@@ -44,11 +44,35 @@ import type {
   RetainedResume,
 } from "./local.ts";
 import type { GitSession } from "../composition/git.ts";
+import type { RepositoryIdentity } from "../../composition/selection.ts";
 import type {
   RetainedFrontier,
   RetainedRepositorySite,
   RetainedWorktreeEntry,
 } from "../../retained-repository/records.ts";
+
+/**
+ * What one selected checkout publishes as, resolved when something asks.
+ *
+ * Pinned by the selection rather than read when a push happens: the identity
+ * carries the commit the repository was selected at, and re-deriving it after
+ * the entry has committed would name a different repository and so a different
+ * external effect. A managed checkout takes it from the metadata its creation
+ * wrote; an ambient one from what its own retained selection recorded.
+ */
+export interface CheckoutPublication {
+  readonly identity: RepositoryIdentity;
+  /** The credential-free locator it publishes to, or `null` when it has none. */
+  readonly origin: string | null;
+  /**
+   * The checkout of the repository this one belongs to.
+   *
+   * Its own, for a repository; the owner's, for a linked worktree — which is
+   * the checkout whose administration holds the object database both of them
+   * publish from.
+   */
+  readonly repositoryDirectory: string;
+}
 
 /** One checkout this entry has selected, as the file handlers see it. */
 export interface SelectedCheckout {
@@ -58,6 +82,16 @@ export interface SelectedCheckout {
   readonly directory: string;
   readonly common: string;
   readonly git: GitSession;
+  /**
+   * What this checkout publishes as, asked for at most once.
+   *
+   * An operation rather than a member because nothing but a push or a pull
+   * request needs it: an entry that selects a checkout and writes a file in it
+   * reads no metadata and resolves no identity. A `Result`, because a
+   * placement whose metadata this host cannot read is an answer the asking
+   * element refuses with its own words.
+   */
+  publication(): Operation<Result<CheckoutPublication>>;
 }
 
 /** What the entry knows about its own selections and history. */
@@ -97,6 +131,17 @@ export interface RetainedFileHost {
   candidates(checkout: string): readonly RetainedFrontier[];
   /** Record what an acknowledged operation left this checkout in. */
   settled(checkout: string, frontier: RetainedFrontier): void;
+  /**
+   * The state this entry holds this checkout to right now.
+   *
+   * What attachment authenticated, advanced by every operation this entry has
+   * since had acknowledged. `undefined` before the checkout has been attached.
+   * An external effect reads it back afterwards: a push that published a
+   * branch and found the checkout somewhere else has left this entry's history
+   * describing a checkout that is no longer there, however well the remote
+   * went.
+   */
+  expected(checkout: string): RetainedFrontier | undefined;
 }
 
 /** The default mode a file this host creates is left at. */

@@ -20,13 +20,17 @@
  * so by being empty.
  */
 
-import { Err, Ok } from "effection";
-import type { Operation } from "effection";
+import { Err, Ok, ensure, scoped } from "effection";
+import type { Operation, Result } from "effection";
 import { isAbsolute, relative, resolve } from "node:path";
-import type { DurableEvent } from "@executablemd/durable-streams";
+import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type { ExecutionInstallation, JournalAdmission } from "@executablemd/core/host";
 import type { FragmentFileAccess } from "@executablemd/core/host";
 import type { FilePathInput, FilesHandler, FileWriteInput, GlobInput } from "@executablemd/runtime";
+import { PullRequestAPI } from "../../composition/pull-request-api.ts";
+import { PullRequestOperations } from "../../composition/pull-request-operations.ts";
+import type { PullRequestReadInvocation } from "../../composition/pull-request-operations.ts";
+import type { PullRequestReadResult } from "../../composition/pull-request-read-records.ts";
 import { admitRetainedRepositoryHistory } from "../../retained-repository/admission.ts";
 import type { RetainedRepositoryHistory } from "../../retained-repository/admission.ts";
 import {
@@ -38,19 +42,38 @@ import type {
   RetainedFrontier,
   RetainedRepositorySite,
 } from "../../retained-repository/records.ts";
+import {
+  parseRetainedAmbientSelection,
+  retainedAmbientSelectionJson,
+} from "../../retained-repository/requests.ts";
+import type { RetainedAmbientSelection } from "../../retained-repository/requests.ts";
 import { gitSession } from "../composition/git.ts";
 import type { GitSession } from "../composition/git.ts";
+import type { GitHubAccess } from "../composition/github.ts";
+import { denoGitHubSource } from "../composition/github-host.ts";
 import type { RepositoryHost } from "../composition/host.ts";
+import { useOwnedPullRequestReads } from "../composition/pull-request-operations.ts";
+import {
+  gitHubPullRequestAccess,
+  useGitHubPullRequestReads,
+} from "../composition/pull-request-reads.ts";
+import type { GitHubPullRequestsOptions } from "../composition/pull-request-reads.ts";
+import { useGitHubIssues } from "../issue/github.ts";
+import type { GitHubIssuesOptions } from "../issue/github.ts";
 import { discoverAmbientRepository } from "../run-composition/ambient.ts";
+import { useLeases } from "../run-composition/leases.ts";
 import { retainedGitComponents } from "./components.ts";
+import { retainedExternalComponents } from "./external.ts";
+import type { RetainedExternalHost } from "./external.ts";
 import { retainedFileMutations } from "./files.ts";
-import type { RetainedFileHost, SelectedCheckout } from "./files.ts";
+import type { CheckoutPublication, RetainedFileHost, SelectedCheckout } from "./files.ts";
+import { FrontierError, inventoryFrontier } from "./frontier.ts";
 import { holdRetainedLanes, retain, retainedLanes, retainedResume } from "./local.ts";
+import type { RetainedResume } from "./local.ts";
+import { admittedPublications, ambientPublication, ambientSelection } from "./publication.ts";
+import type { RetainedPublication } from "./publication.ts";
 import { retainedRepository, retainedWorktree } from "./selections.ts";
 import type { RetainedSelectionHost } from "./selections.ts";
-import { useLeases } from "../run-composition/leases.ts";
-import { FrontierError, inventoryFrontier } from "./frontier.ts";
-import type { RetainedResume } from "./local.ts";
 
 /** What the command tells this entry about itself. */
 export interface RetainedEntryRequest {
@@ -67,6 +90,16 @@ export interface RetainedEntryRequest {
   readonly host: RepositoryHost;
   /** Ordinary file behavior, for everything outside a selected checkout. */
   readonly files: FilesHandler;
+  /** What issue handling this entry installs, and what it may reach. */
+  readonly gitHubIssues?: GitHubIssuesOptions;
+  /** The pull-request destinations this entry allows a document to read. */
+  readonly gitHubPullRequests?: GitHubPullRequestsOptions;
+}
+
+/** An ambient checkout this entry works in, and the directory that identifies it. */
+interface AmbientSelection {
+  readonly selection: RetainedAmbientSelection;
+  readonly common: string;
 }
 
 /** What one entry's host offers the command that built it. */
@@ -115,6 +148,17 @@ export function* useRetainedRepositoryEntry(
   // own completed work is part of what its history accounts for.
   const expected = new Map<string, RetainedFrontier>();
   const attached = new Set<string>();
+  // What this entry has published, in the order it published it: rebuilt from
+  // its accepted history when the admission runs, and appended to by every
+  // push this entry verifies. Nothing else may add to it, and another entry
+  // constructs its own — which is what makes "this entry published that
+  // branch" mean this entry.
+  const published: RetainedPublication[] = [];
+  // The occurrence an evidence read is being performed for, for the length of
+  // that one read. Reads are expanded one at a time, and the retaining
+  // middleware sits beneath the adapter that admits them — where there is no
+  // occurrence to be had — so this is how the claimed one reaches it.
+  let reading: string | undefined;
   const git = gitSession(request.host, request.cwd);
   // Acquired into this entry's own scope, so every slot it holds is released
   // when the entry ends, however it ends.
@@ -167,20 +211,28 @@ export function* useRetainedRepositoryEntry(
    * following it.
    */
   function* selectAmbient(): Operation<SelectedCheckout | undefined> {
-    const retainedRoot = admitted?.completed.find((effect) => effect.intent.operation === "ambient")
-      ?.completion.frontier;
-    const checkout =
-      retainedRoot === undefined
-        ? yield* discoveredCheckout()
-        : Object.freeze({
-            checkout: retainedRoot.checkout,
-            directory: retainedRoot.checkout,
-            common: retainedRoot.administration.common,
-            git,
-          });
-    if (checkout === undefined) {
+    const retained = admitted?.completed.find((effect) => effect.intent.operation === "ambient");
+    const ambientSelected =
+      retained === undefined ? yield* discoveredSelection() : savedSelection(retained);
+    if (ambientSelected === undefined) {
       return undefined;
     }
+    const common = ambientSelected.common;
+    const held = ambientSelected.selection;
+    const checkout: SelectedCheckout = Object.freeze({
+      checkout: held.root,
+      directory: held.root,
+      common,
+      git,
+      // What this entry resolved when it first selected this checkout, read
+      // back from its own record on a resume. Discovering it again would pin
+      // the identity at whatever HEAD is now, and a push after a commit would
+      // then name a repository this history never recorded.
+      // deno-lint-ignore require-yield
+      *publication(): Operation<Result<CheckoutPublication>> {
+        return Ok(ambientPublication(held, common));
+      },
+    });
     // The shared Git directory is leased before this entry reads a byte of it.
     // Selecting is where that happens, because selecting is what makes this
     // entry the one doing repository work here — and a second process holding
@@ -240,7 +292,10 @@ export function* useRetainedRepositoryEntry(
           }
           return Ok({
             postState: preState,
-            prepared: { root: checkout.checkout },
+            // The resolved identity travels with the preparation, not with the
+            // request: what the entry asked for is "work here", and what it
+            // resolved from that is which repository this checkout is of.
+            prepared: retainedAmbientSelectionJson(held),
             evidence: { type: "ambient", checkout: checkout.checkout },
           });
         },
@@ -328,17 +383,34 @@ export function* useRetainedRepositoryEntry(
   }
 
   /** The checkout this entry started in, when it started in one. */
-  function* discoveredCheckout(): Operation<SelectedCheckout | undefined> {
+  function* discoveredSelection(): Operation<AmbientSelection | undefined> {
     const found = yield* discoverAmbientRepository(git, request.cwd);
     if (found === undefined) {
       return undefined;
     }
-    return Object.freeze({
-      checkout: found.checkoutRoot,
-      directory: found.checkoutRoot,
-      common: found.commonDirectory,
-      git,
-    });
+    return { selection: ambientSelection(found), common: found.commonDirectory };
+  }
+
+  /**
+   * The ambient selection this entry's own record froze.
+   *
+   * A record whose preparation this host cannot read, or whose root is not the
+   * checkout its completion established, says nothing about which repository
+   * this entry selected — and answering with the root alone would publish
+   * under an identity nothing recorded.
+   */
+  function savedSelection(effect: {
+    readonly intent: { readonly prepared: Json };
+    readonly completion: { readonly frontier: RetainedFrontier };
+  }): AmbientSelection {
+    const saved = parseRetainedAmbientSelection(effect.intent.prepared);
+    if (saved === undefined || saved.root !== effect.completion.frontier.checkout) {
+      throw new FrontierError(
+        "this entry's own ambient selection does not say which repository it selected, so what " +
+          "it would publish from is not recorded here.",
+      );
+    }
+    return { selection: saved, common: effect.completion.frontier.administration.common };
   }
 
   const fileHost: RetainedFileHost = {
@@ -363,6 +435,7 @@ export function* useRetainedRepositoryEntry(
         : [held];
     },
     settled: settledAt,
+    expected: (checkout) => expected.get(checkout),
     site: (occurrence): RetainedRepositorySite =>
       Object.freeze({ source: request.source, occurrence }),
   };
@@ -388,7 +461,71 @@ export function* useRetainedRepositoryEntry(
     }
     admitted = read.value;
     resume = retainedResume(read.value.pending, read.value.completed);
+    // Publication admission, rebuilt into this closure from the accepted
+    // records of the segment that owns it. A record this scan cannot read
+    // refuses here, where nothing has been attached and nothing contacted.
+    published.push(...admittedPublications(retained, read.value));
   };
+
+  // The pull-request transport, asked of the adapter that owns it and opened
+  // once. Where the API lives is configuration, and an entry that opens no pull
+  // request reads none of it.
+  const access = gitHubPullRequestAccess({
+    host: denoGitHubSource,
+    ...request.gitHubPullRequests,
+  });
+  let opened: GitHubAccess | undefined;
+
+  const externalHost: RetainedExternalHost = {
+    files: fileHost,
+    repository: request.host,
+    *pullRequests(): Operation<GitHubAccess> {
+      if (opened === undefined) {
+        opened = yield* (yield* access()).open();
+      }
+      return opened;
+    },
+    published: (publication) => {
+      published.push(publication);
+    },
+    publications: () => published,
+    reading: <T>(occurrence: string, read: () => Operation<T>): Operation<T> =>
+      // Scoped to the one read, and registered before the slot is taken: a
+      // read that is cancelled or refused leaves no occurrence standing for
+      // whatever asks next.
+      scoped(function* (): Operation<T> {
+        yield* ensure(() => {
+          reading = undefined;
+        });
+        reading = occurrence;
+        return yield* read();
+      }),
+    enclosing: (path) => selectedCheckoutFor([...selected.values()], path),
+  };
+
+  // The transport middlewares, installed into this entry's own scope. Each one
+  // matches a request against its own target first, so absent configuration
+  // authorizes nothing and a document naming an unreachable destination reaches
+  // the surface's own refusal.
+  yield* useGitHubIssues({ host: denoGitHubSource, ...request.gitHubIssues });
+  yield* useGitHubPullRequestReads({ host: denoGitHubSource, ...request.gitHubPullRequests });
+  // Beneath the adapter, so a target this host never authorized leaves no
+  // retained record of a question this entry was not permitted to ask.
+  yield* useOwnedPullRequestReads({ owner, site: () => reading });
+  yield* PullRequestOperations.around(
+    {
+      // Straight through to the transport: which provider answers, and what a
+      // credential may see, belong to the adapters above, and the retaining
+      // middleware beneath them is what makes an admitted read this entry's.
+      *read([invocation]: [PullRequestReadInvocation]): Operation<PullRequestReadResult> {
+        return yield* PullRequestAPI.operations.read(invocation.url, {
+          kind: invocation.kind,
+          ...(invocation.provider === undefined ? {} : { provider: invocation.provider }),
+        });
+      },
+    },
+    { at: "min" },
+  );
 
   return {
     owner,
@@ -399,6 +536,7 @@ export function* useRetainedRepositoryEntry(
       // authenticate its own invocation before it routes anything.
       components: [
         ...retainedGitComponents(fileHost, request.host),
+        ...retainedExternalComponents(externalHost),
         retainedRepository(selectionHost),
         retainedWorktree(selectionHost),
       ],

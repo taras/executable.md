@@ -95,6 +95,7 @@ const PROVIDER_NEUTRAL: readonly string[] = [
   "src/plugin.ts",
   "src/retained-repository/admission.ts",
   "src/retained-repository/records.ts",
+  "src/retained-repository/requests.ts",
 ];
 
 /**
@@ -172,10 +173,12 @@ const DENO_ADAPTER: readonly string[] = [
   "src/deno/retained-repository/commit.ts",
   "src/deno/retained-repository/creation.ts",
   "src/deno/retained-repository/components.ts",
+  "src/deno/retained-repository/external.ts",
   "src/deno/retained-repository/files.ts",
   "src/deno/retained-repository/frontier.ts",
   "src/deno/retained-repository/local.ts",
   "src/deno/retained-repository/provider.ts",
+  "src/deno/retained-repository/publication.ts",
   "src/deno/retained-repository/scratch.ts",
   "src/deno/retained-repository/selections.ts",
   "src/deno/retained-repository/terminal.ts",

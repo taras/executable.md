@@ -4233,6 +4233,14 @@ holds the paired `<File>…</File>`, the self-closing `<File.Delete />` and pair
 canonical `<Elicit>`. A `read` selection therefore never reaches a write form,
 and `<Fetch>` remains absent rather than admitted with an empty ceiling.
 
+A `xmd repl` entry states that same table. What differs is which file access the
+captured operations are bound to: one per-entry trusted instance belonging to
+the entry's retained repository provider (§8.1), so a generated write inside a
+checkout that entry has selected is retained like an authored one and a write
+anywhere else is ordinary. The tables, the forms, the return contracts and the
+ceiling are the command's unchanged ones — nothing about this admits `<Dir>` or
+a Git component into a generated program.
+
 `<Elicit>` is in the write table because asking is not reading. A fragment that
 may change something may also ask the person first — which is what makes
 "preview this, then confirm it" a program an Agent can write — while a `read`
@@ -9592,8 +9600,8 @@ workflow and returns a `DocumentExecution` handle. Options:
 
 A document execution reaches repository operations only through the provider
 the command installed inside the execution scope, before the root document is
-imported. There are two, and they differ in lifetime and permission rather than
-in what an author writes.
+imported. There are three, and they differ in lifetime and permission rather
+than in what an author writes.
 
 The **ordinary provider** is what the Deno source entrypoint and the compiled
 binary install for `xmd run`. Constructing it acquires nothing at all: no
@@ -9634,7 +9642,18 @@ The **retained provider** is what a workflow host installs inside its Workspace
 attachment. Its operations are durable effects keyed by the WorkflowRun, so a
 completed one restores from the journal without contacting anything.
 
-Node and Bun install neither. They register the same declarations (§5.3), and
+The **entry provider** is what the Deno source entrypoint and the compiled
+binary install for one `xmd repl` entry. It acquires nothing at installation on
+the ordinary provider's terms, works against the caller's own checkouts the same
+way, and retains what it did in the entry's own segment of the ordinary journal
+— so an entry interrupted partway through repository work resumes it instead of
+repeating it. Its records are owned by the execution identity and the admitted
+entry key, never by a WorkflowRun, and the generated read and write ceiling is
+the command's unchanged one: the per-entry trusted file access a fragment runs on
+admits no `<Dir>` and no Git into an ordinary generated program.
+`architecture.md` holds its contract.
+
+Node and Bun install none of them. They register the same declarations (§5.3), and
 every repository operation there reports an absent provider before a lock, a
 credential, a subprocess or a request exists.
 

@@ -30,10 +30,13 @@
  *
  * ## Identity, and what may name it
  *
- * The run and the expansion, derived here from the host-established
- * `getWorkflowRun()` and the engine's own `getExpansion()`. Neither the
- * document, the tracker, middleware nor a provider supplies either member,
- * because a party that could name the identity could name someone else's issue.
+ * An effect owner and an authored site. For a workflow run both are derived
+ * here, from the host-established `getWorkflowRun()` and the engine's own
+ * `getExpansion()`; a host that is not a workflow run states them itself,
+ * through {@link readOwnedIssue} and {@link upsertOwnedIssue}. Either way they
+ * come from something the host established. Neither the document, the tracker,
+ * middleware nor a provider supplies either member, because a party that could
+ * name the identity could name someone else's issue.
  */
 
 import type { Operation } from "effection";
@@ -93,9 +96,39 @@ export interface IssueUpsertEffectRequest {
  * reaching one, or appending anything.
  */
 export function* readIssue(request: IssueReadEffectRequest): Operation<IssueDetails> {
+  const identity = yield* effectIdentity();
+  return yield* readOwnedIssue({ owner: identity.runId, site: identity.expansionId, request });
+}
+
+/**
+ * The identity a host that is not a workflow run states for itself.
+ *
+ * `owner` travels in the legacy `runId` member, which is what keeps the
+ * retained record shapes and the upsert idempotency keys byte-compatible, and
+ * `site` is the canonical occurrence of the element asking, as that host
+ * authenticated it. Both are opaque here: this module never interprets either,
+ * and the caller is the only thing that can establish them.
+ */
+export interface OwnedIssueEffect<Request> {
+  readonly owner: string;
+  readonly site: string;
+  readonly request: Request;
+}
+
+/**
+ * Read one issue under an identity its own host authenticated.
+ *
+ * The same durable effect, named the same way; what differs is only who said
+ * the identity. A read reconciles nothing and borrows nothing, so there is
+ * nothing else for this surface to leave out.
+ */
+export function* readOwnedIssue(
+  owned: OwnedIssueEffect<IssueReadEffectRequest>,
+): Operation<IssueDetails> {
+  const request = owned.request;
   const complete: IssueReadRequest = Object.freeze({
     operation: "read" as const,
-    identity: yield* effectIdentity(),
+    identity: { runId: owned.owner, expansionId: owned.site },
     url: request.url,
     provider: request.provider ?? null,
   });
@@ -161,15 +194,61 @@ export function* upsertIssue(request: IssueUpsertEffectRequest): Operation<Issue
       ? live
       : Object.freeze({ ...live, identity: { ...identity, runId: borrowed } });
 
+  return yield* upserted(
+    complete,
+    () => {
+      // The request was named by a retained record, which cannot be a live
+      // request: performing under a run this execution is not would repeat work
+      // that already happened at a service this journal does not enclose.
+      exhaustRetainedIssueIdentities(held);
+    },
+    borrowed !== undefined,
+  );
+}
+
+/**
+ * Create or bring up to date one issue under an identity its own host
+ * authenticated.
+ *
+ * No identity is borrowed: borrowing is a workflow fork keeping the key an
+ * inherited issue was created under, and an owner that is not a workflow run
+ * has no fork to inherit from. Everything else — the durable name, the
+ * idempotency key the provider reconciles with, the validation — is the same.
+ */
+export function* upsertOwnedIssue(
+  owned: OwnedIssueEffect<IssueUpsertEffectRequest>,
+): Operation<IssueReference> {
+  const request = owned.request;
+  return yield* upserted(
+    Object.freeze({
+      operation: "upsert" as const,
+      identity: { runId: owned.owner, expansionId: owned.site },
+      target: request.target,
+      provider: request.provider ?? null,
+      issue: request.issue,
+    }),
+    () => {},
+    false,
+  );
+}
+
+/**
+ * One upsert, once the identity is settled.
+ *
+ * `borrowedName` is the workflow fork's condition: a request this execution did
+ * not name cannot be the one a live attempt performs under, and reaching the
+ * live path with one retires the inherited identities rather than using them.
+ */
+function* upserted(
+  complete: IssueUpsertRequest,
+  exhaust: () => void,
+  borrowedName: boolean,
+): Operation<IssueReference> {
   const retained: unknown = yield* attempt(
     yield* describe(complete),
     function* (): Operation<Json> {
-      if (borrowed !== undefined) {
-        // The request was named by a retained record, which cannot be a live
-        // request: performing under a run this execution is not would repeat
-        // work that already happened at a service this journal does not
-        // enclose.
-        exhaustRetainedIssueIdentities(held);
+      if (borrowedName) {
+        exhaust();
         throw new IssueProtocolError(
           "this request is named by retained history it never consumed, so creating an issue " +
             "here would repeat work that already happened outside this journal",

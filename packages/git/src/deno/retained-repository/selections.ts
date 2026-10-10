@@ -49,7 +49,8 @@ import type { Leases } from "../run-composition/leases.ts";
 import { inventoryFrontier } from "./frontier.ts";
 import { holdRetainedLanes, retain } from "./local.ts";
 import type { CreationObservation } from "./local.ts";
-import type { RetainedFileHost, SelectedCheckout } from "./files.ts";
+import type { CheckoutPublication, RetainedFileHost, SelectedCheckout } from "./files.ts";
+import { managedPublication } from "./publication.ts";
 
 const RETAINED_ORIGIN = "@executablemd/git/retained";
 
@@ -130,6 +131,11 @@ export function retainedRepository(host: RetainedSelectionHost): IdentityCompone
           directory: destination,
           common: established?.commonDirectory ?? common,
           git,
+          // Asked for only by something that publishes, and read from the
+          // metadata this placement's creation wrote rather than from Git: the
+          // identity a push names is the one this repository was selected
+          // under, however far its HEAD has moved since.
+          publication: placementPublication(slot, destination),
         });
         // Authenticated before anything is replayed or expanded in it, whether
         // or not there is a checkout there. The ordinary managed selection
@@ -324,6 +330,10 @@ export function retainedWorktree(host: RetainedSelectionHost): IdentityComponent
           directory: destination,
           common: owner.common,
           git,
+          // The owner's, because that is the repository this checkout belongs
+          // to — and its administration is the object database both of them
+          // publish from.
+          publication: () => owner.publication(),
         });
         yield* host.files.attach(checkout);
 
@@ -432,6 +442,28 @@ export function retainedWorktree(host: RetainedSelectionHost): IdentityComponent
 
 function text(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/**
+ * What a managed placement publishes as, resolved at most once.
+ *
+ * Deferred, because nothing but a push or a pull request needs it: an entry
+ * that selects a repository and writes a file in it reads no metadata. Settled
+ * once it has been read, including when what it read was a refusal — a
+ * placement this host cannot describe does not become describable by asking
+ * again.
+ */
+function placementPublication(
+  slot: string,
+  destination: string,
+): () => Operation<Result<CheckoutPublication>> {
+  let settled: Result<CheckoutPublication> | undefined;
+  return function* (): Operation<Result<CheckoutPublication>> {
+    if (settled === undefined) {
+      settled = yield* managedPublication(slot, destination);
+    }
+    return settled;
+  };
 }
 
 /** This checkout's state right now. */

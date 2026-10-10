@@ -5953,8 +5953,111 @@ row that announces one is what crosses to that surface. Nothing crosses on its
 own: arrival announces and repaints, and that is all it does.
 
 This command installs no foreground launcher, no browser elicitation and no
-readline permission handling, reads no runtime global, and adds no durable record
-family of its own: what it retains is the ordinary events any other run writes.
+readline permission handling, reads no runtime global, and adds no outer durable
+record family of its own: what it retains is the ordinary events any other run
+writes, including the two feature-owned effect payloads the retained repository
+host below writes inside them.
+
+## The retained REPL-entry repository host
+
+A REPL entry that was interrupted partway through repository work resumes it.
+That is a third repository host beside the two of
+`specs/workflow-workspace-spec.md` §2 — not a workflow run, because there is no
+WorkflowRun, no SQLite store and no Workspace, and not an ordinary run, because
+an ordinary run retains nothing and a second one is a second question. What this
+host has is the entry's own segment of the ordinary JSONL journal, and what it
+does with it is remember exactly enough to not do completed work twice.
+
+**The owner is the entry, and nothing a document can reach.** Records are
+retained under `repl:v1:` plus the canonical JSON of `[executionId, entryKey]` —
+the execution identity the host established and the entry key admission order
+fixed. It travels in the legacy `runId` member of the existing Git-host and
+Issue identities, so those record shapes and their idempotency keys stay
+byte-compatible, and `reconcileOwnedGitHostEffect()`, `readOwnedIssue()` and
+`upsertOwnedIssue()` are the surfaces that let a host state an owner the shared
+workers would otherwise derive from `getWorkflowRun()`. A site is the canonical
+occurrence of the element that asked, authenticated through the claimant this
+execution minted for that component. Neither comes from a prop, a binding, a
+middleware answer or `expand.current`, which a descendant may bind and is
+therefore not a permission boundary.
+
+**Local work is fenced by its own intent.** Every mutation reads the state it is
+about to change, works the whole transition out — in disposable scratch when Git
+itself is needed to work it out — appends an intent, and only then touches
+anything. The completion is appended after the result and the resulting state
+have both been checked. An intent with no completion is an operation that may or
+may not have run, and the two states it froze are the only ones a later open
+accepts: the one it started from permits the saved operation, the one it
+predicted means the work already happened and is adopted, and anything else is
+stale and fatal. One lane per canonical common Git directory serializes all of
+it, and an entry-wide non-blocking lease covers that directory and each managed
+placement, so a second process refuses before a byte is read.
+
+**Attachment decides a resume.** Admission folds the accepted records into one
+final frontier per checkout and adds the two ends of any unresolved mutation as
+candidates. Before anything is replayed, performed or expanded in a checkout,
+the live state is read and held to those candidates — a checkout that has moved
+through something the entry never recorded, and one that cannot be read at all,
+refuse there. Absence is a state only where a pending Repository or Worktree
+creation saved it.
+
+**External effects are frozen requests over the existing envelopes.** A push, a
+pull-request upsert and an issue upsert are named by what they *ask*, and part
+of that ask is resolved rather than authored: the branch the checkout is on, the
+commit it holds, the repository identity its selection pinned. Resolving it
+again on a later open asks a different question, consumes no retained result and
+performs the effect twice. So the resolved request is written down first,
+through the same intent/completion protocol — and because none of the three
+changes the checkout it was written in, the two ends of that record are one
+state and the pair is complete before the service is contacted at all.
+
+An issue is the one of the three with nothing resolved in it: a document wrote
+every field, so what its record adds is the barrier rather than the inputs, and
+it is written in the lane of the checkout the issue was filed from. Filed
+outside every selection there is no such lane — these records describe
+checkouts, and filing an issue is not repository work, so nothing is selected to
+make one — and none is invented: the effect's own record and the stable
+owner/site idempotency key are the whole of its recovery.
+
+What the service did stays where it already is. The existing `git_host_effect`
+and `issue_effect` records are the only authority on an external outcome: a
+completed one replays without selecting a provider or reaching a service, and an
+interrupted one observes under the frozen identity and natural key, adopts a
+proven compatible completion, performs proven absence or an attested ancestor
+advance once, refuses conflict and permanent ambiguity, and fails on temporary
+unavailability. A remote that could not answer has proven nothing, and reading
+silence as absence is what would publish twice. A push verifies the local
+frontier afterwards too: the remote accepting a branch does not excuse a
+checkout this entry's history can no longer account for.
+
+**Publication is this entry's own record of publishing.** A pull request is
+admitted against publications rebuilt privately from accepted records — each one
+a retained push request, which says which checkout was published from, paired
+with an accepted successful Git-host record, which says it happened. Neither is
+evidence alone: the retained record is written before the remote is contacted,
+and the Git-host record carries no checkout. A record this version cannot read
+refuses the admission rather than being skipped. The exact repository, checkout,
+origin, destination, branch and commit must match, so a commit made after the
+push needs its own publication, and a replayed pull-request result, a copied
+value and a middleware answer grant nothing. Another entry may select, lease and
+publish the same physical checkout; it inherits no effect identity and no
+evidence.
+
+**Reads are observations, and a later one is a new observation.** A completed
+issue read or pull-request evidence read answers from its record without
+reaching a forge or opening a credential session. The durability of an evidence
+read sits beneath the adapter that admits it, so a target this host never
+authorized leaves no record of a question it was not permitted to ask; the
+claimed occurrence reaches that layer through the entry's own closure rather
+than through a context, and a read nothing claimed is refused.
+
+**Nothing retained is a capability.** Records are data in a file anybody who can
+read the journal can read. Selections, leases, credentials, scratch directories
+and publication evidence live in the entry task's closure and end with it;
+credentials and live handles are never retained. A history this host cannot read
+completely refuses the continuation where it is read, with nothing attached and
+nothing touched, and an incomplete JSONL tail stays an unreadable journal rather
+than a recoverable gap.
 
 ## Changing these rules
 

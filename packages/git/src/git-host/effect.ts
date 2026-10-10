@@ -31,10 +31,14 @@
  *
  * ## Identity, and what may name it
  *
- * The external identity is the run and the expansion — derived here, from the
- * host-established `getWorkflowRun()` and the engine's own `getExpansion()`.
- * Neither the document nor the provider supplies either member, because a party
- * that could name the identity could name someone else's completion.
+ * The external identity is an effect owner and an authored site. For a workflow
+ * run both are derived here, from the host-established `getWorkflowRun()` and
+ * the engine's own `getExpansion()`. A host that is not a workflow run — a REPL
+ * entry, which has an owner token of its own and no run — states them instead,
+ * through {@link reconcileOwnedGitHostEffect}. Either way they come from
+ * something the host established: neither the document nor the provider
+ * supplies either member, because a party that could name the identity could
+ * name someone else's completion.
  *
  * The durable operation is named by a digest of the complete detached request
  * instead. Identity is where the effect *is*; the fingerprint is what it *asks*,
@@ -657,6 +661,61 @@ export function* reconcileGitHostEffect(
     retainedIdentity === undefined
       ? undefined
       : { exhaust: () => exhaustRetainedGitHostIdentities(held) };
+  return yield* reconciled(complete, borrowed);
+}
+
+/**
+ * One effect reconciled under an identity its own host authenticated.
+ *
+ * The two identity members are the one thing this surface adds, and they are
+ * the reason it exists: a host that is not a workflow run has its own account
+ * of who is asking — a REPL entry's owner token and the canonical occurrence of
+ * the element that asked — and no `getWorkflowRun()` to derive either from.
+ * Everything else is the same reconciliation, through the same terminal, with
+ * the same fingerprint, so one journal can hold both hosts' records and neither
+ * can read the other's.
+ *
+ * `owner` travels in the legacy `runId` member of the record's identity, which
+ * is what keeps the retained shapes and the idempotency keys byte-compatible.
+ * It is an opaque token this module never interprets: the caller is the only
+ * thing that can establish it, and a document, a prop, a binding or a
+ * middleware answer is not the caller.
+ */
+export interface OwnedGitHostEffect {
+  /** The opaque effect owner this record is retained under. */
+  readonly owner: string;
+  /** The canonical occurrence of the element asking, as its host authenticated it. */
+  readonly site: string;
+  readonly request: GitHostEffectRequest;
+}
+
+/**
+ * Reconcile one external Git-host effect for a host that owns its own identity.
+ *
+ * No identity is derived here and none is borrowed: borrowing is a workflow
+ * fork inheriting its source's history, and an owner that is not a workflow run
+ * has no fork to inherit from. A request named by somebody else's retained
+ * record is therefore not reachable through this surface at all.
+ */
+export function* reconcileOwnedGitHostEffect(
+  owned: OwnedGitHostEffect,
+): Operation<GitHostReconciliationRecord> {
+  return yield* reconciled(completeRequest(owned.owner, owned.site, owned.request), undefined);
+}
+
+/**
+ * The whole reconciliation, once the identity is settled.
+ *
+ * Both entrypoints reach this with a complete request already named, so what
+ * differs between a workflow run and another host is exactly who may say the
+ * identity — and nothing about the terminal, the fingerprint, the publishable
+ * conditions or the fail-stop.
+ */
+function* reconciled(
+  complete: CompleteGitHostEffectRequest,
+  borrowed: BorrowedIdentity | undefined,
+): Operation<GitHostReconciliationRecord> {
+  const expansion = yield* getExpansion();
   const description: EffectDescription = {
     type: GIT_HOST_EFFECT,
     name: yield* gitHostRequestFingerprint(complete),

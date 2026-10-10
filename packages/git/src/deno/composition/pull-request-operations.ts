@@ -15,10 +15,11 @@
  * So the durability is installed one layer down, as policy on
  * `PullRequestReadExecution`. That surface is profile-neutral and performs
  * afresh by default; an adapter reaches it only after it has admitted a read,
- * and this middleware is what makes an admitted one durable under a workflow
- * run. The adapter itself stays free of WorkflowRun and expansion context,
- * which is what lets an ordinary run install the same adapter and keep
- * nothing.
+ * and this middleware is what makes an admitted one durable — under a workflow
+ * run through {@link useRetainedPullRequestReads}, and under a host that owns
+ * its own identity through {@link useOwnedPullRequestReads}. The adapter itself
+ * stays free of WorkflowRun and expansion context, which is what lets an
+ * ordinary run install the same adapter and keep nothing.
  *
  * An upsert passes through for a different reason: the Git-host reconciliation
  * beneath it is already durable and already holds this run's own Push evidence,
@@ -172,6 +173,53 @@ export function useRetainedPullRequestReads(): Operation<void> {
         const expansion = yield* getExpansion();
         return yield* retainDurableRead(
           readRequest(admitted.url, admitted.kind, admitted.provider, run.runId, expansion.id),
+          transport,
+        );
+      },
+    },
+    { at: "min" },
+  );
+}
+
+/**
+ * Make an admitted read durable for a host that owns its own identity.
+ *
+ * The same middleware, at the same surface, retaining the same request. What an
+ * entry supplies instead of a workflow run is the owner token its own admission
+ * established; the site stays the engine's own `getExpansion()`, because the
+ * question a read asks is named by where it was written and a read mutates
+ * nothing that an authored occurrence would have to authenticate first.
+ */
+export interface OwnedReadIdentity {
+  /** The opaque effect owner this host retains under. */
+  readonly owner: string;
+  /**
+   * The authored occurrence this read is being performed for.
+   *
+   * `undefined` when nothing claimed one, which is what a direct call on the
+   * public surface looks like. A read retained under a site nobody
+   * authenticated could consume the answer of a different question at another
+   * occurrence, so it is refused instead — with nothing retained and the
+   * provider never asked.
+   */
+  site(): string | undefined;
+}
+
+export function useOwnedPullRequestReads(identity: OwnedReadIdentity): Operation<void> {
+  return PullRequestReadExecution.around(
+    {
+      *perform([admitted, transport]): Operation<PullRequestReadResult> {
+        const site = identity.site();
+        if (site === undefined) {
+          throw new PullRequestReadError(
+            "protocol",
+            ELEMENT[admitted.kind],
+            "it was reached without the invocation this host authenticates a read by, so what " +
+              "this read would be retained under is not a site anything established.",
+          );
+        }
+        return yield* retainDurableRead(
+          readRequest(admitted.url, admitted.kind, admitted.provider, identity.owner, site),
           transport,
         );
       },
