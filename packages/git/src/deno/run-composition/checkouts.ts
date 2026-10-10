@@ -63,7 +63,7 @@ import {
   type ManagedMetadata,
   type ManagedRepositoryMetadata,
   type ManagedWorktreeMetadata,
-} from "./metadata.ts";
+} from "../../composition/managed-metadata.ts";
 import { CHECKOUT, checkoutOf, METADATA, metadataOf } from "./placement.ts";
 
 /** One managed checkout, once this execution is entitled to work in it. */

@@ -64,6 +64,20 @@ export interface PreparedTransition {
   readonly evidence: Json;
 }
 
+/**
+ * What a creation finds where its destination will be.
+ *
+ * Three answers and no fourth. A destination that is exactly what the intent
+ * predicted has already been created. One that is absent has not. Anything in
+ * between is a creation something interrupted partway, and it is preserved
+ * rather than completed on a guess — a half-cloned directory is somebody's
+ * work, and this host does not know whose.
+ */
+export type CreationObservation =
+  | { readonly state: "absent" }
+  | { readonly state: "established"; readonly frontier: RetainedFrontier }
+  | { readonly state: "partial"; readonly reason: string };
+
 /** One mutation, as its component describes it to this protocol. */
 export interface RetainedOperation {
   readonly owner: string;
@@ -92,9 +106,17 @@ export interface RetainedOperation {
    * Free to use disposable scratch, and held to leaving the target exactly as
    * it found it — which this module verifies rather than trusts.
    */
-  prepare(preState: RetainedFrontier): Operation<Result<PreparedTransition>>;
+  prepare(preState: RetainedFrontier | null): Operation<Result<PreparedTransition>>;
   /** Perform it once, from the frozen inputs, without reinterpreting them. */
   perform(transition: PreparedTransition): Operation<Result<Json>>;
+  /**
+   * For a creation: what is where the destination will be.
+   *
+   * Supplied only by an operation that can record an absent pre-state. The
+   * three answers decide what a resume may do, and there is no state this can
+   * report that means "finish what somebody started".
+   */
+  observe?(): Operation<Result<CreationObservation>>;
 }
 
 /** What one entry's history already holds for this protocol to resume from. */
@@ -244,15 +266,22 @@ function* retained(
     );
   }
 
-  const standing = yield* operation.inventory();
-  if (!standing.ok) {
-    return standing;
-  }
   const transition: PreparedTransition = {
     postState: intent.postState,
     prepared: intent.prepared,
     evidence: intent.evidence,
   };
+
+  // A creation's destination is not a checkout yet, so what it is held to is
+  // an observation rather than an inventory.
+  if (intent.preState === null) {
+    return yield* createFrom(operation, intent, fingerprint, transition);
+  }
+
+  const standing = yield* operation.inventory();
+  if (!standing.ok) {
+    return standing;
+  }
 
   // Its predicted state means the work already happened, which is also what a
   // selection that changes nothing looks like. Its saved state means the work
@@ -298,6 +327,76 @@ function* retained(
 }
 
 /**
+ * Finish a creation this history acknowledged, from whatever is there now.
+ *
+ * The order is the amendment's: the completed state is checked first, so a
+ * creation that finished and lost only its acknowledgement is adopted rather
+ * than attempted again. Absence is what permits the saved request to run. A
+ * partial destination is preserved and refused, and nothing fills the gap.
+ */
+function* createFrom(
+  operation: RetainedOperation,
+  intent: RetainedRepositoryIntent,
+  fingerprint: string,
+  transition: PreparedTransition,
+): Operation<Result<Json>> {
+  if (operation.observe === undefined) {
+    return Err(
+      new RetainedOperationError(
+        `"${operation.operation}" recorded an absent destination but cannot say what is there.`,
+      ),
+    );
+  }
+  const observed = yield* operation.observe();
+  if (!observed.ok) {
+    return observed;
+  }
+  if (observed.value.state === "established") {
+    if (!sameRetainedFrontier(observed.value.frontier, intent.postState)) {
+      return Err(
+        new FrontierError(
+          `"${operation.operation}" found a destination that is not the one its intent ` +
+            "predicted, so what is there was not created by this request.",
+        ),
+      );
+    }
+    return yield* acknowledge(intent, fingerprint, operation, intent.evidence, intent.postState);
+  }
+  if (observed.value.state === "partial") {
+    return Err(
+      new FrontierError(
+        `"${operation.operation}" found a partly created destination: ${observed.value.reason}. ` +
+          "It is left exactly as it is.",
+      ),
+    );
+  }
+
+  const produced = yield* operation.perform(transition);
+  if (!produced.ok) {
+    return produced;
+  }
+  if (!matchesRetainedEvidence(produced.value, intent.evidence)) {
+    return Err(
+      new RetainedOperationError(
+        `"${operation.operation}" produced a result its intent did not predict.`,
+      ),
+    );
+  }
+  const settled = yield* operation.inventory();
+  if (!settled.ok) {
+    return settled;
+  }
+  if (!sameRetainedFrontier(settled.value, intent.postState)) {
+    return Err(
+      new FrontierError(
+        `"${operation.operation}" created a destination its intent did not predict.`,
+      ),
+    );
+  }
+  return yield* acknowledge(intent, fingerprint, operation, produced.value, settled.value);
+}
+
+/**
  * A fresh intent, decided before anything is touched.
  *
  * The preparation is held to having changed nothing, which this checks rather
@@ -305,23 +404,31 @@ function* retained(
  * state its own intent is about to claim it started from.
  */
 function* prepared(operation: RetainedOperation): Operation<Result<Json>> {
-  const before = yield* operation.inventory();
-  if (!before.ok) {
-    return before;
+  const start = yield* startingState(operation);
+  if (!start.ok) {
+    return start;
   }
-  const transition = yield* operation.prepare(before.value);
+  const before = start.value;
+  const transition = yield* operation.prepare(before);
   if (!transition.ok) {
     return transition;
   }
-  const after = yield* operation.inventory();
+  // The preparation is held to having changed nothing, which this checks
+  // rather than trusts — including for a creation, where "nothing" means the
+  // destination is still not there.
+  const after = yield* startingState(operation);
   if (!after.ok) {
     return after;
   }
-  if (!sameRetainedFrontier(before.value, after.value)) {
+  const unmoved =
+    before === null
+      ? after.value === null
+      : after.value !== null && sameRetainedFrontier(before, after.value);
+  if (!unmoved) {
     return Err(
       new FrontierError(
-        `preparing "${operation.operation}" changed the checkout it was predicting, so nothing ` +
-          "here describes the state it started from.",
+        `preparing "${operation.operation}" changed the state it was predicting from, so ` +
+          "nothing here describes the state it started from.",
       ),
     );
   }
@@ -342,11 +449,42 @@ function* prepared(operation: RetainedOperation): Operation<Result<Json>> {
         request: operation.request,
       }),
       prepared: transition.value.prepared,
-      preState: before.value,
+      preState: before,
       postState: transition.value.postState,
       evidence: transition.value.evidence,
     }),
   );
+}
+
+/**
+ * The state this operation starts from, or `null` where there is nothing yet.
+ *
+ * A creation asks what is where its destination will be; everything else reads
+ * the checkout it is about to change. A partly created destination is refused
+ * here, before an intent exists for it.
+ */
+function* startingState(operation: RetainedOperation): Operation<Result<RetainedFrontier | null>> {
+  if (operation.observe === undefined) {
+    return yield* operation.inventory();
+  }
+  const observed = yield* operation.observe();
+  if (!observed.ok) {
+    return observed;
+  }
+  if (observed.value.state === "absent") {
+    return Ok(null);
+  }
+  if (observed.value.state === "partial") {
+    return Err(
+      new FrontierError(
+        `"${operation.operation}" found a partly created destination: ${observed.value.reason}. ` +
+          "It is left exactly as it is.",
+      ),
+    );
+  }
+  // A destination that is already there is an ordinary compatible selection,
+  // and it keeps an established pre-state like every other operation.
+  return Ok(observed.value.frontier);
 }
 
 /**

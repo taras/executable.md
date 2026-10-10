@@ -41,6 +41,11 @@ import { parseFileWriteFailure, parseFilesFailure } from "@executablemd/runtime"
 import type { Json } from "@executablemd/durable-streams";
 import { canonicalJson } from "@executablemd/workflow";
 import { members, text } from "../composition/parse.ts";
+import { parseRepositoryMetadata, parseWorktreeMetadata } from "../composition/managed-metadata.ts";
+import type {
+  ManagedRepositoryMetadata,
+  ManagedWorktreeMetadata,
+} from "../composition/managed-metadata.ts";
 import type {
   GitFailureReason,
   RepositoryFailureReason,
@@ -225,9 +230,91 @@ export interface RetainedRepositoryIntent {
   readonly request: Json;
   readonly fingerprint: string;
   readonly prepared: Json;
-  readonly preState: RetainedFrontier;
+  /**
+   * The state this operation expects to find, or `null` for a destination that
+   * is not there yet.
+   *
+   * `null` has one meaning: the managed slot is absent, its checkout and its
+   * metadata together. It never means unknown, unreadable or missing evidence,
+   * and it is permitted only where a Repository or a Worktree is being created
+   * — every other operation changes a checkout that already exists, and an
+   * absent state is never represented by an empty Git snapshot.
+   */
+  readonly preState: RetainedFrontier | null;
   readonly postState: RetainedFrontier;
   readonly evidence: Json;
+}
+
+/**
+ * What a creation freezes in place of a state it cannot have.
+ *
+ * Closed, because this is the whole of what a resume has to work from: the
+ * trusted slot the destination will be placed at, the managed metadata that
+ * will identify it, and — for a linked worktree — the owner's own two states,
+ * since adding a worktree advances refs the owner shares.
+ */
+export interface RetainedCreationPreparation {
+  readonly slot: string;
+  readonly metadata: ManagedRepositoryMetadata | ManagedWorktreeMetadata;
+  readonly owner: {
+    readonly preState: RetainedFrontier;
+    readonly postState: RetainedFrontier;
+  } | null;
+}
+
+/** Whether this operation may record an absent destination. */
+export function createsCheckout(operation: RetainedRepositoryOperation): boolean {
+  return operation === "repository" || operation === "worktree";
+}
+
+const OWNER_MEMBERS = ["preState", "postState"] as const;
+const CREATION_MEMBERS = ["slot", "metadata", "owner"] as const;
+
+/**
+ * The creation preparation this value describes, or `undefined`.
+ *
+ * Parsed exactly, and only where an absent pre-state put it there: a record
+ * whose preparation this cannot read is a record whose creation cannot be
+ * resumed, which is the one thing it exists to make possible.
+ */
+export function parseRetainedCreationPreparation(
+  value: unknown,
+  operation: RetainedRepositoryOperation,
+): RetainedCreationPreparation | undefined {
+  const read = members(value, CREATION_MEMBERS);
+  if (read === undefined) {
+    return undefined;
+  }
+  const slot = text(read["slot"]);
+  if (slot === undefined) {
+    return undefined;
+  }
+  const metadata =
+    operation === "repository"
+      ? parseRepositoryMetadata(read["metadata"])
+      : parseWorktreeMetadata(read["metadata"]);
+  if (metadata === undefined) {
+    return undefined;
+  }
+  const owner = read["owner"];
+  if (owner === null) {
+    // A repository has no owner to advance. A worktree always does.
+    return operation === "repository" ? Object.freeze({ slot, metadata, owner: null }) : undefined;
+  }
+  const states = members(owner, OWNER_MEMBERS);
+  if (states === undefined || operation !== "worktree") {
+    return undefined;
+  }
+  const before = parseRetainedFrontier(states["preState"]);
+  const after = parseRetainedFrontier(states["postState"]);
+  if (before === undefined || after === undefined) {
+    return undefined;
+  }
+  return Object.freeze({
+    slot,
+    metadata,
+    owner: Object.freeze({ preState: before, postState: after }),
+  });
 }
 
 /**
@@ -645,7 +732,7 @@ export function parseRetainedRepositoryIntent(
     request: detachedJson(read["request"]),
     fingerprint: text(read["fingerprint"]),
     prepared: detachedJson(read["prepared"]),
-    preState: parseRetainedFrontier(read["preState"]),
+    preState: read["preState"] === null ? null : parseRetainedFrontier(read["preState"]),
     postState: parseRetainedFrontier(read["postState"]),
     evidence: detachedJson(read["evidence"]),
   };
@@ -664,6 +751,17 @@ export function parseRetainedRepositoryIntent(
     parsed.evidence === undefined
   ) {
     return undefined;
+  }
+  // An absent destination is only a thing a creation can record, and it brings
+  // its own closed preparation with it. Null anywhere else, or a preparation
+  // this cannot read, refuses the record rather than being interpreted.
+  if (parsed.preState === null) {
+    if (!createsCheckout(parsed.operation)) {
+      return undefined;
+    }
+    if (parseRetainedCreationPreparation(parsed.prepared, parsed.operation) === undefined) {
+      return undefined;
+    }
   }
   return Object.freeze({
     version: parsed.version,
@@ -768,7 +866,7 @@ export function retainedRepositoryIntentJson(intent: RetainedRepositoryIntent): 
     request: intent.request,
     fingerprint: intent.fingerprint,
     prepared: intent.prepared,
-    preState: retainedFrontierJson(intent.preState),
+    preState: intent.preState === null ? null : retainedFrontierJson(intent.preState),
     postState: retainedFrontierJson(intent.postState),
     evidence: intent.evidence,
   };

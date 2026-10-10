@@ -27,6 +27,7 @@ import type { Operation, Result } from "effection";
 import { StaleInputError } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import {
+  parseRetainedCreationPreparation,
   RETAINED_REPOSITORY_COMPLETION,
   RETAINED_REPOSITORY_INTENT,
   RETAINED_REPOSITORY_VERSION,
@@ -41,11 +42,23 @@ import {
   withSharedRefs,
 } from "./records.ts";
 import type {
+  RetainedCreationPreparation,
   RetainedFrontier,
   RetainedRef,
   RetainedRepositoryCompletion,
   RetainedRepositoryIntent,
 } from "./records.ts";
+
+/**
+ * The creation data an absent destination carries, when it carries valid data.
+ *
+ * The record parser already refused a null pre-state without it, so this is a
+ * read rather than a second gate — but it reads rather than assumes, because
+ * what it answers with decides whether an owner has to be checked.
+ */
+function creationOf(intent: RetainedRepositoryIntent): RetainedCreationPreparation | undefined {
+  return parseRetainedCreationPreparation(intent.prepared, intent.operation);
+}
 
 /** A word from the fixed vocabulary a continuation refusal is reported under. */
 export type RetainedRepositoryRefusal =
@@ -206,8 +219,9 @@ export function* admitRetainedRepositoryHistory(
         );
       }
       const lane = intent.lane.common;
+      const before = intent.preState;
       if (
-        intent.preState.administration.common !== lane ||
+        (before !== null && before.administration.common !== lane) ||
         intent.postState.administration.common !== lane
       ) {
         return refuse(
@@ -216,7 +230,7 @@ export function* admitRetainedRepositoryHistory(
             "claims to advance.",
         );
       }
-      if (intent.preState.checkout !== intent.postState.checkout) {
+      if (before !== null && before.checkout !== intent.postState.checkout) {
         return refuse(
           "lane-mismatch",
           "a retained intent's frozen transition names two different checkouts, so it does not " +
@@ -239,9 +253,49 @@ export function* admitRetainedRepositoryHistory(
             "and only one of them can be the state this entry resumes from.",
         );
       }
-      const checkout = intent.preState.checkout;
+      // A creation names its destination by the state it will establish: the
+      // one it starts from is an absent slot, which is not a state.
+      const checkout = before === null ? intent.postState.checkout : before.checkout;
       const baseline = established.get(checkout);
-      if (baseline === undefined) {
+      if (before === null) {
+        // Creating something this history has already established is not a
+        // creation, and an absent destination places no baseline of its own —
+        // only its completion does.
+        if (baseline !== undefined) {
+          return refuse(
+            "broken-frontier-chain",
+            `a retained "${intent.operation}" records an absent destination for a checkout this ` +
+              "history has already established.",
+          );
+        }
+        const creation = creationOf(intent);
+        if (creation === undefined) {
+          return refuse(
+            "malformed-record",
+            `a retained "${intent.operation}" records an absent destination without the creation ` +
+              "data a resume would have to work from.",
+          );
+        }
+        // A worktree advances refs its owner shares, so the owner has to be a
+        // checkout this history already established, in the state the creation
+        // says it found.
+        if (creation.owner !== null) {
+          const owned = established.get(creation.owner.preState.checkout);
+          if (owned === undefined) {
+            return refuse(
+              "missing-baseline",
+              "a retained worktree creation names an owner this history never established.",
+            );
+          }
+          if (!sameRetainedFrontier(owned, creation.owner.preState)) {
+            return refuse(
+              "broken-frontier-chain",
+              "a retained worktree creation expected its owner in a state this history did not " +
+                "establish.",
+            );
+          }
+        }
+      } else if (baseline === undefined) {
         if (!establishesCheckout(intent.operation)) {
           return refuse(
             "missing-baseline",
@@ -249,7 +303,7 @@ export function* admitRetainedRepositoryHistory(
               "changes, so the state it says it started from is its own account of it.",
           );
         }
-      } else if (!sameRetainedFrontier(baseline, intent.preState)) {
+      } else if (!sameRetainedFrontier(baseline, before)) {
         return refuse(
           "broken-frontier-chain",
           `a retained "${intent.operation}" expected a state this checkout's accepted records ` +
@@ -262,8 +316,8 @@ export function* admitRetainedRepositoryHistory(
       byIdentity.set(identity, entry);
       lanePosition.set(lane, intent.lane.position);
       laneUnresolved.add(lane);
-      if (baseline === undefined) {
-        established.set(checkout, intent.preState);
+      if (baseline === undefined && before !== null) {
+        established.set(checkout, before);
       }
       continue;
     }
@@ -318,7 +372,12 @@ export function* admitRetainedRepositoryHistory(
     // history never prepared, and folding it would advance the frontier a later
     // mutation is held to.
     const advanced = sameRetainedFrontier(completion.frontier, entry.intent.postState);
-    const unchanged = sameRetainedFrontier(completion.frontier, entry.intent.preState);
+    // A creation has no unchanged end. Its destination either exists as it
+    // predicted or it does not exist, and a partial one has no completion at
+    // all — so the only state its completion may stand at is the far one.
+    const unchanged =
+      entry.intent.preState !== null &&
+      sameRetainedFrontier(completion.frontier, entry.intent.preState);
     if (!advanced && !unchanged) {
       return refuse(
         "frontier-substitution",
@@ -456,8 +515,26 @@ function history(
       if (effect.intent.lane.common !== frontier.administration.common) {
         continue;
       }
-      if (effect.intent.preState.checkout === checkout) {
-        admit(effect.intent.preState);
+      const expected = effect.intent.preState;
+      if (expected === null) {
+        // An unresolved creation offers its destination no candidate: the
+        // destination is not there, and absence is not a state to attach to.
+        // What it does offer is its owner's two ends, because adding a
+        // worktree advances refs the owner shares.
+        const creation = creationOf(effect.intent);
+        if (creation?.owner !== null && creation?.owner !== undefined) {
+          if (creation.owner.preState.checkout === checkout) {
+            admit(creation.owner.preState);
+            admit(creation.owner.postState);
+          } else {
+            admit(withSharedRefs(frontier, creation.owner.preState.refs));
+            admit(withSharedRefs(frontier, creation.owner.postState.refs));
+          }
+        }
+        continue;
+      }
+      if (expected.checkout === checkout) {
+        admit(expected);
         admit(effect.intent.postState);
         continue;
       }
@@ -465,7 +542,7 @@ function history(
       // refs this checkout shares with it, so both of its ends reach here as
       // this checkout's own state under each ref list. Its HEAD, index and
       // worktree belong to that worktree and do not travel.
-      admit(withSharedRefs(frontier, effect.intent.preState.refs));
+      admit(withSharedRefs(frontier, expected.refs));
       admit(withSharedRefs(frontier, effect.intent.postState.refs));
     }
     attachments.push(Object.freeze({ checkout, frontier, candidates: Object.freeze(candidates) }));

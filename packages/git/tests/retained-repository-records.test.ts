@@ -92,7 +92,7 @@ interface IntentFixture {
   readonly position?: number;
   readonly site?: RetainedRepositorySite;
   readonly owner?: string;
-  readonly preState?: RetainedFrontier;
+  readonly preState?: RetainedFrontier | null;
   readonly postState?: RetainedFrontier;
   readonly request?: Json;
   readonly lane?: { readonly common: string; readonly position: number };
@@ -181,6 +181,17 @@ function fields(value: Json): Record<string, Json> {
     throw new Error("the encoder did not produce an object");
   }
   return { ...value };
+}
+
+/**
+ * The state this intent starts from, for a fixture that only builds operations
+ * which have one.
+ */
+function established(intent: RetainedRepositoryIntent): RetainedFrontier {
+  if (intent.preState === null) {
+    throw new Error("this fixture built an operation with no state to start from");
+  }
+  return intent.preState;
 }
 
 function accepted(result: Result<RetainedRepositoryHistory>): RetainedRepositoryHistory {
@@ -317,7 +328,7 @@ describe("retained repository records", () => {
     const value = yield* intent();
     const read = parseRetainedRepositoryIntent(retainedRepositoryIntentJson(value));
     expect(read?.fingerprint).toBe(value.fingerprint);
-    expect(read?.preState.administration.role).toBe("primary");
+    expect(read?.preState?.administration.role).toBe("primary");
 
     const identity = yield* retainedRepositoryIntentIdentity(value);
     const completion = yield* completed(value);
@@ -548,7 +559,7 @@ describe("retained repository records", () => {
           // the only part of such a refusal that is retained at all.
           yield* completed(refused, {
             result: { reason: "unmatched-pathspec" },
-            frontier: refused.preState,
+            frontier: established(refused),
           }),
         ],
         OWNER,
@@ -578,7 +589,7 @@ describe("retained repository records", () => {
         yield* completed(selection),
         intended(write),
         // The result its intent froze, at the state the file had before it.
-        yield* completed(write, { frontier: write.preState }),
+        yield* completed(write, { frontier: established(write) }),
       ],
       OWNER,
     );
@@ -624,7 +635,7 @@ describe("retained repository records", () => {
           intended(selection),
           yield* completed(selection),
           intended(commit),
-          yield* completed(commit, { result, frontier: commit.preState }),
+          yield* completed(commit, { result, frontier: established(commit) }),
         ],
         OWNER,
       );
@@ -652,7 +663,7 @@ describe("retained repository records", () => {
         // intent froze: the write happened, under a different publication.
         yield* completed(write, {
           result: { type: FILES_WRITE_SUCCESS, publication: "transaction-staged" },
-          frontier: write.preState,
+          frontier: established(write),
         }),
       ],
       OWNER,
@@ -682,7 +693,7 @@ describe("retained repository records", () => {
             result: failureJson(
               fileWriteFailure({ phase: "target", reason: "permission-denied" }).data,
             ),
-            frontier: write.preState,
+            frontier: established(write),
           }),
         ],
         OWNER,
@@ -699,7 +710,7 @@ describe("retained repository records", () => {
         intended(write),
         yield* completed(write, {
           result: failureJson(fileWriteFailure({ phase: "commit", reason: "no-space" }).data),
-          frontier: write.preState,
+          frontier: established(write),
         }),
       ],
       OWNER,
@@ -733,7 +744,7 @@ describe("retained repository records", () => {
               filesFailure({ operation: "delete", phase: "access", reason: "permission-denied" })
                 .data,
             ),
-            frontier: remove.preState,
+            frontier: established(remove),
           }),
         ],
         OWNER,
@@ -751,7 +762,7 @@ describe("retained repository records", () => {
             result: failureJson(
               filesFailure({ operation, phase: "access", reason: "permission-denied" }).data,
             ),
-            frontier: remove.preState,
+            frontier: established(remove),
           }),
         ],
         OWNER,
@@ -786,7 +797,7 @@ describe("retained repository records", () => {
                 reason: "not-directory",
               }).data,
             ),
-            frontier: ensure.preState,
+            frontier: established(ensure),
           }),
         ],
         OWNER,
@@ -801,7 +812,7 @@ describe("retained repository records", () => {
           result: failureJson(
             filesFailure({ operation: "delete", phase: "target", reason: "missing" }).data,
           ),
-          frontier: ensure.preState,
+          frontier: established(ensure),
         }),
       ],
       OWNER,
@@ -827,7 +838,7 @@ describe("retained repository records", () => {
             result: failureJson(
               filesFailure({ operation: "delete", phase: "target", reason: "missing" }).data,
             ),
-            frontier: remove.preState,
+            frontier: established(remove),
           }),
         ],
         OWNER,
