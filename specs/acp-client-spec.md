@@ -471,9 +471,24 @@ conversation under something else refuses that turn rather than having those
 settings recorded. `options()` sends no model prompt and journals nothing, and
 is called on explicit interaction rather than to restore a pane.
 
+**The native conversation an established history names.** A completed turn
+retains the exact conversation the provider said it ran in, so the retained
+records are what establish a chat's native identity; there is no mapping record
+beside them. A provider that resolves a different conversation refuses the next
+turn before it is sent, a provider that names a different one only after the
+turn ran has that turn's outcome refused with the established identity standing,
+and a history whose own turns name two conversations cannot be opened at all.
+The window before any turn has retained one belongs to the provider: ACPX's own
+record asserts an identity before the host's mapping is acknowledged, and the
+next attachment reconciles and commits that same assertion rather than creating
+a replacement (§ACPX provider).
+
 One turn runs at a time; an overlapping call refuses rather than queuing, and a
 handle kept past the scope that opened it refuses because the conversation it
-addressed has been cancelled. A refusal before a turn starts — an unavailable
+addressed has been cancelled. Cancelling a call joins the turn it started: the
+call finishes once that turn and the provider's cleanup inside it have finished
+unwinding, and the conversation stays unavailable to another turn until then, so
+a completed cancellation is proof that the provider's work has stopped. A refusal before a turn starts — an unavailable
 agent, an identity the provider will not reattach, settings it would not
 honour — is that call's answer and leaves the conversation usable. Only a
 durability failure ends it.

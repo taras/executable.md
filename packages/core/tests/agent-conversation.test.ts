@@ -779,11 +779,20 @@ describe("Tier CV — the native conversation an established history names", () 
     expect(record(yield* stream.readAll(), "turn:1").agentSessionId).toBe("native-1");
   });
 
-  it("CV22: a turn accepted before anything acknowledged a mapping reconciles to that identity", function* () {
+  /**
+   * Reopening against the identity the history itself names.
+   *
+   * What the next turn is held to comes from the retained turn records and from
+   * nothing else — this conversation keeps no mapping record of its own, so a
+   * record is the only account of which conversation it is. The window *before*
+   * a turn has retained one is the canonical provider's to reconcile, and it is
+   * proven there: `packages/acp/tests/host-conversation.test.ts` HC1.
+   */
+  it("CV22: reopening joins the identity its retained turns name, without resending them", function* () {
     const stream = new InMemoryStream();
     const first = fresh();
-    // The whole history is one accepted turn and nothing after it: there is no
-    // mapping record, only the provider's own account of the turn.
+    // One completed turn and nothing after it: the provider's own account of
+    // that turn is all this history holds about which conversation it is.
     const opened = yield* withConversation(
       stream,
       stub(first, { asserts: () => "native-1" }),

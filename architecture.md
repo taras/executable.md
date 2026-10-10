@@ -2588,6 +2588,20 @@ so one established for another id or another agent refuses rather than
 reconnecting the wrong chat, and an established conversation never changes agent
 in place.
 
+Which *native* conversation a chat is also comes from those records and from
+nothing beside them. A completed turn retains the exact conversation the
+provider said it ran in, so the journal already holds the establishment — which
+is what lets a turn the provider accepted before anything acknowledged a mapping
+be reconciled to that same conversation instead of leaving the chat looking
+unestablished and open to a different one. A provider resolving a different
+conversation refuses the next turn before it is sent; one naming a different
+conversation only after the turn ran has that outcome refused with the
+established identity standing; and a history whose own turns name two of them
+cannot be opened, because choosing between them would be a guess. Cancelling a
+turn joins it: the call does not finish until the turn and the provider's own
+cleanup have finished unwinding, and the conversation admits no second turn
+until then — so a host whose cancellation returned knows that work is over.
+
 What a turn ran under is the provider's own account. A placement is made per
 turn, because a placement settles what it asks before it is routed and is good
 for exactly one use: the first is fresh and the provider creates the
