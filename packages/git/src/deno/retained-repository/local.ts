@@ -21,7 +21,7 @@
  * predict a transition from a state the other was about to leave.
  */
 
-import { Err, Ok, ensure, withResolvers } from "effection";
+import { Err, Ok, ensure, scoped, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { createDurableOperation } from "@executablemd/durable-streams";
@@ -31,6 +31,7 @@ import {
   RETAINED_REPOSITORY_INTENT,
   RETAINED_REPOSITORY_VERSION,
   matchesRetainedEvidence,
+  parseRetainedRepositoryIntent,
   retainedRepositoryCompletionJson,
   retainedRepositoryIntentIdentity,
   retainedRepositoryIntentJson,
@@ -71,6 +72,14 @@ export interface RetainedOperation {
   /** The logical checkout this changes, and the shared directory it is in. */
   readonly checkout: string;
   readonly common: string;
+  /**
+   * Where this operation sits in its lane.
+   *
+   * Counted by the entry as it attempts operations, so a resume that attempts
+   * the same ones in the same order arrives at the same numbers — which is
+   * what lets a replayed intent carry the identity it was written under.
+   */
+  readonly position: number;
   /** The selection identity retained beside the request. */
   readonly selection: Json;
   /** Exactly what the document asked for, detached. */
@@ -90,8 +99,30 @@ export interface RetainedOperation {
 
 /** What one entry's history already holds for this protocol to resume from. */
 export interface RetainedResume {
-  /** The intent this occurrence left unresolved, when it left one. */
-  pending(identity: string): RetainedRepositoryIntent | undefined;
+  /**
+   * The intent this request left unresolved, when it left one.
+   *
+   * Found by the request's own fingerprint rather than by the whole record's
+   * digest. The digest covers the state the operation observed, and on a resume
+   * the observed state is the very thing in question — looking the saved intent
+   * up by it would miss exactly the interrupted operation that already ran.
+   */
+  pending(fingerprint: string): RetainedRepositoryIntent | undefined;
+  /**
+   * The result this request already produced, when it produced one.
+   *
+   * A finished operation is not re-decided. Its records stand, and the state
+   * they describe is the state it left *then* — a later operation has moved
+   * the checkout since, and holding a finished selection to the snapshot it
+   * recorded would refuse every entry that went on to do anything.
+   */
+  completed(fingerprint: string): CompletedOperation | undefined;
+}
+
+/** One finished operation, as its own records describe it. */
+export interface CompletedOperation {
+  readonly intent: RetainedRepositoryIntent;
+  readonly result: Json;
 }
 
 /** One shared Git directory's turn, held from inspection to acknowledgement. */
@@ -139,16 +170,28 @@ type Turn = ReturnType<typeof withResolvers<void>>;
  * replay restores — so a caller cannot tell from it which of the two happened,
  * which is the point.
  */
-export function* retain(
+export function retain(
   operation: RetainedOperation,
   resume: RetainedResume,
   lanes: RetainedLanes,
 ): Operation<Result<Json>> {
-  // Held from the first inspection through the last acknowledgement, and
-  // released with the scope that took it. Two mutations over one shared Git
-  // directory would otherwise each predict a transition from a state the other
-  // was about to leave.
+  // Scoped to this one operation, so the lane it takes is released when the
+  // operation ends rather than when its caller does. A selection that held the
+  // lane for the whole of the mutation it was selecting for would be waiting
+  // for itself.
+  return scoped(() => retained(operation, resume, lanes));
+}
+
+function* retained(
+  operation: RetainedOperation,
+  resume: RetainedResume,
+  lanes: RetainedLanes,
+): Operation<Result<Json>> {
+  // Held from the first inspection through the last acknowledgement. Two
+  // mutations over one shared Git directory would otherwise each predict a
+  // transition from a state the other was about to leave.
   yield* lanes.enter(operation.common);
+
   const fingerprint = yield* retainedRepositoryRequestFingerprint({
     owner: operation.owner,
     site: operation.site,
@@ -157,6 +200,111 @@ export function* retain(
     request: operation.request,
   });
 
+  // An interrupted operation is resumed from what it saved, never from what is
+  // observed now: the saved request is this request, so the preparation it
+  // froze is the one already decided on. Preparing again would predict a
+  // transition from whatever state the interruption left behind.
+  // A finished operation replays its own records and answers with what it
+  // produced. Nothing is inspected, nothing is performed, and the state it
+  // recorded is not a precondition on anything that comes after it.
+  const done = resume.completed(fingerprint);
+  if (done !== undefined) {
+    yield* record(
+      RETAINED_REPOSITORY_INTENT,
+      fingerprint,
+      operation,
+      retainedRepositoryIntentJson(done.intent),
+    );
+    return yield* acknowledge(
+      done.intent,
+      fingerprint,
+      operation,
+      done.result,
+      done.intent.postState,
+    );
+  }
+
+  const saved = resume.pending(fingerprint);
+  const written =
+    saved === undefined ? yield* prepared(operation) : Ok(retainedRepositoryIntentJson(saved));
+  if (!written.ok) {
+    return written;
+  }
+
+  // Appended whether it is new or replayed. The stream matches by position, so
+  // an operation that skipped its own intent on a resume would put its
+  // completion where the intent belongs.
+  const stored = yield* record(RETAINED_REPOSITORY_INTENT, fingerprint, operation, written.value);
+  const intent = parseRetainedRepositoryIntent(stored);
+  if (intent === undefined) {
+    return Err(
+      new RetainedOperationError(
+        `the retained intent for "${operation.operation}" is not one this host can read.`,
+      ),
+    );
+  }
+
+  const standing = yield* operation.inventory();
+  if (!standing.ok) {
+    return standing;
+  }
+  const transition: PreparedTransition = {
+    postState: intent.postState,
+    prepared: intent.prepared,
+    evidence: intent.evidence,
+  };
+
+  // Its predicted state means the work already happened, which is also what a
+  // selection that changes nothing looks like. Its saved state means the work
+  // did not happen and may now be performed from the inputs it froze. Anything
+  // else is a checkout something else has been in, and nothing here repairs it.
+  if (sameRetainedFrontier(standing.value, intent.postState)) {
+    return yield* acknowledge(intent, fingerprint, operation, intent.evidence, intent.postState);
+  }
+  if (!sameRetainedFrontier(standing.value, intent.preState)) {
+    return Err(
+      new FrontierError(
+        `"${operation.operation}" found a state its intent neither started from nor predicted, ` +
+          "so what happened to this checkout is not recorded here.",
+      ),
+    );
+  }
+
+  const produced = yield* operation.perform(transition);
+  if (!produced.ok) {
+    return produced;
+  }
+  // The result and the state are both proven before anything is written down:
+  // a nonzero exit proves neither, and neither does a plausible-looking one.
+  if (!matchesRetainedEvidence(produced.value, intent.evidence)) {
+    return Err(
+      new RetainedOperationError(
+        `"${operation.operation}" produced a result its intent did not predict.`,
+      ),
+    );
+  }
+  const settled = yield* operation.inventory();
+  if (!settled.ok) {
+    return settled;
+  }
+  if (!sameRetainedFrontier(settled.value, intent.postState)) {
+    return Err(
+      new FrontierError(
+        `"${operation.operation}" left the checkout in a state its intent did not predict.`,
+      ),
+    );
+  }
+  return yield* acknowledge(intent, fingerprint, operation, produced.value, settled.value);
+}
+
+/**
+ * A fresh intent, decided before anything is touched.
+ *
+ * The preparation is held to having changed nothing, which this checks rather
+ * than trusts: a prediction that moved the checkout would have moved the very
+ * state its own intent is about to claim it started from.
+ */
+function* prepared(operation: RetainedOperation): Operation<Result<Json>> {
   const before = yield* operation.inventory();
   if (!before.ok) {
     return before;
@@ -165,8 +313,6 @@ export function* retain(
   if (!transition.ok) {
     return transition;
   }
-  // The preparation is held to having changed nothing. A prediction that moved
-  // the checkout would have moved the state its own intent is about to claim.
   const after = yield* operation.inventory();
   if (!after.ok) {
     return after;
@@ -179,77 +325,28 @@ export function* retain(
       ),
     );
   }
-
-  const intent: RetainedRepositoryIntent = Object.freeze({
-    version: RETAINED_REPOSITORY_VERSION,
-    owner: operation.owner,
-    site: operation.site,
-    operation: operation.operation,
-    lane: { common: operation.common, position: 0 },
-    selection: operation.selection,
-    request: operation.request,
-    fingerprint,
-    prepared: transition.value.prepared,
-    preState: before.value,
-    postState: transition.value.postState,
-    evidence: transition.value.evidence,
-  });
-  const identity = yield* retainedRepositoryIntentIdentity(intent);
-
-  // A resume for this exact occurrence: the state decides what may happen, and
-  // the only two states it may be in are the ones the saved intent froze.
-  const saved = resume.pending(identity);
-  if (saved !== undefined) {
-    const standing = yield* operation.inventory();
-    if (!standing.ok) {
-      return standing;
-    }
-    if (sameRetainedFrontier(standing.value, saved.postState)) {
-      // The interrupted operation reached its own far end: adopt it rather
-      // than performing anything a second time.
-      return yield* acknowledge(saved, identity, saved.evidence, saved.postState);
-    }
-    if (!sameRetainedFrontier(standing.value, saved.preState)) {
-      return Err(
-        new FrontierError(
-          `resuming "${operation.operation}" found a state its saved intent neither started ` +
-            "from nor predicted, so what happened to this checkout is not recorded here.",
-        ),
-      );
-    }
-  }
-
-  yield* append(intent, identity, RETAINED_REPOSITORY_INTENT, () =>
-    retainedRepositoryIntentJson(intent),
+  return Ok(
+    retainedRepositoryIntentJson({
+      version: RETAINED_REPOSITORY_VERSION,
+      owner: operation.owner,
+      site: operation.site,
+      operation: operation.operation,
+      lane: { common: operation.common, position: operation.position },
+      selection: operation.selection,
+      request: operation.request,
+      fingerprint: yield* retainedRepositoryRequestFingerprint({
+        owner: operation.owner,
+        site: operation.site,
+        operation: operation.operation,
+        selection: operation.selection,
+        request: operation.request,
+      }),
+      prepared: transition.value.prepared,
+      preState: before.value,
+      postState: transition.value.postState,
+      evidence: transition.value.evidence,
+    }),
   );
-
-  const produced = yield* operation.perform(transition.value);
-  if (!produced.ok) {
-    return produced;
-  }
-  // The result and the state are both checked before anything is written down:
-  // a nonzero exit proves neither, and neither does a plausible-looking one.
-  if (!matchesRetainedEvidence(produced.value, transition.value.evidence)) {
-    return Err(
-      new RetainedOperationError(
-        `"${operation.operation}" produced a result its prepared transition did not predict.`,
-      ),
-    );
-  }
-  const settled = yield* operation.inventory();
-  if (!settled.ok) {
-    return settled;
-  }
-  if (!sameRetainedFrontier(settled.value, transition.value.postState)) {
-    return Err(
-      new FrontierError(
-        `"${operation.operation}" left the checkout in a state its prepared transition did not ` +
-          "predict.",
-      ),
-    );
-  }
-
-  return yield* acknowledge(intent, identity, produced.value, settled.value);
 }
 
 /**
@@ -260,21 +357,25 @@ export function* retain(
  */
 function* acknowledge(
   intent: RetainedRepositoryIntent,
-  identity: string,
+  fingerprint: string,
+  operation: RetainedOperation,
   result: Json,
   frontier: RetainedFrontier,
 ): Operation<Result<Json>> {
-  const completion = Object.freeze({
-    version: RETAINED_REPOSITORY_VERSION,
-    owner: intent.owner,
-    site: intent.site,
-    intent: identity,
-    fingerprint: intent.fingerprint,
-    result,
-    frontier,
-  });
-  yield* append(intent, identity, RETAINED_REPOSITORY_COMPLETION, () =>
-    retainedRepositoryCompletionJson(completion),
+  const identity = yield* retainedRepositoryIntentIdentity(intent);
+  yield* record(
+    RETAINED_REPOSITORY_COMPLETION,
+    fingerprint,
+    operation,
+    retainedRepositoryCompletionJson({
+      version: RETAINED_REPOSITORY_VERSION,
+      owner: intent.owner,
+      site: intent.site,
+      intent: identity,
+      fingerprint: intent.fingerprint,
+      result,
+      frontier,
+    }),
   );
   return Ok(result);
 }
@@ -282,33 +383,53 @@ function* acknowledge(
 /**
  * One record, under a name derived from what it is a record of.
  *
- * The name is a domain-separated tuple of the owner, the occurrence, the
- * operation and the phase — nothing from a clock, a scheduler or the checkout's
- * current state — so the same work arrives at the same name on a later open and
- * the stream recognizes it.
+ * The name is a domain-separated tuple of the owner, the request's own
+ * fingerprint, the operation and the phase. The fingerprint rather than the
+ * whole record's digest, because the record holds the state the operation
+ * observed and a resume observes a different one — a name that moved with the
+ * state would not be the name the first attempt wrote.
  */
-function* append(
-  intent: RetainedRepositoryIntent,
-  identity: string,
+function* record(
   phase: string,
-  record: () => Json,
-): Operation<void> {
+  fingerprint: string,
+  operation: RetainedOperation,
+  value: Json,
+): Operation<unknown> {
   const name = canonicalJson([
     "retained-repository",
     phase,
-    intent.owner,
-    identity,
-    intent.operation,
+    operation.owner,
+    fingerprint,
+    operation.operation,
   ]);
-  yield createDurableOperation<Json>({ type: phase, name }, function* () {
-    return record();
-  });
+  // Whatever comes back is journal data on a replay, so it is handed on as the
+  // unknown it is and parsed by the caller.
+  return yield createDurableOperation<Json>(
+    { type: phase, name },
+    // deno-lint-ignore require-yield
+    function* () {
+      return value;
+    },
+  );
 }
 
-/** The intents one admitted history left unresolved, by their own identity. */
+/** The intents one admitted history left unresolved, by their request. */
 export function retainedResume(
-  pending: readonly { readonly identity: string; readonly intent: RetainedRepositoryIntent }[],
+  pending: readonly { readonly intent: RetainedRepositoryIntent }[],
+  completed: readonly {
+    readonly intent: RetainedRepositoryIntent;
+    readonly completion: { readonly result: Json };
+  }[] = [],
 ): RetainedResume {
-  const held = new Map(pending.map((effect) => [effect.identity, effect.intent]));
-  return { pending: (identity) => held.get(identity) };
+  const unresolved = new Map(pending.map((effect) => [effect.intent.fingerprint, effect.intent]));
+  const finished = new Map(
+    completed.map((effect) => [
+      effect.intent.fingerprint,
+      { intent: effect.intent, result: effect.completion.result },
+    ]),
+  );
+  return {
+    pending: (fingerprint) => unresolved.get(fingerprint),
+    completed: (fingerprint) => finished.get(fingerprint),
+  };
 }
