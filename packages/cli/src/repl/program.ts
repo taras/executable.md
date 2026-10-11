@@ -673,6 +673,15 @@ function* drive(
       if (built.ok) {
         state = adopting;
         model = attempted.model;
+        // Standing at the head means the unfinished entry below is this
+        // process's to continue. Said here rather than at the open, because a
+        // location may name a frozen position: that view continues nothing, and
+        // the control that comes back to the head is what asks for the work.
+        // Idempotent, so a frame that merely redrew the head starts nothing and
+        // an entry already running is left exactly as it is.
+        if (state.route.at === undefined) {
+          yield* current.resume();
+        }
         // The readiness may have moved while that refusal was on the screen: the
         // entry it named has finished, or the teardown it named has completed.
         // A refusal that is no longer true is worse than no refusal, because it

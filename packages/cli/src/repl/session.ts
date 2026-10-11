@@ -289,6 +289,21 @@ export interface ReplSession {
    * source exactly as they were.
    */
   submit(source: string): Operation<Result<void>>;
+  /**
+   * Start the unfinished entry this history ends with, if nothing has.
+   *
+   * A session opened at a frozen history position is a reading, and a reading
+   * acquires nothing: the unfinished final entry is projected rather than
+   * continued, so no entry host is built, no checkout is leased and no replay
+   * runs behind a screen that is deliberately showing the past. Continuing is
+   * what returning to the head means, and this is how the driver says so.
+   *
+   * Idempotent, and that is the whole of its contract: an entry already running
+   * keeps running — freezing a view and coming back must not duplicate or
+   * cancel work this session owns — an entry that has settled is not started
+   * again, and a history with nothing unfinished has nothing to start.
+   */
+  resume(): Operation<void>;
 }
 
 /** What starting or reopening a session needs. */
@@ -411,6 +426,18 @@ function* start(
       ? { entry: last, segment: finalSegment }
       : undefined;
 
+  /**
+   * Whether this session's view stands at the head of the file.
+   *
+   * A frozen position is a reading of what the file held then, so opening one
+   * continues nothing: the unfinished entry below is projected and left alone
+   * until the driver returns to the head and says to continue it. Deciding it
+   * here rather than at the start of each entry keeps one answer for the
+   * session's whole life — the position a *location* named is the position this
+   * session was opened at, and moving between views is the driver's business.
+   */
+  const atSelectedHead = selection === undefined;
+
   if (submitted !== undefined) {
     const validated = yield* preflight(submitted, includes, installations);
     if (!validated.ok) {
@@ -463,6 +490,8 @@ function* start(
     let running: ReplEntryTask | undefined;
     /** Whether this session still starts entry tasks. */
     let admitting = true;
+    /** Whether the unfinished entry this history ends with has been continued. */
+    let continued = false;
     /** How the last entry to finish finished. */
     let finished: Result<unknown> | undefined;
 
@@ -518,6 +547,10 @@ function* start(
       },
       submit(source: string): Operation<Result<void>> {
         return submitting(source);
+      },
+      // deno-lint-ignore require-yield
+      *resume(): Operation<void> {
+        continuing();
       },
     };
 
@@ -691,6 +724,35 @@ function* start(
       };
       running = started;
       return started;
+    }
+
+    /**
+     * Continue the unfinished final entry, once.
+     *
+     * Only the one segment that never finished, and only ever that one. A
+     * settled range is read by the projector and handed to nobody: replaying it
+     * would re-run work the file already records, and correlate one entry's
+     * coroutines against another's.
+     *
+     * The guards are what make this callable from a driver that may say
+     * "continue" on every frame. `continued` is this session's own one-shot, so
+     * an entry that has already run and settled is not started a second time by
+     * a view returning to the head; `running` is the entry that is still going,
+     * which a view change must leave exactly as it is; and `admitting` is the
+     * authority to start anything at all, which teardown and a session failure
+     * both withdraw.
+     */
+    function continuing(): void {
+      if (resumed === undefined || continued || running !== undefined || !admitting) {
+        return;
+      }
+      continued = true;
+      begin(
+        resumed.entry.key,
+        resumed.entry.source,
+        new EntrySegmentStream(stream, { retained: resumed.segment.events, final: true }),
+        entryInitialBindings(head, resumed.entry),
+      );
     }
 
     function* runEntry(
@@ -870,17 +932,8 @@ function* start(
       }
     });
 
-    if (resumed !== undefined) {
-      // Only the one segment that never finished, and only ever that one. A
-      // settled range is read by the projector and handed to nobody: replaying
-      // it would re-run work the file already records, and correlate one entry's
-      // coroutines against another's.
-      begin(
-        resumed.entry.key,
-        resumed.entry.source,
-        new EntrySegmentStream(stream, { retained: resumed.segment.events, final: true }),
-        entryInitialBindings(head, resumed.entry),
-      );
+    if (resumed !== undefined && atSelectedHead) {
+      continuing();
     } else if (submitted !== undefined) {
       begin(
         entryKey(head.entries.length + 1),
@@ -889,8 +942,10 @@ function* start(
         entryInitialBindings(head),
       );
     } else {
-      // Nothing to run. Every entry this history holds has settled, so the
-      // reading of them is the whole answer and the session opens at once.
+      // Nothing to run. Every entry this history holds has settled — or the one
+      // that did not is being read at a frozen position, which continues
+      // nothing — so the reading of them is the whole answer and the session
+      // opens at once.
       open();
     }
 

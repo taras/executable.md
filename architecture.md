@@ -6076,6 +6076,18 @@ rather than by discipline. A runtime that passes no factory leaves the
 declarations to reach their own Api defaults, which refuse before a lock, a
 credential, a directory or a subprocess exists.
 
+A session opened at a frozen history position builds nothing either, and that is
+a decision rather than a consequence: the unfinished entry such a history ends
+with is projected and left alone, and continuing it is what returning to the head
+asks for. The session offers that as one idempotent act — an entry already
+running is left exactly as it is, an entry that has settled is not started again,
+and a driver may say it on every frame that stands at the head. Continuing *does*
+reach the repository: the host is built, the saved checkouts are selected and
+authenticated again and their leases re-acquired, and only then are the completed
+boundaries replayed from their records. The effect-free claim belongs to
+presentation — a settled history, and a frozen view of any history — and not to a
+live continuation.
+
 The entry's own file access is bound into the execution it runs: the host's
 ordinary Files provider is still installed beneath it and still answers for the
 rest of the command, so it delegates each mutation inward first and performs one

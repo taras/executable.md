@@ -197,20 +197,33 @@ reads their evidence and files issues. What the REPL adds is that an entry which
 does not finish can be continued without doing any of it again.
 
 Each entry has a repository host of its own, built when that entry is submitted
-and gone when it settles. The command builds none — opening a location, drawing a
-catalog, reading a cold history and refusing an unresolvable location each build
-nothing, select nothing and lock nothing. Two entries in one execution are two
-owners: a later entry inherits no selection, no lease, no effect identity and no
-evidence from an earlier one, and neither does an entry in another execution
-standing on the same checkout.
+and gone when it settles. Two entries in one execution are two owners: a later
+entry inherits no selection, no lease, no effect identity and no evidence from an
+earlier one, and neither does an entry in another execution standing on the same
+checkout.
 
-Reopen an execution whose last entry is unfinished and that entry continues from
-where its records stop. Every boundary it had already completed answers from its
-own record — no clone, no lock, no credential, no scratch directory, no forge
-request — and the first boundary it had not reached is performed once. An entry
-whose work stands on a selection its own history never made refuses rather than
-selecting a second time. Generated writes inside a selected checkout are that
-entry's own effects and recover with the rest of them.
+**A reading builds nothing.** Opening a location, drawing a catalog, reading a
+settled history and refusing an unresolvable location each build no host, select
+nothing and lock nothing. So does a location naming a history position: a frozen
+view of an execution whose last entry never finished shows that entry as
+unfinished and continues none of it, because a view of the past is not a reason
+to start work. `[live]` is what asks for the work, and it asks once — the entry
+it continues is already running by the time anything else is drawn, and going
+back and forth between positions neither starts a second one nor cancels the one
+that is going.
+
+**Continuing is not a reading.** An unfinished entry taken back to the head is
+given to the engine, and that reaches the repository: the entry's host is built,
+the checkouts its own records named are selected and authenticated again, and
+their leases are re-acquired before anything is replayed. What replay does *not*
+do is repeat what was done — every boundary the records show as completed answers
+from its own record, with no commit, no publication, no forge request and no
+second credential session — and the first boundary the records do not reach is
+performed once. An entry whose work stands on a selection its own history never
+made refuses rather than selecting a second time, and one whose checkout has
+moved since refuses rather than building on a state nothing accounts for.
+Generated writes inside a selected checkout are that entry's own effects and
+recover with the rest of them.
 
 Which installations operate repositories is the host's to say, and it is the same
 answer `xmd run` gives: the Deno-hosted command — from this checkout or compiled

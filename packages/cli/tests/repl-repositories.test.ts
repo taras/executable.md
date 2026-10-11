@@ -54,6 +54,7 @@ import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
 import { installReplHost } from "../src/repl-assembly.ts";
 import type { ReplEntryHostFactory, ReplEntryHostRequest } from "../src/repl-repositories.ts";
 import { createExecutionFile, openExecutionFile, replRepository } from "../src/repl/journal.ts";
+import { projectRepl } from "../src/repl/model.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { ReplQuestion } from "../src/repl/elicitation.ts";
@@ -662,6 +663,158 @@ describe("REPL repositories: one retained host per entry", () => {
     expect(yield* exists(join(fixture.checkout, "later.md"))).toBe(true);
     expect(git(["rev-parse", "HEAD"], fixture.checkout, fixture.checkout)).toBe(committed);
     expect(git(["rev-list", "--count", "HEAD"], fixture.checkout, fixture.checkout)).toBe("2");
+  });
+
+  it("R10: a frozen view of an unfinished entry continues nothing until it is left", function* () {
+    const fixture = yield* useFixture();
+    yield* useTempFileCompiler();
+    yield* useCompositionComponents();
+    const execution = yield* useExecution(fixture);
+
+    // A real entry first, so the prefix below is one the product wrote rather
+    // than one this test invented: a write, a commit, and a second write.
+    const source = [
+      '<File path="notes.md">prepared</File>',
+      '<Git.Add paths="notes.md" />',
+      '<Git.Commit message="Prepare" as="commit" />',
+      '<File path="later.md">later</File>',
+      "",
+      "committed {commit.commit}",
+    ].join("\n");
+    yield* scoped(function* () {
+      const opened = yield* submitReplEntry({
+        execution,
+        installations: installations(),
+        entryHost: fixture.entryHost,
+        source,
+      });
+      if (!opened.ok) {
+        throw opened.error;
+      }
+      const settled = yield* opened.value.join();
+      if (!settled.ok) {
+        throw settled.error;
+      }
+    });
+    const whole = yield* recordsOf(execution);
+    const committed = git(["rev-parse", "HEAD"], fixture.checkout, fixture.checkout);
+
+    // The same entry, cut before its last write and with that write's file
+    // removed: an entry that stopped there, which a later open continues.
+    const retained = positionsOf(unfinished(whole), RETAINED_REPOSITORY_INTENT);
+    const cut = retained[retained.length - 1] ?? 0;
+    const events = unfinished(whole).slice(0, cut);
+    const interrupted = yield* useCraftedExecution(fixture, events, execution.id);
+    yield* rm(join(fixture.checkout, "later.md"), { force: true });
+
+    // A position this prefix itself holds, which is what a location names.
+    const projected = projectRepl(events);
+    if (!projected.ok) {
+      throw projected.error;
+    }
+    expect(projected.value.entries.at(-1)?.settled).toBe(false);
+    const frozen = projected.value.checkpoints.at(-1)?.marker;
+    if (frozen === undefined) {
+      throw new Error("this prefix holds no history position to freeze at");
+    }
+
+    const asked = fixture.asked.length;
+    yield* scoped(function* () {
+      const cold = yield* openReplSession({
+        execution: interrupted,
+        selection: frozen,
+        installations: installations(),
+        entryHost: fixture.entryHost,
+      });
+      if (!cold.ok) {
+        throw cold.error;
+      }
+
+      // 1. Frozen, and therefore a reading: nothing runs, nothing is asked and
+      //    no host exists, so no lease, credential or scratch directory does
+      //    either. The work the prefix stops before has not happened.
+      expect(cold.value.live).toBe(false);
+      expect(cold.value.elicitation.pending).toBeUndefined();
+      expect(fixture.asked).toHaveLength(asked);
+      expect(yield* exists(join(fixture.checkout, "later.md"))).toBe(false);
+
+      // 2. Back to the head, which is what the public control does. Said twice,
+      //    because a driver says it on every frame that stands there — and the
+      //    entry is live from the first word, which is the part that is decided
+      //    without suspending.
+      yield* cold.value.resume();
+      yield* cold.value.resume();
+      expect(cold.value.live).toBe(true);
+
+      const settled = yield* cold.value.join();
+      if (!settled.ok) {
+        throw settled.error;
+      }
+
+      // 3. One continuation, by one host, for the entry that was unfinished:
+      //    the second word above started nothing, and a word after the entry
+      //    settled starts nothing either.
+      yield* cold.value.resume();
+      expect(fixture.asked).toHaveLength(asked + 1);
+      expect(fixture.asked[asked]?.entryKey).toBe("entry-1");
+    });
+    expect(yield* exists(join(fixture.checkout, "later.md"))).toBe(true);
+    expect(git(["rev-parse", "HEAD"], fixture.checkout, fixture.checkout)).toBe(committed);
+    expect(git(["rev-list", "--count", "HEAD"], fixture.checkout, fixture.checkout)).toBe("2");
+  });
+
+  it("R10: a view change leaves the entry that is already running alone", function* () {
+    const fixture = yield* useFixture();
+    yield* useTempFileCompiler();
+    yield* useCompositionComponents();
+    const execution = yield* useExecution(fixture);
+
+    // An entry that is still running when the view moves: it stands at a
+    // question, which is the one state a person has time to navigate in.
+    const source = [
+      "```js eval",
+      'const ask = { type: "object", properties: { ok: { type: "string" } }, ' +
+        'required: ["ok"], additionalProperties: false };',
+      "```",
+      '<File path="running.md">running</File>',
+      '<Git.Add paths="running.md" />',
+      '<Git.Commit message="Running" as="commit" />',
+      '<Elicit schema={ask} as={"answer"}>Ready?</Elicit>',
+      "",
+      "answered {answer.ok}",
+    ].join("\n");
+
+    yield* scoped(function* () {
+      const opened = yield* submitReplEntry({
+        execution,
+        installations: installations(),
+        entryHost: fixture.entryHost,
+        source,
+      });
+      if (!opened.ok) {
+        throw opened.error;
+      }
+      const session = opened.value;
+      const question = yield* nextQuestion(session);
+      expect(fixture.asked).toHaveLength(1);
+
+      // The driver returning to the head while that entry runs. Nothing is
+      // started beside it and nothing is taken from it: the same question is
+      // still the one waiting, and answering it still settles the entry.
+      yield* session.resume();
+      yield* session.resume();
+      expect(fixture.asked).toHaveLength(1);
+      expect(session.live).toBe(true);
+      expect(session.elicitation.pending).toBe(question);
+
+      expect(question.submit({ ok: "yes" }).kind).toBe("answered");
+      const settled = yield* session.join();
+      if (!settled.ok) {
+        throw settled.error;
+      }
+      expect(session.overlay.output).toContain("answered yes");
+    });
+    expect(intentsOf(yield* recordsOf(execution), "commit")).toHaveLength(1);
   });
 
   it("R11: one entry's whole repository journey, left and reopened", function* () {

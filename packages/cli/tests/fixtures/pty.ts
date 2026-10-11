@@ -246,8 +246,47 @@ export interface Pty {
   status(): Operation<number | undefined>;
 }
 
+/**
+ * The module cache this host has already filled, named for the child.
+ *
+ * A row like this gives the command a home of its own, which is what keeps its
+ * histories and its managed repositories out of the operator's. Deno keeps its
+ * module cache under that same home, so the child inherits an *empty* one and
+ * re-downloads its whole graph — minutes of registry traffic before the product
+ * runs, and nothing at all on a host with no network. Whichever cache this
+ * process is using is the one that is already warm, so the child is pointed at
+ * it explicitly rather than left to derive one from a home that is a fixture.
+ *
+ * Asked of `deno` rather than assembled from a platform rule, because the
+ * answer is the runtime's and it is already configurable by the operator. A
+ * `deno` that will not answer leaves the variable unset, which is the behaviour
+ * this had before: slow, but not wrong.
+ */
+function* moduleCache(): Operation<Readonly<Record<string, string>>> {
+  const asked = yield* attempted("deno", ["info", "--json"]);
+  if (!asked.ok) {
+    return {};
+  }
+  try {
+    const directory: unknown = JSON.parse(asked.output)?.denoDir;
+    return typeof directory === "string" && directory.length > 0 ? { DENO_DIR: directory } : {};
+  } catch {
+    return {};
+  }
+}
+
 /** Whichever allocator this host can drive. */
-export function* allocate(line: string, home: string, cwd: string = process.cwd()): Operation<Pty> {
+export function* allocate(
+  line: string,
+  home: string,
+  cwd: string = process.cwd(),
+  // What this row's own world needs the command to be standing in: a `PATH`
+  // whose `git` reaches a local remote, a credential, a configured endpoint.
+  // Exported inside the pty, beside the data root and the window, because all
+  // of it is the same kind of thing — the environment a person's shell would
+  // have had.
+  environment: Readonly<Record<string, string>> = {},
+): Operation<Pty> {
   // One shell line, run by whichever allocator's own `sh -c`: the data root is
   // isolated so this row cannot read or write the history of whoever ran it, the
   // window is sized *inside* the pty because one allocated by a parent that is
@@ -255,7 +294,13 @@ export function* allocate(line: string, home: string, cwd: string = process.cwd(
   // be read off the screen.
   const inside = [
     `export HOME=${shellQuote(home)}`,
+    // Before the caller's own exports, so a row that wants to say something
+    // else about the cache still can.
+    ...Object.entries(yield* moduleCache()).map(
+      ([name, value]) => `export ${name}=${shellQuote(value)}`,
+    ),
     `export XDG_DATA_HOME=${shellQuote(join(home, "share"))}`,
+    ...Object.entries(environment).map(([name, value]) => `export ${name}=${shellQuote(value)}`),
     `stty rows ${WINDOW.rows} cols ${WINDOW.columns}`,
     line,
     `printf '${SENTINEL}%s\\n' "$?"`,
@@ -298,7 +343,10 @@ export function* allocate(line: string, home: string, cwd: string = process.cwd(
  */
 function* tmuxPty(inside: string, home: string, cwd: string): Operation<Pty> {
   const name = `xmd-pty-${randomBytes(6).toString("hex")}`;
-  const socket = join(home, "tmux.sock");
+  // Short on purpose: a unix socket path may use 104 bytes, this one lives
+  // inside a temporary home that is already most of them, and tmux reports the
+  // overrun as a connection failure rather than as a name it cannot use.
+  const socket = join(home, "t.sock");
   /** Every tmux invocation for this row's own server, configured by nobody. */
   const control = (...args: string[]): string[] => ["-S", socket, "-f", "/dev/null", ...args];
   // Registered before the server exists, and it waits for the session to be

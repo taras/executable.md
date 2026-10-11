@@ -38,15 +38,23 @@ import {
   REACH_MS,
   showing,
 } from "../../packages/cli/tests/fixtures/pty.ts";
+import type { Pty } from "../../packages/cli/tests/fixtures/pty.ts";
 import {
+  answer,
+  ASKING,
   ENTRY,
+  forgePaths,
   git,
   histories,
+  holds,
+  JOURNEY,
   printed,
   settledOk,
   submit,
+  useJourneyEnvironment,
   useWorld,
 } from "../../packages/cli/tests/fixtures/repl-repository-world.ts";
+import { creations, gitHubStore, issueCreations } from "../../packages/git/tests/support/github.ts";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const BINARY = path.join(ROOT, "dist", "xmd");
@@ -55,11 +63,102 @@ const BINARY = path.join(ROOT, "dist", "xmd");
 const WORK_MS = 120_000;
 
 describe("compiled xmd repl", { sanitizeOps: false, sanitizeResources: false }, () => {
+  it("R11: the binary's own journey, left at each question and reopened", function* () {
+    if (!(yield* exists(BINARY))) {
+      throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
+    }
+    const world = yield* useWorld("xmd-cj-");
+    const store = gitHubStore({ token: "journey-credential" });
+    store.resolveHead = (branch) =>
+      git(["rev-parse", branch], world.remote, world.home) || undefined;
+    const environment = yield* useJourneyEnvironment(world, store);
+
+    /** One invocation of the binary over this world. */
+    function invoking(location?: string): Operation<Pty> {
+      return allocate(
+        [BINARY, "repl", "--deny-all", ...(location === undefined ? [] : [location])]
+          .map(shellQuote)
+          .join(" "),
+        world.home,
+        world.checkout,
+        environment,
+      );
+    }
+
+    // 1. The whole vocabulary, typed into the binary's own draft, left where
+    //    the first question stands: after the local work, before the external.
+    const first = yield* scoped(function* (): Operation<string> {
+      const pty = yield* invoking();
+      yield* showing(pty, "[exit]", REACH_MS);
+      yield* submit(pty, JOURNEY);
+      yield* showing(pty, ASKING, WORK_MS);
+      expect(creations(store)).toBe(0);
+      yield* reaching(pty, "[exit]", LEAVE_MS);
+      yield* pty.type("\r");
+      expect(
+        yield* ended(
+          pty,
+          LEAVE_MS,
+          "a question was waiting, so the binary was holding a selected checkout and a lease.",
+        ),
+      ).toBe(0);
+      return printed(yield* pty.shows());
+    });
+
+    const left = yield* histories(world.home);
+    expect(left).toHaveLength(1);
+
+    // 2. A second invocation of the binary, handed that location: the entry
+    //    continues, the same question is waiting, and answering it publishes,
+    //    opens the pull request and reads its evidence — once.
+    const second = yield* scoped(function* (): Operation<string> {
+      const pty = yield* invoking(first);
+      yield* showing(pty, ASKING, WORK_MS);
+      expect(creations(store)).toBe(0);
+      yield* answer(pty, "yes", LEAVE_MS);
+      yield* holds("the pull request this journey opens", WORK_MS, () => creations(store) === 1);
+      yield* showing(pty, ASKING, WORK_MS);
+      expect(git(["rev-parse", "publish/1.4"], world.remote, world.home).length).toBe(40);
+      expect(issueCreations(store)).toBe(0);
+      yield* reaching(pty, "[exit]", LEAVE_MS);
+      yield* pty.type("\r");
+      expect(yield* ended(pty, LEAVE_MS)).toBe(0);
+      return printed(yield* pty.shows());
+    });
+
+    const published = git(["rev-parse", "publish/1.4"], world.remote, world.home);
+    const requests = store.requests.length;
+
+    // 3. A third invocation answers the second question and settles the entry.
+    //    What was published replays from its records.
+    yield* scoped(function* (): Operation<void> {
+      const pty = yield* invoking(second);
+      yield* showing(pty, ASKING, WORK_MS);
+      yield* answer(pty, "yes", LEAVE_MS);
+      yield* showing(pty, settledOk(1), WORK_MS);
+      yield* reaching(pty, "[exit]", LEAVE_MS);
+      yield* pty.type("\r");
+      expect(yield* ended(pty, LEAVE_MS)).toBe(0);
+    });
+
+    expect(creations(store)).toBe(1);
+    expect(issueCreations(store)).toBe(1);
+    expect(git(["rev-parse", "publish/1.4"], world.remote, world.home)).toBe(published);
+    expect(
+      forgePaths(store)
+        .slice(requests)
+        .filter((one) => !one.includes("/issues") && !one.includes("/graphql")),
+    ).toEqual([]);
+    const settled = yield* histories(world.home);
+    expect(settled).toHaveLength(1);
+    expect(settled[0]?.startsWith(left[0] ?? "")).toBe(true);
+  });
+
   it("R11: an entry publishes from a real checkout, and the location reopens it", function* () {
     if (!(yield* exists(BINARY))) {
       throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
     }
-    const world = yield* useWorld("xmd-repl-repos-compiled-");
+    const world = yield* useWorld("xmd-ca-");
     const line = (...args: string[]): string =>
       [BINARY, "repl", "--deny-all", ...args].map(shellQuote).join(" ");
 
