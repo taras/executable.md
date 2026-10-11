@@ -64,17 +64,9 @@ import { cwd } from "@executablemd/runtime";
 import { parseFilesFailure } from "@executablemd/runtime";
 import type { FilesFailureData, FileWriteFailureData, FilesReason } from "@executablemd/runtime";
 import { content } from "../component-api.ts";
-import { invocationForm } from "../invocation-identity.ts";
-import type {
-  ComponentInvocation,
-  FormDeclaration,
-  IdentityClaimant,
-  ProtectedBody,
-} from "../invocation-identity.ts";
-import { routeAuthoredWrite } from "../file-mutations.ts";
-import type { FileMutationHandlers } from "../file-mutations.ts";
+import type { FormDeclaration } from "../invocation-identity.ts";
 import { ContentError, DocumentationError, ProjectedContentError } from "../errors.ts";
-import { checkFilePath, readFileText, writeFileText, writeOutcome } from "../files.ts";
+import { checkFilePath, readFileText, writeFileText } from "../files.ts";
 import type { Json } from "../types.ts";
 import { reason } from "./fs-error-phrases.ts";
 
@@ -134,68 +126,6 @@ const write = printErrors(function* (props: Record<string, Json>): Operation<str
  * body however the contextual chain answers and whatever object a wrapper hands
  * over, because the read body is the only one it is dispatched to.
  */
-/**
- * The same two directions, with the write routed to a host that journals it.
- *
- * Entered in place of the dispatcher when a host supplied file-mutation
- * handlers and canonical resolution selected core's own `<File>`. The form is
- * read off the engine's own issuance — the fact the scanner recorded, not the
- * contextual answer a handler could compose — so a `<File />` cannot reach the
- * write here any more than it can through ordinary dispatch.
- *
- * The order is the one the ordinary write keeps, with verification added where
- * the contract puts it: the path is admitted by pure arithmetic, then this
- * invocation's identity is claimed in its own frame, before anything
- * subordinate runs, and only then is the content projected and handed over.
- * Claiming first is not observably different from claiming afterwards — the
- * projection has finished either way — so it is here because verification
- * belongs before the subordinate scope, not because the claim would otherwise
- * refuse.
- */
-export function fileMutationBody(
-  claim: IdentityClaimant,
-  handlers: FileMutationHandlers,
-): ProtectedBody {
-  const write = printErrors(function* (
-    props: Record<string, Json>,
-    invocation: ComponentInvocation,
-  ): Operation<string> {
-    const requested = String(props.path);
-    const directory = yield* cwd();
-    const admitted = yield* checkFilePath({ cwd: directory, path: requested });
-    if (!admitted.ok) {
-      throw new FileAccessError(refusal(requested, "write", parseFilesFailure(admitted.error)));
-    }
-    const occurrence = yield* claim(invocation);
-    const text = yield* rendered(requested);
-    const failure = writeOutcome(
-      yield* routeAuthoredWrite(handlers, occurrence, {
-        cwd: directory,
-        path: requested,
-        content: text,
-      }),
-    );
-    if (failure !== undefined) {
-      throw new FileAccessError(report(requested, failure));
-    }
-    return "";
-  });
-
-  return function* (
-    props: Record<string, Json>,
-    invocation: ComponentInvocation,
-  ): Operation<unknown> {
-    const form = invocationForm(invocation);
-    if (form === undefined) {
-      throw new FileAccessError(
-        `did not read or write "${String(props.path)}": this is not an invocation the engine ` +
-          "issued, so it names no file effect.",
-      );
-    }
-    return yield* (form === "paired" ? write : read)(props, invocation);
-  };
-}
-
 export const form: FormDeclaration = {
   forms: "both",
   "self-closing": read,

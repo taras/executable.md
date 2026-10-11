@@ -649,17 +649,8 @@ export function mutations(store: GitHubStore): string[] {
  * `port: 0` so concurrent suites cannot share one, and every connection is
  * closed on teardown: a spare connection a client pool opened and never used
  * would otherwise keep `close()` waiting.
- *
- * `answering` is consulted before the store is, and only for what it answers:
- * this store owns pull requests and issues, and a suite whose subject reaches
- * for something beside them — the three evidence collections, say — supplies
- * those here rather than teaching the store a second subject. Whatever it
- * declines is answered exactly as before.
  */
-export function useGitHubServer(
-  store: GitHubStore,
-  answering?: (request: GitHubHttpRequest) => GitHubHttpResponse | undefined,
-): Operation<string> {
+export function useGitHubServer(store: GitHubStore): Operation<string> {
   return resource(function* (provide) {
     // Each request body is read by a task of this server's own scope, so
     // tearing the server down ends the reads still in progress rather than
@@ -667,16 +658,6 @@ export function useGitHubServer(
     // is the scope-bound adapter for that: it attaches and detaches the
     // stream's own handlers with the task.
     const scope = yield* useScope();
-    /**
-     * Where this server is, once it is somewhere.
-     *
-     * The request URL has to name the place the client actually reached: an
-     * adapter compares the repository a payload names against its own
-     * endpoint, and a payload built around `localhost` while the caller was
-     * given `127.0.0.1` names a different repository. Assigned after the
-     * listener has a port, which is the first moment there is an answer.
-     */
-    let origin = "http://127.0.0.1";
     const server = createServer((incoming: IncomingMessage, outgoing: ServerResponse) => {
       scope.run(function* () {
         const chunks: Uint8Array[] = [];
@@ -689,16 +670,15 @@ export function useGitHubServer(
         for (const [name, value] of Object.entries(incoming.headers)) {
           headers[name === "authorization" ? "Authorization" : name] = String(value);
         }
-        const asked: GitHubHttpRequest = {
-          method:
-            incoming.method === "POST" ? "POST" : incoming.method === "PATCH" ? "PATCH" : "GET",
-          url: `${origin}${incoming.url ?? "/"}`,
-          headers,
-          body: Buffer.concat(chunks).toString("utf8"),
-        };
         let answer: GitHubHttpResponse;
         try {
-          answer = answering?.(asked) ?? respond(store, asked);
+          answer = respond(store, {
+            method:
+              incoming.method === "POST" ? "POST" : incoming.method === "PATCH" ? "PATCH" : "GET",
+            url: `http://localhost${incoming.url ?? "/"}`,
+            headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
         } catch {
           outgoing.destroy();
           return;
@@ -718,7 +698,6 @@ export function useGitHubServer(
     });
 
     const address = server.address() as AddressInfo;
-    origin = `http://127.0.0.1:${address.port}`;
-    yield* provide(origin);
+    yield* provide(`http://127.0.0.1:${address.port}`);
   });
 }

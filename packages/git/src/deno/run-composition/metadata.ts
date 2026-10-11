@@ -25,8 +25,8 @@
  * would refuse every checkout anybody had used.
  */
 
-import { members, optionalText, text } from "./parse.ts";
-import { parseObjectFormat, type GitObjectFormat } from "./records.ts";
+import { members, optionalText, text } from "../../composition/parse.ts";
+import { parseObjectFormat, type GitObjectFormat } from "../../composition/records.ts";
 
 /** The one shape this version writes and the only one it reads. */
 export const METADATA_VERSION = 1;

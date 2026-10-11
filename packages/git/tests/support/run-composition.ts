@@ -12,14 +12,13 @@
  * That is the point of the profile: an ordinary run has none of them.
  */
 
-import { ensure, scoped, spawn, suspend, until, withResolvers, type Operation } from "effection";
+import { scoped, spawn, suspend, until, withResolvers, type Operation } from "effection";
 import { ensureDir, exists, lstat, readdir, readTextFile } from "@effectionx/fs";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
-import process from "node:process";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
 import { API, useHostFiles } from "@executablemd/runtime";
@@ -48,27 +47,6 @@ import {
 } from "../../src/deno/run-composition/placement.ts";
 import { git } from "./git-remotes.ts";
 import type { BareRemote } from "./git-remotes.ts";
-
-/** The invoking identity is inherited by managed clones, whose config is new. */
-export function* useGitIdentity(): Operation<void> {
-  const values = {
-    GIT_AUTHOR_NAME: "Entry",
-    GIT_AUTHOR_EMAIL: "entry@example.invalid",
-    GIT_COMMITTER_NAME: "Entry",
-    GIT_COMMITTER_EMAIL: "entry@example.invalid",
-  };
-  const previous = Object.keys(values).map((name) => ({ name, value: process.env[name] }));
-  yield* ensure(function* () {
-    for (const { name, value } of previous) {
-      if (value === undefined) {
-        delete process.env[name];
-      } else {
-        process.env[name] = value;
-      }
-    }
-  });
-  Object.assign(process.env, values);
-}
 
 /** A working checkout on this host, as if somebody had cloned it by hand. */
 export interface HostCheckout {

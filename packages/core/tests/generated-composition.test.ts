@@ -21,14 +21,13 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
-import { ensure, Ok, scoped } from "effection";
+import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
 
 import { collect } from "../src/collect.ts";
 import { executeInstalled } from "../host.ts";
 import { fileDeleteEntry, fileReadEntry, fileWriteEntry } from "../host.ts";
-import type { ExecutionInstallation, FileMutationHandlers } from "../host.ts";
-import { fileWriteSuccess } from "@executablemd/runtime";
+import type { ExecutionInstallation } from "../host.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { recordedFiles } from "./support/fragment-files.ts";
 import type { RecordedFiles } from "./support/fragment-files.ts";
@@ -445,124 +444,5 @@ describe("Tier FE33 — occurrences do not share generated history", () => {
       (event) => event.type === "yield" && event.description.type === "generated_xmd",
     );
     expect(admitted).toHaveLength(2);
-  });
-});
-
-/**
- * Tier FM — a generated mutation reaching a host that journals it.
- *
- * A fragment's capabilities are captured before any document code exists, so a
- * generated write never travels through ambient Files or Env. These prove the
- * same seam the authored component uses is reached on those captured terms, and
- * that the reads beside it are untouched.
- */
-describe("Tier FM — a host handed a fragment's mutations", () => {
-  interface Mutations {
-    readonly delivered: { occurrence: string; path: string; content: string }[];
-    readonly deleted: { occurrence: string; path: string }[];
-    readonly handlers: FileMutationHandlers;
-  }
-
-  function recording(): Mutations {
-    const delivered: { occurrence: string; path: string; content: string }[] = [];
-    const deleted: { occurrence: string; path: string }[] = [];
-    return {
-      delivered,
-      deleted,
-      handlers: {
-        *writeTextFile([routing], next) {
-          const occurrence = yield* next({ intent: "inspect", routing });
-          delivered.push({
-            occurrence,
-            path: routing.input.path,
-            content: routing.input.content,
-          });
-          yield* next({
-            intent: "answer",
-            routing,
-            answer: Ok(fileWriteSuccess("host-committed")),
-          });
-        },
-        *deleteFile([routing], next) {
-          const occurrence = yield* next({ intent: "inspect", routing });
-          deleted.push({ occurrence, path: routing.input.path });
-          yield* next({ intent: "answer", routing, answer: Ok(undefined) });
-        },
-      },
-    };
-  }
-
-  it("FM11: a generated write reaches the host, not the captured provider", function* () {
-    const files = recordedFiles({});
-    const mutations = recording();
-    yield* run(evaluating(`<File path="out.md">generated text</File>\n`, ["write"]), [
-      { ...writing(files), fileMutations: mutations.handlers },
-    ]);
-
-    expect(mutations.delivered.length).toBe(1);
-    expect(mutations.delivered[0]!.path).toBe("out.md");
-    expect(mutations.delivered[0]!.content).toBe("generated text");
-    // The captured provider performed its pure admission check and nothing
-    // else: the mutation itself went to the host.
-    expect(files.performed).toEqual(["check out.md"]);
-  });
-
-  it("FM11: a generated deletion reaches the host on the same terms", function* () {
-    const files = recordedFiles({ "out.md": NOTE });
-    const mutations = recording();
-    yield* run(evaluating(`<File.Delete path="out.md" />\n`, ["write"]), [
-      { ...writing(files), fileMutations: mutations.handlers },
-    ]);
-
-    expect(mutations.deleted.length).toBe(1);
-    expect(mutations.deleted[0]!.path).toBe("out.md");
-    expect(files.performed).toEqual([]);
-  });
-
-  it("FM12: the read form is untouched and reaches no handler", function* () {
-    const files = recordedFiles({ "notes.md": NOTE });
-    const mutations = recording();
-    const output = yield* run(evaluating(`<File path="notes.md" />\n`, ["read", "write"]), [
-      { ...both(files), fileMutations: mutations.handlers },
-    ]);
-
-    expect(String(output)).toContain("the retained note");
-    expect(files.performed).toEqual(["read notes.md"]);
-    expect(mutations.delivered).toEqual([]);
-    expect(mutations.deleted).toEqual([]);
-  });
-
-  it("FM12: a read-only profile offers no adoption, so no handler exists to reach", function* () {
-    const files = recordedFiles({ "notes.md": NOTE });
-    const mutations = recording();
-    const output = yield* run(evaluating(`<File path="notes.md" />\n`, ["read"]), [
-      { ...reading(files), fileMutations: mutations.handlers },
-    ]);
-
-    expect(String(output)).toContain("the retained note");
-    expect(files.performed).toEqual(["read notes.md"]);
-    expect(mutations.delivered).toEqual([]);
-    expect(mutations.deleted).toEqual([]);
-  });
-
-  it("FM13: two generated writes of the same text are two occurrences", function* () {
-    const files = recordedFiles({});
-    const mutations = recording();
-    yield* run(
-      evaluating(`<File path="a.md">same</File>\n\n<File path="b.md">same</File>\n`, ["write"]),
-      [{ ...writing(files), fileMutations: mutations.handlers }],
-    );
-
-    expect(mutations.delivered.length).toBe(2);
-    expect(mutations.delivered[0]!.occurrence).not.toBe(mutations.delivered[1]!.occurrence);
-  });
-
-  it("FM15: with no handlers the captured provider performs the write", function* () {
-    const files = recordedFiles({});
-    yield* run(evaluating(`<File path="out.md">generated text</File>\n`, ["write"]), [
-      writing(files),
-    ]);
-
-    expect(files.performed).toEqual(["check out.md", "write out.md"]);
   });
 });

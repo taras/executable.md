@@ -207,8 +207,6 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
     includes: options.profile.includes,
     installations: options.profile.installations,
     permissionMode: options.profile.permissionMode,
-    // Carried, not called: the session hands it to each entry's own task.
-    ...(options.profile.entryHost === undefined ? {} : { entryHost: options.profile.entryHost }),
     ...(state.route.at === undefined ? {} : { selection: state.route.at }),
   });
 
@@ -741,15 +739,6 @@ function* drive(
       } else if (built !== undefined && built.ok) {
         state = adopting;
         reading = candidate;
-        // Standing at the head means the unfinished entry below is this
-        // process's to continue. Said here rather than at the open, because a
-        // location may name a frozen position: that view continues nothing, and
-        // the control that comes back to the head is what asks for the work.
-        // Idempotent, so a frame that merely redrew the head starts nothing and
-        // an entry already running is left exactly as it is.
-        if (state.route.at === undefined) {
-          yield* current.resume();
-        }
         // The readiness may have moved while that refusal was on the screen: the
         // entry it named has finished, or the teardown it named has completed.
         // A refusal that is no longer true is worse than no refusal, because it

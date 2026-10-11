@@ -15,16 +15,11 @@
  */
 
 import type { Operation } from "effection";
-import { cwd, hostFilesHandler } from "@executablemd/runtime";
-import {
-  denoRepositoryHost,
-  useRetainedRepositoryEntry,
-  useRunComposition,
-} from "@executablemd/git/deno";
+import { cwd } from "@executablemd/runtime";
+import { useRunComposition } from "@executablemd/git/deno";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { DEFAULT_REPOSITORY_ROOT } from "./run-repositories.ts";
 import type { RepositoryInstaller } from "./run-repositories.ts";
-import type { ReplEntryHost, ReplEntryHostFactory } from "./repl-repositories.ts";
 
 /**
  * The live provider Deno and the compiled binary install.
@@ -50,44 +45,5 @@ export function denoRunRepositories(
       cwd: yield* cwd(),
       helper,
     });
-  };
-}
-
-/**
- * The retained host one REPL entry runs its repository work through.
- *
- * Built per entry, inside that entry's own task, which is what the factory is
- * for: the owner it retains under is this execution and this admitted entry,
- * and everything it acquires — a lease, a credential session, a scratch
- * directory — belongs to the task that asked for it and ends with it. A cold
- * view calls none of this, because nothing executes there to ask.
- *
- * Managed checkouts live under the same root an ordinary run uses, for the same
- * reason: what is in one is somebody's work, and which entry wrote it does not
- * change where it lives.
- */
-export function denoReplEntryHost(
-  helper: HelperAssembly,
-  root: string = DEFAULT_REPOSITORY_ROOT,
-): ReplEntryHostFactory {
-  return function* (request): Operation<ReplEntryHost> {
-    const entry = yield* useRetainedRepositoryEntry({
-      executionId: request.executionId,
-      entryKey: request.entryKey,
-      source: request.source,
-      // Where this entry started, which is where its ambient checkout is
-      // looked for. Read through the contextual Api rather than from the
-      // process, and read once: a resume takes the root its own history
-      // recorded instead of looking again.
-      cwd: yield* cwd(),
-      managedRoot: root,
-      host: denoRepositoryHost({ helper }),
-      // Ordinary file behavior, for everything outside a selected checkout. The
-      // entry's own handlers perform it directly rather than routing back
-      // through the public chain, which is what keeps a write beside the
-      // document ordinary and a write inside a checkout retained.
-      files: hostFilesHandler(),
-    });
-    return { installation: entry.installation, files: entry.files };
   };
 }
