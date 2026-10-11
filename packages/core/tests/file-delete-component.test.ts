@@ -20,22 +20,14 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, Err, Ok, resource, scoped, until } from "effection";
+import { ensure, Err, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import {
-  API,
-  Files,
-  fileWriteSuccess,
-  filesFailure,
-  hostFilesHandler,
-  useHostFiles,
-} from "@executablemd/runtime";
+import { API, Files, filesFailure, useHostFiles } from "@executablemd/runtime";
 import type { FilePathInput } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
-import { execute, executeInstalled } from "../src/execute.ts";
-import type { FileMutationHandlers } from "../src/file-mutations.ts";
+import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { Component, content } from "../src/component-api.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -526,126 +518,5 @@ describe("Tier FD — File.Delete", () => {
     expect(output).toContain('cannot delete "kept.md": permission denied.');
     expect(output).toContain("after");
     expect(yield* readTextFile(join(fixture.workspace, "kept.md"))).toBe("kept");
-  });
-});
-
-/**
- * Tier FM — `<File.Delete>` when a host journals its mutations.
- *
- * The same seam the write uses, on the one form this component has. What the
- * paired spelling does matters most here: a `<File.Delete>` reported as
- * self-closing would remove the path its children were written beside, so the
- * refusal has to come from the engine's own record of how it was written.
- */
-describe("Tier FM — a host that is handed `<File.Delete>`'s mutations", () => {
-  function recording(): {
-    readonly deleted: { occurrence: string; cwd: string; path: string }[];
-    readonly handlers: FileMutationHandlers;
-  } {
-    const deleted: { occurrence: string; cwd: string; path: string }[] = [];
-    return {
-      deleted,
-      handlers: {
-        *writeTextFile([routing], next) {
-          yield* next({ intent: "inspect", routing });
-          yield* next({
-            intent: "answer",
-            routing,
-            answer: Ok(fileWriteSuccess("host-committed")),
-          });
-        },
-        *deleteFile([routing], next) {
-          const occurrence = yield* next({ intent: "inspect", routing });
-          deleted.push({ occurrence, ...routing.input });
-          yield* next({ intent: "answer", routing, answer: Ok(undefined) });
-        },
-      },
-    };
-  }
-
-  function* useRetainedFiles(fixture: Fixture): Operation<void> {
-    const host = hostFilesHandler();
-    yield* API.Env.around(
-      {
-        // deno-lint-ignore require-yield
-        *cwd() {
-          return fixture.workspace;
-        },
-      },
-      { at: "min" },
-    );
-    yield* API.Files.around({
-      *checkFilePath([input]) {
-        return yield* host.checkFilePath(input);
-      },
-      *readTextFile([input]) {
-        return yield* host.readTextFile(input);
-      },
-      *globFiles([input]) {
-        return yield* host.globFiles(input);
-      },
-      *ensureDirectory([input]) {
-        return yield* host.ensureDirectory(input);
-      },
-      *temporaryDirectory() {
-        return yield* host.temporaryDirectory();
-      },
-      *writeTextFile([input], next) {
-        return yield* next(input);
-      },
-      *deleteFile([input], next) {
-        return yield* next(input);
-      },
-    });
-  }
-
-  function retained(
-    fixture: Fixture,
-    source: string,
-    handlers: FileMutationHandlers,
-  ): Operation<string> {
-    return scoped(function* () {
-      const path = join(fixture.workspace, "doc.md");
-      yield* writeTextFile(path, source);
-      yield* useRetainedFiles(fixture);
-      return String(
-        yield* collect(
-          yield* executeInstalled(
-            { path, stream: new InMemoryStream(), includes: [fixture.workspace] },
-            [{ fileMutations: handlers }],
-          ),
-        ),
-      );
-    });
-  }
-
-  it("FM17: the self-closing form hands the host the path and its occurrence", function* () {
-    const fixture = yield* useFixture();
-    yield* writeTextFile(join(fixture.workspace, "notes.md"), "the note");
-    const mutations = recording();
-    yield* retained(fixture, '<File.Delete path="notes.md" />\n', mutations.handlers);
-
-    expect(mutations.deleted.length).toBe(1);
-    expect(mutations.deleted[0]!.path).toBe("notes.md");
-    expect(mutations.deleted[0]!.cwd).toBe(fixture.workspace);
-    expect(mutations.deleted[0]!.occurrence.length).toBeGreaterThan(0);
-    // The host removed nothing, so the file is still there: the removal is the
-    // host's to perform, and this one chose not to.
-    expect(yield* exists(join(fixture.workspace, "notes.md"))).toBe(true);
-  });
-
-  it("FM17: the paired form refuses before reaching the host", function* () {
-    const fixture = yield* useFixture();
-    yield* writeTextFile(join(fixture.workspace, "notes.md"), "the note");
-    const mutations = recording();
-    const output = yield* retained(
-      fixture,
-      '<File.Delete path="notes.md">the children</File.Delete>\n',
-      mutations.handlers,
-    );
-
-    expect(output).toContain("self-closing");
-    expect(mutations.deleted).toEqual([]);
-    expect(yield* exists(join(fixture.workspace, "notes.md"))).toBe(true);
   });
 });

@@ -271,28 +271,6 @@ interface ComponentRoutingInstallation extends ComponentRouting {
     origin: string,
   ): FunctionComponent;
   /**
-   * Keep a body here for an implementation canonical core already has.
-   *
-   * The difference from {@link implementation} is which object the body belongs
-   * to. That one builds a fresh implementation, which is what a component whose
-   * *name* canonical core answers for needs. This one adopts the definition core
-   * already registers, so the name stays as open as it was: ordinary resolution
-   * decides what it means, a repository component or a registration shadows it
-   * exactly as before, and the body here is entered only where resolution
-   * selected this very object.
-   *
-   * So the association is to one function in one loaded copy of core, held in a
-   * WeakMap this execution owns. A copied definition, a wrapper built around it
-   * and a same-named answer are other objects and reach nothing.
-   */
-  adopt(
-    fn: FunctionComponent,
-    build: (claim: IdentityClaimant) => ProtectedBody,
-    claim: IdentityClaimant,
-    domain: IdentityDomain,
-    origin: string,
-  ): void;
-  /**
    * End the route, and every route narrowed from it.
    *
    * Called at the execution's teardown. A route or a projection callback kept
@@ -369,9 +347,6 @@ function createComponentRouting(): ComponentRoutingInstallation {
   const base = route(bodies, () => live);
   return {
     ...base,
-    adopt(fn, build, claim, domain, origin): void {
-      bodies.set(fn, { body: build(claim), domain, origin });
-    },
     implementation(name, build, claim, domain, origin): FunctionComponent {
       // deno-lint-ignore require-yield
       function* unreachable(): Operation<never> {
@@ -397,22 +372,6 @@ function createComponentRouting(): ComponentRoutingInstallation {
  * component may be invoked through is the execution's to decide, not the
  * declaration's.
  */
-/**
- * A definition canonical core already registers, given a body for this
- * execution.
- *
- * It states no props, forms or documentation, because it is not describing a
- * component — the registry already does that, and this adds only the body one
- * execution enters when resolution selected that exact definition.
- */
-export interface AdoptedDeclaration {
-  readonly name: string;
-  readonly origin: string;
-  /** The exact implementation canonical core registers for this name. */
-  readonly fn: FunctionComponent;
-  build(claim: IdentityClaimant): ProtectedBody;
-}
-
 export interface ProtectedDeclaration {
   readonly name: string;
   readonly props: PropsSchema;
@@ -1111,7 +1070,6 @@ export function installIdentities(
   components: readonly IdentityComponent[],
   privateComponents: readonly IdentityComponent[] = [],
   protectedComponents: readonly ProtectedDeclaration[] = [],
-  adoptedComponents: readonly AdoptedDeclaration[] = [],
 ): IdentityInstallation {
   // Before any factory: a set nobody can register is a set nobody may build
   // implementations from either, and a duplicate that reached a factory would
@@ -1122,26 +1080,7 @@ export function installIdentities(
   // already refused it, so a duplicate here is core's own mistake.
   assertDistinctIdentityNames([...components, ...privateComponents, ...protectedComponents]);
 
-  function adoptedDomain(fn: unknown, name: string): Minted | undefined {
-    if (typeof fn !== "function") {
-      return undefined;
-    }
-    const domain = adopted.get(fn);
-    // The adoption's own name as well as its implementation: a profile may
-    // admit a captured capability under a name of its own, and that adoption
-    // answers for that name alone.
-    return domain !== undefined && domain.domain.component === name ? domain : undefined;
-  }
-
   const minted = new Map<string, Minted>();
-  // Indexed by the exact implementation rather than by the name, because two
-  // adoptions legitimately share one name: authored `<File>` and the `<File>`
-  // a fragment's captured capability answers for are different definitions with
-  // different owners, and merging them would let a generated lookup acquire the
-  // authored grant. The named tables beside this keep their own rules — a name
-  // is still one registration's, one declaration's and one protected
-  // component's.
-  const adopted = new Map<object, Minted>();
   const registrations: IdentityRegistration[] = [];
   const privates = new Map<string, FunctionComponentDefinition>();
   const guarded = new Map<string, FunctionComponentDefinition>();
@@ -1170,31 +1109,6 @@ export function installIdentities(
       ...documentationOf(component),
       fn: implementation,
     });
-  }
-  for (const component of adoptedComponents) {
-    // One adoption per implementation. Two declarations for one function are
-    // two owners for one body, so the second is refused rather than quietly
-    // replacing the first — and the read and write entries that share a
-    // generated dispatcher are one adoption, not two.
-    if (adopted.has(component.fn)) {
-      throw new ComponentInvocationError(
-        `this execution was given two file-effect adoptions for the implementation it resolves ` +
-          `<${component.name} /> to, and one implementation has one owner.`,
-      );
-    }
-    const domain = mintDomain(component.name);
-    // The definition core already registers or already built, not a new one:
-    // the name keeps the precedence it has, and this domain answers only where
-    // resolution selected that exact object.
-    domain.implementation = component.fn;
-    adopted.set(component.fn, domain);
-    componentRouting.adopt(
-      component.fn,
-      component.build,
-      domain.claim,
-      domain.domain,
-      component.origin,
-    );
   }
   for (const component of privateComponents) {
     const domain = mintDomain(component.name);
@@ -1264,18 +1178,12 @@ export function installIdentities(
             // The name canonical resolution answered for has to be the one the
             // engine asked: a handler that delegates a different name selects a
             // registration the element never named.
-            const named = asked === name ? minted.get(name) : undefined;
-            // And the implementation has to be the one this execution built or
-            // adopted. A repository file, a nested registration, a copied answer
-            // and another execution's component all resolve to a different
-            // function, so none of them reaches a domain through its name.
-            const owner =
-              named !== undefined && named.implementation === definition.fn
-                ? named
-                : asked === name
-                  ? adoptedDomain(definition.fn, name)
-                  : undefined;
-            selected = owner;
+            const domain = asked === name ? minted.get(name) : undefined;
+            // And the implementation has to be the one this execution built. A
+            // repository file, a nested registration and another execution's
+            // component all resolve to a different function.
+            selected =
+              domain !== undefined && domain.implementation === definition.fn ? domain : undefined;
           },
           settle(): IdentityDomain | undefined {
             if (closed) {
@@ -1287,7 +1195,7 @@ export function installIdentities(
         };
       },
       revoke: () => {
-        for (const domain of [...minted.values(), ...adopted.values()]) {
+        for (const domain of minted.values()) {
           domain.revoke();
         }
         // There is no frame registry to clear. An execution torn down while a
@@ -1306,7 +1214,7 @@ export function installIdentities(
     protected: guarded,
     componentRouting,
     activate: () => {
-      for (const domain of [...minted.values(), ...adopted.values()]) {
+      for (const domain of minted.values()) {
         domain.activate();
       }
     },

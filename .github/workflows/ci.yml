@@ -239,15 +239,6 @@ jobs:
       - name: Smoke test repository composition with the compiled binary
         run: deno run --allow-all --frozen scripts/smoke-run-composition.ts
 
-      # A retained REPL entry's repository host is assembled at a runtime-named
-      # entrypoint too, and reaches further than the ordinary run's: the Git
-      # host, the credential helper the binary re-enters as a subprocess of
-      # itself, and the records an interrupted entry is read back from. This
-      # drives the binary's own `xmd repl` on a pty, publishes out of an ambient
-      # checkout into a bare remote, leaves, and reopens the location it printed.
-      - name: Smoke test a REPL entry's repository work with the compiled binary
-        run: deno test --allow-all --frozen scripts/tests/repl-repositories-compiled.test.ts
-
       # `<Fetch>` resolves from core's registry, requests through the contextual
       # Fetch adapter, and detaches the response before binding it. All three
       # live in the module graph, so only the binary shows they survived

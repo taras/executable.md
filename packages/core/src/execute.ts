@@ -28,8 +28,6 @@ import {
 import { API, readTextFile, cwd, timeoutExec } from "@executablemd/runtime";
 import type { ProcessOutcome } from "@executablemd/runtime";
 import { cwd as processCwd } from "@effectionx/fs";
-import { captureFileMutations } from "./file-mutations.ts";
-import type { FileMutationHandlers } from "./file-mutations.ts";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { createReplayStream } from "./replay-stream.ts";
 import { ExecutionProtocolError, issueExecution } from "./execution-request.ts";
@@ -153,7 +151,6 @@ import {
 import type { AnswerIdentity, ImportTier } from "./components/component-resolution.ts";
 import type { ExecutionEnvironment } from "./execution-environment.ts";
 import { PROTECTED_COMPONENTS, ProtectedImports } from "./components/protected.ts";
-import { fileMutationComponents } from "./components/file-mutation-components.ts";
 import { coreComponentDefinition, CORE_ORIGIN } from "./components/registry.ts";
 import { CORE_REVISION } from "./generated-xmd.ts";
 import { rootSyntaxReference } from "./syntax-reference.ts";
@@ -2456,15 +2453,6 @@ function* executeDocument(
    * *against*, and these are values the document's own namespace starts with.
    */
   initialBindings: Readonly<JsonObject> = NO_INITIAL_BINDINGS,
-  /**
-   * The handler set this execution's host supplied for canonical File
-   * mutations, when it supplied one.
-   *
-   * Carried by value from the capture boundary like the profile beside it, and
-   * never installed in a context: what reaches it is the body canonical
-   * resolution selected, and nothing a document can bind decides that.
-   */
-  fileMutations?: FileMutationHandlers,
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -2586,11 +2574,6 @@ function* executeDocument(
         // execution has them, whatever its host declared, which is what makes a
         // protected name mean one thing everywhere.
         PROTECTED_COMPONENTS,
-        // The two canonical mutations, given a body only when a host supplied
-        // handlers for them. Their names are not claimed and their definitions
-        // are the ones core already registers, so without a host this list is
-        // empty and `<File>` is exactly what it was.
-        fileMutationComponents(fileMutations, prepared?.adoptions),
       );
       yield* registerComponents(identity.registrations);
       identity.activate();
@@ -2955,21 +2938,6 @@ export type JournalAdmission = (retained: readonly DurableEvent[]) => Operation<
  */
 export interface ExecutionInstallation {
   readonly admissions?: readonly JournalAdmission[];
-  /**
-   * Handlers for canonical File writes and deletions.
-   *
-   * Supplied by a host that journals the mutations its documents make, so that
-   * it can name each one after the occurrence that wrote it. Core privately
-   * supplies that occurrence; the handlers never see a site parameter, and
-   * knowing an occurrence string grants nothing — only canonical dispatch owns
-   * the terminal that accepts a result.
-   *
-   * Captured by value alongside the admissions, before any installation runs.
-   * One execution routes its mutations through one host: two supplied sets are
-   * refused rather than merged, and a set missing either method is a setup
-   * refusal. Omission preserves ordinary authored and captured file routing.
-   */
-  readonly fileMutations?: FileMutationHandlers;
   /**
    * The component bundle this execution is closed over.
    *
@@ -3481,12 +3449,6 @@ function* invoke(
   const admissions = Object.freeze(
     installations.flatMap((installation) => [...(installation.admissions ?? [])]),
   );
-  // Read once each, at the same moment and for the same reason: which host
-  // names this execution's File mutations is fixed before any installation,
-  // middleware or document code exists.
-  const fileMutations = captureFileMutations(
-    installations.map((installation) => installation.fileMutations),
-  );
   // Captured by value at the same moment, and for the same reason: what ends up
   // authoritative is fixed before any installation, middleware or document code
   // exists.
@@ -3707,7 +3669,6 @@ function* invoke(
     canonicalImports,
     prepared,
     initialBindings,
-    fileMutations,
   );
 }
 

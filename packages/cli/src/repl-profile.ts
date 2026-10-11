@@ -26,7 +26,6 @@ import { ordinaryEvaluationProfile } from "./evaluation-profile.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
 import { planAgentContext } from "./plan-writer-profile.ts";
 import type { CommandPlugins } from "./plugin-host.ts";
-import type { ReplEntryHostFactory } from "./repl-repositories.ts";
 
 /**
  * Where a REPL entry looks for components.
@@ -67,16 +66,6 @@ export interface ReplExecutionProfile {
   readonly installations: readonly ExecutionInstallation[];
   /** How this REPL answers an Agent permission request. */
   readonly permissionMode: PermissionMode;
-  /**
-   * How each entry of this execution obtains repository operations.
-   *
-   * A factory, retained and never called here: the host belongs to the
-   * executing entry's own task, and building one at assembly would give every
-   * entry of the session one owner and make a cold view somebody is only
-   * reading acquire a checkout and a lease. Absent on a runtime that supplies
-   * none, which leaves repository work refusing before anything is touched.
-   */
-  readonly entryHost?: ReplEntryHostFactory;
 }
 
 /**
@@ -96,10 +85,6 @@ export function* assembleReplProfile(
   stack: AgentStack,
   plugins: CommandPlugins,
   seams: ReplProfileSeams = {},
-  // What this runtime offers an entry for repository work, from the entrypoint
-  // that knows whether it has one. Retained as given: it is called by the entry
-  // task, not here.
-  entryHost?: ReplEntryHostFactory,
 ): Operation<ReplExecutionProfile> {
   yield* installAgentProviderStack(stack, seams.acp);
 
@@ -134,7 +119,6 @@ export function* assembleReplProfile(
       }),
     ]),
     permissionMode: stack.permissionMode,
-    ...(entryHost === undefined ? {} : { entryHost }),
   });
 }
 

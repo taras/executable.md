@@ -383,11 +383,9 @@ describe("REPL terminal entrypoints: one corrected stream, four installations", 
         path: join(CLI, "src", "deno-terminal-surface.ts"),
         opens: 'callable(source, "getReader")',
       },
-      // And the pty child the terminal rows own, which is held to the same
-      // claim they exist to make. It lives in the fixture both of them drive —
-      // the exit regression and the repository journey — because one child is
-      // one subject and two copies of it would be two accounts of ownership.
-      { path: join(CLI, "tests", "fixtures", "pty.ts"), opens: "const spawned = start();" },
+      // And the pty child the exit regression owns, which is held to the same
+      // claim it exists to make.
+      { path: join(CLI, "tests", "repl-exit-pty.test.ts"), opens: "const spawned = start();" },
     ];
     for (const { path, opens } of ordered) {
       const text = yield* code(path);

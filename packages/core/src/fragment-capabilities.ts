@@ -57,15 +57,7 @@ import type { FetchResponseRecord } from "./fetch-response.ts";
 import Elicit, { props as ELICIT_PROPS, returns as ELICIT_RETURNS } from "./components/Elicit.ts";
 import { GLOB_PROPS, GLOB_RETURNS, globFailure, globPatterns } from "./glob-source.ts";
 import { markGeneratedRequestRefusal } from "./generated-request-refusal.ts";
-import { formDispatcher, invocationForm } from "./invocation-identity.ts";
-import type {
-  ComponentInvocation,
-  IdentityClaimant,
-  ProtectedBody,
-} from "./invocation-identity.ts";
-import { routeGeneratedDelete, routeGeneratedWrite } from "./file-mutations.ts";
-import type { FileMutationHandlers } from "./file-mutations.ts";
-import type { FunctionComponent } from "./types.ts";
+import { formDispatcher } from "./invocation-identity.ts";
 import { parseFilesFailure } from "@executablemd/runtime";
 
 /** A refusal an admitted fragment's own operation produced. */
@@ -347,29 +339,6 @@ export const CAPABILITY_FORMS: Readonly<
  * two entries under one name reach one definition, as `<File />` and
  * `<File>…</File>` do.
  */
-/**
- * One generated definition a host that journals mutations may be given a body
- * for, with that body still unbound.
- *
- * Built where the definition is, because the bodies it has to dispatch between
- * are this module's. It is carried unbound because the claimant belongs to the
- * execution's identity installation, which has not happened yet when a profile
- * is prepared — so preparation names the definition and installation supplies
- * the claimant.
- */
-export interface FragmentMutationAdoption {
-  readonly name: string;
-  /** The exact dispatcher this profile built for that name. */
-  readonly fn: FunctionComponent;
-  build(claim: IdentityClaimant, handlers: FileMutationHandlers): ProtectedBody;
-}
-
-/** One admitted name's definition, and the adoption it offers when it mutates. */
-export interface CapabilityDefinition {
-  readonly definition: FunctionComponentDefinition;
-  readonly adoption?: FragmentMutationAdoption;
-}
-
 export function capabilityDefinition(
   name: string,
   admitted: {
@@ -383,7 +352,7 @@ export function capabilityDefinition(
     readonly headers: Record<string, string>;
     readonly timeout?: number;
   }[] = [],
-): CapabilityDefinition {
+): FunctionComponentDefinition {
   const selfClosing = admitted["self-closing"];
   const paired = admitted.paired;
   // The schema is the union of what each spelling takes, which for every pair
@@ -407,60 +376,48 @@ export function capabilityDefinition(
   // answers, which it refuses; one undispatched body would let a read reach the
   // write path.
   if (read !== undefined && write !== undefined) {
-    const fn = formDispatcher({ forms: "both", "self-closing": read, paired: write });
     return {
-      definition: {
-        kind: "function",
-        name,
-        props,
-        forms: ["self-closing", "paired"],
-        ...(returning === undefined ? {} : { returns: returning }),
-        fn,
-      },
-      ...adopting(name, fn, paired, capabilities, read),
+      kind: "function",
+      name,
+      props,
+      forms: ["self-closing", "paired"],
+      ...(returning === undefined ? {} : { returns: returning }),
+      fn: formDispatcher({ forms: "both", "self-closing": read, paired: write }),
     };
   }
   if (read !== undefined) {
-    const fn = formDispatcher({
-      forms: "self-closing",
-      fn: read,
-      refuse: () =>
-        new FragmentCapabilityError(
-          `<${name} /> reads and renders no content of its own, so it is written self-closing.`,
-        ),
-    });
     return {
-      definition: {
-        kind: "function",
-        name,
-        props,
-        forms: ["self-closing"],
-        ...(returning === undefined ? {} : { returns: returning }),
-        fn,
-      },
-      ...adopting(name, fn, selfClosing, capabilities, undefined),
+      kind: "function",
+      name,
+      props,
+      forms: ["self-closing"],
+      ...(returning === undefined ? {} : { returns: returning }),
+      fn: formDispatcher({
+        forms: "self-closing",
+        fn: read,
+        refuse: () =>
+          new FragmentCapabilityError(
+            `<${name} /> reads and renders no content of its own, so it is written self-closing.`,
+          ),
+      }),
     };
   }
   if (write !== undefined) {
-    const fn = formDispatcher({
-      forms: "paired",
-      fn: write,
-      refuse: () =>
-        new FragmentCapabilityError(
-          `<${name} /> writes what it renders, so it is written with content rather than ` +
-            "self-closing.",
-        ),
-    });
     return {
-      definition: {
-        kind: "function",
-        name,
-        props,
-        forms: ["paired"],
-        ...(returning === undefined ? {} : { returns: returning }),
-        fn,
-      },
-      ...adopting(name, fn, paired, capabilities, undefined),
+      kind: "function",
+      name,
+      props,
+      forms: ["paired"],
+      ...(returning === undefined ? {} : { returns: returning }),
+      fn: formDispatcher({
+        forms: "paired",
+        fn: write,
+        refuse: () =>
+          new FragmentCapabilityError(
+            `<${name} /> writes what it renders, so it is written with content rather than ` +
+              "self-closing.",
+          ),
+      }),
     };
   }
   throw new FragmentCapabilityError(`an evaluation profile admitted "${name}" for no form.`);
@@ -532,125 +489,6 @@ function body(
     return deleteBody(files, cursor);
   }
   return capability === "file:write" ? writeBody(files, cursor) : ensureBody(files, cursor);
-}
-
-/**
- * The adoption this name offers, when the form it mutates with is a mutation.
- *
- * Nothing is offered for a name that only reads, globs or asks a question: a
- * host that journals mutations has nothing to be told about those, and offering
- * an adoption for them would hand a read a durable identity it never uses.
- */
-function adopting(
-  name: string,
-  fn: FunctionComponent,
-  capability: FragmentCapability | undefined,
-  capabilities: CapturedCapabilities,
-  read: FunctionComponent | undefined,
-): { adoption?: FragmentMutationAdoption } {
-  if (capability !== "file:write" && capability !== "file:delete") {
-    return {};
-  }
-  const files = capabilities.files;
-  if (files === undefined) {
-    return {};
-  }
-  const cursor = capabilities.cursor;
-  return {
-    adoption: {
-      name,
-      fn,
-      build: (claim, handlers) => {
-        const mutate =
-          capability === "file:write"
-            ? routedWriteBody(files, cursor, claim, handlers)
-            : routedDeleteBody(files, cursor, claim, handlers);
-        const wanted: "paired" | "self-closing" =
-          capability === "file:write" ? "paired" : "self-closing";
-        return function* (
-          props: Record<string, Json>,
-          invocation: ComponentInvocation,
-        ): Operation<unknown> {
-          // Adoption is entered in place of the dispatcher, so the form is read
-          // here from the engine's own issuance — the fact the scan recorded.
-          // A spelling this name does not mutate with reaches its read body or
-          // its ordinary refusal, never the mutation.
-          const form = invocationForm(invocation);
-          if (form === wanted) {
-            return yield* mutate(props, invocation);
-          }
-          if (form === "self-closing" && read !== undefined) {
-            return yield* read(props, invocation);
-          }
-          return yield* fn(props, invocation);
-        };
-      },
-    },
-  };
-}
-
-/**
- * The generated write, with the mutation handed to the host instead of the
- * captured provider.
- *
- * Everything before the mutation is the captured path's: the destination is
- * admitted by the captured pure check before any content runs, and the
- * directory is the one this element was written in. The occurrence is claimed
- * between those two, because an invocation names nothing while it projects its
- * own children.
- */
-function routedWriteBody(
-  files: FragmentFileAccess,
-  cursor: DirectoryCursor,
-  claim: IdentityClaimant,
-  handlers: FileMutationHandlers,
-) {
-  return function* write(
-    props: Record<string, Json>,
-    invocation: ComponentInvocation,
-  ): Operation<string> {
-    const requested = String(props.path);
-    const cwd = cursor.current;
-    const admitted = yield* files.checkFilePath({ cwd, path: requested });
-    if (!admitted.ok) {
-      throw refusedRequest(refusal(requested, "write"));
-    }
-    const occurrence = yield* claim(invocation);
-    const text = yield* rendered(requested);
-    const written = yield* routeGeneratedWrite(handlers, occurrence, {
-      cwd,
-      path: requested,
-      content: text,
-    });
-    if (!written.ok) {
-      throw refusedRequest(refusal(requested, "write"));
-    }
-    return "";
-  };
-}
-
-/** The generated deletion, on the same terms. */
-function routedDeleteBody(
-  _files: FragmentFileAccess,
-  cursor: DirectoryCursor,
-  claim: IdentityClaimant,
-  handlers: FileMutationHandlers,
-) {
-  return function* remove(
-    props: Record<string, Json>,
-    invocation: ComponentInvocation,
-  ): Operation<string> {
-    const requested = String(props.path);
-    const occurrence = yield* claim(invocation);
-    const removed = yield* routeGeneratedDelete(handlers, occurrence, {
-      cwd: cursor.current,
-      path: requested,
-    });
-    if (!removed.ok) {
-      throw refusedRequest(refusal(requested, "delete"));
-    }
-    return "";
-  };
 }
 
 function readBody(files: FragmentFileAccess, cursor: DirectoryCursor) {

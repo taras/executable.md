@@ -254,14 +254,14 @@ function prepareRequestSource(
 /**
  * The provider that answers this exact reconciliation, and no other.
  *
- * Installed around one reconciliation — a workflow run's or a REPL entry's —
- * and reachable only from inside it. Its closure holds the retained locator and the object source; what
+ * Installed around one `reconcileGitHostEffect()` call and reachable only from
+ * inside it. Its closure holds the retained locator and the object source; what
  * it receives from the engine is the frozen request, which it parses and holds
  * to the inputs this invocation admitted. A request naming another Repository,
  * branch or commit is not this invocation's, and answering one would publish a
  * completion for something this operation never admitted.
  */
-export function pushProvider(
+function pushProvider(
   source: PushObjectSource,
   locator: string,
   admitted: GitPushInputs,

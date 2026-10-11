@@ -104,37 +104,6 @@ export function ordinaryEvaluationProfile(): FragmentEvaluationInput {
 }
 
 /**
- * The same installations, with one entry's own file access bound into the
- * ceiling.
- *
- * The tables are untouched: what a generated fragment may name, and in which
- * spelling, is the command's single decision and is settled before any entry
- * exists. What changes per entry is only *which* instance the admitted
- * operations reach — this entry's retained one, so a fragment's write inside a
- * checkout the entry has selected is retained exactly as an authored write is.
- *
- * Rebound rather than appended, because one execution offers one maximum
- * permission: a second profile beside the first would be two ceilings for one
- * fragment, and "whichever came last wins" is how permission stops being
- * auditable.
- */
-export function withEntryFileAccess(
-  installations: readonly ExecutionInstallation[],
-  files: FragmentFileAccess,
-): readonly ExecutionInstallation[] {
-  return Object.freeze(
-    installations.map((installation) =>
-      installation.evaluation === undefined
-        ? installation
-        : Object.freeze({
-            ...installation,
-            evaluation: Object.freeze({ ...installation.evaluation, files }),
-          }),
-    ),
-  );
-}
-
-/**
  * Whether the host that attached this execution already stated a ceiling.
  *
  * One execution offers one maximum permission, so a workflow attachment — which
