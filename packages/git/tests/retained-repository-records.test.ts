@@ -189,9 +189,18 @@ function reasonOf(read: Result<RetainedRepositoryHistory>): string {
   return Reflect.get(read.error, "reason") as string;
 }
 
-/** One error payload as plain journal data, which is how a record holds it. */
+/**
+ * One error payload as plain journal data, which is how a record holds it.
+ *
+ * Read through the same parser the records themselves are read with, so a
+ * fixture cannot hand these rows a value a journal could not carry.
+ */
 function json(data: unknown): Json {
-  return JSON.parse(JSON.stringify(data)) as Json;
+  const read = detachedJson(data);
+  if (read === undefined) {
+    throw new Error("this fixture's payload is not something a journal can hold");
+  }
+  return read;
 }
 
 describe("REPL repository records", () => {

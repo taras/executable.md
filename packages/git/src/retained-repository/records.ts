@@ -497,9 +497,10 @@ const FILE_RESULTS: Readonly<Record<RetainedFileOperation, Json>> = Object.freez
 
 /** This operation's fixed success, for an operation that has one. */
 function fileResultOf(operation: RetainedRepositoryOperation): Json | undefined {
-  return Object.hasOwn(FILE_RESULTS, operation)
-    ? FILE_RESULTS[operation as RetainedFileOperation]
-    : undefined;
+  if (operation === "file-write" || operation === "file-delete" || operation === "dir-ensure") {
+    return FILE_RESULTS[operation];
+  }
+  return undefined;
 }
 
 /**

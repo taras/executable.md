@@ -813,25 +813,34 @@ describe("retained repository: one entry's local work", () => {
   );
   const MALFORMED: Json = { type: "executablemd.runtime.files-error/v1", operation: "delete" };
 
-  for (const operation of [
+  /** One file operation these rows reopen, and the success it writes down. */
+  interface FileOutcome {
+    readonly name: string;
+    readonly effect: string;
+    readonly success: Json;
+  }
+
+  const FILE_OUTCOMES: readonly FileOutcome[] = [
     {
       name: "file-write",
       effect: '<File path="first.md">first\n</File>',
       // What a legitimate success for this operation says, which is what the
       // unsubstituted prefix replays.
-      success: { type: "file-write", publication: "host-committed" } as Json,
+      success: { type: "file-write", publication: "host-committed" },
     },
     {
       name: "file-delete",
       effect: '<File.Delete path="victim.md" />',
-      success: { type: "file-delete" } as Json,
+      success: { type: "file-delete" },
     },
     {
       name: "dir-ensure",
       effect: '<Dir path="first-dir">inside</Dir>',
-      success: { type: "dir-ensure" } as Json,
+      success: { type: "dir-ensure" },
     },
-  ]) {
+  ];
+
+  for (const operation of FILE_OUTCOMES) {
     it(`R5: a saved ${operation.name} outcome that is neither its own ends the entry`, function* () {
       const fixture = yield* useFixture();
       yield* writeTextFile(join(fixture.checkout, "victim.md"), "victim\n");
