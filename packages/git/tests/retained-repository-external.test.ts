@@ -109,6 +109,8 @@ function useFixture(
   return resource(function* (provide) {
     const remote = yield* useBareRemote(REMOTE);
     const checkout = yield* useHostCheckout(remote.locator);
+    checkout.run("config", "user.name", "Entry");
+    checkout.run("config", "user.email", "entry@example.invalid");
     checkout.run("remote", "set-url", "origin", LOCATOR);
     const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "retained-ext-")))));
     yield* ensure(() => rm(root, { recursive: true, force: true }));

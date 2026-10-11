@@ -37,6 +37,10 @@ import {
   parseReplRepositoryRequest,
   parseReplRepositoryResult,
 } from "../../git/src/retained-repository/records.ts";
+import type {
+  ReplRepositoryRequest,
+  ReplRepositoryResult,
+} from "../../git/src/retained-repository/records.ts";
 import { denoRepositoryHost, useRetainedRepositoryEntry } from "@executablemd/git/deno";
 import { parseSelectionResult } from "../../git/src/deno/retained-repository/selections.ts";
 import type { RepositoryHost } from "@executablemd/git/deno";
@@ -51,6 +55,7 @@ import {
   issueCreations,
 } from "../../git/tests/support/github.ts";
 import type { GitHubStore } from "../../git/tests/support/github.ts";
+import { useGitIdentity } from "../../git/tests/support/run-composition.ts";
 import { denoReplEntryHost } from "../src/deno-repositories.ts";
 import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
 import { installReplHost } from "../src/repl-assembly.ts";
@@ -133,6 +138,7 @@ function* useFixture(
   placement: "canonical" | "through a symlink" = "canonical",
 ): Operation<Fixture> {
   {
+    yield* useGitIdentity();
     const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "xmd-repl-repos-")))));
     yield* ensure(() => rm(root, { recursive: true, force: true }));
     const data = join(root, "data");
@@ -438,7 +444,7 @@ function directoriesOf(records: readonly { readonly request: Json }[]): string[]
 
 /** The recorded results of one operation this history holds. */
 function resultsOf(events: readonly DurableEvent[], operation: string) {
-  const held = [];
+  const held: ReplRepositoryResult[] = [];
   for (const event of events) {
     if (
       event.type !== "yield" ||
@@ -457,7 +463,7 @@ function resultsOf(events: readonly DurableEvent[], operation: string) {
 
 /** The resolved external requests of one operation this history holds. */
 function requestsOf(events: readonly DurableEvent[], operation: string) {
-  const held = [];
+  const held: ReplRepositoryRequest[] = [];
   for (const event of events) {
     if (
       event.type !== "yield" ||

@@ -270,6 +270,10 @@ export function* useJourneyEnvironment(
   const endpoint = yield* useForge(store);
   return Object.freeze({
     PATH: `${bin}:${process.env["PATH"] ?? ""}`,
+    GIT_AUTHOR_NAME: "Entry",
+    GIT_AUTHOR_EMAIL: "entry@example.invalid",
+    GIT_COMMITTER_NAME: "Entry",
+    GIT_COMMITTER_EMAIL: "entry@example.invalid",
     GH_TOKEN: store.token ?? "",
     XMD_WORKFLOW_GITHUB_PULL_REQUESTS: JSON.stringify({ allowed: [LOCATOR], endpoint }),
     XMD_WORKFLOW_GITHUB_ISSUES: JSON.stringify({ ceiling: [LOCATOR], endpoint }),

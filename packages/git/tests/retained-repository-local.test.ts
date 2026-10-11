@@ -230,10 +230,13 @@ function recordsOf(events: readonly DurableEvent[], type: string): readonly Json
  * takes the ordinary live path.
  */
 function interrupted(events: readonly DurableEvent[]): InMemoryStream {
-  const last = events.findLastIndex(
-    (event) => event.type === "yield" && event.description.type === REPL_REPOSITORY_RESULT,
-  );
-  return new InMemoryStream([...events.slice(0, last)]);
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index];
+    if (event.type === "yield" && event.description.type === REPL_REPOSITORY_RESULT) {
+      return new InMemoryStream([...events.slice(0, index)]);
+    }
+  }
+  throw new Error("the interruption fixture has no recorded result to remove");
 }
 
 /** The paths this checkout's index holds right now. */

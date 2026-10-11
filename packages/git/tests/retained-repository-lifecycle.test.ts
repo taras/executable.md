@@ -25,7 +25,7 @@ import { join } from "node:path";
 import { API, hostFilesHandler } from "@executablemd/runtime";
 import type { FilesHandler } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import type { DurableEvent } from "@executablemd/durable-streams";
+import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { collect } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
@@ -357,7 +357,7 @@ describe("retained repository: what an entry holds and releases", () => {
 });
 
 function recordsOf(events: readonly DurableEvent[]) {
-  const held = [];
+  const held: Json[] = [];
   for (const event of events) {
     if (
       event.type === "yield" &&
