@@ -231,6 +231,13 @@ then needs that checkout refuses in its own ordinary words. Nothing here is a
 divergence, and nothing is repaired — the person reading the screen is who
 decides what to do about it.
 
+What a saved result may say is still closed. Each operation's own result and its
+own refusal are both recognized by name; a value that is neither — another
+operation's failure, a malformed one, anything from elsewhere — is unreadable
+history, and the entry ends there rather than carrying on as though the
+operation had succeeded. `<PrintErrors>` cannot print its way past that, because
+it is not a refusal the operation reported.
+
 One thing follows from that honesty and is worth stating plainly: native work
 can happen and its result can fail to be appended. The journal then holds no
 completion for it, so a continuation takes the ordinary live path and may

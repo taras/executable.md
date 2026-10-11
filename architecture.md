@@ -6042,6 +6042,16 @@ descendants — and it neither clones nor re-runs the managed selector. What a
 replayed selection does not promise is that the directory is still there; a new
 operation that needs it refuses in its own ordinary words.
 
+Both branches a saved outcome has are read positively: the result the operation
+writes down, or a refusal in its own vocabulary. Failing to be the one does not
+make a value the other, so a Files failure naming a different operation, a
+failure too malformed for any parser to read, and a value from somewhere else
+are each unreadable history rather than an outcome. That ends the continuation
+where the record is read, before the work standing after it runs, and it is
+raised rather than answered — a refusal belongs in the result channel, which
+`<PrintErrors>` may print and carry on past, and an unreadable record is not a
+refusal this operation reported.
+
 **The first operation with no result runs live, and its outcome fences what
 follows.** It performs against whatever is actually there and appends its
 outcome before any later work in the document runs. An append that fails is

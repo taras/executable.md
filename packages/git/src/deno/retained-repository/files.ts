@@ -36,6 +36,7 @@ import type { RecordedOperation } from "./local.ts";
 import type { GitSession } from "../composition/git.ts";
 import type { RegisteredCheckout } from "../run-composition/operations.ts";
 import type { RepositoryIdentity } from "../../composition/selection.ts";
+import { retainedFileResult } from "../../retained-repository/records.ts";
 import type { RetainedRepositorySite } from "../../retained-repository/records.ts";
 
 /**
@@ -147,7 +148,7 @@ export function* retainedDirectoryEnsure(
     request: { cwd: input.cwd, path: input.path },
     *perform(): Operation<Result<Json>> {
       const made = yield* host.ordinary.ensureDirectory(input);
-      return made.ok ? Ok({ type: "dir-ensure" }) : made;
+      return made.ok ? Ok(retainedFileResult("dir-ensure")) : made;
     },
   });
   return produced.ok ? Ok(undefined) : produced;
@@ -216,22 +217,9 @@ function fileOperation(
         : { cwd: input.cwd, path: input.path, content: work.content },
     *perform(): Operation<Result<Json>> {
       const produced = yield* work.perform();
-      return produced.ok ? Ok(resultFor(operation)) : produced;
+      return produced.ok ? Ok(retainedFileResult(operation)) : produced;
     },
   };
-}
-
-/**
- * The result each of these two operations produces.
- *
- * Fixed rather than read back from the provider: what a document learns from a
- * write is that it happened, and the recorded result says the same thing the
- * live one does so a replay is indistinguishable from a first run.
- */
-function resultFor(operation: "file-write" | "file-delete"): Json {
-  return operation === "file-write"
-    ? { type: "file-write", publication: "host-committed" }
-    : { type: "file-delete" };
 }
 
 /**

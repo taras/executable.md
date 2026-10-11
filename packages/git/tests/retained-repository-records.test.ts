@@ -29,6 +29,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type { Operation, Result } from "effection";
+import { fileWriteFailure, filesFailure } from "@executablemd/runtime";
 import {
   detachedJson,
   parseReplRepositoryRequest,
@@ -39,7 +40,10 @@ import {
   REPL_REPOSITORY_REQUEST,
   REPL_REPOSITORY_RESULT,
   REPL_REPOSITORY_VERSION,
+  retainedFileResult,
+  retainedRepositoryOutcome,
   retainedRepositoryOwner,
+  retainedRepositoryRefusal,
   retainedRepositoryRequestFingerprint,
 } from "../src/retained-repository/records.ts";
 import type {
@@ -183,6 +187,11 @@ function reasonOf(read: Result<RetainedRepositoryHistory>): string {
     throw new Error("this history was accepted, and it must be refused");
   }
   return Reflect.get(read.error, "reason") as string;
+}
+
+/** One error payload as plain journal data, which is how a record holds it. */
+function json(data: unknown): Json {
+  return JSON.parse(JSON.stringify(data)) as Json;
 }
 
 describe("REPL repository records", () => {
@@ -425,5 +434,91 @@ describe("REPL repository records", () => {
     expect(parseReplRepositoryResult({ version: 1, owner: OWNER, apply: () => true })).toBe(
       undefined,
     );
+  });
+
+  /**
+   * The two branches a saved file outcome has, and everything that is neither.
+   *
+   * The reader these rows exercise is the one a continuation asks before it
+   * acts on a record: failing to be this operation's refusal is not being its
+   * success, so a value from another operation — or no operation at all — has
+   * to read as neither rather than falling through to one of them.
+   */
+  const FILE_OUTCOMES = [
+    {
+      operation: "file-write" as const,
+      refusal: json(fileWriteFailure({ phase: "target", reason: "read-only" }).data),
+    },
+    {
+      operation: "file-delete" as const,
+      refusal: json(
+        filesFailure({ operation: "delete", phase: "target", reason: "read-only" }).data,
+      ),
+    },
+    {
+      operation: "dir-ensure" as const,
+      refusal: json(
+        filesFailure({ operation: "ensure-directory", phase: "target", reason: "read-only" }).data,
+      ),
+    },
+  ];
+
+  // A well-formed Files failure belonging to none of the three, and a failure
+  // too malformed for any parser to read.
+  const ANOTHER_OPERATION = json(
+    filesFailure({ operation: "read", phase: "target", reason: "read-only" }).data,
+  );
+  const MALFORMED: Json = { type: "executablemd.runtime.files-error/v1", operation: "delete" };
+
+  for (const { operation, refusal } of FILE_OUTCOMES) {
+    it(`R5: only ${operation}'s own result or refusal reads as an outcome`, function* () {
+      // The two it can produce.
+      expect(retainedRepositoryOutcome(operation, retainedFileResult(operation))).toBe(true);
+      expect(retainedRepositoryOutcome(operation, refusal)).toBe(true);
+      // The refusal still reads as the refusal it is, which is what makes the
+      // row above about the success branch rather than about both at once.
+      expect(retainedRepositoryRefusal(operation, refusal)).toBe(true);
+      expect(retainedRepositoryRefusal(operation, retainedFileResult(operation))).toBe(false);
+
+      // And everything that is neither: another operation's failure, one no
+      // parser can read, another file operation's success, and a value from
+      // somewhere else entirely.
+      expect(retainedRepositoryOutcome(operation, ANOTHER_OPERATION)).toBe(false);
+      expect(retainedRepositoryOutcome(operation, MALFORMED)).toBe(false);
+      expect(retainedRepositoryOutcome(operation, null)).toBe(false);
+      for (const other of FILE_OUTCOMES) {
+        if (other.operation !== operation) {
+          expect(retainedRepositoryOutcome(operation, retainedFileResult(other.operation))).toBe(
+            false,
+          );
+          expect(retainedRepositoryOutcome(operation, other.refusal)).toBe(false);
+        }
+      }
+    });
+  }
+
+  it("R5: a file write's result is its whole encoding, not part of it", function* () {
+    // Compared as the value it is, so a result missing the member that says
+    // what became of the file — or carrying one this host never wrote — is not
+    // the result this operation produces.
+    expect(retainedRepositoryOutcome("file-write", { type: "file-write" })).toBe(false);
+    expect(
+      retainedRepositoryOutcome("file-write", {
+        type: "file-write",
+        publication: "host-committed",
+        checkout: "/somewhere",
+      }),
+    ).toBe(false);
+  });
+
+  it("R5: an operation with no fixed result keeps the one it saved", function* () {
+    // A commit keeps its SHA and a selection its placement, so there is no
+    // fixed word to hold them to and the reader that owns those members is the
+    // one that parses them. Nothing here may start refusing them.
+    expect(retainedRepositoryOutcome("commit", { commit: "a".repeat(40) })).toBe(true);
+    expect(retainedRepositoryOutcome("ambient", { type: "ambient", checkout: "/anywhere" })).toBe(
+      true,
+    );
+    expect(retainedRepositoryOutcome("add", ANOTHER_OPERATION)).toBe(true);
   });
 });

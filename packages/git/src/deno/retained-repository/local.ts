@@ -36,6 +36,7 @@ import {
   REPL_REPOSITORY_VERSION,
   retainedRefusalFilesError,
   retainedRefusalResult,
+  retainedRepositoryOutcome,
   retainedRepositoryRefusal,
   retainedRepositoryRequestFingerprint,
 } from "../../retained-repository/records.ts";
@@ -202,11 +203,13 @@ function* recording(operation: RecordedOperation): Operation<Result<Json>> {
 
   const parsed = parseReplRepositoryResult(stored);
   if (parsed === undefined) {
-    return Err(
-      new RetainedOperationError(
-        `the saved result for "${operation.operation}" is not one this host can read, so what ` +
-          "it says about work already done is unknown.",
-      ),
+    // Raised rather than answered. A history this host cannot read is not an
+    // outcome of the operation standing here, so it does not belong in the
+    // result channel: a refusal there is the operation's own sentence, which
+    // `<PrintErrors>` may print and carry on past.
+    throw new RetainedOperationError(
+      `the saved result for "${operation.operation}" is not one this host can read, so what ` +
+        "it says about work already done is unknown.",
     );
   }
   if (
@@ -216,11 +219,20 @@ function* recording(operation: RecordedOperation): Operation<Result<Json>> {
     parsed.site.source !== operation.site.source ||
     parsed.site.occurrence !== operation.site.occurrence
   ) {
-    return Err(
-      new RetainedOperationError(
-        `the saved result standing where "${operation.operation}" belongs describes another ` +
-          "operation, so this history does not say what happened here.",
-      ),
+    throw new RetainedOperationError(
+      `the saved result standing where "${operation.operation}" belongs describes another ` +
+        "operation, so this history does not say what happened here.",
+    );
+  }
+
+  // Both branches a saved outcome has are read positively. A value that is
+  // neither this operation's success nor its own refusal is journal data this
+  // host cannot act on: the operation may have happened or may not, and letting
+  // it answer as success is what would authorize the work standing after it.
+  if (!retainedRepositoryOutcome(parsed.operation, parsed.result)) {
+    throw new RetainedOperationError(
+      `the saved outcome for "${operation.operation}" is neither a result it produces nor a ` +
+        "refusal it reports, so what became of it is unknown.",
     );
   }
 
@@ -228,12 +240,12 @@ function* recording(operation: RecordedOperation): Operation<Result<Json>> {
   // operation's own vocabulary, never inferred from a result's shape.
   if (retainedRepositoryRefusal(parsed.operation, parsed.result)) {
     const error = retainedRefusalFilesError(parsed.operation, parsed.result);
-    return Err(
-      error ??
-        new RetainedOperationError(
-          `the saved refusal for "${operation.operation}" is one this host cannot report again.`,
-        ),
-    );
+    if (error === undefined) {
+      throw new RetainedOperationError(
+        `the saved refusal for "${operation.operation}" is one this host cannot report again.`,
+      );
+    }
+    return Err(error);
   }
   return Ok(parsed.result);
 }

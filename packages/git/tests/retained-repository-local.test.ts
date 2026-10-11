@@ -753,6 +753,137 @@ describe("retained repository: one entry's local work", () => {
     expect(again.writes).toEqual([]);
   });
 
+  /**
+   * This journal, cut off just after one operation's result.
+   *
+   * An entry whose history is complete replays its recorded output and runs
+   * nothing, so a row about what a *component* does with a saved result has to
+   * reopen an unfinished one. Cutting it here leaves exactly the state these
+   * rows are about: the operation settled, and the work standing after it not
+   * yet done.
+   */
+  function through(events: readonly DurableEvent[], operation: string): DurableEvent[] {
+    const at = events.findIndex(
+      (event) =>
+        event.type === "yield" &&
+        event.description.type === REPL_REPOSITORY_RESULT &&
+        event.result.status === "ok" &&
+        parseReplRepositoryResult(event.result.value)?.operation === operation,
+    );
+    expect(at).toBeGreaterThan(-1);
+    return structuredClone([...events.slice(0, at + 1)]);
+  }
+
+  /**
+   * The same prefix, with that operation's saved result replaced.
+   *
+   * Everything else is left as it was recorded — the envelope, the owner, the
+   * canonical site, the authored request and the fingerprint that names it — so
+   * what a row built with this changes is only the value the host reads back as
+   * the outcome.
+   */
+  function substituting(
+    events: readonly DurableEvent[],
+    operation: string,
+    result: Json,
+  ): DurableEvent[] {
+    const changed = through(events, operation);
+    for (const event of changed) {
+      if (
+        event.type === "yield" &&
+        event.description.type === REPL_REPOSITORY_RESULT &&
+        event.result.status === "ok" &&
+        parseReplRepositoryResult(event.result.value)?.operation === operation
+      ) {
+        const payload = event.result.value;
+        if (typeof payload === "object" && payload !== null && !Array.isArray(payload)) {
+          payload.result = structuredClone(result);
+        }
+      }
+    }
+    return changed;
+  }
+
+  // One Files failure that is well formed and belongs to none of the three
+  // operations below, and one too malformed for any parser to read. Neither is
+  // an outcome any of them can report, which is the whole of what these rows
+  // assert.
+  const ANOTHER_OPERATION: Json = JSON.parse(
+    JSON.stringify(filesFailure({ operation: "read", phase: "target", reason: "read-only" }).data),
+  );
+  const MALFORMED: Json = { type: "executablemd.runtime.files-error/v1", operation: "delete" };
+
+  for (const operation of [
+    {
+      name: "file-write",
+      effect: '<File path="first.md">first\n</File>',
+      // What a legitimate success for this operation says, which is what the
+      // unsubstituted prefix replays.
+      success: { type: "file-write", publication: "host-committed" } as Json,
+    },
+    {
+      name: "file-delete",
+      effect: '<File.Delete path="victim.md" />',
+      success: { type: "file-delete" } as Json,
+    },
+    {
+      name: "dir-ensure",
+      effect: '<Dir path="first-dir">inside</Dir>',
+      success: { type: "dir-ensure" } as Json,
+    },
+  ]) {
+    it(`R5: a saved ${operation.name} outcome that is neither its own ends the entry`, function* () {
+      const fixture = yield* useFixture();
+      yield* writeTextFile(join(fixture.checkout, "victim.md"), "victim\n");
+      const source =
+        `<PrintErrors>\n${operation.effect}\n</PrintErrors>\n\n` +
+        '<File path="later.md">later\n</File>\n';
+      const first = yield* run(fixture, source, new InMemoryStream(), counted().handler);
+      expect(first.refusal).toBeUndefined();
+      const saved = recordsOf(first.events, REPL_REPOSITORY_RESULT)
+        .map((record) => parseReplRepositoryResult(record))
+        .find((record) => record?.operation === operation.name);
+      // The success this operation really wrote down, which the prefix below
+      // replays and the two substitutions replace.
+      expect(saved?.result).toEqual(operation.success);
+      yield* rm(join(fixture.checkout, "later.md"));
+
+      // The legitimate one first: replayed as recorded, the operation performs
+      // nothing again and the write standing after it runs live. That is the
+      // behaviour the substitutions have to stop, so it is measured here rather
+      // than assumed.
+      const legitimate = counted();
+      const again = yield* run(
+        fixture,
+        source,
+        new InMemoryStream(through(first.events, operation.name)),
+        legitimate.handler,
+      );
+      expect(again.refusal).toBeUndefined();
+      expect(legitimate.writes).toEqual(["later.md"]);
+      expect(legitimate.deletes).toEqual([]);
+
+      // And the two that are not outcomes of this operation at all. Neither may
+      // answer as the success the work after it would be authorized by — not
+      // even inside `<PrintErrors>`, which is what the absent later file
+      // proves.
+      for (const substituted of [ANOTHER_OPERATION, MALFORMED]) {
+        yield* rm(join(fixture.checkout, "later.md"), { force: true });
+        const leaf = counted();
+        const resumed = yield* run(
+          fixture,
+          source,
+          new InMemoryStream(substituting(first.events, operation.name, substituted)),
+          leaf.handler,
+        );
+        expect(resumed.refusal).toContain(`saved outcome for "${operation.name}"`);
+        expect(leaf.writes).toEqual([]);
+        expect(leaf.deletes).toEqual([]);
+        expect(yield* exists(join(fixture.checkout, "later.md"))).toBe(false);
+      }
+    });
+  }
+
   it("R6: a generated write inside the checkout is retained on captured terms", function* () {
     const fixture = yield* useFixture();
     const leaf = counted();

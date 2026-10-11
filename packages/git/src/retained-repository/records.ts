@@ -469,6 +469,62 @@ export function retainedRepositoryRefusal(
 }
 
 /**
+ * The result a file operation writes down when it succeeds, or nothing.
+ *
+ * These three are the operations whose success is a fixed word rather than data
+ * of their own: what a document learns from a write, a delete or an ensure is
+ * that it happened, so the record says exactly that and nothing about the file.
+ * Defined here, beside the reader that recognizes it, because the two have to
+ * agree — a success this package writes and cannot read back is the same defect
+ * as one it reads and never writes.
+ *
+ * Nothing for every other operation: a commit keeps its SHA, a selection keeps
+ * its placement, and the reader that owns those words is the one that parses
+ * them.
+ */
+export function retainedFileResult(operation: RetainedFileOperation): Json {
+  return FILE_RESULTS[operation];
+}
+
+/** The three operations whose success is a fixed word. */
+export type RetainedFileOperation = "file-write" | "file-delete" | "dir-ensure";
+
+const FILE_RESULTS: Readonly<Record<RetainedFileOperation, Json>> = Object.freeze({
+  "file-write": Object.freeze({ type: "file-write", publication: "host-committed" }),
+  "file-delete": Object.freeze({ type: "file-delete" }),
+  "dir-ensure": Object.freeze({ type: "dir-ensure" }),
+});
+
+/** This operation's fixed success, for an operation that has one. */
+function fileResultOf(operation: RetainedRepositoryOperation): Json | undefined {
+  return Object.hasOwn(FILE_RESULTS, operation)
+    ? FILE_RESULTS[operation as RetainedFileOperation]
+    : undefined;
+}
+
+/**
+ * Whether this saved result is one `operation` could have written at all.
+ *
+ * Read positively from both branches it has: the success above, or its own
+ * refusal. Failing to be a refusal is not being a success — a Files failure
+ * naming another operation, a malformed failure and a value from somewhere else
+ * all fail the refusal reader, and reading any of them as success would let a
+ * continuation carry on past an outcome nobody knows. For an operation with no
+ * fixed success encoding this answers for the refusal branch alone, which is
+ * the one it has.
+ */
+export function retainedRepositoryOutcome(
+  operation: RetainedRepositoryOperation,
+  result: Json,
+): boolean {
+  if (retainedRepositoryRefusal(operation, result)) {
+    return true;
+  }
+  const success = fileResultOf(operation);
+  return success === undefined || canonicalJson(result) === canonicalJson(success);
+}
+
+/**
  * Whether this result is one word from `vocabulary`, and nothing else.
  *
  * The word is the only part of one of these refusals that is safe to retain:
