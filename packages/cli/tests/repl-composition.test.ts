@@ -1108,7 +1108,9 @@ describe("REPL composition: the construction surface", () => {
   it("C1: the only public construction is describe() and component()", function* () {
     // The discriminator for the opacity claim. An alternate issuer, a reader
     // that unwraps an arbitrary value, or an exported definition reader would
-    // each make the classes forgeable again, and each would show up here.
+    // each make the classes forgeable again, and each would show up here. The
+    // two run helpers issue and read plain view data, which carries no identity
+    // and unwraps nothing.
     expect(Object.keys(composition).sort()).toEqual([
       "ReplDescriptionError",
       "component",
@@ -1117,6 +1119,8 @@ describe("REPL composition: the construction surface", () => {
       "fields",
       "readComponent",
       "readDescription",
+      "runText",
+      "tokenRuns",
       "validateDescriptions",
     ]);
 

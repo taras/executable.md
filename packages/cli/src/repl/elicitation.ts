@@ -42,6 +42,7 @@
  */
 
 import { action, createSignal } from "effection";
+import type { ReplWaits } from "./lifecycle.ts";
 import type { Operation, Stream } from "effection";
 import { Elicitation, ElicitationProviderError, prepareElicitation } from "@executablemd/core";
 import { validateParsed } from "@executablemd/core";
@@ -433,7 +434,15 @@ export function readQuestionForm(schema: Json): ReplQuestionForm {
  * outermost, so an outer provider would answer ahead of this one — the opposite
  * of what a provider is.
  */
-export function* useReplElicitation(): Operation<ReplElicitations> {
+export function* useReplElicitation(
+  /**
+   * Where a question says the element asking it is waiting, or none.
+   *
+   * Optional because the provider is complete without it: counting a wait is
+   * something a reading wants, not something answering a question needs.
+   */
+  waits?: ReplWaits,
+): Operation<ReplElicitations> {
   const changes = createSignal<ReplQuestion | undefined, never>();
   let pending: ReplQuestion | undefined;
   let asked = 0;
@@ -453,44 +462,51 @@ export function* useReplElicitation(): Operation<ReplElicitations> {
         // thing that will judge the answer on its way out.
         const prepared = yield* prepareElicitation(request.schema, "Elicit");
         asked++;
-        return yield* action<Json>(function (resolve) {
-          let settled = false;
-          const question: ReplQuestion = {
-            message: request.message,
-            // No schema member. The parsed form is everything a reader needs,
-            // and retaining the caller's object would hand a live reference to
-            // whatever built it out to the application.
-            form,
-            submit(values: Readonly<Record<string, string>>): ReplFormOutcome {
-              if (settled) {
-                return { kind: "invalid", issues: [] };
-              }
-              // Every property the form actually holds, copied into a plain
-              // object — the empty string included. An optional field someone
-              // deliberately cleared is present and empty, which a schema may
-              // well accept; dropping it would answer a different question from
-              // the one on the screen. A field nobody has touched is absent.
-              const assembled: Record<string, Json> = {};
-              for (const field of form.fields) {
-                const value = values[field.name];
-                if (value !== undefined) {
-                  assembled[field.name] = value;
+        // This element is waiting on an answer, from here until the question
+        // stops existing — however it stops: answered, halted or failed above.
+        const release = yield* waits?.hold("question") ?? noWait();
+        try {
+          return yield* action<Json>(function (resolve) {
+            let settled = false;
+            const question: ReplQuestion = {
+              message: request.message,
+              // No schema member. The parsed form is everything a reader needs,
+              // and retaining the caller's object would hand a live reference to
+              // whatever built it out to the application.
+              form,
+              submit(values: Readonly<Record<string, string>>): ReplFormOutcome {
+                if (settled) {
+                  return { kind: "invalid", issues: [] };
                 }
-              }
-              const issues = validateParsed(prepared.validate, assembled);
-              if (issues.length > 0) {
-                return { kind: "invalid", issues: Object.freeze([...issues]) };
-              }
-              settled = true;
-              resolve(assembled);
-              return { kind: "answered", answer: Object.freeze({ ...assembled }) };
-            },
-          };
-          publish(question);
-          // Whatever ends this — an answer, a halt, a failure upstream — the
-          // request stops being pending exactly when it stops existing.
-          return () => publish(undefined);
-        });
+                // Every property the form actually holds, copied into a plain
+                // object — the empty string included. An optional field someone
+                // deliberately cleared is present and empty, which a schema may
+                // well accept; dropping it would answer a different question from
+                // the one on the screen. A field nobody has touched is absent.
+                const assembled: Record<string, Json> = {};
+                for (const field of form.fields) {
+                  const value = values[field.name];
+                  if (value !== undefined) {
+                    assembled[field.name] = value;
+                  }
+                }
+                const issues = validateParsed(prepared.validate, assembled);
+                if (issues.length > 0) {
+                  return { kind: "invalid", issues: Object.freeze([...issues]) };
+                }
+                settled = true;
+                resolve(assembled);
+                return { kind: "answered", answer: Object.freeze({ ...assembled }) };
+              },
+            };
+            publish(question);
+            // Whatever ends this — an answer, a halt, a failure upstream — the
+            // request stops being pending exactly when it stops existing.
+            return () => publish(undefined);
+          });
+        } finally {
+          release();
+        }
       },
     },
     { at: "min" },
@@ -505,4 +521,10 @@ export function* useReplElicitation(): Operation<ReplElicitations> {
       return asked;
     },
   };
+}
+
+/** No reading is counting waits, so nothing is held and nothing is released. */
+// deno-lint-ignore require-yield
+function* noWait(): Operation<() => void> {
+  return () => {};
 }

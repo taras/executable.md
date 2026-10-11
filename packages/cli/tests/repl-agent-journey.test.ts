@@ -333,7 +333,9 @@ describe("J1 — the Story, from one entry to one README", () => {
       expect(shows(terminal, "generated generated")).toBe(true);
       // And both Plan reviews are retained where they were asked, which is
       // inside that scope rather than in the entry.
-      expect(occurrences(terminal, "answered @executablemd/cli/Plan.md")).toBe(2);
+      expect(
+        yield* answeredUnder(terminal, "component Plan", "answered @executablemd/cli/Plan"),
+      ).toBe(2);
 
       // Two turns in one conversation, and nothing else was asked.
       expect(fake.prompts).toHaveLength(2);
@@ -635,12 +637,19 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // Both turns are recorded rows rather than a live process's readings, and
       // both Plan reviews are retained where they were asked.
       expect(occurrences(second.terminal, "completed, recorded")).toBe(2);
-      expect(occurrences(second.terminal, "answered @executablemd/cli/Plan.md")).toBe(2);
+      expect(
+        yield* answeredUnder(second.terminal, "component Plan", "answered @executablemd/cli/Plan"),
+      ).toBe(2);
       // The program's own two questions are retained with the answers they
       // took. Their positions carry no path — generated source is not a file —
       // so they are shown under the fragment that produced them.
-      expect(occurrences(second.terminal, 'answered 4:1 {"project":"Ledger"')).toBe(1);
-      expect(occurrences(second.terminal, 'answered 12:1 {"decision":"Approv')).toBe(1);
+      yield* click(second.terminal, "generated generated");
+      yield* settled(40);
+      // The answers themselves are read from the reading above, which shows
+      // them in full; what this counts is that each question is retained under
+      // the fragment that asked it, at the position it was written.
+      expect(occurrences(second.terminal, "answered 4:1")).toBe(1);
+      expect(occurrences(second.terminal, "answered 12:1")).toBe(1);
       // And the branch that was not taken is on the screen once, as source.
       expect(occurrences(second.terminal, STOPPED)).toBe(1);
 
@@ -890,7 +899,11 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // admission, the turn's publication, and the root settling.
       yield* click(terminal, "[history]");
       yield* settled(40);
-      for (const marker of ["Entry 1 admitted", "Agent prompt completed", "Settled"]) {
+      // The categories a retained position reads as. Re-anchored for #881
+      // PR 3: a drawer row was the checkpoint's own label and is now its place
+      // in the recorded order and what kind of position it is — identical
+      // wording live and historical, so neither route invents a richer one.
+      for (const marker of ["Entry 1 admitted", "Agent turn recorded", "Entry outcome recorded"]) {
         expect([marker, shows(terminal, marker)]).toEqual([marker, true]);
       }
 
@@ -901,11 +914,20 @@ describe("J3 — durable truth, and a cold process over it", () => {
       expect(shows(terminal, REPLY.trim())).toBe(false);
       expect(shows(terminal, "ok? ·")).toBe(false);
 
-      // The drawer stays open on the position it moved to, and now offers only
-      // that prefix's markers: at `yield:root:0` the turn had not happened, so
-      // there is nothing about it to select.
+      // The drawer stays open on the position it moved to, and offers the
+      // whole recorded order from there.
+      //
+      // Re-anchored for #881 PR 3. This asserted the opposite — that an
+      // earlier prefix offers only its own share of the positions — and that
+      // is the premise this slice reverses: the positions *after* the one
+      // being read are where a reader can go next, so navigation is taken at
+      // the whole file while content stays at the prefix. The separation is
+      // still the claim, and it is now the pair below: the later position is
+      // offered, and nothing it holds is on the screen.
       expect(historicalOn(terminal)).toBe(true);
-      expect(shows(terminal, "Agent prompt completed")).toBe(false);
+      expect(shows(terminal, "Agent turn recorded")).toBe(true);
+      expect(shows(terminal, REPLY.trim())).toBe(false);
+      expect(shows(terminal, "completed, recorded")).toBe(false);
 
       // Back at the head: the drawer is modal, so it is closed first and then
       // the live control is reachable.
@@ -918,7 +940,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // record carries and nothing live.
       yield* click(terminal, "[history]");
       yield* settled(40);
-      yield* click(terminal, "Agent prompt completed");
+      yield* click(terminal, "Agent turn recorded");
       yield* settled(40);
       yield* showing(terminal, REPLY.trim());
       yield* showing(terminal, "completed, recorded");
@@ -1323,13 +1345,13 @@ describe("J2 — what filtering Sessions leaves on the screen (#875 R1)", () => 
   /**
    * The rows the Sessions reading itself is drawn in.
    *
-   * The sidebar band, cut at the reading's own `[v later]` control: below that
+   * The sidebar band, cut at the reading's own `[↓ later]` control: below that
    * sit the Entries heading and the catalog, which a conversation filter does
    * not touch, and beside it are columns holding a journal that grows.
    */
   const listBand = (terminal: Terminal): string[] => {
     const rows = screenOf(terminal).map((line) => line.slice(0, SIDEBAR));
-    const bottom = rows.findIndex((line) => line.includes("[v later]"));
+    const bottom = rows.findIndex((line) => line.includes("[↓ later]"));
     return rows.slice(0, bottom === -1 ? rows.length : bottom);
   };
 
@@ -1382,7 +1404,7 @@ describe("J2 — what filtering Sessions leaves on the screen (#875 R1)", () => 
       const before = listBand(terminal);
       const lastBefore = lastWritten(before);
       // Pre-assert: the reading really is windowed, so there is a reading to
-      // shrink and a `[v later]` to bound it by.
+      // shrink and a `[↓ later]` to bound it by.
       expect(before.length).toBeGreaterThan(0);
       expect(lastBefore).toBeGreaterThan(0);
 
@@ -2281,7 +2303,7 @@ function historyMarkers(terminal: Terminal): string[] {
   const found: string[] = [];
   for (let row = at + 1; row < rows.length; row += 1) {
     const label = (rows[row] ?? "").trim().replace(/^>\s*/, "");
-    if (label === "[^ earlier]") {
+    if (label === "[↑ earlier]") {
       // How the window moves, not a position in it. This drawer scrolls (#875),
       // and both window controls sit outside the content they scroll.
       continue;
@@ -2312,6 +2334,32 @@ function childrenShown(terminal: Terminal): string[] {
  */
 function occurrences(terminal: Terminal, text: string): number {
   return screenOf(terminal).filter((line) => line.includes(text)).length;
+}
+
+/**
+ * Select one scope by its catalog row, and count what it says was answered.
+ *
+ * #881 PR 2 gave the Transcript the selected entry's reading, so the records of
+ * every scope no longer appear there at once; the answers a nested scope
+ * retained are read by selecting that scope, which is where the product says
+ * they were asked. Selecting is the claim: a row counted under the wrong scope
+ * would be an answer attributed to somewhere it never happened.
+ */
+function* answeredUnder(terminal: Terminal, scope: string, text: string): Operation<number> {
+  yield* click(terminal, scope);
+  yield* settled(40);
+  const found = occurrences(terminal, text);
+  if (found === 0) {
+    throw new Error(
+      `after selecting ${scope}, no row said ${text}: ${JSON.stringify(
+        screenOf(terminal)
+          .map((line) => line.trimEnd())
+          .filter((line) => line.length > 0)
+          .slice(0, 12),
+      )}`,
+    );
+  }
+  return found;
 }
 
 /** Every row of the screen holding this text, trimmed, in order. */
@@ -2471,8 +2519,12 @@ function* showing(terminal: Terminal, expected: string): Operation<void> {
 function coordinateOf(
   terminal: Terminal,
   label: string,
+  from = 0,
 ): { readonly column: number; readonly row: number } | undefined {
   for (const [row, line] of screenOf(terminal).entries()) {
+    if (row < from) {
+      continue;
+    }
     const column = line.indexOf(label);
     if (column !== -1) {
       return { column, row };
@@ -2482,14 +2534,33 @@ function coordinateOf(
 }
 
 /**
+ * Where the open drawer begins, as the row its own top rule is on.
+ *
+ * Needed to tell a control inside the drawer from text that merely reads the
+ * same outside it: #881 PR 2 gave the Transcript the entry's source, and a
+ * question's own schema is written in that source — so `Project name` is on the
+ * screen twice, once as the field to click and once as the `title` the author
+ * typed. A pointer aimed at the second lands behind the modal and does nothing.
+ */
+function drawerTop(terminal: Terminal): number {
+  for (const [row, line] of screenOf(terminal).entries()) {
+    const said = line.trim();
+    if (said.length > 8 && /^\u2500+$/.test(said)) {
+      return row;
+    }
+  }
+  return 0;
+}
+
+/**
  * Click one control, by finding it on the screen and pressing there.
  *
  * The way a person reaches a control without traversing to it: activating by
  * pointer needs no focus, so it can reach a control while an execution is still
  * moving. The protocol counts from one and the screen counts from zero.
  */
-function* click(terminal: Terminal, label: string): Operation<void> {
-  const at = coordinateOf(terminal, label);
+function* click(terminal: Terminal, label: string, from = 0): Operation<void> {
+  const at = coordinateOf(terminal, label, from);
   if (at === undefined) {
     throw new Error(`no control labelled ${label} is on the screen`);
   }
@@ -2651,13 +2722,14 @@ function* focusDraft(terminal: Terminal): Operation<void> {
 
 /** Type a value into the field this label names. */
 function* answer(terminal: Terminal, label: string, value: string): Operation<void> {
-  yield* click(terminal, label);
+  // Inside the drawer that is asking, not wherever the words first appear.
+  yield* click(terminal, label, drawerTop(terminal));
   terminal.bytes(BYTES.encode(value));
   yield* settled(20);
 }
 
 /** Submit the open form. */
 function* submit(terminal: Terminal): Operation<void> {
-  yield* click(terminal, "[submit]");
+  yield* click(terminal, "[submit]", drawerTop(terminal));
   yield* settled(40);
 }

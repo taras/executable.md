@@ -55,6 +55,8 @@ import {
   permissionWithdrawn,
   presentationFor,
   readinessOf,
+  readingOf,
+  readsGeometry,
   reduceRepl,
   refusedView,
   stateFor,
@@ -78,10 +80,15 @@ import { decodeLocation, encodeLocation, resolveLocation } from "./route.ts";
 import { replRepository } from "./journal.ts";
 import type { ReplExecution } from "./journal.ts";
 import { lifecycleRefusal, openReplSession } from "./session.ts";
-import type { ReplSession } from "./session.ts";
+import type { ReplReading, ReplSession } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
 import { committedOps, flatten, profileFor, skeletonOps } from "./layout.ts";
+import { createFitStore, fitPlain, prepareReading } from "./fitting.ts";
+import type { ReplFitStore } from "./fitting.ts";
+import { prepareRail } from "./history-rail.ts";
+import { readingLines } from "./source-reading.ts";
+import { sourceRuns } from "./presentation-text.ts";
 import type { ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
 import { capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
 import type { ReplAdmission } from "./layout-admission.ts";
@@ -413,8 +420,14 @@ function* drive(
   // One session for the whole command: it owns the file, the observer and each
   // entry task in turn, so submitting an entry does not replace it.
   const current: ReplSession = session;
-  let model: ReplModel = session.model;
+  // One prepared reading, never a model beside a navigation that arrived
+  // separately. Everything below assigns both halves together or neither.
+  let reading: ReplReading = { model: session.model, navigation: session.navigation };
   let rendered: ReplRendered | undefined;
+  // The reading geometry this command has already measured. Owned here, so it
+  // lives exactly as long as the command does and no frame outside it can
+  // reach one process's cuts.
+  const fits = createFitStore();
 
   const outcome = yield* scoped(function* (): Operation<Result<ReplOutcome>> {
     const screen = yield* useReplScreen();
@@ -469,6 +482,13 @@ function* drive(
     function* act(event: ReplInputEvent): Operation<boolean> {
       const dispatched = yield* tree.dispatch(event);
       if (!dispatched.ok || dispatched.value.outcome !== "action") {
+        // A traversal has already moved focus in the tree. Taking it now means
+        // the frame below is composed with the focus that is actually held —
+        // the alternative is a frame marking the control the reader has just
+        // left, followed by a second whole frame correcting it.
+        if (dispatched.ok && dispatched.value.outcome === "focus") {
+          focused = keyOfFocus(tree);
+        }
         return false;
       }
       // Measured for the size and the reading this action is being answered at,
@@ -476,24 +496,33 @@ function* drive(
       // showing, so the capacity it moves within has to be this frame's and not
       // the one a resize or a filter left behind. This preparation subscribes to
       // no frame and acknowledges nothing — it is a question about geometry.
-      const ready = yield* prepareFrame(
-        renderer,
-        yield* build(state, model, current, yield* screen.size(), focused),
-      );
-      if (!ready.ok) {
-        throw ready.error;
+      //
+      // Only the actions that ask the question pay for the answer. Typing into
+      // the draft moves no window, and measuring the reading beside it was the
+      // single most expensive thing a keystroke did.
+      let geometry = NOTHING_ADMITTED;
+      if (readsGeometry(dispatched.value.action)) {
+        const ready = yield* prepareFrame(
+          renderer,
+          yield* build(state, reading, current, yield* screen.size(), focused),
+          fits,
+        );
+        if (!ready.ok) {
+          throw ready.error;
+        }
+        geometry = ready.value.admission;
       }
       const transition = reduceRepl(
         state,
         dispatched.value.action,
-        model,
+        reading.model,
         liveOf(current),
-        ready.value.admission,
+        geometry,
       );
       state = transition.state;
       const performed = yield* perform(transition.intent, current, execution, options, wakes);
       if (performed.submitted === true) {
-        model = current.model;
+        reading = { model: current.model, navigation: current.navigation };
         // The entry exists now, so the draft that became it is finished.
         state = admitted(state);
       }
@@ -501,7 +530,7 @@ function* drive(
         // The question took it, so the drawer that was asking is over. The model
         // here is the history without this answer in it yet, which is what makes
         // the record it adds recognisable.
-        state = answered(state, model, performed.answered);
+        state = answered(state, reading.model, performed.answered);
       }
       if (performed.settled !== undefined) {
         // The authority answered it, so the request is gone and the drawer over it
@@ -528,14 +557,26 @@ function* drive(
     }
 
     let focused: string | undefined;
-    // Composed per frame: every branch below leaves `state` and `model` such
+    // Composed per frame: every branch below leaves `state` and `reading` such
     // that this reproduces the view it resolved, at whatever size the terminal
-    // turns out to be when the frame is drawn.
-    const compose: ReplCompose = (at) => build(state, model, current, at, focused);
-    rendered = (yield* paint(frames, tree, renderer, screen, compose)).rendered;
-    focused = keyOfFocus(tree);
-    // The first frame has the same obligation as every other one.
-    rendered = (yield* paint(frames, tree, renderer, screen, compose)).rendered;
+    // turns out to be when the frame is drawn. It recomposes from the reading
+    // that was resolved, never from the session again: a resize between
+    // resolution and commit would otherwise pair this content with navigation
+    // taken from a later snapshot.
+    let broken: string | undefined;
+    const compose: ReplCompose = function* (at): Operation<ReplView> {
+      return broken === undefined
+        ? yield* build(state, reading, current, at, focused)
+        : refusedView(state, broken, at, focused);
+    };
+    rendered = (yield* paint(frames, tree, renderer, screen, compose, fits)).rendered;
+    // The first frame has the same obligation as every other one: draw again
+    // only if the tree settled focus somewhere the frame did not mark.
+    const settled = keyOfFocus(tree);
+    if (settled !== focused) {
+      focused = settled;
+      rendered = (yield* paint(frames, tree, renderer, screen, compose, fits)).rendered;
+    }
 
     while (true) {
       const taken = yield* wakes.take();
@@ -560,7 +601,7 @@ function* drive(
           break;
         }
         if (wake.kind === "session") {
-          model = current.model;
+          reading = { model: current.model, navigation: current.navigation };
         } else if (wake.event.kind === "eof") {
           ended = true;
         } else if (wake.event.kind === "resize") {
@@ -650,29 +691,56 @@ function* drive(
       // filter over the head. Reprojected, then verified — and a route that does
       // not resolve there leaves the standing one exactly as it was.
       //
-      // Resolution settles `state` and `model`; the view itself is composed per
-      // frame, because a resize between here and the commit rebuilds it.
-      const attempted = yield* reproject(state, model, execution);
+      // One reading answers both halves, taken before the size read below it.
+      // The size read suspends, and a record can arrive while it does: content
+      // taken before it and navigation taken after it would describe two
+      // different files on one screen.
+      const attempted = reproject(state, reading, current);
       const drawnAt = yield* screen.size();
+      // The whole file, including the part before the position asked for, is
+      // unreadable. There is no prefix for a notice to stand beside, so what
+      // this draws is the refused view itself — the same screen a cold open
+      // of the same file shows — and the standing reading is not adopted.
+      broken = attempted.broken?.message;
       let adopting = attempted.state;
-      let built = viewFor(adopting, attempted.model, liveOf(current), drawnAt, focused);
-      if (!built.ok) {
+      let candidate = attempted.reading;
+      let built =
+        broken !== undefined
+          ? undefined
+          : viewFor(
+              adopting,
+              candidate.model,
+              liveOf(current),
+              drawnAt,
+              focused,
+              candidate.navigation,
+            );
+      if (built !== undefined && !built.ok) {
         // A position earlier than the selected entry's admission has no such
         // entry in it. The position is what was asked for, so the invalid entry
         // and scope suffix goes and nothing guesses a replacement — the draft,
         // the surface, the conversation filter and the marker all stand.
-        const cleared = withoutAbsentEntry(adopting, attempted.model);
+        const cleared = withoutAbsentEntry(adopting, candidate.model);
         if (cleared !== undefined) {
-          const without = viewFor(cleared, attempted.model, liveOf(current), drawnAt, focused);
+          const without = viewFor(
+            cleared,
+            candidate.model,
+            liveOf(current),
+            drawnAt,
+            focused,
+            candidate.navigation,
+          );
           if (without.ok) {
             adopting = cleared;
             built = without;
           }
         }
       }
-      if (built.ok) {
+      if (broken !== undefined) {
+        state = Object.freeze({ ...standing, refusal: broken });
+      } else if (built !== undefined && built.ok) {
         state = adopting;
-        model = attempted.model;
+        reading = candidate;
         // Standing at the head means the unfinished entry below is this
         // process's to continue. Said here rather than at the open, because a
         // location may name a frozen position: that view continues nothing, and
@@ -695,18 +763,17 @@ function* drive(
           state = Object.freeze({ ...state, refusal: undefined });
           refusedByReadiness = false;
         }
-      } else {
-        // The reason the *reprojection* refused, when there was one: it is the
-        // first thing that went wrong, and the resolution failure below it is a
-        // consequence of still holding the older reading.
-        state = Object.freeze({
-          ...standing,
-          refusal: attempted.state.refusal ?? built.error.message,
-        });
-        const back = yield* reproject(state, model, execution);
-        model = back.model;
+      } else if (built !== undefined) {
+        // The route did not resolve at that position. The standing reading is
+        // kept and the reason is said beside it: unlike the refusal above,
+        // there *is* a reading to stand beside.
+        state = Object.freeze({ ...standing, refusal: built.error.message });
+        const back = reproject(state, reading, current);
+        if (back.broken === undefined) {
+          reading = back.reading;
+        }
       }
-      const painted = yield* paint(frames, tree, renderer, screen, compose);
+      const painted = yield* paint(frames, tree, renderer, screen, compose, fits);
       rendered = painted.rendered;
       // Focus is read against the view that was committed, which a resize may
       // have rebuilt from the one resolved above.
@@ -723,7 +790,7 @@ function* drive(
       state = focusSettled(view, settledFocus, painted.admission);
       if (settledFocus !== focused) {
         focused = settledFocus;
-        const again = yield* paint(frames, tree, renderer, screen, compose);
+        const again = yield* paint(frames, tree, renderer, screen, compose, fits);
         rendered = again.rendered;
         settledFocus = keyOfFocus(tree);
         state = focusSettled(again.view, settledFocus, again.admission);
@@ -763,18 +830,23 @@ function exitLocation(state: ReplState): string {
  * the reason, so a caller can decide between adopting and restoring rather than
  * being handed a half-applied navigation.
  */
-function* reproject(
+function reproject(
   state: ReplState,
-  model: ReplModel,
-  execution: ReplExecution,
-): Operation<{ readonly state: ReplState; readonly model: ReplModel }> {
-  if (state.route.at === model.selection) {
-    return { state, model };
-  }
-  const projected = projectRepl(yield* execution.stream.readAll(), state.route.at);
-  return projected.ok
-    ? { state, model: projected.value }
-    : { state: Object.freeze({ ...state, refusal: projected.error.message }), model };
+  reading: ReplReading,
+  session: ReplSession,
+): {
+  readonly state: ReplState;
+  readonly reading: ReplReading;
+  readonly broken: Error | undefined;
+} {
+  const read = session.reading(state.route.at);
+  // A file this process can no longer read is not a position to carry on at.
+  // It is returned rather than folded into a route notice, because the two
+  // are different screens: a notice stands beside a reading, and this has
+  // none to stand beside.
+  return read.ok
+    ? { state, reading: read.value, broken: undefined }
+    : { state, reading, broken: read.error };
 }
 
 /** The key of whatever holds focus now, or none. */
@@ -783,7 +855,13 @@ function keyOfFocus(tree: ReplTree<ReplAction>): string | undefined {
   return node === undefined ? undefined : tree.keyOf(node);
 }
 
-/** This process's overlay, as the application reads it. */
+/**
+ * This process's overlay, as the application reads it.
+ *
+ * Everything this process knows and no record holds. What a reading frozen at
+ * a recorded position leaves out of it is stated once, in `viewFor`, rather
+ * than decided again here.
+ */
 function liveOf(session: ReplSession): ReplLive {
   return {
     output: session.overlay.output,
@@ -792,18 +870,21 @@ function liveOf(session: ReplSession): ReplLive {
     pausable: session.controller !== undefined,
     running: session.live,
     agent: session.agent,
+    lifecycle: session.lifecycle,
   };
 }
 
 /** The view for the state that stands, or a refusal naming why there is none. */
 function* build(
   state: ReplState,
-  model: ReplModel,
+  reading: ReplReading,
   session: ReplSession,
   size: ReplTerminalSize,
   focused: string | undefined,
 ): Operation<ReplView> {
-  const view = viewFor(state, model, liveOf(session), size, focused);
+  // Both halves from the reading that was resolved, never from the session
+  // again. A resize recomposes at a new size, not at a new snapshot.
+  const view = viewFor(state, reading.model, liveOf(session), size, focused, reading.navigation);
   return view.ok ? view.value : refusedView(state, view.error.message, size);
 }
 
@@ -1083,9 +1164,10 @@ function* paint(
   renderer: ReplRenderer,
   screen: ReplScreen,
   compose: ReplCompose,
+  store?: ReplFitStore,
 ): Operation<ReplPainted> {
   while (true) {
-    const painted = yield* prepared(frames, tree, renderer, screen, compose);
+    const painted = yield* prepared(frames, tree, renderer, screen, compose, store);
     if (painted !== undefined) {
       return painted;
     }
@@ -1108,6 +1190,7 @@ function* prepared(
   renderer: ReplRenderer,
   screen: ReplScreen,
   compose: ReplCompose,
+  store?: ReplFitStore,
 ): Operation<ReplPainted | undefined> {
   return yield* scoped(function* (): Operation<ReplPainted | undefined> {
     const held = yield* frames.subscribe({ owner: "repl", participants: [["repl"]] });
@@ -1129,8 +1212,14 @@ function* prepared(
       // that skips it: a frame drawn from a measurement the terminal has
       // already invalidated publishes targets naming rows nobody can see, and
       // presenting it would put that on the screen as though it were current.
-      const committed = yield* commitReplFrame(tree, renderer, view, tick.delta, undefined, () =>
-        screen.size(),
+      const committed = yield* commitReplFrame(
+        tree,
+        renderer,
+        view,
+        tick.delta,
+        undefined,
+        () => screen.size(),
+        store,
       );
       if (committed.ok) {
         // 5. Present the copied bytes. 6. The caller retains the returned map.
@@ -1252,11 +1341,12 @@ export function* commitReplFrame(
    * one exact size — leaves it out.
    */
   sizeNow?: () => Operation<ReplTerminalSize>,
+  store?: ReplFitStore,
 ): Operation<Result<ReplCommitted>> {
   // Measure before anything is mounted: this asks the engine how much room each
   // region has, so what a window shows is the frame's answer rather than this
   // boundary's guess. It mounts nothing and publishes nothing.
-  const prepared = yield* prepareFrame(renderer, view);
+  const prepared = yield* prepareFrame(renderer, view, store);
   if (!prepared.ok) {
     return prepared;
   }
@@ -1367,6 +1457,12 @@ function measuringAt(
     entriesWindowed,
     entriesRows,
     capture: "capture",
+    // The measuring pass describes no width-dependent text, so it has no
+    // fitted reading or preview either: text prepared against a width this
+    // pass is still asking for would be text fitted to nothing.
+    reading: undefined,
+    preview: undefined,
+    rail: undefined,
   };
 }
 
@@ -1388,6 +1484,13 @@ function measuringAt(
 export function* prepareFrame(
   renderer: ReplRenderer,
   view: ReplView,
+  /**
+   * Where this process keeps the reading geometry it has already measured.
+   *
+   * Absent for a caller holding one frame — a test, or a measurement taken
+   * for its own sake — which measures everything every time.
+   */
+  store?: ReplFitStore,
 ): Operation<Result<ReplPrepared>> {
   // No widths at all for the pass that answers what the widths are. Every row
   // whose text has to fit a region is left out of it, because a growing column
@@ -1417,10 +1520,80 @@ export function* prepareFrame(
   if (!third.ok) {
     return third;
   }
+  // The entry reading, fitted to the transcript's measured inner width. It
+  // happens here — after the widths are known and before anything is admitted —
+  // because the rows it produces are what the window has to admit and what the
+  // descriptions have to say. Preparing it later would admit a count from one
+  // list and describe another.
+  //
+  // Independent probe elements, so nothing about this measurement touches the
+  // tree the frame is about to draw.
+  //
+  // A profile with no pane for it has no reading: a frame refused for being too
+  // small publishes no transcript and no routed outlet, so there is no measured
+  // region to fit one to. That is different from a pane too narrow to hold a
+  // grapheme, which is a refusal and stays one.
+  const reading =
+    widths.surface < 1
+      ? Ok(undefined)
+      : yield* prepareReading(
+          renderer,
+          view.size,
+          readingLines(readingOf(view)),
+          widths.surface,
+          store,
+        );
+  if (!reading.ok) {
+    return reading;
+  }
+  // The open question's message, fitted to the drawer's own width. Prepared
+  // here for the same reason the reading is: a drawer row is one row, so a
+  // long preview line is only reachable if it was cut into rows before the
+  // window counted them.
+  const asked = view.live.question;
+  const preview =
+    asked === undefined || widths.drawer < 1
+      ? Ok(undefined)
+      : yield* fitPlain(
+          renderer,
+          view.size,
+          asked.message.split("\n").map((text, offset) => ({
+            key: `message:${offset}`,
+            text,
+            runs: sourceRuns(text),
+          })),
+          widths.drawer,
+        );
+  if (!preview.ok) {
+    return preview;
+  }
+  // The History band, measured against the terminal's own width. Prepared
+  // beside the reading: where a mark lands is a proportion of the rail's
+  // measured columns, so the pass that asks how wide the band is cannot
+  // already have placed anything on it.
+  // Below the minimum there is no band to measure: that frame is one
+  // sentence and publishes no footer at all, so preparing a rail for it
+  // would turn a refusal the product already handles into a measurement
+  // failure.
+  const rail =
+    profileFor(view.size) === "too-small"
+      ? Ok(undefined)
+      : yield* prepareRail(
+          renderer,
+          view.size,
+          view.navigation,
+          view.state.route.at,
+          view.size.columns,
+        );
+  if (!rail.ok) {
+    return rail;
+  }
   const admission = admissionFor({
     view,
     manifest: measured.manifest,
     widths,
+    reading: reading.value,
+    preview: preview.value,
     boundsOf: (id: string) => third.value.boundsOf(id),
   });
   const context: ReplPresentationContext = {
@@ -1430,6 +1603,9 @@ export function* prepareFrame(
     entriesWindowed: windowed,
     entriesRows,
     capture: "capture",
+    reading: reading.value,
+    preview: preview.value,
+    rail: rail.value,
   };
   return Ok({ context, admission, presentation: presentationFor(view, context) });
 }

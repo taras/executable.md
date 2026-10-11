@@ -12,6 +12,7 @@
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 import { validateBindingName } from "./live-env.ts";
+import type { SourceRange } from "./document-targets.ts";
 import { bindsByReference, isStructural } from "./structural.ts";
 import type {
   Segment,
@@ -211,6 +212,16 @@ export function scanSegments(
   text: string,
   origin?: SourceOrigin,
   spans?: ComponentSpan[],
+  /**
+   * Where every recognized element's delimiters are, collected as the scan
+   * commits each one.
+   *
+   * The same walk, asked for one more thing. A second reader looking for `<`
+   * and `>` afterwards would be a second grammar — it would have to decide
+   * again what a fence, a quoted `>` and a tag-like expression are — and the
+   * two readings would disagree the first time one of them was wrong.
+   */
+  elements?: SourceElement[],
 ): Segment[] {
   const index: PositionIndex = { origin, lineStarts: computeLineStarts(text) };
   const segments: Segment[] = [];
@@ -269,7 +280,7 @@ export function scanSegments(
     // Check for component invocation: `<` followed by uppercase letter
     if (text[pos] === "<" && pos + 1 < text.length && /[A-Z]/.test(text[pos + 1]!)) {
       // Make sure we're not inside a fenced code block (handled above)
-      const component = parseComponentTag(text, pos, index);
+      const component = parseComponentTag(text, pos, index, elements);
       if (component) {
         // Flush text before component
         if (pos > textStart) {
@@ -292,6 +303,22 @@ export function scanSegments(
   }
 
   return segments;
+}
+
+/**
+ * One recognized element's delimiters, as the scanner committed them.
+ *
+ * `name` is the authored spelling, dots included. It says nothing about
+ * whether the name resolves, what it is allowed to do, or whether anything
+ * ever ran: this is where the characters are, and no more than that.
+ *
+ * `closing` is absent for exactly self-closing syntax. An element written with
+ * paired delimiters and no content between them still has one.
+ */
+export interface SourceElement {
+  readonly name: string;
+  readonly opening: SourceRange;
+  readonly closing?: SourceRange;
 }
 
 /** The source spans of the top-level component invocations in `text`. */
@@ -436,6 +463,7 @@ function parseComponentTag(
   text: string,
   start: number,
   index: PositionIndex,
+  elements?: SourceElement[],
 ): ParsedComponent | null {
   let pos = start + 1; // Skip '<'
 
@@ -476,6 +504,7 @@ function parseComponentTag(
     }
     pos++; // Skip '>'
 
+    elements?.push(Object.freeze({ name, opening: Object.freeze({ start, end: pos }) }));
     return {
       segment: {
         type: "component",
@@ -496,11 +525,27 @@ function parseComponentTag(
     return null;
   }
   pos++; // Skip '>'
+  const openingEnd = pos;
 
-  // Parse children until closing tag
-  const { children, end: childEnd } = parseChildren(text, pos, name, index);
+  // Parse children until closing tag. Nested elements are collected aside and
+  // committed only with this parse: an incomplete passive tag has no children
+  // the scanner recognized, so it must leave none behind.
+  const nested: SourceElement[] | undefined = elements === undefined ? undefined : [];
+  const { children, end: childEnd } = parseChildren(text, pos, name, index, nested);
   if (childEnd === -1) {
     return null;
+  }
+
+  if (elements !== undefined && nested !== undefined) {
+    // This element before the ones inside it, which is opening order.
+    elements.push(
+      Object.freeze({
+        name,
+        opening: Object.freeze({ start, end: openingEnd }),
+        closing: Object.freeze({ start: childEnd - `</${name}>`.length, end: childEnd }),
+      }),
+    );
+    elements.push(...nested);
   }
 
   return {
@@ -819,6 +864,7 @@ function parseChildren(
   start: number,
   tagName: string,
   index: PositionIndex,
+  elements?: SourceElement[],
 ): ParsedChildren {
   let pos = start;
   let textStart = pos;
@@ -884,7 +930,7 @@ function parseChildren(
 
     // Check for nested component
     if (text[pos] === "<" && pos + 1 < text.length && /[A-Z]/.test(text[pos + 1]!)) {
-      const nested = parseComponentTag(text, pos, index);
+      const nested = parseComponentTag(text, pos, index, elements);
       if (nested) {
         if (pos > textStart) {
           pushText(children, text.slice(textStart, pos));

@@ -40,7 +40,6 @@ import {
   drawerLayerProps,
   drawerRect,
   footerProps,
-  historyBand,
   inspectionWidth,
   profileFor,
   refusalProps,
@@ -52,11 +51,12 @@ import {
   stackProps,
   viewportProps,
 } from "../../../src/repl/layout.ts";
+import { blankBand, EMPTY_BAND } from "../../../src/repl/history-rail.ts";
+import { runText } from "../../../src/repl/description.ts";
 import type {
   ReplBox,
   ReplLayoutManifest,
   ReplRegion,
-  ReplSurfaceMarker,
   ReplViewportSlot,
 } from "../../../src/repl/layout.ts";
 import type { ReplTerminalSize } from "../../../src/repl/terminal.ts";
@@ -263,7 +263,7 @@ export interface ReplFixtureState {
   readonly scopes: readonly string[];
   readonly transcript: readonly string[];
   readonly bindings: readonly { readonly name: string; readonly value: string }[];
-  readonly history: readonly ReplSurfaceMarker[];
+  readonly history: readonly { readonly marker: string; readonly label: string }[];
   /** The open drawer's title, or none. */
   readonly drawer: string | undefined;
   /** The drawer's own ordered content, which its window shows part of. */
@@ -407,7 +407,13 @@ export function fixturePairs(
     },
     build(pass) {
       const profile = profileFor(size);
-      const band = historyBand(state.history, size.columns);
+      // The band is prepared by the application from engine measurements, so
+      // this fixture screen carries an empty one: a double cannot measure, and
+      // a band it invented would be a band nothing placed. `repl-history` has
+      // the rail's own tests.
+      // Blank, at this size. The manifest and the boxes carry the same rows,
+      // so a test reading either is reading what the other drew.
+      const band = { ...EMPTY_BAND, rows: blankBand(size.columns) };
       if (profile === "too-small") {
         return {
           descriptions: [leaf(LINE, "refusal", refusalText(size))],
@@ -451,11 +457,11 @@ export function fixturePairs(
       ): readonly ReplBox[] => {
         const id = `box:${window}:viewport`;
         viewports.push(Object.freeze({ id, region, window }));
-        const less = paired(CONTROL, `${window}:earlier`, "[^ earlier]", region, {
+        const less = paired(CONTROL, `${window}:earlier`, "[↑ earlier]", region, {
           control: true,
           extra: { window, delta: -1 },
         });
-        const more = paired(CONTROL, `${window}:later`, "[v later]", region, {
+        const more = paired(CONTROL, `${window}:later`, "[↓ later]", region, {
           control: true,
           extra: { window, delta: 1 },
         });
@@ -601,11 +607,11 @@ export function fixturePairs(
         const id = `box:${DRAWER}:viewport`;
         viewports.push(Object.freeze({ id, region: "drawer", window: DRAWER }));
         regions.push({ region: "drawer", id: "box:drawer:layer" });
-        const less = paired(CONTROL, "drawer:earlier", "[^ earlier]", "drawer", {
+        const less = paired(CONTROL, "drawer:earlier", "[↑ earlier]", "drawer", {
           control: true,
           extra: { window: DRAWER, delta: -1 },
         });
-        const more = paired(CONTROL, "drawer:later", "[v later]", "drawer", {
+        const more = paired(CONTROL, "drawer:later", "[↓ later]", "drawer", {
           control: true,
           extra: { window: DRAWER, delta: 1 },
         });
@@ -710,7 +716,8 @@ export function fixturePairs(
                         id: `box:band:${at}`,
                         region: "footer",
                         props: ROW_PROPS,
-                        text: line,
+                        text: runText(line),
+                        runs: line,
                       }),
                     ),
                   }),

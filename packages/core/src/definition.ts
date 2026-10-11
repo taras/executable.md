@@ -9,6 +9,7 @@ import { findTarget, outlineDocument, retainedRanges, selectTarget } from "./doc
 import type { DocumentOutline, DocumentTargetInfo } from "./document-targets.ts";
 
 import matter from "gray-matter";
+import { envelopeBody } from "./source-inspection.ts";
 
 /**
  * Whether a path names a function component. Execution imports `.ts`
@@ -41,6 +42,16 @@ export function parseSource(path: string, content: string): ParsedSource {
   const baseOffset = content.length - parsed.content.length;
   if (content.slice(baseOffset) !== parsed.content) {
     throw new Error(`frontmatter parse did not preserve the markdown body verbatim: ${path}`);
+  }
+  // Inspection finds this same boundary without asking the value parser for
+  // anything, so that reading a document's shape never interprets its header.
+  // One boundary, asserted here: a divergence is loud rather than a quiet
+  // offset drift between what executes and what is shown.
+  if (envelopeBody(content) !== baseOffset) {
+    throw new Error(
+      `frontmatter boundary disagrees with the lexical envelope (${envelopeBody(content)} vs ` +
+        `${baseOffset}): ${path}`,
+    );
   }
   let baseLine = 1;
   for (let i = 0; i < baseOffset; i++) {

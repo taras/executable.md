@@ -124,6 +124,8 @@ import type { IdentityDomain } from "./invocation-identity.ts";
 import { protectedContentLease } from "./protected-content.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
 import { withInvocation } from "./invocation.ts";
+import { observeExpansion } from "./component-expansion.ts";
+import type { ObservedExpansion } from "./component-expansion.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
 import type { ProjectionHandle, ProjectionRequest } from "./projection.ts";
@@ -1797,93 +1799,97 @@ function* expandEach(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
-  // Decided from source alone, so the catalog is shared with validation. A
-  // literal `in` is checked here too; an expression is a value the document
-  // computes, and its answer is checked below where it arrives.
-  const violations = eachViolations(segment);
-  const refusal = violations[0];
-  if (refusal !== undefined) {
-    return [yield* raise(eachError(refusal.message))];
-  }
-  const name = eachItemBinding(segment)!;
-  const asBinding = eachCaptureBinding(segment);
+  return yield* structural(segment, path, () => work());
 
-  let items: Json | undefined;
-  if ("in" in segment.props) {
-    items = segment.props.in;
-  } else if ("in" in segment.expressions) {
-    try {
-      const resolved = yield* resolveExpressionProps(
-        {},
-        { in: segment.expressions.in },
-        "Each",
-        segment.projectedEnv,
+  function* work(): Operation<Segment[]> {
+    // Decided from source alone, so the catalog is shared with validation. A
+    // literal `in` is checked here too; an expression is a value the document
+    // computes, and its answer is checked below where it arrives.
+    const violations = eachViolations(segment);
+    const refusal = violations[0];
+    if (refusal !== undefined) {
+      return [yield* raise(eachError(refusal.message))];
+    }
+    const name = eachItemBinding(segment)!;
+    const asBinding = eachCaptureBinding(segment);
+
+    let items: Json | undefined;
+    if ("in" in segment.props) {
+      items = segment.props.in;
+    } else if ("in" in segment.expressions) {
+      try {
+        const resolved = yield* resolveExpressionProps(
+          {},
+          { in: segment.expressions.in },
+          "Each",
+          segment.projectedEnv,
+        );
+        items = resolved.in;
+      } catch (error) {
+        return [yield* raise(eachError(error instanceof Error ? error.message : String(error)))];
+      }
+    }
+    if (!Array.isArray(items)) {
+      return [yield* raise(eachError(eachItemsViolation(items)!.message))];
+    }
+
+    // Effective caller env honors projection through <Content />, mirroring
+    // expandComponent, so a projected <Each> resolves both lexical caller
+    // bindings and the current component's bindings.
+    const contextEnv = yield* env;
+    const callerEnv = layerEnvironments(segment.projectedEnv, contextEnv);
+    const parentEvalScope = yield* evalScope;
+
+    const enclosingLoop = yield* ActiveLoop.get();
+    // A rendering iteration writes into the caller's region as it goes, so a
+    // failure partway leaves the items it already produced behind. A captured one
+    // builds a value instead: its buffer is private and never becomes output.
+    const out: Segment[] = asBinding === undefined ? owner : [];
+    for (const [iteration, item] of items.entries()) {
+      yield* expandChildrenScoped(
+        segment.children,
+        callerEnv ?? undefined,
+        { [name]: item },
+        parentEvalScope ?? undefined,
+        parentMeta,
+        parentProps,
+        hideSet,
+        counter,
+        out,
+        extendPath(path, { f: "item", i: iteration }),
+        checkedFailures,
+        environment,
+        imports,
+        returnBody,
       );
-      items = resolved.in;
-    } catch (error) {
-      return [yield* raise(eachError(error instanceof Error ? error.message : String(error)))];
+      // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
+      // items are part of the work that iteration no longer does.
+      if (enclosingLoop?.broken) {
+        break;
+      }
     }
-  }
-  if (!Array.isArray(items)) {
-    return [yield* raise(eachError(eachItemsViolation(items)!.message))];
-  }
 
-  // Effective caller env honors projection through <Content />, mirroring
-  // expandComponent, so a projected <Each> resolves both lexical caller
-  // bindings and the current component's bindings.
-  const contextEnv = yield* env;
-  const callerEnv = layerEnvironments(segment.projectedEnv, contextEnv);
-  const parentEvalScope = yield* evalScope;
-
-  const enclosingLoop = yield* ActiveLoop.get();
-  // A rendering iteration writes into the caller's region as it goes, so a
-  // failure partway leaves the items it already produced behind. A captured one
-  // builds a value instead: its buffer is private and never becomes output.
-  const out: Segment[] = asBinding === undefined ? owner : [];
-  for (const [iteration, item] of items.entries()) {
-    yield* expandChildrenScoped(
-      segment.children,
-      callerEnv ?? undefined,
-      { [name]: item },
-      parentEvalScope ?? undefined,
-      parentMeta,
-      parentProps,
-      hideSet,
-      counter,
-      out,
-      extendPath(path, { f: "item", i: iteration }),
-      checkedFailures,
-      environment,
-      imports,
-      returnBody,
-    );
-    // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
-    // items are part of the work that iteration no longer does.
-    if (enclosingLoop?.broken) {
-      break;
+    if (asBinding === undefined) {
+      return [];
     }
-  }
 
-  if (asBinding === undefined) {
+    // A capture never swallows an error. The body reported these where they were
+    // created (§6.9), so they are returned as they are: the printed errors reach the
+    // document unchanged and the binding stays unset.
+    const errors = out.filter((outSegment) => outSegment.type === "error");
+    if (errors.length > 0) {
+      return errors;
+    }
+
+    const captureEnv = yield* env;
+    if (!captureEnv) {
+      return [
+        yield* raise(eachError('Prop "as" on <Each /> requires a parent evaluation environment.')),
+      ];
+    }
+    captureEnv.values[asBinding] = renderSegments(out);
     return [];
   }
-
-  // A capture never swallows an error. The body reported these where they were
-  // created (§6.9), so they are returned as they are: the printed errors reach the
-  // document unchanged and the binding stays unset.
-  const errors = out.filter((outSegment) => outSegment.type === "error");
-  if (errors.length > 0) {
-    return errors;
-  }
-
-  const captureEnv = yield* env;
-  if (!captureEnv) {
-    return [
-      yield* raise(eachError('Prop "as" on <Each /> requires a parent evaluation environment.')),
-    ];
-  }
-  captureEnv.values[asBinding] = renderSegments(out);
-  return [];
 }
 
 /**
@@ -1938,6 +1944,37 @@ function ifError(segment: ComponentElement, message: string): ErrorSegment {
  * handed back untouched, so a `<Broken />` inside a selected branch settles
  * once, exactly as it would inline.
  */
+/**
+ * Surround one structural element's own work with its canonical observation.
+ *
+ * Structural syntax has no separate body to enter: the work it consumes starts
+ * where the element does, so ACTIVE is published as the region begins and EXIT
+ * when it ends. Written once here, so a construct that recurses and one that
+ * selects a branch are observed the same way.
+ */
+function structural<T>(
+  segment: { readonly name: string; readonly position?: SourcePosition },
+  path: string,
+  work: () => Operation<T>,
+): Operation<T> {
+  return observeExpansion(snapshot(path, segment.name, segment.position), function* (observed) {
+    observed.active();
+    // Cancellation unless something says otherwise: the `finally` runs on an
+    // unwind the work never returned from as well as on the two it did.
+    let reason: "returned" | "failed" | "cancelled" = "cancelled";
+    try {
+      const value = yield* work();
+      reason = "returned";
+      return value;
+    } catch (error) {
+      reason = "failed";
+      throw error;
+    } finally {
+      observed.settled(reason);
+    }
+  });
+}
+
 function* expandIf(
   segment: ComponentElement,
   parentMeta: Record<string, unknown>,
@@ -1953,78 +1990,91 @@ function* expandIf(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
-  // Decided from source alone and shared with validation: which props were
-  // written, and how the body splits at its `<Else>`.
-  const unknownProp = ifPropsViolation(segment);
-  if (unknownProp !== undefined) {
-    owner.push(yield* raise(ifError(segment, unknownProp.message)));
-    return;
-  }
+  return yield* structural(segment, path, () => work());
 
-  const structure = ifStructure(segment);
-  if (structure.violations.length > 0) {
-    for (const violation of structure.violations) {
-      owner.push(yield* raise(structuralErrorSegment(violation, segment)));
-    }
-    return;
-  }
-
-  let condition: unknown;
-  if ("condition" in segment.props) {
-    condition = segment.props.condition;
-  } else if ("condition" in segment.expressions) {
-    try {
-      // Evaluated directly rather than through resolveExpressionProps: that
-      // helper normalizes its result through JSON, which rejects `undefined`,
-      // rewrites `NaN` as `null`, and throws on a BigInt. A condition is
-      // decided and discarded rather than passed on or recorded, so it takes
-      // any JavaScript value and crosses no serialization boundary.
-      condition = yield* evaluateExpression(
-        segment.expressions.condition,
-        "If",
-        "condition",
-        segment.projectedEnv,
-      );
-    } catch (error) {
-      owner.push(
-        yield* raise(ifError(segment, error instanceof Error ? error.message : String(error))),
-      );
+  function* work(): Operation<void> {
+    // Decided from source alone and shared with validation: which props were
+    // written, and how the body splits at its `<Else>`.
+    const unknownProp = ifPropsViolation(segment);
+    if (unknownProp !== undefined) {
+      owner.push(yield* raise(ifError(segment, unknownProp.message)));
       return;
     }
-  } else {
-    owner.push(yield* raise(ifError(segment, ifConditionViolation(segment)!.message)));
-    return;
-  }
 
-  const selected = !!condition;
+    const structure = ifStructure(segment);
+    if (structure.violations.length > 0) {
+      for (const violation of structure.violations) {
+        owner.push(yield* raise(structuralErrorSegment(violation, segment)));
+      }
+      return;
+    }
 
-  // The false arm belongs to `<Else>`, which is consumed above, so its frame is
-  // added here — otherwise both arms of one `<If>` expand under one path.
-  const branchPath =
-    selected || structure.elseElement === undefined
-      ? path
-      : extendPath(
-          path,
-          elementFrame(
-            structure.elseElement.name,
-            elementSite(structure.elseElement.position, structure.elseIndex ?? 0),
-          ),
+    let condition: unknown;
+    if ("condition" in segment.props) {
+      condition = segment.props.condition;
+    } else if ("condition" in segment.expressions) {
+      try {
+        // Evaluated directly rather than through resolveExpressionProps: that
+        // helper normalizes its result through JSON, which rejects `undefined`,
+        // rewrites `NaN` as `null`, and throws on a BigInt. A condition is
+        // decided and discarded rather than passed on or recorded, so it takes
+        // any JavaScript value and crosses no serialization boundary.
+        condition = yield* evaluateExpression(
+          segment.expressions.condition,
+          "If",
+          "condition",
+          segment.projectedEnv,
         );
+      } catch (error) {
+        owner.push(
+          yield* raise(ifError(segment, error instanceof Error ? error.message : String(error))),
+        );
+        return;
+      }
+    } else {
+      owner.push(yield* raise(ifError(segment, ifConditionViolation(segment)!.message)));
+      return;
+    }
 
-  yield* expandSegmentsWithin(
-    selected ? structure.whenTrue : structure.whenFalse,
-    parentMeta,
-    parentProps,
-    hideSet,
-    counter,
-    owner,
-    branchPath,
-    0,
-    checkedFailures,
-    environment,
-    imports,
-    returnBody,
-  );
+    const selected = !!condition;
+
+    // The false arm belongs to `<Else>`, which is consumed above, so its frame is
+    // added here — otherwise both arms of one `<If>` expand under one path.
+    const branchPath =
+      selected || structure.elseElement === undefined
+        ? path
+        : extendPath(
+            path,
+            elementFrame(
+              structure.elseElement.name,
+              elementSite(structure.elseElement.position, structure.elseIndex ?? 0),
+            ),
+          );
+
+    const branch = function* (): Operation<void> {
+      yield* expandSegmentsWithin(
+        selected ? structure.whenTrue : structure.whenFalse,
+        parentMeta,
+        parentProps,
+        hideSet,
+        counter,
+        owner,
+        branchPath,
+        0,
+        checkedFailures,
+        environment,
+        imports,
+        returnBody,
+      );
+    };
+    // The `<Else>` is an element of its own, and only when it is the arm that
+    // runs: the unselected arm expands nothing, so it is told nothing.
+    if (selected || structure.elseElement === undefined) {
+      yield* branch();
+      return;
+    }
+    yield* structural(structure.elseElement, branchPath, branch);
+  }
 }
 
 function switchError(segment: ComponentElement, message: string): ErrorSegment {
@@ -2095,73 +2145,82 @@ function* expandSwitch(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
-  // Decided from source alone and shared with validation: which props were
-  // written, and how the body divides into branches.
-  const structure = switchStructure(segment);
-  if (structure.violations.length > 0) {
-    for (const violation of structure.violations) {
-      owner.push(yield* raise(structuralErrorSegment(violation, segment)));
+  return yield* structural(segment, path, () => work());
+
+  function* work(): Operation<void> {
+    // Decided from source alone and shared with validation: which props were
+    // written, and how the body divides into branches.
+    const structure = switchStructure(segment);
+    if (structure.violations.length > 0) {
+      for (const violation of structure.violations) {
+        owner.push(yield* raise(structuralErrorSegment(violation, segment)));
+      }
+      return;
     }
-    return;
-  }
 
-  let selector: unknown;
-  try {
-    selector = yield* structuralOperand(segment, "Switch");
-  } catch (error) {
-    owner.push(
-      yield* raise(switchError(segment, error instanceof Error ? error.message : String(error))),
-    );
-    return;
-  }
-
-  let selected: SwitchCase | undefined;
-  for (const candidate of structure.matching) {
-    let matcher: unknown;
+    let selector: unknown;
     try {
-      matcher = yield* structuralOperand(candidate.element, "Case");
+      selector = yield* structuralOperand(segment, "Switch");
     } catch (error) {
       owner.push(
-        yield* raise(
-          caseError(candidate.element, error instanceof Error ? error.message : String(error)),
-        ),
+        yield* raise(switchError(segment, error instanceof Error ? error.message : String(error))),
       );
       return;
     }
-    // The `===` operator, and nothing else: `NaN` matches no case including one
-    // written `NaN`, `0` and `-0` are the same value, and two objects match only
-    // when they are the same object.
-    if (selector === matcher) {
-      selected = candidate;
-      break;
+
+    let selected: SwitchCase | undefined;
+    for (const candidate of structure.matching) {
+      let matcher: unknown;
+      try {
+        matcher = yield* structuralOperand(candidate.element, "Case");
+      } catch (error) {
+        owner.push(
+          yield* raise(
+            caseError(candidate.element, error instanceof Error ? error.message : String(error)),
+          ),
+        );
+        return;
+      }
+      // The `===` operator, and nothing else: `NaN` matches no case including one
+      // written `NaN`, `0` and `-0` are the same value, and two objects match only
+      // when they are the same object.
+      if (selector === matcher) {
+        selected = candidate;
+        break;
+      }
     }
-  }
 
-  const chosen = selected ?? structure.fallback;
-  if (chosen === undefined) {
-    return;
-  }
+    const chosen = selected ?? structure.fallback;
+    if (chosen === undefined) {
+      return;
+    }
 
-  // The selected `<Case>` is consumed above and never reaches dispatch, so its
-  // frame is added here — otherwise corresponding children of two branches
-  // would expand under one path (§5.6).
-  yield* expandSegmentsWithin(
-    chosen.element.children,
-    parentMeta,
-    parentProps,
-    hideSet,
-    counter,
-    owner,
-    extendPath(
+    // The selected `<Case>` is consumed above and never reaches dispatch, so its
+    // frame is added here — otherwise corresponding children of two branches
+    // would expand under one path (§5.6).
+    const casePath = extendPath(
       path,
       elementFrame(chosen.element.name, elementSite(chosen.element.position, chosen.index)),
-    ),
-    0,
-    checkedFailures,
-    environment,
-    imports,
-    returnBody,
-  );
+    );
+    // The chosen `<Case>` is an element of its own; the ones that were not
+    // chosen expand nothing and are told nothing.
+    yield* structural(chosen.element, casePath, () =>
+      expandSegmentsWithin(
+        chosen.element.children,
+        parentMeta,
+        parentProps,
+        hideSet,
+        counter,
+        owner,
+        casePath,
+        0,
+        checkedFailures,
+        environment,
+        imports,
+        returnBody,
+      ),
+    );
+  }
 }
 
 function loopError(segment: ComponentElement, message: string): ErrorSegment {
@@ -2238,103 +2297,107 @@ function* expandLoop(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
-  const unknownProp = loopPropsViolation(segment);
-  if (unknownProp !== undefined) {
-    owner.push(yield* raise(loopError(segment, unknownProp.message)));
-    return;
-  }
+  return yield* structural(segment, path, () => work());
 
-  if ("name" in segment.expressions) {
-    owner.push(
-      yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a string literal.')),
-    );
-    return;
-  }
-  const name = segment.props.name;
-  if (name !== undefined && (typeof name !== "string" || name.length === 0)) {
-    owner.push(
-      yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a non-empty string.')),
-    );
-    return;
-  }
-
-  const bound = yield* resolveLoopBound(segment);
-  if (!bound.ok) {
-    owner.push(yield* raise(loopError(segment, bound.error.message)));
-    return;
-  }
-
-  // Taken from the shared block counter, so every `<Loop>` an execution enters
-  // — including each entry into a nested one — has a distinct identity that
-  // lands the same way on replay.
-  const identity: LoopIdentity = {
-    id: counter.next(),
-    ...(name === undefined ? {} : { name }),
-    ...(segment.position === undefined ? {} : { position: segment.position }),
-  };
-
-  const frame: LoopFrame = { broken: false };
-  let started = 0;
-
-  try {
-    yield* scoped(function* () {
-      yield* ActiveLoop.set(frame);
-      for (let iteration = 0; iteration < bound.value; iteration++) {
-        yield* recordIteration(identity, iteration);
-        started = iteration + 1;
-        yield* expandSegmentsWithin(
-          segment.children,
-          parentMeta,
-          parentProps,
-          hideSet,
-          counter,
-          owner,
-          extendPath(path, { f: "iter", i: iteration }),
-          0,
-          checkedFailures,
-          environment,
-          imports,
-          returnBody,
-        );
-        if (frame.broken) {
-          break;
-        }
-      }
-    });
-  } catch (error) {
-    // A durability failure is not an outcome of the loop's work, and recording
-    // one would reach the journal twice over: it appends an entry on top of a
-    // journal already known not to describe this run, and on replay it consumes
-    // a terminal entry an earlier run wrote — which is how a stale journal
-    // would quietly hand this loop a different outcome. The durability failure
-    // stays the primary error.
-    const durability = durabilityFailure(error);
-    if (durability !== undefined) {
-      // The durability failure itself, not whatever wrapped it. A teardown
-      // aggregate or an AggregateError says how the failure travelled, not what
-      // went wrong, and the caller has to see which journal entry stopped
-      // describing this run.
-      throw durability;
+  function* work(): Operation<void> {
+    const unknownProp = loopPropsViolation(segment);
+    if (unknownProp !== undefined) {
+      owner.push(yield* raise(loopError(segment, unknownProp.message)));
+      return;
     }
-    // An ordinary document failure is the loop's own outcome. Recorded from the
-    // catch rather than a destructor: this frame is still live here, so the
-    // entry lands in the journal before the failure leaves the loop.
+
+    if ("name" in segment.expressions) {
+      owner.push(
+        yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a string literal.')),
+      );
+      return;
+    }
+    const name = segment.props.name;
+    if (name !== undefined && (typeof name !== "string" || name.length === 0)) {
+      owner.push(
+        yield* raise(loopError(segment, 'Prop "name" on <Loop /> must be a non-empty string.')),
+      );
+      return;
+    }
+
+    const bound = yield* resolveLoopBound(segment);
+    if (!bound.ok) {
+      owner.push(yield* raise(loopError(segment, bound.error.message)));
+      return;
+    }
+
+    // Taken from the shared block counter, so every `<Loop>` an execution enters
+    // — including each entry into a nested one — has a distinct identity that
+    // lands the same way on replay.
+    const identity: LoopIdentity = {
+      id: counter.next(),
+      ...(name === undefined ? {} : { name }),
+      ...(segment.position === undefined ? {} : { position: segment.position }),
+    };
+
+    const frame: LoopFrame = { broken: false };
+    let started = 0;
+
     try {
-      yield* recordOutcome(identity, { iterations: started, outcome: "error" });
-    } catch (recording) {
-      // Recording found the journal recording a different outcome. That is the
-      // more fundamental failure and becomes the primary one, but the document
-      // failure that reached it is what the author has to fix.
-      if (recording instanceof Error && recording.cause === undefined) {
-        recording.cause = error;
+      yield* scoped(function* () {
+        yield* ActiveLoop.set(frame);
+        for (let iteration = 0; iteration < bound.value; iteration++) {
+          yield* recordIteration(identity, iteration);
+          started = iteration + 1;
+          yield* expandSegmentsWithin(
+            segment.children,
+            parentMeta,
+            parentProps,
+            hideSet,
+            counter,
+            owner,
+            extendPath(path, { f: "iter", i: iteration }),
+            0,
+            checkedFailures,
+            environment,
+            imports,
+            returnBody,
+          );
+          if (frame.broken) {
+            break;
+          }
+        }
+      });
+    } catch (error) {
+      // A durability failure is not an outcome of the loop's work, and recording
+      // one would reach the journal twice over: it appends an entry on top of a
+      // journal already known not to describe this run, and on replay it consumes
+      // a terminal entry an earlier run wrote — which is how a stale journal
+      // would quietly hand this loop a different outcome. The durability failure
+      // stays the primary error.
+      const durability = durabilityFailure(error);
+      if (durability !== undefined) {
+        // The durability failure itself, not whatever wrapped it. A teardown
+        // aggregate or an AggregateError says how the failure travelled, not what
+        // went wrong, and the caller has to see which journal entry stopped
+        // describing this run.
+        throw durability;
       }
-      throw recording;
+      // An ordinary document failure is the loop's own outcome. Recorded from the
+      // catch rather than a destructor: this frame is still live here, so the
+      // entry lands in the journal before the failure leaves the loop.
+      try {
+        yield* recordOutcome(identity, { iterations: started, outcome: "error" });
+      } catch (recording) {
+        // Recording found the journal recording a different outcome. That is the
+        // more fundamental failure and becomes the primary one, but the document
+        // failure that reached it is what the author has to fix.
+        if (recording instanceof Error && recording.cause === undefined) {
+          recording.cause = error;
+        }
+        throw recording;
+      }
+      throw error;
     }
-    throw error;
-  }
 
-  const outcome: LoopOutcome = frame.broken ? "break" : "exhausted";
-  yield* recordOutcome(identity, { iterations: started, outcome });
+    const outcome: LoopOutcome = frame.broken ? "break" : "exhausted";
+    yield* recordOutcome(identity, { iterations: started, outcome });
+  }
 }
 
 /**
@@ -2434,19 +2497,23 @@ function spawnChild(
     // a checked command failure inside one child fails that child, and a
     // sibling's walk is not stopped by a ledger it does not own.
     const ledger = containedLedger(inherited);
-    yield* expandSegmentsWithin(
-      spawn.element.children,
-      parentMeta,
-      parentProps,
-      new Set(hideSet),
-      createBlockCounter(),
-      segments,
-      childPath,
-      0,
-      ledger,
-      environment,
-      imports,
-      undefined,
+    // Each child the `<All>` actually runs is its own element, observed on its
+    // own: real siblings reach their phases independently of each other.
+    yield* structural(spawn.element, childPath, () =>
+      expandSegmentsWithin(
+        spawn.element.children,
+        parentMeta,
+        parentProps,
+        new Set(hideSet),
+        createBlockCounter(),
+        segments,
+        childPath,
+        0,
+        ledger,
+        environment,
+        imports,
+        undefined,
+      ),
     );
     yield* refuseCheckedFailure(ledger);
     // Runs rather than one joined string. What a child produced is prose, or a
@@ -2492,57 +2559,61 @@ function* expandAll(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
 ): Operation<void> {
-  // Decided from source alone and shared with validation, completely, before a
-  // child is constructed: a malformed `<All>` starts none of them.
-  const structure = allStructure(segment);
-  if (structure.violations.length > 0) {
-    for (const violation of structure.violations) {
-      owner.push(yield* raise(structuralErrorSegment(violation, segment)));
-    }
-    return;
-  }
+  return yield* structural(segment, path, () => work());
 
-  // Read once, here: every child starts from the same incoming snapshot, and
-  // reading it inside a child would let whichever ran first decide what the
-  // others saw.
-  const incoming = yield* env;
-  const children = structure.spawns.map(
-    (spawn) => () =>
-      spawnChild(
-        spawn,
-        incoming,
-        parentMeta,
-        parentProps,
-        hideSet,
-        path,
-        checkedFailures,
-        environment,
-        imports,
-      ),
-  );
-
-  const scope = yield* useScope();
-  const rendered =
-    scope.get(DurableContext) === undefined
-      ? yield* all(children.map((child) => child()))
-      : (yield* durableAll(
-          children.map((child) => (): Workflow<Json> => ephemeral(retained(child()))),
-        )).map(readEmissions);
-
-  for (const runs of rendered) {
-    for (const run of runs) {
-      if (run.text === "") {
-        continue;
+  function* work(): Operation<void> {
+    // Decided from source alone and shared with validation, completely, before a
+    // child is constructed: a malformed `<All>` starts none of them.
+    const structure = allStructure(segment);
+    if (structure.violations.length > 0) {
+      for (const violation of structure.violations) {
+        owner.push(yield* raise(structuralErrorSegment(violation, segment)));
       }
-      // One segment per run, and the exact ones are marked again here: the
-      // record is keyed by segment identity, and these segments are this
-      // region's, not the child's. A child that ran on a previous attempt says
-      // what its runs were through its own durable close, so a replay marks
-      // exactly what the live run marked.
-      const segment: Segment = { type: "text", content: run.text };
-      owner.push(segment);
-      if (run.exact) {
-        markExactSource(environment?.sourceSegments, [segment]);
+      return;
+    }
+
+    // Read once, here: every child starts from the same incoming snapshot, and
+    // reading it inside a child would let whichever ran first decide what the
+    // others saw.
+    const incoming = yield* env;
+    const children = structure.spawns.map(
+      (spawn) => () =>
+        spawnChild(
+          spawn,
+          incoming,
+          parentMeta,
+          parentProps,
+          hideSet,
+          path,
+          checkedFailures,
+          environment,
+          imports,
+        ),
+    );
+
+    const scope = yield* useScope();
+    const rendered =
+      scope.get(DurableContext) === undefined
+        ? yield* all(children.map((child) => child()))
+        : (yield* durableAll(
+            children.map((child) => (): Workflow<Json> => ephemeral(retained(child()))),
+          )).map(readEmissions);
+
+    for (const runs of rendered) {
+      for (const run of runs) {
+        if (run.text === "") {
+          continue;
+        }
+        // One segment per run, and the exact ones are marked again here: the
+        // record is keyed by segment identity, and these segments are this
+        // region's, not the child's. A child that ran on a previous attempt says
+        // what its runs were through its own durable close, so a replay marks
+        // exactly what the live run marked.
+        const segment: Segment = { type: "text", content: run.text };
+        owner.push(segment);
+        if (run.exact) {
+          markExactSource(environment?.sourceSegments, [segment]);
+        }
       }
     }
   }
@@ -2688,498 +2759,518 @@ function* expandComponent(
   imports: ComponentImportTerminal | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
-  // Cycle detection — Prosser's algorithm
-  if (hideSet.has(name)) {
-    return [
-      yield* raise({
-        type: "error",
-        message: `Cycle detected: ${name} is already being expanded (hide set: ${[...hideSet].join(" → ")})`,
-        source: name,
-      }),
-    ];
-  }
+  // Surrounded before resolution, props validation or any body: what an
+  // observer is offered is the whole of this element's expansion, including
+  // the parts that decide whether it has one.
+  return yield* observeExpansion(snapshot(path, name, position), (observed) => work(observed));
 
-  if (hideSet.size >= MAX_EXPANSION_DEPTH) {
-    return [
-      yield* raise({
-        type: "error",
-        message: `Maximum expansion depth (${MAX_EXPANSION_DEPTH}) exceeded`,
-        source: name,
-      }),
-    ];
-  }
+  function* work(observed: ObservedExpansion): Operation<Segment[]> {
+    // Cycle detection — Prosser's algorithm
+    if (hideSet.has(name)) {
+      return [
+        yield* raise({
+          type: "error",
+          message: `Cycle detected: ${name} is already being expanded (hide set: ${[...hideSet].join(" → ")})`,
+          source: name,
+        }),
+      ];
+    }
 
-  let imported: ComponentDefinition | FunctionComponentDefinition;
-  // Opened before the ask and settled the moment it answers, however it
-  // answered: what canonical resolution selected here is what decides whether
-  // this invocation is in one of this execution's identity domains, and nothing
-  // on the answer or in the chain carries it (`invocation-identity.ts`).
-  //
-  // The frame is this dispatch's closure, and the terminal built for this one
-  // import is the only thing that can select into it. That is what makes it this
-  // invocation's own: a sibling `<Spawn>` resolving the same name at the same
-  // time has its own frame behind its own terminal, and a handler delegating
-  // through any number of descendant scopes still arrives at this one.
-  const selection = environment?.componentIdentity?.beginImport(name);
-  let selected: IdentityDomain | undefined;
-  let dispatcher: FunctionComponent | undefined;
-  /**
-   * Whether canonical execution answered this import for a name it closed.
-   *
-   * The provenance exact source is read from. An open import's answer — the
-   * chain's, unverified — never sets it, so nothing a handler writes into a
-   * definition can reach the presentation decision below.
-   */
-  let authorizedCanonically = false;
-  try {
-    // The public chain answers, and canonical execution decides whether the
-    // answer is one it produced. In a closed execution — a workflow holding a
-    // component bundle, a generated fragment holding an allowlist — a handler
-    // may observe this import, delegate it, and refuse it by throwing; nothing
-    // it returns is invoked. Without an environment the answer is whatever the
-    // chain produced, exactly as it always was.
-    // The offer is open for exactly this ask. Middleware composes inside it and
-    // may observe, delegate or refuse the import; what it cannot do is obtain
-    // the declaration for an element that did not author it, because the offer
-    // is made from the closure the segments being expanded carry, is spent by
-    // whatever asks first, and authorizes only the answer it produced itself.
-    const offered = environment?.installedComponents?.offer(environment.componentBodyScope, name);
-    let answered: ImportedDefinition;
+    if (hideSet.size >= MAX_EXPANSION_DEPTH) {
+      return [
+        yield* raise({
+          type: "error",
+          message: `Maximum expansion depth (${MAX_EXPANSION_DEPTH}) exceeded`,
+          source: name,
+        }),
+      ];
+    }
+
+    let imported: ComponentDefinition | FunctionComponentDefinition;
+    // Opened before the ask and settled the moment it answers, however it
+    // answered: what canonical resolution selected here is what decides whether
+    // this invocation is in one of this execution's identity domains, and nothing
+    // on the answer or in the chain carries it (`invocation-identity.ts`).
+    //
+    // The frame is this dispatch's closure, and the terminal built for this one
+    // import is the only thing that can select into it. That is what makes it this
+    // invocation's own: a sibling `<Spawn>` resolving the same name at the same
+    // time has its own frame behind its own terminal, and a handler delegating
+    // through any number of descendant scopes still arrives at this one.
+    const selection = environment?.componentIdentity?.beginImport(name);
+    let selected: IdentityDomain | undefined;
+    let dispatcher: FunctionComponent | undefined;
+    /**
+     * Whether canonical execution answered this import for a name it closed.
+     *
+     * The provenance exact source is read from. An open import's answer — the
+     * chain's, unverified — never sets it, so nothing a handler writes into a
+     * definition can reach the presentation decision below.
+     */
+    let authorizedCanonically = false;
     try {
-      // Through this import's own terminal when the execution handed expansion
-      // one: the public middleware chain composes around it by name, and `next`
-      // terminates in the continuation that carries this frame. Where expansion
-      // was handed none — driven directly, or a generated fragment answering
-      // through its own narrowed provider — the ordinary public operation answers
-      // exactly as it always did.
-      answered =
-        imports === undefined
-          ? yield* importComponent(name, position)
-          : yield* importThroughTerminal(name, position, (asked, at) =>
-              imports(asked, at, selection),
-            );
-    } finally {
-      offered?.close();
-    }
-    selected = selection?.settle();
-    // A private import is authorized by the ask that made the offer, and by
-    // nothing else. Not by the name: a private component runs for the element
-    // the declaration that carries it authored, so an answer kept from another
-    // import — however exactly it describes the same definition — authorizes
-    // nothing here. And a private name written where no offer was made never
-    // reaches this at all: selection resolves it to nothing, so what arrives is
-    // the ordinary unresolved failure.
-    let authorizedPrivate = false;
-    if (environment?.installedComponents?.declaresPrivate(name) === true) {
-      imported = requirePrivate(offered, name, answered);
-      authorizedPrivate = true;
-      environment.forms?.select(name, imported);
-    } else if (
-      environment?.componentResolution === undefined ||
-      !environment.componentResolution.resolves(name)
-    ) {
-      // Closed for this exact name, not for the execution that closed it. A
-      // bundled run closes every import; a host that declared exact Markdown
-      // closed the names it declared, and an unrelated one is the open import it
-      // has always been — the chain's answer, unverified, with no selection
-      // recorded against it.
-      imported = answered;
-    } else {
-      imported = environment.componentResolution.verify(name, answered);
-      // This import is canonical execution's own answer for a name this
-      // execution closed, which is the only provenance exact source is read
-      // from. An open import — one no tier claims — never sets it, however its
-      // answer describes itself.
-      authorizedCanonically = true;
-      // Closed authorization answers with core's retained copy rather than the
-      // object the resolver recorded, and the copy is what this expansion
-      // invokes — so the selection is recorded against it too. Only here: an
-      // open execution's answer travelled through public middleware, and
-      // nothing it hands back is canonical resolution's product. The record
-      // takes its dispatcher from the copy's own `fn`, identical by retention;
-      // a wrapper whose `fn` is no dispatcher records nothing, so a dispatcher
-      // an environment recorded explicitly is never displaced.
-      environment.forms?.select(name, imported);
-    }
-    // Whatever tier answered, and whatever this execution declares, an
-    // implementation some declaration's private closure built runs only for an
-    // import that closure authorized. Neither the name nor the current
-    // execution can decide it: an answer kept from a legitimate private import
-    // can be returned for any *other* name, in a copy of the definition, and in
-    // a later run that declares nothing at all — and a run that has ended
-    // authorizes nothing.
-    if (!authorizedPrivate) {
-      refuseEscapedPrivate(name, imported);
-    }
-    // Read off the answer rather than from a frame the engine opened: what is
-    // recognized is the exact definition canonical resolution produced for this
-    // exact name, whenever it produced it.
-    dispatcher = environment?.forms?.dispatcherFor(name, imported);
-  } catch (error) {
-    selection?.settle();
-    // Import is a durable effect, so it is the other place a stale journal
-    // entry can surface.
-    const fatal = fatalCause(error);
-    if (fatal !== undefined) {
-      throw fatal;
-    }
-    return [
-      yield* raise({
-        type: "error",
-        message:
-          error instanceof Error
-            ? `Failed to import component ${name}: ${error.message}`
-            : `Failed to import component ${name}: ${String(error)}`,
-        source: name,
-      }),
-    ];
-  }
-
-  // Function component: call the generator function directly
-  if (imported.kind === "function") {
-    return yield* expandFunctionComponent(
-      name,
-      props,
-      expressions,
-      authoredExpressions,
-      children,
-      selfClosing,
-      imported,
-      hideSet,
-      counter,
-      projectedEnv,
-      position,
-      callerMeta,
-      callerProps,
-      owner,
-      path,
-      checkedFailures,
-      environment,
-      imports,
-      returnBody,
-      selected,
-      dispatcher,
-    );
-  }
-
-  const definition = imported;
-
-  // What this definition's own body may write. A declaration carries its
-  // private closure here; every other body carries whatever the caller carried,
-  // which for an ordinary document is nothing. Decided from the definition
-  // canonical resolution retained — the one this expansion is about to invoke,
-  // reporting the origin core declared — rather than from the name alone.
-  const bodyEnvironment = environmentForBody(environment, name, definition);
-
-  const placementError = validateBodyStructure(definition.bodySegments, definition.returns);
-  if (placementError) {
-    return [yield* raise(placementError)];
-  }
-
-  const asExpression = asExpressionViolation(name, expressions);
-  if (asExpression !== undefined) {
-    return [yield* raise({ type: "error", message: asExpression.message, source: name })];
-  }
-
-  // Resolve eval expression props against env.values using the shared
-  // VM context. This must happen before validation so that resolved
-  // values can be type-checked. See spec §5.1 (expression prop evaluation).
-  let resolvedProps: Record<string, Json>;
-  try {
-    resolvedProps = yield* resolveExpressionProps(props, expressions, name, projectedEnv);
-  } catch (error) {
-    return [
-      yield* raise({
-        type: "error",
-        message: error instanceof Error ? error.message : String(error),
-        source: name,
-      }),
-    ];
-  }
-
-  // Validate caller props against the component's declared props schema.
-  // Strip the `slot` prop before validation — it is consumed by the
-  // expansion engine for slot assignment, not forwarded to the child.
-  let validatedProps: Record<string, Json>;
-  let asBinding: string | undefined;
-  try {
-    const refused = asBindingViolation(name, resolvedProps.as);
-    if (refused !== undefined) {
-      throw new Error(refused.message);
-    }
-    asBinding = capturedBinding(resolvedProps.as);
-
-    const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
-    validatedProps = yield* validateProps(name, propsForValidation, definition.props);
-  } catch (error) {
-    return [yield* raise(schemaValidationErrorSegment(error, name))];
-  }
-
-  const missingCapture = returnCaptureViolation(name, definition.returns !== undefined, asBinding);
-  if (missingCapture !== undefined) {
-    return [yield* raise({ type: "error", message: missingCapture.message, source: name })];
-  }
-
-  // Capture the caller's eval environment before creating the component's
-  // own env. Children are caller-provided content — expression props like
-  // {pr} should resolve against the scope where the JSX was written, not
-  // the component that renders <Content />.
-  //
-  // For multi-level nesting (Root → Provider → Instruction → ReviewBody),
-  // the projectedEnv from the outer caller must be merged with the current
-  // context env so that ancestor bindings propagate through all levels.
-  // The current context env's ordinary bindings take precedence; the shared
-  // layering helper keeps a projected caller's props object lexical.
-  const contextEnv = yield* env;
-  const callerEvalEnv = layerEnvironments(projectedEnv, contextEnv);
-
-  // Recurse with augmented hide set.
-  // Each component gets its own fresh binding environment so that
-  // eval blocks within a component share bindings but don't leak
-  // into parent or sibling components. This is critical for the
-  // provider pattern where each provider has isolated port/URL bindings.
-  //
-  // Each component also gets its own EvalScope, created as a child of
-  // the parent component's eval scope. This ensures that middleware
-  // installed via `persist eval` blocks (e.g., Sample.around()) is
-  // scoped to the component. Nested providers produce a scope chain
-  // where innermost middleware runs first (innermost-wins), and
-  // next() delegates to the parent scope's middleware.
-  const newHideSet = new Set([...hideSet, name]);
-  const componentEnv: EvalEnv = propsEnvironment(validatedProps);
-  liveEnvironment(componentEnv);
-
-  // Children are caller-provided content, not the component's own body.
-  // Use the parent's hide set (without the current component name) so
-  // that caller-provided children can reference the same component name
-  // without triggering false cycle detection. True cycles in a component's
-  // body are still caught because body expansion uses newHideSet.
-  //
-  // Use the caller's eval env for the same reason: expression props (e.g.
-  // {pr}) resolve against the scope where the JSX was written.
-  const capturedCallerEnv = callerEvalEnv ?? componentEnv;
-  // A body eval block can render errors away through a string projection
-  // (renderChildren, render, useContent); the buffer records them so an
-  // `as=` capture can be refused (§6.5).
-  const bodyContentErrors: Segment[] = [];
-
-  // Read before the invocation exists: the eval scope ambient here is the
-  // caller's, and it is what `retain()` creates resources in. The loop is read
-  // here for the same reason — it is the one the caller's content was written
-  // in, and the invocation is about to clear it for the component's own body.
-  const siteEvalScope = yield* evalScope;
-  const siteLoop = yield* ActiveLoop.get();
-  const siteReturn = returnBody;
-
-  const expansion = snapshot(path, name, position);
-
-  // Both bodies run inside one invocation, so a value component owns its
-  // resources exactly like a rendered one.
-  let claimProjection: ClaimFn = passthroughClaim;
-
-  function* installInvocation(invocation: Invocation): Operation<void> {
-    const enclosing = yield* ActiveProjection.get();
-    const handle = createProjectionHandle({
-      invocation,
-      enclosing,
-      children,
-      caller: {
-        env: capturedCallerEnv,
-        meta: callerMeta,
-        props: callerProps,
-        hideSet,
-      },
-      authored: {
-        env: componentEnv,
-        meta: definition.meta,
-        props: validatedProps,
-        hideSet: newHideSet,
-      },
-      counter,
-      callerLoop: siteLoop,
-      callerReturn: siteReturn,
-      ownPath: path,
-      printedErrors: bodyContentErrors,
-      checkedFailures,
-      environment,
-      imports,
-    });
-    // Published on the eval scope, which every task the invocation owns
-    // descends from — including its persist-eval blocks and its content.
-    invocation.evalScope.scope.set(ActiveProjection, handle);
-    claimProjection = handle.claim;
-
-    // The component's own body is isolated from the loop that invoked it: a
-    // `<Break>` written here belongs to a `<Loop>` written here. Set on the body
-    // task, which the content scope descends from — so each projection restores
-    // the caller's frame for the caller's own text (createProjectionHandle),
-    // and anything the body does outside a projection finds none.
-    yield* ActiveLoop.set(undefined);
-
-    // And from the caller's value body for the same reason: a <Return> written
-    // here satisfies this component's own `returns`, never the caller's. A
-    // value body installs its own frame below; a rendered one owns none, so a
-    // <Return> written in it stays reserved.
-    // Published on the body task, so the component's own body and everything it
-    // owns read this expansion, and a nested one uncovers it again on the way
-    // out (§5.6).
-    yield* publishExpansion(expansion);
-
-    // Installed on the invocation's own body task rather than a nested
-    // scoped(): anything the body acquires must still be alive when teardown
-    // halts the content scope, and it is released by the body's own stage.
-    yield* provideEnv(componentEnv);
-    yield* provideEvalScope(invocation.evalScope);
-    yield* provideRetain(siteEvalScope);
-
-    // Render closures (spec §4.8). Non-serializable, so serializeExports
-    // omits them from the journal. The optional error mode is supplied by a
-    // persistent evaluation's binding snapshot (§4.3), which knows the error mode of the
-    // block that started the projection; an ordinary block leaves it unset and
-    // the projection site's error mode applies.
-    componentEnv.values.renderChildren = (override?: unknown, mode?: ErrorMode) =>
-      handle.projectToString({
-        kind: "children",
-        override: validateRenderOverride(override),
-        mode,
-      });
-    componentEnv.values.render = (markdown: unknown, mode?: ErrorMode) =>
-      handle.projectToString({
-        kind: "markdown",
-        segments: scanSegments(String(markdown)),
-        mode,
-      });
-    componentEnv.values.useContent = (slot?: unknown, mode?: ErrorMode) =>
-      handle.projectToString({
-        kind: "slot",
-        name: slot === undefined ? undefined : String(slot),
-        mode,
-      });
-  }
-
-  const returns = definition.returns;
-  if (returns !== undefined) {
-    let value: Json;
-    try {
-      value = yield* withInvocation(function* (invocation) {
-        yield* installInvocation(invocation);
-        return yield* expandValueBody(
-          name,
-          returns,
-          definition.bodySegments,
-          children,
-          definition.meta,
-          validatedProps,
-          newHideSet,
-          counter,
-          callerEvalEnv ?? undefined,
-          claimProjection,
-          path,
-          checkedFailures,
-          bodyEnvironment,
-          imports,
-          returnBody,
-        );
-      });
+      // The public chain answers, and canonical execution decides whether the
+      // answer is one it produced. In a closed execution — a workflow holding a
+      // component bundle, a generated fragment holding an allowlist — a handler
+      // may observe this import, delegate it, and refuse it by throwing; nothing
+      // it returns is invoked. Without an environment the answer is whatever the
+      // chain produced, exactly as it always was.
+      // The offer is open for exactly this ask. Middleware composes inside it and
+      // may observe, delegate or refuse the import; what it cannot do is obtain
+      // the declaration for an element that did not author it, because the offer
+      // is made from the closure the segments being expanded carry, is spent by
+      // whatever asks first, and authorizes only the answer it produced itself.
+      const offered = environment?.installedComponents?.offer(environment.componentBodyScope, name);
+      let answered: ImportedDefinition;
+      try {
+        // Through this import's own terminal when the execution handed expansion
+        // one: the public middleware chain composes around it by name, and `next`
+        // terminates in the continuation that carries this frame. Where expansion
+        // was handed none — driven directly, or a generated fragment answering
+        // through its own narrowed provider — the ordinary public operation answers
+        // exactly as it always did.
+        answered =
+          imports === undefined
+            ? yield* importComponent(name, position)
+            : yield* importThroughTerminal(name, position, (asked, at) =>
+                imports(asked, at, selection),
+              );
+      } finally {
+        offered?.close();
+      }
+      selected = selection?.settle();
+      // A private import is authorized by the ask that made the offer, and by
+      // nothing else. Not by the name: a private component runs for the element
+      // the declaration that carries it authored, so an answer kept from another
+      // import — however exactly it describes the same definition — authorizes
+      // nothing here. And a private name written where no offer was made never
+      // reaches this at all: selection resolves it to nothing, so what arrives is
+      // the ordinary unresolved failure.
+      let authorizedPrivate = false;
+      if (environment?.installedComponents?.declaresPrivate(name) === true) {
+        imported = requirePrivate(offered, name, answered);
+        authorizedPrivate = true;
+        environment.forms?.select(name, imported);
+      } else if (
+        environment?.componentResolution === undefined ||
+        !environment.componentResolution.resolves(name)
+      ) {
+        // Closed for this exact name, not for the execution that closed it. A
+        // bundled run closes every import; a host that declared exact Markdown
+        // closed the names it declared, and an unrelated one is the open import it
+        // has always been — the chain's answer, unverified, with no selection
+        // recorded against it.
+        imported = answered;
+      } else {
+        imported = environment.componentResolution.verify(name, answered);
+        // This import is canonical execution's own answer for a name this
+        // execution closed, which is the only provenance exact source is read
+        // from. An open import — one no tier claims — never sets it, however its
+        // answer describes itself.
+        authorizedCanonically = true;
+        // Closed authorization answers with core's retained copy rather than the
+        // object the resolver recorded, and the copy is what this expansion
+        // invokes — so the selection is recorded against it too. Only here: an
+        // open execution's answer travelled through public middleware, and
+        // nothing it hands back is canonical resolution's product. The record
+        // takes its dispatcher from the copy's own `fn`, identical by retention;
+        // a wrapper whose `fn` is no dispatcher records nothing, so a dispatcher
+        // an environment recorded explicitly is never displaced.
+        environment.forms?.select(name, imported);
+      }
+      // Whatever tier answered, and whatever this execution declares, an
+      // implementation some declaration's private closure built runs only for an
+      // import that closure authorized. Neither the name nor the current
+      // execution can decide it: an answer kept from a legitimate private import
+      // can be returned for any *other* name, in a copy of the definition, and in
+      // a later run that declares nothing at all — and a run that has ended
+      // authorizes nothing.
+      if (!authorizedPrivate) {
+        refuseEscapedPrivate(name, imported);
+      }
+      // Read off the answer rather than from a frame the engine opened: what is
+      // recognized is the exact definition canonical resolution produced for this
+      // exact name, whenever it produced it.
+      dispatcher = environment?.forms?.dispatcherFor(name, imported);
     } catch (error) {
-      // Body fail-fast propagates unchanged; a return-value failure is the
-      // component's own printed error and follows the caller's error mode.
+      selection?.settle();
+      // Import is a durable effect, so it is the other place a stale journal
+      // entry can surface.
       const fatal = fatalCause(error);
       if (fatal !== undefined) {
         throw fatal;
       }
+      return [
+        yield* raise({
+          type: "error",
+          message:
+            error instanceof Error
+              ? `Failed to import component ${name}: ${error.message}`
+              : `Failed to import component ${name}: ${String(error)}`,
+          source: name,
+        }),
+      ];
+    }
+
+    // Function component: call the generator function directly
+    if (imported.kind === "function") {
+      return yield* expandFunctionComponent(
+        observed,
+        name,
+        props,
+        expressions,
+        authoredExpressions,
+        children,
+        selfClosing,
+        imported,
+        hideSet,
+        counter,
+        projectedEnv,
+        position,
+        callerMeta,
+        callerProps,
+        owner,
+        path,
+        checkedFailures,
+        environment,
+        imports,
+        returnBody,
+        selected,
+        dispatcher,
+      );
+    }
+
+    const definition = imported;
+
+    // What this definition's own body may write. A declaration carries its
+    // private closure here; every other body carries whatever the caller carried,
+    // which for an ordinary document is nothing. Decided from the definition
+    // canonical resolution retained — the one this expansion is about to invoke,
+    // reporting the origin core declared — rather than from the name alone.
+    const bodyEnvironment = environmentForBody(environment, name, definition);
+
+    const placementError = validateBodyStructure(definition.bodySegments, definition.returns);
+    if (placementError) {
+      return [yield* raise(placementError)];
+    }
+
+    const asExpression = asExpressionViolation(name, expressions);
+    if (asExpression !== undefined) {
+      return [yield* raise({ type: "error", message: asExpression.message, source: name })];
+    }
+
+    // Resolve eval expression props against env.values using the shared
+    // VM context. This must happen before validation so that resolved
+    // values can be type-checked. See spec §5.1 (expression prop evaluation).
+    let resolvedProps: Record<string, Json>;
+    try {
+      resolvedProps = yield* resolveExpressionProps(props, expressions, name, projectedEnv);
+    } catch (error) {
+      return [
+        yield* raise({
+          type: "error",
+          message: error instanceof Error ? error.message : String(error),
+          source: name,
+        }),
+      ];
+    }
+
+    // Validate caller props against the component's declared props schema.
+    // Strip the `slot` prop before validation — it is consumed by the
+    // expansion engine for slot assignment, not forwarded to the child.
+    let validatedProps: Record<string, Json>;
+    let asBinding: string | undefined;
+    try {
+      const refused = asBindingViolation(name, resolvedProps.as);
+      if (refused !== undefined) {
+        throw new Error(refused.message);
+      }
+      asBinding = capturedBinding(resolvedProps.as);
+
+      const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
+      validatedProps = yield* validateProps(name, propsForValidation, definition.props);
+    } catch (error) {
       return [yield* raise(schemaValidationErrorSegment(error, name))];
     }
+    // Resolution and validation accepted this element, so whatever body it has
+    // is the work that was accepted. Published here rather than at each body,
+    // because every path past this point is work — and a refusal above it is
+    // an element that never became active at all.
+    observed.active();
 
-    // Bind only after the invocation has torn down, so the value reaches the
-    // caller's environment and never the component's own.
-    const parentEnv = yield* env;
-    if (!parentEnv || asBinding === undefined) {
-      return [
-        yield* raise({
-          type: "error",
-          message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
-          source: name,
-        }),
-      ];
-    }
-    parentEnv.values[asBinding] = value;
-    return [];
-  }
-
-  const bodyOwner = asBinding === undefined ? owner : undefined;
-  // Where this body's own segments start, so what it renders can be told apart
-  // from what the caller had already produced into the same array.
-  const renderedFrom = bodyOwner?.length ?? 0;
-  const expanded = yield* withInvocation(function* (invocation) {
-    yield* installInvocation(invocation);
-    return yield* expandBody(
-      definition.bodySegments,
-      children,
-      definition.meta,
-      validatedProps,
-      newHideSet,
-      counter,
-      callerEvalEnv ?? undefined,
-      claimProjection,
-      bodyOwner,
-      path,
-      checkedFailures,
-      bodyEnvironment,
-      imports,
-      returnBody,
+    const missingCapture = returnCaptureViolation(
+      name,
+      definition.returns !== undefined,
+      asBinding,
     );
-  });
-
-  // Exact source is a provenance, and both halves of it are read here from
-  // things no answer can write: that canonical execution authorized this import
-  // for a name this execution closed, and that the *host's own admitted
-  // declaration* for that name states exact source. A definition claiming the
-  // disposition, or segments arriving already marked, decide nothing.
-  //
-  // What a component declared exact renders is exact wherever it renders: the
-  // caller's flow, its own returned region, or neither when the invocation
-  // binds instead. Recording it here — against the segments this body produced,
-  // after it produced them — is what carries the fact to the emission loop,
-  // which is outside every scope the invocation owned.
-  if (authorizedCanonically && environment?.installedComponents?.declaresExact(name) === true) {
-    markExactSource(
-      environment?.sourceSegments,
-      bodyOwner === undefined ? expanded : bodyOwner.slice(renderedFrom),
-    );
-  }
-
-  if (asBinding) {
-    // A capture never swallows an error. The body reported these where they
-    // were created (§6.9) — including the ones a string projection rendered
-    // away — so they are handed back as they are and the binding stays unset.
-    // Recorded errors precede expanded ones regardless of source position;
-    // the order across the two lists is deliberately unspecified.
-    const errors = [
-      ...bodyContentErrors,
-      ...expanded.filter((capturedSegment) => capturedSegment.type === "error"),
-    ];
-    if (errors.length > 0) {
-      return errors;
+    if (missingCapture !== undefined) {
+      return [yield* raise({ type: "error", message: missingCapture.message, source: name })];
     }
 
-    const parentEnv = yield* env;
-    if (!parentEnv) {
-      return [
-        yield* raise({
-          type: "error",
-          message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
-          source: name,
-        }),
+    // Capture the caller's eval environment before creating the component's
+    // own env. Children are caller-provided content — expression props like
+    // {pr} should resolve against the scope where the JSX was written, not
+    // the component that renders <Content />.
+    //
+    // For multi-level nesting (Root → Provider → Instruction → ReviewBody),
+    // the projectedEnv from the outer caller must be merged with the current
+    // context env so that ancestor bindings propagate through all levels.
+    // The current context env's ordinary bindings take precedence; the shared
+    // layering helper keeps a projected caller's props object lexical.
+    const contextEnv = yield* env;
+    const callerEvalEnv = layerEnvironments(projectedEnv, contextEnv);
+
+    // Recurse with augmented hide set.
+    // Each component gets its own fresh binding environment so that
+    // eval blocks within a component share bindings but don't leak
+    // into parent or sibling components. This is critical for the
+    // provider pattern where each provider has isolated port/URL bindings.
+    //
+    // Each component also gets its own EvalScope, created as a child of
+    // the parent component's eval scope. This ensures that middleware
+    // installed via `persist eval` blocks (e.g., Sample.around()) is
+    // scoped to the component. Nested providers produce a scope chain
+    // where innermost middleware runs first (innermost-wins), and
+    // next() delegates to the parent scope's middleware.
+    const newHideSet = new Set([...hideSet, name]);
+    const componentEnv: EvalEnv = propsEnvironment(validatedProps);
+    liveEnvironment(componentEnv);
+
+    // Children are caller-provided content, not the component's own body.
+    // Use the parent's hide set (without the current component name) so
+    // that caller-provided children can reference the same component name
+    // without triggering false cycle detection. True cycles in a component's
+    // body are still caught because body expansion uses newHideSet.
+    //
+    // Use the caller's eval env for the same reason: expression props (e.g.
+    // {pr}) resolve against the scope where the JSX was written.
+    const capturedCallerEnv = callerEvalEnv ?? componentEnv;
+    // A body eval block can render errors away through a string projection
+    // (renderChildren, render, useContent); the buffer records them so an
+    // `as=` capture can be refused (§6.5).
+    const bodyContentErrors: Segment[] = [];
+
+    // Read before the invocation exists: the eval scope ambient here is the
+    // caller's, and it is what `retain()` creates resources in. The loop is read
+    // here for the same reason — it is the one the caller's content was written
+    // in, and the invocation is about to clear it for the component's own body.
+    const siteEvalScope = yield* evalScope;
+    const siteLoop = yield* ActiveLoop.get();
+    const siteReturn = returnBody;
+
+    const expansion = snapshot(path, name, position);
+
+    // Both bodies run inside one invocation, so a value component owns its
+    // resources exactly like a rendered one.
+    let claimProjection: ClaimFn = passthroughClaim;
+
+    function* installInvocation(invocation: Invocation): Operation<void> {
+      // Resolution and validation accepted this element, and its body is about
+      // to run: that is what makes it active, and both bodies install here.
+      observed.active();
+      const enclosing = yield* ActiveProjection.get();
+      const handle = createProjectionHandle({
+        invocation,
+        enclosing,
+        children,
+        caller: {
+          env: capturedCallerEnv,
+          meta: callerMeta,
+          props: callerProps,
+          hideSet,
+        },
+        authored: {
+          env: componentEnv,
+          meta: definition.meta,
+          props: validatedProps,
+          hideSet: newHideSet,
+        },
+        counter,
+        callerLoop: siteLoop,
+        callerReturn: siteReturn,
+        ownPath: path,
+        printedErrors: bodyContentErrors,
+        checkedFailures,
+        environment,
+        imports,
+      });
+      // Published on the eval scope, which every task the invocation owns
+      // descends from — including its persist-eval blocks and its content.
+      invocation.evalScope.scope.set(ActiveProjection, handle);
+      claimProjection = handle.claim;
+
+      // The component's own body is isolated from the loop that invoked it: a
+      // `<Break>` written here belongs to a `<Loop>` written here. Set on the body
+      // task, which the content scope descends from — so each projection restores
+      // the caller's frame for the caller's own text (createProjectionHandle),
+      // and anything the body does outside a projection finds none.
+      yield* ActiveLoop.set(undefined);
+
+      // And from the caller's value body for the same reason: a <Return> written
+      // here satisfies this component's own `returns`, never the caller's. A
+      // value body installs its own frame below; a rendered one owns none, so a
+      // <Return> written in it stays reserved.
+      // Published on the body task, so the component's own body and everything it
+      // owns read this expansion, and a nested one uncovers it again on the way
+      // out (§5.6).
+      yield* publishExpansion(expansion);
+
+      // Installed on the invocation's own body task rather than a nested
+      // scoped(): anything the body acquires must still be alive when teardown
+      // halts the content scope, and it is released by the body's own stage.
+      yield* provideEnv(componentEnv);
+      yield* provideEvalScope(invocation.evalScope);
+      yield* provideRetain(siteEvalScope);
+
+      // Render closures (spec §4.8). Non-serializable, so serializeExports
+      // omits them from the journal. The optional error mode is supplied by a
+      // persistent evaluation's binding snapshot (§4.3), which knows the error mode of the
+      // block that started the projection; an ordinary block leaves it unset and
+      // the projection site's error mode applies.
+      componentEnv.values.renderChildren = (override?: unknown, mode?: ErrorMode) =>
+        handle.projectToString({
+          kind: "children",
+          override: validateRenderOverride(override),
+          mode,
+        });
+      componentEnv.values.render = (markdown: unknown, mode?: ErrorMode) =>
+        handle.projectToString({
+          kind: "markdown",
+          segments: scanSegments(String(markdown)),
+          mode,
+        });
+      componentEnv.values.useContent = (slot?: unknown, mode?: ErrorMode) =>
+        handle.projectToString({
+          kind: "slot",
+          name: slot === undefined ? undefined : String(slot),
+          mode,
+        });
+    }
+
+    const returns = definition.returns;
+    if (returns !== undefined) {
+      let value: Json;
+      try {
+        value = yield* withInvocation(function* (invocation) {
+          yield* installInvocation(invocation);
+          return yield* expandValueBody(
+            name,
+            returns,
+            definition.bodySegments,
+            children,
+            definition.meta,
+            validatedProps,
+            newHideSet,
+            counter,
+            callerEvalEnv ?? undefined,
+            claimProjection,
+            path,
+            checkedFailures,
+            bodyEnvironment,
+            imports,
+            returnBody,
+          );
+        }, observed.settled);
+      } catch (error) {
+        // Body fail-fast propagates unchanged; a return-value failure is the
+        // component's own printed error and follows the caller's error mode.
+        const fatal = fatalCause(error);
+        if (fatal !== undefined) {
+          throw fatal;
+        }
+        return [yield* raise(schemaValidationErrorSegment(error, name))];
+      }
+
+      // Bind only after the invocation has torn down, so the value reaches the
+      // caller's environment and never the component's own.
+      const parentEnv = yield* env;
+      if (!parentEnv || asBinding === undefined) {
+        return [
+          yield* raise({
+            type: "error",
+            message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
+            source: name,
+          }),
+        ];
+      }
+      parentEnv.values[asBinding] = value;
+      return [];
+    }
+
+    const bodyOwner = asBinding === undefined ? owner : undefined;
+    // Where this body's own segments start, so what it renders can be told apart
+    // from what the caller had already produced into the same array.
+    const renderedFrom = bodyOwner?.length ?? 0;
+    const expanded = yield* withInvocation(function* (invocation) {
+      yield* installInvocation(invocation);
+      return yield* expandBody(
+        definition.bodySegments,
+        children,
+        definition.meta,
+        validatedProps,
+        newHideSet,
+        counter,
+        callerEvalEnv ?? undefined,
+        claimProjection,
+        bodyOwner,
+        path,
+        checkedFailures,
+        bodyEnvironment,
+        imports,
+        returnBody,
+      );
+    }, observed.settled);
+
+    // Exact source is a provenance, and both halves of it are read here from
+    // things no answer can write: that canonical execution authorized this import
+    // for a name this execution closed, and that the *host's own admitted
+    // declaration* for that name states exact source. A definition claiming the
+    // disposition, or segments arriving already marked, decide nothing.
+    //
+    // What a component declared exact renders is exact wherever it renders: the
+    // caller's flow, its own returned region, or neither when the invocation
+    // binds instead. Recording it here — against the segments this body produced,
+    // after it produced them — is what carries the fact to the emission loop,
+    // which is outside every scope the invocation owned.
+    if (authorizedCanonically && environment?.installedComponents?.declaresExact(name) === true) {
+      markExactSource(
+        environment?.sourceSegments,
+        bodyOwner === undefined ? expanded : bodyOwner.slice(renderedFrom),
+      );
+    }
+
+    if (asBinding) {
+      // A capture never swallows an error. The body reported these where they
+      // were created (§6.9) — including the ones a string projection rendered
+      // away — so they are handed back as they are and the binding stays unset.
+      // Recorded errors precede expanded ones regardless of source position;
+      // the order across the two lists is deliberately unspecified.
+      const errors = [
+        ...bodyContentErrors,
+        ...expanded.filter((capturedSegment) => capturedSegment.type === "error"),
       ];
-    }
-    parentEnv.values[asBinding] = renderSegments(expanded);
-    return [];
-  }
+      if (errors.length > 0) {
+        return errors;
+      }
 
-  // A rendering body already wrote into the owner, so there is nothing left to
-  // hand back; one that kept its own returns what it rendered.
-  return bodyOwner === undefined ? expanded : [];
+      const parentEnv = yield* env;
+      if (!parentEnv) {
+        return [
+          yield* raise({
+            type: "error",
+            message: `Prop "as" on <${name} /> requires a parent evaluation environment.`,
+            source: name,
+          }),
+        ];
+      }
+      parentEnv.values[asBinding] = renderSegments(expanded);
+      return [];
+    }
+
+    // A rendering body already wrote into the owner, so there is nothing left to
+    // hand back; one that kept its own returns what it rendered.
+    return bodyOwner === undefined ? expanded : [];
+  }
 }
 
 // Without `returns`, a function component's rendering is its return value, so
@@ -3270,6 +3361,11 @@ function* raiseFrom(segment: ErrorSegment, from: unknown): Operation<ErrorSegmen
  * `expandChildren` helper that renders children.
  */
 function* expandFunctionComponent(
+  /**
+   * What this element's observers are told, from the expansion that issued
+   * them. Publication only: nothing here reads an outcome or decides one.
+   */
+  observed: ObservedExpansion,
   name: string,
   props: Record<string, Json>,
   expressions: Record<string, string>,
@@ -3450,6 +3546,7 @@ function* expandFunctionComponent(
     // in scope so it can render its invocation content through `yield* content()`.
     try {
       const output: unknown = yield* withInvocation(function* (invocation) {
+        observed.active();
         const enclosing = yield* ActiveProjection.get();
         // Minted before the handle, because the handle is what raises it: an
         // invocation names nothing while it is expanding its own content, and
@@ -3697,7 +3794,7 @@ function* expandFunctionComponent(
           }
           throw new ThrownValue(error);
         }
-      });
+      }, observed.settled);
       if (asBinding) {
         const parentEnv = yield* env;
         if (!parentEnv) {

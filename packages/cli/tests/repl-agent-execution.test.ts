@@ -1163,6 +1163,67 @@ describe("P1 — exact policy and per-turn suspension", () => {
   });
 });
 
+describe("L2 — a pending permission is a waiting element (#881 PR 2)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("L2: the element the request was asked on behalf of is waiting, and stops when it is answered", function* () {
+    const stub = createStub({
+      one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["reply"] },
+    });
+    yield* useStub(stub);
+    const holder = execution();
+    const session = opened(yield* start(holder, ONE_PROMPT, "approve-reads"));
+
+    yield* spawn(function* () {
+      yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
+      const pending = session.agent.requests[0]!;
+
+      // The waiting is counted on the element the request was asked inside —
+      // the `<Prompt>` whose turn owns it — and not on the session. A reading
+      // that said "busy" would name every element here.
+      const waiting = session.lifecycle.occurrences.filter((one) => one.waiting.length > 0);
+      expect(waiting.map((one) => `${one.name}:${one.waiting.join()}`)).toEqual([
+        "Prompt:permission",
+      ]);
+
+      // Answering it releases that element and nothing else.
+      expect(session.permissions.choose(pending.key, "once")).toBe(true);
+      yield* sleep(0);
+      expect(session.lifecycle.occurrences.filter((one) => one.waiting.length > 0)).toEqual([]);
+    });
+
+    const outcome = yield* session.join();
+    expect(outcome.ok).toBe(true);
+    // And the reading goes with the entry, the way every other one does.
+    yield* sleep(0);
+    expect(session.lifecycle.occurrences).toEqual([]);
+  });
+
+  it("L2: a request abandoned at teardown releases its wait without deciding anything", function* () {
+    const stub = createStub({
+      one: { permission: { toolCallId: "call-1", kind: "execute" }, deltas: ["reply"] },
+    });
+    yield* useStub(stub);
+    const holder = execution();
+    // Held inside a scope of its own, so leaving the scope is the teardown.
+    const left = yield* scoped(function* () {
+      const session = opened(yield* start(holder, ONE_PROMPT, "approve-reads"));
+      yield* reported(session, "a pending request", (reading) => reading.requests.length === 1);
+      expect(session.lifecycle.occurrences.some((one) => one.waiting.includes("permission"))).toBe(
+        true,
+      );
+      // Nobody answers.
+      return session;
+    });
+    yield* sleep(0);
+    // The scope went away and took the reading with it. No decision was
+    // invented on the way out: a denial recorded here would be a decision
+    // nobody made.
+    expect(left.lifecycle.occurrences).toEqual([]);
+    expect(stub.outcomes.get("call-1")).toBe(undefined);
+  });
+});
+
 describe("P2 — one live request, one direct settlement", () => {
   beforeAll(() => useTempFileCompiler());
 

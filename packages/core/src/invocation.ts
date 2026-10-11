@@ -77,8 +77,28 @@ function asError(cause: unknown): Error {
  * failure and a single `InvocationTeardownError` — each original error stays
  * reachable by identity, which is what `fatalCause()` traverses.
  */
-export function* withInvocation<T>(body: (invocation: Invocation) => Operation<T>): Operation<T> {
+export function* withInvocation<T>(
+  body: (invocation: Invocation) => Operation<T>,
+  /**
+   * Told once that the body's own work has ended, and why, before any of the
+   * ordered teardown stages run.
+   *
+   * An observer of the invocation, not a participant in it: nothing it does
+   * changes the outcome, and it cannot see what the body produced. It is here
+   * rather than around the call because "the body ended" and "the invocation
+   * returned" are different moments — the destructors between them are exactly
+   * what a reader watching an element wants to see it waiting in.
+   */
+  settled?: (reason: "returned" | "failed" | "cancelled") => void,
+): Operation<T> {
   return yield* scoped(function* () {
+    let told = false;
+    const tell = (reason: "returned" | "failed" | "cancelled"): void => {
+      if (!told) {
+        told = true;
+        settled?.(reason);
+      }
+    };
     let bodyFailure: Error | undefined;
     const teardownFailures: unknown[] = [];
 
@@ -185,10 +205,20 @@ export function* withInvocation<T>(body: (invocation: Invocation) => Operation<T
       }
     });
 
+    // Registered after the teardown stages so it runs before them: an unwind
+    // the body never returned from is a cancellation, and it is told as one
+    // while the resources it is about to release are still standing.
+    yield* ensure(() => {
+      tell("cancelled");
+    });
+
     start.resolve(invocation);
     try {
-      return yield* resultPublished.operation;
+      const value = yield* resultPublished.operation;
+      tell("returned");
+      return value;
     } catch (error) {
+      tell("failed");
       // Recorded so the outcome destructor can keep it when a teardown stage
       // also fails; a destructor throw would otherwise replace it as the
       // scope's failure.

@@ -35,6 +35,7 @@ import {
   reduceRepl,
   viewFor,
 } from "../src/repl/application.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import type {
   ReplAction,
   ReplLive,
@@ -50,6 +51,7 @@ import type { ReplDescription } from "../src/repl/description.ts";
 import { ENTRY_SCOPE, projectRepl } from "../src/repl/model.ts";
 import type { ReplElicitation, ReplModel, ReplScope } from "../src/repl/model.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
+import { navigationOf } from "../src/repl/navigation.ts";
 import { presentationFor } from "../src/repl/application.ts";
 import type { ReplPresentationContext } from "../src/repl/application.ts";
 import { commitReplFrame, isStaleFrame } from "../src/repl/program.ts";
@@ -142,6 +144,7 @@ function asking(question: ReplQuestion | undefined): ReplLive {
     pausable: false,
     running: false,
     agent: NO_AGENT,
+    lifecycle: NO_LIFECYCLE,
   };
 }
 
@@ -676,7 +679,17 @@ function reading(
   size = NARROW,
   focused?: string,
 ): ReplView {
-  const resolved = viewFor(state, model, live, size, focused);
+  // The navigation a session would publish for this reading. The History
+  // drawer is fed from it rather than from the model's prefix, so a view
+  // built here has to carry one or the drawer lists nothing.
+  const resolved = viewFor(
+    state,
+    model,
+    live,
+    size,
+    focused,
+    navigationOf(model.checkpoints, model.settled ? "settled" : "unfinished"),
+  );
   if (!resolved.ok) {
     throw resolved.error;
   }
@@ -863,6 +876,134 @@ describe("F3 — complete content and reachable navigation", () => {
       expect([key, reached.has(key)]).toEqual([key, true]);
       expect([key, reached.get(key)]).toEqual([key, true]);
     }
+  });
+
+  it("F3: a long preview line is readable to its last character at 72x20", function* () {
+    // R4. A drawer row is one row, so a message split only at its newlines
+    // puts a long line's tail nowhere: the window can scroll to rows that
+    // were prepared and cannot recover the rest of one that was not. The
+    // reviewed build lost `ng coding agents."` off the end of the README
+    // summary at this size, with Approve still reachable — so reaching the
+    // controls is not what discriminates this.
+    //
+    // Walked through the real tree, the real admission and the real scroll,
+    // concatenating what the drawer actually placed.
+    const summary = "A lightweight workspace for coordinating coding agents.";
+    const long = [
+      "Proposed README.md:",
+      "",
+      "{",
+      `  "project": "Northstar",`,
+      `  "summary": "${summary}"`,
+      "}",
+      "",
+    ].join("\n");
+    const asked = yield* askingFor(PLAN_SCHEMA, long);
+    const live = asking(asked.question);
+    const tree = yield* useReplTree<ReplAction>();
+
+    let state = opened(live);
+    const rows: string[] = [];
+    const seenKeys = new Set<string>();
+    for (let press = 0; press < 160; press++) {
+      const view = reading(state, live, EMPTY_MODEL, NARROW, undefined);
+      for (const [key] of yield* placedKeys(tree, view)) {
+        if (key.startsWith("drawer:message:") && !seenKeys.has(key)) {
+          seenKeys.add(key);
+        }
+      }
+      for (const row of yield* framed(state, live)) {
+        if (
+          row.key.startsWith("drawer:message:") &&
+          !rows.includes(row.key + "\u0000" + row.label)
+        ) {
+          rows.push(row.key + "\u0000" + row.label);
+        }
+      }
+      const next = reduceRepl(
+        state,
+        { kind: "scroll", delta: 1 },
+        EMPTY_MODEL,
+        live,
+        yield* admissionOf(state, live),
+      ).state;
+      if (next.form.offset === state.form.offset) {
+        break;
+      }
+      state = next;
+    }
+
+    // Every row the drawer showed, in the order its keys number them.
+    //
+    // Compared with runs of whitespace collapsed, because the display adds
+    // two kinds of its own: `drawerLine` pads each row to the drawer's width,
+    // and a continuation is set in to the column its line was written at.
+    // Neither is content, and neither can be told from the content's own
+    // spaces in a drawn row — so the recovery rule is "every character, in
+    // order, up to the whitespace the display inserted". That is exactly the
+    // rule that catches the defect: a dropped tail is missing characters, not
+    // extra spaces.
+    const flat = (text: string): string => text.replace(/\s+/g, " ").trim();
+    const whole = flat(
+      rows
+        .map((one) => one.split("\u0000"))
+        .sort((a, b) => Number(a[0].split(":")[2]) - Number(b[0].split(":")[2]))
+        .map(([, label]) => label)
+        .join(" "),
+    );
+
+    // The property that makes the text *drawable*, and the one the reviewed
+    // build failed. A description's label always held the whole line — the
+    // loss happened at the row, where a label wider than the drawer has
+    // nowhere to put its tail and the window has no second row to scroll to.
+    // So every message row must fit the width the drawer was measured at.
+    const room =
+      (yield* contextOf(reading(opened(live), live, EMPTY_MODEL, NARROW, undefined))).widths
+        ?.drawer ?? 0;
+    expect(room).toBeGreaterThan(0);
+    const overflowing = rows
+      .map((one) => one.split("\u0000"))
+      .filter(([, label]) => label.replace(/\s+$/, "").length > room);
+    expect(overflowing.map(([key]) => key)).toEqual([]);
+    // And there really are more rows than logical lines, so this is wrapping
+    // rather than a message that happened to be short enough.
+    expect(rows.length).toBeGreaterThan(long.split("\n").length);
+
+    // The tail the reviewed build dropped.
+    expect(whole).toContain("ng coding agents.");
+    // And the value entire, with its closing quote.
+    expect(whole).toContain(flat(`"summary": "${summary}"`));
+    // Every logical line is in there whole, so nothing was shortened and
+    // nothing was invented.
+    for (const line of long.split("\n").filter((one) => one.trim().length > 0)) {
+      expect([line, whole.includes(flat(line))]).toEqual([line, true]);
+    }
+    // The decisions are still reachable afterwards, which is the half the
+    // reviewed build already satisfied.
+    const reached = new Set<string>();
+    let at = opened(live);
+    for (let press = 0; press < 160; press++) {
+      for (const [key, targetable] of yield* placedKeys(
+        tree,
+        reading(at, live, EMPTY_MODEL, NARROW, undefined),
+      )) {
+        if (targetable) {
+          reached.add(key);
+        }
+      }
+      const next = reduceRepl(
+        at,
+        { kind: "scroll", delta: 1 },
+        EMPTY_MODEL,
+        live,
+        yield* admissionOf(at, live),
+      ).state;
+      if (next.form.offset === at.form.offset) {
+        break;
+      }
+      at = next;
+    }
+    expect(reached.has("drawer:form:submit")).toBe(true);
   });
 
   it("F3: the viewport walks the whole message before the form controls", function* () {
@@ -1271,6 +1412,7 @@ function liveReading(session: ReplSession): ReplLive {
     pausable: session.controller !== undefined,
     running: session.live,
     agent: session.agent,
+    lifecycle: NO_LIFECYCLE,
   };
 }
 
@@ -1488,7 +1630,20 @@ describe("F3 — every placed modal control is in the ring", () => {
     // A real one-entry history under it, so the row names the entry the question
     // belongs to rather than a readiness with no entry in it.
     const recorded = yield* retained();
-    const state = opened(live);
+    // One window action first. The drawer's top rule and side inset are part of
+    // its measured rectangle, so at 72x20 the content window is one row shorter
+    // than this form's rows and `[submit]` is in the next one. Advanced through
+    // the control a person presses, against the admission the frame measured,
+    // rather than by setting an offset: what the ring must hold is what a frame
+    // really placed.
+    const atTop = opened(live);
+    const state = reduceRepl(
+      atTop,
+      { kind: "scroll", delta: 1 },
+      recorded.model,
+      live,
+      yield* admissionOf(atTop, live, recorded.model, NARROW),
+    ).state;
     const view = reading(state, live, recorded.model, NARROW, undefined);
     yield* applied(tree, view);
 
@@ -1585,7 +1740,7 @@ describe("F2 — an invalid answer is not a lifecycle refusal", () => {
 
   it("UI17: the field keeps its own explanation, and the state row still says the state", function* () {
     // A short question, so the whole form — the message under its field included
-    // — is inside the drawer's window rather than scrolled out of it.
+    // — is reachable inside the drawer's window rather than past the end of it.
     const asked = yield* askingFor(CONFIRM_SCHEMA);
     const live = asking(asked.question);
     const recorded = yield* retained();
@@ -1598,7 +1753,19 @@ describe("F2 — an invalid answer is not a lifecycle refusal", () => {
         messages: Object.freeze([{ field: "decision", message: "decision is required" }]),
       }),
     });
-    const rows = rowsOf(yield* seenView(reading(invalid, live, recorded.model, NARROW, undefined)));
+    // One window action, for the row the drawer's top rule and side inset take
+    // out of its measured content window at 72x20. The validation row is the
+    // last of this form's rows, so it is in the window after the first one.
+    const advanced = reduceRepl(
+      invalid,
+      { kind: "scroll", delta: 1 },
+      recorded.model,
+      live,
+      yield* admissionOf(invalid, live, recorded.model, NARROW),
+    ).state;
+    const rows = rowsOf(
+      yield* seenView(reading(advanced, live, recorded.model, NARROW, undefined)),
+    );
 
     // Under the form, about the field, in its own row.
     const under = rows.find((one) => one.key.startsWith("drawer:invalid:"));

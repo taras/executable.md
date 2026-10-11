@@ -37,7 +37,16 @@
 
 import { close, fixed, fit, grow, open, text } from "@bomb.sh/tty";
 import type { Op, OpenElement, SizingAxis } from "@bomb.sh/tty";
-import { REPL_PALETTE, surfaceOf, terminalColour, textStyleOf } from "./presentation-style.ts";
+import { runText } from "./description.ts";
+import type { ReplPreparedRail } from "./history-rail.ts";
+import type { ReplTokenRun } from "./description.ts";
+import {
+  REPL_PALETTE,
+  runStyleOf,
+  surfaceOf,
+  terminalColour,
+  textStyleOf,
+} from "./presentation-style.ts";
 import type { ReplRowStyle } from "./presentation-style.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 
@@ -95,6 +104,16 @@ export interface ReplBox {
    * structure, and structure takes the surface of whatever it is inside.
    */
   readonly style: ReplRowStyle | undefined;
+  /**
+   * The stretches this row's text is made of, where its characters mean
+   * different things, or none where the whole row reads as one thing.
+   *
+   * They apply only when they spell exactly the text being drawn. A row whose
+   * mounted node contributed something else is drawn as one stretch under the
+   * row's own role, because runs that said something about other characters
+   * would be colouring text they were never built for.
+   */
+  readonly runs: readonly ReplTokenRun[] | undefined;
   readonly children: readonly ReplBox[];
 }
 
@@ -179,7 +198,10 @@ const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
  */
 export const FOOTER_ROWS = 7;
 /** The History band's own five rows. */
-export const HISTORY_ROWS = 5;
+export { HISTORY_ROWS } from "./history-rail.ts";
+
+/** Five, at every size — imported for this module's own placement. */
+import { HISTORY_ROWS } from "./history-rail.ts";
 
 /** How wide a column is at each profile that has one. */
 interface ColumnWidths {
@@ -210,6 +232,16 @@ const DRAWER_SHARE = 8;
  * underneath it.
  */
 const DRAWER_BACKGROUND = terminalColour(REPL_PALETTE.drawerSurface);
+
+/**
+ * How far in from each side of its rectangle a drawer's rows start.
+ *
+ * One cell. The reference this screen follows separates a drawer's content from
+ * its own edge with pixels, and a cell is the terminal's smallest version of
+ * that — enough to tell a title from the text it is in front of, and not enough
+ * to cost the content a column it needed.
+ */
+const DRAWER_INSET = 1;
 
 /** Which profile a size gets. */
 export function profileFor(size: ReplTerminalSize): ReplProfile {
@@ -269,115 +301,16 @@ export function drawerRect(size: ReplTerminalSize): ReplBounds | undefined {
   });
 }
 
-/** One selectable history position, as the band would label it. */
-export interface ReplSurfaceMarker {
-  readonly marker: string;
-  readonly label: string;
-}
-
-/** One marker as the band shows it, grouped or not. */
-export interface ReplPlacedMarker {
-  readonly marker: string;
-  /** The label shown. Several markers may share one when space is short. */
-  readonly label: string;
-  /** The other markers sharing that label, this one excluded. */
-  readonly grouped: readonly string[];
-}
-
-/** The History band: its five rows, and what each marker is labelled. */
-export interface ReplHistoryBand {
-  /** Exactly five rows, whatever the size. */
-  readonly rows: readonly string[];
-  readonly markers: readonly ReplPlacedMarker[];
-}
-
 /**
- * The History band, labelled and laid into its five rows.
+ * The History band as the frame holds it: five rows of inert runs, and the
+ * columns its positions landed on.
  *
- * The band is the one thing on this screen that is not a mounted row: its labels
- * come from the model rather than from a node, so nothing else can tell the
- * engine what to put there. Grouping is visual — every marker stays under its
- * own name and the ones sharing a label say which others they share it with, so
- * a compact band never costs a reader the ability to select an exact position.
+ * Prepared in `history-rail.ts` from engine measurements and handed here as
+ * text and roles. Layout places it; it receives no Journal, no session, no
+ * capability, no mounted focus and no authoritative outcome, and it decides
+ * nothing about what the band says.
  */
-export function historyBand(
-  markers: readonly ReplSurfaceMarker[],
-  columns: number,
-): ReplHistoryBand {
-  const placed = groupedMarkers(markers, columns);
-  return Object.freeze({ rows: Object.freeze(bandRows(placed, columns)), markers: placed });
-}
-
-function groupedMarkers(
-  markers: readonly ReplSurfaceMarker[],
-  columns: number,
-): readonly ReplPlacedMarker[] {
-  // Five rows wide as the band is wide. Grouping is about the band's whole
-  // budget, not one row's: a label that will not fit row three may fit row four.
-  const budget = HISTORY_ROWS * Math.max(1, columns - 2);
-  const separate = markers.reduce((width, marker) => width + marker.label.length + 1, 0);
-  if (markers.length === 0 || separate <= budget) {
-    return Object.freeze(
-      markers.map((marker) => Object.freeze({ ...marker, grouped: Object.freeze([]) })),
-    );
-  }
-
-  // A grouped label is its first member's plus a count, so budget for that.
-  const widest = markers.reduce((width, marker) => Math.max(width, marker.label.length), 1) + 4;
-  const affordable = Math.max(1, Math.floor(budget / (widest + 1)));
-  // At least two: reaching here means one-per-group would group nothing and the
-  // band would overflow exactly as before.
-  const perGroup = Math.max(2, Math.ceil(markers.length / affordable));
-  const placed: ReplPlacedMarker[] = [];
-  for (let start = 0; start < markers.length; start += perGroup) {
-    const group = markers.slice(start, start + perGroup);
-    const label = group.length === 1 ? group[0].label : `${group[0].label} +${group.length - 1}`;
-    for (const marker of group) {
-      placed.push(
-        Object.freeze({
-          marker: marker.marker,
-          label,
-          grouped: Object.freeze(
-            group.filter((other) => other !== marker).map((other) => other.marker),
-          ),
-        }),
-      );
-    }
-  }
-  return Object.freeze(placed);
-}
-
-/**
- * What the band is called, on the first of its own rows.
- *
- * On the band rather than above it, because the footer is seven rows and all
- * five of these are the band's: a label given a row of its own would be a row
- * taken from the positions it names. It is read, not activated — nothing here
- * becomes a control.
- */
-export const HISTORY_LABEL = "History ·";
-
-function bandRows(markers: readonly ReplPlacedMarker[], columns: number): string[] {
-  const rows = new Array<string>(HISTORY_ROWS).fill("");
-  // The label occupies the first row before any position does, so a position
-  // that will not fit beside it moves on like any other.
-  rows[0] = HISTORY_LABEL.length <= columns ? HISTORY_LABEL : "";
-  const labels: string[] = [];
-  for (const marker of markers) {
-    if (!labels.includes(marker.label)) {
-      labels.push(marker.label);
-    }
-  }
-  labels.forEach((label, index) => {
-    const row = index % HISTORY_ROWS;
-    const next = rows[row] === "" ? label : `${rows[row]} ${label}`;
-    rows[row] = next.length <= columns ? next : rows[row];
-  });
-  // Padded to the full width, for the same reason the location rows are: a
-  // renderer writes what changed, so a band row that got shorter would keep the
-  // tail of the position that used to be there.
-  return rows.map((row) => (columns < 1 ? row : row.padEnd(columns, " ")));
-}
+export type ReplHistoryBand = ReplPreparedRail;
 
 /** The one region a refusal has: the whole terminal, holding one sentence. */
 export function refusalProps(): ReplBoxProps {
@@ -428,10 +361,18 @@ export const CONTROL_PROPS: ReplBoxProps = Object.freeze({
   layout: Object.freeze({ width: fit(), height: fixed(1) }),
 });
 
-/** The whole terminal, stacked top to bottom. */
+/**
+ * The whole terminal, stacked top to bottom, on the application's own surface.
+ *
+ * Painted here rather than left to the terminal's default, because the parts of
+ * the screen no pane covers — the footer, the band, whatever a profile leaves
+ * over — are still this application's. A frame that painted only its panes would
+ * read as three lit columns on somebody's wallpaper.
+ */
 export function rootProps(size: ReplTerminalSize): ReplBoxProps {
   return {
     layout: { width: fixed(size.columns), height: fixed(size.rows), direction: "ttb" },
+    bg: terminalColour(REPL_PALETTE.applicationSurface),
   };
 }
 
@@ -590,10 +531,17 @@ export function bandProps(): ReplBoxProps {
  * `drawerRect()` states, and painted with its own background so the blank
  * interior of a short modal line obscures the text beneath it.
  *
- * Every row of the rectangle is the drawer's to use. There is no inset inside
- * it: the rectangle is already inset from the body, and a second margin within
- * it would cost the content two of the rows the product gives it — a drawer that
- * showed two fewer rows than before because it had gained a border.
+ * It is bounded by a rule along its top and inset one cell on each side. Both
+ * are part of the rectangle rather than additions to it, and both are measured:
+ * the rule is a row the engine takes out of the layer and the inset is two
+ * columns, so the content window below is measured at what is left and admits
+ * only what fits there. A drawer in front of a reading has to say where the
+ * reading stops, and a title flush against the text it covers reads as one more
+ * line of that text.
+ *
+ * The vertical rows beyond the rule are the drawer's to use. There is no second
+ * margin: the rectangle is already inset from the body, and another one inside
+ * it would cost the content more of the rows the product gives it.
  *
  * `capture` narrows the engine's own hit test over the rectangle, blank cells
  * included. It is not modal containment and nothing here treats it as such: a
@@ -609,8 +557,10 @@ export function drawerLayerProps(
       width: fixed(rect.width),
       height: fixed(rect.height),
       direction: "ttb",
+      padding: { left: DRAWER_INSET, right: DRAWER_INSET },
     },
     bg: DRAWER_BACKGROUND,
+    border: { color: terminalColour(REPL_PALETTE.waiting), top: 1 },
     // Vertically only: every row inside clips itself to the layer's width, so
     // nothing paints past the rectangle. Clipping horizontally here would make
     // each of those rows resolve its width against its own text instead.
@@ -698,7 +648,7 @@ function opsOf(
     ops.push(open(id, decorated(box)));
     const content = textOf(id) ?? box.text;
     if (content !== undefined && content !== "") {
-      ops.push(written(content, box, id === focused));
+      ops.push(...written(content, box, id === focused));
     }
     ops.push(...opsOf(box.children, idOf, textOf, focused));
     ops.push(close());
@@ -725,11 +675,81 @@ function decorated(box: ReplBox): ReplBoxProps {
   return { ...box.props, bg: terminalColour(surface) };
 }
 
-function written(content: string, box: ReplBox, focused: boolean): Op {
-  if (box.style === undefined) {
-    return text(content);
+/**
+ * One row's text, as the operations that draw it.
+ *
+ * Several operations inside the one element the row was measured as, never one
+ * element per stretch: the engine lays adjacent text out along the element's own
+ * flow, so what a reader sees is still one row of exactly the measured width —
+ * while a child per token would be a box, a bound and a pointer target for every
+ * delimiter on the screen.
+ *
+ * Bounded to the room the element has, because the engine wraps each operation
+ * it is given **on its own** and a row is one cell tall: several operations
+ * totalling more than the element each show their own first line and leave the
+ * cells their remainder went to blank — measured, a 400-column generated tag in
+ * a 118-column drawer came out with its quoted values missing. Cutting the
+ * stretches at the room keeps every character the row can show, in order, in
+ * the role it has; what is past the edge was never on the screen either way.
+ */
+function written(content: string, box: ReplBox, focused: boolean): Op[] {
+  const style = box.style;
+  if (style === undefined) {
+    return [text(content)];
   }
-  const { colour, attrs } = textStyleOf(box.style, focused);
+  const { runs } = box;
+  const room = roomOf(box.props);
+  if (runs === undefined || runs.length === 0 || runText(runs) !== content || room === "unknown") {
+    const { colour, attrs } = textStyleOf(style, focused);
+    return [drawn(content, colour, attrs)];
+  }
+  return bounded(runs, room).map((run) => {
+    const { colour, attrs } = runStyleOf(run.token, style, focused);
+    return drawn(run.text, colour, attrs);
+  });
+}
+
+/**
+ * How many columns this element gives its text.
+ *
+ * Read off the constraint the element was opened with rather than worked out
+ * again: a box stated at a measured width says how much room its text has, and
+ * a box that sizes itself to its own content never has too little. A box that
+ * grows takes its width from the flow around it, which is not an answer this
+ * builder has — and only the pass that is *asking* what the widths are draws
+ * one, so that row is drawn the way it always was and the measurement it
+ * contributes is unchanged.
+ */
+function roomOf(props: ReplBoxProps): number | "whole" | "unknown" {
+  const width = props.layout?.width;
+  if (width === undefined) {
+    return "unknown";
+  }
+  if (width.type === "fit") {
+    return "whole";
+  }
+  return width.type === "fixed" ? width.value : "unknown";
+}
+
+/** The stretches of a row that fall inside the room it has, in order. */
+function bounded(runs: readonly ReplTokenRun[], room: number | "whole"): readonly ReplTokenRun[] {
+  if (room === "whole" || runText(runs).length <= room) {
+    return runs;
+  }
+  const kept: ReplTokenRun[] = [];
+  let used = 0;
+  for (const run of runs) {
+    if (used >= room) {
+      break;
+    }
+    const take = Math.min(run.text.length, room - used);
+    kept.push(Object.freeze({ text: run.text.slice(0, take), token: run.token }));
+    used += take;
+  }
+  return kept;
+}
+
+function drawn(content: string, colour: number, attrs: number): Op {
   return text(content, { color: terminalColour(colour), ...(attrs === 0 ? {} : { attrs }) });
 }
 
@@ -747,6 +767,7 @@ export function box(input: {
   readonly text?: string;
   readonly control?: boolean;
   readonly style?: ReplRowStyle;
+  readonly runs?: readonly ReplTokenRun[];
   readonly children?: readonly ReplBox[];
 }): ReplBox {
   return Object.freeze({
@@ -757,6 +778,7 @@ export function box(input: {
     text: input.text,
     control: input.control === true,
     style: input.style,
+    runs: input.runs,
     children: Object.freeze(input.children === undefined ? [] : [...input.children]),
   });
 }
