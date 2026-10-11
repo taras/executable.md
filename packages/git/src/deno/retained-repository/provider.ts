@@ -20,12 +20,13 @@
  * so by being empty.
  */
 
-import { Err, Ok, ensure, scoped } from "effection";
+import { Err, Ok, ensure, scoped, useScope } from "effection";
 import type { Operation, Result } from "effection";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type { ExecutionInstallation, JournalAdmission } from "@executablemd/core/host";
 import type { FragmentFileAccess } from "@executablemd/core/host";
+import { ensureDir } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
 import type { FilePathInput, FilesHandler, FileWriteInput, GlobInput } from "@executablemd/runtime";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
@@ -63,6 +64,8 @@ import { useGitHubIssues } from "../issue/github.ts";
 import type { GitHubIssuesOptions } from "../issue/github.ts";
 import { discoverAmbientRepository } from "../run-composition/ambient.ts";
 import { useLeases } from "../run-composition/leases.ts";
+import type { Leases } from "../run-composition/leases.ts";
+import { canonicalPath, lazily } from "../run-composition/provider.ts";
 import { retainedGitComponents } from "./components.ts";
 import { retainedExternalComponents } from "./external.ts";
 import type { RetainedExternalHost } from "./external.ts";
@@ -162,9 +165,41 @@ export function* useRetainedRepositoryEntry(
   // occurrence to be had — so this is how the claimed one reaches it.
   let reading: string | undefined;
   const git = gitSession(request.host, request.cwd);
-  // Acquired into this entry's own scope, so every slot it holds is released
-  // when the entry ends, however it ends.
-  const leases = yield* useLeases(request.managedRoot);
+  // The scope this entry's placement infrastructure belongs to: created once,
+  // released with the entry.
+  const entry = yield* useScope();
+  /**
+   * Where managed placements live, as one canonical path.
+   *
+   * Created and then canonicalized, in that order and once. A root reached
+   * through a symlink is still one directory, and every identity this host
+   * derives from it has to be derived from the same spelling: the slot a
+   * `<Repository>` is placed in, the common directory its worktrees key on, the
+   * key its selection is remembered under, and the lock that keeps a second
+   * process out. A write inside a selected checkout arrives as the path the
+   * filesystem answers with, so a selection remembered under the other spelling
+   * does not cover it — the write goes out as an ordinary one, and the next
+   * operation finds a checkout in a state this entry's history cannot account
+   * for.
+   *
+   * Lazily, because it is infrastructure for an entry that asks for a managed
+   * placement and nothing for an entry that does not: a cold view, a preflight
+   * and an ordinary unselected entry each reach none of this. Creating the root
+   * is not creating a destination — no slot, checkout or metadata is touched
+   * here, and a placement's own creation still happens inside its acknowledged
+   * intent.
+   */
+  const useRoot = lazily(entry, function* (): Operation<string> {
+    yield* ensureDir(request.managedRoot);
+    return yield* canonicalPath(request.managedRoot);
+  });
+  // Rooted at that same canonical path: a lease taken under one spelling of a
+  // root excludes nobody holding the other. The root is handed over as the way
+  // to get one rather than as a path, so an entry whose only lease is a shared
+  // Git directory — every ambient one — still creates no placement root.
+  const useSlots = lazily(entry, function* (): Operation<Leases> {
+    return yield* useLeases(useRoot);
+  });
   // The checkout a `<Worktree>` is a worktree of: the last one selected, which
   // is the one its content is written inside.
   let enclosing: SelectedCheckout | undefined;
@@ -240,7 +275,7 @@ export function* useRetainedRepositoryEntry(
     // entry the one doing repository work here — and a second process holding
     // the same directory has to refuse before anything is inventoried, not
     // after an operation has already frozen a state the other one is moving.
-    yield* holdRetainedLanes(leases, [
+    yield* holdRetainedLanes(yield* useSlots(), [
       {
         kind: "common",
         slot: checkout.common,
@@ -445,8 +480,8 @@ export function* useRetainedRepositoryEntry(
   const selectionHost: RetainedSelectionHost = {
     files: fileHost,
     repository: request.host,
-    managedRoot: request.managedRoot,
-    leases,
+    root: useRoot,
+    slots: useSlots,
     select: (checkout) => {
       selected.set(checkout.checkout, checkout);
       enclosing = checkout;

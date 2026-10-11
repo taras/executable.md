@@ -21,7 +21,7 @@ import { ensure, race, scoped, sleep, until } from "effection";
 import type { Operation } from "effection";
 import { exists } from "@effectionx/fs";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
@@ -97,6 +97,8 @@ function git(args: readonly string[], cwd: string, home: string): string {
 }
 
 interface Fixture {
+  /** The directory every path of this world canonicalizes under. */
+  readonly root: string;
   /** The data root the REPL keeps its histories under. */
   readonly data: string;
   /** The directory those histories live in. */
@@ -121,13 +123,25 @@ interface Fixture {
  * because both are facts about the command a person ran: the directory an
  * ambient checkout is discovered from is the one the command started in.
  */
-function* useFixture(): Operation<Fixture> {
+function* useFixture(
+  // How this scenario spells the root it hands the host. A placement reached
+  // through a symlink is the same directory as the one it points at, and a host
+  // that derives two identities from the two spellings loses a write inside its
+  // own selected checkout — so one scenario says it the other way on purpose.
+  placement: "canonical" | "through a symlink" = "canonical",
+): Operation<Fixture> {
   {
     const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "xmd-repl-repos-")))));
     yield* ensure(() => rm(root, { recursive: true, force: true }));
     const data = join(root, "data");
     const checkout = join(root, "checkout");
-    const managed = join(root, "managed");
+    const placed = join(root, "placed");
+    if (placement === "through a symlink") {
+      yield* until(mkdir(placed, { recursive: true }));
+      yield* until(symlink(placed, join(root, "link"), "dir"));
+    }
+    const managed =
+      placement === "canonical" ? join(root, "managed") : join(root, "link", "managed");
     const remote = join(root, "remote.git");
     const home = join(root, "home");
 
@@ -169,6 +183,7 @@ function* useFixture(): Operation<Fixture> {
     const asked: ReplEntryHostRequest[] = [];
     const inner = denoReplEntryHost(HELPER, managed);
     return {
+      root,
       data,
       histories: join(data, "xmd", "repl"),
       checkout,
@@ -816,6 +831,92 @@ describe("REPL repositories: one retained host per entry", () => {
     });
     expect(intentsOf(yield* recordsOf(execution), "commit")).toHaveLength(1);
   });
+
+  for (const placement of ["canonical", "through a symlink"] as const) {
+    it(`R3/R6: a managed placement ${placement} owns the writes inside it`, function* () {
+      const fixture = yield* useFixture(placement);
+      yield* useTempFileCompiler();
+      yield* useCompositionComponents();
+      const execution = yield* useExecution(fixture);
+
+      // An explicit `<Repository>`, a write inside it, and the stage that
+      // follows: the write has to be *this entry's*, and the Add after it has
+      // to find a checkout its own history accounts for.
+      const source = [
+        `<Repository name="project" url="${LOCATOR}">`,
+        '<File path="placed.md">placed</File>',
+        '<Git.Add paths="placed.md" />',
+        '<Git.Commit message="Placed" as="commit" />',
+        "</Repository>",
+        "",
+        "committed {commit.commit}",
+      ].join("\n");
+
+      const output = yield* scoped(function* () {
+        const opened = yield* submitReplEntry({
+          execution,
+          installations: installations(),
+          entryHost: forgeEntryHost(fixture, gitHubStore({ token: "placement" }), []),
+          source,
+        });
+        if (!opened.ok) {
+          throw opened.error;
+        }
+        const settled = yield* opened.value.join();
+        if (!settled.ok) {
+          throw settled.error;
+        }
+        return opened.value.overlay.output;
+      });
+
+      // The write is retained, and so is the Add after it: a write this host
+      // did not recognize as its own would leave no intent here, and the Add
+      // would have refused a change nothing accounts for.
+      const events = yield* recordsOf(execution);
+      const writes = intentsOf(events, "file-write");
+      expect(writes).toHaveLength(1);
+      expect(intentsOf(events, "add")).toHaveLength(1);
+      expect(intentsOf(events, "commit")).toHaveLength(1);
+      expect(completions(events)).toBe(intentsOf(events, "repository").length + writes.length + 2);
+
+      // Under one canonical identity, whichever way the root was spelled: the
+      // checkout the records name is the path the filesystem answers with, and
+      // it is inside this world's own canonical root.
+      const selection = writes[0]?.selection;
+      const named =
+        selection !== null && typeof selection === "object" && !Array.isArray(selection)
+          ? selection["checkout"]
+          : undefined;
+      if (typeof named !== "string") {
+        throw new Error(`this write's record names no checkout: ${JSON.stringify(selection)}`);
+      }
+      expect(named).toBe(yield* until(realpath(named)));
+      expect(named.startsWith(fixture.root)).toBe(true);
+      expect(named.includes("/link/")).toBe(false);
+
+      // The bytes are where the document put them, staged, and committed.
+      expect(yield* until(readFile(join(named, "placed.md"), "utf8"))).toBe("placed");
+      expect(git(["show", "HEAD:placed.md"], named, fixture.checkout)).toBe("placed");
+      expect(output).toContain("committed ");
+
+      // And the history reopens: a settled entry projected from records that
+      // name one checkout, with nothing left to continue and no host built.
+      const asked = fixture.asked.length;
+      const reopened = yield* scoped(function* () {
+        const opened = yield* openReplSession({
+          execution: yield* replRepository(fixture.histories).open(execution.id),
+          installations: installations(),
+          entryHost: fixture.entryHost,
+        });
+        if (!opened.ok) {
+          throw opened.error;
+        }
+        return opened.value.model.entries[0]?.settled;
+      });
+      expect(reopened).toBe(true);
+      expect(fixture.asked).toHaveLength(asked);
+    });
+  }
 
   it("R11: one entry's whole repository journey, left and reopened", function* () {
     const fixture = yield* useFixture();

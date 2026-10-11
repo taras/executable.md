@@ -58,9 +58,19 @@ const RETAINED_ORIGIN = "@executablemd/git/retained";
 export interface RetainedSelectionHost {
   readonly files: RetainedFileHost;
   readonly repository: RepositoryHost;
-  /** The trusted root managed placements live under. */
-  readonly managedRoot: string;
-  readonly leases: Leases;
+  /**
+   * The trusted root managed placements live under, as one canonical path.
+   *
+   * An operation rather than a value, because the answer is infrastructure this
+   * entry may never need: it is created and canonicalized by the first managed
+   * selection that asks, and an entry that selects nothing asks nobody. Every
+   * identity below is derived from what it answers — the slot, the common
+   * directory, the selection key and the lease — so that they are all derived
+   * from one spelling of one directory.
+   */
+  root(): Operation<string>;
+  /** The leases over that same canonical root. */
+  slots(): Operation<Leases>;
   /** Remember a selection so later work in it is covered. */
   select(checkout: SelectedCheckout): void;
   /** The checkout a `<Worktree>` belongs to, which is where it is added from. */
@@ -91,7 +101,8 @@ export function retainedRepository(host: RetainedSelectionHost): IdentityCompone
         const base = text(props.base);
         const occurrence = yield* claim(invocation);
 
-        const slot = repositorySlot(host.managedRoot, locator, name);
+        const root = yield* host.root();
+        const slot = repositorySlot(root, locator, name);
         const destination = checkoutOf(slot);
         const common = join(destination, ".git");
         // Both leased before the slot is even looked at, and held for the rest
@@ -100,7 +111,7 @@ export function retainedRepository(host: RetainedSelectionHost): IdentityCompone
         // a clone. A managed repository's own `.git` is its own, but it is
         // leased all the same — a `<Worktree>` of it later shares exactly this
         // directory, and the lane that serializes them is named by it.
-        yield* holdRetainedLanes(host.leases, [
+        yield* holdRetainedLanes(yield* host.slots(), [
           { kind: "repository", slot, subject: `repository ${JSON.stringify(name)}` },
           {
             kind: "common",
@@ -108,7 +119,7 @@ export function retainedRepository(host: RetainedSelectionHost): IdentityCompone
             subject: `the Git directory of repository ${JSON.stringify(name)}`,
           },
         ]);
-        const git = gitSession(host.repository, host.managedRoot);
+        const git = gitSession(host.repository, root);
 
         const observed = yield* observeManagedSlot(slot);
         if (observed.state === "partial") {
@@ -290,12 +301,13 @@ export function retainedWorktree(host: RetainedSelectionHost): IdentityComponent
           );
         }
 
-        const slot = worktreeSlot(host.managedRoot, owner.common, name);
+        const root = yield* host.root();
+        const slot = worktreeSlot(root, owner.common, name);
         // Both leases before anything is inspected: the destination's slot and
         // the owner's shared directory, because adding a worktree moves refs
         // the owner shares. The owner's lease is normally already held — this
         // entry selected it — and asking again for one it holds costs nothing.
-        yield* holdRetainedLanes(host.leases, [
+        yield* holdRetainedLanes(yield* host.slots(), [
           { kind: "worktree", slot, subject: `worktree ${JSON.stringify(name)}` },
           {
             kind: "common",
@@ -303,7 +315,7 @@ export function retainedWorktree(host: RetainedSelectionHost): IdentityComponent
             subject: `the Git directory worktree ${JSON.stringify(name)} is added to`,
           },
         ]);
-        const git = gitSession(host.repository, host.managedRoot);
+        const git = gitSession(host.repository, root);
         const destination = checkoutOf(slot);
 
         const observed = yield* observeManagedSlot(slot);

@@ -90,18 +90,35 @@ export interface Leases {
   holdAll(requests: readonly LeaseRequest[]): Operation<void>;
 }
 
-export function* useLeases(root: string): Operation<Leases> {
+/**
+ * Where leases this host places are placed, as a path or as the way to get one.
+ *
+ * An operation, for a caller whose root is infrastructure it may never need: a
+ * shared Git directory names its own lock wherever it is, so an entry that
+ * leases only those touches no root at all, and one that leases a slot resolves
+ * the root at that moment and not before.
+ */
+export type LeaseRoot = string | (() => Operation<string>);
+
+export function* useLeases(root: LeaseRoot): Operation<Leases> {
   // The scope the provider is installed in, captured once. Every lease is
   // acquired into it, so all of them are released — by the kernel and by the
   // resource's own teardown — when the document execution ends, on success,
   // failure and cancellation alike.
   const owner: Scope = yield* useScope();
   const held = new Set<string>();
+  // Asked for once, and only by a lease this root places.
+  let placed: string | undefined;
+  function* rooted(): Operation<string> {
+    placed ??= typeof root === "string" ? root : yield* root();
+    return placed;
+  }
 
   function* take({ kind, slot, subject, refuse }: LeaseRequest): Operation<void> {
     // A shared Git directory names its own lock. Everything else is placed by
-    // this root, and its lock is placed beside it.
-    const path = kind === "common" ? commonLockOf(slot) : lockOf(root, kind, slot);
+    // this root, and its lock is placed beside it — which is the only thing
+    // here that needs the root, and therefore the only thing that resolves it.
+    const path = kind === "common" ? commonLockOf(slot) : lockOf(yield* rooted(), kind, slot);
     if (held.has(path)) {
       return;
     }
@@ -141,19 +158,23 @@ export function* useLeases(root: string): Operation<Leases> {
     held.add(path);
   }
 
-  const pathFor = ({ kind, slot }: LeaseRequest): string =>
-    kind === "common" ? commonLockOf(slot) : lockOf(root, kind, slot);
+  const pathFor = ({ kind, slot }: LeaseRequest, base: string): string =>
+    kind === "common" ? commonLockOf(slot) : lockOf(base, kind, slot);
 
   return {
     *hold(kind: LeaseKind, slot: string, subject: string): Operation<void> {
       yield* take({ kind, slot, subject });
     },
     *holdAll(requests: readonly LeaseRequest[]): Operation<void> {
+      // The root, once, when any of these is a lease it places. A set of
+      // shared Git directories needs none, and asking for one would create a
+      // root for an entry that places nothing.
+      const base = requests.some((request) => request.kind !== "common") ? yield* rooted() : "";
       // Sorted by the path each one locks, so an overlapping pair is always
       // asked for in the same sequence whichever caller is asking.
       const ordered = [...requests].sort((left, right) => {
-        const here = pathFor(left);
-        const there = pathFor(right);
+        const here = pathFor(left, base);
+        const there = pathFor(right, base);
         return here < there ? -1 : here > there ? 1 : 0;
       });
       for (const request of ordered) {

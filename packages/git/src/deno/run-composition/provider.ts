@@ -126,8 +126,14 @@ import { until } from "effection";
 /** What `withResolvers()` hands back, named so a capability can hold a pair. */
 type Resolvers<T> = ReturnType<typeof withResolvers<T>>;
 
-/** The canonical directory this path resolves to, or the path as written. */
-function* canonicalPath(path: string): Operation<string> {
+/**
+ * The canonical directory this path resolves to, or the path as written.
+ *
+ * Exported because both providers need the same answer about the same root: a
+ * placement reached through a symlink is one directory, and two spellings of it
+ * are two slots, two digests, two selection keys and no lock between them.
+ */
+export function* canonicalPath(path: string): Operation<string> {
   try {
     return yield* until(realpath(path));
   } catch {

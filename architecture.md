@@ -6076,6 +6076,21 @@ rather than by discipline. A runtime that passes no factory leaves the
 declarations to reach their own Api defaults, which refuse before a lock, a
 credential, a directory or a subprocess exists.
 
+**A placement has one canonical identity, resolved before it is used.** The root
+managed checkouts live under is created and then canonicalized, once, by the
+first managed selection that asks for it — and every identity derived from it is
+derived from that one spelling: the slot a `<Repository>` is placed in, the
+common directory its `<Worktree>`s key on, the key its selection is remembered
+under, and the lock that keeps a second process out. A write arrives as the path
+the filesystem answers with, so a selection remembered under another spelling of
+the same directory does not cover it: the write would leave as an ordinary one
+and the next operation would find a checkout in a state this entry's history
+cannot account for. Creating that root is infrastructure and not a destination —
+no slot, checkout or metadata is touched by it, and a placement's own creation
+still happens inside its acknowledged intent — and an entry that selects nothing
+managed never asks, so a cold view, a preflight and an ordinary unselected entry
+still reach none of it.
+
 A session opened at a frozen history position builds nothing either, and that is
 a decision rather than a consequence: the unfinished entry such a history ends
 with is projected and left alone, and continuing it is what returning to the head

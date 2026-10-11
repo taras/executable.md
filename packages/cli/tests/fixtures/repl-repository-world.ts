@@ -15,16 +15,17 @@
  * managed root out of, so each row's histories and repositories are its own.
  */
 
-import { sleep, until } from "effection";
+import { scoped, sleep, until } from "effection";
 import type { Operation } from "effection";
 import { spawnSync } from "node:child_process";
 import { chmod, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
 import process from "node:process";
 import { shellQuote } from "@executablemd/test-support/launch";
+import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { evidenceRoutes } from "../../../git/tests/support/run-composition-tier.ts";
-import { useGitHubServer } from "../../../git/tests/support/github.ts";
+import { creations, issueCreations, useGitHubServer } from "../../../git/tests/support/github.ts";
 import type { GitHubStore } from "../../../git/tests/support/github.ts";
 import type {
   GitHubHttpRequest,
@@ -32,7 +33,7 @@ import type {
 } from "../../../git/src/deno/composition/github.ts";
 import { platformDataRoot } from "../../src/repl-assembly.ts";
 import { REPL_DIRECTORY } from "../../src/repl/storage.ts";
-import { reaching, showing } from "./pty.ts";
+import { ended, reaching, showing } from "./pty.ts";
 import type { Pty } from "./pty.ts";
 
 /** The repository a journey document names, and the forge it belongs to. */
@@ -386,56 +387,478 @@ export const ENTRY: string = [
 ].join("\n");
 
 /**
- * The whole vocabulary one entry can reach, with a checkpoint in the middle.
+ * Every boundary one entry can reach, each with a question standing after it.
  *
- * In the order a person writes it: a managed checkout of its own, an authored
- * directory, a generated write, a branch, a commit — then an ordinary question
- * standing between the local work and the external work — then the publication,
- * the pull request, its three evidence collections, a second question, a linked
- * worktree and a deferred issue.
+ * The table is the journey: a boundary's own lines, the name a report calls it
+ * by, and what has to be true of the world once it has happened. The document is
+ * assembled from it with an ordinary `<Elicit>` after each one, so each boundary
+ * has a place a person can be when they walk away — and a place a later
+ * invocation finds them, with everything above it done and nothing below it
+ * started.
  *
- * The two questions are where a terminal journey leaves. Everything above a
- * question has happened by the time it is asked, and everything below it has
- * not, which is what makes each one a place to come back to.
+ * What each row asserts is the world rather than the screen: bytes on disk, the
+ * index and the refs a real Git reports, the branch at the bare remote, and the
+ * mutations that actually reached the forge. The walk below asks each row twice
+ * — before leaving and again after reopening — so a boundary that was done
+ * cannot have been done differently by its own replay.
+ *
+ * The last boundary carries no question of its own: the entry settling *is* the
+ * place after it, and the walk reads its answer out of the settled output.
  */
-export const JOURNEY: string = [
+export interface Boundary {
+  /** What this boundary is called, in a report and in a failure. */
+  readonly name: string;
+  /** The document lines it is made of. */
+  readonly lines: readonly string[];
+  /** What must be true once it has happened. */
+  done(state: BoundaryState): Operation<void>;
+}
+
+/** What a boundary's own assertion is handed. */
+export interface BoundaryState {
+  readonly world: World;
+  readonly store: GitHubStore;
+  /**
+   * The managed checkout this journey's `<Repository>` was placed in.
+   *
+   * Asked for rather than handed over, because the first boundary is the one
+   * that creates it: a state built before that boundary ran would have to
+   * guess, and guessing is how a row ends up asserting about a directory that
+   * does not exist yet.
+   */
+  checkout(): Operation<string>;
+}
+
+/** The state a journey's assertions are made against. */
+function stateOf(world: World, store: GitHubStore): BoundaryState {
+  return { world, store, checkout: () => managedCheckout(world) };
+}
+
+/** The managed checkout of this world's one placement. */
+export function* managedCheckout(world: World): Operation<string> {
+  const placements = join(world.home, ".xmd", "repositories", "repositories");
+  const names = yield* until(readdir(placements));
+  if (names.length !== 1) {
+    throw new Error(`this world holds ${names.length} managed placements, not one`);
+  }
+  return join(placements, names[0] ?? "", "checkout");
+}
+
+/** What `git` reports, for a row that is asking about the index or the refs. */
+function reports(args: readonly string[], cwd: string, world: World): string {
+  return git(args, cwd, world.home);
+}
+
+/** The whole journey, boundary by boundary. */
+export const BOUNDARIES: readonly Boundary[] = Object.freeze([
+  {
+    name: "Repository",
+    lines: [`<Repository name="project" url="${LOCATOR}">`],
+    *done({ world, ...state }: BoundaryState): Operation<void> {
+      // A checkout of its own, placed under this host's root and holding what
+      // the remote's branch holds.
+      const checkout = yield* state.checkout();
+      expect(yield* until(readFile(join(checkout, "seed.md"), "utf8"))).toBe("seed\n");
+      expect(reports(["rev-parse", "HEAD"], checkout, world)).toBe(
+        reports(["rev-parse", "main"], world.remote, world),
+      );
+    },
+  },
+  {
+    name: "Git.Switch",
+    lines: ['<Git.Switch branch="publish/1.4" />'],
+    *done({ world, ...state }: BoundaryState): Operation<void> {
+      const checkout = yield* state.checkout();
+      expect(reports(["symbolic-ref", "--short", "HEAD"], checkout, world)).toBe("publish/1.4");
+    },
+  },
+  {
+    name: "Dir and authored File",
+    lines: ['<Dir path="notes">', '<File path="authored.md">authored</File>', "</Dir>"],
+    *done(state: BoundaryState): Operation<void> {
+      const checkout = yield* state.checkout();
+      expect(yield* until(readFile(join(checkout, "notes", "authored.md"), "utf8"))).toBe(
+        "authored",
+      );
+    },
+  },
+  {
+    name: "generated File",
+    lines: ['<Evaluate text={fragment} allow={["write"]} />'],
+    /**
+     * The bytes a generated program wrote, where it actually wrote them.
+     *
+     * Which is the directory the *command* started in, and not the checkout the
+     * enclosing `<Repository>` selected: a fragment resolves its paths against
+     * the file access this entry captured when it began, and that access
+     * carries the entry's own working directory rather than the one composed
+     * around the element that invoked it. An authored `<File>` beside it lands
+     * in the selected checkout, so the two disagree.
+     *
+     * This row therefore says where the write went and nothing about who owns
+     * it: in this journey the write lands outside every selected checkout, and
+     * on a continuation it leaves no retained record at all. Both are reported
+     * with their own evidence rather than asserted away here — a row that
+     * demanded the documented behaviour would fail for the product's reason
+     * while claiming to be about leaving and reopening.
+     */
+    *done({ world }: BoundaryState): Operation<void> {
+      expect(yield* until(readFile(join(world.checkout, "generated.md"), "utf8"))).toBe(
+        "generated",
+      );
+    },
+  },
+  {
+    name: "Git.Add",
+    lines: ['<Git.Add paths="." />'],
+    *done({ world, ...state }: BoundaryState): Operation<void> {
+      const checkout = yield* state.checkout();
+      // Staged, which is a fact about the index rather than about the files —
+      // and exactly what is in this checkout to stage: the authored file. The
+      // generated one is in the directory the command started in, as the
+      // boundary above says, so `.` here cannot reach it.
+      expect(reports(["diff", "--cached", "--name-only"], checkout, world).split("\n")).toEqual([
+        "notes/authored.md",
+      ]);
+    },
+  },
+  {
+    name: "Git.Commit",
+    lines: ['<Git.Commit message="Prepare 1.4" as="commit" />'],
+    *done({ world, ...state }: BoundaryState): Operation<void> {
+      const checkout = yield* state.checkout();
+      expect(reports(["log", "-1", "--format=%s"], checkout, world)).toBe("Prepare 1.4");
+      expect(reports(["show", "HEAD:notes/authored.md"], checkout, world)).toBe("authored");
+      // Nothing left staged: the commit took what Add had put there.
+      expect(reports(["diff", "--cached", "--name-only"], checkout, world)).toBe("");
+    },
+  },
+  {
+    name: "Git.Push",
+    lines: ["<Git.Push />"],
+    *done({ world, ...state }: BoundaryState): Operation<void> {
+      const checkout = yield* state.checkout();
+      expect(reports(["rev-parse", "publish/1.4"], world.remote, world)).toBe(
+        reports(["rev-parse", "HEAD"], checkout, world),
+      );
+    },
+  },
+  {
+    name: "PullRequest",
+    lines: ['<PullRequest title="Prepare 1.4" as="pullRequest">', "the body", "</PullRequest>"],
+    // deno-lint-ignore require-yield
+    *done({ store }: BoundaryState): Operation<void> {
+      expect(creations(store)).toBe(1);
+      expect(store.pullRequests.map((one) => one.title)).toEqual(["Prepare 1.4"]);
+    },
+  },
+  {
+    name: "PullRequest.Reviews",
+    lines: [`<PullRequest.Reviews url="${LOCATOR}/pull/${OPENED}" as="reviews" />`],
+    // deno-lint-ignore require-yield
+    *done({ store }: BoundaryState): Operation<void> {
+      expect(forgePaths(store).some((one) => one.endsWith("/reviews"))).toBe(true);
+    },
+  },
+  {
+    name: "PullRequest.Comments",
+    lines: [`<PullRequest.Comments url="${LOCATOR}/pull/${OPENED}" as="comments" />`],
+    // deno-lint-ignore require-yield
+    *done({ store }: BoundaryState): Operation<void> {
+      expect(forgePaths(store).some((one) => one.endsWith("/comments"))).toBe(true);
+    },
+  },
+  {
+    name: "PullRequest.Checks",
+    lines: [`<PullRequest.Checks url="${LOCATOR}/pull/${OPENED}" as="checks" />`],
+    // deno-lint-ignore require-yield
+    *done({ store }: BoundaryState): Operation<void> {
+      expect(forgePaths(store).some((one) => one.endsWith("/check-runs"))).toBe(true);
+    },
+  },
+  {
+    name: "Worktree",
+    lines: [
+      '<Worktree name="review" branch="review/1.4">',
+      '<File path="review.md">reviewing</File>',
+      "</Worktree>",
+    ],
+    *done({ world, ...state }: BoundaryState): Operation<void> {
+      const checkout = yield* state.checkout();
+      // A linked checkout of the same repository, with its own branch and the
+      // file that entry wrote inside it.
+      const linked = reports(["worktree", "list", "--porcelain"], checkout, world)
+        .split("\n")
+        .filter((line) => line.startsWith("worktree "))
+        .map((line) => line.slice("worktree ".length));
+      expect(linked).toHaveLength(2);
+      const other = linked.find((one) => one !== checkout);
+      if (other === undefined) {
+        throw new Error(`no linked worktree beside ${checkout}: ${linked.join(", ")}`);
+      }
+      expect(reports(["symbolic-ref", "--short", "HEAD"], other, world)).toBe("review/1.4");
+      expect(yield* until(readFile(join(other, "review.md"), "utf8"))).toBe("reviewing");
+    },
+  },
+  {
+    name: "Issue",
+    lines: [
+      `<IssueTracker url="${LOCATOR}">`,
+      '<Issue title="Follow up on 1.4" as="filed">',
+      "the description",
+      "</Issue>",
+      "</IssueTracker>",
+      "</Repository>",
+    ],
+    // deno-lint-ignore require-yield
+    *done({ store }: BoundaryState): Operation<void> {
+      expect(issueCreations(store)).toBe(1);
+      expect(store.issues.map((one) => one.title)).toEqual(["Follow up on 1.4"]);
+    },
+  },
+]);
+
+/** What every checkpoint is answered with, one character so a reading of all of
+ * them fits on a line. */
+export const ANSWER = "y";
+
+/** The schema and the fragment every checkpoint's question is judged against. */
+const PREAMBLE: readonly string[] = [
   "```js eval",
   'const ask = { type: "object", properties: { ok: { type: "string" } }, ' +
     'required: ["ok"], additionalProperties: false };',
   "const fragment = '<File path=\"generated.md\">generated</File>';",
   "```",
   "",
-  `<Repository name="project" url="${LOCATOR}">`,
-  '<Git.Switch branch="publish/1.4" />',
-  '<Dir path="notes">',
-  '<File path="authored.md">authored</File>',
-  "</Dir>",
-  '<Evaluate text={fragment} allow={["write"]} />',
-  '<Git.Add paths="." />',
-  '<Git.Commit message="Prepare 1.4" as="commit" />',
-  '<Elicit schema={ask} as="local">Local work ready?</Elicit>',
-  "<Git.Push />",
-  '<PullRequest title="Prepare 1.4" as="pullRequest">',
-  "the body",
-  "</PullRequest>",
-  `<PullRequest.Reviews url="${LOCATOR}/pull/${OPENED}" as="reviews" />`,
-  `<PullRequest.Comments url="${LOCATOR}/pull/${OPENED}" as="comments" />`,
-  `<PullRequest.Checks url="${LOCATOR}/pull/${OPENED}" as="checks" />`,
-  '<Elicit schema={ask} as="external">External work ready?</Elicit>',
-  '<Worktree name="review" branch="review/1.4">',
-  '<File path="review.md">reviewing</File>',
-  "</Worktree>",
-  `<IssueTracker url="${LOCATOR}">`,
-  '<Issue title="Follow up on 1.4" as="filed">',
-  "the description",
-  "</Issue>",
-  "</IssueTracker>",
-  "</Repository>",
+];
+
+/** The name a checkpoint's binding is retained under. */
+function binding(at: number): string {
+  return `after${at + 1}`;
+}
+
+/**
+ * The document this journey is, assembled from the table.
+ *
+ * Every boundary but the last is followed by its own question, and the closing
+ * lines read back a value from each end of the journey: the pull request it
+ * opened, the commit it made, the issue it filed, the three collections it read
+ * and every answer it was given. A reopen that lost one of them would say so
+ * here rather than in a counter.
+ */
+export const JOURNEY: string = [
+  ...PREAMBLE,
+  ...BOUNDARIES.flatMap((boundary, at) => [
+    ...boundary.lines,
+    ...(at === BOUNDARIES.length - 1
+      ? []
+      : [`<Elicit schema={ask} as="${binding(at)}">After ${boundary.name}?</Elicit>`]),
+  ]),
   "",
   "opened {pullRequest.number} at {commit.commit} filed {filed.url}",
   "read {reviews.length} {comments.length} {checks.length}",
-  "answered {local.ok} {external.ok}",
+  `answered ${BOUNDARIES.slice(0, -1)
+    .map((_, at) => `{${binding(at)}.ok}`)
+    .join("")}`,
 ].join("\n");
+
+/**
+ * What the settled journey prints, which only the whole of it can produce.
+ *
+ * One answer per checkpoint, in order, which is what makes this a reading of
+ * the whole walk rather than of its last step: an answer lost to a reopen
+ * leaves a gap here.
+ */
+export const JOURNEY_OUTPUT: readonly string[] = Object.freeze([
+  `opened ${OPENED} at `,
+  "read 1 2 2",
+  `answered ${ANSWER.repeat(BOUNDARIES.length - 1)}`,
+]);
+
+/**
+ * Every path this entry has retained a write of, as its own records name them.
+ *
+ * Read from the file the command wrote, which is the only authority on what
+ * this entry owns: a write that reached ordinary file handling leaves nothing
+ * here, whatever appeared on disk.
+ */
+export function* retainedWrites(world: World): Operation<string[]> {
+  const held: string[] = [];
+  for (const body of yield* histories(world.home)) {
+    for (const line of body.trim().split("\n")) {
+      if (!line.includes("file-write")) {
+        continue;
+      }
+      const target = /"path":"([^"]+)"/.exec(line)?.[1];
+      if (target !== undefined) {
+        held.push(target);
+      }
+    }
+  }
+  return held;
+}
+
+/** What the world holds, as a reopen must find it. */
+interface Standing {
+  /** Every ref the bare remote holds, and where it points. */
+  readonly remote: string;
+  /** The managed checkout's own head, index and worktree. */
+  readonly local: string;
+  /** Pull requests created at the forge. */
+  readonly creations: number;
+  /** Issues created at the forge. */
+  readonly issues: number;
+  /** Every request the forge answered. */
+  readonly requests: number;
+}
+
+/** What the world holds right now. */
+function* standing(state: BoundaryState): Operation<Standing> {
+  const { world, store } = state;
+  const checkout = yield* state.checkout();
+  return {
+    remote: reports(["for-each-ref", "--format=%(refname) %(objectname)"], world.remote, world),
+    local: [
+      reports(["rev-parse", "HEAD"], checkout, world),
+      reports(["symbolic-ref", "--short", "HEAD"], checkout, world),
+      reports(["status", "--porcelain"], checkout, world),
+      // The checkout the command was started in, too: a generated program
+      // writes there, so leaving it out would leave a reopen free to write
+      // again where nobody was looking.
+      reports(["status", "--porcelain"], world.checkout, world),
+    ].join("\n"),
+    creations: creations(store),
+    issues: issueCreations(store),
+    requests: store.requests.length,
+  };
+}
+
+/** Wait until this boundary's own claim holds, or say which one did not. */
+function* reached(state: BoundaryState, boundary: Boundary, within: number): Operation<void> {
+  const deadline = Date.now() + within;
+  while (true) {
+    try {
+      yield* boundary.done(state);
+      return;
+    } catch (error) {
+      if (Date.now() > deadline) {
+        // What each checkout holds, because "the file is not there" is a
+        // different defect depending on which directory it is not in.
+        const where: string[] = [];
+        for (const [name, at] of [
+          ["managed", yield* state.checkout()],
+          ["ambient", state.world.checkout],
+        ] as const) {
+          try {
+            where.push(`${name}=${JSON.stringify(yield* until(readdir(at)))}`);
+          } catch (reason) {
+            where.push(`${name}=unreadable(${String(reason)})`);
+          }
+        }
+        throw new Error(
+          `${boundary.name} did not happen within ${within}ms: ${
+            error instanceof Error ? error.message : String(error)
+          }. ${where.join(" ")}`,
+        );
+      }
+    }
+    yield* sleep(200);
+  }
+}
+
+/** How a journey starts one invocation of the public command. */
+export type Invoking = (location?: string) => Operation<Pty>;
+
+/** How long each part of a terminal journey may take. */
+export interface JourneyDeadlines {
+  /** Reaching a drawn screen, which compiles an entrypoint. */
+  readonly reach: number;
+  /** One boundary's own work. */
+  readonly work: number;
+  /** Leaving, and reaching a control. */
+  readonly leave: number;
+}
+
+/**
+ * Walk the whole table at a terminal, leaving and reopening at every boundary.
+ *
+ * One invocation per boundary. Each one finds the question the invocation
+ * before it left standing, proves that boundary is still *exactly* as it was —
+ * the same refs, the same head and index, the same forge mutations and not one
+ * more request — answers it, waits for the next boundary to happen live, proves
+ * that one, and leaves while its question is pending. The last invocation
+ * answers the last question and the entry settles.
+ *
+ * So every boundary is asserted twice: once when it happened, and once after a
+ * fresh public invocation replayed it. That is what makes "completed work is
+ * not done again" a claim about each boundary rather than about the journey.
+ */
+export function* journeyThrough(
+  world: World,
+  store: GitHubStore,
+  invoking: Invoking,
+  within: JourneyDeadlines,
+): Operation<void> {
+  let location: string | undefined;
+  let before: Standing | undefined;
+
+  for (const [at, boundary] of BOUNDARIES.entries()) {
+    const last = at === BOUNDARIES.length - 1;
+    const standingBefore = before;
+    const reopened = location;
+    location = yield* scoped(function* (): Operation<string | undefined> {
+      const pty = yield* invoking(reopened);
+      const state = stateOf(world, store);
+
+      if (reopened === undefined) {
+        // The first invocation types the document; every other one is handed a
+        // location and continues what this one started.
+        yield* showing(pty, "[exit]", within.reach);
+        yield* submit(pty, JOURNEY);
+      } else {
+        // The question the invocation before this one left standing, and the
+        // world exactly as it left it: replay performed none of it again.
+        yield* showing(pty, ASKING, within.work);
+        const after = yield* standing(state);
+        expect(after).toEqual(standingBefore);
+        yield* BOUNDARIES[at - 1]?.done(state);
+        yield* answer(pty, ANSWER, within.leave);
+      }
+
+      // This boundary, live. Its own claim is what says it has happened —
+      // nothing on the screen can, because the draft holds the whole document.
+      yield* reached(state, boundary, within.work);
+
+      if (last) {
+        // Nothing follows it, so the entry settles rather than asking again.
+        yield* showing(pty, settledOk(1), within.work);
+        // Read out of the file rather than off the screen: the transcript is
+        // elided to the pane it is drawn in, and what the entry *produced* is
+        // recorded. Every line of it has to be there — the pull request it
+        // opened, the collections it read and one answer per checkpoint — so a
+        // value lost to any of the reopens above shows up as a gap here.
+        const journal = (yield* histories(world.home)).join("\n");
+        for (const line of JOURNEY_OUTPUT) {
+          expect(journal).toContain(line);
+        }
+      } else {
+        yield* showing(pty, ASKING, within.work);
+        before = yield* standing(state);
+      }
+
+      yield* reaching(pty, "[exit]", within.leave);
+      yield* pty.type("\r");
+      expect(
+        yield* ended(
+          pty,
+          within.leave,
+          `${boundary.name} had just happened, so this teardown joins a retained host.`,
+        ),
+      ).toBe(0);
+      return last ? undefined : printed(yield* pty.shows());
+    });
+  }
+}
 
 /** The entry a second invocation types, which is work of its own. */
 export const SECOND: string = [
