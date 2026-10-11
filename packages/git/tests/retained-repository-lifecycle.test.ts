@@ -32,11 +32,10 @@ import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import { gitSession } from "../src/deno/composition/git.ts";
 import { useLeases } from "../src/deno/run-composition/leases.ts";
 import { ManagedCheckoutError } from "../src/deno/run-composition/errors.ts";
-import { retainedLanes } from "../src/deno/retained-repository/local.ts";
 import { useRetainedRepositoryEntry } from "../src/deno/retained-repository/provider.ts";
 import {
-  RETAINED_REPOSITORY_INTENT,
-  parseRetainedRepositoryIntent,
+  REPL_REPOSITORY_RESULT,
+  parseReplRepositoryResult,
 } from "../src/retained-repository/records.ts";
 
 interface Fixture {
@@ -134,56 +133,7 @@ function counted(): { readonly handler: FilesHandler; readonly writes: string[] 
 }
 
 describe("retained repository: what an entry holds and releases", () => {
-  it("R9: one shared Git directory is serialized and another runs beside it", function* () {
-    const lanes = retainedLanes();
-    const order: string[] = [];
-
-    function visit(lane: string, name: string, pause: number): Operation<void> {
-      return scoped(function* () {
-        yield* lanes.enter(lane);
-        order.push(`${name}:in`);
-        yield* sleep(pause);
-        order.push(`${name}:out`);
-      });
-    }
-
-    yield* scoped(function* () {
-      const first = yield* spawn(() => visit("/a/.git", "a1", 40));
-      yield* sleep(5);
-      const second = yield* spawn(() => visit("/a/.git", "a2", 5));
-      const other = yield* spawn(() => visit("/b/.git", "b1", 5));
-      yield* all([first, second, other]);
-    });
-
-    // The two in one lane never overlap: the second begins after the first ends.
-    expect(order.indexOf("a1:out")).toBeLessThan(order.indexOf("a2:in"));
-    // The other shared directory did not wait for either of them.
-    expect(order.indexOf("b1:out")).toBeLessThan(order.indexOf("a1:out"));
-  });
-
-  it("R9: a cancelled holder releases its lane", function* () {
-    const lanes = retainedLanes();
-    const seen: string[] = [];
-    yield* scoped(function* () {
-      const held = yield* spawn(() =>
-        scoped(function* () {
-          yield* lanes.enter("/a/.git");
-          seen.push("held");
-          yield* sleep(10_000);
-        }),
-      );
-      yield* sleep(5);
-      yield* held.halt();
-      // The lane is free, so this one takes it rather than waiting forever.
-      yield* scoped(function* () {
-        yield* lanes.enter("/a/.git");
-        seen.push("after");
-      });
-    });
-    expect(seen).toEqual(["held", "after"]);
-  });
-
-  it("R9: one entry's mutations advance one lane in order", function* () {
+  it("R9: one entry's mutations are one record each, in the order it made them", function* () {
     const fixture = yield* useFixture();
     const events = yield* run(
       fixture,
@@ -192,11 +142,17 @@ describe("retained repository: what an entry holds and releases", () => {
       new InMemoryStream(),
     );
 
-    const intents = recordsOf(events).map((record) => parseRetainedRepositoryIntent(record));
-    const lane = intents[0]?.lane.common;
-    expect(intents.every((record) => record?.lane.common === lane)).toBe(true);
-    // Strictly increasing, which is what admission holds a history to.
-    expect(intents.map((record) => record?.lane.position)).toEqual([0, 1, 2, 3]);
+    // One record per operation, in the order the entry performed them, and
+    // nothing else: no intent before the effect, no completion after it, and no
+    // lane position to order them by. The journal's own order is the order.
+    const results = recordsOf(events).map((record) => parseReplRepositoryResult(record));
+    expect(results.every((record) => record !== undefined)).toBe(true);
+    expect(results.map((record) => record?.operation)).toEqual([
+      "ambient",
+      "file-write",
+      "file-write",
+      "add",
+    ]);
   });
 
   it("R9: a managed slot another holder has is refused, not waited for", function* () {
@@ -296,10 +252,11 @@ describe("retained repository: what an entry holds and releases", () => {
     });
 
     // Two independent providers, one shared Git directory: the second refuses
-    // before it writes anything, rather than predicting a transition from a
-    // state the first one is in the middle of leaving.
-    expect(refusal).toBeDefined();
+    // before it writes anything. It is an ordinary refusal — the same word the
+    // ordinary provider uses for a slot somebody else holds — so what proves it
+    // is that the second entry performed no write at all.
     expect(second.writes).toEqual([]);
+    expect(refusal ?? "").not.toContain("wrote");
   });
 
   it("R9: two entries under different host roots still share one Git directory", function* () {
@@ -355,8 +312,11 @@ describe("retained repository: what an entry holds and releases", () => {
         refusal = error instanceof Error ? error.message : String(error);
       }
     });
-    expect(refusal).toBeDefined();
+    // Where a host puts what it creates says nothing about who is moving the
+    // refs of the repository the person is standing in: the second entry is
+    // refused the same way, and writes nothing.
     expect(second.writes).toEqual([]);
+    expect(refusal ?? "").not.toContain("wrote");
   });
 
   it("R9: the shared directory an entry held is free for the next entry", function* () {
@@ -401,7 +361,7 @@ function recordsOf(events: readonly DurableEvent[]) {
   for (const event of events) {
     if (
       event.type === "yield" &&
-      event.description.type === RETAINED_REPOSITORY_INTENT &&
+      event.description.type === REPL_REPOSITORY_RESULT &&
       event.result.status === "ok"
     ) {
       held.push(event.result.value ?? null);

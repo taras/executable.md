@@ -29,14 +29,16 @@ import { rm } from "@effectionx/fs";
 import { API, hostFilesHandler, useHostFiles } from "@executablemd/runtime";
 import { useTempFileCompiler } from "@executablemd/core";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
-import type { DurableEvent } from "@executablemd/durable-streams";
+import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import {
-  RETAINED_REPOSITORY_COMPLETION,
-  RETAINED_REPOSITORY_INTENT,
-  parseRetainedRepositoryIntent,
+  REPL_REPOSITORY_REQUEST,
+  REPL_REPOSITORY_RESULT,
+  parseReplRepositoryRequest,
+  parseReplRepositoryResult,
 } from "../../git/src/retained-repository/records.ts";
 import { denoRepositoryHost, useRetainedRepositoryEntry } from "@executablemd/git/deno";
+import { parseSelectionResult } from "../../git/src/deno/retained-repository/selections.ts";
 import type { RepositoryHost } from "@executablemd/git/deno";
 import type { GitInvocation, GitOutcome } from "../../git/src/deno/composition/host.ts";
 import { gitHubSource } from "../../git/src/deno/composition/github.ts";
@@ -411,20 +413,62 @@ function unfinished(events: readonly DurableEvent[]): DurableEvent[] {
   return events.filter((event) => event.type !== "close");
 }
 
-/** The retained intents of one operation this history holds. */
-function intentsOf(events: readonly DurableEvent[], operation: string) {
+/**
+ * The directory each of these records was asked for in.
+ *
+ * Read out of the record's own authored request, which is where a file
+ * operation says what it was asked to do: the working directory the document
+ * was standing in and the path it named. A record carries no checkout state and
+ * no selection token, so "which checkout did this write belong to" is answered
+ * by resolving what it actually asked for.
+ */
+function directoriesOf(records: readonly { readonly request: Json }[]): string[] {
+  return records.map((record) => {
+    const request = record.request;
+    const named =
+      request !== null && typeof request === "object" && !Array.isArray(request)
+        ? request["cwd"]
+        : undefined;
+    if (typeof named !== "string") {
+      throw new Error(`this record names no working directory: ${JSON.stringify(request)}`);
+    }
+    return named;
+  });
+}
+
+/** The recorded results of one operation this history holds. */
+function resultsOf(events: readonly DurableEvent[], operation: string) {
   const held = [];
   for (const event of events) {
     if (
       event.type !== "yield" ||
-      event.description.type !== RETAINED_REPOSITORY_INTENT ||
+      event.description.type !== REPL_REPOSITORY_RESULT ||
       event.result.status !== "ok"
     ) {
       continue;
     }
-    const intent = parseRetainedRepositoryIntent(event.result.value ?? null);
-    if (intent !== undefined && intent.operation === operation) {
-      held.push(intent);
+    const result = parseReplRepositoryResult(event.result.value ?? null);
+    if (result !== undefined && result.operation === operation) {
+      held.push(result);
+    }
+  }
+  return held;
+}
+
+/** The resolved external requests of one operation this history holds. */
+function requestsOf(events: readonly DurableEvent[], operation: string) {
+  const held = [];
+  for (const event of events) {
+    if (
+      event.type !== "yield" ||
+      event.description.type !== REPL_REPOSITORY_REQUEST ||
+      event.result.status !== "ok"
+    ) {
+      continue;
+    }
+    const request = parseReplRepositoryRequest(event.result.value ?? null);
+    if (request !== undefined && request.operation === operation) {
+      held.push(request);
     }
   }
   return held;
@@ -441,10 +485,10 @@ function positionsOf(events: readonly DurableEvent[], type: string): number[] {
   return at;
 }
 
-/** How many completions this history holds. */
+/** How many recorded results this history holds. */
 function completions(events: readonly DurableEvent[]): number {
   return events.filter(
-    (event) => event.type === "yield" && event.description.type === RETAINED_REPOSITORY_COMPLETION,
+    (event) => event.type === "yield" && event.description.type === REPL_REPOSITORY_RESULT,
   ).length;
 }
 
@@ -493,7 +537,7 @@ describe("REPL repositories: one retained host per entry", () => {
     // And the records they wrote are two different owners': the entry is half
     // of the owner, so the second entry inherits nothing the first established.
     const events = yield* recordsOf(execution);
-    const owners = new Set(intentsOf(events, "file-write").map((intent) => intent.owner));
+    const owners = new Set(resultsOf(events, "file-write").map((intent) => intent.owner));
     expect(owners.size).toBe(2);
     expect(completions(events)).toBeGreaterThan(0);
   });
@@ -575,7 +619,7 @@ describe("REPL repositories: one retained host per entry", () => {
     });
 
     const events = yield* recordsOf(execution);
-    const written = intentsOf(events, "file-write");
+    const written = resultsOf(events, "file-write");
     // Two writes, one authored and one generated, and they are two
     // occurrences of one entry: the fragment's write is its own effect, and it
     // reached this entry's own access rather than the command's.
@@ -646,7 +690,7 @@ describe("REPL repositories: one retained host per entry", () => {
     // state before it — and an entry whose checkout holds work its history does
     // not account for refuses rather than continuing.
     const asked = fixture.asked.length;
-    const retained = positionsOf(whole, RETAINED_REPOSITORY_INTENT);
+    const retained = positionsOf(whole, REPL_REPOSITORY_RESULT);
     const cut = retained[retained.length - 1] ?? 0;
     const interrupted = yield* useCraftedExecution(
       fixture,
@@ -716,7 +760,7 @@ describe("REPL repositories: one retained host per entry", () => {
 
     // The same entry, cut before its last write and with that write's file
     // removed: an entry that stopped there, which a later open continues.
-    const retained = positionsOf(unfinished(whole), RETAINED_REPOSITORY_INTENT);
+    const retained = positionsOf(unfinished(whole), REPL_REPOSITORY_RESULT);
     const cut = retained[retained.length - 1] ?? 0;
     const events = unfinished(whole).slice(0, cut);
     const interrupted = yield* useCraftedExecution(fixture, events, execution.id);
@@ -829,7 +873,7 @@ describe("REPL repositories: one retained host per entry", () => {
       }
       expect(session.overlay.output).toContain("answered yes");
     });
-    expect(intentsOf(yield* recordsOf(execution), "commit")).toHaveLength(1);
+    expect(resultsOf(yield* recordsOf(execution), "commit")).toHaveLength(1);
   });
 
   for (const placement of ["canonical", "through a symlink"] as const) {
@@ -839,13 +883,15 @@ describe("REPL repositories: one retained host per entry", () => {
       yield* useCompositionComponents();
       const execution = yield* useExecution(fixture);
 
-      // An explicit `<Repository>`, a write inside it, and the stage that
-      // follows: the write has to be *this entry's*, and the Add after it has
-      // to find a checkout its own history accounts for.
+      // An explicit `<Repository>`, two writes inside it — one authored and
+      // one from a generated program — and the stage that follows. Both have to
+      // be *this entry's*, in the checkout it selected, and the Add after them
+      // has to find a checkout its own history accounts for.
       const source = [
         `<Repository name="project" url="${LOCATOR}">`,
         '<File path="placed.md">placed</File>',
-        '<Git.Add paths="placed.md" />',
+        `<Evaluate text={${JSON.stringify(FRAGMENT)}} allow={["write"]} />`,
+        '<Git.Add paths="." />',
         '<Git.Commit message="Placed" as="commit" />',
         "</Repository>",
         "",
@@ -873,30 +919,36 @@ describe("REPL repositories: one retained host per entry", () => {
       // did not recognize as its own would leave no intent here, and the Add
       // would have refused a change nothing accounts for.
       const events = yield* recordsOf(execution);
-      const writes = intentsOf(events, "file-write");
-      expect(writes).toHaveLength(1);
-      expect(intentsOf(events, "add")).toHaveLength(1);
-      expect(intentsOf(events, "commit")).toHaveLength(1);
-      expect(completions(events)).toBe(intentsOf(events, "repository").length + writes.length + 2);
+      const writes = resultsOf(events, "file-write");
+      expect(writes).toHaveLength(2);
+      expect(resultsOf(events, "add")).toHaveLength(1);
+      expect(resultsOf(events, "commit")).toHaveLength(1);
+      expect(completions(events)).toBe(resultsOf(events, "repository").length + writes.length + 2);
 
       // Under one canonical identity, whichever way the root was spelled: the
-      // checkout the records name is the path the filesystem answers with, and
-      // it is inside this world's own canonical root.
-      const selection = writes[0]?.selection;
-      const named =
-        selection !== null && typeof selection === "object" && !Array.isArray(selection)
-          ? selection["checkout"]
-          : undefined;
-      if (typeof named !== "string") {
-        throw new Error(`this write's record names no checkout: ${JSON.stringify(selection)}`);
+      // checkout the selection's own result names is the path the filesystem
+      // answers with, and it is inside this world's own canonical root.
+      const selected = resultsOf(events, "repository")[0]?.result;
+      const selection = selected === undefined ? undefined : parseSelectionResult(selected);
+      if (selection === undefined) {
+        throw new Error(`this selection's record is unreadable: ${JSON.stringify(selected)}`);
       }
+      const named = selection.checkout;
       expect(named).toBe(yield* until(realpath(named)));
       expect(named.startsWith(fixture.root)).toBe(true);
       expect(named.includes("/link/")).toBe(false);
 
+      // Both writes were asked for *in* that checkout — the authored one and
+      // the generated one alike — and neither named the directory the command
+      // was started in.
+      expect(directoriesOf(writes)).toEqual([named, named]);
+      expect(yield* exists(join(fixture.checkout, "generated.md"))).toBe(false);
+
       // The bytes are where the document put them, staged, and committed.
       expect(yield* until(readFile(join(named, "placed.md"), "utf8"))).toBe("placed");
+      expect(yield* until(readFile(join(named, "generated.md"), "utf8"))).toBe("generated\n");
       expect(git(["show", "HEAD:placed.md"], named, fixture.checkout)).toBe("placed");
+      expect(git(["show", "HEAD:generated.md"], named, fixture.checkout)).toBe("generated");
       expect(output).toContain("committed ");
 
       // And the history reopens: a settled entry projected from records that
@@ -917,6 +969,123 @@ describe("REPL repositories: one retained host per entry", () => {
       expect(fixture.asked).toHaveLength(asked);
     });
   }
+
+  it("R6: a generated write in a continuation belongs to the selected checkout", function* () {
+    const fixture = yield* useFixture();
+    yield* useTempFileCompiler();
+    yield* useCompositionComponents();
+    const execution = yield* useExecution(fixture);
+    const entryHost = forgeEntryHost(fixture, gitHubStore({ token: "continued" }), []);
+
+    // The question stands *before* the `<Evaluate>`, so the fragment runs in a
+    // continuation and nowhere else: whatever directory a replayed selection
+    // leaves behind is the directory that write is resolved against.
+    const source = [
+      "```js eval",
+      'const ask = { type: "object", properties: { ok: { type: "string" } }, ' +
+        'required: ["ok"], additionalProperties: false };',
+      "```",
+      "",
+      `<Repository name="project" url="${LOCATOR}">`,
+      '<File path="authored.md">authored</File>',
+      '<Elicit schema={ask} as="ready">Ready?</Elicit>',
+      `<Evaluate text={${JSON.stringify(FRAGMENT)}} allow={["write"]} />`,
+      '<Git.Add paths="." />',
+      '<Git.Commit message="Continued" as="commit" />',
+      "</Repository>",
+      "",
+      "committed {commit.commit} after {ready.ok}",
+    ].join("\n");
+
+    /**
+     * The records the file holds now.
+     *
+     * Through a fresh open, because a continuation appends through its own
+     * handle: the handle this entry was submitted with stops where that
+     * invocation stopped, and reading it would report the continuation's work
+     * as missing.
+     */
+    function* recordsNow(): Operation<DurableEvent[]> {
+      return yield* recordsOf(yield* replRepository(fixture.histories).open(execution.id));
+    }
+
+    /** Reopen this history the way a later invocation does. */
+    function* reopened(): Operation<ReplSession> {
+      const opened = yield* openReplSession({
+        execution: yield* replRepository(fixture.histories).open(execution.id),
+        installations: installations(),
+        entryHost,
+      });
+      if (!opened.ok) {
+        throw opened.error;
+      }
+      return opened.value;
+    }
+
+    // 1. Left standing at the question, with the authored write done and the
+    //    generated one not started.
+    yield* scoped(function* () {
+      const opened = yield* submitReplEntry({
+        execution,
+        installations: installations(),
+        entryHost,
+        source,
+      });
+      if (!opened.ok) {
+        throw opened.error;
+      }
+      const question = yield* nextQuestion(opened.value);
+      expect(question.message).toContain("Ready?");
+    });
+
+    const left = yield* recordsNow();
+    const placement = resultsOf(left, "repository")[0]?.result;
+    const selection = placement === undefined ? undefined : parseSelectionResult(placement);
+    if (selection === undefined) {
+      throw new Error(`this selection's record is unreadable: ${JSON.stringify(placement)}`);
+    }
+    const selected = selection.checkout;
+    expect(directoriesOf(resultsOf(left, "file-write"))).toEqual([selected]);
+    expect(yield* exists(join(selected, "generated.md"))).toBe(false);
+
+    // 2. Reopened and answered: the fragment runs now, in the continuation.
+    const output = yield* scoped(function* () {
+      const session = yield* reopened();
+      const question = yield* nextQuestion(session);
+      expect(question.submit({ ok: "yes" }).kind).toBe("answered");
+      const settled = yield* session.join();
+      if (!settled.ok) {
+        throw settled.error;
+      }
+      return session.overlay.output;
+    });
+    expect(output).toContain("after yes");
+
+    // Its write belongs to the same checkout the authored one did, is retained
+    // there, and left nothing where the command was started.
+    const events = yield* recordsNow();
+    const writes = resultsOf(events, "file-write");
+    expect(directoriesOf(writes)).toEqual([selected, selected]);
+    expect(yield* until(readFile(join(selected, "generated.md"), "utf8"))).toBe("generated\n");
+    expect(yield* exists(join(fixture.checkout, "generated.md"))).toBe(false);
+    // Staged and committed with the authored one, which is the Add and the
+    // Commit agreeing with the document about which checkout this is.
+    expect(git(["show", "HEAD:generated.md"], selected, fixture.checkout)).toBe("generated");
+    expect(git(["show", "HEAD:authored.md"], selected, fixture.checkout)).toBe("authored");
+
+    // 3. Reopened once more. Nothing is performed again: the same two writes,
+    //    the same commit, and the file untouched.
+    const commit = git(["rev-parse", "HEAD"], selected, fixture.checkout);
+    const asked = fixture.asked.length;
+    const settled = yield* scoped(function* () {
+      return (yield* reopened()).model.entries[0]?.settled;
+    });
+    expect(settled).toBe(true);
+    expect(resultsOf(yield* recordsNow(), "file-write")).toHaveLength(2);
+    expect(completions(yield* recordsNow())).toBe(completions(events));
+    expect(git(["rev-parse", "HEAD"], selected, fixture.checkout)).toBe(commit);
+    expect(fixture.asked).toHaveLength(asked);
+  });
 
   it("R11: one entry's whole repository journey, left and reopened", function* () {
     const fixture = yield* useFixture();
@@ -1019,8 +1188,8 @@ describe("REPL repositories: one retained host per entry", () => {
     // The local work is done and the external work has not started: the entry
     // reached a question that stands after one and before the other.
     const left = yield* recordsNow();
-    expect(intentsOf(left, "commit")).toHaveLength(1);
-    expect(intentsOf(left, "push")).toHaveLength(0);
+    expect(resultsOf(left, "commit")).toHaveLength(1);
+    expect(requestsOf(left, "push")).toHaveLength(0);
     expect(creations(store)).toBe(0);
 
     // 2. Reopened, answered, and left again at the second question. Everything
@@ -1038,7 +1207,7 @@ describe("REPL repositories: one retained host per entry", () => {
 
     // The publication and the pull request happened once, between the two
     // questions, and the forge was asked for them exactly once.
-    expect(intentsOf(yield* recordsNow(), "push")).toHaveLength(1);
+    expect(requestsOf(yield* recordsNow(), "push")).toHaveLength(1);
     expect(creations(store)).toBe(1);
     expect(issueCreations(store)).toBe(0);
 
@@ -1078,15 +1247,15 @@ describe("REPL repositories: one retained host per entry", () => {
     expect(creations(store)).toBe(1);
     expect(issueCreations(store)).toBe(1);
     const events = yield* recordsNow();
-    expect(intentsOf(events, "repository")).toHaveLength(1);
-    expect(intentsOf(events, "worktree")).toHaveLength(1);
-    expect(intentsOf(events, "push")).toHaveLength(1);
-    expect(intentsOf(events, "pull-request")).toHaveLength(1);
-    expect(intentsOf(events, "commit")).toHaveLength(1);
+    expect(resultsOf(events, "repository")).toHaveLength(1);
+    expect(resultsOf(events, "worktree")).toHaveLength(1);
+    expect(requestsOf(events, "push")).toHaveLength(1);
+    expect(requestsOf(events, "pull-request")).toHaveLength(1);
+    expect(resultsOf(events, "commit")).toHaveLength(1);
     // Two writes inside the repository's own checkout and one inside the
     // worktree, each its own occurrence of one entry.
-    expect(intentsOf(events, "file-write")).toHaveLength(3);
-    expect(intentsOf(events, "dir-ensure")).toHaveLength(1);
+    expect(resultsOf(events, "file-write")).toHaveLength(3);
+    expect(resultsOf(events, "dir-ensure")).toHaveLength(1);
 
     // Settled, and reopened once more: the whole entry is projected, and this
     // time nothing is asked, nothing is performed and no host is built at all.
@@ -1106,7 +1275,7 @@ describe("REPL repositories: one retained host per entry", () => {
     expect(new Set(asked.map((request) => request.entryKey))).toEqual(new Set(["entry-1"]));
   });
 
-  it("R13: work standing on a selection this history never made refuses", function* () {
+  it("R2/R13: a record retained under another entry grants this one nothing", function* () {
     const fixture = yield* useFixture();
     yield* useTempFileCompiler();
     yield* useCompositionComponents();
@@ -1129,16 +1298,30 @@ describe("REPL repositories: one retained host per entry", () => {
     });
     const whole = unfinished(yield* recordsOf(first));
 
-    // The same history with the selection taken out of it, records and all: a
-    // write that stands on repository authority nothing here established. It is
-    // what a partial legacy history looks like, and the continuation refuses
-    // rather than inventing the selection it would need.
-    const selection = positionsOf(whole, RETAINED_REPOSITORY_INTENT)[0] ?? 0;
-    const completion = positionsOf(whole, RETAINED_REPOSITORY_COMPLETION).find(
-      (at) => at > selection,
+    // The same history with one record's owner replaced: a result that belongs
+    // to another entry, standing in this entry's own segment. It is what a
+    // copied or borrowed record looks like, and the continuation refuses before
+    // anything is performed rather than replaying somebody else's work.
+    const crafted = yield* useCraftedExecution(
+      fixture,
+      whole.map((event) =>
+        event.type === "yield" &&
+        event.description.type === REPL_REPOSITORY_RESULT &&
+        event.result.status === "ok" &&
+        event.result.value !== null &&
+        typeof event.result.value === "object" &&
+        !Array.isArray(event.result.value)
+          ? {
+              ...event,
+              result: {
+                ...event.result,
+                value: { ...event.result.value, owner: 'repl:v1:["somebody-else","entry-1"]' },
+              },
+            }
+          : event,
+      ),
+      first.id,
     );
-    const without = whole.filter((_event, at) => at !== selection && at !== completion);
-    const crafted = yield* useCraftedExecution(fixture, without, first.id);
 
     const outcome = yield* scoped(function* () {
       const opened = yield* openReplSession({
@@ -1153,6 +1336,6 @@ describe("REPL repositories: one retained host per entry", () => {
       return settled.ok ? "continued" : settled.error.message;
     });
     expect(outcome).not.toBe("continued");
-    expect(String(outcome)).toContain("stands before anything selected the checkout");
+    expect(String(outcome)).toContain("another entry's owner");
   });
 });

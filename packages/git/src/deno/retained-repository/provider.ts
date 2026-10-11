@@ -27,7 +27,8 @@ import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type { ExecutionInstallation, JournalAdmission } from "@executablemd/core/host";
 import type { FragmentFileAccess } from "@executablemd/core/host";
 import { ensureDir } from "@effectionx/fs";
-import { API } from "@executablemd/runtime";
+import { dirname } from "node:path";
+import { API, cwd } from "@executablemd/runtime";
 import type { FilePathInput, FilesHandler, FileWriteInput, GlobInput } from "@executablemd/runtime";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
 import { PullRequestOperations } from "../../composition/pull-request-operations.ts";
@@ -35,19 +36,8 @@ import type { PullRequestReadInvocation } from "../../composition/pull-request-o
 import type { PullRequestReadResult } from "../../composition/pull-request-read-records.ts";
 import { admitRetainedRepositoryHistory } from "../../retained-repository/admission.ts";
 import type { RetainedRepositoryHistory } from "../../retained-repository/admission.ts";
-import {
-  retainedRepositoryOwner,
-  sameRetainedFrontier,
-  withSharedRefs,
-} from "../../retained-repository/records.ts";
-import type {
-  RetainedFrontier,
-  RetainedRepositorySite,
-} from "../../retained-repository/records.ts";
-import {
-  parseRetainedAmbientSelection,
-  retainedAmbientSelectionJson,
-} from "../../retained-repository/requests.ts";
+import { retainedRepositoryOwner } from "../../retained-repository/records.ts";
+import type { RetainedRepositorySite } from "../../retained-repository/records.ts";
 import type { RetainedAmbientSelection } from "../../retained-repository/requests.ts";
 import { gitSession } from "../composition/git.ts";
 import type { GitSession } from "../composition/git.ts";
@@ -71,13 +61,17 @@ import { retainedExternalComponents } from "./external.ts";
 import type { RetainedExternalHost } from "./external.ts";
 import { retainedFileMutations } from "./files.ts";
 import type { CheckoutPublication, RetainedFileHost, SelectedCheckout } from "./files.ts";
-import { FrontierError, inventoryFrontier } from "./frontier.ts";
 import { admitOwnedObservations } from "./observations.ts";
-import { holdRetainedLanes, retain, retainedLanes, retainedResume } from "./local.ts";
-import type { RetainedResume } from "./local.ts";
+import { FrontierError, holdCommonDirectory, recorded } from "./local.ts";
 import { admittedPublications, ambientPublication, ambientSelection } from "./publication.ts";
 import type { RetainedPublication } from "./publication.ts";
-import { retainedRepository, retainedWorktree } from "./selections.ts";
+import {
+  parseSelectionResult,
+  retainedRepository,
+  retainedWorktree,
+  selectedFrom,
+  selectionResultJson,
+} from "./selections.ts";
 import type { RetainedSelectionHost } from "./selections.ts";
 
 /** What the command tells this entry about itself. */
@@ -103,8 +97,11 @@ export interface RetainedEntryRequest {
 
 /** An ambient checkout this entry works in, and the directory that identifies it. */
 interface AmbientSelection {
+  /** The repository discovery found, as the ambient selection describes it. */
   readonly selection: RetainedAmbientSelection;
   readonly common: string;
+  /** The checkout whose administration that shared directory belongs to. */
+  readonly repositoryDirectory: string;
 }
 
 /** What one entry's host offers the command that built it. */
@@ -134,25 +131,9 @@ export function* useRetainedRepositoryEntry(
     executionId: request.executionId,
     entryKey: request.entryKey,
   });
-  const lanes = retainedLanes();
   // One counter per shared Git directory, advanced as this entry attempts
   // operations. A resume attempts the same ones in the same order, so the
-  // numbers line up and a replayed intent carries the identity it was written
-  // under.
-  const positions = new Map<string, number>();
-  const position = (common: string) => {
-    const next = positions.get(common) ?? 0;
-    positions.set(common, next + 1);
-    return next;
-  };
   const selected = new Map<string, SelectedCheckout>();
-  // What this entry expects each checkout it has touched to be in: the state
-  // its history authenticated when the checkout was attached, advanced by every
-  // operation this entry has since had acknowledged. A new operation is held to
-  // this rather than to the snapshot the entry opened with, because the entry's
-  // own completed work is part of what its history accounts for.
-  const expected = new Map<string, RetainedFrontier>();
-  const attached = new Set<string>();
   // What this entry has published, in the order it published it: rebuilt from
   // its accepted history when the admission runs, and appended to by every
   // push this entry verifies. Nothing else may add to it, and another entry
@@ -204,7 +185,6 @@ export function* useRetainedRepositoryEntry(
   // is the one its content is written inside.
   let enclosing: SelectedCheckout | undefined;
   let admitted: RetainedRepositoryHistory | undefined;
-  let resume: RetainedResume = retainedResume([]);
   let ambient: SelectedCheckout | undefined;
   let discovered = false;
 
@@ -218,7 +198,6 @@ export function* useRetainedRepositoryEntry(
   function* covering(path: string): Operation<SelectedCheckout | undefined> {
     for (const checkout of selected.values()) {
       if (within(checkout.directory, path)) {
-        yield* attach(checkout);
         return checkout;
       }
     }
@@ -248,175 +227,85 @@ export function* useRetainedRepositoryEntry(
    * following it.
    */
   function* selectAmbient(): Operation<SelectedCheckout | undefined> {
-    const retained = admitted?.completed.find((effect) => effect.intent.operation === "ambient");
-    const ambientSelected =
-      retained === undefined ? yield* discoveredSelection() : savedSelection(retained);
-    if (ambientSelected === undefined) {
+    // What the entry asked for is "work here". Which repository that is — its
+    // name, its origin, the commit its identity is pinned at — is what asking
+    // resolved to, and a continuation reads that back from its own record
+    // rather than discovering it again: an entry reopened while HEAD has moved
+    // is still the entry that selected this checkout.
+    const site = Object.freeze({ source: request.source, occurrence: "ambient" });
+    // Asked of this entry's own history first, and of the filesystem only when
+    // the history has nothing to say: a continuation reads back the repository
+    // it selected, and an entry standing nowhere near a checkout selects
+    // nothing rather than recording that it found none.
+    const saved = admitted?.results.find((result) => result.operation === "ambient");
+    const discovered = saved === undefined ? yield* discoveredSelection() : undefined;
+    if (saved === undefined && discovered === undefined) {
       return undefined;
     }
-    const common = ambientSelected.common;
-    const held = ambientSelected.selection;
-    const checkout: SelectedCheckout = Object.freeze({
-      checkout: held.root,
-      directory: held.root,
-      common,
-      git,
-      // What this entry resolved when it first selected this checkout, read
-      // back from its own record on a resume. Discovering it again would pin
-      // the identity at whatever HEAD is now, and a push after a commit would
-      // then name a repository this history never recorded.
-      // deno-lint-ignore require-yield
-      *publication(): Operation<Result<CheckoutPublication>> {
-        return Ok(ambientPublication(held, common));
+    const produced = yield* recorded({
+      owner,
+      site,
+      operation: "ambient",
+      request: { ambient: request.cwd },
+      *perform(): Operation<Result<Json>> {
+        if (discovered === undefined) {
+          return Err(
+            new FrontierError(
+              `${request.cwd} is not inside a Git checkout, so there is no ambient repository ` +
+                "for this entry to work in.",
+            ),
+          );
+        }
+        const held = discovered.selection;
+        return Ok(
+          selectionResultJson("ambient", {
+            checkout: held.root,
+            common: discovered.common,
+            identity: held.identity,
+            origin: held.origin,
+            // An ambient entry started inside a linked worktree publishes from
+            // the repository whose administration that worktree shares.
+            repositoryDirectory: discovered.repositoryDirectory,
+            repositoryName: held.identity.name,
+            worktreeName: null,
+          }),
+        );
       },
     });
+    if (!produced.ok) {
+      throw produced.error;
+    }
+    const selection = parseSelectionResult(produced.value);
+    if (selection === undefined) {
+      throw new FrontierError(
+        "this entry's own ambient selection is not one this host can read, so which repository " +
+          "it works in is not something this history says.",
+      );
+    }
     // The shared Git directory is leased before this entry reads a byte of it.
     // Selecting is where that happens, because selecting is what makes this
     // entry the one doing repository work here — and a second process holding
-    // the same directory has to refuse before anything is inventoried, not
-    // after an operation has already frozen a state the other one is moving.
-    yield* holdRetainedLanes(yield* useSlots(), [
+    // the same directory has to refuse before anything is performed.
+    yield* holdCommonDirectory(selection.common, owner);
+    yield* (yield* useSlots()).holdAll([
       {
         kind: "common",
-        slot: checkout.common,
+        slot: selection.common,
         subject: "the Git directory of the checkout this entry started in",
       },
     ]);
-    // Authenticated before its own selection is replayed: a resume that
-    // answered with the root it recorded while the checkout there has been
-    // changed would be selecting a checkout that is no longer the one it chose.
-    yield* attach(checkout);
-    const selection = yield* retain(
-      {
-        owner,
-        site: Object.freeze({
-          source: request.source,
-          occurrence: `ambient:${checkout.checkout}`,
-        }),
-        operation: "ambient",
-        checkout: checkout.checkout,
-        common: checkout.common,
-        position: position(checkout.common),
-        candidates: () => {
-          const held = expected.get(checkout.checkout);
-          return held === undefined ? [] : [held];
-        },
-        settled: (frontier) => settledAt(checkout.checkout, frontier),
-        selection: { checkout: checkout.checkout },
-        request: { ambient: checkout.checkout },
-        inventory: () =>
-          inventoryFrontier({
-            git,
-            checkout: checkout.checkout,
-            directory: checkout.directory,
-          }),
-        // deno-lint-ignore require-yield
-        *prepare(preState) {
-          // Selecting changes nothing: the two ends of this transition are one
-          // state, and what the record is for is saying which checkout.
-          //
-          // Ambient selection never creates anything — it found a checkout that
-          // was already there — so it has a state to start from by
-          // construction, and an absent one here would mean this host had
-          // discovered a repository that does not exist.
-          if (preState === null) {
-            return Err(
-              new Error(
-                "ambient selection has no absent state: the checkout it selected was found, " +
-                  "not created.",
-              ),
-            );
-          }
-          return Ok({
-            postState: preState,
-            // The resolved identity travels with the preparation, not with the
-            // request: what the entry asked for is "work here", and what it
-            // resolved from that is which repository this checkout is of.
-            prepared: retainedAmbientSelectionJson(held),
-            evidence: { type: "ambient", checkout: checkout.checkout },
-          });
-        },
-        // deno-lint-ignore require-yield
-        *perform() {
-          return Ok({ type: "ambient", checkout: checkout.checkout });
-        },
-      },
-      resume,
-      lanes,
-    );
-    if (!selection.ok) {
-      throw selection.error;
-    }
-    return checkout;
-  }
-
-  /**
-   * Authenticate a checkout against what this entry's history accounts for.
-   *
-   * Once per checkout, before anything is replayed, performed or expanded in
-   * it. What the history holds is its folded final state and the two ends of
-   * any mutation of it left unresolved; the checkout is in one of those, or it
-   * has been changed by something this entry did not record — and a replay
-   * answering with its saved results anyway would be answering about a
-   * checkout that is no longer there.
-   *
-   * A checkout the history says nothing about is a first selection and needs
-   * no authentication: there is nothing yet for it to disagree with.
-   */
-  function* attach(checkout: SelectedCheckout): Operation<void> {
-    if (attached.has(checkout.checkout)) {
-      return;
-    }
-    attached.add(checkout.checkout);
-    const candidates = admitted?.attachments.find(
-      (attachment) => attachment.checkout === checkout.checkout,
-    )?.candidates;
-    if (candidates === undefined || candidates.length === 0) {
-      return;
-    }
-    const live = yield* inventoryFrontier({
-      git: checkout.git,
-      checkout: checkout.checkout,
-      directory: checkout.directory,
+    // What this entry resolved when it first selected this checkout, read back
+    // from its own record on a resume. Discovering it again would pin the
+    // identity at whatever HEAD is now, and a push after a commit would then
+    // name a repository this history never recorded.
+    const publication: CheckoutPublication = Object.freeze({
+      identity: selection.identity,
+      origin: selection.origin,
+      repositoryDirectory: selection.repositoryDirectory,
     });
-    if (!live.ok) {
-      // A checkout this history established, and this host cannot describe.
-      // The commonest way for that to happen is for it not to be there any
-      // more, which is the one state none of the candidates can be: a
-      // destination that has gone is not a state to replay saved results
-      // against, and nothing here puts it back.
-      throw new FrontierError(
-        `${checkout.checkout} is a checkout this entry's history established and this host ` +
-          `cannot read now, so what has happened to it is not recorded here: ` +
-          `${live.error.message}`,
-      );
-    }
-    if (!candidates.some((candidate) => sameRetainedFrontier(candidate, live.value))) {
-      throw new FrontierError(
-        `${checkout.checkout} is not in any state this entry's history accounts for, so what ` +
-          "has happened to it since is not recorded here.",
-      );
-    }
-    expected.set(checkout.checkout, live.value);
-  }
-
-  /**
-   * Hold this checkout to what an acknowledged operation left it in.
-   *
-   * The refs reach every sibling of the same administration too: a commit in
-   * one linked worktree moves a branch every checkout of that repository can
-   * see, and a sibling still expecting the old ref list would refuse the next
-   * thing written in it.
-   */
-  function settledAt(checkout: string, frontier: RetainedFrontier): void {
-    expected.set(checkout, frontier);
-    attached.add(checkout);
-    for (const [other, held] of expected) {
-      if (other === checkout || held.administration.common !== frontier.administration.common) {
-        continue;
-      }
-      expected.set(other, withSharedRefs(held, frontier.refs));
-    }
+    return selectedFrom(selection, git, function* () {
+      return Ok(publication);
+    });
   }
 
   /** The checkout this entry started in, when it started in one. */
@@ -425,54 +314,20 @@ export function* useRetainedRepositoryEntry(
     if (found === undefined) {
       return undefined;
     }
-    return { selection: ambientSelection(found), common: found.commonDirectory };
-  }
-
-  /**
-   * The ambient selection this entry's own record froze.
-   *
-   * A record whose preparation this host cannot read, or whose root is not the
-   * checkout its completion established, says nothing about which repository
-   * this entry selected — and answering with the root alone would publish
-   * under an identity nothing recorded.
-   */
-  function savedSelection(effect: {
-    readonly intent: { readonly prepared: Json };
-    readonly completion: { readonly frontier: RetainedFrontier };
-  }): AmbientSelection {
-    const saved = parseRetainedAmbientSelection(effect.intent.prepared);
-    if (saved === undefined || saved.root !== effect.completion.frontier.checkout) {
-      throw new FrontierError(
-        "this entry's own ambient selection does not say which repository it selected, so what " +
-          "it would publish from is not recorded here.",
-      );
-    }
-    return { selection: saved, common: effect.completion.frontier.administration.common };
+    return {
+      selection: ambientSelection(found),
+      common: found.commonDirectory,
+      // An entry started inside a linked worktree publishes from the
+      // repository whose administration that worktree shares, which is the
+      // directory holding that administration.
+      repositoryDirectory: dirname(found.commonDirectory),
+    };
   }
 
   const fileHost: RetainedFileHost = {
     owner,
     covering: (path) => covering(path),
     ordinary: request.files,
-    lanes,
-    resume: {
-      pending: (fingerprint) => resume.pending(fingerprint),
-      completed: (fingerprint) => resume.completed(fingerprint),
-    },
-    position,
-    attach: (checkout) => attach(checkout),
-    candidates: (checkout) => {
-      // What this entry expects, once the checkout has been attached. The
-      // admitted snapshot answers only before that, which is the window in
-      // which attachment itself decides.
-      const held = expected.get(checkout);
-      return held === undefined
-        ? (admitted?.attachments.find((attachment) => attachment.checkout === checkout)
-            ?.candidates ?? [])
-        : [held];
-    },
-    settled: settledAt,
-    expected: (checkout) => expected.get(checkout),
     site: (occurrence): RetainedRepositorySite =>
       Object.freeze({ source: request.source, occurrence }),
   };
@@ -503,10 +358,9 @@ export function* useRetainedRepositoryEntry(
       throw observed.error;
     }
     admitted = read.value;
-    resume = retainedResume(read.value.pending, read.value.completed);
     // Publication admission, rebuilt into this closure from the accepted
     // records of the segment that owns it. A record this scan cannot read
-    // refuses here, where nothing has been attached and nothing contacted.
+    // refuses here, where nothing has been contacted.
     published.push(...admittedPublications(retained, read.value));
   };
 
@@ -606,13 +460,13 @@ export function* useRetainedRepositoryEntry(
       // Declared, not registered: each one is minted a domain so its body can
       // authenticate its own invocation before it routes anything.
       components: [
-        ...retainedGitComponents(fileHost, request.host),
+        ...retainedGitComponents(fileHost),
         ...retainedExternalComponents(externalHost),
         retainedRepository(selectionHost),
         retainedWorktree(selectionHost),
       ],
     },
-    files: capturedFiles(request.files, request.cwd),
+    files: capturedFiles(request.files),
     history: () => admitted,
     selections: () => [...selected.values()],
   };
@@ -626,7 +480,7 @@ export function* useRetainedRepositoryEntry(
  * is not a mutation — and the ordinary mutation behavior for a host that was
  * given no handlers at all.
  */
-function capturedFiles(files: FilesHandler, cwd: string): FragmentFileAccess {
+function capturedFiles(files: FilesHandler): FragmentFileAccess {
   return {
     checkFilePath: (input: FilePathInput) => files.checkFilePath(input),
     readTextFile: (input: FilePathInput) => files.readTextFile(input),
@@ -634,10 +488,24 @@ function capturedFiles(files: FilesHandler, cwd: string): FragmentFileAccess {
     writeTextFile: (input: FileWriteInput) => files.writeTextFile(input),
     deleteFile: (input: FilePathInput) => files.deleteFile(input),
     ensureDirectory: (input: FilePathInput) => files.ensureDirectory(input),
-    // deno-lint-ignore require-yield
-    *workingDirectory(): Operation<string> {
-      return cwd;
-    },
+    /**
+     * The directory a fragment resolves its own relative paths against.
+     *
+     * Read when the fragment runs, not frozen when this access was captured.
+     * An `<Evaluate>` inside a `<Repository>` or a `<Worktree>` is standing in
+     * that checkout — the selection composed the working directory for its
+     * content — and a fragment it produced has to resolve `generated.md` to the
+     * same file the authored `<File>` beside it resolves. Freezing the entry's
+     * own starting directory here sent every generated write to wherever the
+     * command happened to be started, which is a different checkout with a
+     * different selection and a different lane.
+     *
+     * The callable is what is captured. Core reads it once per fragment into
+     * that fragment's own cursor and restores the cursor afterwards, so one
+     * answer per fragment is exactly the grain this needs: the directory the
+     * element that produced it was standing in.
+     */
+    workingDirectory: () => cwd(),
   };
 }
 

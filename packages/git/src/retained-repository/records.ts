@@ -1,38 +1,40 @@
 /**
- * What one REPL entry retains about repository work, and what names it.
+ * What one REPL entry records about repository work, and what names it.
  *
- * A retained repository effect is read back out of an ordinary JSONL journal on
- * a later open, so nothing here is this package's own word by the time it is
- * read. Each record is therefore parsed exactly: a value carrying more or fewer
- * members than its shape declares describes something other than that shape,
- * and reading it as one would accept whatever a later version — or another
- * entry — put there.
+ * The REPL is a foreground environment: replay restores the recorded execution
+ * state, and whether the live environment still matches it is the person's
+ * business rather than this protocol's. So a record here says what one operation
+ * was asked for and what it produced, and nothing about what the checkout
+ * looked like — no inventory, no predicted transition, no frontier to compare.
+ * A completed operation replays its result; the first operation with no result
+ * runs live against whatever is actually there.
  *
- * The protocol is closed and version 1. There is no forward-compatible member
- * bag, because an unknown member in a record that decides whether a mutation
- * already happened is not a feature to ignore: continuation fails closed and the
- * person is told, rather than replaying against a history this code cannot
- * fully read.
+ * Each record is read back out of an ordinary JSONL journal on a later open, so
+ * nothing here is this package's own word by the time it is read. Records are
+ * therefore parsed exactly: a value carrying more or fewer members than its
+ * shape declares describes something other than that shape, and reading it as
+ * one would accept whatever a later version — or another entry — put there.
  *
- * Two kinds of record exist. An **intent** is written before a mutation and
- * freezes everything the mutation will use, including the state it expects to
- * find and the state it will leave. A **completion** is written after the
- * mutation is verified and carries what it produced. An intent with no
- * completion is pending work that a later open reconciles or refuses; it is
- * never evidence that the mutation happened.
+ * Two kinds of record exist, and both are ordinary durable values.
+ *
+ * - A **result** is written by the one durable operation that performs a local
+ *   effect: the authored request, and what performing it produced. There is no
+ *   record before the effect, because there is nothing for one to say.
+ * - A **request** is written before a *service* is contacted, and freezes the
+ *   inputs that call resolves — a branch, a commit, an origin, a destination —
+ *   so a continuation asks the same question rather than re-resolving today's
+ *   answer. It is not an outcome: `git_host_effect` and `issue_effect` remain
+ *   the only authority on what a service did.
  *
  * Nothing operational is retained. A record holds detached JSON — never a
  * credential, a live handle, a function or a private selection token — so a
  * copied record is descriptive data and grants nothing.
  *
- * The frontier shape is what makes "the state I expected" decidable. It carries
- * semantic Git state and a content-and-mode worktree inventory, and it
- * deliberately has no member for a stat cache, a pack layout or a reflog time:
- * those differ between two checkouts that are semantically identical, so a
- * shape that held them would refuse honest work. Git's own administrative
- * directory is outside the worktree inventory for the same reason, and its
- * identity and relationships are proven by {@link RetainedAdministration}
- * instead.
+ * The durable type and name of both records are this feature's own and are new
+ * in this protocol. The experimental intent/completion encodings that preceded
+ * it are not readable here and are not migrated: a history holding them is
+ * refused as one this version cannot continue, rather than reinterpreted as
+ * results it never recorded.
  */
 
 import { until } from "effection";
@@ -46,25 +48,69 @@ import {
 import type { Json } from "@executablemd/durable-streams";
 import { canonicalJson } from "@executablemd/workflow";
 import { members, text } from "../composition/parse.ts";
-import { parseRepositoryMetadata, parseWorktreeMetadata } from "../composition/managed-metadata.ts";
-import type {
-  ManagedRepositoryMetadata,
-  ManagedWorktreeMetadata,
-} from "../composition/managed-metadata.ts";
 import type {
   GitFailureReason,
   RepositoryFailureReason,
   WorktreeFailureReason,
 } from "../composition/errors.ts";
 
-/** The durable type an intent is journaled under. */
-export const RETAINED_REPOSITORY_INTENT = "retained_repository_intent";
+/** The durable type a completed local operation's result is journaled under. */
+export const REPL_REPOSITORY_RESULT = "repl_repository_result";
 
-/** The durable type a local completion is journaled under. */
-export const RETAINED_REPOSITORY_COMPLETION = "retained_repository_completion";
+/** The durable type a resolved external request is journaled under. */
+export const REPL_REPOSITORY_REQUEST = "repl_repository_request";
 
-/** The one version of this protocol that exists. */
-export const RETAINED_REPOSITORY_VERSION = 1;
+/** The version both records carry, and the only one this code reads. */
+export const REPL_REPOSITORY_VERSION = 1;
+
+/**
+ * The prefix both record names begin with.
+ *
+ * This feature's own, and deliberately not the prefix the experimental
+ * snapshot protocol used: a name is half of what identifies a durable record,
+ * so an old journal's records cannot be matched by a new operation even if a
+ * type happened to agree.
+ */
+export const REPL_REPOSITORY_PREFIX = "repl-repository";
+
+/** The durable types the experimental snapshot protocol wrote. */
+export const SUPERSEDED_RECORD_TYPES: readonly string[] = Object.freeze([
+  "retained_repository_intent",
+  "retained_repository_completion",
+]);
+
+/** What one recorded operation does. */
+export type RetainedRepositoryOperation =
+  | "repository"
+  | "worktree"
+  | "ambient"
+  | "switch"
+  | "add"
+  | "commit"
+  | "file-write"
+  | "file-delete"
+  | "dir-ensure"
+  | "push"
+  | "pull-request"
+  | "issue";
+
+/** Every operation this protocol has, in canonical order. */
+export const RETAINED_REPOSITORY_OPERATIONS: readonly RetainedRepositoryOperation[] = Object.freeze(
+  [
+    "repository",
+    "worktree",
+    "ambient",
+    "switch",
+    "add",
+    "commit",
+    "file-write",
+    "file-delete",
+    "dir-ensure",
+    "push",
+    "pull-request",
+    "issue",
+  ],
+);
 
 /**
  * The entry that owns a retained effect.
@@ -105,52 +151,6 @@ export interface RetainedRepositorySite {
 }
 
 /**
- * The state lane one mutation advances, and where in that lane it sits.
- *
- * Keyed by the canonical common Git directory, because that is what two linked
- * worktrees share: serializing per checkout would let two of them move the same
- * refs at once. The position orders a lane's records and nothing else — it is
- * not a count of anything and not a position in the journal.
- */
-export interface RetainedRepositoryLane {
-  readonly common: string;
-  readonly position: number;
-}
-
-/** What one retained effect does. */
-export type RetainedRepositoryOperation =
-  | "repository"
-  | "worktree"
-  | "ambient"
-  | "switch"
-  | "add"
-  | "commit"
-  | "file-write"
-  | "file-delete"
-  | "dir-ensure"
-  | "push"
-  | "pull-request"
-  | "issue";
-
-/** Every operation this protocol has, in canonical order. */
-export const RETAINED_REPOSITORY_OPERATIONS: readonly RetainedRepositoryOperation[] = Object.freeze(
-  [
-    "repository",
-    "worktree",
-    "ambient",
-    "switch",
-    "add",
-    "commit",
-    "file-write",
-    "file-delete",
-    "dir-ensure",
-    "push",
-    "pull-request",
-    "issue",
-  ],
-);
-
-/**
  * The operations that establish a checkout rather than change one.
  *
  * A lane's first record is one of these: a mutation written before anything
@@ -164,254 +164,30 @@ export function establishesCheckout(operation: RetainedRepositoryOperation): boo
   return SELECTIONS.has(operation);
 }
 
-/** Which commit HEAD names, and whether it does so through a ref. */
-export type RetainedHead =
-  | { readonly kind: "symbolic"; readonly ref: string; readonly oid: string | null }
-  | { readonly kind: "detached"; readonly oid: string };
+const SITE_MEMBERS = ["source", "occurrence"] as const;
 
-/** One ref and what it points at. */
-export interface RetainedRef {
-  readonly name: string;
-  readonly oid: string;
-}
-
-/** One index entry, with the stage and flags that make it semantic. */
-export interface RetainedIndexEntry {
-  readonly path: string;
-  readonly stage: number;
-  readonly oid: string;
-  readonly mode: string;
-  readonly flags: readonly string[];
-}
-
-/**
- * One path in the worktree, including untracked and ignored content.
- *
- * A file carries its bytes as base64 rather than text: a frontier that compared
- * decoded text would call two different files equal whenever the difference was
- * not valid UTF-8. A directory is listed so an empty one is part of the state,
- * and a symlink carries its target rather than what the target holds.
- */
-export type RetainedWorktreeEntry =
-  | { readonly kind: "file"; readonly path: string; readonly mode: string; readonly bytes: string }
-  | { readonly kind: "directory"; readonly path: string; readonly mode: string }
-  | { readonly kind: "symlink"; readonly path: string; readonly target: string };
-
-/** Which Git directories a checkout has, and how they relate. */
-export interface RetainedAdministration {
-  readonly common: string;
-  /** The linked worktree's own administrative directory; absent for a primary checkout. */
-  readonly worktree: string | null;
-  readonly role: "primary" | "linked";
-}
-
-/** The saved state one accepted record establishes for one checkout. */
-export interface RetainedFrontier {
-  readonly checkout: string;
-  readonly administration: RetainedAdministration;
-  readonly objectFormat: "sha1" | "sha256";
-  readonly head: RetainedHead;
-  readonly refs: readonly RetainedRef[];
-  readonly index: readonly RetainedIndexEntry[];
-  readonly worktree: readonly RetainedWorktreeEntry[];
-}
-
-/**
- * What one mutation froze before it ran.
- *
- * `request` is what the document authored and `prepared` is what preparation
- * resolved from it, kept apart on purpose: a replay compares the authored
- * request with the saved one and then uses the saved prepared values, so a
- * resumed commit does not re-resolve HEAD, a branch base, the clock or an
- * identity. `evidence` is what the operation's own result must match.
- */
-export interface RetainedRepositoryIntent {
-  readonly version: typeof RETAINED_REPOSITORY_VERSION;
-  readonly owner: string;
-  readonly site: RetainedRepositorySite;
-  readonly operation: RetainedRepositoryOperation;
-  readonly lane: RetainedRepositoryLane;
-  readonly selection: Json;
-  readonly request: Json;
-  readonly fingerprint: string;
-  readonly prepared: Json;
-  /**
-   * The state this operation expects to find, or `null` for a destination that
-   * is not there yet.
-   *
-   * `null` has one meaning: the managed slot is absent, its checkout and its
-   * metadata together. It never means unknown, unreadable or missing evidence,
-   * and it is permitted only where a Repository or a Worktree is being created
-   * — every other operation changes a checkout that already exists, and an
-   * absent state is never represented by an empty Git snapshot.
-   */
-  readonly preState: RetainedFrontier | null;
-  readonly postState: RetainedFrontier;
-  readonly evidence: Json;
-}
-
-/**
- * What a creation freezes in place of a state it cannot have.
- *
- * Closed, because this is the whole of what a resume has to work from: the
- * trusted slot the destination will be placed at, the managed metadata that
- * will identify it, and — for a linked worktree — the owner's own two states,
- * since adding a worktree advances refs the owner shares.
- */
-export interface RetainedCreationPreparation {
-  readonly slot: string;
-  readonly metadata: ManagedRepositoryMetadata | ManagedWorktreeMetadata;
-  readonly owner: {
-    readonly preState: RetainedFrontier;
-    readonly postState: RetainedFrontier;
-  } | null;
-}
-
-/** Whether this operation may record an absent destination. */
-export function createsCheckout(operation: RetainedRepositoryOperation): boolean {
-  return operation === "repository" || operation === "worktree";
-}
-
-const OWNER_MEMBERS = ["preState", "postState"] as const;
-const CREATION_MEMBERS = ["slot", "metadata", "owner"] as const;
-
-/**
- * The creation preparation this value describes, or `undefined`.
- *
- * Parsed exactly, and only where an absent pre-state put it there: a record
- * whose preparation this cannot read is a record whose creation cannot be
- * resumed, which is the one thing it exists to make possible.
- */
-export function parseRetainedCreationPreparation(
-  value: unknown,
-  operation: RetainedRepositoryOperation,
-): RetainedCreationPreparation | undefined {
-  const read = members(value, CREATION_MEMBERS);
+/** The site this value describes, or `undefined`. */
+export function parseRetainedRepositorySite(value: unknown): RetainedRepositorySite | undefined {
+  const read = members(value, SITE_MEMBERS);
   if (read === undefined) {
     return undefined;
   }
-  const slot = text(read["slot"]);
-  if (slot === undefined) {
+  const source = text(read["source"]);
+  const occurrence = text(read["occurrence"]);
+  if (source === undefined || occurrence === undefined) {
     return undefined;
   }
-  const metadata =
-    operation === "repository"
-      ? parseRepositoryMetadata(read["metadata"])
-      : parseWorktreeMetadata(read["metadata"]);
-  if (metadata === undefined) {
-    return undefined;
-  }
-  const owner = read["owner"];
-  if (owner === null) {
-    // A repository has no owner to advance. A worktree always does.
-    return operation === "repository" ? Object.freeze({ slot, metadata, owner: null }) : undefined;
-  }
-  const states = members(owner, OWNER_MEMBERS);
-  if (states === undefined || operation !== "worktree") {
-    return undefined;
-  }
-  const before = parseRetainedFrontier(states["preState"]);
-  const after = parseRetainedFrontier(states["postState"]);
-  if (before === undefined || after === undefined) {
-    return undefined;
-  }
-  // Adding a worktree advances refs its owner shares and changes nothing else
-  // about the owner. So the owner's two frozen states are one checkout, with
-  // the same HEAD, index, working files and administration, and only its refs
-  // moved — an owner post-state that invented a file or moved HEAD would be
-  // authorizing drift in a checkout this creation is not even touching.
-  if (!advancesOnlyRefs(before, after)) {
-    return undefined;
-  }
-  return Object.freeze({
-    slot,
-    metadata,
-    owner: Object.freeze({ preState: before, postState: after }),
-  });
+  return Object.freeze({ source, occurrence });
 }
 
-/**
- * Whether these two states are one checkout with only its refs moved.
- *
- * Everything but the ref list is compared exactly. The refs are allowed to
- * differ because that is what adding a worktree does; nothing else about the
- * owner is.
- */
-function advancesOnlyRefs(before: RetainedFrontier, after: RetainedFrontier): boolean {
-  const steady = (frontier: RetainedFrontier): Json =>
-    retainedFrontierJson(
-      Object.freeze({
-        checkout: frontier.checkout,
-        administration: frontier.administration,
-        objectFormat: frontier.objectFormat,
-        head: frontier.head,
-        refs: Object.freeze([]),
-        index: frontier.index,
-        worktree: frontier.worktree,
-      }),
-    );
-  return canonicalJson(steady(before)) === canonicalJson(steady(after));
+/** The detached JSON this value describes, or `undefined` when it describes none. */
+export function detachedJson(value: unknown): Json | undefined {
+  try {
+    return json(value, new Set<object>());
+  } catch {
+    return undefined;
+  }
 }
-
-/**
- * What one verified mutation produced.
- *
- * It names the intent it completes and repeats that intent's request
- * fingerprint, so a completion cannot be read as the answer to a different
- * question that happens to sit at the same position.
- */
-export interface RetainedRepositoryCompletion {
-  readonly version: typeof RETAINED_REPOSITORY_VERSION;
-  readonly owner: string;
-  readonly site: RetainedRepositorySite;
-  readonly intent: string;
-  readonly fingerprint: string;
-  readonly result: Json;
-  readonly frontier: RetainedFrontier;
-}
-
-const SITE_MEMBERS = ["source", "occurrence"] as const;
-const LANE_MEMBERS = ["common", "position"] as const;
-const ADMINISTRATION_MEMBERS = ["common", "worktree", "role"] as const;
-const SYMBOLIC_HEAD_MEMBERS = ["kind", "ref", "oid"] as const;
-const DETACHED_HEAD_MEMBERS = ["kind", "oid"] as const;
-const REF_MEMBERS = ["name", "oid"] as const;
-const INDEX_MEMBERS = ["path", "stage", "oid", "mode", "flags"] as const;
-const FILE_MEMBERS = ["kind", "path", "mode", "bytes"] as const;
-const DIRECTORY_MEMBERS = ["kind", "path", "mode"] as const;
-const SYMLINK_MEMBERS = ["kind", "path", "target"] as const;
-const FRONTIER_MEMBERS = [
-  "checkout",
-  "administration",
-  "objectFormat",
-  "head",
-  "refs",
-  "index",
-  "worktree",
-] as const;
-const INTENT_MEMBERS = [
-  "version",
-  "owner",
-  "site",
-  "operation",
-  "lane",
-  "selection",
-  "request",
-  "fingerprint",
-  "prepared",
-  "preState",
-  "postState",
-  "evidence",
-] as const;
-const COMPLETION_MEMBERS = [
-  "version",
-  "owner",
-  "site",
-  "intent",
-  "fingerprint",
-  "result",
-  "frontier",
-] as const;
 
 /**
  * A detached, deeply frozen copy of the JSON this value describes.
@@ -478,266 +254,8 @@ function json(value: unknown, ancestors: Set<object>): Json | undefined {
   }
 }
 
-/** The detached JSON this value describes, or `undefined` when it describes none. */
-export function detachedJson(value: unknown): Json | undefined {
-  try {
-    return json(value, new Set<object>());
-  } catch {
-    return undefined;
-  }
-}
-
-function version(value: unknown): typeof RETAINED_REPOSITORY_VERSION | undefined {
-  return value === RETAINED_REPOSITORY_VERSION ? RETAINED_REPOSITORY_VERSION : undefined;
-}
-
-function wholeNumber(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    return undefined;
-  }
-  return value;
-}
-
-function list<T>(
-  value: unknown,
-  parse: (member: unknown) => T | undefined,
-): readonly T[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const parsed: T[] = [];
-  for (let index = 0; index < value.length; index += 1) {
-    if (!Object.hasOwn(value, index)) {
-      return undefined;
-    }
-    const member = parse(Reflect.get(value, index));
-    if (member === undefined) {
-      return undefined;
-    }
-    parsed.push(member);
-  }
-  return Object.freeze(parsed);
-}
-
-/** The site this value describes, or `undefined`. */
-export function parseRetainedRepositorySite(value: unknown): RetainedRepositorySite | undefined {
-  const read = members(value, SITE_MEMBERS);
-  if (read === undefined) {
-    return undefined;
-  }
-  const source = text(read["source"]);
-  const occurrence = text(read["occurrence"]);
-  if (source === undefined || occurrence === undefined) {
-    return undefined;
-  }
-  return Object.freeze({ source, occurrence });
-}
-
-/** The lane position this value describes, or `undefined`. */
-export function parseRetainedRepositoryLane(value: unknown): RetainedRepositoryLane | undefined {
-  const read = members(value, LANE_MEMBERS);
-  if (read === undefined) {
-    return undefined;
-  }
-  const common = text(read["common"]);
-  const position = wholeNumber(read["position"]);
-  if (common === undefined || position === undefined) {
-    return undefined;
-  }
-  return Object.freeze({ common, position });
-}
-
-function parseAdministration(value: unknown): RetainedAdministration | undefined {
-  const read = members(value, ADMINISTRATION_MEMBERS);
-  if (read === undefined) {
-    return undefined;
-  }
-  const common = text(read["common"]);
-  const role = read["role"];
-  const worktree = read["worktree"] === null ? null : text(read["worktree"]);
-  if (common === undefined || worktree === undefined) {
-    return undefined;
-  }
-  if (role !== "primary" && role !== "linked") {
-    return undefined;
-  }
-  // A primary checkout's administration *is* the common directory, and a linked
-  // one has its own beside it. Either shape without the other's relationship
-  // describes a checkout that cannot exist.
-  if ((role === "primary") !== (worktree === null)) {
-    return undefined;
-  }
-  return Object.freeze({ common, worktree, role });
-}
-
-function parseHead(value: unknown): RetainedHead | undefined {
-  const kind = kindOf(value);
-  if (kind === "symbolic") {
-    const read = members(value, SYMBOLIC_HEAD_MEMBERS);
-    if (read === undefined) {
-      return undefined;
-    }
-    const ref = text(read["ref"]);
-    const oid = read["oid"] === null ? null : text(read["oid"]);
-    if (ref === undefined || oid === undefined) {
-      return undefined;
-    }
-    return Object.freeze({ kind, ref, oid });
-  }
-  if (kind !== "detached") {
-    return undefined;
-  }
-  const read = members(value, DETACHED_HEAD_MEMBERS);
-  if (read === undefined) {
-    return undefined;
-  }
-  const oid = text(read["oid"]);
-  if (oid === undefined) {
-    return undefined;
-  }
-  return Object.freeze({ kind, oid });
-}
-
-/**
- * The word a value uses for its own kind, read on its own.
- *
- * The kind selects which members the value must carry exactly, so it has to be
- * read before that membership is decided.
- */
-function kindOf(value: unknown): unknown {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  return Reflect.get(value, "kind");
-}
-
-function parseRef(value: unknown): RetainedRef | undefined {
-  const read = members(value, REF_MEMBERS);
-  if (read === undefined) {
-    return undefined;
-  }
-  const name = text(read["name"]);
-  const oid = text(read["oid"]);
-  if (name === undefined || oid === undefined) {
-    return undefined;
-  }
-  return Object.freeze({ name, oid });
-}
-
-function parseIndexEntry(value: unknown): RetainedIndexEntry | undefined {
-  const read = members(value, INDEX_MEMBERS);
-  if (read === undefined) {
-    return undefined;
-  }
-  const path = text(read["path"]);
-  const stage = wholeNumber(read["stage"]);
-  const oid = text(read["oid"]);
-  const mode = text(read["mode"]);
-  const flags = list(read["flags"], text);
-  if (
-    path === undefined ||
-    stage === undefined ||
-    oid === undefined ||
-    mode === undefined ||
-    flags === undefined
-  ) {
-    return undefined;
-  }
-  return Object.freeze({ path, stage, oid, mode, flags });
-}
-
-function parseWorktreeEntry(value: unknown): RetainedWorktreeEntry | undefined {
-  const kind = kindOf(value);
-  if (kind === "file") {
-    const read = members(value, FILE_MEMBERS);
-    if (read === undefined) {
-      return undefined;
-    }
-    const path = text(read["path"]);
-    const mode = text(read["mode"]);
-    const bytes = base64(read["bytes"]);
-    if (path === undefined || mode === undefined || bytes === undefined) {
-      return undefined;
-    }
-    return Object.freeze({ kind, path, mode, bytes });
-  }
-  if (kind === "directory") {
-    const read = members(value, DIRECTORY_MEMBERS);
-    if (read === undefined) {
-      return undefined;
-    }
-    const path = text(read["path"]);
-    const mode = text(read["mode"]);
-    if (path === undefined || mode === undefined) {
-      return undefined;
-    }
-    return Object.freeze({ kind, path, mode });
-  }
-  if (kind !== "symlink") {
-    return undefined;
-  }
-  const read = members(value, SYMLINK_MEMBERS);
-  if (read === undefined) {
-    return undefined;
-  }
-  const path = text(read["path"]);
-  const target = text(read["target"]);
-  if (path === undefined || target === undefined) {
-    return undefined;
-  }
-  return Object.freeze({ kind, path, target });
-}
-
-/**
- * The base64 this value is, or `undefined`.
- *
- * Empty is a real answer here — an empty file has no bytes — so this is the one
- * string member that is not required to be non-empty.
- */
-function base64(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  return /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
-    ? value
-    : undefined;
-}
-
-/** The frontier this value describes, or `undefined`. */
-export function parseRetainedFrontier(value: unknown): RetainedFrontier | undefined {
-  const read = members(value, FRONTIER_MEMBERS);
-  if (read === undefined) {
-    return undefined;
-  }
-  const checkout = text(read["checkout"]);
-  const administration = parseAdministration(read["administration"]);
-  const objectFormat = read["objectFormat"];
-  const head = parseHead(read["head"]);
-  const refs = list(read["refs"], parseRef);
-  const index = list(read["index"], parseIndexEntry);
-  const worktree = list(read["worktree"], parseWorktreeEntry);
-  if (
-    checkout === undefined ||
-    administration === undefined ||
-    head === undefined ||
-    refs === undefined ||
-    index === undefined ||
-    worktree === undefined
-  ) {
-    return undefined;
-  }
-  if (objectFormat !== "sha1" && objectFormat !== "sha256") {
-    return undefined;
-  }
-  return Object.freeze({
-    checkout,
-    administration,
-    objectFormat,
-    head,
-    refs,
-    index,
-    worktree,
-  });
+function version(value: unknown): typeof REPL_REPOSITORY_VERSION | undefined {
+  return value === REPL_REPOSITORY_VERSION ? REPL_REPOSITORY_VERSION : undefined;
 }
 
 /**
@@ -748,178 +266,6 @@ export function parseRetainedFrontier(value: unknown): RetainedFrontier | undefi
  */
 function parseOperation(value: unknown): RetainedRepositoryOperation | undefined {
   return RETAINED_REPOSITORY_OPERATIONS.find((operation) => operation === value);
-}
-
-/** The intent this value describes, or `undefined` when it describes none. */
-export function parseRetainedRepositoryIntent(
-  value: unknown,
-): RetainedRepositoryIntent | undefined {
-  const read = members(value, INTENT_MEMBERS);
-  if (read === undefined) {
-    return undefined;
-  }
-  const parsed = {
-    version: version(read["version"]),
-    owner: text(read["owner"]),
-    site: parseRetainedRepositorySite(read["site"]),
-    operation: parseOperation(read["operation"]),
-    lane: parseRetainedRepositoryLane(read["lane"]),
-    selection: detachedJson(read["selection"]),
-    request: detachedJson(read["request"]),
-    fingerprint: text(read["fingerprint"]),
-    prepared: detachedJson(read["prepared"]),
-    preState: read["preState"] === null ? null : parseRetainedFrontier(read["preState"]),
-    postState: parseRetainedFrontier(read["postState"]),
-    evidence: detachedJson(read["evidence"]),
-  };
-  if (
-    parsed.version === undefined ||
-    parsed.owner === undefined ||
-    parsed.site === undefined ||
-    parsed.operation === undefined ||
-    parsed.lane === undefined ||
-    parsed.selection === undefined ||
-    parsed.request === undefined ||
-    parsed.fingerprint === undefined ||
-    parsed.prepared === undefined ||
-    parsed.preState === undefined ||
-    parsed.postState === undefined ||
-    parsed.evidence === undefined
-  ) {
-    return undefined;
-  }
-  // An absent destination is only a thing a creation can record, and it brings
-  // its own closed preparation with it. Null anywhere else, or a preparation
-  // this cannot read, refuses the record rather than being interpreted.
-  if (parsed.preState === null) {
-    if (!createsCheckout(parsed.operation)) {
-      return undefined;
-    }
-    const creation = parseRetainedCreationPreparation(parsed.prepared, parsed.operation);
-    if (creation === undefined || !agreesWithCreation(creation, parsed.request, parsed.postState)) {
-      return undefined;
-    }
-  }
-  return Object.freeze({
-    version: parsed.version,
-    owner: parsed.owner,
-    site: parsed.site,
-    operation: parsed.operation,
-    lane: parsed.lane,
-    selection: parsed.selection,
-    request: parsed.request,
-    fingerprint: parsed.fingerprint,
-    prepared: parsed.prepared,
-    preState: parsed.preState,
-    postState: parsed.postState,
-    evidence: parsed.evidence,
-  });
-}
-
-/** The completion this value describes, or `undefined` when it describes none. */
-export function parseRetainedRepositoryCompletion(
-  value: unknown,
-): RetainedRepositoryCompletion | undefined {
-  const read = members(value, COMPLETION_MEMBERS);
-  if (read === undefined) {
-    return undefined;
-  }
-  const parsed = {
-    version: version(read["version"]),
-    owner: text(read["owner"]),
-    site: parseRetainedRepositorySite(read["site"]),
-    intent: text(read["intent"]),
-    fingerprint: text(read["fingerprint"]),
-    result: detachedJson(read["result"]),
-    frontier: parseRetainedFrontier(read["frontier"]),
-  };
-  if (
-    parsed.version === undefined ||
-    parsed.owner === undefined ||
-    parsed.site === undefined ||
-    parsed.intent === undefined ||
-    parsed.fingerprint === undefined ||
-    parsed.result === undefined ||
-    parsed.frontier === undefined
-  ) {
-    return undefined;
-  }
-  return Object.freeze({
-    version: parsed.version,
-    owner: parsed.owner,
-    site: parsed.site,
-    intent: parsed.intent,
-    fingerprint: parsed.fingerprint,
-    result: parsed.result,
-    frontier: parsed.frontier,
-  });
-}
-
-/** The frontier as the journal holds it. */
-export function retainedFrontierJson(frontier: RetainedFrontier): Json {
-  return {
-    checkout: frontier.checkout,
-    administration: {
-      common: frontier.administration.common,
-      worktree: frontier.administration.worktree,
-      role: frontier.administration.role,
-    },
-    objectFormat: frontier.objectFormat,
-    head:
-      frontier.head.kind === "symbolic"
-        ? { kind: "symbolic", ref: frontier.head.ref, oid: frontier.head.oid }
-        : { kind: "detached", oid: frontier.head.oid },
-    refs: frontier.refs.map((ref) => ({ name: ref.name, oid: ref.oid })),
-    index: frontier.index.map((entry) => ({
-      path: entry.path,
-      stage: entry.stage,
-      oid: entry.oid,
-      mode: entry.mode,
-      flags: [...entry.flags],
-    })),
-    worktree: frontier.worktree.map(worktreeEntryJson),
-  };
-}
-
-function worktreeEntryJson(entry: RetainedWorktreeEntry): Json {
-  if (entry.kind === "file") {
-    return { kind: "file", path: entry.path, mode: entry.mode, bytes: entry.bytes };
-  }
-  if (entry.kind === "directory") {
-    return { kind: "directory", path: entry.path, mode: entry.mode };
-  }
-  return { kind: "symlink", path: entry.path, target: entry.target };
-}
-
-/** The intent as the journal holds it. */
-export function retainedRepositoryIntentJson(intent: RetainedRepositoryIntent): Json {
-  return {
-    version: intent.version,
-    owner: intent.owner,
-    site: { source: intent.site.source, occurrence: intent.site.occurrence },
-    operation: intent.operation,
-    lane: { common: intent.lane.common, position: intent.lane.position },
-    selection: intent.selection,
-    request: intent.request,
-    fingerprint: intent.fingerprint,
-    prepared: intent.prepared,
-    preState: intent.preState === null ? null : retainedFrontierJson(intent.preState),
-    postState: retainedFrontierJson(intent.postState),
-    evidence: intent.evidence,
-  };
-}
-
-/** The completion as the journal holds it. */
-export function retainedRepositoryCompletionJson(completion: RetainedRepositoryCompletion): Json {
-  return {
-    version: completion.version,
-    owner: completion.owner,
-    site: { source: completion.site.source, occurrence: completion.site.occurrence },
-    intent: completion.intent,
-    fingerprint: completion.fingerprint,
-    result: completion.result,
-    frontier: retainedFrontierJson(completion.frontier),
-  };
 }
 
 /**
@@ -973,89 +319,6 @@ const GIT_REFUSALS: Readonly<Record<GitFailureReason, true>> = Object.freeze({
  */
 function filesOutcome(result: Json): Error {
   return Object.assign(new Error("Files operation failed"), { data: result });
-}
-
-/**
- * Whether what this creation saved and what it predicted describe one thing.
- *
- * The members parse on their own; what this asks is whether they are about the
- * same creation. The metadata has to name the destination the post-state
- * describes, and a Worktree's two halves have to predict the same shared facts
- * — the refs a worktree add moves are the owner's refs, and an owner left
- * predicting the ones it already had is an owner that never gained the branch
- * the destination is checked out on.
- */
-function agreesWithCreation(
-  creation: RetainedCreationPreparation,
-  request: Json,
-  postState: RetainedFrontier,
-): boolean {
-  // Which slot a creation may name, and where that slot puts its checkout, is
-  // the trusted placement's to decide and the host's to check against the root
-  // it was given. What is left here is what the record says about itself.
-  const metadata = creation.metadata;
-  if (metadata.objectFormat !== postState.objectFormat) {
-    return false;
-  }
-  // The commit the destination was created at is the commit it is on.
-  if (metadata.creationCommit !== postState.head.oid) {
-    return false;
-  }
-  if (metadata.kind === "repository") {
-    return (
-      creation.owner === null &&
-      metadata.commonDirectory === postState.administration.common &&
-      postState.administration.role === "primary"
-    );
-  }
-  if (creation.owner === null) {
-    return false;
-  }
-  const owner = creation.owner;
-  return (
-    // One repository: the owner's administration is the destination's, and the
-    // destination is a linked checkout of it.
-    metadata.owner === postState.administration.common &&
-    owner.preState.administration.common === postState.administration.common &&
-    owner.postState.administration.common === postState.administration.common &&
-    postState.administration.role === "linked" &&
-    owner.postState.objectFormat === postState.objectFormat &&
-    owner.preState.objectFormat === postState.objectFormat &&
-    // One set of shared refs, predicted the same way by both halves. The
-    // owner's two ends differ by exactly what adding this worktree moves, and
-    // the destination sees the result.
-    canonicalJson(refsJson(owner.postState.refs)) === canonicalJson(refsJson(postState.refs)) &&
-    // And the branch the destination is on is one the owner's own prediction
-    // says it will have, at the commit the destination is created at.
-    owner.postState.refs.some(
-      (ref) => ref.name === headRef(postState) && ref.oid === metadata.creationCommit,
-    ) &&
-    // The branch is the one the document asked for, and the one the
-    // destination is predicted to stand on. What performs this creation reads
-    // the branch out of the metadata, so a metadata naming a different one is
-    // a record describing a creation other than the one acknowledged.
-    headRef(postState) === `refs/heads/${metadata.requestedBranch}` &&
-    requestedBranch(request) === metadata.requestedBranch
-  );
-}
-
-/** The branch the document itself asked for, as the authored request holds it. */
-function requestedBranch(request: Json): string | undefined {
-  // Read rather than matched: the authored request carries whatever its own
-  // component wrote, and this asks it one question.
-  if (typeof request !== "object" || request === null || Array.isArray(request)) {
-    return undefined;
-  }
-  return text(Reflect.get(request, "branch"));
-}
-
-/** The ref a checkout is on, when it is on one. */
-function headRef(frontier: RetainedFrontier): string | undefined {
-  return frontier.head.kind === "symbolic" ? frontier.head.ref : undefined;
-}
-
-function refsJson(refs: readonly RetainedRef[]): Json {
-  return refs.map((ref) => ({ name: ref.name, oid: ref.oid }));
 }
 
 /**
@@ -1223,60 +486,6 @@ function refusedWith(result: Json, vocabulary: Readonly<Record<string, true>>): 
 }
 
 /**
- * Whether a completion's result is the one its intent froze as evidence.
- *
- * This is what tells a performed operation from a refusal without a second
- * member to disagree with: an intent freezes the exact result its operation
- * will produce, so a completion carrying that result is the operation having
- * produced it, and a completion carrying anything else did not. Which of the
- * two it is decides which frozen state the completion is allowed to stand at.
- */
-export function matchesRetainedEvidence(result: Json, evidence: Json): boolean {
-  return canonicalJson(result) === canonicalJson(evidence);
-}
-
-/** Whether two frontiers describe the same saved state. */
-export function sameRetainedFrontier(left: RetainedFrontier, right: RetainedFrontier): boolean {
-  return canonicalJson(retainedFrontierJson(left)) === canonicalJson(retainedFrontierJson(right));
-}
-
-/**
- * The same frontier with the shared Git directory's refs replaced.
- *
- * Refs belong to the common directory rather than to one checkout, so work in a
- * linked worktree moves them for every checkout that shares it. HEAD, the index
- * and the worktree inventory stay this checkout's own: only the worktree that
- * has a branch checked out can move it, so a sibling's commit changes what the
- * ref list says without changing where this checkout stands.
- */
-export function withSharedRefs(
-  frontier: RetainedFrontier,
-  refs: readonly RetainedRef[],
-): RetainedFrontier {
-  return Object.freeze({
-    checkout: frontier.checkout,
-    administration: frontier.administration,
-    objectFormat: frontier.objectFormat,
-    head: frontier.head,
-    refs: Object.freeze([...refs]),
-    index: frontier.index,
-    worktree: frontier.worktree,
-  });
-}
-
-function withoutRemotes(frontier: RetainedFrontier): RetainedFrontier {
-  return Object.freeze({
-    checkout: frontier.checkout,
-    administration: frontier.administration,
-    objectFormat: frontier.objectFormat,
-    head: frontier.head,
-    refs: Object.freeze(frontier.refs.filter((ref) => !ref.name.startsWith("refs/remotes/"))),
-    index: frontier.index,
-    worktree: frontier.worktree,
-  });
-}
-
-/**
  * What one authored request asks, as a stable name.
  *
  * The owner and the site are in it, so the same text written at two occurrences
@@ -1305,17 +514,193 @@ export function* retainedRepositoryRequestFingerprint(request: {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+/** The name one record is identified by, which is half of its identity. */
+export function replRepositoryRecordName(record: {
+  readonly phase: "result" | "request";
+  readonly owner: string;
+  readonly fingerprint: string;
+  readonly operation: RetainedRepositoryOperation;
+}): string {
+  return canonicalJson([
+    REPL_REPOSITORY_PREFIX,
+    record.phase,
+    record.owner,
+    record.fingerprint,
+    record.operation,
+  ]);
+}
+
 /**
- * The name one intent record is identified by.
+ * What one completed local operation left behind.
  *
- * A digest of the whole intent, so a completion naming it cannot be satisfied
- * by an intent that differs anywhere — including in the state it expected to
- * find or the state it predicted.
+ * The request is the authored one — what the document asked for — and the
+ * result is what performing it produced, in the operation's own ordinary
+ * vocabulary. `selection` is the small logical fact a descendant needs to be
+ * routed correctly on a later open: which checkout this operation's content
+ * belongs to. It is a path and a shared Git directory, not a capability and not
+ * a state to verify.
  */
-export function* retainedRepositoryIntentIdentity(
-  intent: RetainedRepositoryIntent,
-): Operation<string> {
-  const encoded = new TextEncoder().encode(canonicalJson(retainedRepositoryIntentJson(intent)));
-  const digest = yield* until(crypto.subtle.digest("SHA-256", encoded));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+export interface ReplRepositoryResult {
+  readonly version: typeof REPL_REPOSITORY_VERSION;
+  readonly owner: string;
+  readonly site: RetainedRepositorySite;
+  readonly operation: RetainedRepositoryOperation;
+  /** The digest of owner, site, operation and authored request. */
+  readonly fingerprint: string;
+  /** What the document asked for. */
+  readonly request: Json;
+  /** What performing it produced, or the refusal it is allowed to retain. */
+  readonly result: Json;
+}
+
+/**
+ * The logical target a completed selection's own result carries.
+ *
+ * A selection answers with the checkout its content belongs to and the shared
+ * Git directory that checkout administers, so a later open routes this entry's
+ * descendants to the same place by reading the result it already has. It is a
+ * path, not a capability: it is checked against the entry's own trusted
+ * identity and placement rather than treated as permission.
+ */
+export interface ReplRepositorySelection {
+  /** The checkout content inside this selection is written in. */
+  readonly checkout: string;
+  /** The shared Git directory that checkout administers. */
+  readonly common: string;
+}
+
+/**
+ * The inputs one external call was resolved to, frozen before it is made.
+ *
+ * Written so a continuation asks the service the same question: the branch and
+ * commit a push names, the repository a pull request belongs to, the issue a
+ * tracker is asked about. Reading today's HEAD again would be asking a
+ * different question and calling the answer a resume.
+ */
+export interface ReplRepositoryRequest {
+  readonly version: typeof REPL_REPOSITORY_VERSION;
+  readonly owner: string;
+  readonly site: RetainedRepositorySite;
+  readonly operation: RetainedRepositoryOperation;
+  readonly fingerprint: string;
+  /** What the document asked for, which is what names this record. */
+  readonly request: Json;
+  /**
+   * The inputs that call was resolved to, which a continuation reuses.
+   *
+   * Separate from the authored request because the two are different facts: the
+   * document asked to push, and *this* branch at *this* commit to *that*
+   * destination is what asking resolved to on the day it was asked. Reading
+   * today's answer instead would be asking a new question and calling it a
+   * resume.
+   */
+  readonly resolved: Json;
+}
+
+const RESULT_MEMBERS = [
+  "version",
+  "owner",
+  "site",
+  "operation",
+  "fingerprint",
+  "request",
+  "result",
+] as const;
+
+const REQUEST_MEMBERS = [
+  "version",
+  "owner",
+  "site",
+  "operation",
+  "fingerprint",
+  "request",
+  "resolved",
+] as const;
+
+/** This result as the journal holds it. */
+export function replRepositoryResultJson(result: ReplRepositoryResult): Json {
+  return {
+    version: result.version,
+    owner: result.owner,
+    site: { source: result.site.source, occurrence: result.site.occurrence },
+    operation: result.operation,
+    fingerprint: result.fingerprint,
+    request: result.request,
+    result: result.result,
+  };
+}
+
+/** This request as the journal holds it. */
+export function replRepositoryRequestJson(request: ReplRepositoryRequest): Json {
+  return {
+    version: request.version,
+    owner: request.owner,
+    site: { source: request.site.source, occurrence: request.site.occurrence },
+    operation: request.operation,
+    fingerprint: request.fingerprint,
+    request: request.request,
+    resolved: request.resolved,
+  };
+}
+
+/** The result this value describes, or `undefined`. */
+export function parseReplRepositoryResult(value: unknown): ReplRepositoryResult | undefined {
+  const read = members(value, RESULT_MEMBERS);
+  if (read === undefined) {
+    return undefined;
+  }
+  const held = version(read["version"]);
+  const owner = text(read["owner"]);
+  const site = parseRetainedRepositorySite(read["site"]);
+  const operation = parseOperation(read["operation"]);
+  const fingerprint = text(read["fingerprint"]);
+  const request = detachedJson(read["request"]);
+  const outcome = detachedJson(read["result"]);
+  if (
+    held === undefined ||
+    owner === undefined ||
+    site === undefined ||
+    operation === undefined ||
+    fingerprint === undefined ||
+    request === undefined ||
+    outcome === undefined
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    version: held,
+    owner,
+    site,
+    operation,
+    fingerprint,
+    request,
+    result: outcome,
+  });
+}
+
+/** The request this value describes, or `undefined`. */
+export function parseReplRepositoryRequest(value: unknown): ReplRepositoryRequest | undefined {
+  const read = members(value, REQUEST_MEMBERS);
+  if (read === undefined) {
+    return undefined;
+  }
+  const held = version(read["version"]);
+  const owner = text(read["owner"]);
+  const site = parseRetainedRepositorySite(read["site"]);
+  const operation = parseOperation(read["operation"]);
+  const fingerprint = text(read["fingerprint"]);
+  const request = detachedJson(read["request"]);
+  const resolved = detachedJson(read["resolved"]);
+  if (
+    held === undefined ||
+    owner === undefined ||
+    site === undefined ||
+    operation === undefined ||
+    fingerprint === undefined ||
+    request === undefined ||
+    resolved === undefined
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ version: held, owner, site, operation, fingerprint, request, resolved });
 }

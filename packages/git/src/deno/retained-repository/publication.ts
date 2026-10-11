@@ -193,31 +193,35 @@ export function admittedPublications(
 }
 
 /**
- * The push requests this entry's retained records froze, with their checkouts
- * and the identity each one was frozen under.
+ * The push requests this entry resolved, with their checkouts and the identity
+ * each one was resolved under.
  *
- * Read from the admitted intents rather than from the events again: admission
- * has already held every one of them to its owner, its site, its request
- * fingerprint and its lane — so the owner here is this entry's by
- * construction, and carrying it is what lets a receipt be held to it.
+ * Read from the admitted requests rather than from the events again: admission
+ * has already held every one of them to its owner, its site and its request
+ * fingerprint — so the owner here is this entry's by construction, and carrying
+ * it is what lets a receipt be held to it.
+ *
+ * A request is not an outcome. What it says is that this entry asked to publish
+ * exactly this branch at exactly this commit from exactly this checkout; the
+ * receipt beside it is what says the service did it.
  */
 function retainedPushRequests(history: RetainedRepositoryHistory): readonly RetainedPublication[] {
   const frozen: RetainedPublication[] = [];
-  for (const effect of [...history.completed, ...history.pending]) {
-    if (effect.intent.operation !== "push") {
+  for (const record of history.requests) {
+    if (record.operation !== "push") {
       continue;
     }
-    const request = parseRetainedPushRequest(effect.intent.evidence);
+    const request = parseRetainedPushRequest(record.resolved);
     if (request === undefined) {
-      // A retained push whose frozen request this version cannot read cannot
-      // say what it published, and a pull request decided without it would be
-      // decided against a shorter history than the one that exists.
+      // A resolved push this version cannot read cannot say what it published,
+      // and a pull request decided without it would be decided against a
+      // shorter history than the one that exists.
       refuse("unreadable");
     }
     frozen.push(
       Object.freeze({
-        owner: effect.intent.owner,
-        site: effect.intent.site.occurrence,
+        owner: record.owner,
+        site: record.site.occurrence,
         checkout: request.checkout,
         origin: request.origin,
         inputs: request.inputs,

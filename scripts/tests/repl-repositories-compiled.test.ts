@@ -130,7 +130,7 @@ describe("compiled xmd repl", { sanitizeOps: false, sanitizeResources: false }, 
 
     const before = yield* histories(world.home);
     expect(before).toHaveLength(1);
-    expect(before[0]).toContain("retained_repository_completion");
+    expect(before[0]).toContain("repl_repository_result");
 
     // 2. The same binary, handed the location the first invocation printed. The
     //    entry that already ran is on the screen before anything is typed, and

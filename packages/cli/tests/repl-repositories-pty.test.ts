@@ -129,7 +129,7 @@ describe("REPL repositories: the command on a real terminal", () => {
       // One history, holding this entry's own retained records.
       const before = yield* histories(world.home);
       expect(before).toHaveLength(1);
-      expect(before[0]).toContain("retained_repository_completion");
+      expect(before[0]).toContain("repl_repository_result");
 
       // 2. A second invocation of the same public command, handed the location
       //    the first one printed. The entry that already ran is shown — its

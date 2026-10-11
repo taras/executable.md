@@ -1,19 +1,20 @@
 /**
- * The Git-owned components a retained entry answers with.
+ * Every Git-owned component this entry records the work of.
  *
- * Each one is declared to the execution as an identity component, so canonical
- * core mints it a domain and hands the implementation a claimant that answers
- * only for invocations of that component in this execution. The body
- * authenticates its own invocation once, in its own frame, and keeps the
- * occurrence in the closure that routes the operation — never in a context,
- * never on a request, and never anywhere a second invocation could reach it.
+ * Each one is the ordinary component's shape with this entry's own durable
+ * boundary around the live work: claim the occurrence, find the selection the
+ * element is standing in, then record one ordinary operation. The operations
+ * themselves are the ordinary live performers — `liveSwitch`, `liveAdd`,
+ * `liveCommit` — because a REPL entry does the same Git work an ordinary run
+ * does. What it adds is that a completed one replays its result instead of
+ * running again.
  *
- * What a document writes does not change. The names, props, forms and results
- * are the ordinary ones; what is different is that the operation behind them is
- * retained, so an entry that is interrupted knows what it had already done.
+ * Nothing here predicts. A commit's identity, time and object id are whatever
+ * the commit that happens produces; a staged index is whatever staging leaves.
+ * That is what makes the recorded result a report rather than a promise.
  */
 
-import { Err, Ok } from "effection";
+import { Ok } from "effection";
 import type { Operation, Result } from "effection";
 import { findDurabilityFailure } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
@@ -23,38 +24,32 @@ import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/hos
 import { parseFilesFailure } from "@executablemd/runtime";
 import { DirInvocationError, props as dirProps, reason } from "../../composition/components/Dir.ts";
 import { canonicalPaths, props as addProps } from "../../composition/components/GitAdd.ts";
+import {
+  admitCommitMessage,
+  composeCommitMessage,
+  props as commitProps,
+  returns as commitReturns,
+} from "../../composition/components/GitCommit.ts";
+import { props as switchProps } from "../../composition/components/GitSwitch.ts";
 import { GitOperationError } from "../../composition/errors.ts";
-import { inventoryFrontier } from "./frontier.ts";
-import { retain } from "./local.ts";
+import { captureCommitIdentity, denoIdentityReader } from "../run-composition/identity.ts";
+import { liveAdd, liveCheckout, liveCommit, liveSwitch } from "../run-composition/operations.ts";
+import { detachedJson } from "../../retained-repository/records.ts";
+import { recorded } from "./local.ts";
 import { retainedDirectoryEnsure } from "./files.ts";
 import type { RetainedFileHost, SelectedCheckout } from "./files.ts";
-import type { RetainedFrontier } from "../../retained-repository/records.ts";
 import { routeDirectory } from "./terminal.ts";
-import { retainedCommit } from "./commit.ts";
-import { predictInScratch } from "./scratch.ts";
-import { props as switchProps } from "../../composition/components/GitSwitch.ts";
-import {
-  branchExists,
-  resolveBaseCommit,
-  resolveCommit,
-  switchBranch,
-} from "../composition/git.ts";
-import type { GitSession } from "../composition/git.ts";
-import type { RepositoryHost } from "../composition/host.ts";
 
 /** Where these components report themselves as coming from. */
 export const RETAINED_ORIGIN = "@executablemd/git/retained";
 
-/** Every Git-owned component this entry retains the work of. */
-export function retainedGitComponents(
-  host: RetainedFileHost,
-  repository: RepositoryHost,
-): readonly IdentityComponent[] {
+/** Every Git-owned component this entry records the work of. */
+export function retainedGitComponents(host: RetainedFileHost): readonly IdentityComponent[] {
   return Object.freeze([
     retainedDir(host),
     retainedAdd(host),
-    retainedCommit(host, repository),
-    retainedSwitch(host, repository),
+    retainedCommit(host),
+    retainedSwitch(host),
   ]);
 }
 
@@ -125,14 +120,12 @@ function retainedDir(host: RetainedFileHost): IdentityComponent {
 }
 
 /**
- * `Git.Add`, with the staging it does retained.
+ * `Git.Add`, with what staging produced recorded.
  *
- * The prediction needs Git but changes nothing: `--dry-run` says exactly which
- * paths this pathspec would stage, and `hash-object` without `-w` computes the
- * object each one would become without writing it. So the semantic index is
- * predicted from read-only commands, and the real add is then checked against
- * it. Partial staging followed by a refusal is therefore not an unchanged
- * state — it is a state the prediction did not describe.
+ * The live add is the ordinary one, and what it returns is the ordinary
+ * result: which paths were named, and the branch, commit and trees the checkout
+ * was on either side of it. A completed add replays that and stages nothing,
+ * however the working tree has changed since.
  */
 function retainedAdd(host: RetainedFileHost): IdentityComponent {
   return {
@@ -146,65 +139,16 @@ function retainedAdd(host: RetainedFileHost): IdentityComponent {
         const paths = canonicalPaths(props.paths);
         const directory = yield* cwd();
         const occurrence = yield* claim(invocation);
-        const selected = yield* host.covering(directory);
-        if (selected === undefined) {
-          throw new GitOperationError(
-            "Git.Add",
-            "invalid-invocation",
-            "<Git.Add> is written outside a repository this entry has selected, so there is " +
-              "nothing in scope to stage anything in.",
-          );
-        }
-        const produced = yield* retain(
-          {
-            owner: host.owner,
-            site: host.site(occurrence),
-            operation: "add",
-            checkout: selected.checkout,
-            common: selected.common,
-            position: host.position(selected.common),
-            candidates: () => host.candidates(selected.checkout),
-            settled: (frontier) => host.settled(selected.checkout, frontier),
-            selection: { checkout: selected.checkout },
-            request: { cwd: directory, paths: [...paths] },
-            inventory: () => inventory(selected),
-            *prepare(preState) {
-              if (preState === null) {
-                return Err(
-                  new GitOperationError(
-                    "Git.Add",
-                    "invalid-invocation",
-                    "<Git.Add> has no absent state: it stages in a checkout that exists.",
-                  ),
-                );
-              }
-              const staged = yield* stagedBy(selected, directory, paths);
-              if (!staged.ok) {
-                return staged;
-              }
-              return Ok({
-                postState: withIndex(preState, staged.value),
-                prepared: { paths: [...paths], entries: staged.value.map(indexJson) },
-                evidence: { type: "add", paths: [...paths] },
-              });
-            },
-            *perform() {
-              const outcome = yield* selected.git.run(["add", "--", ...paths], directory);
-              if (outcome.code !== 0) {
-                return Err(
-                  new GitOperationError(
-                    "Git.Add",
-                    "unmatched-pathspec",
-                    "<Git.Add> could not stage what its pathspec named.",
-                  ),
-                );
-              }
-              return Ok({ type: "add", paths: [...paths] });
-            },
+        const selected = yield* selection(host, directory, "Git.Add", "stage anything in");
+        const produced = yield* recorded({
+          owner: host.owner,
+          site: host.site(occurrence),
+          operation: "add",
+          request: { cwd: directory, paths: [...paths] },
+          *perform(): Operation<Result<Json>> {
+            return Ok(yield* journaled(yield* liveAdd(checkoutIn(selected, directory), paths)));
           },
-          host.resume,
-          host.lanes,
-        );
+        });
         if (!produced.ok) {
           throw produced.error;
         }
@@ -214,135 +158,12 @@ function retainedAdd(host: RetainedFileHost): IdentityComponent {
 }
 
 /**
- * The index entries this pathspec would produce, read without writing.
+ * `Git.Switch`, with the branch it left the checkout on recorded.
  *
- * `--dry-run` names the paths and `hash-object` names the objects, and neither
- * writes: the prediction leaves the object store exactly as it found it, which
- * is what lets the intent be appended before anything has happened.
+ * The ordinary live switch, which creates a missing branch at the base the
+ * document named and reports which branch and base it resolved to.
  */
-function* stagedBy(
-  selected: SelectedCheckout,
-  directory: string,
-  paths: readonly string[],
-): Operation<Result<readonly StagedEntry[]>> {
-  const listed = yield* selected.git.read(
-    ["add", "--dry-run", "--verbose", "--", ...paths],
-    directory,
-  );
-  const entries: StagedEntry[] = [];
-  for (const line of (listed ?? "").split("\n")) {
-    const match = /^(add|remove) '(.*)'$/.exec(line.trim());
-    if (match === null) {
-      if (line.trim() !== "") {
-        return Err(
-          new GitOperationError(
-            "Git.Add",
-            "invalid-invocation",
-            "<Git.Add> could not be predicted: this host does not recognize what Git said it " +
-              "would stage.",
-          ),
-        );
-      }
-      continue;
-    }
-    const [, verb, at] = match;
-    if (at === undefined) {
-      continue;
-    }
-    if (verb === "remove") {
-      entries.push({ path: at, removed: true });
-      continue;
-    }
-    const oid = yield* selected.git.read(["hash-object", at], selected.directory);
-    const mode = yield* selected.git.read(["ls-files", "--stage", "--", at], selected.directory);
-    if (oid === undefined) {
-      return Err(
-        new GitOperationError(
-          "Git.Add",
-          "unmatched-pathspec",
-          "<Git.Add> could not read one of the files its pathspec named.",
-        ),
-      );
-    }
-    entries.push({
-      path: at,
-      oid,
-      // A file already in the index keeps the mode Git recorded for it;
-      // anything new is the ordinary non-executable blob unless the file says
-      // otherwise, which `hash-object` does not tell us — so it is read back
-      // from the worktree after the add and compared there.
-      mode: mode === undefined ? "100644" : (mode.split(/\s+/)[0] ?? "100644"),
-      removed: false,
-    });
-  }
-  return Ok(Object.freeze(entries));
-}
-
-interface StagedEntry {
-  readonly path: string;
-  readonly oid?: string;
-  readonly mode?: string;
-  readonly removed: boolean;
-}
-
-function indexJson(entry: StagedEntry): Json {
-  return entry.removed
-    ? { path: entry.path, removed: true }
-    : { path: entry.path, oid: entry.oid ?? null, mode: entry.mode ?? null };
-}
-
-/** The index this add would leave, with everything else where it was. */
-function withIndex(preState: RetainedFrontier, staged: readonly StagedEntry[]): RetainedFrontier {
-  const entries = new Map(preState.index.map((entry) => [`${entry.path}:${entry.stage}`, entry]));
-  for (const entry of staged) {
-    const key = `${entry.path}:0`;
-    if (entry.removed) {
-      entries.delete(key);
-      continue;
-    }
-    const held = entries.get(key);
-    entries.set(key, {
-      path: entry.path,
-      stage: 0,
-      oid: entry.oid ?? "",
-      mode: entry.mode ?? "100644",
-      flags: held?.flags ?? Object.freeze([]),
-    });
-  }
-  const index = [...entries.values()].sort((left, right) =>
-    left.path === right.path ? left.stage - right.stage : left.path < right.path ? -1 : 1,
-  );
-  return Object.freeze({
-    checkout: preState.checkout,
-    administration: preState.administration,
-    objectFormat: preState.objectFormat,
-    head: preState.head,
-    refs: preState.refs,
-    index: Object.freeze(index),
-    worktree: preState.worktree,
-  });
-}
-
-function inventory(selected: SelectedCheckout) {
-  return inventoryFrontier({
-    git: selected.git,
-    checkout: selected.checkout,
-    directory: selected.directory,
-  });
-}
-
-/**
- * `Git.Switch`, with the transition it makes predicted in a copy.
- *
- * A switch replaces tracked content with another tree's, and computing that by
- * hand would mean reimplementing Git. So the checkout is copied, the switch is
- * performed in the copy, and what the copy ends up in is what the intent
- * freezes. The refusals a document can act on — a branch another checkout
- * holds, local changes the switch would overwrite, a base that names no commit
- * — happen in the copy first, so they refuse before the original is touched and
- * nothing is forced.
- */
-function retainedSwitch(host: RetainedFileHost, repository: RepositoryHost): IdentityComponent {
+function retainedSwitch(host: RetainedFileHost): IdentityComponent {
   return {
     name: "Git.Switch",
     origin: RETAINED_ORIGIN,
@@ -364,65 +185,19 @@ function retainedSwitch(host: RetainedFileHost, repository: RepositoryHost): Ide
         const base = typeof props.base === "string" && props.base !== "" ? props.base : undefined;
         const directory = yield* cwd();
         const occurrence = yield* claim(invocation);
-        const selected = yield* host.covering(directory);
-        if (selected === undefined) {
-          throw new GitOperationError(
-            "Git.Switch",
-            "invalid-invocation",
-            "<Git.Switch> is written outside a repository this entry has selected.",
-          );
-        }
-
-        const produced = yield* retain(
-          {
-            owner: host.owner,
-            site: host.site(occurrence),
-            operation: "switch",
-            checkout: selected.checkout,
-            common: selected.common,
-            position: host.position(selected.common),
-            candidates: () => host.candidates(selected.checkout),
-            settled: (frontier) => host.settled(selected.checkout, frontier),
-            selection: { checkout: selected.checkout },
-            request:
-              base === undefined ? { cwd: directory, branch } : { cwd: directory, branch, base },
-            inventory: () => inventory(selected),
-            *prepare(preState) {
-              if (preState === null) {
-                return Err(
-                  new GitOperationError(
-                    "Git.Switch",
-                    "invalid-invocation",
-                    "<Git.Switch> has no absent state: it switches a checkout that exists.",
-                  ),
-                );
-              }
-              const predicted = yield* predictInScratch(
-                repository,
-                { directory: selected.directory, checkout: selected.checkout },
-                preState.administration,
-                (git, at) => switchInto(git, at, branch, base),
-              );
-              if (!predicted.ok) {
-                return predicted;
-              }
-              return Ok({
-                postState: predicted.value,
-                prepared: { branch, base: base ?? null },
-                evidence: { type: "switch", branch },
-              });
-            },
-            *perform() {
-              const switched = yield* switchInto(selected.git, selected.directory, branch, base);
-              if (!switched.ok) {
-                return switched;
-              }
-              return Ok({ type: "switch", branch });
-            },
+        const selected = yield* selection(host, directory, "Git.Switch", "switch a branch in");
+        const produced = yield* recorded({
+          owner: host.owner,
+          site: host.site(occurrence),
+          operation: "switch",
+          request:
+            base === undefined ? { cwd: directory, branch } : { cwd: directory, branch, base },
+          *perform(): Operation<Result<Json>> {
+            return Ok(
+              yield* journaled(yield* liveSwitch(checkoutIn(selected, directory), branch, base)),
+            );
           },
-          host.resume,
-          host.lanes,
-        );
+        });
         if (!produced.ok) {
           throw produced.error;
         }
@@ -432,61 +207,108 @@ function retainedSwitch(host: RetainedFileHost, repository: RepositoryHost): Ide
 }
 
 /**
- * Put one checkout on a branch, creating it at a base when it is missing.
+ * `Git.Commit`, with the commit it wrote recorded.
  *
- * The same sequence in the copy and in the original, so what the prediction
- * proved is what the performance does. No force: a switch that would overwrite
- * local changes refuses, in the copy first.
+ * The message is composed once, from what the document wrote, and is the
+ * authored request this operation is named by. Everything else — the parent,
+ * the tree, the commit id, the time — is whatever the ordinary live commit
+ * produced. A completed commit replays that result and writes no object.
  */
-function* switchInto(
-  git: GitSession,
+function retainedCommit(host: RetainedFileHost): IdentityComponent {
+  return {
+    name: "Git.Commit",
+    origin: RETAINED_ORIGIN,
+    props: commitProps,
+    returns: commitReturns,
+    description:
+      "Commit what is staged. `<Git.Commit message={summary} />` writes one commit in the " +
+      "selected checkout.",
+    factory: (claim: IdentityClaimant) =>
+      function* GitCommit(props, invocation): Operation<string> {
+        const directory = yield* cwd();
+        const occurrence = yield* claim(invocation);
+        const selected = yield* selection(host, directory, "Git.Commit", "commit in");
+        const composed = composeCommitMessage(
+          typeof props.message === "string" ? props.message : undefined,
+          invocation.hasContent() ? yield* content() : "",
+        );
+        const message = admitCommitMessage(composed.message);
+
+        const produced = yield* recorded({
+          owner: host.owner,
+          site: host.site(occurrence),
+          operation: "commit",
+          request: { cwd: directory, message },
+          *perform(): Operation<Result<Json>> {
+            // Read here, because this is the operation that needs it: an entry
+            // that commits nothing asks the host nothing about who it is.
+            // Whatever the commit records is what this result reports.
+            const identity = yield* captureCommitIdentity(denoIdentityReader(selected.directory));
+            return Ok(
+              yield* journaled(
+                yield* liveCommit(
+                  checkoutIn(selected, directory),
+                  message,
+                  composed.source,
+                  identity,
+                ),
+              ),
+            );
+          },
+        });
+        if (!produced.ok) {
+          throw produced.error;
+        }
+        const commit = produced.value;
+        return typeof commit === "object" && commit !== null && !Array.isArray(commit)
+          ? String(Reflect.get(commit, "commit") ?? "")
+          : "";
+      },
+  };
+}
+
+/**
+ * The selection this element is standing in, or its own refusal.
+ *
+ * One sentence per component, because what a person needs to know is which
+ * element was written outside a selection — not which internal lookup answered
+ * nothing.
+ */
+function* selection(
+  host: RetainedFileHost,
   directory: string,
-  branch: string,
-  base: string | undefined,
-): Operation<Result<void>> {
-  if (branch.startsWith("-")) {
-    return Err(
-      new GitOperationError(
-        "Git.Switch",
-        "invalid-branch",
-        "<Git.Switch> was given a branch name that reads as an option.",
-      ),
+  element: string,
+  doing: string,
+): Operation<SelectedCheckout> {
+  const selected = yield* host.covering(directory);
+  if (selected === undefined) {
+    throw new GitOperationError(
+      element,
+      "invalid-invocation",
+      `<${element}> is written outside a repository this entry has selected, so there is ` +
+        `nothing in scope to ${doing}.`,
     );
   }
-  try {
-    if (yield* branchExists(git, directory, branch)) {
-      yield* switchBranch(git, {
-        operation: "Git.Switch",
-        workingDirectory: directory,
-        checkout: directory,
-        branch,
-        start: undefined,
-      });
-      return Ok(undefined);
-    }
-    const start =
-      base === undefined
-        ? yield* resolveCommit(git, directory, "HEAD")
-        : yield* resolveBaseCommit(git, directory, base);
-    if (start === undefined) {
-      return Err(
-        new GitOperationError(
-          "Git.Switch",
-          "unresolved-base",
-          "<Git.Switch> was given a base that names no commit.",
-        ),
-      );
-    }
-    yield* switchBranch(git, {
-      operation: "Git.Switch",
-      workingDirectory: directory,
-      checkout: directory,
-      branch,
-      start,
-    });
-    return Ok(undefined);
-  } catch (error) {
-    // The refusals the native layer already has words for travel as they are.
-    return Err(error instanceof Error ? error : new Error(String(error)));
+  return selected;
+}
+
+/** The ordinary live checkout these performers act on. */
+function checkoutIn(selected: SelectedCheckout, workingDirectory: string) {
+  return liveCheckout(selected.git, selected.registered, workingDirectory);
+}
+
+/**
+ * One ordinary result, as journal data.
+ *
+ * Detached rather than cast: what goes into a record has to be plain JSON this
+ * host built, so a performer that one day answered with something richer is
+ * caught here rather than written down as whatever it happened to be.
+ */
+// deno-lint-ignore require-yield
+function* journaled(result: unknown): Operation<Json> {
+  const detached = detachedJson(result);
+  if (detached === undefined) {
+    throw new Error("a live Git operation answered with something this host cannot journal.");
   }
+  return detached;
 }

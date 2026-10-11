@@ -122,7 +122,6 @@ import {
   retainedPushRequestJson,
 } from "../../retained-repository/requests.ts";
 import type { RetainedPushRequest } from "../../retained-repository/requests.ts";
-import { sameRetainedFrontier } from "../../retained-repository/records.ts";
 import { currentBranch, resolveCommit } from "../composition/git.ts";
 import type { GitHubAccess } from "../composition/github.ts";
 import { pullRequestProvider } from "../composition/github-pull-request.ts";
@@ -135,8 +134,7 @@ import { useGitAuthentication } from "../composition/host.ts";
 import type { RepositoryHost } from "../composition/host.ts";
 import type { GitCheckout } from "../composition/operations.ts";
 import { gitRefusal } from "../composition/refusals.ts";
-import { FrontierError, inventoryFrontier } from "./frontier.ts";
-import { retain } from "./local.ts";
+import { resolvedRequest } from "./local.ts";
 import type { RetainedFileHost, SelectedCheckout } from "./files.ts";
 import { admitRetainedPublication } from "./publication.ts";
 import type { RetainedPublication } from "./publication.ts";
@@ -223,71 +221,32 @@ function retainedPush(host: RetainedExternalHost): IdentityComponent {
           );
         }
 
-        const frozen = yield* retain(
-          {
-            owner: host.files.owner,
-            site: host.files.site(occurrence),
-            operation: "push",
-            checkout: selected.checkout,
-            common: selected.common,
-            position: host.files.position(selected.common),
-            candidates: () => host.files.candidates(selected.checkout),
-            settled: (frontier) => host.files.settled(selected.checkout, frontier),
-            selection: { checkout: selected.checkout },
-            // What the document wrote is where it wrote it: `<Git.Push />` has
-            // no props, and the branch and commit it publishes are resolved
-            // rather than authored — so they belong in the frozen preparation
-            // and not in the request this fingerprint names.
-            request: { cwd: directory },
-            inventory: () => inventoryOf(selected),
-            *prepare(preState) {
-              if (preState === null) {
-                return Err(
-                  new GitOperationError(
-                    PUSH,
-                    "invalid-invocation",
-                    "<Git.Push> has no absent state: it publishes from a checkout that exists.",
-                  ),
-                );
-              }
-              const resolved = yield* pushRequest(selected, directory);
-              if (!resolved.ok) {
-                return resolved;
-              }
-              const request = retainedPushRequestJson(resolved.value);
-              return Ok({
-                // Publishing moves nothing here: the objects leave through a
-                // control repository of their own, and the checkout ends where
-                // it started.
-                postState: preState,
-                prepared: request,
-                evidence: request,
-              });
-            },
-            // deno-lint-ignore require-yield
-            *perform(transition) {
-              // Unreachable, and deliberately so: the two frozen ends are one
-              // state, so the protocol adopts the transition and acknowledges
-              // it before this operation contacts anything.
-              return Ok(transition.evidence);
-            },
+        // Resolved once, and read back on a continuation: the branch and commit
+        // this push names are what asking resolved to when it was asked, not
+        // what HEAD says today. `<Git.Push />` has no props, so the authored
+        // request is where it was written and the resolution is beside it.
+        const frozen = yield* resolvedRequest({
+          owner: host.files.owner,
+          site: host.files.site(occurrence),
+          operation: "push",
+          request: { cwd: directory },
+          *resolve(): Operation<Json> {
+            const resolved = yield* pushRequest(selected, directory);
+            if (!resolved.ok) {
+              throw resolved.error;
+            }
+            return retainedPushRequestJson(resolved.value);
           },
-          host.files.resume,
-          host.files.lanes,
-        );
+        });
         if (!frozen.ok) {
           throw frozen.error;
         }
-        const request = parseRetainedPushRequest(frozen.value);
+        const request = parseRetainedPushRequest(frozen.value.resolved);
         if (request === undefined) {
           throw new GitOperationProtocolError(PUSH);
         }
 
         yield* publish(host, selected, occurrence, request);
-        // The remote is where it was asked to be. Whether the checkout still is
-        // what this entry's history accounts for is a separate question, and
-        // the answer decides whether anything after this is resumable.
-        yield* unmoved(host, selected, PUSH);
         // Remembered with the identity it was performed under, which is what a
         // later pull request holds a receipt to.
         host.published({
@@ -472,102 +431,71 @@ function retainedPullRequest(host: RetainedExternalHost): IdentityComponent {
         const draft = props.draft === true;
         const base = typeof props.base === "string" && props.base !== "" ? props.base : undefined;
 
-        const frozen = yield* retain(
-          {
-            owner: host.files.owner,
-            site: host.files.site(occurrence),
-            operation: "pull-request",
-            checkout: selected.checkout,
-            common: selected.common,
-            position: host.files.position(selected.common),
-            candidates: () => host.files.candidates(selected.checkout),
-            settled: (frontier) => host.files.settled(selected.checkout, frontier),
-            selection: { checkout: selected.checkout },
-            request: {
-              cwd: directory,
+        const frozen = yield* resolvedRequest({
+          owner: host.files.owner,
+          site: host.files.site(occurrence),
+          operation: "pull-request",
+          request: {
+            cwd: directory,
+            number,
+            title,
+            body,
+            draft,
+            base: base ?? null,
+          },
+          *resolve(): Operation<Json> {
+            const publication = yield* selected.publication();
+            if (!publication.ok) {
+              throw publication.error;
+            }
+            const origin = publication.value.origin;
+            if (origin === null) {
+              throw new PullRequestAdmissionError(
+                "no-repository-context",
+                "the checkout it selected records no usable origin, so there is no repository " +
+                  "at a Git host for a pull request to be opened in.",
+              );
+            }
+            const headBranch = yield* currentBranch(selected.git, directory);
+            if (headBranch === undefined) {
+              throw new PullRequestAdmissionError(
+                "unnamed-branch",
+                "the checkout it selected has no branch checked out, so there is no head " +
+                  "branch to open a pull request from — and a detached HEAD is not something " +
+                  "this entry could have published.",
+              );
+            }
+            const headSha = yield* resolveCommit(selected.git, directory, "HEAD");
+            if (headSha === undefined) {
+              throw new GitOperationInfrastructureError(
+                PULL_REQUEST_ELEMENT,
+                "the checkout it selected did not report the commit its branch holds",
+              );
+            }
+            const inputs: PullRequestInputs = Object.freeze({
+              repository: publication.value.identity,
               number,
               title,
               body,
               draft,
-              base: base ?? null,
-            },
-            inventory: () => inventoryOf(selected),
-            *prepare(preState) {
-              if (preState === null) {
-                return Err(
-                  new PullRequestAdmissionError(
-                    "no-repository-context",
-                    "<PullRequest> has no absent state: it names a branch in a checkout that " +
-                      "exists.",
-                  ),
-                );
-              }
-              const publication = yield* selected.publication();
-              if (!publication.ok) {
-                return publication;
-              }
-              const origin = publication.value.origin;
-              if (origin === null) {
-                return Err(
-                  new PullRequestAdmissionError(
-                    "no-repository-context",
-                    "the checkout it selected records no usable origin, so there is no " +
-                      "repository at a Git host for a pull request to be opened in.",
-                  ),
-                );
-              }
-              const headBranch = yield* currentBranch(selected.git, directory);
-              if (headBranch === undefined) {
-                return Err(
-                  new PullRequestAdmissionError(
-                    "unnamed-branch",
-                    "the checkout it selected has no branch checked out, so there is no head " +
-                      "branch to open a pull request from — and a detached HEAD is not " +
-                      "something this entry could have published.",
-                  ),
-                );
-              }
-              const headSha = yield* resolveCommit(selected.git, directory, "HEAD");
-              if (headSha === undefined) {
-                return Err(
-                  new GitOperationInfrastructureError(
-                    PULL_REQUEST_ELEMENT,
-                    "the checkout it selected did not report the commit its branch holds",
-                  ),
-                );
-              }
-              const inputs: PullRequestInputs = Object.freeze({
-                repository: publication.value.identity,
-                number,
-                title,
-                body,
-                draft,
-                headBranch,
-                headSha,
-                // The repository's own initial branch, pinned when it was
-                // selected, rather than whatever its default branch is at the
-                // host right now.
-                baseBranch: base ?? publication.value.identity.primaryBranch,
-              });
-              const request = retainedPullRequestRequestJson({
-                checkout: selected.checkout,
-                origin,
-                inputs,
-              });
-              return Ok({ postState: preState, prepared: request, evidence: request });
-            },
-            // deno-lint-ignore require-yield
-            *perform(transition) {
-              return Ok(transition.evidence);
-            },
+              headBranch,
+              headSha,
+              // The repository's own initial branch, pinned when it was
+              // selected, rather than whatever its default branch is at the
+              // host right now.
+              baseBranch: base ?? publication.value.identity.primaryBranch,
+            });
+            return retainedPullRequestRequestJson({
+              checkout: selected.checkout,
+              origin,
+              inputs,
+            });
           },
-          host.files.resume,
-          host.files.lanes,
-        );
+        });
         if (!frozen.ok) {
           throw frozen.error;
         }
-        const request = parseRetainedPullRequestRequest(frozen.value);
+        const request = parseRetainedPullRequestRequest(frozen.value.resolved);
         if (request === undefined) {
           throw new GitOperationProtocolError(PULL_REQUEST_ELEMENT);
         }
@@ -811,40 +739,20 @@ function freezeIssueRequest(
       return Ok(undefined);
     }
     const frozen = retainedIssueRequestJson(request);
-    const written = yield* retain(
-      {
-        owner: host.files.owner,
-        site: host.files.site(occurrence),
-        operation: "issue",
-        checkout: selected.checkout,
-        common: selected.common,
-        position: host.files.position(selected.common),
-        candidates: () => host.files.candidates(selected.checkout),
-        settled: (frontier) => host.files.settled(selected.checkout, frontier),
-        selection: { checkout: selected.checkout },
-        request: frozen,
-        inventory: () => inventoryOf(selected),
-        // deno-lint-ignore require-yield
-        *prepare(preState) {
-          if (preState === null) {
-            return Err(
-              new IssueProtocolError(
-                "an issue has no absent state: it is filed from a checkout that exists.",
-              ),
-            );
-          }
-          // Filing an issue changes nothing here. What the record is for is
-          // saying this entry asked for it, before any tracker was contacted.
-          return Ok({ postState: preState, prepared: frozen, evidence: frozen });
-        },
-        // deno-lint-ignore require-yield
-        *perform(transition) {
-          return Ok(transition.evidence);
-        },
+    // Filing an issue changes no checkout. What the record is for is saying
+    // this entry asked for exactly this issue, before any tracker was
+    // contacted — so the authored request and the resolved one are the same
+    // thing here, and resolving reads nothing.
+    const written = yield* resolvedRequest({
+      owner: host.files.owner,
+      site: host.files.site(occurrence),
+      operation: "issue",
+      request: frozen,
+      // deno-lint-ignore require-yield
+      *resolve(): Operation<Json> {
+        return frozen;
       },
-      host.files.resume,
-      host.files.lanes,
-    );
+    });
     return written.ok ? Ok(undefined) : Err(written.error);
   });
 }
@@ -945,44 +853,3 @@ function deferred(ready: () => Operation<GitHostProvider>): GitHostProvider {
 }
 
 /** This checkout's state right now. */
-function inventoryOf(selected: SelectedCheckout) {
-  return inventoryFrontier({
-    git: selected.git,
-    checkout: selected.checkout,
-    directory: selected.directory,
-  });
-}
-
-/**
- * That the checkout is still in the state this entry holds it to.
- *
- * Read after an external effect rather than before: what is in question is
- * whether publishing moved anything local, and a remote that accepted the
- * branch says nothing about that. A `FrontierError`, because an entry whose
- * history no longer describes its own checkout cannot be continued — and must
- * not be printed past.
- */
-function* unmoved(
-  host: RetainedExternalHost,
-  selected: SelectedCheckout,
-  operation: string,
-): Operation<void> {
-  const held = host.files.expected(selected.checkout);
-  if (held === undefined) {
-    throw new FrontierError(
-      `${operation} published from ${selected.checkout}, and this entry holds no state for that ` +
-        "checkout to be held to, so what it is in now is not recorded here.",
-    );
-  }
-  const live = yield* inventoryOf(selected);
-  if (!live.ok) {
-    throw live.error;
-  }
-  if (!sameRetainedFrontier(live.value, held)) {
-    throw new FrontierError(
-      `${operation} published from ${selected.checkout}, and left it in a state this entry's ` +
-        "history does not account for. The remote accepted the branch; the checkout is not " +
-        "where this entry's own records say it is.",
-    );
-  }
-}

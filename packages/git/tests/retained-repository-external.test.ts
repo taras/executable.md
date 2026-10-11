@@ -30,14 +30,12 @@ import { collect } from "@executablemd/core";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import { denoGitAuthentication } from "../src/deno/composition/authentication.ts";
 import type { GitInvocation, GitOutcome, RepositoryHost } from "../src/deno/composition/host.ts";
-import { gitSession } from "../src/deno/composition/git.ts";
 import { gitHubSource } from "../src/deno/composition/github.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { useRetainedRepositoryEntry } from "../src/deno/retained-repository/provider.ts";
 import {
-  RETAINED_REPOSITORY_COMPLETION,
-  RETAINED_REPOSITORY_INTENT,
-  parseRetainedRepositoryIntent,
+  REPL_REPOSITORY_REQUEST,
+  parseReplRepositoryRequest,
 } from "../src/retained-repository/records.ts";
 import {
   parseRetainedIssueRequest,
@@ -370,11 +368,11 @@ function positionsOf(events: readonly DurableEvent[], type: string): number[] {
   return at;
 }
 
-/** The retained intents of one operation this journal holds. */
-function intentsOf(events: readonly DurableEvent[], operation: string) {
-  return recordsOf(events, RETAINED_REPOSITORY_INTENT)
-    .map((record) => parseRetainedRepositoryIntent(record))
-    .filter((intent) => intent !== undefined && intent.operation === operation);
+/** The resolved requests of one external operation this journal holds. */
+function requestsOf(events: readonly DurableEvent[], operation: string) {
+  return recordsOf(events, REPL_REPOSITORY_REQUEST)
+    .map((record) => parseReplRepositoryRequest(record))
+    .filter((request) => request !== undefined && request.operation === operation);
 }
 
 /**
@@ -532,12 +530,12 @@ describe("retained repository: one entry's external work", () => {
     // The branch is at the remote, at the commit this entry made.
     expect(published(fixture)).toBe(head(fixture));
 
-    // One retained push record pair, and the Git-host record after both of
-    // them: the request this entry would make was written down before the
-    // remote was contacted at all.
-    const intents = intentsOf(events, "push");
+    // One resolved push request, and the Git-host record after it: the request
+    // this entry would make was written down before the remote was contacted at
+    // all.
+    const intents = requestsOf(events, "push");
     expect(intents).toHaveLength(1);
-    const frozen = parseRetainedPushRequest(intents[0]?.evidence ?? null);
+    const frozen = parseRetainedPushRequest(intents[0]?.resolved ?? null);
     expect(frozen?.inputs.branch).toBe(BRANCH);
     expect(frozen?.inputs.sourceCommit).toBe(head(fixture));
     expect(frozen?.inputs.destinationRef).toBe(`refs/heads/${BRANCH}`);
@@ -545,13 +543,12 @@ describe("retained repository: one entry's external work", () => {
 
     const effect = positionsOf(events, GIT_HOST_EFFECT);
     expect(effect).toHaveLength(1);
-    // Every record pair this entry wrote is complete, and the push's own is
-    // the last of them — it is the last element in the document — so the lane
-    // was settled before the remote was contacted rather than left standing
-    // across a round trip.
-    const completions = positionsOf(events, RETAINED_REPOSITORY_COMPLETION);
-    expect(positionsOf(events, RETAINED_REPOSITORY_INTENT)).toHaveLength(completions.length);
-    expect(effect[0]).toBeGreaterThan(completions[completions.length - 1] ?? -1);
+    // The resolved request stands before the Git-host record, which is the
+    // order that matters: what this entry asked for was written down before
+    // anything was asked of the service.
+    const requests = positionsOf(events, REPL_REPOSITORY_REQUEST);
+    expect(requests).toHaveLength(1);
+    expect(effect[0]).toBeGreaterThan(requests[requests.length - 1] ?? -1);
   });
 
   it("R7: a completed push replays with no remote work at all", function* () {
@@ -589,11 +586,12 @@ describe("retained repository: one entry's external work", () => {
     );
     expect(reopened.refusal).toBeUndefined();
     expect(reopened.output).toBe(first.output);
-    // The entry really resumed: it authenticated its checkout, which is Git
-    // work, and then did none of the work that reaches a remote.
-    expect(subcommands(replayed.commands)).toContain("rev-parse");
-    expect(subcommands(replayed.commands)).not.toContain("push");
-    expect(subcommands(replayed.commands)).not.toContain("ls-remote");
+    // The entry really resumed — its output repeats the commit it made, out of
+    // the saved result — and asked Git for nothing at all while doing it, not
+    // even for the branch and commit the push resolved, which have since moved
+    // on. That this fixture's recorder catches replay-time Git work is what the
+    // interrupted-push rows below measure, through the same wiring.
+    expect(replayed.commands).toEqual([]);
     expect(published(fixture)).toBe(publishedAt);
     // And none of the work a live push needs before it reaches one: the
     // completed record answers before a provider is asked anything, so there
@@ -609,7 +607,7 @@ describe("retained repository: one entry's external work", () => {
     // The entry ended where the push failed, with its request written down and
     // the remote never asked to change anything.
     expect(first.refusal).toBeDefined();
-    expect(intentsOf(first.events, "push")).toHaveLength(1);
+    expect(requestsOf(first.events, "push")).toHaveLength(1);
     // Nothing at all was published for it: a boundary that failed before the
     // provider answered reaches no outcome, so there is no record to replay.
     expect(positionsOf(first.events, GIT_HOST_EFFECT)).toHaveLength(0);
@@ -722,9 +720,9 @@ describe("retained repository: one entry's external work", () => {
 
     // Its request was written down before the forge heard of it, with the head
     // this entry published and the base its selection pinned.
-    const intents = intentsOf(first.events, "pull-request");
+    const intents = requestsOf(first.events, "pull-request");
     expect(intents).toHaveLength(1);
-    const frozen = parseRetainedPullRequestRequest(intents[0]?.evidence ?? null);
+    const frozen = parseRetainedPullRequestRequest(intents[0]?.resolved ?? null);
     expect(frozen?.inputs.headBranch).toBe(BRANCH);
     expect(frozen?.inputs.headSha).toBe(head(fixture));
     expect(frozen?.inputs.baseBranch).toBe("main");
@@ -737,8 +735,12 @@ describe("retained repository: one entry's external work", () => {
     const reopened = yield* run(fixture, source, new InMemoryStream(unfinished(first.events)));
     expect(reopened.refusal).toBeUndefined();
     expect(reopened.output).toBe(first.output);
-    // The entry resumed and ran — and asked the forge for nothing.
-    expect(fixture.commands.length).toBeGreaterThan(before);
+    // The entry resumed and produced its saved answer without asking anything
+    // of either side: every operation in it is completed, so neither the forge
+    // nor Git is reached. The live run above left `before` well above zero,
+    // which is what makes this a measurement.
+    expect(before).toBeGreaterThan(0);
+    expect(fixture.commands.length).toBe(before);
     expect(fixture.store.requests).toHaveLength(asked);
     expect(creations(fixture.store)).toBe(1);
   });
@@ -795,7 +797,7 @@ describe("retained repository: one entry's external work", () => {
     // the pull request is work this entry has not reached yet. Reopening makes
     // it fresh work, decided against publication evidence rebuilt out of
     // accepted records into a provider closure that has never seen it.
-    const intents = positionsOf(first.events, RETAINED_REPOSITORY_INTENT);
+    const intents = positionsOf(first.events, REPL_REPOSITORY_REQUEST);
     const upsert = intents[intents.length - 1] ?? 0;
     const reopened = yield* run(
       fixture,
@@ -964,7 +966,7 @@ describe("retained repository: one entry's external work", () => {
 
     // The request this entry would make stands written down before the tracker
     // was contacted, in the lane of the checkout the issue was filed from.
-    const intents = intentsOf(first.events, "issue");
+    const intents = requestsOf(first.events, "issue");
     expect(intents).toHaveLength(1);
     const frozen = parseRetainedIssueRequest(intents[0]?.request ?? null);
     expect(frozen?.target).toBe(LOCATOR);
@@ -972,8 +974,9 @@ describe("retained repository: one entry's external work", () => {
     expect(frozen?.issue.description).toContain("the description");
     const effect = positionsOf(first.events, ISSUE_EFFECT);
     expect(effect).toHaveLength(1);
-    const completions = positionsOf(first.events, RETAINED_REPOSITORY_COMPLETION);
-    expect(effect[0]).toBeGreaterThan(completions[completions.length - 1] ?? -1);
+    // The resolved request stands before the tracker was asked anything.
+    const requests = positionsOf(first.events, REPL_REPOSITORY_REQUEST);
+    expect(effect[0]).toBeGreaterThan(requests[requests.length - 1] ?? -1);
 
     // Reopened: the completed upsert replays its record, and the tracker is
     // asked nothing at all.
@@ -999,7 +1002,7 @@ describe("retained repository: one entry's external work", () => {
     expect(issueCreations(fixture.store)).toBe(1);
     // Its request stands written down, and the answer this run did get is the
     // effect's own failure.
-    expect(intentsOf(first.events, "issue")).toHaveLength(1);
+    expect(requestsOf(first.events, "issue")).toHaveLength(1);
     expect(recordsOf(first.events, ISSUE_EFFECT)).toHaveLength(0);
     const answered = positionsOf(first.events, ISSUE_EFFECT);
     expect(answered).toHaveLength(1);
@@ -1046,7 +1049,7 @@ describe("retained repository: one entry's external work", () => {
       "filed https://github.com/owner/repository/issues/1 and " +
         "https://github.com/owner/repository/issues/2",
     );
-    expect(intentsOf(events, "issue")).toHaveLength(2);
+    expect(requestsOf(events, "issue")).toHaveLength(2);
     expect(recordsOf(events, ISSUE_EFFECT)).toHaveLength(2);
   });
 
@@ -1058,11 +1061,11 @@ describe("retained repository: one entry's external work", () => {
     // No checkout was selected, so there is no state lane for a request to be
     // written down in — and nothing was resolved from live state that a frozen
     // copy would protect. The effect's own record is the whole of its history.
-    expect(intentsOf(first.events, "issue")).toHaveLength(0);
+    expect(requestsOf(first.events, "issue")).toHaveLength(0);
     expect(recordsOf(first.events, ISSUE_EFFECT)).toHaveLength(1);
     // And no repository was opened on the way: filing an issue is not
     // repository work.
-    expect(intentsOf(first.events, "ambient")).toHaveLength(0);
+    expect(requestsOf(first.events, "ambient")).toHaveLength(0);
 
     const asked = fixture.store.requests.length;
     const reopened = yield* run(
@@ -1073,19 +1076,6 @@ describe("retained repository: one entry's external work", () => {
     expect(reopened.refusal).toBeUndefined();
     expect(reopened.output).toBe(first.output);
     expect(fixture.store.requests).toHaveLength(asked);
-  });
-
-  it("R7: a published branch does not excuse a checkout that moved", function* () {
-    const fixture = yield* useFixture({ driftAfterPush: true });
-    const { refusal, events } = yield* run(fixture, PUBLISH.join("\n"), new InMemoryStream());
-    // The remote accepted the branch, and the entry stops anyway: its history
-    // no longer describes its own checkout, and nothing after this would be
-    // resumable.
-    expect(published(fixture)).toBe(head(fixture));
-    expect(refusal).toContain("not where this entry's own records say it is");
-    // The publication is recorded, because it happened; what is refused is
-    // carrying on.
-    expect(recordsOf(events, GIT_HOST_EFFECT)).toHaveLength(1);
   });
 
   it("R8: a publication this entry never asked for is not this entry's", function* () {
@@ -1211,7 +1201,7 @@ describe("retained repository: one entry's external work", () => {
     expect(first.refusal).toBeDefined();
     expect(fixture.store.pullRequests).toHaveLength(0);
     const attempted = creations(fixture.store);
-    expect(intentsOf(first.events, "pull-request")).toHaveLength(1);
+    expect(requestsOf(first.events, "pull-request")).toHaveLength(1);
 
     // Reopened from the prefix that holds its frozen request and not its
     // answer, against a forge that works: the saved request is performed once.
@@ -1232,7 +1222,7 @@ describe("retained repository: one entry's external work", () => {
     expect(first.refusal).toBeDefined();
     expect(fixture.store.issues).toHaveLength(0);
     const attempted = issueCreations(fixture.store);
-    expect(intentsOf(first.events, "issue")).toHaveLength(1);
+    expect(requestsOf(first.events, "issue")).toHaveLength(1);
 
     fixture.store.fault = undefined;
     const gap = positionsOf(first.events, ISSUE_EFFECT).at(-1) ?? 0;
@@ -1256,7 +1246,7 @@ describe("retained repository: one entry's external work", () => {
     expect(published(fixture)).toBeUndefined();
     // The request still stands written down, and the failure is this effect's
     // own published result rather than a gap in the history.
-    expect(intentsOf(events, "push")).toHaveLength(1);
+    expect(requestsOf(events, "push")).toHaveLength(1);
     expect(
       events.filter(
         (event) =>

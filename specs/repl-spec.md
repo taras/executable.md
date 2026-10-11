@@ -194,7 +194,7 @@ refuses whole — with nothing appended and no execution started.
 An entry does repository work the way any document does: it selects or clones a
 repository, opens worktrees, writes and commits, publishes, opens pull requests,
 reads their evidence and files issues. What the REPL adds is that an entry which
-does not finish can be continued without doing any of it again.
+does not finish can be continued without doing again what it already did.
 
 Each entry has a repository host of its own, built when that entry is submitted
 and gone when it settles. Two entries in one execution are two owners: a later
@@ -213,17 +213,34 @@ back and forth between positions neither starts a second one nor cancels the one
 that is going.
 
 **Continuing is not a reading.** An unfinished entry taken back to the head is
-given to the engine, and that reaches the repository: the entry's host is built,
-the checkouts its own records named are selected and authenticated again, and
-their leases are re-acquired before anything is replayed. What replay does *not*
-do is repeat what was done — every boundary the records show as completed answers
-from its own record, with no commit, no publication, no forge request and no
-second credential session — and the first boundary the records do not reach is
-performed once. An entry whose work stands on a selection its own history never
-made refuses rather than selecting a second time, and one whose checkout has
-moved since refuses rather than building on a state nothing accounts for.
+given to the engine, and that reaches the repository: the entry's host is built
+and the leases it needs are taken before it works anywhere live. What replay
+does *not* do is repeat what was done — every operation the records show as
+completed answers from its own record, with no write, no commit, no publication,
+no forge request and no second credential session — and the first operation the
+records do not reach runs live, against whatever is there, appending its outcome
+before anything after it runs.
+
+**Recorded results and the live environment may disagree, and that is allowed.**
+Replay restores what was recorded; it does not restore the directory. An entry
+that wrote `A` into a file somebody has since changed to `B` replays that write,
+leaves `B`, and the next new operation reads and acts on `B`. A completed
+selection replays its own recorded placement without cloning or inspecting
+anything, even if the checkout has been changed or removed; an operation that
+then needs that checkout refuses in its own ordinary words. Nothing here is a
+divergence, and nothing is repaired — the person reading the screen is who
+decides what to do about it.
+
+One thing follows from that honesty and is worth stating plainly: native work
+can happen and its result can fail to be appended. The journal then holds no
+completion for it, so a continuation takes the ordinary live path and may
+attempt that operation again. This is the ordinary durable-stream window, not an
+exactly-once local effect.
+
 Generated writes inside a selected checkout are that entry's own effects and
-recover with the rest of them.
+replay with the rest of them: an `<Evaluate>` fragment resolves its relative
+paths in the checkout the element that produced it was standing in, exactly as
+an authored `<File>` beside it does.
 
 Which installations operate repositories is the host's to say, and it is the same
 answer `xmd run` gives: the Deno-hosted command — from this checkout or compiled

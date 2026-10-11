@@ -1,12 +1,17 @@
 /**
- * R3–R6 — one entry's retained repository work, against real Git and real files.
+ * R3–R6 — one entry's local repository work, against real Git and real files.
  *
  * Everything here runs a document through canonical execution with the entry
  * host installed, so what is proven is the whole path: core delivers the
- * occurrence, the host retains an intent, native work happens, and the
- * completion is written only once the result and the resulting state have both
- * been checked. A fixture that asserted on the protocol without the filesystem
+ * occurrence, the ordinary provider performs the work, and its result is
+ * recorded once. A fixture that asserted on the protocol without the filesystem
  * would prove the bookkeeping and nothing about the checkout.
+ *
+ * The contract these rows hold the host to is the REPL's execution model.
+ * Replay restores recorded results; it does not restore the environment or
+ * require it to match. So the rows that matter most here are the ones where the
+ * two disagree: a file changed behind a completed write, a checkout that is no
+ * longer there, a write whose result was never acknowledged.
  *
  * Each scenario gets its own repository, HOME and journal. Nothing is shared,
  * because the thing most of these assert is what a *second* open of one history
@@ -29,7 +34,13 @@ import {
 import { mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { API, fileWriteFailure, filesFailure, hostFilesHandler } from "@executablemd/runtime";
+import {
+  API,
+  fileWriteFailure,
+  filesFailure,
+  hostFilesHandler,
+  useHostFiles,
+} from "@executablemd/runtime";
 import type { FilesHandler } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
@@ -42,13 +53,11 @@ import { countingHost } from "./support/composition.ts";
 import type { CompositionCounters } from "./support/composition.ts";
 import { fileDeleteEntry, fileWriteEntry } from "@executablemd/core/host";
 import { useRetainedRepositoryEntry } from "../src/deno/retained-repository/provider.ts";
+import { useRunComposition } from "../src/deno/run-composition/provider.ts";
+import { useCompositionComponents } from "../src/composition/installation.ts";
 import {
-  RETAINED_REPOSITORY_COMPLETION,
-  RETAINED_REPOSITORY_INTENT,
-  parseRetainedCreationPreparation,
-  parseRetainedRepositoryCompletion,
-  parseRetainedRepositoryIntent,
-  retainedFrontierJson,
+  REPL_REPOSITORY_RESULT,
+  parseReplRepositoryResult,
 } from "../src/retained-repository/records.ts";
 import { METADATA, repositorySlot } from "../src/deno/run-composition/placement.ts";
 import { admitRetainedRepositoryHistory } from "../src/retained-repository/admission.ts";
@@ -147,6 +156,8 @@ function* useEntryFiles(fixture: Fixture, leaf: FilesHandler): Operation<void> {
 interface Run {
   readonly output: string;
   readonly events: readonly DurableEvent[];
+  /** What ended the entry, when something did. */
+  readonly refusal: string | undefined;
 }
 
 /** One entry, over one journal, in one checkout. */
@@ -154,7 +165,7 @@ function run(
   fixture: Fixture,
   source: string,
   stream: InMemoryStream,
-  leaf: FilesHandler,
+  leaf: FilesHandler = hostFilesHandler(),
   entryKey = "0001",
   evaluating = false,
 ): Operation<Run> {
@@ -183,10 +194,21 @@ function run(
           },
         }
       : entry.installation;
-    const output = yield* collect(
-      yield* executeInstalled({ path, stream, includes: [fixture.root] }, [installation]),
-    );
-    return { output: String(output), events: yield* stream.readAll() };
+    // What ended the entry, when something did: a fatal history or durability
+    // failure leaves the execution rather than appearing in the document, and
+    // a row about replay has to be able to say which happened.
+    let refusal: string | undefined;
+    let output = "";
+    try {
+      output = String(
+        yield* collect(
+          yield* executeInstalled({ path, stream, includes: [fixture.root] }, [installation]),
+        ),
+      );
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    return { output, events: yield* stream.readAll(), refusal };
   });
 }
 
@@ -200,10 +222,16 @@ function recordsOf(events: readonly DurableEvent[], type: string): readonly Json
   return held;
 }
 
-/** A journal with its last completion removed: one interrupted mutation. */
+/**
+ * A journal with its last recorded result removed.
+ *
+ * What an interruption leaves: native work that happened and whose outcome was
+ * never acknowledged. There is nothing to replay for it, so a continuation
+ * takes the ordinary live path.
+ */
 function interrupted(events: readonly DurableEvent[]): InMemoryStream {
   const last = events.findLastIndex(
-    (event) => event.type === "yield" && event.description.type === RETAINED_REPOSITORY_COMPLETION,
+    (event) => event.type === "yield" && event.description.type === REPL_REPOSITORY_RESULT,
   );
   return new InMemoryStream([...events.slice(0, last)]);
 }
@@ -225,7 +253,7 @@ function refused(fixture: Fixture, source: string): Operation<Run> {
     try {
       return yield* run(fixture, source, stream, counted().handler);
     } catch {
-      return { output: "", events: yield* stream.readAll() };
+      return { output: "", events: yield* stream.readAll(), refusal: undefined };
     }
   });
 }
@@ -312,15 +340,65 @@ function refusedOrRan(fixture: Fixture, source: string, stream: InMemoryStream):
     try {
       return yield* run(fixture, source, stream, counted().handler);
     } catch {
-      return { output: "", events: yield* stream.readAll() };
+      return { output: "", events: yield* stream.readAll(), refusal: undefined };
+    }
+  });
+}
+
+/**
+ * The same document through the ordinary run provider.
+ *
+ * What an `xmd run` would do with this batch: the same native work, with no
+ * record of any of it. Answers with a refusal when one happened, so a
+ * comparison cannot quietly be a comparison with a run that failed.
+ */
+function runOrdinary(fixture: Fixture, source: string): Operation<string | undefined> {
+  return scoped(function* () {
+    const path = join(fixture.root, "ordinary.md");
+    yield* writeTextFile(path, source);
+    // The ordinary host's own Files provider, which is what an `xmd run`
+    // installs: the mutations go straight to it, recorded by nobody.
+    yield* API.Env.around(
+      {
+        // deno-lint-ignore require-yield
+        *cwd() {
+          return fixture.checkout;
+        },
+      },
+      { at: "min" },
+    );
+    yield* useHostFiles();
+    yield* useCompositionComponents();
+    yield* useRunComposition({
+      root: join(fixture.root, "ordinary-managed"),
+      cwd: fixture.checkout,
+      host: denoRepositoryHost(),
+    });
+    try {
+      yield* collect(
+        yield* executeInstalled(
+          {
+            path,
+            stream: new InMemoryStream(),
+            includes: [fixture.root],
+          },
+          [],
+        ),
+      );
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
     }
   });
 }
 
 describe("retained repository: one entry's local work", () => {
-  it("R3: a write inside the ambient checkout retains an intent and a completion", function* () {
+  it("R3: a write records what it did, and nothing about the checkout around it", function* () {
     const fixture = yield* useFixture();
     const leaf = counted();
+    // A file this entry never touches, beside the one it writes. Nothing about
+    // it may appear in anything this entry records.
+    yield* writeTextFile(join(fixture.checkout, "unrelated.md"), "not this entry's business\n");
     const { events } = yield* run(
       fixture,
       '<File path="notes.md">the note\n</File>\n',
@@ -331,28 +409,141 @@ describe("retained repository: one entry's local work", () => {
     expect(yield* readTextFile(join(fixture.checkout, "notes.md"))).toBe("the note\n");
     expect(leaf.writes).toEqual(["notes.md"]);
 
-    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
-      parseRetainedRepositoryIntent(record),
+    const results = recordsOf(events, REPL_REPOSITORY_RESULT).map((record) =>
+      parseReplRepositoryResult(record),
     );
-    const completions = recordsOf(events, RETAINED_REPOSITORY_COMPLETION).map((record) =>
-      parseRetainedRepositoryCompletion(record),
-    );
-    // Selecting the checkout is itself retained, and it is the baseline the
-    // write is held to following.
-    expect(intents.map((record) => record?.operation)).toEqual(["ambient", "file-write"]);
-    expect(intents.map((record) => record?.lane.position)).toEqual([0, 1]);
-    expect(completions.length).toBe(2);
+    // One record per operation, and selecting the checkout is one of them: it
+    // is what says this entry works here.
+    expect(results.map((record) => record?.operation)).toEqual(["ambient", "file-write"]);
+    const write = results[1];
+    expect(write?.owner).toBe('repl:v1:["execution-1","0001"]');
+    // What it asked for, and what doing it produced. No state, no inventory,
+    // and no byte of any other file.
+    expect(write?.request).toEqual({
+      cwd: fixture.checkout,
+      path: "notes.md",
+      content: "the note\n",
+    });
+    expect(write?.result).toEqual({ type: "file-write", publication: "host-committed" });
+    expect(JSON.stringify(events)).not.toContain("not this entry's business");
+  });
 
-    const intent = intents[1];
-    const completion = completions[1];
-    expect(intent?.operation).toBe("file-write");
-    expect(intent?.owner).toBe('repl:v1:["execution-1","0001"]');
-    // The state it started from had no such file, and the one it predicted does.
-    expect(intent?.preState?.worktree.some((entry) => entry.path === "notes.md")).toBe(false);
-    expect(intent?.postState.worktree.some((entry) => entry.path === "notes.md")).toBe(true);
-    expect(completion?.intent.length).toBeGreaterThan(0);
-    // What it left is what it predicted.
-    expect(completion?.frontier.worktree.some((entry) => entry.path === "notes.md")).toBe(true);
+  it("R3: a completed write replays while the file holds something else", function* () {
+    const fixture = yield* useFixture();
+    const first = counted();
+    const source = '<File path="notes.md">A</File>\n\nread: {props.unused}\n';
+    const { events } = yield* run(
+      fixture,
+      '<File path="notes.md">A</File>\n',
+      new InMemoryStream(),
+      first.handler,
+    );
+    expect(first.writes).toEqual(["notes.md"]);
+    expect(yield* readTextFile(join(fixture.checkout, "notes.md"))).toBe("A");
+
+    // Somebody changes the file. This is the ordinary situation the REPL is
+    // built for: the recorded result says `A` was written, and the file says
+    // `B`, and both are true.
+    yield* writeTextFile(join(fixture.checkout, "notes.md"), "B");
+
+    const again = counted();
+    const replayed = yield* run(
+      fixture,
+      '<File path="notes.md">A</File>\n',
+      new InMemoryStream([...events]),
+      again.handler,
+    );
+
+    // Replayed: no write, no refusal, and the file still holds what the person
+    // put there. Nothing was restored and nothing was compared.
+    expect(replayed.refusal).toBeUndefined();
+    expect(again.writes).toEqual([]);
+    expect(yield* readTextFile(join(fixture.checkout, "notes.md"))).toBe("B");
+    expect(source.length).toBeGreaterThan(0);
+  });
+
+  it("R3: a completed result replays when its checkout is no longer there", function* () {
+    const fixture = yield* useFixture();
+    const { events } = yield* run(
+      fixture,
+      '<File path="notes.md">the note\n</File>\n',
+      new InMemoryStream(),
+    );
+
+    // The checkout is gone: not moved, not changed — removed. Replay neither
+    // puts it back nor looks at it.
+    yield* rm(join(fixture.checkout, "notes.md"), { force: true });
+    yield* rm(join(fixture.checkout, ".git"), { recursive: true, force: true });
+
+    const again = counted();
+    const replayed = yield* run(
+      fixture,
+      '<File path="notes.md">the note\n</File>\n',
+      new InMemoryStream([...events]),
+      again.handler,
+    );
+    expect(replayed.refusal).toBeUndefined();
+    expect(again.writes).toEqual([]);
+    expect(yield* exists(join(fixture.checkout, ".git"))).toBe(false);
+  });
+
+  it("R4: an unacknowledged write is attempted again on the ordinary live path", function* () {
+    const fixture = yield* useFixture();
+    const first = counted();
+    const { events } = yield* run(
+      fixture,
+      '<File path="notes.md">the note\n</File>\n',
+      new InMemoryStream(),
+      first.handler,
+    );
+    expect(first.writes).toEqual(["notes.md"]);
+
+    // The journal with that write's result taken off the end: native work that
+    // happened and was never acknowledged. There is no completion to replay, so
+    // the ordinary live path runs it — which may write again. That is normal
+    // durable-stream behaviour, and it is the window this host trades for not
+    // snapshotting anybody's checkout.
+    yield* rm(join(fixture.checkout, "notes.md"));
+    const resumed = counted();
+    const continued = yield* run(
+      fixture,
+      '<File path="notes.md">the note\n</File>\n',
+      interrupted(events),
+      resumed.handler,
+    );
+
+    expect(continued.refusal).toBeUndefined();
+    expect(resumed.writes).toEqual(["notes.md"]);
+    expect(yield* readTextFile(join(fixture.checkout, "notes.md"))).toBe("the note\n");
+  });
+
+  it("R4: a new commit takes the index and the identity it finds", function* () {
+    const fixture = yield* useFixture();
+    const source = [
+      '<File path="one.md">one</File>',
+      '<Git.Add paths="one.md" />',
+      '<Git.Commit message="One" as="commit" />',
+      "",
+      "committed {commit.commit}",
+    ].join("\n");
+    const { events, output } = yield* run(fixture, source, new InMemoryStream());
+    expect(output).toContain("committed ");
+
+    const results = recordsOf(events, REPL_REPOSITORY_RESULT).map((record) =>
+      parseReplRepositoryResult(record),
+    );
+    const commit = results.find((record) => record?.operation === "commit");
+    // The ordinary live result: what the commit actually produced, read back
+    // from Git rather than predicted before it.
+    const held = commit?.result;
+    const reported =
+      held !== null && typeof held === "object" && !Array.isArray(held)
+        ? String(Reflect.get(held, "commit") ?? "")
+        : "";
+    const git = gitSession(denoRepositoryHost(), fixture.checkout);
+    expect(reported).toBe(yield* git.read(["rev-parse", "HEAD"], fixture.checkout));
+    // And the request is the authored message, which is all it ever asked for.
+    expect(commit?.request).toEqual({ cwd: fixture.checkout, message: "One\n" });
   });
 
   it("R4: a completed write replays with no native mutation at all", function* () {
@@ -373,81 +564,15 @@ describe("retained repository: one entry's local work", () => {
     expect(yield* readTextFile(join(fixture.checkout, "notes.md"))).toBe("the note\n");
   });
 
-  it("R4: an interrupted write performs from the state it saved", function* () {
+  it("R4: a completed stage replays without running git add again", function* () {
     const fixture = yield* useFixture();
-    const first = counted();
-    const { events } = yield* run(
-      fixture,
-      '<File path="notes.md">the note\n</File>\n',
-      new InMemoryStream(),
-      first.handler,
-    );
-    // Put the checkout back where the intent says it started.
-    yield* rm(join(fixture.checkout, "notes.md"));
+    const source = '<File path="notes.md">the note\n</File>\n\n<Git.Add paths="notes.md" />\n';
+    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
 
-    const resumed = counted();
-    yield* run(
-      fixture,
-      '<File path="notes.md">the note\n</File>\n',
-      interrupted(events),
-      resumed.handler,
-    );
-
-    expect(resumed.writes).toEqual(["notes.md"]);
-    expect(yield* readTextFile(join(fixture.checkout, "notes.md"))).toBe("the note\n");
-  });
-
-  it("R4: an interrupted write adopts the state it predicted", function* () {
-    const fixture = yield* useFixture();
-    const first = counted();
-    const { events } = yield* run(
-      fixture,
-      '<File path="notes.md">the note\n</File>\n',
-      new InMemoryStream(),
-      first.handler,
-    );
-    // The file is already there: the interrupted write reached its far end.
-    const adopted = counted();
-    yield* run(
-      fixture,
-      '<File path="notes.md">the note\n</File>\n',
-      interrupted(events),
-      adopted.handler,
-    );
-
-    expect(adopted.writes).toEqual([]);
-    expect(yield* readTextFile(join(fixture.checkout, "notes.md"))).toBe("the note\n");
-  });
-
-  it("R4: an interrupted write refuses a state it neither saved nor predicted", function* () {
-    const fixture = yield* useFixture();
-    const first = counted();
-    const { events } = yield* run(
-      fixture,
-      '<File path="notes.md">the note\n</File>\n',
-      new InMemoryStream(),
-      first.handler,
-    );
-    // Somebody else has been in this checkout.
-    yield* writeTextFile(join(fixture.checkout, "notes.md"), "somebody else\n");
-
-    const drifted = counted();
-    let refusal: string | undefined;
-    try {
-      yield* run(
-        fixture,
-        '<File path="notes.md">the note\n</File>\n',
-        interrupted(events),
-        drifted.handler,
-      );
-    } catch (error) {
-      refusal = error instanceof Error ? error.message : String(error);
-    }
-
-    expect(refusal).toBeDefined();
-    expect(drifted.writes).toEqual([]);
-    // Nothing was repaired to make the replay succeed.
-    expect(yield* readTextFile(join(fixture.checkout, "notes.md"))).toBe("somebody else\n");
+    const again = counted();
+    yield* run(fixture, source, new InMemoryStream([...events]), again.handler);
+    expect(again.writes).toEqual([]);
+    expect(yield* readIndexPaths(fixture)).toContain("notes.md");
   });
 
   it("R6: an authored directory is retained, and the file inside it is its own work", function* () {
@@ -462,8 +587,8 @@ describe("retained repository: one entry's local work", () => {
 
     expect(yield* readTextFile(join(fixture.checkout, "notes", "inside.md"))).toBe("nested\n");
 
-    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
-      parseRetainedRepositoryIntent(record),
+    const intents = recordsOf(events, REPL_REPOSITORY_RESULT).map((record) =>
+      parseReplRepositoryResult(record),
     );
     // The selection, the directory, then the file: three operations, and the
     // file's is its own rather than the directory's.
@@ -475,132 +600,16 @@ describe("retained repository: one entry's local work", () => {
     const ensure = intents[1];
     const write = intents[2];
     expect(ensure?.site.occurrence).not.toBe(write?.site.occurrence);
-    // The directory is in the state the ensure predicted, and the file is not.
-    expect(ensure?.postState.worktree.some((entry) => entry.path === "notes")).toBe(true);
-    expect(ensure?.postState.worktree.some((entry) => entry.path === "notes/inside.md")).toBe(
-      false,
-    );
-    expect(write?.postState.worktree.some((entry) => entry.path === "notes/inside.md")).toBe(true);
-  });
-
-  it("R3: staging predicts the index it will leave and is checked against it", function* () {
-    const fixture = yield* useFixture();
-    const leaf = counted();
-    const { events } = yield* run(
-      fixture,
-      '<File path="notes.md">the note\n</File>\n\n<Git.Add paths="notes.md" />\n',
-      new InMemoryStream(),
-      leaf.handler,
-    );
-
-    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
-      parseRetainedRepositoryIntent(record),
-    );
-    expect(intents.map((record) => record?.operation)).toEqual(["ambient", "file-write", "add"]);
-    const add = intents[2];
-    // The file was not in the index before and is in the one it predicted.
-    expect(add?.preState?.index.some((entry) => entry.path === "notes.md")).toBe(false);
-    expect(add?.postState.index.some((entry) => entry.path === "notes.md")).toBe(true);
-
-    // And that is the index Git actually produced.
-    const staged = yield* readIndexPaths(fixture);
-    expect(staged).toContain("notes.md");
-  });
-
-  it("R4: a completed stage replays without running git add again", function* () {
-    const fixture = yield* useFixture();
-    const source = '<File path="notes.md">the note\n</File>\n\n<Git.Add paths="notes.md" />\n';
-    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
-
-    const again = counted();
-    yield* run(fixture, source, new InMemoryStream([...events]), again.handler);
-    expect(again.writes).toEqual([]);
-    expect(yield* readIndexPaths(fixture)).toContain("notes.md");
-  });
-
-  it("R3: a commit's object id is predicted before it is written", function* () {
-    const fixture = yield* useFixture();
-    const source =
-      '<File path="notes.md">the note\n</File>\n\n' +
-      '<Git.Add paths="notes.md" />\n\n<Git.Commit message="record the note" as="commit" />\n';
-    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
-
-    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
-      parseRetainedRepositoryIntent(record),
-    );
-    expect(intents.map((record) => record?.operation)).toEqual([
-      "ambient",
-      "file-write",
-      "add",
-      "commit",
-    ]);
-    const commit = intents[3];
-    const predicted =
-      commit?.postState.head.kind === "symbolic" ? commit.postState.head.oid : undefined;
-    expect(predicted).toBeDefined();
-
-    // The commit Git actually wrote is the one the intent predicted.
-    const git = gitSession(denoRepositoryHost(), fixture.root);
-    expect(yield* git.read(["rev-parse", "HEAD"], fixture.checkout)).toBe(predicted);
-    // And the parent it predicted is the commit the checkout was on.
-    expect(commit?.preState?.head.kind === "symbolic" && commit.preState.head.oid).not.toBe(
-      predicted,
-    );
-  });
-
-  it("R4: an interrupted commit adopts the commit it predicted", function* () {
-    const fixture = yield* useFixture();
-    const source =
-      '<File path="notes.md">the note\n</File>\n\n' +
-      '<Git.Add paths="notes.md" />\n\n<Git.Commit message="record the note" as="commit" />\n';
-    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
-    const git = gitSession(denoRepositoryHost(), fixture.root);
-    const head = yield* git.read(["rev-parse", "HEAD"], fixture.checkout);
-
-    // The commit happened; its completion did not. A resume adopts it rather
-    // than committing a second time.
-    const resumed = yield* run(fixture, source, interrupted(events), counted().handler);
-    expect(recordsOf(resumed.events, RETAINED_REPOSITORY_COMPLETION).length).toBeGreaterThan(0);
-    expect(yield* git.read(["rev-parse", "HEAD"], fixture.checkout)).toBe(head);
-    // One commit, not two.
-    expect(yield* git.read(["rev-list", "--count", "HEAD"], fixture.checkout)).toBe("2");
-  });
-
-  it("R3: a switch predicts the branch and the content it will leave", function* () {
-    const fixture = yield* useFixture();
-    const git = gitSession(denoRepositoryHost(), fixture.root);
-    // A second branch whose content differs, so the switch has something to do.
-    yield* git.run(["switch", "--create", "topic"], fixture.checkout);
-    yield* writeTextFile(join(fixture.checkout, "topic.md"), "topic\n");
-    yield* git.run(["add", "topic.md"], fixture.checkout);
-    yield* git.run(["commit", "-m", "topic"], fixture.checkout);
-    yield* git.run(["switch", "main"], fixture.checkout);
-
-    const { events } = yield* run(
-      fixture,
-      '<Git.Switch branch="topic" />\n',
-      new InMemoryStream(),
-      counted().handler,
-    );
-
-    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
-      parseRetainedRepositoryIntent(record),
-    );
-    expect(intents.map((record) => record?.operation)).toEqual(["ambient", "switch"]);
-    const moved = intents[1];
-    expect(moved?.preState?.head.kind === "symbolic" && moved.preState.head.ref).toBe(
-      "refs/heads/main",
-    );
-    expect(moved?.postState.head.kind === "symbolic" && moved.postState.head.ref).toBe(
-      "refs/heads/topic",
-    );
-    // The content the other branch carries was predicted, not guessed.
-    expect(moved?.preState?.worktree.some((entry) => entry.path === "topic.md")).toBe(false);
-    expect(moved?.postState.worktree.some((entry) => entry.path === "topic.md")).toBe(true);
-
-    // And that is where the checkout actually is.
-    expect(yield* git.read(["symbolic-ref", "HEAD"], fixture.checkout)).toBe("refs/heads/topic");
-    expect(yield* exists(join(fixture.checkout, "topic.md"))).toBe(true);
+    // Each one records what it was asked for and what it produced, and the
+    // file's record is about the file: the directory's holds no inventory of
+    // what ended up inside it.
+    expect(ensure?.request).toEqual({ cwd: fixture.checkout, path: "notes" });
+    expect(ensure?.result).toEqual({ type: "dir-ensure" });
+    expect(write?.request).toEqual({
+      cwd: join(fixture.checkout, "notes"),
+      path: "inside.md",
+      content: "nested\n",
+    });
   });
 
   it("R5: a switch that would overwrite local changes refuses before touching it", function* () {
@@ -619,184 +628,15 @@ describe("retained repository: one entry's local work", () => {
     // The refusal happened before the checkout moved, and nothing was forced.
     expect(yield* git.read(["symbolic-ref", "HEAD"], fixture.checkout)).toBe("refs/heads/main");
     expect(yield* readTextFile(join(fixture.checkout, "seed.md"))).toBe("mine\n");
-    // Nothing was retained for an operation that never started.
+    // Nothing was recorded as a result for an operation that refused: the
+    // refusal is the ordinary one this provider has always reported, journaled
+    // as the effect failure it is rather than as an outcome this host stands
+    // behind.
     expect(
-      recordsOf(events, RETAINED_REPOSITORY_INTENT)
-        .map((record) => parseRetainedRepositoryIntent(record)?.operation)
+      recordsOf(events, REPL_REPOSITORY_RESULT)
+        .map((record) => parseReplRepositoryResult(record)?.operation)
         .filter((operation) => operation === "switch"),
     ).toEqual([]);
-  });
-
-  it("R3: a repository creation records an absent destination before it clones", function* () {
-    const fixture = yield* useFixture();
-    const remote = yield* useBareRemote({
-      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
-    });
-    const { events } = yield* run(
-      fixture,
-      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
-        '<File path="inside.md">inside\n</File>\n</Repository>\n',
-      new InMemoryStream(),
-      counted().handler,
-    );
-
-    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
-      parseRetainedRepositoryIntent(record),
-    );
-    expect(intents.map((record) => record?.operation)).toEqual(["repository", "file-write"]);
-    const creation = intents[0];
-    // There was nothing there, and that is what the record says — not an empty
-    // Git snapshot standing in for absence.
-    expect(creation?.preState).toBe(null);
-    // What makes it recoverable is everything else it froze.
-    const prepared = creation?.prepared;
-    expect(typeof prepared === "object" && prepared !== null && !Array.isArray(prepared)).toBe(
-      true,
-    );
-    const creationData = prepared as {
-      slot: string;
-      metadata: Record<string, unknown>;
-      owner: null;
-    };
-    expect(typeof creationData.slot).toBe("string");
-    expect(creationData.owner).toBe(null);
-    expect(creationData.metadata.kind).toBe("repository");
-    expect(creationData.metadata.locator).toBe(remote.locator);
-    expect(typeof creationData.metadata.creationCommit).toBe("string");
-    // And the state it will be in when it is done, which the clone produced.
-    expect(creation?.postState.worktree.some((entry) => entry.path === "remote.md")).toBe(true);
-    expect(creation?.postState.administration.role).toBe("primary");
-    // The write inside it follows in the same lane.
-    expect(intents[1]?.lane.common).toBe(creation?.lane.common);
-    expect(intents.map((record) => record?.lane.position)).toEqual([0, 1]);
-  });
-
-  it("R5: a refused acknowledgement creates nothing at all", function* () {
-    const fixture = yield* useFixture();
-    const remote = yield* useBareRemote({
-      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
-    });
-    // This feature's own intent is what the journal refuses, and nothing else
-    // — a stream that refused every append could fail on the root or an
-    // import before the creation ever reached its barrier, and the assertions
-    // below would hold without the fence being tested at all.
-    const stream = new InMemoryStream();
-    let reached = 0;
-    stream.onAppend = (event) => {
-      if (event.type === "yield" && event.description.type === RETAINED_REPOSITORY_INTENT) {
-        reached += 1;
-        throw new Error("the journal refused this entry's creation intent");
-      }
-    };
-
-    const slot = repositorySlot(join(fixture.root, "managed"), remote.locator, "project");
-    const attempted = yield* runCounting(
-      fixture,
-      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
-        "nothing\n</Repository>\n",
-      stream,
-    );
-
-    // The barrier was reached once, and the entry ended there.
-    expect(reached).toBe(1);
-    expect(attempted.refusal).toBeDefined();
-    expect(recordsOf(attempted.events, RETAINED_REPOSITORY_INTENT)).toEqual([]);
-    // Nothing was created where it was asked for: no checkout, no metadata,
-    // and no clone into the placement. Preparing one clones into a scratch
-    // directory, which is why the destination is what is counted.
-    expect(yield* exists(join(slot, "checkout"))).toBe(false);
-    expect(yield* exists(join(slot, METADATA))).toBe(false);
-    expect(targetCommands(attempted.counters, "clone", join(slot, "checkout"))).toEqual([]);
-  });
-
-  it("R4: an interrupted creation is adopted without cloning again", function* () {
-    const fixture = yield* useFixture();
-    const remote = yield* useBareRemote({
-      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
-    });
-    const source =
-      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
-      "nothing\n</Repository>\n";
-    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
-    const intent = parseRetainedRepositoryIntent(recordsOf(events, RETAINED_REPOSITORY_INTENT)[0]);
-    const completed = parseRetainedRepositoryCompletion(
-      recordsOf(events, RETAINED_REPOSITORY_COMPLETION)[0],
-    );
-    expect(intent).toBeDefined();
-    expect(completed).toBeDefined();
-    const [created] = yield* checkoutPaths(fixture);
-    expect(created).toBe(intent!.postState.checkout);
-
-    // Nothing is changed first. Adoption is what this proves, and a checkout
-    // with something extra in it is not the state the intent predicted — so a
-    // resume that refused drift would pass an assertion about clones it never
-    // reached.
-    const resumed = yield* runCounting(fixture, source, interrupted(events));
-    expect(resumed.refusal).toBeUndefined();
-    // No clone ran at all: the destination was already what the intent
-    // predicted, so there was nothing to prepare and nothing to perform.
-    expect(resumed.counters.commands.filter((args) => args[0] === "clone")).toEqual([]);
-    const adopted = parseRetainedRepositoryCompletion(
-      recordsOf(resumed.events, RETAINED_REPOSITORY_COMPLETION)[0],
-    );
-    expect(adopted?.result).toEqual(completed!.result);
-    expect(adopted === undefined ? undefined : retainedFrontierJson(adopted.frontier)).toEqual(
-      retainedFrontierJson(intent!.postState),
-    );
-  });
-
-  it("R4: a resumed creation uses its saved commit after the base moves", function* () {
-    const fixture = yield* useFixture();
-    // One remote, with somewhere for it to move to. The locator the document
-    // wrote never changes — what changes is what it answers, which is the case
-    // a pinned commit exists for.
-    const remote = yield* useBareRemote({
-      commits: [
-        { message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] },
-        {
-          message: "moved on",
-          branch: "next",
-          entries: [{ path: "later.md", content: "later\n" }],
-        },
-      ],
-    });
-    const source =
-      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
-      "nothing\n</Repository>\n";
-    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
-    const intent = parseRetainedRepositoryIntent(recordsOf(events, RETAINED_REPOSITORY_INTENT)[0]);
-    expect(intent).toBeDefined();
-    const prepared = parseRetainedCreationPreparation(intent!.prepared, intent!.operation);
-    expect(prepared).toBeDefined();
-    const pinned = prepared!.metadata.creationCommit;
-    const moved = remote.heads.get("next");
-    expect(moved).toBeDefined();
-    expect(moved).not.toBe(pinned);
-
-    // The destination is removed so the resume has the absent state its intent
-    // saved, and the branch the authored request names is moved on so a live
-    // resolution would answer with a different commit.
-    yield* rm(prepared!.slot, { recursive: true, force: true });
-    const git = gitSession(denoRepositoryHost(), fixture.root);
-    expect((yield* git.run(["update-ref", "refs/heads/main", moved!], remote.locator)).code).toBe(
-      0,
-    );
-
-    const resumed = yield* runCounting(fixture, source, interrupted(events));
-    expect(resumed.refusal).toBeUndefined();
-    // The checkout exists, and it is at the commit the intent pinned rather
-    // than at what the locator now answers.
-    expect(yield* git.read(["rev-parse", "HEAD"], intent!.postState.checkout)).toBe(pinned);
-    const completed = parseRetainedRepositoryCompletion(
-      recordsOf(resumed.events, RETAINED_REPOSITORY_COMPLETION)[0],
-    );
-    expect(completed?.frontier.head.oid).toBe(pinned);
-    // Exactly the state the intent predicted, remote-tracking refs included: a
-    // creation establishes the refs it froze rather than keeping whatever the
-    // remote advertised by the time the clone ran.
-    expect(completed === undefined ? undefined : retainedFrontierJson(completed.frontier)).toEqual(
-      retainedFrontierJson(intent!.postState),
-    );
   });
 
   it("R4: a partly created destination is preserved and refused", function* () {
@@ -826,299 +666,47 @@ describe("retained repository: one entry's local work", () => {
     expect(yield* readTextFile(join(slot, "checkout", "half.md"))).toBe("half\n");
     expect(yield* exists(join(slot, METADATA))).toBe(false);
     expect(targetCommands(attempted.counters, "clone", join(slot, "checkout"))).toEqual([]);
-    expect(recordsOf(attempted.events, RETAINED_REPOSITORY_INTENT)).toEqual([]);
+    expect(recordsOf(attempted.events, REPL_REPOSITORY_RESULT)).toEqual([]);
   });
 
-  it("R3: a worktree creation freezes its owner's two states as well", function* () {
+  it("R5: a refused acknowledgement creates nothing at all", function* () {
     const fixture = yield* useFixture();
     const remote = yield* useBareRemote({
       commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
     });
-    const { events } = yield* run(
-      fixture,
-      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
-        '<Worktree name="review" branch="topic">\n' +
-        '<File path="in-worktree.md">worktree\n</File>\n' +
-        "</Worktree>\n</Repository>\n",
-      new InMemoryStream(),
-      counted().handler,
-    );
-
-    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
-      parseRetainedRepositoryIntent(record),
-    );
-    expect(intents.map((record) => record?.operation)).toEqual([
-      "repository",
-      "worktree",
-      "file-write",
-    ]);
-    const worktree = intents[1];
-    expect(worktree?.preState).toBe(null);
-    // A linked worktree is its own checkout sharing the repository's
-    // administration, and the record says so before it exists.
-    expect(worktree?.postState.administration.role).toBe("linked");
-    expect(worktree?.postState.administration.common).toBe(
-      intents[0]?.postState.administration.common,
-    );
-    // Adding it advances refs the owner shares, so the owner's own two states
-    // are frozen beside it.
-    const prepared = parseRetainedCreationPreparation(
-      worktree?.prepared ?? null,
-      worktree?.operation ?? "worktree",
-    );
-    expect(prepared?.owner).not.toBe(null);
-    expect(prepared?.owner?.postState.refs.some((ref) => ref.name === "refs/heads/topic")).toBe(
-      true,
-    );
-    expect(prepared?.owner?.preState.refs.some((ref) => ref.name === "refs/heads/topic")).toBe(
-      false,
-    );
-    // The file was written in the worktree, not in the repository.
-    expect(intents[2]?.preState?.checkout).toBe(worktree?.postState.checkout);
-  });
-
-  it("R3/R4: a drifted owner refuses a pending worktree creation before it is added", function* () {
-    const fixture = yield* useFixture();
-    const remote = yield* useBareRemote({
-      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
-    });
-    const source =
-      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
-      '<Worktree name="review" branch="topic">\nnothing\n</Worktree>\n</Repository>\n';
-    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
-    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
-      parseRetainedRepositoryIntent(record),
-    );
-    const worktree = intents[1];
-    expect(worktree?.operation).toBe("worktree");
-    const prepared = parseRetainedCreationPreparation(
-      worktree?.prepared ?? null,
-      worktree?.operation ?? "worktree",
-    );
-    expect(prepared?.owner).not.toBe(null);
-
-    // The destination goes away, so the resume finds the absence its intent
-    // saved — and the owner is moved on, so the other half of the pair is no
-    // longer the state the creation started from. One match is not the pair.
-    const owner = intents[0]?.postState.checkout ?? "";
-    const git = gitSession(denoRepositoryHost(), fixture.root);
-    expect(
-      (yield* git.run(["worktree", "remove", "--force", worktree!.postState.checkout], owner)).code,
-    ).toBe(0);
-    expect((yield* git.run(["branch", "-D", "topic"], owner)).code).toBe(0);
-    yield* rm(prepared!.slot, { recursive: true, force: true });
-    yield* writeTextFile(join(owner, "drift.md"), "the owner moved on\n");
-
-    const resumed = yield* runCounting(fixture, source, interrupted(events));
-    expect(resumed.refusal).toBeDefined();
-    // Nothing was added: no worktree at the destination, and the owner still
-    // has no branch for it.
-    expect(yield* exists(worktree!.postState.checkout)).toBe(false);
-    expect(yield* git.read(["rev-parse", "--verify", "refs/heads/topic"], owner)).toBe(undefined);
-    expect(targetCommands(resumed.counters, "worktree", worktree!.postState.checkout)).toEqual([]);
-  });
-
-  it("R3: a new mutation refuses a checkout its own history cannot account for", function* () {
-    const fixture = yield* useFixture();
-    const source =
-      '<File path="first.md">first\n</File>\n\n<File path="second.md">second\n</File>\n';
-    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
-    // Keep everything up to the second write's own intent: its predecessor is
-    // complete, and the tail mutation has not been attempted.
-    const intents = events.filter(
-      (event) => event.type === "yield" && event.description.type === RETAINED_REPOSITORY_INTENT,
-    );
-    const tail = events.indexOf(intents[intents.length - 1]!);
-    expect(tail).toBeGreaterThan(0);
-    yield* rm(join(fixture.checkout, "second.md"), { force: true });
-
-    // Something this history never recorded. The completed prefix still
-    // replays, but the state the new mutation would start from is not one the
-    // history accounts for, so it is not a state to freeze and build on.
-    yield* writeTextFile(join(fixture.checkout, "outside.md"), "nobody recorded this\n");
-
-    const leaf = counted();
-    let refusal: string | undefined;
-    try {
-      yield* run(fixture, source, new InMemoryStream([...events.slice(0, tail)]), leaf.handler);
-    } catch (error) {
-      refusal = error instanceof Error ? error.message : String(error);
-    }
-    expect(refusal).toBeDefined();
-    expect(leaf.writes).toEqual([]);
-    expect(yield* exists(join(fixture.checkout, "second.md"))).toBe(false);
-  });
-
-  it("R5: a refusal that changed nothing is printed, and the entry goes on", function* () {
-    const fixture = yield* useFixture();
-    const leaf = counted();
-    const refusing: FilesHandler = {
-      ...leaf.handler,
-      *writeTextFile(input) {
-        if (input.path === "refused.md") {
-          // A refusal in the closed write vocabulary, at a phase whose target
-          // is `unchanged`. Its own words say the file was not replaced, and
-          // the checkout bears that out — which is what makes it printable.
-          return Err(fileWriteFailure({ phase: "target", reason: "read-only" }));
-        }
-        return yield* leaf.handler.writeTextFile(input);
-      },
-    };
-    const { output } = yield* run(
-      fixture,
-      '<PrintErrors>\n<File path="refused.md">no\n</File>\n</PrintErrors>\n\n' +
-        '<File path="after.md">after\n</File>\n',
-      new InMemoryStream(),
-      refusing,
-    );
-    expect(output).toContain("read-only");
-    expect(yield* exists(join(fixture.checkout, "refused.md"))).toBe(false);
-    // The entry carried on, because nothing it recorded disagrees with the
-    // disk.
-    expect(yield* readTextFile(join(fixture.checkout, "after.md"))).toBe("after\n");
-  });
-
-  it("R5: PrintErrors cannot print away a failure that left the checkout changed", function* () {
-    const fixture = yield* useFixture();
-    const leaf = counted();
-    const halfway: FilesHandler = {
-      ...leaf.handler,
-      *writeTextFile(input) {
-        if (input.path === "halfway.md") {
-          // The bytes land and the write reports a failure whose own target is
-          // `commit-unknown`: the outcome the journal holds no longer
-          // describes the checkout, and nothing here can say which way it
-          // went.
-          yield* leaf.handler.writeTextFile(input);
-          return Err(fileWriteFailure({ phase: "commit", reason: "no-space" }));
-        }
-        return yield* leaf.handler.writeTextFile(input);
-      },
-    };
-    let refusal: string | undefined;
-    try {
-      yield* run(
-        fixture,
-        '<PrintErrors>\n<File path="halfway.md">half\n</File>\n</PrintErrors>\n\n' +
-          '<File path="after.md">after\n</File>\n',
-        new InMemoryStream(),
-        halfway,
-      );
-    } catch (error) {
-      refusal = error instanceof Error ? error.message : String(error);
-    }
-    expect(refusal).toBeDefined();
-    // `<PrintErrors>` encloses the failing write, and the entry still ends
-    // there: the later file is never written.
-    expect(yield* exists(join(fixture.checkout, "after.md"))).toBe(false);
-  });
-
-  it("R4/R5: a commit writes no object into the checkout before its intent stands", function* () {
-    const fixture = yield* useFixture();
+    // This feature's own intent is what the journal refuses, and nothing else
+    // — a stream that refused every append could fail on the root or an
+    // import before the creation ever reached its barrier, and the assertions
+    // below would hold without the fence being tested at all.
     const stream = new InMemoryStream();
     let reached = 0;
-    // The commit's own intent, and nothing else this entry writes: the file
-    // write and the staging before it are acknowledged normally, so what the
-    // assertions below are about is the barrier this one operation reached.
     stream.onAppend = (event) => {
-      if (event.type !== "yield" || event.description.type !== RETAINED_REPOSITORY_INTENT) {
-        return;
+      if (event.type === "yield" && event.description.type === REPL_REPOSITORY_RESULT) {
+        reached += 1;
+        throw new Error("the journal refused this entry's creation intent");
       }
-      if (event.result.status !== "ok") {
-        return;
-      }
-      if (parseRetainedRepositoryIntent(event.result.value ?? null)?.operation !== "commit") {
-        return;
-      }
-      reached += 1;
-      throw new Error("the journal refused this entry's commit intent");
     };
-    const git = gitSession(denoRepositoryHost(), fixture.root);
-    const before = yield* git.read(["rev-parse", "HEAD"], fixture.checkout);
 
+    const slot = repositorySlot(join(fixture.root, "managed"), remote.locator, "project");
     const attempted = yield* runCounting(
       fixture,
-      '<File path="staged.md">staged\n</File>\n\n<Git.Add paths="staged.md" />\n\n' +
-        '<Git.Commit message="predicted" as="commit" />\n',
+      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
+        "nothing\n</Repository>\n",
       stream,
     );
 
+    // The barrier was reached once, and the entry ended there: a durability
+    // failure is fatal, and no later work in the document ran.
     expect(reached).toBe(1);
     expect(attempted.refusal).toBeDefined();
-    // The commit was predicted in a copy of the administration, so the
-    // checkout's own HEAD never moved and no commit of its own was written.
-    expect(yield* git.read(["rev-parse", "HEAD"], fixture.checkout)).toBe(before);
-  });
-
-  it("R3: a completed entry authenticates its checkout before answering again", function* () {
-    const fixture = yield* useFixture();
-    const source = '<File path="one.md">one\n</File>\n';
-    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
-
-    // Every mutation this entry made is resolved, so there is nothing to
-    // perform and nothing to prepare — only results to answer with. What has
-    // changed is the file it wrote, which nothing in this history accounts
-    // for, and answering anyway would be answering about a checkout that is
-    // not the one these records describe.
-    const complete = events.findLastIndex(
-      (event) =>
-        event.type === "yield" && event.description.type === RETAINED_REPOSITORY_COMPLETION,
-    );
-    expect(complete).toBeGreaterThan(0);
-    yield* writeTextFile(join(fixture.checkout, "one.md"), "somebody else\n");
-
-    const leaf = counted();
-    let refusal: string | undefined;
-    try {
-      yield* run(
-        fixture,
-        source,
-        new InMemoryStream([...events.slice(0, complete + 1)]),
-        leaf.handler,
-      );
-    } catch (error) {
-      refusal = error instanceof Error ? error.message : String(error);
-    }
-    expect(refusal).toBeDefined();
-    expect(leaf.writes).toEqual([]);
-    // Left exactly as it was found: refusing is what preserves it.
-    expect(yield* readTextFile(join(fixture.checkout, "one.md"))).toBe("somebody else\n");
-  });
-
-  it("R4: each new mutation builds on what the last one was acknowledged to leave", function* () {
-    const fixture = yield* useFixture();
-    const source =
-      '<File path="first.md">first\n</File>\n\n<File path="second.md">second\n</File>\n\n' +
-      '<File path="third.md">third\n</File>\n';
-    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
-    const intents = events.filter(
-      (event) => event.type === "yield" && event.description.type === RETAINED_REPOSITORY_INTENT,
-    );
-    // Everything up to the second write's own intent: one completed mutation,
-    // and two still to make.
-    const tail = events.indexOf(intents[intents.length - 2]!);
-    expect(tail).toBeGreaterThan(0);
-    yield* rm(join(fixture.checkout, "second.md"), { force: true });
-    yield* rm(join(fixture.checkout, "third.md"), { force: true });
-
-    const leaf = counted();
-    const resumed = yield* run(
-      fixture,
-      source,
-      new InMemoryStream([...events.slice(0, tail)]),
-      leaf.handler,
-    );
-    // Both performed. The second mutation starts from the state the history
-    // established, and the third from the state the second one was
-    // acknowledged to have left — not from the snapshot the entry opened with.
-    expect(leaf.writes).toEqual(["second.md", "third.md"]);
-    expect(yield* readTextFile(join(fixture.checkout, "third.md"))).toBe("third\n");
-    const owner = parseRetainedRepositoryIntent(
-      recordsOf(resumed.events, RETAINED_REPOSITORY_INTENT)[0],
-    )?.owner;
-    expect(owner).toBeDefined();
-    const admitted = yield* admitRetainedRepositoryHistory(resumed.events, owner!);
-    expect(admitted.ok ? "ok" : admitted.error.message).toBe("ok");
+    // Nothing was written down, because the append is what failed.
+    expect(recordsOf(attempted.events, REPL_REPOSITORY_RESULT)).toEqual([]);
+    // And what the native work left is left: the clone it had already made is
+    // still there, unrolled back and unclaimed. This host promises that later
+    // work stops, not that the filesystem is put back — and the person is told
+    // rather than shown a checkout nothing accounts for.
+    expect(yield* exists(join(slot, "checkout"))).toBe(true);
+    expect(targetCommands(attempted.counters, "clone", join(slot, "checkout"))).toHaveLength(1);
   });
 
   it("R5: a printable refusal is written down, and replays as a refusal", function* () {
@@ -1143,8 +731,8 @@ describe("retained repository: one entry's local work", () => {
     // The refusal is settled, not left hanging: the write that follows it
     // advances the same shared directory, and a history with an unresolved
     // mutation behind it could not be reopened.
-    const owner = parseRetainedRepositoryIntent(
-      recordsOf(first.events, RETAINED_REPOSITORY_INTENT)[0],
+    const owner = parseReplRepositoryResult(
+      recordsOf(first.events, REPL_REPOSITORY_RESULT)[0],
     )?.owner;
     expect(owner).toBeDefined();
     const admitted = yield* admitRetainedRepositoryHistory(first.events, owner!);
@@ -1165,320 +753,6 @@ describe("retained repository: one entry's local work", () => {
     expect(again.writes).toEqual([]);
   });
 
-  it("R5: a changed-state directory failure cannot be printed away", function* () {
-    const fixture = yield* useFixture();
-    const leaf = counted();
-    const halfway: FilesHandler = {
-      ...leaf.handler,
-      *ensureDirectory(input) {
-        const made = yield* leaf.handler.ensureDirectory(input);
-        if (!made.ok) {
-          return made;
-        }
-        // The directory is there and the ensure reports failure anyway.
-        return Err(
-          filesFailure({
-            operation: "ensure-directory",
-            phase: "access",
-            reason: "permission-denied",
-          }),
-        );
-      },
-    };
-    let refusal: string | undefined;
-    try {
-      yield* run(
-        fixture,
-        '<PrintErrors>\n<Dir path="nested">nothing\n</Dir>\n</PrintErrors>\n\n' +
-          '<File path="after.md">after\n</File>\n',
-        new InMemoryStream(),
-        halfway,
-      );
-    } catch (error) {
-      refusal = error instanceof Error ? error.message : String(error);
-    }
-    // `<Dir>` reports what a document could not use, and a durability failure
-    // is not that: it keeps its own class, so the later file is never written.
-    expect(yield* exists(join(fixture.checkout, "nested"))).toBe(true);
-    expect(leaf.writes).toEqual([]);
-    // The failure the entry ends on is the one the coordinator raised, not a
-    // sentence about a directory a document could not use. An adapter that
-    // described it that way would be describing a durability failure as
-    // something to print and carry on past.
-    expect(refusal).toContain("dir-ensure");
-    expect(refusal).not.toContain("could not be used");
-  });
-
-  it("R3: a commit in a linked worktree is predicted from that worktree's index", function* () {
-    const fixture = yield* useFixture();
-    const remote = yield* useBareRemote({
-      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
-    });
-    const prefix =
-      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
-      '<Worktree name="review" branch="topic">\n';
-    const setup = yield* run(
-      fixture,
-      `${prefix}nothing\n</Worktree>\n</Repository>\n`,
-      new InMemoryStream(),
-      counted().handler,
-    );
-    const creation = recordsOf(setup.events, RETAINED_REPOSITORY_INTENT)
-      .map((record) => parseRetainedRepositoryIntent(record))
-      .find((record) => record?.operation === "worktree");
-    expect(creation).toBeDefined();
-    const target = creation!.postState.checkout;
-    const owner = recordsOf(setup.events, RETAINED_REPOSITORY_INTENT)
-      .map((record) => parseRetainedRepositoryIntent(record))
-      .find((record) => record?.operation === "repository")!.postState.checkout;
-    const git = gitSession(denoRepositoryHost(), fixture.root);
-    yield* git.run(["config", "user.name", "Retained"], target);
-    yield* git.run(["config", "user.email", "retained@example.com"], target);
-    const before = yield* git.read(["rev-parse", "HEAD"], owner);
-
-    const { events } = yield* run(
-      fixture,
-      `${prefix}<File path="new.md">new\n</File>\n<Git.Add paths="new.md" />\n` +
-        '<Git.Commit message="linked work" as="commit" />\n</Worktree>\n</Repository>\n',
-      new InMemoryStream(),
-      counted().handler,
-      "0002",
-    );
-
-    // The commit exists in the worktree, holds the file staged there, and the
-    // primary checkout — whose own index was clean — has not moved. A
-    // prediction pointed at the shared administration would have computed the
-    // primary's tree and found nothing to commit.
-    const commits = recordsOf(events, RETAINED_REPOSITORY_INTENT)
-      .map((record) => parseRetainedRepositoryIntent(record))
-      .filter((record) => record?.operation === "commit");
-    expect(commits.length).toBe(1);
-    expect(yield* git.read(["show", "HEAD:new.md"], target)).toBe("new");
-    expect(yield* git.read(["log", "-1", "--format=%s"], target)).toBe("linked work");
-    expect(yield* git.read(["rev-parse", "HEAD"], owner)).toBe(before);
-    // The commit that was written is the commit the intent predicted.
-    expect(yield* git.read(["rev-parse", "HEAD"], target)).toBe(commits[0]!.postState.head.oid);
-  });
-
-  it("R3: a managed checkout is authenticated before its results are replayed", function* () {
-    const fixture = yield* useFixture();
-    const remote = yield* useBareRemote({
-      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
-    });
-    const source =
-      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
-      '<File path="one.md">one\n</File>\n</Repository>\n';
-    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
-    const created = recordsOf(events, RETAINED_REPOSITORY_INTENT)
-      .map((record) => parseRetainedRepositoryIntent(record))
-      .find((record) => record?.operation === "repository");
-    expect(created).toBeDefined();
-    const complete = events.findLastIndex(
-      (event) =>
-        event.type === "yield" && event.description.type === RETAINED_REPOSITORY_COMPLETION,
-    );
-    expect(complete).toBeGreaterThan(0);
-
-    // The managed checkout this entry created, changed by something else. Its
-    // own records are complete and would replay without reading a byte — and
-    // a selection replaying its acknowledgement is not a reason to believe the
-    // checkout is still what the history describes.
-    yield* writeTextFile(join(created!.postState.checkout, "one.md"), "external drift\n");
-
-    const leaf = counted();
-    let refusal: string | undefined;
-    try {
-      yield* run(
-        fixture,
-        source,
-        new InMemoryStream([...events.slice(0, complete + 1)]),
-        leaf.handler,
-      );
-    } catch (error) {
-      refusal = error instanceof Error ? error.message : String(error);
-    }
-    expect(refusal).toBeDefined();
-    expect(leaf.writes).toEqual([]);
-    // And what was there is still there: refusing is what preserves it.
-    expect(yield* readTextFile(join(created!.postState.checkout, "one.md"))).toBe(
-      "external drift\n",
-    );
-  });
-
-  it("R3: a managed checkout is authenticated when it is selected, not when it is used", function* () {
-    const fixture = yield* useFixture();
-    const remote = yield* useBareRemote({
-      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
-    });
-    // Nothing in this document writes inside the managed checkout: it selects
-    // the repository and then works in the checkout the entry started in. So
-    // the only thing that ever looks at the managed checkout is its own
-    // selection, which is where this entry has to look.
-    const source =
-      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
-      "nothing\n</Repository>\n\n" +
-      '<File path="outside.md">outside\n</File>\n';
-    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
-    const created = recordsOf(events, RETAINED_REPOSITORY_INTENT)
-      .map((record) => parseRetainedRepositoryIntent(record))
-      .find((record) => record?.operation === "repository");
-    expect(created).toBeDefined();
-    // The checkout this entry started in is left exactly as its own history
-    // describes it, so the only thing out of place is in the managed one.
-    expect(yield* readTextFile(join(fixture.checkout, "outside.md"))).toBe("outside\n");
-
-    // The cloned file in the managed checkout, changed by something else.
-    yield* writeTextFile(join(created!.postState.checkout, "remote.md"), "somebody else\n");
-
-    const complete = events.findLastIndex(
-      (event) =>
-        event.type === "yield" && event.description.type === RETAINED_REPOSITORY_COMPLETION,
-    );
-    const leaf = counted();
-    let refusal: string | undefined;
-    try {
-      yield* run(
-        fixture,
-        source,
-        new InMemoryStream([...events.slice(0, complete + 1)]),
-        leaf.handler,
-      );
-    } catch (error) {
-      refusal = error instanceof Error ? error.message : String(error);
-    }
-    expect(refusal).toBeDefined();
-    // And the work that came after the selection never ran: the write replays
-    // from its records, and a replay writes nothing.
-    expect(leaf.writes).toEqual([]);
-  });
-
-  it("R4: a replayed selection's own snapshot is not what the next write is held to", function* () {
-    const fixture = yield* useFixture();
-    const remote = yield* useBareRemote({
-      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
-    });
-    // The commit inside the worktree moves a branch the repository checkout
-    // shares, so the state the repository's own selection recorded is already
-    // out of date by the time the last write happens. That selection is
-    // replayed on a resume, and what it recorded is a state this checkout was
-    // in once — not the state the next write starts from.
-    const source =
-      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
-      '<Worktree name="review" branch="topic">\n<File path="in-worktree.md">work\n</File>\n' +
-      '<Git.Add paths="in-worktree.md" />\n' +
-      '<Git.Commit message="worktree work" as="commit" />\n</Worktree>\n\n' +
-      '<File path="later.md">later\n</File>\n</Repository>\n';
-    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
-    const records = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
-      parseRetainedRepositoryIntent(record),
-    );
-    const repository = records.find((record) => record?.operation === "repository");
-    expect(repository).toBeDefined();
-    expect(records.some((record) => record?.operation === "commit")).toBe(true);
-    const intents = events.filter(
-      (event) => event.type === "yield" && event.description.type === RETAINED_REPOSITORY_INTENT,
-    );
-    const tail = events.indexOf(intents[intents.length - 1]!);
-    expect(tail).toBeGreaterThan(0);
-    yield* rm(join(repository!.postState.checkout, "later.md"), { force: true });
-
-    const leaf = counted();
-    const resumed = yield* run(
-      fixture,
-      source,
-      new InMemoryStream([...events.slice(0, tail)]),
-      leaf.handler,
-    );
-    expect(leaf.writes).toEqual(["later.md"]);
-    expect(yield* readTextFile(join(repository!.postState.checkout, "later.md"))).toBe("later\n");
-    const admitted = yield* admitRetainedRepositoryHistory(resumed.events, repository!.owner);
-    expect(admitted.ok ? "ok" : admitted.error.message).toBe("ok");
-  });
-
-  it("R3: a managed checkout this entry established cannot have gone", function* () {
-    const fixture = yield* useFixture();
-    const remote = yield* useBareRemote({
-      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
-    });
-    const source =
-      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
-      "nothing\n</Repository>\n\n" +
-      '<File path="outside.md">outside\n</File>\n';
-    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
-    const created = recordsOf(events, RETAINED_REPOSITORY_INTENT)
-      .map((record) => parseRetainedRepositoryIntent(record))
-      .find((record) => record?.operation === "repository");
-    expect(created).toBeDefined();
-    const prepared = parseRetainedCreationPreparation(created!.prepared, created!.operation);
-    expect(prepared).toBeDefined();
-
-    // The creation completed, so this history established that checkout — and
-    // then it is removed. Absence is the state a creation starts from, not a
-    // state one that finished may be found in, and nothing here clones it
-    // again or decides the destination is eligible because it is missing.
-    const complete = events.findLastIndex(
-      (event) =>
-        event.type === "yield" && event.description.type === RETAINED_REPOSITORY_COMPLETION,
-    );
-    expect(complete).toBeGreaterThan(0);
-    yield* rm(prepared!.slot, { recursive: true, force: true });
-
-    const leaf = counted();
-    let refusal: string | undefined;
-    try {
-      yield* run(
-        fixture,
-        source,
-        new InMemoryStream([...events.slice(0, complete + 1)]),
-        leaf.handler,
-      );
-    } catch (error) {
-      refusal = error instanceof Error ? error.message : String(error);
-    }
-    expect(refusal).toBeDefined();
-    // Nothing later ran, and nothing put the destination back.
-    expect(leaf.writes).toEqual([]);
-    expect(yield* exists(prepared!.slot)).toBe(false);
-  });
-
-  it("R4: an undisturbed managed checkout replays its results and goes on", function* () {
-    const fixture = yield* useFixture();
-    const remote = yield* useBareRemote({
-      commits: [{ message: "remote seed", entries: [{ path: "remote.md", content: "remote\n" }] }],
-    });
-    const source =
-      `<Repository name="project" url=${JSON.stringify(remote.locator)}>\n` +
-      '<File path="one.md">one\n</File>\n\n<File path="two.md">two\n</File>\n</Repository>\n';
-    const { events } = yield* run(fixture, source, new InMemoryStream(), counted().handler);
-    const created = recordsOf(events, RETAINED_REPOSITORY_INTENT)
-      .map((record) => parseRetainedRepositoryIntent(record))
-      .find((record) => record?.operation === "repository");
-    expect(created).toBeDefined();
-    const intents = events.filter(
-      (event) => event.type === "yield" && event.description.type === RETAINED_REPOSITORY_INTENT,
-    );
-    // Up to the last write's own intent: the creation and the first write are
-    // resolved, and the second write is still to make.
-    const tail = events.indexOf(intents[intents.length - 1]!);
-    expect(tail).toBeGreaterThan(0);
-    yield* rm(join(created!.postState.checkout, "two.md"), { force: true });
-
-    // Authentication is a check, not an obstacle: a checkout nobody has
-    // touched is in a state this history accounts for, so the completed
-    // selection and write replay and the remaining write is performed.
-    const leaf = counted();
-    const resumed = yield* run(
-      fixture,
-      source,
-      new InMemoryStream([...events.slice(0, tail)]),
-      leaf.handler,
-    );
-    expect(leaf.writes).toEqual(["two.md"]);
-    expect(yield* readTextFile(join(created!.postState.checkout, "two.md"))).toBe("two\n");
-    const admitted = yield* admitRetainedRepositoryHistory(resumed.events, created!.owner);
-    expect(admitted.ok ? "ok" : admitted.error.message).toBe("ok");
-  });
-
   it("R6: a generated write inside the checkout is retained on captured terms", function* () {
     const fixture = yield* useFixture();
     const leaf = counted();
@@ -1495,8 +769,8 @@ describe("retained repository: one entry's local work", () => {
 
     expect(yield* readTextFile(join(fixture.checkout, "generated.md"))).toBe("generated\n");
 
-    const intents = recordsOf(events, RETAINED_REPOSITORY_INTENT).map((record) =>
-      parseRetainedRepositoryIntent(record),
+    const intents = recordsOf(events, REPL_REPOSITORY_RESULT).map((record) =>
+      parseReplRepositoryResult(record),
     );
     expect(intents.map((record) => record?.operation)).toEqual([
       "ambient",
@@ -1512,8 +786,13 @@ describe("retained repository: one entry's local work", () => {
       path: "generated.md",
       content: "generated\n",
     });
-    // It followed the authored write in the same lane rather than racing it.
-    expect(intents.map((record) => record?.lane.position)).toEqual([0, 1, 2]);
+    // It followed the authored write in the journal's own order, which is the
+    // only order there is: nothing numbers these records.
+    expect(intents.map((record) => record?.operation)).toEqual([
+      "ambient",
+      "file-write",
+      "file-write",
+    ]);
   });
 
   it("R6: a completed generated write replays with no native mutation", function* () {
@@ -1535,6 +814,90 @@ describe("retained repository: one entry's local work", () => {
     expect(yield* readTextFile(join(fixture.checkout, "generated.md"))).toBe("generated\n");
   });
 
+  it("R12: a fixed batch costs its own requests and nothing of the checkout", function* () {
+    const fixture = yield* useFixture();
+    // A directory this entry never touches, holding content nothing it records
+    // may mention. The point of the batch is what *is* in the journal: a
+    // recovery protocol would have put all of this in it.
+    yield* ensureDir(join(fixture.checkout, "ignored"));
+    for (let at = 0; at < 20; at += 1) {
+      yield* writeTextFile(
+        join(fixture.checkout, "ignored", `noise-${at}.md`),
+        `unrelated content number ${at}, which belongs to nobody's history\n`,
+      );
+    }
+
+    // The fixed batch: five authored writes in two directories, then one
+    // staging of all of it. Small, and the same both ways.
+    const batch = [
+      '<Dir path="notes">',
+      '<File path="one.md">one</File>',
+      '<File path="two.md">two</File>',
+      "</Dir>",
+      '<Dir path="more">',
+      '<File path="three.md">three</File>',
+      '<File path="four.md">four</File>',
+      "</Dir>",
+      '<File path="five.md">five</File>',
+      '<Git.Add paths="." />',
+      "",
+    ].join("\n");
+
+    const started = Date.now();
+    const entry = yield* runCounting(fixture, batch, new InMemoryStream());
+    const elapsed = Date.now() - started;
+    expect(entry.refusal).toBeUndefined();
+
+    // Every byte this entry wrote down, and what it is about.
+    const journal = entry.events.map((event) => JSON.stringify(event)).join("\n");
+    const results = recordsOf(entry.events, REPL_REPOSITORY_RESULT).map((record) =>
+      parseReplRepositoryResult(record),
+    );
+    // One record per operation: the ambient selection, two directories, five
+    // writes and the stage. Nothing else was recorded.
+    expect(results.map((record) => record?.operation)).toEqual([
+      "ambient",
+      "dir-ensure",
+      "file-write",
+      "file-write",
+      "dir-ensure",
+      "file-write",
+      "file-write",
+      "file-write",
+      "add",
+    ]);
+    // And nothing in any of them is about a file this entry did not write.
+    expect(journal).not.toContain("unrelated content number");
+    expect(journal).not.toContain("noise-");
+
+    // No recovery work at all: nothing cloned or copied for a prediction, and
+    // no scan of the checkout per mutation. The Git this batch runs is the
+    // ambient discovery and the stage it was asked for.
+    expect(entry.counters.commands.filter((command) => command[0] === "clone")).toEqual([]);
+    const scans = entry.counters.commands.filter((command) =>
+      ["ls-files", "status", "hash-object", "diff"].includes(String(command[0])),
+    );
+    expect(scans.length).toBeLessThanOrEqual(2);
+
+    // The same batch through the ordinary provider, for the comparison this
+    // row reports rather than asserts. No budget is invented here: the numbers
+    // are evidence, and what gates the revision is the structure above.
+    const ordinary = yield* useFixture();
+    yield* ensureDir(join(ordinary.checkout, "ignored"));
+    const ordinaryStarted = Date.now();
+    const plain = yield* runOrdinary(ordinary, batch);
+    const ordinaryElapsed = Date.now() - ordinaryStarted;
+    expect(plain).toBeUndefined();
+
+    console.log(
+      JSON.stringify({
+        batch: { directories: 2, writes: 5, stages: 1, unrelatedFiles: 20 },
+        repl: { milliseconds: elapsed, journalBytes: journal.length, records: results.length },
+        ordinary: { milliseconds: ordinaryElapsed },
+      }),
+    );
+  });
+
   it("R6: a write where there is no repository is ordinary and retains nothing", function* () {
     const fixture = yield* useFixture();
     const leaf = counted();
@@ -1549,6 +912,13 @@ describe("retained repository: one entry's local work", () => {
 
     expect(yield* exists(join(fixture.root, "plain", "outside.md"))).toBe(true);
     expect(leaf.writes).toEqual(["outside.md"]);
-    expect(recordsOf(events, RETAINED_REPOSITORY_INTENT)).toEqual([]);
+    // No record of the write, and no selection either: an entry standing
+    // outside every checkout selects nothing, so there is nothing for a record
+    // to be about.
+    expect(
+      recordsOf(events, REPL_REPOSITORY_RESULT).map(
+        (record) => parseReplRepositoryResult(record)?.operation,
+      ),
+    ).toEqual([]);
   });
 });

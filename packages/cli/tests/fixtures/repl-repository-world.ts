@@ -24,6 +24,12 @@ import process from "node:process";
 import { shellQuote } from "@executablemd/test-support/launch";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
+import { exists } from "@effectionx/fs";
+import { parseDurableEvent } from "@executablemd/durable-streams";
+import {
+  parseReplRepositoryResult,
+  REPL_REPOSITORY_RESULT,
+} from "../../../git/src/retained-repository/records.ts";
 import { evidenceRoutes } from "../../../git/tests/support/run-composition-tier.ts";
 import { creations, issueCreations, useGitHubServer } from "../../../git/tests/support/github.ts";
 import type { GitHubStore } from "../../../git/tests/support/github.ts";
@@ -486,26 +492,27 @@ export const BOUNDARIES: readonly Boundary[] = Object.freeze([
     name: "generated File",
     lines: ['<Evaluate text={fragment} allow={["write"]} />'],
     /**
-     * The bytes a generated program wrote, where it actually wrote them.
+     * A generated program's write, inside the checkout the document is in.
      *
-     * Which is the directory the *command* started in, and not the checkout the
-     * enclosing `<Repository>` selected: a fragment resolves its paths against
-     * the file access this entry captured when it began, and that access
-     * carries the entry's own working directory rather than the one composed
-     * around the element that invoked it. An authored `<File>` beside it lands
-     * in the selected checkout, so the two disagree.
-     *
-     * This row therefore says where the write went and nothing about who owns
-     * it: in this journey the write lands outside every selected checkout, and
-     * on a continuation it leaves no retained record at all. Both are reported
-     * with their own evidence rather than asserted away here — a row that
-     * demanded the documented behaviour would fail for the product's reason
-     * while claiming to be about leaving and reopening.
+     * The fragment resolves `generated.md` against the directory the element
+     * that produced it was standing in, which inside a `<Repository>` is that
+     * repository's checkout — the same file an authored `<File>` beside it
+     * would name. And it is this entry's own effect: the write is retained
+     * under the selected checkout, which is what makes it recoverable and what
+     * the `<Git.Add>` below it stages.
      */
-    *done({ world }: BoundaryState): Operation<void> {
-      expect(yield* until(readFile(join(world.checkout, "generated.md"), "utf8"))).toBe(
-        "generated",
-      );
+    *done({ world, store: _store, ...state }: BoundaryState): Operation<void> {
+      const checkout = yield* state.checkout();
+      expect(yield* until(readFile(join(checkout, "generated.md"), "utf8"))).toBe("generated");
+      expect(yield* exists(join(world.checkout, "generated.md"))).toBe(false);
+      // Both writes are this entry's own, and both were asked for inside the
+      // checkout it selected: the authored one in the directory `<Dir>` made,
+      // the generated one where the fragment was standing. The path each record
+      // names is the path its element wrote.
+      expect(yield* retainedWrites(world)).toEqual([
+        { path: "authored.md", checkout: join(checkout, "notes") },
+        { path: "generated.md", checkout },
+      ]);
     },
   },
   {
@@ -513,11 +520,10 @@ export const BOUNDARIES: readonly Boundary[] = Object.freeze([
     lines: ['<Git.Add paths="." />'],
     *done({ world, ...state }: BoundaryState): Operation<void> {
       const checkout = yield* state.checkout();
-      // Staged, which is a fact about the index rather than about the files —
-      // and exactly what is in this checkout to stage: the authored file. The
-      // generated one is in the directory the command started in, as the
-      // boundary above says, so `.` here cannot reach it.
+      // Staged, which is a fact about the index rather than about the files:
+      // both of them, because both were written in this checkout.
       expect(reports(["diff", "--cached", "--name-only"], checkout, world).split("\n")).toEqual([
+        "generated.md",
         "notes/authored.md",
       ]);
     },
@@ -529,6 +535,7 @@ export const BOUNDARIES: readonly Boundary[] = Object.freeze([
       const checkout = yield* state.checkout();
       expect(reports(["log", "-1", "--format=%s"], checkout, world)).toBe("Prepare 1.4");
       expect(reports(["show", "HEAD:notes/authored.md"], checkout, world)).toBe("authored");
+      expect(reports(["show", "HEAD:generated.md"], checkout, world)).toBe("generated");
       // Nothing left staged: the commit took what Add had put there.
       expect(reports(["diff", "--cached", "--name-only"], checkout, world)).toBe("");
     },
@@ -608,7 +615,6 @@ export const BOUNDARIES: readonly Boundary[] = Object.freeze([
       "the description",
       "</Issue>",
       "</IssueTracker>",
-      "</Repository>",
     ],
     // deno-lint-ignore require-yield
     *done({ store }: BoundaryState): Operation<void> {
@@ -650,16 +656,18 @@ export const JOURNEY: string = [
   ...PREAMBLE,
   ...BOUNDARIES.flatMap((boundary, at) => [
     ...boundary.lines,
-    ...(at === BOUNDARIES.length - 1
-      ? []
-      : [`<Elicit schema={ask} as="${binding(at)}">After ${boundary.name}?</Elicit>`]),
+    `<Elicit schema={ask} as="${binding(at)}">After ${boundary.name}?</Elicit>`,
   ]),
+  // The selection's own closing tag, after the last checkpoint: every boundary
+  // inside it has a place to be left standing, the last one included. The
+  // opening tag is the first boundary's own line, so this is its pair — and an
+  // unpaired one is not a refusal but a `<Repository>` read as *text*, with
+  // every operation under it running wherever the command happened to start.
+  "</Repository>",
   "",
   "opened {pullRequest.number} at {commit.commit} filed {filed.url}",
   "read {reviews.length} {comments.length} {checks.length}",
-  `answered ${BOUNDARIES.slice(0, -1)
-    .map((_, at) => `{${binding(at)}.ok}`)
-    .join("")}`,
+  `answered ${BOUNDARIES.map((_, at) => `{${binding(at)}.ok}`).join("")}`,
 ].join("\n");
 
 /**
@@ -672,7 +680,7 @@ export const JOURNEY: string = [
 export const JOURNEY_OUTPUT: readonly string[] = Object.freeze([
   `opened ${OPENED} at `,
   "read 1 2 2",
-  `answered ${ANSWER.repeat(BOUNDARIES.length - 1)}`,
+  `answered ${ANSWER.repeat(BOUNDARIES.length)}`,
 ]);
 
 /**
@@ -682,20 +690,49 @@ export const JOURNEY_OUTPUT: readonly string[] = Object.freeze([
  * this entry owns: a write that reached ordinary file handling leaves nothing
  * here, whatever appeared on disk.
  */
-export function* retainedWrites(world: World): Operation<string[]> {
-  const held: string[] = [];
+export function* retainedWrites(world: World): Operation<RetainedWrite[]> {
+  const held: RetainedWrite[] = [];
   for (const body of yield* histories(world.home)) {
     for (const line of body.trim().split("\n")) {
-      if (!line.includes("file-write")) {
+      // Parsed as the records they are. The first attempt at this read a path
+      // out of the line with a regular expression and reported a write it had
+      // simply failed to find — which is how a measurement becomes a finding.
+      const event = parseDurableEvent(line);
+      if (!event.ok) {
+        throw event.error;
+      }
+      const record = event.value;
+      if (
+        record.type !== "yield" ||
+        record.description.type !== REPL_REPOSITORY_RESULT ||
+        record.result.status !== "ok"
+      ) {
         continue;
       }
-      const target = /"path":"([^"]+)"/.exec(line)?.[1];
-      if (target !== undefined) {
-        held.push(target);
+      const result = parseReplRepositoryResult(record.result.value ?? null);
+      if (result?.operation !== "file-write") {
+        continue;
       }
+      // What this write asked for is where it says it belongs: the directory
+      // the document was standing in, and the path it named there. A record
+      // carries no checkout state and no selection token.
+      const request = result.request;
+      const read = (member: string): string =>
+        String(
+          request !== null && typeof request === "object" && !Array.isArray(request)
+            ? request[member]
+            : "",
+        );
+      held.push({ path: read("path"), checkout: read("cwd") });
     }
   }
   return held;
+}
+
+/** One write this entry retained: what it wrote, and in which checkout. */
+export interface RetainedWrite {
+  readonly path: string;
+  readonly checkout: string;
 }
 
 /** What the world holds, as a reopen must find it. */
@@ -744,12 +781,13 @@ function* reached(state: BoundaryState, boundary: Boundary, within: number): Ope
       if (Date.now() > deadline) {
         // What each checkout holds, because "the file is not there" is a
         // different defect depending on which directory it is not in.
+        // Nothing in here may throw. The first version resolved the placement
+        // outside a try, so a boundary that failed because the placement was
+        // not there reported *that* read's error instead of its own claim.
         const where: string[] = [];
-        for (const [name, at] of [
-          ["managed", yield* state.checkout()],
-          ["ambient", state.world.checkout],
-        ] as const) {
+        for (const name of ["managed", "ambient"] as const) {
           try {
+            const at = name === "managed" ? yield* state.checkout() : state.world.checkout;
             where.push(`${name}=${JSON.stringify(yield* until(readdir(at)))}`);
           } catch (reason) {
             where.push(`${name}=unreadable(${String(reason)})`);
@@ -803,7 +841,6 @@ export function* journeyThrough(
   let before: Standing | undefined;
 
   for (const [at, boundary] of BOUNDARIES.entries()) {
-    const last = at === BOUNDARIES.length - 1;
     const standingBefore = before;
     const reopened = location;
     location = yield* scoped(function* (): Operation<string | undefined> {
@@ -822,31 +859,17 @@ export function* journeyThrough(
         const after = yield* standing(state);
         expect(after).toEqual(standingBefore);
         yield* BOUNDARIES[at - 1]?.done(state);
-        yield* answer(pty, ANSWER, within.leave);
+        yield* answer(pty, ANSWER, within.work);
       }
 
       // This boundary, live. Its own claim is what says it has happened —
       // nothing on the screen can, because the draft holds the whole document.
       yield* reached(state, boundary, within.work);
 
-      if (last) {
-        // Nothing follows it, so the entry settles rather than asking again.
-        yield* showing(pty, settledOk(1), within.work);
-        // Read out of the file rather than off the screen: the transcript is
-        // elided to the pane it is drawn in, and what the entry *produced* is
-        // recorded. Every line of it has to be there — the pull request it
-        // opened, the collections it read and one answer per checkpoint — so a
-        // value lost to any of the reopens above shows up as a gap here.
-        const journal = (yield* histories(world.home)).join("\n");
-        for (const line of JOURNEY_OUTPUT) {
-          expect(journal).toContain(line);
-        }
-      } else {
-        yield* showing(pty, ASKING, within.work);
-        before = yield* standing(state);
-      }
+      yield* showing(pty, ASKING, within.work);
+      before = yield* standing(state);
 
-      yield* reaching(pty, "[exit]", within.leave);
+      yield* reaching(pty, "[exit]", within.work);
       yield* pty.type("\r");
       expect(
         yield* ended(
@@ -855,9 +878,44 @@ export function* journeyThrough(
           `${boundary.name} had just happened, so this teardown joins a retained host.`,
         ),
       ).toBe(0);
-      return last ? undefined : printed(yield* pty.shows());
+      return printed(yield* pty.shows());
     });
   }
+
+  // One more invocation, for the last question. Nothing follows it, so
+  // answering it settles the entry — and the last boundary's own work has to
+  // survive this reopen the way every other one did.
+  const settling = location;
+  const held = before;
+  yield* scoped(function* (): Operation<void> {
+    const pty = yield* invoking(settling);
+    const state = stateOf(world, store);
+    yield* showing(pty, ASKING, within.work);
+    expect(yield* standing(state)).toEqual(held);
+    const last = BOUNDARIES[BOUNDARIES.length - 1];
+    yield* last?.done(state);
+    yield* answer(pty, ANSWER, within.work);
+
+    yield* showing(pty, settledOk(1), within.work);
+    // Read out of the file rather than off the screen: the transcript is
+    // elided to the pane it is drawn in, and what the entry *produced* is
+    // recorded. Every line of it has to be there — the pull request it opened,
+    // the collections it read and one answer per checkpoint — so a value lost
+    // to any of the reopens above shows up as a gap here.
+    const journal = (yield* histories(world.home)).join("\n");
+    for (const line of JOURNEY_OUTPUT) {
+      expect(journal).toContain(line);
+    }
+    // And the world the last boundary left is still that world: settling the
+    // entry performed none of it again.
+    expect(yield* standing(state)).toEqual(held);
+
+    yield* reaching(pty, "[exit]", within.work);
+    yield* pty.type("\r");
+    expect(
+      yield* ended(pty, within.leave, "the entry had settled, so this teardown joins its host."),
+    ).toBe(0);
+  });
 }
 
 /** The entry a second invocation types, which is work of its own. */
