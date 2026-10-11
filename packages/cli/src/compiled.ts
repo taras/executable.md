@@ -16,7 +16,7 @@ import { importPluginModule } from "./host-plugin-modules.ts";
 import { compiledUpgradeAssembly } from "./compiled-upgrade.ts";
 import { useMachineSessions } from "./session-coordinator.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
-import { denoRunRepositories } from "./deno-repositories.ts";
+import { denoReplEntryHost, denoRunRepositories } from "./deno-repositories.ts";
 import { isCredentialHelperMode, runCredentialHelper } from "@executablemd/git/credential-helper";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { useCompiledService } from "./compiled-service.ts";
@@ -94,6 +94,9 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
       () => useDenoWorkflowHost(HELPER),
       useMachineSessions(),
       useCompiledRepl,
+      // The same retained host the source entrypoint supplies: a compiled
+      // binary is the same program, and an entry it runs resumes the same way.
+      denoReplEntryHost(HELPER),
     );
   });
 }

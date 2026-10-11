@@ -380,7 +380,19 @@ export function temporaryDirectory(): Operation<Result<string>> {
  * outcome here.
  */
 export function* writeFileText(input: FileWriteInput): Operation<FileWriteFailureData | undefined> {
-  const result = yield* invokeFiles(Files.operations.writeTextFile(input));
+  return writeOutcome(yield* invokeFiles(Files.operations.writeTextFile(input)));
+}
+
+/**
+ * What a write outcome says went wrong, or nothing when it says it succeeded.
+ *
+ * Shared with the routed mutation path so the two cannot come to classify one
+ * provider answer differently. Every refusal here is the same `protocol`
+ * invariant the ordinary call raises: a provider that cannot describe what it
+ * did may not have done it, and there is no safe reading of a write outcome
+ * this boundary cannot parse.
+ */
+export function writeOutcome(result: unknown): FileWriteFailureData | undefined {
   const settled = settlement(result);
   if (settled === undefined) {
     throw new FilesInvariantError("protocol");

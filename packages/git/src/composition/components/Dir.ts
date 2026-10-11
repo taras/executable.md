@@ -50,8 +50,14 @@ export class DirInvocationError extends Error {
   override name = "DirInvocationError";
 }
 
-/** What a refusal means, in the document's terms rather than the platform's. */
-function reason(value: string): string {
+/**
+ * What a refusal means, in the document's terms rather than the platform's.
+ *
+ * Exported so the retained entry's own `<Dir>` refuses in these same words: a
+ * document should not be able to tell which host made its directory from the
+ * sentence it gets when one could not be made.
+ */
+export function reason(value: string): string {
   switch (value) {
     case "not-directory":
       return "something that is not a directory is already there, or is on the way to it";

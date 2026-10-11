@@ -28,9 +28,12 @@ and categorization rather than clarify them, so both stay exactly as written.
 | Term | Meaning |
 | --- | --- |
 | behavioral predictability | a plan as a program: ~80% deterministic, ~20% probabilistic |
-| replay determinism | the journal doesn't lose the execution chain: replaying arrives at the same state, where execution can continue |
+| replay determinism | the journal preserves the execution chain: replay restores the recorded execution state from which execution can continue; correspondence with the live environment is a separate host contract |
 | replay | using the durable journal to restore the recorded portion of a document execution without repeating durable effects; after the recorded entries are consumed, execution may continue live |
 | divergence | reserved for replay: a replay that departs from the recorded journal |
+| foreground execution | interactive work designed around the available attention of a user or agent, who inspects the environment, addresses mismatches and adjusts subsequent work |
+| background automation | work designed to proceed without ongoing user or agent attention, with its persistence and recovery guarantees supplied by the workflow host |
+| REPL | the foreground interactive environment for experimenting with and testing components; replay restores recorded execution state, while the user or agent handles differences between that state and the live environment |
 | REPL history | the immutable ordered execution records the REPL reads from the durable journal and projects into `ReplModel`; the History surface presents this read model and is not itself a journal |
 | middleware | applied by the lexical structure, used by runtime execution |
 | workflow run | a workflow being carried out with its progress and outcome recorded durably; document executions perform its work, while ongoing effects remain scoped to the document execution in which they run |
@@ -156,8 +159,9 @@ Determinism is two properties:
 - **Behavioral predictability** — a key product feature: generate a plan as a
   program where ~80% is deterministic and ~20% is probabilistic.
 - **Replay determinism** — the journal doesn't lose the execution chain:
-  replaying the journal arrives at the same state, where execution can
-  continue.
+  replaying the journal restores the recorded execution state, where execution
+  can continue. Whether the live environment matches that state is a separate
+  host contract.
 
 ## Workflow runs
 
@@ -5457,6 +5461,36 @@ Status is measured against main.
 `<Retry>` composes with validation by nesting: a `<Parse>` failing inside
 fails the attempt — "retry until it parses" is two existing ideas.
 
+## REPL execution model
+
+The REPL is a foreground interactive environment for experimenting with and
+testing components. It assumes a user or agent is available to inspect what
+happened, orient to the current environment and adjust the script for further
+work. Workflows supply the persistence and recovery contracts for background
+automation.
+
+Replay fast-forwards execution through the retained history to its latest
+recorded state. Recorded results restore execution values and progress without
+re-executing the effects that produced them. Once that history is consumed, new
+work acts on the live environment.
+
+The recorded execution state and the live environment may disagree. The REPL
+accepts that disconnect: replay neither restores the environment nor requires
+it to match historical results before continuing. Environmental mismatch alone
+does not justify repeating a completed effect or blocking continuation. The
+user or agent addresses the mismatch through inspection, orientation and
+changes to subsequent work.
+
+For example, an entry writes `A` to a file and records the result. The user then
+changes the file to `B`. Replay returns the recorded write result without
+writing `A` again; the file remains `B`. A subsequent new operation observes
+and acts on `B`.
+
+This execution model retains journal integrity, configured permissions, entry
+ownership and external-effect reconciliation. Workflow-specific environmental
+validation and recovery belong to the workflow host; REPL history alone creates
+no requirement to snapshot, validate or recover an entire checkout.
+
 ## The private REPL composition kernel
 
 `packages/cli/src/repl/` is a private CLI feature, not a package boundary and
@@ -6071,8 +6105,209 @@ row that announces one is what crosses to that surface. Nothing crosses on its
 own: arrival announces and repaints, and that is all it does.
 
 This command installs no foreground launcher, no browser elicitation and no
-readline permission handling, reads no runtime global, and adds no durable record
-family of its own: what it retains is the ordinary events any other run writes.
+readline permission handling, reads no runtime global, and adds no outer durable
+record family of its own: what it retains is the ordinary events any other run
+writes, including the two feature-owned effect payloads the retained repository
+host below writes inside them.
+
+## The retained REPL-entry repository host
+
+The REPL execution model above governs this host: replay restores recorded
+results, and whether the live environment still matches them is the person's
+business. Inventories, predicted local transitions and frontier comparisons are
+not continuation requirements and are not implemented. Entry ownership, passive
+history views and external-effect reconciliation are.
+
+A REPL entry that was interrupted partway through repository work continues it.
+That is a third repository host beside the two of
+`specs/workflow-workspace-spec.md` §2 — not a workflow run, because there is no
+WorkflowRun, no SQLite store and no Workspace, and not an ordinary run, because
+an ordinary run retains nothing and a second one is a second question. What this
+host has is the entry's own segment of the ordinary JSONL journal, and what it
+does with it is remember exactly enough to not do completed work twice.
+
+**The owner is the entry, and nothing a document can reach.** Records are
+retained under `repl:v1:` plus the canonical JSON of `[executionId, entryKey]` —
+the execution identity the host established and the entry key admission order
+fixed. It travels in the legacy `runId` member of the existing Git-host and
+Issue identities, so those record shapes and their idempotency keys stay
+byte-compatible, and `reconcileOwnedGitHostEffect()`, `readOwnedIssue()` and
+`upsertOwnedIssue()` are the surfaces that let a host state an owner the shared
+workers would otherwise derive from `getWorkflowRun()`. A site is the canonical
+occurrence of the element that asked, authenticated through the claimant this
+execution minted for that component. Neither comes from a prop, a binding, a
+middleware answer or `expand.current`, which a descendant may bind and is
+therefore not a permission boundary.
+
+**A local operation is one ordinary durable operation.** Every mutation — an
+authored or generated `<File>`, a `<File.Delete>`, an authored `<Dir>`, a
+`<Git.Switch>`, `<Git.Add>` or `<Git.Commit>`, and a `<Repository>` or
+`<Worktree>` selection — is performed by the ordinary live provider and its
+result is appended once. Its durable name is this entry's owner, the canonical
+occurrence that asked, the operation and a digest of the *authored* request;
+live state, the clock and an inferred object id contribute nothing to it. There
+is no record before the effect, because there is nothing for one to say.
+
+**A completed operation replays its result and performs nothing.** The record
+holds what was asked for and what performing it produced, so a replay answers
+the same value a live run did and touches no file, no index and no ref. It does
+not read the checkout, compare it with anything, restore it or refuse because it
+has changed: an entry that wrote `A` into a file somebody has since changed to
+`B` replays its write, leaves `B`, and the next new operation acts on `B`. A
+selection replays the same way — its own result carries the checkout and shared
+Git directory its content belongs to, which is what routes this entry's
+descendants — and it neither clones nor re-runs the managed selector. What a
+replayed selection does not promise is that the directory is still there; a new
+operation that needs it refuses in its own ordinary words.
+
+Both branches a saved outcome has are read positively: the result the operation
+writes down, or a refusal in its own vocabulary. Failing to be the one does not
+make a value the other, so a Files failure naming a different operation, a
+failure too malformed for any parser to read, and a value from somewhere else
+are each unreadable history rather than an outcome. That ends the continuation
+where the record is read, before the work standing after it runs, and it is
+raised rather than answered — a refusal belongs in the result channel, which
+`<PrintErrors>` may print and carry on past, and an unreadable record is not a
+refusal this operation reported.
+
+**The first operation with no result runs live, and its outcome fences what
+follows.** It performs against whatever is actually there and appends its
+outcome before any later work in the document runs. An append that fails is
+fatal, as every durability failure is, and `<PrintErrors>` cannot turn one into
+authorization for later work. What that leaves is one honest window: native work
+can happen and its result can fail to be appended, in which case the journal
+holds no completion and a continuation may attempt the operation again. That is
+ordinary durable-stream behaviour rather than an exactly-once local effect, and
+it is what this host trades for not snapshotting anybody's working tree. A
+refusal in an operation's own vocabulary is journaled as the effect failure it
+is, so a continuation reports the same refusal rather than retrying it.
+
+**Leases, not states, are what keep two writers apart.** An entry-wide
+non-blocking lease covers each managed placement and the canonical common Git
+directory of every checkout it works in, taken before live use and released with
+the entry; a second *process* refuses before a byte is read. Within one process,
+one entry at a time holds a shared Git directory, which is the only mutual
+exclusion this host keeps. Nothing is ordered by a retained position, and no
+expected state is remembered.
+
+**External effects are frozen requests over the existing envelopes.** A push, a
+pull-request upsert and an issue upsert are named by what they *ask*, and part
+of that ask is resolved rather than authored: the branch the checkout is on, the
+commit it holds, the repository identity its selection pinned. Resolving it
+again on a later open asks a different question, consumes no retained result and
+performs the effect twice. So the resolved request is written down
+first, as a record of its own: it holds the authored request, the inputs that
+asking resolved to, and nothing about the state of any checkout. It is written
+before the service is contacted at all, and it is not an outcome.
+
+An issue is the one of the three with nothing resolved in it: a document wrote
+every field, so what its record adds is the barrier rather than the inputs.
+Filed outside every selection it needs no record at all — filing an issue is
+not repository work, so nothing is selected for one to be about — and none is
+invented: the effect's own record and the stable owner/site idempotency key are
+the whole of its recovery.
+
+What the service did stays where it already is. The existing `git_host_effect`
+and `issue_effect` records are the only authority on an external outcome: a
+completed one replays without selecting a provider or reaching a service, and an
+interrupted one observes under the frozen identity and natural key, adopts a
+proven compatible completion, performs proven absence or an attested ancestor
+advance once, refuses conflict and permanent ambiguity, and fails on temporary
+unavailability. A remote that could not answer has proven nothing, and reading
+silence as absence is what would publish twice. What a push does *not* do is
+check the checkout afterwards: the branch is where it was asked to be, and
+whether the working tree has moved since is the person's business like every
+other live difference.
+
+**Publication is this entry's own record of publishing.** A pull request is
+admitted against publications rebuilt privately from accepted records — each one
+a resolved push request, which says which checkout was published from, paired
+with an accepted successful Git-host record, which says it happened. Neither is
+evidence alone: the retained record is written before the remote is contacted,
+and the Git-host record carries no checkout. The pair has to agree about whose
+publication it is as well as about the branch and the commit: the identity the
+receipt was performed under is the owner and the occurrence the request was
+frozen under, so a receipt that matches the Git inputs while naming another
+entry or another site pairs with nothing. A record this version cannot read
+refuses the admission rather than being skipped. The exact repository, checkout,
+origin, destination, branch and commit must match, so a commit made after the
+push needs its own publication, and a replayed pull-request result, a copied
+value and a middleware answer grant nothing. Another entry may select, lease and
+publish the same physical checkout; it inherits no effect identity and no
+evidence.
+
+**Reads are observations, and a later one is a new observation.** A completed
+issue read or pull-request evidence read answers from its record without
+reaching a forge or opening a credential session. The durability of an evidence
+read sits beneath the adapter that admits it, so a target this host never
+authorized leaves no record of a question it was not permitted to ask; the
+claimed occurrence reaches that layer through the entry's own closure rather
+than through a context, and a read nothing claimed is refused.
+
+An evidence read is also the one retained effect whose durable name leaves the
+owner out — a workflow fork reaching the same position with the same question
+has to consume the record its source wrote — so the name alone would let a
+segment answer with an observation another owner made, and answer it with no
+forge request at all. The entry therefore reads each retained read's own request
+where it reads its whole history, and refuses one retained under another owner,
+or one whose request it cannot read, before anything is attached. Every other
+external record is named by a digest that includes its identity, so no live
+request here can ask for one somebody else wrote.
+
+**One host per entry, assembled where the runtime is known.** `xmd repl` carries
+a factory, not a host: the public command names it at the entrypoint that can
+answer for the platform — the Deno source entrypoint and the compiled binary pass
+one, Node and Bun pass none — and the REPL session calls it once per submitted
+entry, inside the task that runs that entry. So a command that only draws a
+catalog, a settled entry projected from records, and an entry refused before it
+executed each build nothing, and two entries are two owners by construction
+rather than by discipline. A runtime that passes no factory leaves the
+declarations to reach their own Api defaults, which refuse before a lock, a
+credential, a directory or a subprocess exists.
+
+**A placement has one canonical identity, resolved before it is used.** The root
+managed checkouts live under is created and then canonicalized, once, by the
+first managed selection that asks for it — and every identity derived from it is
+derived from that one spelling: the slot a `<Repository>` is placed in, the
+common directory its `<Worktree>`s key on, the key its selection is remembered
+under, and the lock that keeps a second process out. A write arrives as the path
+the filesystem answers with, so a selection remembered under another spelling of
+the same directory does not cover it: the write would leave as an ordinary one
+and the next operation would find a checkout in a state this entry's history
+cannot account for. Creating that root is infrastructure and not a destination —
+no slot, checkout or metadata is touched by it, and a placement's own creation
+still happens inside its acknowledged intent — and an entry that selects nothing
+managed never asks, so a cold view, a preflight and an ordinary unselected entry
+still reach none of it.
+
+A session opened at a frozen history position builds nothing either, and that is
+a decision rather than a consequence: the unfinished entry such a history ends
+with is projected and left alone, and continuing it is what returning to the head
+asks for. The session offers that as one idempotent act — an entry already
+running is left exactly as it is, an entry that has settled is not started again,
+and a driver may say it on every frame that stands at the head. Continuing *does*
+reach the repository: the host is built, the saved checkouts are selected and
+authenticated again and their leases re-acquired, and only then are the completed
+boundaries replayed from their records. The effect-free claim belongs to
+presentation — a settled history, and a frozen view of any history — and not to a
+live continuation.
+
+The entry's own file access is bound into the execution it runs: the host's
+ordinary Files provider is still installed beneath it and still answers for the
+rest of the command, so it delegates each mutation inward first and performs one
+only when nothing further in has claimed it. An outer provider that answered
+mutations itself would make the entry's authored-write seam unreachable in
+production while every injected test passed, which is exactly the shape a
+delivery gate exists to catch.
+
+**Nothing retained is a capability.** Records are data in a file anybody who can
+read the journal can read. Selections, leases, credentials, scratch directories
+and publication evidence live in the entry task's closure and end with it;
+credentials and live handles are never retained. A history this host cannot read
+completely refuses the continuation where it is read, with nothing selected and
+nothing touched; a history holding the experimental snapshot protocol's own
+records is refused the same way rather than reinterpreted; and an incomplete
+JSONL tail stays an unreadable journal rather than a recoverable gap.
 
 ## Changing these rules
 

@@ -72,6 +72,7 @@ const PROVIDER_NEUTRAL: readonly string[] = [
   "src/composition/pull-request-records.ts",
   "src/composition/pull-request-target.ts",
   "src/composition/push-evidence.ts",
+  "src/composition/managed-metadata.ts",
   "src/composition/records.ts",
   "src/composition/selection.ts",
   "src/git-host/api.ts",
@@ -92,6 +93,9 @@ const PROVIDER_NEUTRAL: readonly string[] = [
   "src/issue/records.ts",
   "src/issue/tracker.ts",
   "src/plugin.ts",
+  "src/retained-repository/admission.ts",
+  "src/retained-repository/records.ts",
+  "src/retained-repository/requests.ts",
 ];
 
 /**
@@ -162,11 +166,19 @@ const DENO_ADAPTER: readonly string[] = [
   "src/deno/run-composition/errors.ts",
   "src/deno/run-composition/identity.ts",
   "src/deno/run-composition/leases.ts",
-  "src/deno/run-composition/metadata.ts",
   "src/deno/run-composition/operations.ts",
   "src/deno/run-composition/placement.ts",
   "src/deno/run-composition/provider.ts",
   "src/deno/run-composition/pull-request.ts",
+  "src/deno/retained-repository/components.ts",
+  "src/deno/retained-repository/external.ts",
+  "src/deno/retained-repository/files.ts",
+  "src/deno/retained-repository/local.ts",
+  "src/deno/retained-repository/observations.ts",
+  "src/deno/retained-repository/provider.ts",
+  "src/deno/retained-repository/publication.ts",
+  "src/deno/retained-repository/selections.ts",
+  "src/deno/retained-repository/terminal.ts",
 ];
 
 /**

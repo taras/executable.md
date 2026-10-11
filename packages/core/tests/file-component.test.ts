@@ -14,13 +14,21 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, race, resource, scoped, sleep, suspend, until } from "effection";
+import { ensure, Ok, race, resource, scoped, sleep, suspend, until } from "effection";
 import type { Operation } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { API, useHostFiles } from "@executablemd/runtime";
+import { API, fileWriteSuccess, hostFilesHandler, useHostFiles } from "@executablemd/runtime";
+import type { FilePathInput, FileWriteInput, FileWriteSuccess } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
-import { execute } from "../src/execute.ts";
+import { execute, executeInstalled } from "../src/execute.ts";
+import { fileDeleteEntry, fileWriteEntry } from "../host.ts";
+import { recordedFiles } from "./support/fragment-files.ts";
+import type {
+  FileMutationHandlers,
+  FileMutationNext,
+  FileMutationRequest,
+} from "../src/file-mutations.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { FileAccessError } from "../src/components/File.ts";
@@ -30,7 +38,7 @@ import { createContext } from "effection";
 import { registerComponents } from "../src/components/registration.ts";
 import { hasContent } from "../src/content-context.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
-import { Component } from "../src/component-api.ts";
+import { Component, content } from "../src/component-api.ts";
 import { printErrors } from "../src/component-failures.ts";
 import { ExecutionDeclarationCatalog } from "../src/execution-declarations.ts";
 import { expandSegments } from "../src/expand.ts";
@@ -1567,5 +1575,594 @@ describe("Tier FL — the authored form decides the effect", () => {
     expect(failure).toContain("without the invocation the engine issued");
     expect(calls).toEqual([]);
     expect(yield* readTextFile(join(fixture.workspace, "notes.md"))).toBe("the authored note\n");
+  });
+});
+
+/**
+ * Tier FM — `<File>` when a host journals its mutations.
+ *
+ * A host that retains repository work is handed each write, and with it the
+ * identity of the occurrence that wrote. These drive the real component through
+ * the trusted entrypoint with a fixture handler set, so what is proven is the
+ * delivery: which request arrives, which occurrence names it, and what cannot
+ * reach the handler at all. Whether a provider then journals or performs
+ * anything is the provider's own, and is not fixed here.
+ */
+describe("Tier FM — a host that is handed `<File>`'s mutations", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  interface Delivered {
+    readonly occurrence: string;
+    readonly cwd: string;
+    readonly path: string;
+    readonly content: string;
+  }
+
+  interface Mutations {
+    readonly delivered: Delivered[];
+    readonly deleted: { occurrence: string; path: string }[];
+    readonly handlers: FileMutationHandlers;
+  }
+
+  /**
+   * A handler set that records what it was handed and submits success without
+   * touching the filesystem.
+   *
+   * Not writing is the point: if the file changes anyway, the mutation did not
+   * go through this seam.
+   */
+  function recording(options: { write?: boolean } = {}): Mutations {
+    const delivered: Delivered[] = [];
+    const deleted: { occurrence: string; path: string }[] = [];
+    return {
+      delivered,
+      deleted,
+      handlers: {
+        *writeTextFile([routing], next) {
+          const occurrence = yield* next({ intent: "inspect", routing });
+          delivered.push({ occurrence, ...routing.input });
+          if (options.write === true) {
+            const written = yield* hostFilesHandler().writeTextFile(routing.input);
+            yield* next({ intent: "answer", routing, answer: written });
+            return;
+          }
+          yield* next({
+            intent: "answer",
+            routing,
+            answer: Ok(fileWriteSuccess("host-committed")),
+          });
+        },
+        *deleteFile([routing], next) {
+          const occurrence = yield* next({ intent: "inspect", routing });
+          deleted.push({ occurrence, path: routing.input.path });
+          yield* next({ intent: "answer", routing, answer: Ok(undefined) });
+        },
+      },
+    };
+  }
+
+  /**
+   * The working directory and a provider shaped like a retained entry's.
+   *
+   * It answers everything that is not a mutation itself and *delegates* the two
+   * that are, which is what lets the chain reach the invocation's own terminal.
+   * A provider that answered a write here would be the "direct public call"
+   * case: the write would happen with nothing having accepted its result, and
+   * the mutation fails closed rather than going unrecorded.
+   */
+  function* useRetainedFiles(fixture: Fixture): Operation<void> {
+    const host = hostFilesHandler();
+    yield* API.Env.around(
+      {
+        // deno-lint-ignore require-yield
+        *cwd() {
+          return fixture.workspace;
+        },
+      },
+      { at: "min" },
+    );
+    yield* API.Files.around({
+      *checkFilePath([input]) {
+        return yield* host.checkFilePath(input);
+      },
+      *readTextFile([input]) {
+        return yield* host.readTextFile(input);
+      },
+      *globFiles([input]) {
+        return yield* host.globFiles(input);
+      },
+      *ensureDirectory([input]) {
+        return yield* host.ensureDirectory(input);
+      },
+      *temporaryDirectory() {
+        return yield* host.temporaryDirectory();
+      },
+      *writeTextFile([input], next) {
+        return yield* next(input);
+      },
+      *deleteFile([input], next) {
+        return yield* next(input);
+      },
+    });
+  }
+
+  function retained(
+    fixture: Fixture,
+    source: string,
+    handlers: FileMutationHandlers,
+    install?: () => Operation<void>,
+  ): Operation<Json> {
+    return scoped(function* () {
+      const path = join(fixture.workspace, "doc.md");
+      yield* writeTextFile(path, source);
+      yield* useRetainedFiles(fixture);
+      if (install) {
+        yield* install();
+      }
+      return yield* collect(
+        yield* executeInstalled(
+          { path, stream: new InMemoryStream(), includes: [fixture.workspace] },
+          [{ fileMutations: handlers }],
+        ),
+      );
+    });
+  }
+
+  it("FM1: the paired form hands the host the frozen request and its occurrence", function* () {
+    const fixture = yield* useFixture();
+    const mutations = recording();
+    yield* retained(fixture, '<File path="notes.md">the note</File>\n', mutations.handlers);
+
+    expect(mutations.delivered.length).toBe(1);
+    const delivered = mutations.delivered[0]!;
+    expect(delivered.path).toBe("notes.md");
+    expect(delivered.cwd).toBe(fixture.workspace);
+    expect(delivered.content).toBe("the note");
+    expect(delivered.occurrence.length).toBeGreaterThan(0);
+    // The host submitted success and wrote nothing, so nothing was written.
+    expect(yield* exists(join(fixture.workspace, "notes.md"))).toBe(false);
+  });
+
+  it("FM1: a host that performs the write still writes exactly once", function* () {
+    const fixture = yield* useFixture();
+    const mutations = recording({ write: true });
+    yield* retained(fixture, '<File path="notes.md">the note</File>\n', mutations.handlers);
+
+    expect(mutations.delivered.length).toBe(1);
+    expect(yield* readTextFile(join(fixture.workspace, "notes.md"))).toBe("the note");
+  });
+
+  it("FM2: the self-closing form reads and reaches no handler", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "already here");
+    const mutations = recording();
+    const output = yield* retained(fixture, '<File path="notes.md" />\n', mutations.handlers);
+
+    expect(String(output)).toContain("already here");
+    expect(mutations.delivered).toEqual([]);
+  });
+
+  it("FM3: two sibling writes of the same text are two occurrences", function* () {
+    const fixture = yield* useFixture();
+    const mutations = recording();
+    yield* retained(
+      fixture,
+      '<File path="a.md">same</File>\n\n<File path="b.md">same</File>\n',
+      mutations.handlers,
+    );
+
+    expect(mutations.delivered.length).toBe(2);
+    const [first, second] = mutations.delivered;
+    expect(first!.occurrence).not.toBe(second!.occurrence);
+  });
+
+  it("FM4: a substituted `expand.current` cannot redirect the occurrence", function* () {
+    const fixture = yield* useFixture();
+    const mutations = recording();
+    const Substituted = createContext<unknown>("expand.current", undefined);
+    yield* retained(
+      fixture,
+      '<Around>\n<File path="a.md">one</File>\n\n<File path="b.md">two</File>\n</Around>\n',
+      mutations.handlers,
+      function* () {
+        yield* registerComponents([
+          {
+            name: "Around",
+            origin: "test://around",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            *fn(): Operation<string> {
+              // A valid-looking expansion of somebody else's site, bound for
+              // everything inside.
+              yield* Substituted.set({ id: "forged-occurrence", name: "File" });
+              return yield* content();
+            },
+          },
+        ]);
+      },
+    );
+
+    expect(mutations.delivered.length).toBe(2);
+    for (const delivered of mutations.delivered) {
+      expect(delivered.occurrence).not.toBe("forged-occurrence");
+    }
+    expect(mutations.delivered[0]!.occurrence).not.toBe(mutations.delivered[1]!.occurrence);
+  });
+
+  it("FM5: ordinary Files middleware still sees the request and may narrow it", function* () {
+    const fixture = yield* useFixture();
+    const mutations = recording();
+    const seen: string[] = [];
+    yield* retained(
+      fixture,
+      '<File path="notes.md">the note</File>\n',
+      mutations.handlers,
+      function* () {
+        yield* API.Files.around(
+          {
+            *writeTextFile([input], next) {
+              seen.push(input.path);
+              return yield* next({ ...input, content: `${input.content} (narrowed)` });
+            },
+          },
+          { at: "max" },
+        );
+      },
+    );
+
+    expect(seen).toEqual(["notes.md"]);
+    expect(mutations.delivered[0]!.content).toBe("the note (narrowed)");
+  });
+
+  it("FM6: middleware that answers without delegating settles no mutation", function* () {
+    const fixture = yield* useFixture();
+    const mutations = recording();
+    let failure: string | undefined;
+    try {
+      yield* retained(
+        fixture,
+        '<File path="notes.md">the note</File>\n',
+        mutations.handlers,
+        function* () {
+          yield* API.Files.around(
+            {
+              // deno-lint-ignore require-yield
+              *writeTextFile() {
+                return Ok(fileWriteSuccess("host-committed"));
+              },
+            },
+            { at: "max" },
+          );
+        },
+      );
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(failure).toBeDefined();
+    expect(mutations.delivered).toEqual([]);
+  });
+
+  it("FM7: a handler that submits nothing fails closed", function* () {
+    const fixture = yield* useFixture();
+    let failure: string | undefined;
+    try {
+      yield* retained(fixture, '<File path="notes.md">the note</File>\n', {
+        *writeTextFile([routing], next) {
+          yield* next({ intent: "inspect", routing });
+        },
+        *deleteFile([routing], next) {
+          yield* next({ intent: "inspect", routing });
+        },
+      });
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    expect(failure).toBeDefined();
+    expect(yield* exists(join(fixture.workspace, "notes.md"))).toBe(false);
+  });
+
+  it("FM8: a copied request, a second inspection and an early answer all refuse", function* () {
+    const fixture = yield* useFixture();
+    const breaking: readonly Pick<FileMutationHandlers, "writeTextFile">[] = [
+      {
+        *writeTextFile([routing], next) {
+          // A request rebuilt with the same members.
+          yield* next({ intent: "inspect", routing: { ...routing } });
+        },
+      },
+      {
+        *writeTextFile([routing], next) {
+          yield* next({ intent: "inspect", routing });
+          yield* next({ intent: "inspect", routing });
+        },
+      },
+      {
+        *writeTextFile([routing], next) {
+          yield* next({
+            intent: "answer",
+            routing,
+            answer: Ok(fileWriteSuccess("host-committed")),
+          });
+        },
+      },
+    ];
+    for (const handlers of breaking) {
+      let failure: string | undefined;
+      try {
+        yield* retained(fixture, '<File path="notes.md">the note</File>\n', {
+          ...handlers,
+          *deleteFile([routing], next) {
+            yield* next({ intent: "inspect", routing });
+          },
+        });
+      } catch (error) {
+        failure = error instanceof Error ? error.message : String(error);
+      }
+      expect(failure).toBeDefined();
+    }
+  });
+
+  it("FM9: two handler sets, or a set missing a method, refuse setup", function* () {
+    const fixture = yield* useFixture();
+    const mutations = recording();
+    const path = join(fixture.workspace, "doc.md");
+
+    let two: string | undefined;
+    try {
+      yield* scoped(function* () {
+        yield* writeTextFile(path, '<File path="notes.md">x</File>\n');
+        yield* useRetainedFiles(fixture);
+        yield* collect(
+          yield* executeInstalled(
+            { path, stream: new InMemoryStream(), includes: [fixture.workspace] },
+            [{ fileMutations: mutations.handlers }, { fileMutations: recording().handlers }],
+          ),
+        );
+      });
+    } catch (error) {
+      two = error instanceof Error ? error.message : String(error);
+    }
+    expect(two).toContain("two file-mutation handler sets");
+
+    // A host crosses this boundary from JavaScript, so the missing method is
+    // removed rather than described: the type says a set has both.
+    const halfSet: FileMutationHandlers = { ...mutations.handlers };
+    Reflect.deleteProperty(halfSet, "deleteFile");
+
+    let half: string | undefined;
+    try {
+      yield* scoped(function* () {
+        yield* writeTextFile(path, '<File path="notes.md">x</File>\n');
+        yield* useRetainedFiles(fixture);
+        yield* collect(
+          yield* executeInstalled(
+            { path, stream: new InMemoryStream(), includes: [fixture.workspace] },
+            [{ fileMutations: halfSet }],
+          ),
+        );
+      });
+    } catch (error) {
+      half = error instanceof Error ? error.message : String(error);
+    }
+    expect(half).toContain("both writeTextFile and deleteFile");
+  });
+
+  it("FM16: an authored and a generated write under one name are separate owners", function* () {
+    const fixture = yield* useFixture();
+    const mutations = recording();
+    const fragments = recordedFiles({});
+    const path = join(fixture.workspace, "doc.md");
+    yield* scoped(function* () {
+      yield* writeTextFile(
+        path,
+        '<File path="authored.md">authored text</File>\n\n' +
+          `<Evaluate text={${JSON.stringify('<File path="generated.md">generated text</File>\n')}} ` +
+          'allow={["write"]} />\n',
+      );
+      yield* useRetainedFiles(fixture);
+      yield* collect(
+        yield* executeInstalled(
+          { path, stream: new InMemoryStream(), includes: [fixture.workspace] },
+          [
+            {
+              fileMutations: mutations.handlers,
+              evaluation: {
+                read: [],
+                write: [fileWriteEntry(), fileDeleteEntry()],
+                files: fragments,
+              },
+            },
+          ],
+        ),
+      );
+    });
+
+    // One authored name and one generated name, two definitions, two owners.
+    expect(mutations.delivered.map((call) => call.path)).toEqual(["authored.md", "generated.md"]);
+    expect(mutations.delivered[0]!.occurrence).not.toBe(mutations.delivered[1]!.occurrence);
+  });
+
+  it("FM18: a registration shadowing `File` acquires no eligibility", function* () {
+    const fixture = yield* useFixture();
+    const mutations = recording();
+    const output = yield* retained(
+      fixture,
+      '<File path="notes.md">the note</File>\n',
+      mutations.handlers,
+      function* () {
+        yield* registerComponents([
+          {
+            name: "File",
+            origin: "test://shadow",
+            props: {
+              type: "object",
+              properties: { path: { type: "string" } },
+              required: ["path"],
+              additionalProperties: false,
+            },
+            *fn(props: Record<string, Json>): Operation<string> {
+              return `shadowed ${String(props.path)}`;
+            },
+          },
+        ]);
+      },
+    );
+
+    // The shadow answered the name, so the adoption — which belongs to core's
+    // own definition — was never selected and the host was never handed
+    // anything.
+    expect(output).toContain("shadowed notes.md");
+    expect(mutations.delivered).toEqual([]);
+    expect(yield* exists(join(fixture.workspace, "notes.md"))).toBe(false);
+  });
+
+  it("FM20: overlapping continuations cannot enter two handlers for one occurrence", function* () {
+    const fixture = yield* useFixture();
+    const entered: string[] = [];
+    const handlers: FileMutationHandlers = {
+      *writeTextFile([routing], next) {
+        const occurrence = yield* next({ intent: "inspect", routing });
+        entered.push(occurrence);
+        // Suspended while a second continuation call is in flight: the entry is
+        // what has to already be consumed, not the settled result.
+        yield* sleep(20);
+        yield* next({
+          intent: "answer",
+          routing,
+          answer: Ok(fileWriteSuccess("host-committed")),
+        });
+      },
+      *deleteFile([routing], next) {
+        yield* next({ intent: "inspect", routing });
+        yield* next({ intent: "answer", routing, answer: Ok(undefined) });
+      },
+    };
+    try {
+      yield* retained(fixture, '<File path="notes.md">the note</File>\n', handlers, function* () {
+        yield* API.Files.around(
+          {
+            *writeTextFile([input], next) {
+              return yield* race([next(input), next(input)]);
+            },
+          },
+          { at: "max" },
+        );
+      });
+    } catch {
+      // Refusing the reuse may end the execution. What matters is that it
+      // happened before a second handler entered.
+    }
+    expect(entered.length).toBe(1);
+  });
+
+  it("FM21: a continuation kept past a failed mutation opens no fresh terminal", function* () {
+    const fixture = yield* useFixture();
+    const mutations = recording();
+    let replay: (() => Operation<unknown>) | undefined;
+    try {
+      yield* retained(
+        fixture,
+        '<File path="notes.md">the note</File>\n',
+        mutations.handlers,
+        function* () {
+          yield* API.Files.around(
+            {
+              // deno-lint-ignore require-yield
+              *writeTextFile([input], next) {
+                replay = () => next(input);
+                return Ok(fileWriteSuccess("host-committed"));
+              },
+            },
+            { at: "max" },
+          );
+        },
+      );
+    } catch {
+      // Answering without delegating fails the mutation, which is the point:
+      // the invocation is over before its saved continuation is called.
+    }
+    if (replay === undefined) {
+      throw new Error("the middleware never captured its continuation");
+    }
+    try {
+      yield* replay();
+    } catch {
+      // An expired continuation refuses.
+    }
+    expect(mutations.delivered).toEqual([]);
+  });
+
+  it("FM22: a captured handler method keeps its supplied receiver", function* () {
+    const fixture = yield* useFixture();
+    const handlers = {
+      received: 0,
+      *writeTextFile(
+        [routing]: [FileMutationRequest<FileWriteInput>],
+        next: FileMutationNext<FileWriteInput, FileWriteSuccess>,
+      ): Operation<void> {
+        this.received += 1;
+        yield* next({ intent: "inspect", routing });
+        yield* next({
+          intent: "answer",
+          routing,
+          answer: Ok(fileWriteSuccess("host-committed")),
+        });
+      },
+      *deleteFile(
+        [routing]: [FileMutationRequest<FilePathInput>],
+        next: FileMutationNext<FilePathInput, void>,
+      ): Operation<void> {
+        yield* next({ intent: "inspect", routing });
+        yield* next({ intent: "answer", routing, answer: Ok(undefined) });
+      },
+    };
+    try {
+      yield* retained(fixture, '<File path="notes.md">the note</File>\n', handlers);
+    } catch {
+      // A lost receiver throws before inspecting; the counter is what says so.
+    }
+    expect(handlers.received).toBe(1);
+  });
+
+  it("FM23: a final request that is not a write reaches no handler", function* () {
+    const fixture = yield* useFixture();
+    const mutations = recording();
+    try {
+      yield* retained(
+        fixture,
+        '<File path="notes.md">the note</File>\n',
+        mutations.handlers,
+        function* () {
+          yield* API.Files.around(
+            {
+              *writeTextFile([input], next) {
+                const changed = { ...input };
+                Reflect.set(changed, "path", 42);
+                return yield* next(changed);
+              },
+            },
+            { at: "max" },
+          );
+        },
+      );
+    } catch {
+      // Invalid final input fails the mutation before any provider work.
+    }
+    expect(mutations.delivered).toEqual([]);
+  });
+
+  it("FM10: a path the lexical check refuses reaches no handler", function* () {
+    const fixture = yield* useFixture();
+    const mutations = recording();
+    // Printed rather than thrown: this component's own declaration settles an
+    // ordinary filesystem refusal as data. What matters here is that the pure
+    // check ran first, so nothing was offered to the host.
+    const output = yield* retained(
+      fixture,
+      '<File path="/etc/passwd">the note</File>\n',
+      mutations.handlers,
+    );
+    expect(String(output)).toContain("an absolute path is not accepted");
+    expect(mutations.delivered).toEqual([]);
   });
 });

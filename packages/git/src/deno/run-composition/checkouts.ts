@@ -63,7 +63,7 @@ import {
   type ManagedMetadata,
   type ManagedRepositoryMetadata,
   type ManagedWorktreeMetadata,
-} from "./metadata.ts";
+} from "../../composition/managed-metadata.ts";
 import { CHECKOUT, checkoutOf, METADATA, metadataOf } from "./placement.ts";
 
 /** One managed checkout, once this execution is entitled to work in it. */
@@ -182,6 +182,54 @@ function* slotHoldsOnlyCheckout(slot: string): Operation<boolean> {
  * The lease is already held by the caller, so everything below is this
  * execution's alone until the execution ends.
  */
+/**
+ * What is at this managed slot, read without changing any of it.
+ *
+ * Three answers, because a retained creation has to decide what it may do
+ * before it does anything: an absent slot may be created, an established one is
+ * already there, and anything in between is an interrupted creation that is
+ * left exactly as it is. A slot holding a checkout with no metadata beside it
+ * is the clearest case — creation writes that sidecar last, precisely so a
+ * half-made checkout is never mistaken for a finished one.
+ */
+export type ManagedSlotState =
+  | { readonly state: "absent" }
+  | {
+      readonly state: "established";
+      readonly checkout: string;
+      readonly metadata: ManagedMetadata;
+    }
+  | { readonly state: "partial"; readonly reason: string };
+
+export function* observeManagedSlot(slot: string): Operation<ManagedSlotState> {
+  const checkout = checkoutOf(slot);
+  const present = yield* exists(checkout);
+  const stored = yield* readMetadata(slot);
+  if (!present && stored === undefined) {
+    return { state: "absent" };
+  }
+  if (!present) {
+    return {
+      state: "partial",
+      reason: "the slot records a managed checkout that is not there",
+    };
+  }
+  if (stored === undefined) {
+    return {
+      state: "partial",
+      reason: "the slot holds a checkout with no managed metadata beside it",
+    };
+  }
+  const metadata = parseRepositoryMetadata(stored) ?? parseWorktreeMetadata(stored);
+  if (metadata === undefined) {
+    return {
+      state: "partial",
+      reason: "the slot carries metadata this version cannot read",
+    };
+  }
+  return { state: "established", checkout, metadata };
+}
+
 export function* selectManagedRepository(
   git: GitSession,
   host: RepositoryHost,

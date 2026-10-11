@@ -49,7 +49,7 @@ The host creates a WorkflowRun, gives it an implicit Workspace, streams the
 rendered document output and retains enough state to continue after the process
 exits.
 
-## 2. Two execution environments
+## 2. Three execution environments
 
 ### 2.1 `xmd run`
 
@@ -116,8 +116,43 @@ environment.
   filesystem or process behavior.
 - Agents inspect the Workspace read-only and cannot mutate it directly.
 
-The same declarative components work in both environments. Durability comes
-from the workflow host, not from another spelling of `<File>` or `<Git.Commit>`.
+### 2.3 `xmd repl`
+
+A REPL entry executes against the current environment the way `xmd run` does,
+and retains what it did so an interrupted entry can be resumed. It is neither of
+the two above: there is no WorkflowRun, no SQLite store and no Workspace, and
+nothing is restored or reattached except the checkouts the entry's own records
+name.
+
+- Repository, Worktree and ambient selection, local Git operations, canonical
+  `<File>` writes and deletions inside a selected checkout, authored `<Dir>`
+  ensures, Push, pull requests, issues and the evidence reads are all retained
+  as feature-owned payloads inside the ordinary journal events this command
+  already writes. No outer record family, no second store and no WorkflowRun is
+  invented for them.
+- Records are owned by the entry: the execution identity the host established
+  and the entry key admission order fixed. A later entry may select, lease and
+  publish the same physical checkout and inherits no effect identity and no
+  publication evidence from the entry before it.
+- A mutation appends its complete frozen request before it changes anything, and
+  its completion after the result and the resulting state have both been
+  checked. A resume performs the saved operation from the state it started from,
+  adopts the state it predicted, and refuses anything else rather than resetting,
+  fetching or repairing to make a replay succeed.
+- Push, pull requests and issues freeze their resolved request the same way and
+  then reconcile through the existing Git-host and Issue envelopes under the
+  entry's own owner, so a completed one replays with no service work and an
+  interrupted one observes before it performs. `<PullRequest>` is authorized by
+  publications rebuilt from this entry's own accepted records and by nothing
+  else.
+- Node and Bun supply no retained repository provider and refuse repository
+  operations before a lock, a credential, a subprocess or a request exists.
+  Ordinary `<File>` and `<Dir>` stay usable there.
+
+`architecture.md` holds this host's own contract.
+
+The same declarative components work in all three environments. Durability comes
+from the host, not from another spelling of `<File>` or `<Git.Commit>`.
 
 ## 3. Workflow lifecycle
 
@@ -2347,7 +2382,12 @@ retained no checkpoint remains unassociated.
 Everything in this section is workflow-only. An ordinary `xmd run` has no
 WorkflowRun, no retained history and nothing to replay: its repository
 operations are performed once per execution, and a second run is a second
-question rather than a continuation of the first.
+question rather than a continuation of the first. A REPL entry (§2.3) does
+resume, under its own protocol and its own entry owner rather than through a
+Workspace transaction: it replays its feature-owned intent and completion
+records, holds each checkout to the states those records froze, and reconciles
+an unfinished external effect through the same envelopes §10.2 and §10.3
+describe. None of the Workspace behavior in the table below is claimed for it.
 
 Replay rehydrates the Effection tree. Ephemeral structure executes again;
 durable observations and mutations restore.
@@ -2546,6 +2586,15 @@ record of publishing the branch rather than a journal scan. Within one
 invocation the attempt happens at most once; across a process interruption
 there is no exactly-once claim.
 
+A REPL entry (§2.3) runs this same state machine, through the same terminal and
+with the same publishable conditions, under an owner it states instead of one
+derived from a WorkflowRun. What it adds is on its side of the boundary: the
+resolved request is written into its own journal before the first remote
+mutation, so a later open asks the question this one asked rather than resolving
+the branch and commit again, and publication is admitted from its own accepted
+records. Nothing about the request, the fingerprint, the identity members or the
+refusals below changes.
+
 A **Git host** is an external service that owns remote Git repositories and
 associated collaboration objects such as branches and pull requests. GitHub is
 one Git-host adapter. A Git host is distinct from the local Git capability of
@@ -2703,6 +2752,15 @@ The durable envelope described here is a workflow run's. Under an ordinary run
 with no envelope at all: identity is that execution's own opaque invocation
 identity together with the engine's expansion identity, an upsert presents an
 idempotency key derived from them, and nothing is retained.
+
+A REPL entry (§2.3) uses this envelope under its own entry owner and the
+authenticated occurrence of the `<Issue>` that asked, so identical issue text at
+another site or another entry is a different effect. An upsert written inside a
+checkout that entry has selected also writes its complete request down first, in
+that checkout's lane; written outside every selection there is no lane for such a
+record and no input resolved from live state, so this envelope and the
+provider's own idempotency key are the whole of its recovery. The key algorithm,
+the requests, the results and the effect type are unchanged.
 
 An **Issue provider** is an external service that owns a collection of issues.
 GitHub and Atlassian Cloud are Issue-provider adapters.

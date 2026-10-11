@@ -23,6 +23,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
 
 /** The layout, relative to whichever root the entrypoint chose. */
 export const REPOSITORIES = "repositories";
@@ -77,7 +78,38 @@ export function metadataOf(slot: string): string {
  * Outside the slot, because a lock file inside a directory this provider may be
  * about to create would be part of the thing it is protecting. Different slots
  * never share one: the digest is of the whole slot identity, kind included.
+ *
+ * A `common` lease names a shared Git directory rather than a managed slot, and
+ * that directory may be anywhere — an ambient checkout is not under this root.
+ * The sidecar is still placed here, under the host root every cooperating
+ * process on this machine shares, because a lock file written inside somebody's
+ * own `.git` is not this host's to leave behind.
  */
-export function lockOf(root: string, kind: "repository" | "worktree", slot: string): string {
+export function lockOf(root: string, kind: LockKind, slot: string): string {
   return `${root}/${LOCKS}/${kind}/${digest(slot)}.lock`;
 }
+
+/** What a lock sidecar can be for. */
+export type LockKind = "repository" | "worktree" | "common";
+
+/**
+ * The lock sidecar for one shared Git directory, wherever it is.
+ *
+ * Not under any host root, because a common directory is not placed by one: an
+ * ambient checkout is wherever the person is standing, and two cooperating
+ * processes may be working under two different managed roots and still be
+ * moving the refs of the same `.git`. Keyed by the directory's own canonical
+ * path, in one place every process on this machine derives identically, so the
+ * identity of the lock is the identity of the directory.
+ *
+ * Not inside that directory either. For a managed checkout the common
+ * directory is inside the slot, and lock infrastructure does not belong in the
+ * thing it protects; for somebody's own repository it is not this host's to
+ * leave a file in.
+ */
+export function commonLockOf(commonDirectory: string): string {
+  return `${tmpdir()}/${LANES}/${digest(commonDirectory)}.lock`;
+}
+
+/** Where the shared-directory locks of every process on this machine meet. */
+export const LANES = "xmd-common-lanes";

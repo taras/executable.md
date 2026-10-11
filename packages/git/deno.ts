@@ -48,3 +48,29 @@ export { gitWorkspaceAttachment } from "./src/deno/attachment.ts";
 export type { GitWorkspaceOptions } from "./src/deno/attachment.ts";
 export { useRunComposition } from "./src/deno/run-composition/provider.ts";
 export type { RunCompositionOptions } from "./src/deno/run-composition/provider.ts";
+
+/**
+ * One REPL entry's retained repository host.
+ *
+ * The factory alone, beside the ordinary installer above and for the same
+ * reason: what the host holds — this entry's owner, its selections, its leases,
+ * its credential sessions, its mutation lanes and its publication evidence —
+ * stays inside it, and a package that could reach one of those could authorize
+ * work this entry never did. Calling it acquires nothing by itself; the first
+ * element that needs repository state is what opens anything.
+ */
+export { useRetainedRepositoryEntry } from "./src/deno/retained-repository/provider.ts";
+/**
+ * The native host those operations run through.
+ *
+ * Exported for the entrypoint that builds an entry's retained host, which has
+ * to hand it one: the host is where a `git` subprocess, a temporary directory
+ * and an authentication session come from, and the entry provider names none of
+ * them itself.
+ */
+export { denoRepositoryHost } from "./src/deno/composition/host.ts";
+export type { RepositoryHost } from "./src/deno/composition/host.ts";
+export type {
+  RetainedEntryHost,
+  RetainedEntryRequest,
+} from "./src/deno/retained-repository/provider.ts";

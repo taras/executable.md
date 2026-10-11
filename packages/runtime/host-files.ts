@@ -72,7 +72,13 @@ import { realpath, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { FsApi, rm } from "@effectionx/fs";
 import { API } from "./apis.ts";
-import { fileWriteFailure, fileWriteSuccess, filesFailure, FilesInvariantError } from "./files.ts";
+import {
+  fileWriteFailure,
+  fileWriteSuccess,
+  filesFailure,
+  FilesInvariantError,
+  parseFilesFatal,
+} from "./files.ts";
 import type {
   FilePathInput,
   FilesHandler,
@@ -767,11 +773,49 @@ function traverse(
 }
 
 /**
+ * One mutation, offered to whatever is beneath this host before it performs.
+ *
+ * A host installed at `min` is the last middleware before an Api's own default,
+ * which for the ordinary chain is the refusal that says no provider is
+ * installed — so answering straight away is what this used to do, and it was
+ * right as long as nothing deeper could settle anything.
+ *
+ * Something deeper can. A trusted host that supplies canonical file-mutation
+ * handlers gives one invocation its own private terminal, built under this same
+ * Api name and reached only by delegating through the chain: public middleware
+ * may read, narrow, refuse or delegate the request, and what it may not do is
+ * *answer* it, because the value the chain returns is never read. A host
+ * provider that answered a write there would establish nothing at all, and the
+ * invocation would fail with nothing written.
+ *
+ * So each mutation is offered down the chain first, and this host performs it
+ * only when the answer is that there was nothing beneath it. Read as the closed
+ * failure data rather than by class, because the value may come from a second
+ * loaded copy of this module — and only that one condition is caught: a
+ * provider that refused for any other reason refused.
+ */
+function* delegating<Input, Value>(
+  input: Input,
+  next: (input: Input) => Operation<Result<Value>>,
+  perform: (input: Input) => Operation<Result<Value>>,
+): Operation<Result<Value>> {
+  try {
+    return yield* next(input);
+  } catch (error) {
+    if (parseFilesFatal(error)?.kind !== "provider-unavailable") {
+      throw error;
+    }
+  }
+  return yield* perform(input);
+}
+
+/**
  * Install the host provider beneath ordinary middleware.
  *
  * `at: "min"` is what lets a host wrap document filesystem access without
  * replacing it — middleware installed later sees these operations and can
- * delegate to them.
+ * delegate to them. The three mutations delegate in the other direction too,
+ * for the reason {@link delegating} gives.
  */
 export function useHostFiles(options: HostFilesOptions = {}): Operation<void> {
   const handler = hostFilesHandler(options);
@@ -783,14 +827,14 @@ export function useHostFiles(options: HostFilesOptions = {}): Operation<void> {
       *readTextFile([input]) {
         return yield* handler.readTextFile(input);
       },
-      *writeTextFile([input]) {
-        return yield* handler.writeTextFile(input);
+      *writeTextFile([input], next) {
+        return yield* delegating(input, next, handler.writeTextFile);
       },
-      *deleteFile([input]) {
-        return yield* handler.deleteFile(input);
+      *deleteFile([input], next) {
+        return yield* delegating(input, next, handler.deleteFile);
       },
-      *ensureDirectory([input]) {
-        return yield* handler.ensureDirectory(input);
+      *ensureDirectory([input], next) {
+        return yield* delegating(input, next, handler.ensureDirectory);
       },
       *globFiles([input]) {
         return yield* handler.globFiles(input);

@@ -156,6 +156,7 @@ import { testingExecutionHost } from "./testing-host.ts";
 import type { ChildPlanDeclaration } from "./testing-host.ts";
 import { unsupportedRepositories } from "./run-repositories.ts";
 import type { RepositoryInstaller } from "./run-repositories.ts";
+import type { ReplEntryHostFactory } from "./repl-repositories.ts";
 import { EVAL_ALIAS, EVAL_OPTION, evalGrammarError, readEvalFlags } from "./eval-source.ts";
 import type { EvalFlags } from "./eval-source.ts";
 import { STANDARD_INPUT_FAILURE, STANDARD_INPUT_PATH } from "./standard-input.ts";
@@ -2677,6 +2678,11 @@ function* dispatch(
   workflowHost: WorkflowHost | undefined,
   sessions: MachineSessionAssembly | undefined,
   installRepl: ReplHostInstaller | undefined,
+  // What a REPL entry of this host obtains repository operations through, or
+  // nothing on a runtime that offers none. Carried rather than called: the
+  // `repl` command retains it in its profile, and the entry task builds the
+  // host.
+  replEntryHost: ReplEntryHostFactory | undefined,
   /**
    * What this invocation's Plugins installed.
    *
@@ -2923,7 +2929,7 @@ function* dispatch(
       // vocabulary and the ceiling a generated fragment runs under. Nothing is
       // assembled again per entry, so two entries of one session cannot run
       // under different rules.
-      const profile = yield* assembleReplProfile(replStack, plugins);
+      const profile = yield* assembleReplProfile(replStack, plugins, {}, replEntryHost);
       yield* installRepl();
       const ran = yield* runReplProgram({
         profile,
@@ -3330,6 +3336,13 @@ export function* runXmd(
   // names none has no REPL, and says so rather than opening a terminal it cannot
   // restore.
   installRepl?: ReplHostInstaller,
+  // How a REPL entry of this host obtains repository operations. A factory, so
+  // the host belongs to the executing entry's own task rather than to the
+  // command: two entries of one session are two owners, and a cold view builds
+  // none at all. Deno and the compiled binary supply the retained one; Node and
+  // Bun supply none, so an entry there refuses repository work before a lock, a
+  // credential, a subprocess or a request exists.
+  replEntryHost?: ReplEntryHostFactory,
 ): Operation<void> {
   // Before every scanner and before anything reads a path: what a command line
   // selects is read from the argv the caller wrote, and the tokens that
@@ -3364,6 +3377,7 @@ export function* runXmd(
     installWorkflowHost,
     sessions,
     installRepl,
+    replEntryHost,
   );
 }
 
@@ -3426,6 +3440,7 @@ function* runCommand(
   installWorkflowHost: HostWorkflowInstaller,
   sessions: MachineSessionAssembly | undefined,
   installRepl: ReplHostInstaller | undefined,
+  replEntryHost: ReplEntryHostFactory | undefined,
 ): Operation<void> {
   // First, so that no later scanner — help, properties, agent flags — can
   // mistake the inline document's own text for an option.
@@ -3491,6 +3506,7 @@ function* runCommand(
       workflowHost,
       sessions,
       installRepl,
+      replEntryHost,
       plugins,
     );
 

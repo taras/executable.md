@@ -85,6 +85,16 @@ export { parseDurableEvent } from "./parse.ts";
 // Core effect factories
 export { createDurableEffect, createDurableOperation } from "./effect.ts";
 
+/**
+ * Whether an error is one of the failures that end a durable execution.
+ *
+ * The same predicate the engine decides with, so a host that wraps a failure in
+ * its own error — a component reporting what a document asked for — can keep
+ * the classification instead of demoting it to something `<PrintErrors>` may
+ * print over.
+ */
+export { findDurabilityFailure } from "./durability.ts";
+
 export { durablePosition } from "./position.ts";
 export type { DurablePosition } from "./position.ts";
 export type { Executor } from "./effect.ts";

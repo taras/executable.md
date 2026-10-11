@@ -90,6 +90,8 @@ import {
 } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
+import type { ReplEntryHostFactory } from "../repl-repositories.ts";
+import { withEntryFileAccess } from "../evaluation-profile.ts";
 import { useReplAgent } from "./agent.ts";
 import { filter } from "@effectionx/stream-helpers";
 import { consumeAdmissions } from "./admission.ts";
@@ -371,6 +373,21 @@ export interface ReplSession {
    * source exactly as they were.
    */
   submit(source: string): Operation<Result<void>>;
+  /**
+   * Start the unfinished entry this history ends with, if nothing has.
+   *
+   * A session opened at a frozen history position is a reading, and a reading
+   * acquires nothing: the unfinished final entry is projected rather than
+   * continued, so no entry host is built, no checkout is leased and no replay
+   * runs behind a screen that is deliberately showing the past. Continuing is
+   * what returning to the head means, and this is how the driver says so.
+   *
+   * Idempotent, and that is the whole of its contract: an entry already running
+   * keeps running — freezing a view and coming back must not duplicate or
+   * cancel work this session owns — an entry that has settled is not started
+   * again, and a history with nothing unfinished has nothing to start.
+   */
+  resume(): Operation<void>;
 }
 
 /** What starting or reopening a session needs. */
@@ -390,6 +407,15 @@ export interface ReplSessionOptions {
    * is what an execution with no configured mode already does.
    */
   readonly permissionMode?: PermissionMode;
+  /**
+   * How each entry obtains repository operations, when this host offers them.
+   *
+   * Held and handed to the entry task, never called here: opening a session
+   * must reach no repository, and a cold view must reach none either. Absent
+   * leaves every repository operation refusing at its own Api's default,
+   * before a lock, a credential, a subprocess or a request exists.
+   */
+  readonly entryHost?: ReplEntryHostFactory;
 }
 
 /**
@@ -428,7 +454,7 @@ function* start(
   options: ReplSessionOptions,
   submitted: string | undefined,
 ): Operation<Result<ReplSession>> {
-  const { execution, includes, installations = [], selection, permissionMode } = options;
+  const { execution, includes, installations = [], selection, permissionMode, entryHost } = options;
   const stream = execution.stream;
 
   const events = yield* stream.readAll();
@@ -483,6 +509,18 @@ function* start(
     submitted === undefined && last !== undefined && !last.settled && finalSegment !== undefined
       ? { entry: last, segment: finalSegment }
       : undefined;
+
+  /**
+   * Whether this session's view stands at the head of the file.
+   *
+   * A frozen position is a reading of what the file held then, so opening one
+   * continues nothing: the unfinished entry below is projected and left alone
+   * until the driver returns to the head and says to continue it. Deciding it
+   * here rather than at the start of each entry keeps one answer for the
+   * session's whole life — the position a *location* named is the position this
+   * session was opened at, and moving between views is the driver's business.
+   */
+  const atSelectedHead = selection === undefined;
 
   if (submitted !== undefined) {
     const validated = yield* preflight(submitted, includes, installations);
@@ -540,6 +578,8 @@ function* start(
     let running: ReplEntryTask | undefined;
     /** Whether this session still starts entry tasks. */
     let admitting = true;
+    /** Whether the unfinished entry this history ends with has been continued. */
+    let continued = false;
     /** How the last entry to finish finished. */
     let finished: Result<unknown> | undefined;
     /**
@@ -730,6 +770,10 @@ function* start(
       submit(source: string): Operation<Result<void>> {
         return submitting(source);
       },
+      // deno-lint-ignore require-yield
+      *resume(): Operation<void> {
+        continuing();
+      },
     };
 
     function open(): void {
@@ -918,6 +962,35 @@ function* start(
       return started;
     }
 
+    /**
+     * Continue the unfinished final entry, once.
+     *
+     * Only the one segment that never finished, and only ever that one. A
+     * settled range is read by the projector and handed to nobody: replaying it
+     * would re-run work the file already records, and correlate one entry's
+     * coroutines against another's.
+     *
+     * The guards are what make this callable from a driver that may say
+     * "continue" on every frame. `continued` is this session's own one-shot, so
+     * an entry that has already run and settled is not started a second time by
+     * a view returning to the head; `running` is the entry that is still going,
+     * which a view change must leave exactly as it is; and `admitting` is the
+     * authority to start anything at all, which teardown and a session failure
+     * both withdraw.
+     */
+    function continuing(): void {
+      if (resumed === undefined || continued || running !== undefined || !admitting) {
+        return;
+      }
+      continued = true;
+      begin(
+        resumed.entry.key,
+        resumed.entry.source,
+        new EntrySegmentStream(stream, { retained: resumed.segment.events, final: true }),
+        entryInitialBindings(head, resumed.entry),
+      );
+    }
+
     function* runEntry(
       key: string,
       source: string,
@@ -933,6 +1006,27 @@ function* start(
         // provider work come down first, then this attachment discards whatever it
         // never transferred, and only then is the session's entry slot freed.
         const installation = yield* agent.owning(key);
+        // This entry's repository host, built here for the same reasons and on
+        // the same terms. Its owner is this execution and this admitted key, so
+        // two entries of one session are two owners and neither inherits the
+        // other's selections, leases or publication permission; everything it
+        // acquires belongs to this task and is released with it, before the
+        // session can admit the entry after it. A host built at assembly would
+        // have one owner for the whole session, and a cold view would acquire a
+        // checkout to show somebody a history they are only reading.
+        const repositories =
+          entryHost === undefined
+            ? undefined
+            : yield* entryHost({
+                executionId: execution.id,
+                entryKey: key,
+                // The canonical identity of what this entry runs. Every entry
+                // of every execution runs an inline document, so this is the
+                // same for all of them — which is the point: what separates
+                // two entries is their owner, and what separates two elements
+                // inside one is the occurrence core authenticates.
+                source: INLINE_SOURCE_PATH,
+              });
         const started = yield* executeInstalled(
           {
             ...inlineSource(source),
@@ -946,7 +1040,18 @@ function* start(
           // Installed into this exact execution, and nowhere else: the live
           // observer and the permission policy are this session's, not the
           // process's, and the attachment carries the entry whose turns they are.
-          [...installations, lifecycle.installation, installation],
+          //
+          // The ceiling is the command's, with this entry's own captured file
+          // access bound into it — the tables are untouched, and what changes
+          // is only which instance an admitted fragment's write reaches.
+          [
+            ...(repositories === undefined
+              ? installations
+              : withEntryFileAccess(installations, repositories.files)),
+            lifecycle.installation,
+            installation,
+            ...(repositories === undefined ? [] : [repositories.installation]),
+          ],
           { initialBindings },
         );
         // Consumed as it arrives, inside this session's scope. Collecting until
@@ -1066,17 +1171,8 @@ function* start(
       }
     });
 
-    if (resumed !== undefined) {
-      // Only the one segment that never finished, and only ever that one. A
-      // settled range is read by the projector and handed to nobody: replaying
-      // it would re-run work the file already records, and correlate one entry's
-      // coroutines against another's.
-      begin(
-        resumed.entry.key,
-        resumed.entry.source,
-        new EntrySegmentStream(stream, { retained: resumed.segment.events, final: true }),
-        entryInitialBindings(head, resumed.entry),
-      );
+    if (resumed !== undefined && atSelectedHead) {
+      continuing();
     } else if (submitted !== undefined) {
       begin(
         entryKey(head.entries.length + 1),
@@ -1085,8 +1181,10 @@ function* start(
         entryInitialBindings(head),
       );
     } else {
-      // Nothing to run. Every entry this history holds has settled, so the
-      // reading of them is the whole answer and the session opens at once.
+      // Nothing to run. Every entry this history holds has settled — or the one
+      // that did not is being read at a frozen position, which continues
+      // nothing — so the reading of them is the whole answer and the session
+      // opens at once.
       open();
     }
 
