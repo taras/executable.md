@@ -152,6 +152,15 @@ const DEAD_FUNCTION = `export function deadCodeProbe(): string {
 const DEAD_TYPE = `export type DeadCodeProbe = { readonly dead: true };
 `;
 
+/** A published package export, and the entrypoints each runtime starts. */
+const PUBLISHED_OR_STARTED: readonly string[] = [
+  "packages/core/api.ts",
+  "packages/cli/src/deno.ts",
+  "packages/cli/src/node.ts",
+  "packages/cli/src/bun.ts",
+  "packages/cli/src/compiled.ts",
+];
+
 /**
  * Modules nothing imports on purpose, which the gate must not call dead.
  *
@@ -240,8 +249,14 @@ describe("the repository-wide dead-code gate", () => {
     const target = yield* clone();
 
     // A published package export has no internal consumer by definition, and
-    // removing one is a compatibility break rather than a cleanup.
-    yield* append(target, "packages/core/api.ts", DEAD_FUNCTION);
+    // removing one is a compatibility break rather than a cleanup. A runtime
+    // entrypoint is the same shape for a different reason: the runtime starts
+    // it, so nothing here imports it either — and `packages/cli/src/deno.ts` is
+    // declared in `deno.json` alone, which is why the configuration names the
+    // four by hand instead of trusting `package.json`'s `exports`.
+    for (const entry of PUBLISHED_OR_STARTED) {
+      yield* append(target, entry, DEAD_FUNCTION);
+    }
     for (const { file, source } of REACHED_OTHERWISE) {
       yield* write(target, file, source);
     }
