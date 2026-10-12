@@ -87,8 +87,6 @@ export interface RepositorySelection {
   readonly checkoutPath: string;
 }
 
-const SELECTION_MEMBERS = ["selection", "name", "identity", "checkoutPath"] as const;
-
 /** The retained record, filtered to the identity a selection carries. */
 export function filteredRepositoryIdentity(record: RepositoryRecord): RepositoryIdentity {
   return Object.freeze({
@@ -151,34 +149,6 @@ export function sameRepositoryIdentity(
   right: RepositoryIdentity,
 ): boolean {
   return REPOSITORY_IDENTITY_MEMBERS.every((member) => left[member] === right[member]);
-}
-
-/**
- * The selection this value describes, or `undefined` when it describes none.
- *
- * Total, and exact about membership, for the reason every parser in this
- * package is: a selection may arrive from a caller reaching the Api directly,
- * and a value carrying more or fewer members than the contract declares
- * describes something other than a selection.
- */
-export function parseRepositorySelection(value: unknown): RepositorySelection | undefined {
-  const record = members(value, SELECTION_MEMBERS);
-  if (record === undefined) {
-    return undefined;
-  }
-  const selection = text(record.selection);
-  const name = text(record.name);
-  const identity = parseRepositoryIdentity(record.identity);
-  const checkoutPath = text(record.checkoutPath);
-  if (
-    selection === undefined ||
-    name === undefined ||
-    identity === undefined ||
-    checkoutPath === undefined
-  ) {
-    return undefined;
-  }
-  return Object.freeze({ selection, name, identity, checkoutPath });
 }
 
 /** The selection a provider hands back, frozen so a holder cannot edit one. */

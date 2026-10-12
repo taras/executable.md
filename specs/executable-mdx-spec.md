@@ -1939,7 +1939,6 @@ run but are absent from the diagnostic trace.
 | `src/document-request.ts` | `DocumentRequest` and `DocumentProtocolError` — the one-use capability one document expansion is asked through, its detached prop snapshot, and the settlement canonical core reconciles |
 | `src/bound-exec.ts` | `BoundExecRequest` and `BoundExecProtocolError` — the one-use capability one `exec as="name"` block is run through, and the settlement the issuing expansion binds |
 | `src/collect.ts` | `collect()` — stream consumption helper, returns `Result<string>` |
-| `src/output/mod.ts` | Barrel export for output middleware |
 | `src/output/normalize.ts` | `useNormalizedOutput()` — whitespace normalization middleware (§9.4) |
 | `src/output/terminal.ts` | `useTerminalOutput()` — terminal ANSI formatting middleware (§9.5) |
 | `packages/cli/src/cli.ts` | Runtime-neutral CLI (separate `cli` workspace package) with `--verbose`, `--journal`, and `--raw` flags; Output Api stream consumption (§9.6); seeds `Config.verbose` and registers `<Verbose>` (§6.20) |

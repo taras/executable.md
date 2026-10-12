@@ -66,15 +66,6 @@ import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import { describeError } from "./props.ts";
 import { renderSyntaxMarkdown } from "./syntax.ts";
 
-/**
- * The identity approved text runs under.
- *
- * Owned by the Component module, because the structural admission inside `<Plan>`
- * reads the same bytes under the same identity: a position reading
- * `(<plan>:5:1)` means the same thing whichever gate produced it.
- */
-export { PLAN_IDENTITY } from "./plan-component.ts";
-
 /** What one `xmd plan` invocation was asked to do. */
 export interface PlanCommand {
   /** The request, byte for byte, as fixed grammar preserved it. */

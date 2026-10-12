@@ -57,36 +57,6 @@ export function requestRecord(request: FetchRequest): JsonObject {
 }
 
 /**
- * Read a request back from what was retained.
- *
- * A replayed description is durable input, so it is parsed rather than trusted:
- * what a journal holds was written by an earlier run of a document that may
- * since have changed.
- */
-export function parseRequestRecord(value: Json): FetchRequest {
-  if (!isJsonObject(value)) {
-    throw new FetchRequestError("a retained Fetch request must be a JSON object");
-  }
-  const { url, method, headers, timeout } = value;
-  if (typeof url !== "string" || typeof method !== "string" || !isJsonObject(headers)) {
-    throw new FetchRequestError("a retained Fetch request must carry url, method and headers");
-  }
-  const parsed: Record<string, string> = {};
-  for (const [name, header] of Object.entries(headers)) {
-    if (typeof header !== "string") {
-      throw new FetchRequestError(`retained Fetch header "${name}" is not a string`);
-    }
-    parsed[name] = header;
-  }
-  return {
-    url,
-    method,
-    headers: parsed,
-    ...(typeof timeout === "number" ? { timeout } : {}),
-  };
-}
-
-/**
  * The URL a document wrote, checked but not rewritten.
  *
  * Parsing answers whether the string is an absolute `http:` or `https:` URL;

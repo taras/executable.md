@@ -42,9 +42,6 @@ import type { Json } from "@executablemd/durable-streams";
 import { IssueTrackerContext } from "../../issue/context.ts";
 import type { IssueTracker as Tracker } from "../../issue/tracker.ts";
 
-/** The component name, as a document writes it and as a refusal names it. */
-export const ISSUE_TRACKER_ELEMENT = "<IssueTracker>";
-
 export const props: PropsSchema = {
   type: "object",
   properties: {

@@ -164,23 +164,6 @@ export function* runWebFormDoc(source: string, options: RunOptions = {}): Operat
   });
 }
 
-/** Printed URLs are captured by watching stderr, which is where they go. */
-export function* recordingPrints<T>(body: () => Operation<T>): Operation<{
-  value: T;
-  printed: string[];
-}> {
-  const printed: string[] = [];
-  const original = console.error;
-  console.error = (...args: unknown[]) => {
-    printed.push(args.map((arg) => String(arg)).join(" "));
-  };
-  try {
-    return { value: yield* body(), printed };
-  } finally {
-    console.error = original;
-  }
-}
-
 /**
  * Every durable yield of one type, whatever its result.
  *

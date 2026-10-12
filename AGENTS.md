@@ -181,7 +181,7 @@ keep their own task names:
 ```bash
 deno task verify       # the shared-state interference proof
 deno task verify:clean # the same proof, from a clean checkout, after the offline builds
-deno task lint         # oxlint + oxfmt --check
+deno task lint         # oxlint + oxfmt --check + the dead-code check
 deno task check        # typecheck
 deno task test         # the complete Deno suite
 pnpm test:node         # the complete suite under Node
@@ -291,8 +291,10 @@ composability runs them.
 
 The complete battery consists of:
 
-1. **Lint + Format**: `deno task lint` (runs `oxlint` + `oxfmt --check`) — must
-   produce 0 errors. Run `deno task fmt` to auto-fix formatting.
+1. **Lint + Format + dead code**: `deno task lint` (runs `oxlint`,
+   `oxfmt --check` and `knip`) — must produce 0 errors. Run `deno task fmt` to
+   auto-fix formatting, and `deno task lint:dead-code` for the dead-code check
+   alone.
 2. **Typecheck**: `deno task check` — must produce no errors
 3. **Tests**: `deno task test` — the full Deno suite; CI also runs the full
    corpus under Node and Bun
@@ -347,6 +349,18 @@ here:
   lint task's command line instead — the rule tests in `scripts/tests/` lint
   through the repository config, and an `ignorePatterns` entry there stops them
   seeing their own fixtures.
+- The **dead-code** half of `lint` is Knip, pinned in `package.json` and
+  configured in `knip.json`, exposed on its own as `deno task lint:dead-code`.
+  It reads the repository's import graph and fails on a source file nothing
+  imports, an exported value nothing uses, and an exported type nothing uses,
+  naming the path and the symbol. What keeps it honest is the entry-point list:
+  the published package exports, the runtime CLI entrypoints, every test, the
+  standalone scripts, the browser entry, the site's routes and islands, the
+  runnable examples, and the fixtures and components a document names or a test
+  spawns are entry points — nothing in the repository imports them and none of
+  them is dead. Anything else is implementation, and an implementation module
+  never becomes an entry point to silence a finding. Duplicate exports are out
+  of scope: `gitPlugin`/`default` is one value declared two ways, not dead code.
 
 ### Measuring the corpus
 

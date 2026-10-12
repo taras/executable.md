@@ -114,13 +114,6 @@ const OBJECTS: ReadonlyMap<string, DeclaredObject> = new Map([
   ],
 ]);
 
-/** Every object version 1 declares, with the shape it declares. */
-export const XMD_ARTIFACT_EXPECTED_SCHEMA = Object.freeze(
-  [...OBJECTS.entries()].map(([name, object]) =>
-    Object.freeze({ name, type: object.type, sql: normalize(object.sql) }),
-  ),
-);
-
 /** Version 1 in full. */
 export const XMD_ARTIFACT_SCHEMA_SQL = [...OBJECTS.values()]
   .map((object) => `${object.sql};`)

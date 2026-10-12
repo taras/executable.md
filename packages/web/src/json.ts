@@ -33,12 +33,6 @@ export function parseJsonObject(value: unknown): JsonObject {
   return parsed;
 }
 
-export function isJsonObject(value: Json | undefined): value is JsonObject {
-  return (
-    value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value)
-  );
-}
-
 function parseValue(value: unknown, seen: Set<object>, path: string): Json {
   if (value === null) {
     return null;

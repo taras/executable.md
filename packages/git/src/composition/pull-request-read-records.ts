@@ -230,29 +230,6 @@ export function pullRequestReadRequestJson(request: PullRequestReadRequest): Jso
   };
 }
 
-/** The retained request, read back rather than asserted. */
-export function parsePullRequestReadRequest(value: Json): PullRequestReadRequest | undefined {
-  if (!isJsonObject(value)) {
-    return undefined;
-  }
-  const names = ["operation", "url", "provider", "kind", "runId", "expansionId"];
-  if (!exactMembers(value, names) || value.operation !== "read") {
-    return undefined;
-  }
-  const kind = PULL_REQUEST_READ_KINDS.find((known) => known === value.kind);
-  const { url, provider, runId, expansionId } = value;
-  if (kind === undefined || typeof url !== "string" || url === "") {
-    return undefined;
-  }
-  if (provider !== null && typeof provider !== "string") {
-    return undefined;
-  }
-  if (typeof runId !== "string" || typeof expansionId !== "string") {
-    return undefined;
-  }
-  return { operation: "read", url, provider, kind, runId, expansionId };
-}
-
 /**
  * Exactly these members, and no others.
  *

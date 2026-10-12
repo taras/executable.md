@@ -1,0 +1,105 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignore": [
+    "**/vendor/**",
+    "**/npm/**",
+    "scripts/tests/fixtures/**",
+    "**/_fresh/**",
+    "**/*.d.ts"
+  ],
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/*.ts",
+        "scripts/tests/**/*.test.ts",
+        "components/**/*.ts",
+        "smoke-test/**/*.ts",
+        "site/main.ts",
+        "site/client.ts",
+        "site/vite.config.ts",
+        "site/routes/**/*.{ts,tsx}",
+        "site/islands/**/*.{ts,tsx}"
+      ],
+      "project": [
+        "scripts/**/*.ts",
+        "components/**/*.ts",
+        "smoke-test/**/*.ts",
+        "site/**/*.{ts,tsx}"
+      ],
+      "paths": {
+        "@executablemd/acp": ["packages/acp/mod.ts"],
+        "@executablemd/acp/embedded-adapters": ["packages/acp/embedded-adapters.ts"],
+        "@executablemd/cli": ["packages/cli/src/deno.ts"],
+        "@executablemd/code-review-agent": ["packages/code-review-agent/mod.ts"],
+        "@executablemd/code-review-agent/review-components": [
+          "packages/code-review-agent/src/review-components.ts"
+        ],
+        "@executablemd/core": ["packages/core/mod.ts"],
+        "@executablemd/core/api": ["packages/core/api.ts"],
+        "@executablemd/core/host": ["packages/core/host.ts"],
+        "@executablemd/durable-streams": ["packages/durable-streams/mod.ts"],
+        "@executablemd/git": ["packages/git/mod.ts"],
+        "@executablemd/git/api": ["packages/git/api.ts"],
+        "@executablemd/git/credential-helper": ["packages/git/credential-helper.ts"],
+        "@executablemd/git/deno": ["packages/git/deno.ts"],
+        "@executablemd/runtime": ["packages/runtime/mod.ts"],
+        "@executablemd/runtime/api": ["packages/runtime/api.ts"],
+        "@executablemd/runtime/files": ["packages/runtime/files.ts"],
+        "@executablemd/runtime/test": ["packages/runtime/test/mod.ts"],
+        "@executablemd/test-agent": ["packages/test-agent/mod.ts"],
+        "@executablemd/testing": ["packages/testing/mod.ts"],
+        "@executablemd/web": ["packages/web/mod.ts"],
+        "@executablemd/workflow": ["packages/workflow/mod.ts"],
+        "@executablemd/workflow/deno": ["packages/workflow/deno.ts"],
+        "@/*": ["site/*"]
+      }
+    },
+    "packages/*": {
+      "entry": [
+        "mod.ts",
+        "src/{deno,node,bun,compiled}.ts",
+        "client/main.tsx",
+        "tests/**/*.test.ts",
+        "tests/**/fixtures/**/*.{ts,tsx,js}",
+        "tests/**/components/**/*.ts",
+        "components/**/*.ts",
+        "demo/**/*.{ts,tsx}",
+        "examples/**/*.{ts,tsx}"
+      ],
+      "project": [
+        "**/*.{ts,tsx,js,jsx}",
+        "!vendor/**",
+        "!src/repl/vendor/**",
+        "!npm/**"
+      ],
+      "paths": {
+        "@executablemd/acp": ["../../packages/acp/mod.ts"],
+        "@executablemd/acp/embedded-adapters": ["../../packages/acp/embedded-adapters.ts"],
+        "@executablemd/cli": ["../../packages/cli/src/deno.ts"],
+        "@executablemd/code-review-agent": ["../../packages/code-review-agent/mod.ts"],
+        "@executablemd/code-review-agent/review-components": [
+          "../../packages/code-review-agent/src/review-components.ts"
+        ],
+        "@executablemd/core": ["../../packages/core/mod.ts"],
+        "@executablemd/core/api": ["../../packages/core/api.ts"],
+        "@executablemd/core/host": ["../../packages/core/host.ts"],
+        "@executablemd/durable-streams": ["../../packages/durable-streams/mod.ts"],
+        "@executablemd/git": ["../../packages/git/mod.ts"],
+        "@executablemd/git/api": ["../../packages/git/api.ts"],
+        "@executablemd/git/credential-helper": ["../../packages/git/credential-helper.ts"],
+        "@executablemd/git/deno": ["../../packages/git/deno.ts"],
+        "@executablemd/runtime": ["../../packages/runtime/mod.ts"],
+        "@executablemd/runtime/api": ["../../packages/runtime/api.ts"],
+        "@executablemd/runtime/files": ["../../packages/runtime/files.ts"],
+        "@executablemd/runtime/test": ["../../packages/runtime/test/mod.ts"],
+        "@executablemd/test-agent": ["../../packages/test-agent/mod.ts"],
+        "@executablemd/testing": ["../../packages/testing/mod.ts"],
+        "@executablemd/web": ["../../packages/web/mod.ts"],
+        "@executablemd/workflow": ["../../packages/workflow/mod.ts"],
+        "@executablemd/workflow/deno": ["../../packages/workflow/deno.ts"],
+        "@/*": ["../../site/*"]
+      }
+    }
+  },
+  "ignoreExportsUsedInFile": true
+}

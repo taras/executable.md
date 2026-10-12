@@ -50,7 +50,6 @@
  */
 
 import { isComponentName } from "./components/registration.ts";
-import { parseSource } from "./definition.ts";
 import type { ComponentOrigin } from "./types.ts";
 
 /** One package's documentation for the components it registers. */
@@ -112,28 +111,6 @@ export interface DocumentationIndex {
   documentationFor(name: string, origin: ComponentOrigin): string | undefined;
   /** What the bundle at this origin says about itself, if anything. */
   bundleDocumentation(origin: ComponentOrigin): string | undefined;
-}
-
-/**
- * A Markdown component's own documentation, taken from its own document.
- *
- * A repository component, a bundled one and a host's declared Markdown are all
- * *this run's* rather than a package's, so no `components.md` documents them.
- * Their long-form documentation, when they have any, is the prose in their own
- * file — which is where an author writing one would put it, and the only place
- * that stays correct when the file changes.
- *
- * Read from the source the selection already holds, so this loads nothing: a
- * repository component's bytes were read to describe it, and a bundled or
- * declared one's were admitted before the run began.
- */
-export function markdownDocumentation(path: string, source: string): string | undefined {
-  // The canonical splitter, not a delimiter search of this module's own: a
-  // document whose body repeats `---` is ordinary, and a second implementation
-  // of the rule is one release from disagreeing with the one that decides what
-  // actually runs.
-  const body = parseSource(path, source).content.trim();
-  return body.length === 0 ? undefined : body;
 }
 
 /** What a component with no authored documentation renders instead of prose. */

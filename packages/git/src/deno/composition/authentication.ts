@@ -623,16 +623,6 @@ export function denoGitAuthentication(options: GitAuthenticationOptions = {}): G
   };
 }
 
-/** The authentication of a host that lends none. */
-export function noGitAuthentication(): GitAuthentication {
-  return {
-    // deno-lint-ignore require-yield
-    *open(): Operation<GitAuthenticationSession> {
-      return UNAUTHENTICATED;
-    },
-  };
-}
-
 /**
  * Whether a failed transport failed for want of authentication.
  *

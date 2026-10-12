@@ -1478,8 +1478,3 @@ function* suspensionEvent(
   }
   return undefined;
 }
-
-/** The exit code a status reports, for a caller composing its own outcome. */
-export function workflowExitCode(status: WorkflowRunStatus): number {
-  return EXIT_BY_STATUS[status];
-}

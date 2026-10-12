@@ -85,7 +85,6 @@ export const Test: Api<TestApi> = createApi<TestApi>("Test", {
 
 export const testing: Operations<TestApi>["testing"] = Test.operations.testing;
 export const inTest: Operations<TestApi>["inTest"] = Test.operations.inTest;
-export const testScope: Operations<TestApi>["testScope"] = Test.operations.testScope;
 export const verbose: Operations<TestApi>["verbose"] = Test.operations.verbose;
 export const sessionActive: Operations<TestApi>["sessionActive"] = Test.operations.sessionActive;
 export const record: Operations<TestApi>["record"] = Test.operations.record;

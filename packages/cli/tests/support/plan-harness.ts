@@ -254,44 +254,6 @@ export function* useWorkingDirectory<T>(
 }
 
 /**
- * Environment values this scope answers with, delegating every other name.
- *
- * Delegation matters: the agent stack reads `DEFAULT_AGENT_NAME` through the
- * same Api, and answering `undefined` for everything would make a case about
- * `XMD_PROPS` quietly also be a case about the default agent.
- */
-export function* useEnvironment(values: Record<string, string>): Operation<void> {
-  yield* useRecordedEnvironment([], values);
-}
-
-/**
- * The same environment, with every name it was asked recorded in order.
- *
- * What a resolution costs is visible only as the reads it performs: a value
- * settled once and handed to both consumers reads its name once, while two
- * consumers each settling their own read it twice and agree only by accident.
- */
-export function* useRecordedEnvironment(
-  reads: string[],
-  values: Record<string, string>,
-): Operation<void> {
-  yield* API.Env.around({
-    *env([name], next) {
-      reads.push(name);
-      if (Object.hasOwn(values, name)) {
-        return values[name];
-      }
-      return yield* next(name);
-    },
-  });
-}
-
-/** How many times one name was read. */
-export function timesRead(reads: readonly string[], name: string): number {
-  return reads.filter((read) => read === name).length;
-}
-
-/**
  * A temporary tree this scope creates, owns and removes whole.
  *
  * Owning it is what makes recursive removal safe: everything under it was made

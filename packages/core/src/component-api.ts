@@ -491,7 +491,6 @@ export function expandThroughTerminal(
   return owned.operations.expand(request);
 }
 
-export const expand: Operations<ComponentApi>["expand"] = Component.operations.expand;
 export const importComponent: Operations<ComponentApi>["importComponent"] =
   Component.operations.importComponent;
 export const applyModifiers: Operations<ComponentApi>["applyModifiers"] =
@@ -507,7 +506,6 @@ export const content: Operations<ComponentApi>["content"] = Component.operations
 export const hasContent: Operations<ComponentApi>["hasContent"] = Component.operations.hasContent;
 export const hasBinding: Operations<ComponentApi>["hasBinding"] = Component.operations.hasBinding;
 export const retain: Operations<ComponentApi>["retain"] = Component.operations.retain;
-export const registry: Operations<ComponentApi>["registry"] = Component.operations.registry;
 export const tryContent: Operations<ComponentApi>["tryContent"] = Component.operations.tryContent;
 export const hasCapture: Operations<ComponentApi>["hasCapture"] = Component.operations.hasCapture;
 export const capture: Operations<ComponentApi>["capture"] = Component.operations.capture;

@@ -53,7 +53,7 @@ import {
 } from "../composition/git.ts";
 import type { GitSession } from "../composition/git.ts";
 import { useGitAuthentication, type RepositoryHost } from "../composition/host.ts";
-import { repositoryRefused, worktreeRefused } from "../composition/refusals.ts";
+import { repositoryRefused } from "../composition/refusals.ts";
 import { ManagedCheckoutError } from "./errors.ts";
 import {
   METADATA_VERSION,
@@ -623,9 +623,4 @@ function* createManagedWorktree(
     creationCommit: added.commit,
     metadata,
   };
-}
-
-/** The refusal a Worktree request reports when native Git refuses it. */
-export function worktreeRefusal(name: string, reason: string): never {
-  worktreeRefused(name, reason);
 }

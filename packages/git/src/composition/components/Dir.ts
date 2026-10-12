@@ -144,5 +144,3 @@ export const form: FormDeclaration = {
             "engine issued, so which form it was written as cannot be established.",
     ),
 };
-
-export default form;

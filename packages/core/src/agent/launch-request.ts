@@ -20,7 +20,7 @@
  * value it has already moved past.
  */
 
-import type { Agent, LaunchOptions, PermissionMode, Session } from "./agent-api.ts";
+import type { Agent, PermissionMode, Session } from "./agent-api.ts";
 
 /**
  * What public launch middleware is handed.
@@ -239,13 +239,5 @@ export function issueLaunch(facts: LaunchFacts, generation: object): IssuedLaunc
     close() {
       invocation.live = false;
     },
-  };
-}
-
-/** The facts a routed request carries, for the provider that accepted it. */
-export function launchOptionsOf(request: AgentLaunchRequest): LaunchOptions {
-  return {
-    agent: request.agent,
-    ...(request.session === undefined ? {} : { session: request.session }),
   };
 }

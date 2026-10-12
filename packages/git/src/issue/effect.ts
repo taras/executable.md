@@ -66,8 +66,6 @@ import {
   type IssueUpsertRequest,
 } from "./records.ts";
 
-export { ISSUE_EFFECT } from "./effect-type.ts";
-
 /** What one read asks the envelope for. */
 export interface IssueReadEffectRequest {
   /** The canonical issue URL. */

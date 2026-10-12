@@ -78,8 +78,3 @@ export function releaseTargetFor(
     (row) => row.platform === platform && row.architecture === architecture,
   );
 }
-
-/** The row for one target triple, or `undefined` when it names none. */
-export function releaseTargetNamed(target: string): ReleaseTarget | undefined {
-  return RELEASE_TARGETS.find((row) => row.target === target);
-}

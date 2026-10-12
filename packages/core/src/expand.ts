@@ -36,7 +36,6 @@ import {
   misplacedReturnMessage,
   outputPropsViolation,
   validateBodyStructure,
-  validateOutputPlacement,
 } from "./body-structure.ts";
 import {
   allStructure,
@@ -4385,7 +4384,7 @@ interface BodyChunk {
  * from; the walk and the catalog now live beside the facts validation reads, so
  * the two callers cannot drift.
  */
-export { bodyHasOutput, validateBodyStructure, validateOutputPlacement };
+export { bodyHasOutput, validateBodyStructure };
 
 /**
  * Partition a definition body into ordered chunks (spec §6.9). Output error mode
