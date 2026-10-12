@@ -361,9 +361,6 @@ here:
   them is dead. Anything else is implementation, and an implementation module
   never becomes an entry point to silence a finding. Duplicate exports are out
   of scope: `gitPlugin`/`default` is one value declared two ways, not dead code.
-  `scripts/tests/dead-code.test.ts` proves the gate by mutating a clone of
-  `HEAD`, which is what distinguishes a configuration that finds dead code from
-  one that reports nothing.
 
 ### Measuring the corpus
 
