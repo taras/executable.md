@@ -82,7 +82,7 @@ import type { ReplPresentationRole, ReplRowStyle } from "./presentation-style.ts
 import { jsonRuns, sourceRuns } from "./presentation-text.ts";
 import { NO_NAVIGATION, numbered, pointLabel } from "./navigation.ts";
 import type { ReplHistoryNavigation } from "./navigation.ts";
-import { blankBand, EMPTY_BAND, HISTORY_ROWS } from "./history-rail.ts";
+import { blankBand, EMPTY_BAND } from "./history-rail.ts";
 import type { ReplPreparedRail } from "./history-rail.ts";
 import { entryReading, NO_READING } from "./source-reading.ts";
 import type { ReplReading } from "./source-reading.ts";
@@ -96,13 +96,7 @@ import {
   resolveLocation,
   surfaceForDrawer,
 } from "./route.ts";
-import type {
-  ReplDrawerRef,
-  ReplLiveAvailability,
-  ReplRoute,
-  ReplSelection,
-  ReplSurface,
-} from "./route.ts";
+import type { ReplDrawerRef, ReplLiveAvailability, ReplRoute, ReplSelection } from "./route.ts";
 import type {
   ReplAgentPermission,
   ReplAgentTurn,
@@ -5017,5 +5011,4 @@ function totalOf(
   return drawerContent(view, widths?.drawer ?? 0, preview)?.content.length ?? 0;
 }
 
-export { HISTORY_ROWS };
-export type { ReplDrawerRef, ReplSurface };
+export type { ReplDrawerRef };

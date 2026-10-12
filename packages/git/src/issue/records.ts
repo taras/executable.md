@@ -83,9 +83,6 @@ export interface IssueUpsertRequest {
  */
 export type IssueRequest = IssueReadRequest | IssueUpsertRequest;
 
-/** What one settled read retains, and what a document binds. */
-export type IssueReadRecord = IssueDetails;
-
 /** What one settled upsert retains, and what a document binds. */
 export type IssueRecord = IssueReference;
 

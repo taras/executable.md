@@ -1553,9 +1553,9 @@ function readRoots(value: Json | undefined): readonly string[] | undefined {
 /**
  * The retained requests, read closed.
  *
- * `parseRequestRecord()` is the wrong reader here: it ignores members it does
- * not know and treats a malformed `timeout` as an absent one, so a retained
- * ceiling could compare equal to a live one it does not describe.
+ * A reader that ignored members it does not know, or treated a malformed
+ * `timeout` as an absent one, would let a retained ceiling compare equal to a
+ * live one it does not describe, so this admits exactly the declared members.
  */
 function readRequests(value: Json): FetchRequest[] | undefined {
   if (!Array.isArray(value)) {

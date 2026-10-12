@@ -115,12 +115,6 @@ export function logicalParent(path: string): string {
   return posix(segments);
 }
 
-/** The path of `entry` relative to `directory`, POSIX-separated. */
-export function logicalRelative(directory: string, entry: string): string {
-  const base = directory === WORKSPACE_ROOT ? "" : directory;
-  return entry.startsWith(`${base}/`) ? entry.slice(base.length + 1) : entry;
-}
-
 /** One more segment beneath an absolute logical directory. */
 export function logicalJoin(directory: string, name: string): string {
   return directory === WORKSPACE_ROOT ? `/${name}` : `${directory}/${name}`;

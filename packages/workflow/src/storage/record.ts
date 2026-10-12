@@ -273,28 +273,3 @@ export function parseDocumentExecutionCompletion(
     throw error;
   }
 }
-
-/** A run state a caller offered, checked before anything is written. */
-export function parseStoredRunState(value: unknown): Result<StoredRunState> {
-  try {
-    const members = parseMembers(value, "$", requestFailure);
-    requireMemberNames(members, ["status", "reason"], "$", requestFailure);
-
-    const status = parseWorkflowRunStatus(members.get("status"), "$.status", requestFailure);
-
-    const reason = members.get("reason");
-    if (reason === undefined) {
-      return Ok({ status });
-    }
-    const parsed = parseStopReasonInput(reason);
-    if (!parsed.ok) {
-      return parsed;
-    }
-    return Ok({ status, reason: parsed.value });
-  } catch (error) {
-    if (error instanceof WorkflowRequestError) {
-      return Err(error);
-    }
-    throw error;
-  }
-}

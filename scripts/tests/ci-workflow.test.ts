@@ -148,6 +148,15 @@ function* workflow(): Operation<Record<string, Job>> {
   );
 }
 
+/** The scripts `pnpm` and `deno task` both run, read from where they are defined. */
+function* packageScripts(): Operation<Record<string, string>> {
+  const manifest = object(
+    JSON.parse(yield* readTextFile(new URL("package.json", ROOT))),
+    "package.json",
+  );
+  return stringRecord(manifest.scripts, "package.json.scripts");
+}
+
 function green(workflow: Record<string, Job>): Job {
   const job = workflow.green;
   if (job === undefined) {
@@ -593,6 +602,63 @@ describe("the conditional CI jobs", () => {
 
     expect(condition).not.toContain("github.event_name == 'pull_request'");
     expect(condition).not.toContain("always()");
+  });
+});
+
+/**
+ * The dead-code gate is one of lint's checks rather than a job of its own, so
+ * what CI runs is the repository's `lint` script — and the chain from the
+ * workflow to knip is asserted link by link. A `lint` script that stopped
+ * calling the check, or called it in a way that could not redden the job, would
+ * leave the required `lint` job green while unreferenced files and exports
+ * accumulated.
+ */
+describe("the CI lint job", () => {
+  it("runs the repository's own lint command", function* () {
+    const lint = (yield* workflow()).lint;
+    const commands = (lint?.steps ?? [])
+      .map((step) => step.run)
+      .filter((run): run is string => run !== undefined);
+
+    expect(commands).toContain("pnpm lint");
+  });
+
+  it("reaches the dead-code check through that command, chained so a finding fails it", function* () {
+    const defined = yield* packageScripts();
+
+    expect(defined.lint).toContain("&& pnpm run lint:dead-code");
+    expect(defined["lint:dead-code"]).toContain("knip");
+    expect(defined.lint).not.toContain("|| true");
+    expect(defined["lint:dead-code"]).not.toContain("|| true");
+  });
+
+  it("asks it for unused files, exports and types, through the checked-in configuration", function* () {
+    const defined = yield* packageScripts();
+
+    expect(defined["lint:dead-code"]).toContain("--config knip.json");
+    expect(defined["lint:dead-code"]).toContain("--include files,exports,types");
+  });
+
+  /**
+   * Named per job rather than left to the derived sweep below: the aggregate
+   * cases assert that *every* dependency can redden `green`, which stays true
+   * of a workflow that dropped the lint job altogether.
+   */
+  it("cannot satisfy green with anything but success", function* () {
+    const parsed = yield* workflow();
+    const commandText = command(green(parsed));
+
+    for (const occasion of OCCASIONS) {
+      for (const result of ["failure", "cancelled", "skipped", "timed_out", "action_required"]) {
+        const values = required(parsed, occasion);
+        values.lint = result;
+        expect({
+          occasion,
+          result,
+          code: yield* runGreen(commandText, values, occasion),
+        }).not.toEqual({ occasion, result, code: 0 });
+      }
+    }
   });
 });
 

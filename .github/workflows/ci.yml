@@ -69,7 +69,13 @@ jobs:
 
       - run: pnpm install
 
-      - name: Lint + Format
+      # `pnpm lint` is oxlint, oxfmt and the repository-wide dead-code check,
+      # chained with `&&`, so a finding from any of the three reddens this
+      # required job. The dead-code check is a step of this job rather than a
+      # job of its own because it needs exactly what lint already prepared, and
+      # a second job would pay for another checkout and install to learn the
+      # same thing.
+      - name: Lint + Format + dead code
         run: pnpm lint
 
   # The corpus is partitioned by measured per-file weight, so the shards finish

@@ -323,22 +323,3 @@ export function retainedRunMismatch(fields: readonly string[]): StaleInputError 
     { coroutineId: ROOT_COROUTINE, description: refusalDescription() },
   );
 }
-
-/**
- * The recorded run started from a different base than this run supplied.
- *
- * Both bases are named, because here they are the two things a caller has to
- * compare to understand the refusal, and both came from that caller rather than
- * from the journal's opaque content. They are named in the sentence only: the
- * description this error retains still holds nothing but the effect's type and
- * name.
- */
-export function baseMismatch(recorded: string, supplied: string): StaleInputError {
-  return new StaleInputError(
-    `The journal records this workflow run starting from "${recorded}", but this run ` +
-      `supplied "${supplied}". A recorded base cannot be replayed onto a run that asked ` +
-      "for a different one. Re-run the document from the start rather than resuming from " +
-      "this journal.",
-    { coroutineId: ROOT_COROUTINE, description: refusalDescription() },
-  );
-}

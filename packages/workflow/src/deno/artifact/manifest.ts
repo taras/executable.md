@@ -37,21 +37,13 @@ import type {
 /** The artifact manifest version a format-1 artifact produces and reads. */
 export const XMD_ARTIFACT_MANIFEST_VERSION = 1;
 
-/** The manifest version a format-2 artifact produces and reads. */
-export const XMD_ARTIFACT_SOURCE_BUNDLE_MANIFEST_VERSION = 2;
-
 /**
  * What the artifact identity is a hash *of*, beyond the manifest bytes.
  *
  * Domain separation, so the same bytes appearing as some other structure's
- * canonical encoding cannot be presented as an artifact identity — and so one
- * format's manifest can never derive the other's identity, however similar the
- * two inventories happen to look.
+ * canonical encoding cannot be presented as an artifact identity.
  */
 export const XMD_ARTIFACT_IDENTITY_DOMAIN = "xmd-artifact\0v1\0";
-
-/** The same separation for format 2, which is a different set of records. */
-export const XMD_ARTIFACT_SOURCE_BUNDLE_IDENTITY_DOMAIN = "xmd-artifact\0v2\0";
 
 const encoder = new TextEncoder();
 

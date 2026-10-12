@@ -44,7 +44,6 @@ import type {
 } from "../../composition/pull-request-read-records.ts";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
 import { PullRequestReadExecution } from "../../composition/pull-request-read-execution.ts";
-import type { PullRequestReadOptions } from "../../composition/pull-request-api.ts";
 import type { RepositoryRecord } from "../../composition/records.ts";
 import type { SelectionRegistry } from "../selections.ts";
 import type { GitHubRepositoryName, GitHubSource } from "./github.ts";
@@ -359,6 +358,3 @@ export function* useGitHubPullRequestReads(
     },
   });
 }
-
-/** The options a read carries, re-exported for a host installing this. */
-export type { PullRequestReadOptions };

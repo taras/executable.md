@@ -73,7 +73,7 @@ import {
 } from "./definition-source.ts";
 import type { ForkSourceSnapshot } from "./fork-source.ts";
 import { readForkLineage, writeForkInheritance, type ForkHeadEvents } from "./fork-write.ts";
-import { readDocumentExecution, readRetrieval, stopReasonColumns } from "./rows.ts";
+import { readDocumentExecution, stopReasonColumns } from "./rows.ts";
 import {
   initializeSchema,
   isSqliteForeignKeyConstraint,
@@ -96,7 +96,6 @@ const UPSERT_RETRIEVAL = `INSERT INTO definition_retrieval (id, metadata, revisi
   ON CONFLICT(id) DO UPDATE
   SET metadata = excluded.metadata, revision = excluded.revision,
       updated_at = excluded.updated_at`;
-const SELECT_RETRIEVAL = "SELECT * FROM definition_retrieval WHERE id = 1";
 const INSERT_EXECUTION = "INSERT INTO document_executions (execution_id, started_at) VALUES (?, ?)";
 const FINISH_EXECUTION = `UPDATE document_executions
   SET stopped_at = ?, stop_status = ?, stop_reason_kind = ?, stop_reason_code = ?,
@@ -1130,12 +1129,6 @@ function readExecution(database: DatabaseSync, executionId: string): DocumentExe
     throw new WorkflowDocumentExecutionError(executionId);
   }
   return readDocumentExecution(row);
-}
-
-/** The retrieval metadata a run holds, for a caller that already opened it. */
-export function readRetrievalRow(database: DatabaseSync) {
-  const row = reading(database, SELECT_RETRIEVAL).get();
-  return row === undefined ? undefined : readRetrieval(row);
 }
 
 /**

@@ -144,11 +144,6 @@ export function gitHubStore(options: GitHubStoreOptions = {}): GitHubStore {
   };
 }
 
-/** The locator a document writes for this store's repository. */
-export function gitHubLocator(store: GitHubStore): string {
-  return `https://github.com/${store.owner}/${store.repository}`;
-}
-
 function payloadOf(store: GitHubStore, pullRequest: StoredPullRequest): Record<string, unknown> {
   const home = { full_name: `${store.owner}/${store.repository}` };
   return {
@@ -588,11 +583,6 @@ export function fakeGitHubAccess(
   };
 }
 
-/** The requests one store received, as method and path. */
-export function calls(store: GitHubStore): string[] {
-  return store.requests.map((request) => `${request.method} ${new URL(request.url).search}`);
-}
-
 export function creations(store: GitHubStore): number {
   return store.requests.filter(
     (request) => request.method === "POST" && new URL(request.url).pathname.endsWith("/pulls"),
@@ -606,28 +596,9 @@ export function issueCreations(store: GitHubStore): number {
   ).length;
 }
 
-/** How many issue field updates this GitHub was asked for. */
-export function issuePatches(store: GitHubStore): number {
-  return store.requests.filter(
-    (request) => request.method === "PATCH" && new URL(request.url).pathname.includes("/issues/"),
-  ).length;
-}
-
-/** Every issue call this GitHub received, in order, as method and path. */
-export function issueCalls(store: GitHubStore): string[] {
-  return store.requests
-    .filter((request) => new URL(request.url).pathname.includes("/issues"))
-    .map((request) => `${request.method} ${new URL(request.url).pathname}`);
-}
-
 /** How many REST field updates this GitHub was asked for. */
 export function patches(store: GitHubStore): number {
   return store.requests.filter((request) => request.method === "PATCH").length;
-}
-
-/** How many draft transitions this GitHub was asked for. */
-export function draftMutations(store: GitHubStore): number {
-  return store.requests.filter((request) => new URL(request.url).pathname === "/graphql").length;
 }
 
 /** Every mutation this GitHub received, in order, as a short word. */

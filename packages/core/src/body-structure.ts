@@ -185,17 +185,6 @@ export function bodyStructureFacts(
   };
 }
 
-/** Whether these facts describe a body whose structure is refused. */
-export function hasBodyStructureViolation(facts: BodyStructureFacts): boolean {
-  return (
-    facts.misplacedOutputs.length > 0 ||
-    facts.undeclaredReturns.length > 0 ||
-    facts.exclusiveOutputs.length > 0 ||
-    facts.missingReturn ||
-    facts.returnViolations.length > 0
-  );
-}
-
 function structureError(source: string, headline: string, violations: string[]): ErrorSegment {
   const list = violations.map((entry) => `  - ${entry}`).join("\n");
   return { type: "error", message: `${headline}\n${list}`, source };
@@ -266,18 +255,6 @@ export function renderBodyStructure(facts: BodyStructureFacts): ErrorSegment | u
     };
   }
   return outputError ?? returnError;
-}
-
-/**
- * Structural preflight (spec §6.9). Validates `<Output>` placement against the
- * body's own source AST. Only a direct top-level `<Output>` is a valid
- * declaration; any `<Output>` at depth > 0 — including inside unreachable or
- * discarded children — is a placement violation. All violations are combined
- * into a single aggregate ErrorSegment. Returns undefined when placement is
- * valid.
- */
-export function validateOutputPlacement(bodySegments: Segment[]): ErrorSegment | undefined {
-  return misplacedOutputAggregate(collectOutputs(bodySegments, 1));
 }
 
 /**

@@ -605,29 +605,6 @@ export const EXPECTED_SCHEMA = Object.freeze(
 );
 
 /**
- * Objects a version-1 file must hold, including the pinned Cloudflare
- * structure.
- *
- * The optional ones are absent from this list and only from this list: they are
- * created with every new database, compared against their declaration wherever
- * they are found, and simply not demanded of a file written before they
- * existed.
- */
-export const REQUIRED_OBJECTS: readonly string[] = Object.freeze(
-  [...OBJECTS.entries()].filter(([, object]) => object.optional !== true).map(([name]) => name),
-);
-
-/** Tables a version-1 file must hold. */
-export const REQUIRED_TABLES: readonly string[] = Object.freeze(
-  [...OBJECTS.entries()]
-    .filter(([, object]) => object.type === "table" && object.optional !== true)
-    .map(([name]) => name),
-);
-
-/** Every object version 1 declares, required or not. */
-export const DECLARED_OBJECTS: readonly string[] = Object.freeze([...OBJECTS.keys()]);
-
-/**
  * The objects a version-1 file may hold or not hold.
  *
  * Held apart because presence tells you nothing about which build wrote a file:
