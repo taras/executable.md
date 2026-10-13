@@ -15,7 +15,8 @@
  * write table still cannot write, and a name in the enclosing symbols is still
  * not admitted (FE26). A component that is replaceable at an ordinary authored
  * site stays replaceable there, and that replaceability still does not let it
- * into a fragment (FE27).
+ * into a fragment (FE27) — shown with `<Glob>`, because `<File>` is a name
+ * canonical core owns and a registration for it is refused outright (FE27b).
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -268,31 +269,38 @@ describe("Tier FE — ownership is not permission", () => {
   it("FE27: a replaceable ordinary component still wins at an authored site", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
     const stream = new InMemoryStream();
+    const reached: string[] = [];
     const output = yield* scoped(function* () {
-      // `<File>` is an ordinary registration, so a repository or host component
+      // `<Glob>` is an ordinary registration, so a repository or host component
       // of that name replaces it at an authored site. That is unchanged.
+      //
+      // It is `<Glob>` rather than `<File>` because canonical core now owns
+      // `<File>` and a registration for it is refused outright (FE27b). The
+      // claim here is about a *replaceable* component, so it needs one.
       yield* registerComponents([
         {
-          name: "File",
+          name: "Glob",
           origin: "test://repository",
           props: {
             type: "object",
-            properties: { path: { type: "string" } },
-            required: ["path"],
+            properties: { pattern: { type: "string" } },
+            required: ["pattern"],
             additionalProperties: false,
           },
           // deno-lint-ignore require-yield
           *fn(): Operation<string> {
+            reached.push("repository");
             return "the repository component answered";
           },
         },
       ]);
-      return yield* run(`<File path="anywhere.md" />\n\n${READS}`, [reading(files)], stream);
+      return yield* run(`<Glob pattern="*.md" />\n\n${READS}`, [reading(files)], stream);
     });
 
     const rendered = String(output);
     // The authored site got the replacement...
     expect(rendered).toContain("the repository component answered");
+    expect(reached).toEqual(["repository"]);
     // ...and the fragment did not: it reached the pinned identity the profile
     // admitted, through the captured operation.
     expect(rendered).toContain("the retained note");
@@ -300,34 +308,38 @@ describe("Tier FE — ownership is not permission", () => {
     expect(admissions(yield* stream.readAll())).toHaveLength(1);
   });
 
-  it("FE27: a repository component cannot enter a fragment under an admitted name", function* () {
+  it("FE27b: an admitted name canonical core owns cannot be registered at all", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
-    const reached: string[] = [];
+
+    // Where this used to prove that a *live* registration for `<File>` could
+    // not enter a fragment, the registration itself is now refused: canonical
+    // core owns the name, so the protection happens a layer earlier than this
+    // tier used to observe it. The fragment half is unchanged.
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* registerComponents([
+          {
+            name: "File",
+            origin: "test://repository",
+            props: {
+              type: "object",
+              properties: { path: { type: "string" } },
+              required: ["path"],
+              additionalProperties: false,
+            },
+            // deno-lint-ignore require-yield
+            *fn(): Operation<string> {
+              return "replaced";
+            },
+          },
+        ]);
+      }),
+    );
+    expect(failed).toContain("canonical core owns that name");
+
     const output = yield* scoped(function* () {
-      yield* registerComponents([
-        {
-          name: "File",
-          origin: "test://repository",
-          props: {
-            type: "object",
-            properties: { path: { type: "string" } },
-            required: ["path"],
-            additionalProperties: false,
-          },
-          // deno-lint-ignore require-yield
-          *fn(): Operation<string> {
-            reached.push("repository");
-            return "replaced";
-          },
-        },
-      ]);
       return yield* run(READS, [reading(files)]);
     });
-
-    // The name is admitted, the registration is live, and the fragment still
-    // ran the pinned identity: an evaluator that resolved through the registry
-    // would have let a repository file into an admitted fragment.
-    expect(reached).toEqual([]);
     expect(String(output)).toContain("the retained note");
     expect(files.performed).toEqual(["read notes.md"]);
   });

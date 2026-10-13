@@ -1094,7 +1094,9 @@ export function installIdentities(
   // Answered with as they stand. A fixed definition has no claimant to mint and
   // no site to build, so there is nothing for this execution to add to it — and
   // adding anything would make the object the engine invokes a different one
-  // from the object the generated-XMD write table pinned.
+  // from the object the generated-XMD write table pinned. Its owner froze it,
+  // which is what keeps a refused in-place change from becoming the next
+  // import's baseline.
   for (const definition of fixedComponents) {
     guarded.set(definition.name, definition);
   }
@@ -1112,6 +1114,12 @@ export function installIdentities(
     // Not marked private: a protected implementation is resolved by canonical
     // core's own tier under its public name, so refusing it wherever an answer
     // becomes something the engine invokes would refuse the component itself.
+    //
+    // Left writable deliberately. A handler that changes this object is
+    // *detected* and the import is refused, which is the documented behavior,
+    // and the object belongs to this execution alone — so the change dies with
+    // it. What makes the refusal final rather than a delay is that the baseline
+    // is taken once per issued object (`component-resolution.ts`).
     guarded.set(component.name, {
       kind: "function",
       name: component.name,

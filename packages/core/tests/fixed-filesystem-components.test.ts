@@ -35,22 +35,28 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { API, Files, useHostFiles } from "@executablemd/runtime";
+import { API, cwd, Files, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { Component } from "../src/component-api.ts";
 import { registerComponents } from "../src/components/registration.ts";
+import { selectComponent } from "../src/components/select.ts";
 import { fixedFilesystemDefinition } from "../src/components/fixed-filesystem.ts";
 import { formDispatcher } from "../src/invocation-identity.ts";
 import { form as fileForm } from "../src/components/File.ts";
 import { PROTECTED_COMPONENT_NAMES } from "../src/components/protected.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
-import type { FunctionComponentDefinition } from "../src/types.ts";
+import type { ComponentRegistry, FunctionComponentDefinition } from "../src/types.ts";
 import { mkdtemp, readdir, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+/** The registry visible in the current scope. */
+function currentRegistry(): Operation<ComponentRegistry> {
+  return Component.operations.registry;
+}
 
 /** The three names this tier is about, in the order the spec introduces them. */
 const FIXED = ["File", "File.Delete", "Dir"] as const;
@@ -90,6 +96,35 @@ function* useWorkspaceCwd(fixture: Fixture): Operation<void> {
     { at: "min" },
   );
   yield* useHostFiles();
+}
+
+/**
+ * Run `source` and report the enclosing working directory **in the scope that
+ * installed it**, after the execution has settled.
+ *
+ * Calling `run()` a second time cannot establish restoration: that helper opens
+ * a new scope and installs the workspace cwd afresh, which is indistinguishable
+ * from a stale one left behind. This reads `cwd()` in the original owner,
+ * before any later installation exists.
+ */
+function observeEnclosingCwd(
+  fixture: Fixture,
+  source: string,
+): Operation<{ failure: string; enclosing: string }> {
+  return scoped(function* () {
+    const path = join(fixture.workspace, "doc.md");
+    yield* writeTextFile(path, source);
+    yield* useWorkspaceCwd(fixture);
+    let failure = "";
+    try {
+      yield* collect(
+        yield* execute({ path, stream: new InMemoryStream(), includes: [fixture.workspace] }),
+      );
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    return { failure, enclosing: yield* cwd() };
+  });
 }
 
 function run(fixture: Fixture, source: string, install?: () => Operation<void>): Operation<string> {
@@ -275,21 +310,21 @@ describe("Tier FX — nothing else may claim the names", () => {
     }
   });
 
-  it("FX2b: a batch holding one fixed name installs nothing at all", function* () {
-    const fixture = yield* useFixture();
+  it("FX2b: a batch holding one fixed name installs nothing, in its own live scope", function* () {
+    const adjacent = {
+      name: "Adjacent",
+      origin: "@executablemd/test",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<string> {
+        return "adjacent";
+      },
+    };
 
-    const refused = yield* raised(() =>
-      scoped(function* () {
-        yield* registerComponents([
-          {
-            name: "Adjacent",
-            origin: "@executablemd/test",
-            props: { type: "object", properties: {}, additionalProperties: false },
-            // deno-lint-ignore require-yield
-            *fn(): Operation<string> {
-              return "adjacent";
-            },
-          },
+    yield* scoped(function* () {
+      const refused = yield* raised(() =>
+        registerComponents([
+          adjacent,
           {
             name: "Dir",
             origin: "@executablemd/test",
@@ -299,16 +334,29 @@ describe("Tier FX — nothing else may claim the names", () => {
               return "replaced";
             },
           },
-        ]);
-      }),
-    );
-    expect(refused).toContain("canonical core owns that name");
+        ]),
+      );
+      expect(refused).toContain("canonical core owns that name");
 
-    // The ordinary name in the refused batch is not installed either: a batch
-    // that refuses rolls back, so `<Adjacent />` resolves to nothing.
-    const unresolved = yield* raised(() => run(fixture, "<Adjacent />"));
-    expect(unresolved).not.toBe("");
-    expect(unresolved).not.toContain("adjacent");
+      // Inspected here, while the registration scope is still live. Leaving the
+      // scope first would remove a partially installed registration too, so the
+      // assertion could not tell an atomic refusal from one that installed and
+      // was then torn down.
+      const refusedSelection = yield* selectComponent("Adjacent", {
+        includes: [],
+        registry: yield* currentRegistry(),
+      });
+      expect(refusedSelection.kind).toBe("unresolved");
+
+      // And the collision index did not record it either, so the ordinary name
+      // still registers cleanly in this same scope afterwards.
+      yield* registerComponents([adjacent]);
+      const afterSelection = yield* selectComponent("Adjacent", {
+        includes: [],
+        registry: yield* currentRegistry(),
+      });
+      expect(afterSelection.kind).toBe("registered");
+    });
   });
 
   it("FX2c: a same-name local implementation is never loaded, and open names still win", function* () {
@@ -414,26 +462,82 @@ describe("Tier FX — the final import answer is verified", () => {
     }
   });
 
-  it("FX3c: a changed descriptor and another name's answer are both refused", function* () {
+  it("FX3c: an in-place change to a fixed definition cannot run, now or later", function* () {
     const fixture = yield* useFixture();
+    const definition = fixedFilesystemDefinition("File");
+    if (definition === undefined) {
+      throw new Error("core supplies no File definition");
+    }
+    const original = definition.fn;
+    let attempts = 0;
+    let accepted: boolean | undefined;
+    let replacementCalls = 0;
 
-    const changed = yield* raised(() =>
-      run(
-        fixture,
-        '<Dir path="notes">\n<File path="m.md">first</File>\n</Dir>',
-        answerImport("Dir", (definition) => ({ ...definition, description: "changed" })),
-      ),
+    // The dangerous shape is not a replacement object — it is a change to the
+    // object canonical execution handed out. Verification baselines each
+    // issuance separately, so a change that survived its own refusal would
+    // *become* the baseline every later import of the name is compared
+    // against, and the second attempt would pass the check and run.
+    const output = yield* run(
+      fixture,
+      [
+        "<PrintErrors>",
+        "",
+        '<File path="one.md">one</File>',
+        "",
+        '<File path="two.md">two</File>',
+        "",
+        '<File path="two.md" as="two" />',
+        "",
+        "LATER {two}",
+        "",
+        "</PrintErrors>",
+      ].join("\n"),
+      function* () {
+        yield* Component.around({
+          *importComponent([name, position], next) {
+            const answer = yield* next(name, position);
+            if (name !== "File" || attempts > 0) {
+              return answer;
+            }
+            attempts += 1;
+            accepted = Reflect.set(answer, "fn", function* (): Operation<string> {
+              replacementCalls += 1;
+              return "POISONED-FILE-BODY";
+            });
+            return answer;
+          },
+        });
+      },
     );
-    // A spread is a new object, so it is not the definition canonical execution
-    // issued — which is the check, rather than a field-by-field comparison.
-    expect(changed).toContain("canonical execution did not produce");
+
+    // The attempt was made and rejected where it was made, rather than the
+    // handler quietly doing nothing.
+    expect(attempts).toBe(1);
+    expect(accepted).toBe(false);
+
+    // No replacement body and no replacement I/O, on this import or any later
+    // one: the writes are the document's own text and the read returns it.
+    expect(replacementCalls).toBe(0);
+    expect(output).not.toContain("POISONED");
+    expect(output).toContain("LATER two");
+    expect(yield* readTextFile(join(fixture.workspace, "one.md"))).toBe("one");
+    expect(yield* readTextFile(join(fixture.workspace, "two.md"))).toBe("two");
+
+    // And the owning definition is what it was, so no later execution inherits
+    // a changed baseline either.
+    expect(fixedFilesystemDefinition("File")?.fn).toBe(original);
+  });
+
+  it("FX3c2: another name's issued definition is refused", function* () {
+    const fixture = yield* useFixture();
 
     const swapped = yield* raised(() =>
       run(
         fixture,
         // `<File>` first, so its definition has been issued by the time the
         // `<Dir>` import is answered with it. An answer holding a definition
-        // this execution never issued is the other refusal, above.
+        // this execution never issued is the other refusal, below.
         '<File path="earlier.md">x</File>\n<Dir path="notes">\n<File path="m.md">first</File>\n</Dir>',
         function* () {
           const other = fixedFilesystemDefinition("File");
@@ -447,13 +551,14 @@ describe("Tier FX — the final import answer is verified", () => {
     expect(swapped).toContain("produced for another component");
   });
 
-  it("FX3d: a separately constructed dispatcher is refused, as another copy's would be", function* () {
+  it("FX3d: a rebuilt definition is refused, however exactly it matches", function* () {
     const fixture = yield* useFixture();
 
-    // What a second loaded copy of core supplies: a dispatcher built from the
-    // same declaration, so every field matches and the function is not the one
-    // this execution retained. Built here rather than bundled, because this
-    // file runs under every supported runtime.
+    // A dispatcher built from the same declaration, so every field matches and
+    // the function is not the one this execution retained. A definition from an
+    // actual second loaded copy of core is the same class of answer and is
+    // proven against a real bundled copy in `syntax-loaded-copy.test.ts`, which
+    // is Deno-only; this file runs under every supported runtime.
     const rebuilt: FunctionComponentDefinition = {
       kind: "function",
       name: "File",
@@ -527,37 +632,30 @@ describe("Tier FX — the dispatcher authenticates its own invocation", () => {
 });
 
 describe("Tier FX — Dir's ordering, ownership and cancellation", () => {
-  it("FX5: the enclosing directory is restored after the body fails", function* () {
+  it("FX5: the enclosing directory is restored in its owner after the body fails", function* () {
     const fixture = yield* useFixture();
 
     // `<Fail>` rather than a filesystem refusal: a File failure is a printed
     // error this component owns, and what this case is about is the directory
     // ownership surviving a body that ends the run.
-    const failed = yield* raised(() =>
-      run(
-        fixture,
-        [
-          '<Dir path="notes">',
-          '<File path="inside.md">in</File>',
-          '<Fail message="stop inside the directory" />',
-          "</Dir>",
-        ].join("\n"),
-      ),
-    );
-    expect(failed).toContain("stop inside the directory");
-
-    // The directory the failed body ran in survives, and the working directory
-    // the document had before it is what a later read resolves against. There
-    // is no teardown deletion and no rollback.
-    expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
-    const output = yield* run(
+    const { failure, enclosing } = yield* observeEnclosingCwd(
       fixture,
-      ['<File path="after.md">after</File>', '<File path="after.md" as="seen" />', "{seen}"].join(
-        "\n",
-      ),
+      [
+        '<Dir path="notes">',
+        '<File path="inside.md">in</File>',
+        '<Fail message="stop inside the directory" />',
+        "</Dir>",
+      ].join("\n"),
     );
-    expect(output).toContain("after");
-    expect(yield* exists(join(fixture.workspace, "after.md"))).toBe(true);
+
+    expect(failure).toContain("stop inside the directory");
+    // Read in the owner that installed it, so a stale cwd would show here.
+    expect(enclosing).toBe(fixture.workspace);
+
+    // The directory the failed body ran in survives. There is no teardown
+    // deletion and no rollback.
+    expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
+    expect(yield* exists(join(fixture.workspace, "notes", "inside.md"))).toBe(true);
   });
 
   it("FX5b: a refused ensure begins no content and binds no directory", function* () {
@@ -601,59 +699,53 @@ describe("Tier FX — Dir's ordering, ownership and cancellation", () => {
     expect(yield* readTextFile(join(fixture.workspace, "notes", "kept.md"))).toBe("kept\n");
   });
 
-  it("FX5d: cancellation inside the body restores the directory and keeps it", function* () {
+  it("FX5d: joined cancellation restores the directory in its owner", function* () {
     const fixture = yield* useFixture();
     const inside = withResolvers<void>();
     const outcome: string[] = [];
+    let enclosing = "";
 
     yield* scoped(function* () {
-      const task = yield* spawn(() =>
-        scoped(function* () {
-          const path = join(fixture.workspace, "doc.md");
-          yield* writeTextFile(
-            path,
-            ['<Dir path="notes">', '<File path="held.md">held</File>', "</Dir>"].join("\n"),
-          );
-          yield* useWorkspaceCwd(fixture);
-          // Halted exactly here: the directory exists, the working directory is
-          // installed, and the write inside it has begun. Synchronized through
-          // the operation rather than timed.
-          yield* Files.around({
-            *writeTextFile([input], next) {
-              const result = yield* next(input);
-              inside.resolve();
-              yield* suspend();
-              return result;
-            },
-          });
-          const output: Json = yield* collect(
-            yield* execute({
-              path,
-              stream: new InMemoryStream(),
-              includes: [fixture.workspace],
-            }),
-          );
-          outcome.push(String(output));
-        }),
+      const path = join(fixture.workspace, "doc.md");
+      yield* writeTextFile(
+        path,
+        ['<Dir path="notes">', '<File path="held.md">held</File>', "</Dir>"].join("\n"),
       );
+      // Installed by *this* scope, which is the owner restoration has to be
+      // observed in. The execution runs in a child task, so halting it unwinds
+      // the Dir invocation while this scope is still live to be read.
+      yield* useWorkspaceCwd(fixture);
+      yield* Files.around({
+        *writeTextFile([input], next) {
+          const result = yield* next(input);
+          inside.resolve();
+          yield* suspend();
+          return result;
+        },
+      });
 
+      const task = yield* spawn(function* () {
+        const output = yield* collect(
+          yield* execute({ path, stream: new InMemoryStream(), includes: [fixture.workspace] }),
+        );
+        outcome.push(String(output));
+      });
+
+      // Halted exactly here: the directory exists, the working directory is
+      // installed and the write inside it has completed. Synchronized through
+      // the operation rather than timed, and joined before anything is read.
       yield* inside.operation;
       yield* task.halt();
+      enclosing = yield* cwd();
     });
 
-    // Nothing settled, and the directory the cancelled body entered is still
-    // there: a restored working directory is not a deletion.
+    // Nothing settled, and the enclosing directory is the one this scope
+    // installed rather than the directory the cancelled body entered.
     expect(outcome).toEqual([]);
-    expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
+    expect(enclosing).toBe(fixture.workspace);
 
-    // And the enclosing directory is what the next document resolves against.
-    const output = yield* run(
-      fixture,
-      ['<File path="later.md">later</File>', '<File path="later.md" as="seen" />', "{seen}"].join(
-        "\n",
-      ),
-    );
-    expect(output).toContain("later");
-    expect(yield* exists(join(fixture.workspace, "later.md"))).toBe(true);
+    // The directory the cancelled body entered is still there: a restored
+    // working directory is not a deletion.
+    expect(yield* exists(join(fixture.workspace, "notes"))).toBe(true);
   });
 });

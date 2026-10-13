@@ -683,8 +683,21 @@ export class CanonicalImports {
    * The copy is taken here, before the definition is handed to the public
    * chain, so it is a copy of what core decided rather than of whatever the
    * chain gave back.
+   *
+   * **Once per object.** A second import of the same name is handed the same
+   * definition, and re-copying it here would take the baseline from whatever
+   * the chain had already done to it: a handler that changed the definition in
+   * place would be refused for the import it changed, and then *be* the
+   * baseline the next import is compared against — so the second attempt would
+   * pass the check and run. The first copy is the one core decided, so it is
+   * the one that is kept. A different name re-copies as it always did, because
+   * that entry is what the `another-name` refusal reads.
    */
   issue(name: string, definition: ImportedDefinition): ImportedDefinition {
+    const held = this.#issued.get(definition);
+    if (held !== undefined && held.name === name) {
+      return definition;
+    }
     this.#issued.set(definition, { name, canonical: retain(definition) });
     return definition;
   }

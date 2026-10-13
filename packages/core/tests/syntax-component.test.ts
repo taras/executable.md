@@ -1669,6 +1669,37 @@ describe("Tier SYN — what the chain may and may not do", () => {
     }
   });
 
+  it("SYN12b: a refused change does not become the next import's baseline", function* () {
+    const replacement: FunctionComponent = function* () {
+      return "replaced symbols";
+    };
+    const { installation, calls } = stating(symbolsOf("Marker"));
+    let attempts = 0;
+
+    // `<PrintErrors>` is what makes the second occurrence reachable: the first
+    // refusal is handled rather than ending the run, which is the only state in
+    // which a poisoned baseline could be used. Without it the run stops at the
+    // first refusal and a second import never happens — so the case would pass
+    // whatever the baseline did.
+    const output = yield* run("<PrintErrors>\n\n<Syntax />\n\n<Syntax />\n\n</PrintErrors>\n", [
+      installation,
+      answering((real) => {
+        attempts += 1;
+        Reflect.set(Object(real), "fn", replacement);
+        return real;
+      }),
+    ]);
+
+    // Both occurrences attempted it, and neither ran the replacement: canonical
+    // verification keeps the copy taken when the definition was *first* issued,
+    // so the change is compared against what core decided rather than against
+    // the changed object.
+    expect(attempts).toBeGreaterThan(1);
+    expect(String(output)).not.toContain("replaced symbols");
+    expect(calls.count).toBe(0);
+    expect(String(output)).toContain("canonical core owns");
+  });
+
   it("SYN13: a handler that redirects the name, or delegates twice, answers nothing", function* () {
     const redirecting: ExecutionInstallation = {
       *install() {

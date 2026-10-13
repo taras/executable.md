@@ -54,6 +54,17 @@ import type { FunctionComponentDefinition, PropsSchema } from "../types.ts";
  * disagree. Documentation is a parameter for the same reason it is one in the
  * registry: a component core supplies states what it is for, and says whether
  * `as` and content apply to it.
+ *
+ * **Frozen, and that is load-bearing.** This object is what the public
+ * `Component.importComponent` chain is handed, and it is shared by every
+ * execution in the process. Canonical verification compares each answer against
+ * the copy taken when the definition was first issued *to that execution*
+ * (`component-resolution.ts`), which is enough to refuse a change inside the
+ * execution that made it — but a change left behind would be what the next
+ * execution took its own first copy of, and that one would describe the change
+ * already. Freezing is what the sharing requires, and it covers the descriptive
+ * members for the same reason it covers `fn`: a changed schema or form list
+ * decides what runs too.
  */
 function fixed(
   name: string,
@@ -61,14 +72,14 @@ function fixed(
   props: PropsSchema,
   documentation: FirstPartyDocumentation,
 ): FunctionComponentDefinition {
-  return {
+  return Object.freeze({
     kind: "function",
     name,
     props,
-    forms: declaredForms(declaration),
+    forms: Object.freeze(declaredForms(declaration)),
     ...documented(documentation),
     fn: formDispatcher(declaration),
-  };
+  });
 }
 
 /** The definitions themselves, in the order inspection reads them. */
