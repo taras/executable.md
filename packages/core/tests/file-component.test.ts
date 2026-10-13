@@ -24,7 +24,7 @@ import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { FileAccessError } from "../src/components/File.ts";
-import { CORE_REGISTRY } from "../src/components/registry.ts";
+import { fixedFilesystemDefinition } from "../src/components/fixed-filesystem.ts";
 import { installFormSyntax } from "../src/invocation-identity.ts";
 import { createContext } from "effection";
 import { registerComponents } from "../src/components/registration.ts";
@@ -191,7 +191,7 @@ const BROKE = "Function component Broken error: broken";
  */
 function observe(fixture: Fixture, source: string, mode: ErrorMode): Operation<Observation> {
   return scoped(function* () {
-    const definition = CORE_REGISTRY.get("File")?.default?.definition;
+    const definition = fixedFilesystemDefinition("File");
     if (!definition) {
       throw new Error("the File component core supplies is missing");
     }
@@ -1561,10 +1561,13 @@ describe("Tier FL — the authored form decides the effect", () => {
       failure = error instanceof Error ? error.message : String(error);
     }
 
-    // Fatal rather than printed, because the wrapper's own function is not the
-    // one core declared a printing boundary on — which is beside the point
-    // here. What matters is where it stopped.
-    expect(failure).toContain("without the invocation the engine issued");
+    // It stops one layer earlier than it used to. The wrapper returns a
+    // definition canonical execution did not issue, and this is a name
+    // canonical core owns, so verification refuses the answer before anything
+    // is invoked with the forged invocation at all. The dispatcher's own
+    // refusal is still there underneath — `fixed-filesystem-components.test.ts`
+    // reaches it directly, without an import to intercept.
+    expect(failure).toContain("canonical execution did not produce");
     expect(calls).toEqual([]);
     expect(yield* readTextFile(join(fixture.workspace, "notes.md"))).toBe("the authored note\n");
   });

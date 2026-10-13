@@ -78,7 +78,6 @@ describe("the Git package's provider-neutral surface", () => {
         "packages/git/src/plugin.ts",
         "packages/git/src/identities.ts",
         "packages/git/src/composition/api.ts",
-        "packages/git/src/composition/components/Dir.ts",
         "packages/git/src/composition/components/Repository.ts",
         "packages/git/src/composition/components/Worktree.ts",
         "packages/git/src/composition/context.ts",

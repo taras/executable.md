@@ -175,8 +175,15 @@ describe("Tier WFD — reading a workflow's component declaration", () => {
     for (const name of ["If", "Each", "Output", "PrintErrors"]) {
       expect(refused({ [name]: "./Stage.md" })).toContain("structural syntax");
     }
-    for (const name of ["File", "Parse", "Test", "Fetch", "Glob", "TempDir", "Elicit"]) {
+    for (const name of ["Parse", "Test", "Fetch", "Glob", "TempDir", "Elicit"]) {
       expect(refused({ [name]: "./Stage.md" })).toContain("the engine supplies");
+    }
+    // The names canonical core owns are refused here too, and say so
+    // differently: a replaceable default is one a bundle may not *add*, while
+    // these are fixed whatever a bundle declares. Both refusals happen before
+    // the declared path is resolved or read.
+    for (const name of ["File", "File.Delete", "Dir", "Syntax", "Evaluate"]) {
+      expect(refused({ [name]: "./Stage.md" })).toContain("is fixed by the engine");
     }
   });
 

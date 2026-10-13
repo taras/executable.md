@@ -53,6 +53,22 @@ function describedNames(stdout: string): string[] {
   );
 }
 
+/** One described component, by name, from a symbols payload. */
+function describedEntry(
+  stdout: string,
+  name: string,
+): { description?: string; origin?: { kind?: string; origin?: string } } | undefined {
+  const catalog = JSON.parse(stdout);
+  for (const category of catalog.categories) {
+    for (const entry of category.entries) {
+      if (entry.name === name) {
+        return entry;
+      }
+    }
+  }
+  return undefined;
+}
+
 /** A directory that is not the checkout, holding one trivial document. */
 function* useElsewhere(body: (dir: string) => Operation<void>): Operation<void> {
   const dir = yield* until(mkdtemp(path.join(tmpdir(), "xmd-compiled-plugin-")));
@@ -103,6 +119,14 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
       for (const name of ["Repository", "Worktree", "Dir", "PullRequest", "Issue"]) {
         expect(`${name}: ${names.includes(name)}`).toBe(`${name}: true`);
       }
+      // `<Dir>` is in that list for a different reason than the rest: canonical
+      // core owns it, so the binary describes it whether or not a Plugin is
+      // selected, and its prose comes from core's embedded asset rather than
+      // the Git package's.
+      const dirEntry = describedEntry(run.stdout, "Dir");
+      expect(dirEntry?.origin?.kind).toBe("protected");
+      expect(dirEntry?.origin?.origin).toBe("@executablemd/core");
+      expect(dirEntry?.description ?? "").toContain("directory");
       // And nothing from a Plugin nobody named.
       expect(names).not.toContain("Finding");
       expect(names).not.toContain("ReviewContext");
@@ -364,3 +388,64 @@ const BUNDLED_COMPONENTS: readonly string[] = [
   "IssueTracker",
   "Issue",
 ];
+
+describe(
+  "compiled xmd — the filesystem journey",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    /**
+     * The three fixed components, from the binary, away from the checkout.
+     *
+     * This is the distribution's half of the ownership move. `<Dir>` is embedded
+     * in core now rather than reached through the Git package, and a compiled
+     * binary has no module graph to fall back on — so if the move left the body
+     * or its documentation on the wrong side of the package boundary, nothing
+     * here resolves. The run happens in a temporary directory with candidates for
+     * all three names beside the document, which is also the arrangement a
+     * repository would present.
+     */
+    it("enters, writes, reads and deletes, with the names contested on disk", function* () {
+      if (!(yield* exists(BINARY))) {
+        throw new Error(`${BINARY} is missing — run \`deno task build\` before this case`);
+      }
+      yield* useElsewhere(function* (dir) {
+        yield* writeTextFile(path.join(dir, "File.md"), "MARKER-FILE\n");
+        yield* writeTextFile(path.join(dir, "Dir.md"), "MARKER-DIR\n");
+        yield* ensureDir(path.join(dir, "File"));
+        yield* writeTextFile(path.join(dir, "File", "Delete.md"), "MARKER-DELETE\n");
+        yield* writeTextFile(
+          path.join(dir, "journey.md"),
+          [
+            '<Dir path="notes">',
+            "",
+            '<File path="message.md">first</File>',
+            '<File path="message.md" as="message" />',
+            "",
+            "INSIDE {message}",
+            "",
+            '<File.Delete path="message.md" />',
+            "",
+            "</Dir>",
+            "",
+            '<File path="after.md">after</File>',
+            "",
+            "DONE",
+            "",
+          ].join("\n"),
+        );
+
+        const run = yield* runBinary(["run", "journey.md"], dir);
+        if (run.code !== 0) {
+          throw new Error(`the compiled binary exited ${run.code}\n${run.stderr}`);
+        }
+
+        expect(run.stdout).toContain("INSIDE first");
+        expect(run.stdout).toContain("DONE");
+        expect(run.stdout).not.toContain("MARKER");
+        expect(yield* exists(path.join(dir, "notes"))).toBe(true);
+        expect(yield* exists(path.join(dir, "notes", "message.md"))).toBe(false);
+        expect(yield* exists(path.join(dir, "after.md"))).toBe(true);
+      });
+    });
+  },
+);

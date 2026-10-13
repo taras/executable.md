@@ -1,9 +1,11 @@
 Long-form documentation for the repository-composition components.
 
-Thirteen components for working with repositories, branches, pull requests and
-issues from inside a document. They are mostly *regions*: `<Repository>`,
-`<Worktree>` and `<Dir>` establish where the work happens, and the `Git.*`,
+Twelve components for working with repositories, branches, pull requests and
+issues from inside a document. They are mostly *regions*: `<Repository>` and
+`<Worktree>` establish where the work happens, and the `Git.*`,
 `PullRequest.*` and issue components act inside whatever those established.
+`<Dir>` works the same way inside them and is canonical core's, so it is
+documented with the components core owns.
 
 The pattern to hold onto is that a document says *what* it wants — this
 repository, this branch, this commit — and the components decide whether that
@@ -43,20 +45,6 @@ two branches at once, which is what makes a document that reviews one branch
 while building another possible.
 
 `as` captures the path of the linked checkout, for a step that needs to name it.
-
-## Dir
-
-Changes the working directory for its content.
-
-```mdx
-<Dir path={worktree}>
-…
-</Dir>
-```
-
-The plainest of the three regions: no repository, no branch, just a directory.
-It pairs naturally with `<Worktree as="…">`, which hands you a path this can
-then work inside.
 
 ## Git.Switch
 

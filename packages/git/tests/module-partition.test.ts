@@ -46,7 +46,6 @@ const PROVIDER_NEUTRAL: readonly string[] = [
   "api.ts",
   "mod.ts",
   "src/composition/api.ts",
-  "src/composition/components/Dir.ts",
   "src/composition/components/GitAdd.ts",
   "src/composition/components/GitCommit.ts",
   "src/composition/components/GitPush.ts",

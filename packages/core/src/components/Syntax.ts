@@ -47,7 +47,7 @@ import type {
   ProtectedSite,
 } from "../invocation-identity.ts";
 import { sourceDescription } from "../source-position.ts";
-import type { ProtectedComponent } from "./protected.ts";
+import type { ExecutionBuiltComponent } from "./protected.ts";
 import { CORE_ORIGIN } from "./registry.ts";
 import { documented } from "./documentation.ts";
 import type { Json, PropsSchema, SourcePosition } from "../types.ts";
@@ -111,7 +111,7 @@ const UNREADABLE_RECORD =
  * and `as` captures the same text through the engine's ordinary capture and
  * emits nothing.
  */
-export const SYNTAX_PROTECTED: ProtectedComponent = {
+export const SYNTAX_PROTECTED: ExecutionBuiltComponent = {
   name: SYNTAX_COMPONENT,
   origin: CORE_ORIGIN,
   props,

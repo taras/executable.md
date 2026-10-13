@@ -144,7 +144,6 @@ function symbolsWith(props: PropsSchema): SyntaxSymbols {
 const COMPOSITION_NAMES = [
   "Repository",
   "Worktree",
-  "Dir",
   "Git.Switch",
   "Git.Add",
   "Git.Commit",
@@ -212,7 +211,7 @@ describe("Tier SX — the run profile the command describes", () => {
     expect(entry.as).toBe("Optional. Captures the rendered text instead of emitting it.");
   });
 
-  it("ORC1: names all thirteen repository-composition components, with contracts", function* () {
+  it("ORC1: names all twelve repository-composition components, with contracts", function* () {
     // Described because the profile carries the Plugin that declares them.
     // `xmd syntax` renders the run profile's vocabulary, and the repository
     // components are the bundled Plugin's rather than the engine's own.
@@ -241,6 +240,16 @@ describe("Tier SX — the run profile the command describes", () => {
         reserved: false,
       });
     }
+
+    // `<Dir>` is still part of this host's vocabulary, and it is no longer part
+    // of the Plugin's: canonical core owns the name, so a bundled host
+    // describes it once, with core's own origin.
+    const everywhereDir = catalog.categories.flatMap((category) =>
+      category.entries.filter((entry) => entry.name === "Dir"),
+    );
+    expect(everywhereDir).toHaveLength(1);
+    expect(builtIn).toContain("Dir");
+    expect(everywhereDir[0]?.origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
 
     // The ones that produce a value say what `as` binds; the ones that render
     // nothing and produce nothing do not pretend to.

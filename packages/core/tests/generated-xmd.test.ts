@@ -42,7 +42,7 @@ import { join } from "node:path";
 
 import { Component, content, hasContent } from "../src/component-api.ts";
 import { pinnedJson } from "../src/generated-xmd.ts";
-import { CORE_REGISTRY } from "../src/components/registry.ts";
+import { fixedFilesystemDefinition } from "../src/components/fixed-filesystem.ts";
 import { collect } from "../src/collect.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
@@ -2770,7 +2770,7 @@ describe("Tier WGAC — the pinned read-only File", () => {
     // The exact object core's registry holds, not one shaped like it. Expansion
     // invokes a copy of this, and a same-shaped substitute is a different
     // implementation behind a name the host already granted.
-    expect(deletion.definition).toBe(CORE_REGISTRY.get("File.Delete")?.default?.definition);
+    expect(deletion.definition).toBe(fixedFilesystemDefinition("File.Delete"));
   });
 
   it("WGAC8: the result carries each observation's value, in order, beside the rendering", function* () {

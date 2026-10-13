@@ -150,7 +150,11 @@ import {
 } from "./components/component-resolution.ts";
 import type { AnswerIdentity, ImportTier } from "./components/component-resolution.ts";
 import type { ExecutionEnvironment } from "./execution-environment.ts";
-import { PROTECTED_COMPONENTS, ProtectedImports } from "./components/protected.ts";
+import {
+  EXECUTION_BUILT_COMPONENTS,
+  FIXED_COMPONENTS,
+  ProtectedImports,
+} from "./components/protected.ts";
 import { coreComponentDefinition, CORE_ORIGIN } from "./components/registry.ts";
 import { CORE_REVISION } from "./generated-xmd.ts";
 import { rootSyntaxReference } from "./syntax-reference.ts";
@@ -2573,7 +2577,11 @@ function* executeDocument(
         // Core's own, minted the same way and registered nowhere. Every
         // execution has them, whatever its host declared, which is what makes a
         // protected name mean one thing everywhere.
-        PROTECTED_COMPONENTS,
+        EXECUTION_BUILT_COMPONENTS,
+        // Core's own as well, and already built: the filesystem components are
+        // ordinary definitions this copy of core made once, so every execution
+        // answers for them with that same object.
+        FIXED_COMPONENTS.map((component) => component.definition),
       );
       yield* registerComponents(identity.registrations);
       identity.activate();

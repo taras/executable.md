@@ -1070,21 +1070,34 @@ export function installIdentities(
   components: readonly IdentityComponent[],
   privateComponents: readonly IdentityComponent[] = [],
   protectedComponents: readonly ProtectedDeclaration[] = [],
+  fixedComponents: readonly FunctionComponentDefinition[] = [],
 ): IdentityInstallation {
   // Before any factory: a set nobody can register is a set nobody may build
   // implementations from either, and a duplicate that reached a factory would
-  // have minted a claimant for a domain that is about to be discarded. The three
-  // sets are checked together because they mint into one table of domains, so a
+  // have minted a claimant for a domain that is about to be discarded. The four
+  // sets are checked together because they claim from one table of names, so a
   // private name that shadowed a registered one would take its domain — and a
   // host that declared a protected name reaches this only after admission has
   // already refused it, so a duplicate here is core's own mistake.
-  assertDistinctIdentityNames([...components, ...privateComponents, ...protectedComponents]);
+  assertDistinctIdentityNames([
+    ...components,
+    ...privateComponents,
+    ...protectedComponents,
+    ...fixedComponents,
+  ]);
 
   const minted = new Map<string, Minted>();
   const registrations: IdentityRegistration[] = [];
   const privates = new Map<string, FunctionComponentDefinition>();
   const guarded = new Map<string, FunctionComponentDefinition>();
   const componentRouting = createComponentRouting();
+  // Answered with as they stand. A fixed definition has no claimant to mint and
+  // no site to build, so there is nothing for this execution to add to it — and
+  // adding anything would make the object the engine invokes a different one
+  // from the object the generated-XMD write table pinned.
+  for (const definition of fixedComponents) {
+    guarded.set(definition.name, definition);
+  }
   for (const component of protectedComponents) {
     const domain = mintDomain(component.name);
     minted.set(component.name, domain);

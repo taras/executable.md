@@ -28,6 +28,7 @@ import type { ComponentRegistration } from "../src/components/registration.ts";
 import { DEFAULT_INCLUDES, selectComponent } from "../src/components/select.ts";
 import * as core from "../mod.ts";
 import { CORE_ORIGIN } from "../src/components/registry.ts";
+import { PROTECTED_COMPONENT_NAMES } from "../src/components/protected.ts";
 import type {
   ComponentRegistry,
   ComponentSelection,
@@ -366,13 +367,12 @@ describe("Tier CR — resolution order", () => {
     });
   });
 
-  it("CR16b: a repository file overrides every component core supplies", function* () {
+  it("CR16b: a repository file overrides every replaceable component core supplies", function* () {
     const dir = yield* useFixture();
     for (const name of [
       "CodeBlock",
       "Fail",
       "Fetch",
-      "File",
       "Glob",
       "Json",
       "Parse",
@@ -385,13 +385,25 @@ describe("Tier CR — resolution order", () => {
     }
   });
 
+  it("CR16c: a repository file overrides none of the names canonical core owns", function* () {
+    const dir = yield* useFixture();
+    for (const name of [...PROTECTED_COMPONENT_NAMES]) {
+      const [head, nested] = name.split(".");
+      if (nested !== undefined) {
+        yield* ensureDir(join(dir, head));
+      }
+      yield* writeTextFile(join(dir, `${name.split(".").join("/")}.md`), "mine\n");
+      const selection = yield* select(name, [dir]);
+      expect(selection.kind).toBe("protected");
+    }
+  });
+
   it("CR17: core's components resolve when nothing is on disk", function* () {
     const dir = yield* useFixture();
     for (const name of [
       "CodeBlock",
       "Fail",
       "Fetch",
-      "File",
       "Glob",
       "Json",
       "Parse",
@@ -401,6 +413,10 @@ describe("Tier CR — resolution order", () => {
       const selection = yield* select(name, [dir]);
       expect(selection.kind).toBe("registered");
       expect(originOf(selection)).toBe(CORE_ORIGIN);
+    }
+    for (const name of [...PROTECTED_COMPONENT_NAMES]) {
+      const selection = yield* select(name, [dir]);
+      expect(selection.kind).toBe("protected");
     }
   });
 

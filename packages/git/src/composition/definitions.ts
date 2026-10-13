@@ -1,38 +1,18 @@
 /**
- * Where a composition component's definition comes from, for everyone who needs
- * one.
+ * This boundary's origin, and the generated-XMD identity it pins for `<Dir>`.
  *
- * `<Dir>` has two consumers. It is an ordinary registered default, and it is
- * the pinned lexical identity the generated-XMD write table admits
- * (specs/workflow-workspace-spec.md §8.4). A pinned identity built from a
- * second copy of the implementation or a second copy of the schema would be a
- * component nothing else in this package runs, and the drift would be invisible
- * until a generated fragment behaved differently from an authored one. So both
- * read this, and the generated evaluator never consults the registration.
+ * The component itself is canonical core's
+ * (`core/src/components/fixed-filesystem.ts`). What stays here is the *identity*
+ * a workflow run's generated-XMD write table admits it under
+ * (specs/workflow-workspace-spec.md §8.4): a host states which grant a fragment
+ * is being given, and this host's grant is a string released builds already
+ * wrote into their journals.
  */
 
-import { formDispatcher } from "@executablemd/core";
 import { directoryEntry } from "@executablemd/core/host";
 import type { FragmentEntry } from "@executablemd/core/host";
-import type { FunctionComponentDefinition } from "@executablemd/core";
-import { form as dirForm, props as dirProps } from "./components/Dir.ts";
 
 export const COMPOSITION_ORIGIN = "@executablemd/workflow/composition";
-
-/**
- * The dispatcher both consumers share, built once.
- *
- * `<Dir>` is paired-only, so its definition is an engine-owned dispatcher
- * rather than the body itself, and canonical core builds it from the
- * declaration the component exports. Built once here for the same reason the
- * schema is read once: the registration and the pinned identity must be the
- * same definition, and two dispatchers would be two components.
- */
-const fn = formDispatcher(dirForm);
-
-export function dirDefinition(): FunctionComponentDefinition {
-  return { kind: "function", name: "Dir", props: dirProps, fn };
-}
 
 /**
  * The origin released builds retained for `<Dir>`'s generated-XMD entry.
@@ -47,10 +27,10 @@ export const RETAINED_DIRECTORY_ORIGIN = "@executablemd/workflow/composition";
 /**
  * `<Dir>`'s entry in a workflow run's generated-XMD write table.
  *
- * Stated here, beside the definition the ordinary registration uses, because
- * both describe the same component and a second copy of either would drift.
  * A host assembling the generated-evaluation profile asks for this rather than
- * writing the identity out again.
+ * writing the identity out again. Core supplies the body behind it, so this
+ * names no definition of its own: what the grant admits is the one `<Dir>` every
+ * authored element reaches.
  */
 export function gitDirectoryEntry(): FragmentEntry {
   return directoryEntry({ origin: RETAINED_DIRECTORY_ORIGIN, key: "Dir", revision: "3" }, "Dir", [

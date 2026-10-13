@@ -61,8 +61,8 @@ exits.
 - Agent permissions remain caller-selected.
 
 Repository operations are part of that environment under Deno and inside the
-compiled binary. The ordinary provider gives a document the same thirteen
-components a workflow run has, over the caller's own filesystem:
+compiled binary. The ordinary provider gives a document the same twelve
+repository components a workflow run has, over the caller's own filesystem:
 
 - The **ambient Repository** is the Git checkout the command was run in,
   discovered when the first element asks for one — never at installation — and
@@ -95,12 +95,13 @@ components a workflow run has, over the caller's own filesystem:
 - `<Issue>` and the pull-request evidence reads reach the same configured
   transports under the same host ceilings, retaining nothing.
 
-Node and Bun register the same thirteen declarations and install no operational
+Node and Bun register the same twelve declarations and install no operational
 repository provider, so `xmd syntax` describes one language everywhere and
 every repository operation there reports an absent provider before a lock, a
-credential, a subprocess or a request exists. Their host `API.Files` provider
-still supplies `<Dir>`'s directory operation, so directory composition remains
-operational on every runtime.
+credential, a subprocess or a request exists. `<Dir>` is canonical core's
+rather than one of those declarations, and their host `API.Files` provider
+supplies its directory operation, so directory composition remains operational
+on every runtime.
 
 ### 2.2 `xmd workflow`
 
@@ -924,11 +925,18 @@ installed provider's private state before it touches Git, so a replaced
 contextual Repository can misname a checkout and be refused but can never reach
 one.
 
-`<Repository>`, `<Worktree>` and `<Dir>` are ordinary registered defaults that
-the workflow host installs for a live or partial execution, alongside the
-document filesystem. A repository-local component with one of those names is
-chosen ahead of them. A completed root replay installs neither them nor the
-provider behind them.
+`<Repository>` and `<Worktree>` are ordinary registered defaults that the
+workflow host installs for a live or partial execution, alongside the document
+filesystem. A repository-local component with either of those names is chosen
+ahead of them. A completed root replay installs neither them nor the provider
+behind them.
+
+`<Dir>` is not one of those registrations. It is a name canonical core owns
+(`specs/executable-mdx-spec.md` §§5.3, 6.13.2), so it is present in every
+execution, no repository-local component is chosen ahead of it, and a document
+reaches it with a Files provider alone. What a workflow run supplies for it is
+the *provider* beneath it — the logical paths and the effect transaction
+§§6.3 and 10.1 describe — not the component.
 
 **These components describe known refusals; document-authored regions decide
 whether to print and continue.** A refusal one of them recognizes — a locator
@@ -1065,6 +1073,10 @@ checkout path while also rendering them.
 ### 6.3 Directory context
 
 `<Dir>` creates or adopts a directory and gives its content that lexical cwd.
+The component is canonical core's (`specs/executable-mdx-spec.md` §6.13.2),
+which states its general contract; what this section states is what a workflow
+run's provider makes that contract mean — logical placement, the effect
+transaction and replay.
 
 ```md
 <Dir path={repository_api}>
@@ -2106,10 +2118,17 @@ other unadmitted component.
 Mutation admission is the same boundary asked for the other class. The standard
 Deno workflow profile's write table holds exactly three identities, in the order
 it states them: core's paired `File:write`, the paired versioned
-`@executablemd/workflow/composition/dir-v2#Dir` — built from the same
-implementation and schema the ordinary registration owns so the two cannot
-drift — and core's self-closing `File.Delete`. A host's own extensions come
-after them, and the profile supplies no external-write and no execution table.
+`@executablemd/workflow/composition/dir-v2#Dir` — a host-stated identity whose
+body canonical core supplies, so the admitted grant and the authored component
+are one implementation — and core's self-closing `File.Delete`. A host's own
+extensions come after them, and the profile supplies no external-write and no
+execution table.
+
+That `<Dir>` identity names *retained history*, not the package the component
+lives in. Every journal a released build wrote holds the string above and a
+continuation compares the table position by position, so the identity stays as
+written even though canonical core now owns the component
+(`specs/executable-mdx-spec.md` §6.13.2).
 
 That order is retained identity. A continuation compares the entries position by
 position (§8.4, *A resumed run is held to its ceilings*), so a run admitted under
@@ -3496,7 +3515,7 @@ fetch operation requires its own language and durability contract.
 | provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; mandatory directory ensure is specified by #643 for both providers; process capabilities unbuilt (#218) |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition under a workflow run | Repository and Worktree built by #293, Deno provider only; `<Dir>`'s mandatory `API.Files.ensureDirectory` is specified by #643 as one transactional `workspace_file` mutation followed by lexical cwd installation |
-| the same thirteen declarations under every runtime | built by #643: one shadowable array declared by the bundled Git Plugin and consumed wherever its profile is assembled — `xmd syntax`, `xmd plan`, an ordinary document execution and a workflow action that executes a document |
+| the same twelve declarations under every runtime | built by #643: one shadowable array declared by the bundled Git Plugin and consumed wherever its profile is assembled — `xmd syntax`, `xmd plan`, an ordinary document execution and a workflow action that executes a document. `<Dir>` left that array when canonical core took the name, and is present under every runtime without it |
 | `<Repository>`, `<Worktree>` and the ambient Repository under an ordinary run | built by #643, Deno and compiled only: managed checkouts under `~/.xmd/repositories` with version 1 sidecars and execution-owned non-blocking locks, and the checkout the command was run in as the default Repository. Node and Bun install no operational provider |
 | local Git operations and `Git.Push` evidence under an ordinary run | built by #643, Deno and compiled only: the same authored transitions with no transaction and no replay, commits recorded under the invoking user's own captured Git identity with an actionable refusal when the host can name none, and a private per-execution Push evidence entry that authorizes `<PullRequest>` and crosses no run |
 | `<Issue>` and pull-request reads under an ordinary run | built by #643, Deno and compiled only: the same transports and ceilings with no durable envelope, keyed by this execution's own invocation identity |

@@ -2,12 +2,13 @@
  * The Git Plugin: what writing `<Repository>` in a document means.
  *
  * Installing it declares vocabulary and admits history, and does nothing else.
- * The Repository, Worktree, Dir, Git, PullRequest, IssueTracker and Issue
+ * The Repository, Worktree, Git, PullRequest, IssueTracker and Issue
  * components become ordinary defaults for the command, exactly as they were
  * when this package was part of `@executablemd/workflow` — same names, same
  * order, same props, same documentation and the same durable origins. A
  * repository-local component of one of those names is still chosen ahead of
- * them.
+ * them. `<Dir>` is canonical core's, so it is available with or without this
+ * plugin and no repository component shadows it.
  *
  * What installing does *not* do is reach a repository. No ambient checkout is
  * discovered, no managed directory is created, no `git` runs, no credential is
