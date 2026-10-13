@@ -280,6 +280,62 @@ describe("Tier DV: resolution and schemas", () => {
   });
 
   it("DV2: a missing required prop on a registered component is a schema failure", function* () {
+    // A host's own registration, because no core default declares a required
+    // prop: what this row is about is the registered tier, and reading the
+    // schema off a component canonical core owns would be the row below.
+    const { result, seen } = yield* validateText("<Noted />\n", {
+      registrations: [
+        {
+          name: "Noted",
+          origin: "test:noted",
+          props: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+            additionalProperties: false,
+          },
+          description: "Ends the run if it is ever invoked.",
+          // deno-lint-ignore require-yield
+          *fn() {
+            throw new Error("Noted was invoked");
+          },
+        },
+      ],
+    });
+
+    expect(codes(result)).toEqual(["props-invalid"]);
+    const [diagnostic] = result.diagnostics;
+    expect(diagnostic!.component).toBe("Noted");
+    expect(diagnostic!.issues).toEqual([
+      {
+        instancePath: "",
+        schemaPath: "#/required",
+        keyword: "required",
+        params: { missingProperty: "path" },
+        message: "must have required property 'path'",
+      },
+    ]);
+    expect(diagnostic!.position?.line).toBe(1);
+
+    const invocation = only(result);
+    expect(invocation.outcome).toBe("invalid");
+    expect(invocation.origin).toEqual({
+      kind: "registered",
+      origin: "test:noted",
+      reserved: false,
+    });
+    expect(seen.effects).toEqual([]);
+  });
+
+  /**
+   * The same failure for a name canonical core owns, which reports its own tier.
+   *
+   * Validation reads the protected declaration rather than a registry entry, so
+   * this is the row that notices if the fixed tier ever stopped carrying a
+   * schema — and the origin says `protected` rather than a registration a host
+   * could be told was theirs to take.
+   */
+  it("DV2b: and on a component canonical core owns", function* () {
     const { result, seen } = yield* validateText("<File />\n");
 
     expect(codes(result)).toEqual(["props-invalid"]);
@@ -298,11 +354,7 @@ describe("Tier DV: resolution and schemas", () => {
 
     const invocation = only(result);
     expect(invocation.outcome).toBe("invalid");
-    expect(invocation.origin).toEqual({
-      kind: "registered",
-      origin: "@executablemd/core",
-      reserved: false,
-    });
+    expect(invocation.origin).toEqual({ kind: "protected", origin: "@executablemd/core" });
     expect(seen.effects).toEqual([]);
   });
 

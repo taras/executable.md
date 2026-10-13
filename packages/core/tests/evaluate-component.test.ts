@@ -160,6 +160,83 @@ describe("protected generated component answers", () => {
     expect(rendered).toContain(held.trim());
   });
 
+  /**
+   * An admitted capability for an operation canonical core owns a component
+   * for is that component, however the host identified its grant.
+   *
+   * Availability compares what an author was *shown* with what this evaluation
+   * may *run*, by identity rather than by spelling. The enclosing reference
+   * documents core's own `<File>`, so an admitted entry reporting an ordinary
+   * registration is a different component under the same name — and a fragment
+   * admitted to write a file would be told it could not. The grant stays the
+   * host's: only the documentation origin is core's, which is why the host's own
+   * directory identity below is untouched.
+   */
+  it("reports an admitted file operation as the component canonical core owns", function* () {
+    const prepared = yield* prepareEvaluationProfile({
+      read: [fileReadEntry()],
+      // Deliberately a host's own identity, and deliberately not core's: it is
+      // what a continuation compares, and nothing here may rewrite it.
+      write: [directoryEntry({ origin: "test://host", key: "Dir", revision: "1" }, "Dir")],
+      files: recordedFiles(),
+    });
+    try {
+      const captured = yield* prepared.seal(new Map());
+      expect(admittedSymbols(captured.read).categories[2].entries).toMatchObject([
+        {
+          name: "File",
+          origin: { kind: "protected", origin: "@executablemd/core" },
+          sourceKind: "protected",
+        },
+      ]);
+      expect(admittedSymbols(captured.write).categories[2].entries).toMatchObject([
+        {
+          name: "Dir",
+          origin: { kind: "protected", origin: "@executablemd/core" },
+          sourceKind: "protected",
+        },
+      ]);
+      // The grant itself is unchanged. A journal holds this string, and the
+      // component moving into core did not move the host's entry with it.
+      expect(captured.write.map((entry) => entry.identity.origin)).toEqual(["test://host"]);
+    } finally {
+      prepared.revoke();
+    }
+  });
+
+  /**
+   * And the pairing is what carries it, not the name.
+   *
+   * A host chooses the name a capability is admitted under, so the name alone
+   * says nothing about which component is behind it. An operation core owns no
+   * component for stays an ordinary registration even under a name core does
+   * own — otherwise this would be telling an author that the `<File>` they read
+   * about is the thing this fragment may run.
+   */
+  it("reports a differently named or different operation as the registration it is", function* () {
+    const prepared = yield* prepareEvaluationProfile({
+      // The operation core owns `<File>` for, under a name it does not: a host
+      // may call its own grant whatever it likes.
+      read: [
+        { ...fileReadEntry(), name: "Scribe" },
+        // And the other half: an operation core owns no `<File>` body for,
+        // admitted under the name it does own.
+        { ...globReadEntry(), name: "File" },
+      ],
+      files: recordedFiles(),
+    });
+    try {
+      const captured = yield* prepared.seal(new Map());
+      const entries = admittedSymbols(captured.read).categories[2].entries;
+      expect(entries.map((entry) => `${entry.name}: ${entry.sourceKind}`)).toEqual([
+        "Scribe: registered",
+        "File: registered",
+      ]);
+    } finally {
+      prepared.revoke();
+    }
+  });
+
   it("keeps the producer's route while the generated child admits only Syntax", function* () {
     const told: string[] = [];
     const stream = new InMemoryStream();

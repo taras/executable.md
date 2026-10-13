@@ -2818,6 +2818,15 @@ how a component works where they may not run one — and is told which it is.
 Neither input carries definitions, import witnesses, invocation capabilities,
 providers, registrations or any other execution capability.
 
+Availability compares each entry's **identity** rather than its spelling: one
+name may hold a different component on each side, and an author shown one of
+them must not be told they may run the other. An operation canonical core owns
+a component for, admitted under that component's name, *is* that component — it
+reports core's own origin and the entry is available — while the grant it was
+admitted under stays the host's, because that is what a continuation compares.
+An operation admitted under any other name, or another operation admitted under
+one of those names, reports the registration it is.
+
 `xmd syntax Elicit` is the same lookup — one selection, one index, one renderer —
 so the command and the component cannot describe one component two ways. The
 compact `xmd syntax` and its version-2 `--json` are unchanged: documentation is

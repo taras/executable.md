@@ -8,9 +8,21 @@
  * shadow.
  *
  * So the same element resolves in two places and not in a third, and that
- * asymmetry is the whole subject here: `<Dir>` inside a nested
- * `<Execution host="run">` child is Git's component, doing Git's work, while
- * `<Dir>` written at the test root resolves to nothing at all.
+ * asymmetry is the whole subject here: `<Repository />` is a component under an
+ * ordinary run and inside a nested `<Execution host="run">` child, while
+ * `<Repository />` written at the test root is not a component at all.
+ *
+ * `<Repository>` rather than `<Dir>`, which these rows used while Git declared
+ * it: canonical core owns `<Dir>` now, so it resolves under every command, and
+ * a row written in it would report an asymmetry that no longer exists. What is
+ * wanted is any name the Plugin still declares.
+ *
+ * Each row reads one element written with no props, so the two outcomes are a
+ * profile's and nothing else's: a command that has the declaration reads its
+ * schema and names the props it is missing, and a command that does not have it
+ * cannot resolve the name at all. Neither outcome reaches a provider, a
+ * credential or a network, so what separates the rows is the vocabulary rather
+ * than what some host went on to install.
  *
  * Driven through the real binary rather than an in-process assembly, because
  * what is under test is which profile each *command* runs with — and a command
@@ -24,6 +36,12 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import { writeTextFile } from "@effectionx/fs";
 import { join } from "node:path";
 import type { Operation } from "effection";
+
+/** What a command that does not know the name answers with. */
+const UNKNOWN = "Cannot resolve component: Repository";
+
+/** What a command that does know it answers with, having read its schema. */
+const DECLARED = "Prop validation failed for <Repository />";
 
 /** One document, run by one command, from a directory naming no repository. */
 function* xmd(
@@ -48,13 +66,15 @@ describe("the profile each command runs with", () => {
     // The positive control for both cases below: the element, the spelling and
     // the directory are the same everywhere, so what differs is only which
     // profile the command carries.
-    const { code, output } = yield* xmd(["run"], '<Dir path="notes">a run resolves this</Dir>\n');
-    expect(`${code}: ${output.includes("a run resolves this")}`).toBe("0: true");
+    const { output } = yield* xmd(["run"], "<Repository />\n");
+    expect(output).toContain(DECLARED);
+    expect(output).not.toContain(UNKNOWN);
   });
 
   it("resolves none of it at the test root", function* () {
     // Not a failure to *perform* the work — a failure to know the name at all.
-    // The root profile carries no Plugin, so `<Dir>` is not a component here.
+    // The root profile carries no Plugin, so `<Repository />` is not a
+    // component here.
     const { code, output } = yield* xmd(
       ["test"],
       [
@@ -62,7 +82,7 @@ describe("the profile each command runs with", () => {
         "",
         '<Test name="the root writes Git vocabulary">',
         "",
-        '<Dir path="notes">the root must not resolve this</Dir>',
+        "<Repository />",
         "",
         "</Test>",
         "",
@@ -75,8 +95,11 @@ describe("the profile each command runs with", () => {
     // The intended failure, named. Any non-zero exit would otherwise satisfy
     // this — including one from a CLI fault that has nothing to do with which
     // profile the command carries.
-    expect(output).toContain("Cannot resolve component: Dir");
-    expect(output).not.toContain("the root must not resolve this");
+    expect(output).toContain(UNKNOWN);
+    // And it never read the declaration, which is the other half: a root that
+    // resolved the name and then refused the invocation would report the props
+    // it was missing instead.
+    expect(output).not.toContain(DECLARED);
   });
 
   it("resolves it inside a nested run child", function* () {
@@ -84,18 +107,18 @@ describe("the profile each command runs with", () => {
     // profile for itself. The root still has none of it; the child has all of
     // it — which is what "a child does not inherit what its parent declined"
     // looks like from the outside.
-    const { code, output } = yield* xmd(
+    //
+    // The child's failure is deliberately not bound: what it reported is the
+    // evidence, and the row above shows what that text reads when a command
+    // does not know the name.
+    const { output } = yield* xmd(
       ["test"],
       [
         "<Testing>",
         "",
         '<Test name="a run child resolves Git vocabulary">',
         "",
-        '<Execution host="run" source={"<Dir path=\\"notes\\">the child resolves this</Dir>"} as="child">',
-        '<CollectOutput as="output" />',
-        "<AssertEquals actual={child.result.ok} expected={true} />",
-        '<AssertStringIncludes actual={output} expected="the child resolves this" />',
-        "</Execution>",
+        '<Execution host="run" source={"<Repository />"} />',
         "",
         "</Test>",
         "",
@@ -104,14 +127,7 @@ describe("the profile each command runs with", () => {
       ].join("\n"),
       "nested.md",
     );
-    // The proof is inside the document. `<CollectOutput>` binds the child's
-    // output rather than printing it, so what discriminates here is the pair of
-    // assertions the child ran: that it succeeded at all, and that what it
-    // rendered is what `<Dir>` renders. A child that resolved no component
-    // fails the first; one that resolved a different one fails the second.
-    expect(code).toBe(0);
-    // And it resolved the component rather than reporting it missing, which is
-    // exactly what the root case above sees.
-    expect(output).not.toContain("Cannot resolve component: Dir");
+    expect(output).toContain(DECLARED);
+    expect(output).not.toContain(UNKNOWN);
   });
 });

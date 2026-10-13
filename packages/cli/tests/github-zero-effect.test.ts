@@ -85,10 +85,15 @@ describe("describing the bundled profile costs nothing", () => {
   it("validates a Plan draft without reading GitHub configuration", function* () {
     // Real structural validation, not merely loading the declaration: a draft
     // written in Git-owned syntax, checked through the profile a `plan` command
-    // assembles. `<Dir>` is Git's, and the profile is now the only route to it
-    // — nothing bootstraps the vocabulary any more — so the omission case
-    // below refuses this very draft.
-    const draft = '# Plan\n\n<Dir path="notes">work here</Dir>\n';
+    // assembles. `<Repository>` is Git's, and the profile is the only route to
+    // it — nothing bootstraps the vocabulary — so the omission case below
+    // refuses this very draft.
+    //
+    // Git's, and not `<Dir>`: canonical core owns that name now, so a draft
+    // written in it would be valid with no Plugin at all and the pair of rows
+    // would be asserting nothing about the profile.
+    const draft =
+      '# Plan\n\n<Repository name="project" url="https://example.invalid/p.git">work here</Repository>\n';
     const result = yield* scoped(function* () {
       yield* refusing();
       yield* adapters();
@@ -100,7 +105,7 @@ describe("describing the bundled profile costs nothing", () => {
     expect(`${result.outcome}: ${result.diagnostics.map((d) => d.code).join(",")}`).toBe("valid: ");
     // And it recognized the Git invocation rather than skipping it: an empty
     // invocation list is what a validation that knew no components returns.
-    expect(result.invocations.map((invocation) => invocation.name)).toContain("Dir");
+    expect(result.invocations.map((invocation) => invocation.name)).toContain("Repository");
 
     // The validation really discriminates. Without this, "valid" could be what
     // a validator that accepted anything answers, and the row above would be
@@ -116,14 +121,15 @@ describe("describing the bundled profile costs nothing", () => {
   });
 
   it("refuses the same draft when the Git Plugin is not in the profile", function* () {
-    // The omission case. `<Dir>` reaches a Plan only because the profile
+    // The omission case. `<Repository>` reaches a Plan only because the profile
     // carries the Plugin that declares it: nothing bootstraps that vocabulary,
     // so a validation assembled without the Plugin does not merely lose a
     // provider — it does not know the name.
     //
     // This is what makes the positive case above a claim about the *profile*
     // rather than about whatever the engine happens to declare.
-    const draft = '# Plan\n\n<Dir path="notes">work here</Dir>\n';
+    const draft =
+      '# Plan\n\n<Repository name="project" url="https://example.invalid/p.git">work here</Repository>\n';
     const result = yield* scoped(function* () {
       yield* refusing();
       yield* adapters();
@@ -140,6 +146,6 @@ describe("describing the bundled profile costs nothing", () => {
     // Named, not merely refused: a draft rejected for some other reason would
     // satisfy `invalid` while proving nothing about the vocabulary.
     expect(`unresolved: ${unresolved.length > 0}`).toBe("unresolved: true");
-    expect(unresolved.map((diagnostic) => diagnostic.component)).toContain("Dir");
+    expect(unresolved.map((diagnostic) => diagnostic.component)).toContain("Repository");
   });
 });
