@@ -7,13 +7,31 @@
  * them: a protected name means the same thing in every execution, whichever host
  * built it, whichever package registered what, and whatever a repository holds.
  *
- * There are two components in it. `<Syntax />` describes the vocabulary of the
- * site it is written at, and a description of a run's vocabulary that anything
- * in the run could answer for is a description of nothing — the value of the
- * answer is exactly that nobody but core produced it. `<Evaluate>` runs program
- * text the document did not author, under a ceiling a trusted host stated
- * before any document existed; a component in the run answering for that name
- * would decide what an unaudited fragment is allowed to do.
+ * There are five components in it, for two reasons. `<Syntax />` describes the
+ * vocabulary of the site it is written at, and a description of a run's
+ * vocabulary that anything in the run could answer for is a description of
+ * nothing — the value of the answer is exactly that nobody but core produced
+ * it. `<Evaluate>` runs program text the document did not author, under a
+ * ceiling a trusted host stated before any document existed; a component in the
+ * run answering for that name would decide what an unaudited fragment is
+ * allowed to do. `<File>`, `<File.Delete>` and `<Dir>` name effects on the
+ * author's own filesystem (`fixed-filesystem.ts`), and a repository `File.md`
+ * answering for `<File>` would choose what a document writes under the name
+ * every author already reads as core's.
+ *
+ * ## Two shapes, one tier
+ *
+ * What a protected name claims is settled here; how its implementation comes
+ * about is not the same for all five. `<Syntax />` and `<Evaluate>` are handed
+ * a site canonical execution built for them, so each execution builds their
+ * bodies from a claimant it minted. The three filesystem components are
+ * ordinary components whose bodies reach the filesystem through contextual
+ * operations, so each is one definition built once per loaded copy of core and
+ * answered with as it stands.
+ *
+ * Both shapes carry the same descriptive members, because selection,
+ * inspection, documentation and validation ask every protected component the
+ * same questions. Only the execution that resolves one has to tell them apart.
  *
  * ## What protection is, and is not
  *
@@ -26,14 +44,12 @@
  * verified at the call site against core's own retained copy, and core's copy is
  * what is invoked.
  *
- * Protection is not permission to do anything. A protected implementation is
- * handed the site canonical execution built for it and nothing else: the
- * lexical syntax reference, the evaluation profile a trusted host stated at the
- * installation boundary, and a one-shot projection of its own content. No
- * component definitions, no import witness, no invocation capability, no
- * provider and no registration handle — and no way to widen what the profile
- * already says, because the profile is a captured value rather than a handle to
- * the host's own objects.
+ * Protection is not permission to do anything, and it is not a second
+ * filesystem. A protected implementation is handed what canonical execution
+ * built for it and nothing else, and the three filesystem bodies perform every
+ * operation through the installed `API.Files` provider — which middleware still
+ * answers, transforms, delegates and refuses. Fixing the *name* says nothing
+ * about which filesystem it reaches.
  *
  * ## Why it is not a registration
  *
@@ -47,13 +63,16 @@
 
 import { EVALUATE_PROTECTED } from "./Evaluate.ts";
 import { SYNTAX_PROTECTED } from "./Syntax.ts";
+import { FIXED_FILESYSTEM_DEFINITIONS, FIXED_FILESYSTEM_ORIGIN } from "./fixed-filesystem.ts";
+import { documentationOf } from "./documentation.ts";
 import type { ImportRefusal, ImportTier } from "./component-resolution.ts";
 import type { ComponentDocumentation } from "./documentation.ts";
 import type { ProtectedDeclaration } from "../invocation-identity.ts";
-import type { ComponentOrigin } from "../types.ts";
+import type { ComponentOrigin, FunctionComponentDefinition } from "../types.ts";
 
 /**
- * One component canonical core claims the name of.
+ * One component canonical core claims the name of, whose body each execution
+ * builds.
  *
  * The same contract an identity component declares, minus the choice of origin:
  * a protected component is core's, so it reports core's origin. Its body is
@@ -61,12 +80,64 @@ import type { ComponentOrigin } from "../types.ts";
  * implementation the execution wraps it in is the only thing that name resolves
  * to there.
  */
-export interface ProtectedComponent extends ProtectedDeclaration, ComponentDocumentation {}
+export interface ExecutionBuiltComponent extends ProtectedDeclaration, ComponentDocumentation {}
+
+/**
+ * One component canonical core claims the name of and supplies as it stands.
+ *
+ * The definition is the whole of it. There is no claimant to mint and no site
+ * to build, so the execution's protected table answers with this exact object —
+ * which is also what the generated-XMD write table pins, so an authored element
+ * and an admitted generated one invoke one implementation.
+ */
+export interface FixedComponent extends ComponentDocumentation {
+  readonly name: string;
+  readonly props: FunctionComponentDefinition["props"];
+  readonly returns?: FunctionComponentDefinition["returns"];
+  readonly captures?: FunctionComponentDefinition["captures"];
+  readonly forms?: FunctionComponentDefinition["forms"];
+  readonly origin: string;
+  readonly definition: FunctionComponentDefinition;
+}
+
+/** One component canonical core claims the name of, however it is supplied. */
+export type ProtectedComponent = ExecutionBuiltComponent | FixedComponent;
+
+/**
+ * The tier entry one fixed definition supplies.
+ *
+ * Read off that definition rather than restated beside it: the definition
+ * already carries the schema, the accepted forms and the prose, and a second
+ * copy of any of them would be the one that drifted.
+ */
+function fixedComponent(definition: FunctionComponentDefinition): FixedComponent {
+  return {
+    name: definition.name,
+    props: definition.props,
+    ...(definition.returns === undefined ? {} : { returns: definition.returns }),
+    ...(definition.captures === undefined ? {} : { captures: definition.captures }),
+    ...(definition.forms === undefined ? {} : { forms: definition.forms }),
+    origin: FIXED_FILESYSTEM_ORIGIN,
+    ...documentationOf(definition),
+    definition,
+  };
+}
+
+/** The components whose bodies each execution builds for itself. */
+export const EXECUTION_BUILT_COMPONENTS: readonly ExecutionBuiltComponent[] = Object.freeze([
+  EVALUATE_PROTECTED,
+  SYNTAX_PROTECTED,
+]);
+
+/** The definitions canonical core answers with as they stand. */
+export const FIXED_COMPONENTS: readonly FixedComponent[] = Object.freeze(
+  FIXED_FILESYSTEM_DEFINITIONS.map(fixedComponent),
+);
 
 /** Every name the engine itself claims. */
 export const PROTECTED_COMPONENTS: readonly ProtectedComponent[] = Object.freeze([
-  EVALUATE_PROTECTED,
-  SYNTAX_PROTECTED,
+  ...EXECUTION_BUILT_COMPONENTS,
+  ...FIXED_COMPONENTS,
 ]);
 
 const BY_NAME: ReadonlyMap<string, ProtectedComponent> = new Map(

@@ -2297,6 +2297,13 @@ describe("Tier ED — one catalog, two arms", () => {
     ]);
     expect(owned).toContain("canonical core owns that name");
 
+    // The filesystem components are in that same tier, so a declaration cannot
+    // claim one of their names either.
+    const filesystem = yield* refusedBeforeRoot([
+      declaring([deck({ name: "File" }), panel({ parent: "File" })]),
+    ]);
+    expect(filesystem).toContain("canonical core owns that name");
+
     const reserved = yield* refusedBeforeRoot([
       declaring([deck(), panel()]),
       {

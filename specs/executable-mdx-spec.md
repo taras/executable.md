@@ -128,7 +128,8 @@ on success, failure and cancellation alike.
 - `<Dir path>` recursively creates or adopts `path` before content begins, then
   expands its content there. A relative path is read against the directory
   already in effect and an absolute path keeps its existing meaning. It selects
-  no repository.
+  no repository. It is canonical core's (§6.13.2), so a document reaches it
+  with a Files provider alone — the other two need the repository vocabulary.
 
 Written self-closing with `as`, Repository and Worktree render nothing and bind
 the checkout path instead, which is what lets a later sibling `<Dir path={…}>`
@@ -2817,6 +2818,15 @@ how a component works where they may not run one — and is told which it is.
 Neither input carries definitions, import witnesses, invocation capabilities,
 providers, registrations or any other execution capability.
 
+Availability compares each entry's **identity** rather than its spelling: one
+name may hold a different component on each side, and an author shown one of
+them must not be told they may run the other. An operation canonical core owns
+a component for, admitted under that component's name, *is* that component — it
+reports core's own origin and the entry is available — while the grant it was
+admitted under stays the host's, because that is what a continuation compares.
+An operation admitted under any other name, or another operation admitted under
+one of those names, reports the registration it is.
+
 `xmd syntax Elicit` is the same lookup — one selection, one index, one renderer —
 so the command and the component cannot describe one component two ways. The
 compact `xmd syntax` and its version-2 `--json` are unchanged: documentation is
@@ -3247,15 +3257,39 @@ nothing. A non-string is not an error — it is a value with no destination.
 
 Some components are core's own: `<Fail>` (§6.8.2), `<TempDir>` (§6.11),
 `<Json>`, `<Parse>` and `<SafeParse>` (§6.12), `<File>` (§6.13), `<File.Delete>`
-(§6.13.1), `<Glob>` (§6.14), `<Fetch>` (§6.18), and `<CodeBlock>` (§6.19). Each
-is already in the module graph, so it ships in the compiled binary and every
-published package without a search path or a bundling step, and a document
-invokes it with no `--include`.
+(§6.13.1), `<Dir>` (§6.13.2), `<Glob>` (§6.14), `<Fetch>` (§6.18), and
+`<CodeBlock>` (§6.19). Each is already in the module graph, so it ships in the
+compiled binary and every published package without a search path or a bundling
+step, and a document invokes it with no `--include`.
 
-They are ordinary **defaults**, not reserved names: a repository component
-called `Parse.md` is chosen ahead of core's `<Parse>`, exactly as it would be
-ahead of any other package's registration. Nothing core supplies claims a name a
+Most of them are ordinary **defaults**, not reserved names: a repository
+component called `Parse.md` is chosen ahead of core's `<Parse>`, exactly as it
+would be ahead of any other package's registration. A default claims no name a
 document cannot take back.
+
+Five are not defaults. `<Syntax />` (§5.3.1), `<Evaluate>` (§5.3.2), `<File>`,
+`<File.Delete>` and `<Dir>` are names **canonical core owns**: no registration,
+repository file, bundle member, declared Markdown component, import-handler
+answer or second loaded copy replaces one, and claiming the name is refused
+where the claim is made. The three filesystem components are owned because they
+name effects on the author's own filesystem, and a repository `File.md`
+answering for `<File>` would choose what a document writes under the name every
+author reads as core's.
+
+**Owning the name is not owning the operation.** The three filesystem
+components are ordinary components: each performs its work through the
+contextual `API.Files` provider (§6.11), which a host installs and middleware
+still answers, transforms, delegates and refuses. What is fixed is which
+definition the name resolves to, never which filesystem it reaches.
+
+Their definitions are also **immutable**, function and schema alike, because
+one object answers for every execution in the process. The refusal above
+describes a handler that changes what it was handed; for these three a change
+does not take, so there is nothing left behind for a later execution to
+validate documents against. Canonical core keeps the copy it took when a
+definition was first issued to an execution, rather than re-copying per import,
+so a refused change cannot become the baseline the next import is compared
+against either.
 
 The definitions are module-resident and reused — one object per component for
 the life of the process. That is not what varies between runs. What each
@@ -8210,8 +8244,9 @@ testable like anything else.
 
 A document reads a repository file, writes a source file, or lays out a
 fixture without asking an agent to choose a path or run a command. `<File>` is
-core's own component (§5.3) and takes one required prop, `path`, resolved
-relative to the contextual `Env.cwd`:
+a name canonical core owns (§5.3): no repository file, registration, bundle
+member or import-handler answer supplies it. It takes one required prop,
+`path`, resolved relative to the contextual `Env.cwd`:
 
 ```md
 <File path="request.md" />
@@ -8611,8 +8646,8 @@ directory's replay refusal depends on (§6.11).
 
 ### 6.13.1 Removing a file: `<File.Delete>`
 
-A document that wrote a file can also stop it existing. `<File.Delete>` is
-core's own component (§5.3), takes one required non-empty `path` resolved
+A document that wrote a file can also stop it existing. `<File.Delete>` is a
+name canonical core owns (§5.3), takes one required non-empty `path` resolved
 against the contextual `Env.cwd`, and is written self-closing:
 
 ```md
@@ -8775,6 +8810,67 @@ output around the deletion.
 The paired spelling is refused in whole-fragment preflight, before the
 fragment's first effect, because the identity is admitted for the self-closing
 form alone.
+
+---
+
+### 6.13.2 Entering a directory: `<Dir>`
+
+A document that writes several files in one place names that place once.
+`<Dir>` is a name canonical core owns (§5.3), takes one required non-empty
+`path`, and is written **paired**:
+
+```md
+<Dir path="notes">
+<File path="message.md">first</File>
+</Dir>
+```
+
+It does two things, in this order. First the directory named by `path` is made
+to exist: created recursively when it is missing, used as it stands when it is
+already a directory, and refused when something that is not a directory is
+there or on the way to it. Only then does the content expand, with `path` as
+the contextual `Env.cwd` — so `<File>`, `<Glob>`, a process a document runs and
+every other consumer of the working directory (§1.2) resolve against it.
+
+Content never begins on the far side of a refusal. A document that named a
+directory asked for that directory, not for whatever it would otherwise have
+run in, so a refused ensure expands no content and binds no working directory.
+
+A relative `path` is read against the directory already in effect, so one
+`<Dir>` inside another nests; an absolute path keeps its existing meaning. It
+selects no repository, which is what lets the self-closing `<Worktree as="…">`
+spelling compose with it: the Repository a later Git element acts on is still
+the enclosing one.
+
+#### Ownership, and what restoring does not do
+
+The enclosing working directory is restored when the invocation ends — on
+success, failure and cancellation alike, because the installation lives on the
+invocation's own scope. Restoring it removes nothing. A directory this element
+created stays, and a later failure of the content inside it says nothing about
+whether the directory should exist: there is no rollback here and no teardown
+deletion.
+
+#### One form
+
+Self-closing `<Dir />` is invalid. A working directory installed for no content
+is a directory nothing runs in, and silently rendering nothing would hide a
+document that meant to write children. Which form it was written as is decided
+by canonical dispatch from the scan, before the body is entered (§5.6), so
+neither a contextual handler answering ahead of the engine nor a wrapper
+minting an invocation validates a `<Dir />` the document wrote no children for.
+
+Being invalid, it fails the operation it is part of; an authored
+`<PrintErrors>` region may recover from that explicitly.
+
+#### Under a workflow run
+
+The component is the same one. A workflow run installs a Files provider whose
+paths are the run's own logical ones and whose mutations cross the run's effect
+transaction, so `<Dir>` creates a directory in that workspace rather than the
+caller's, and a completed ensure replays without being performed again. Those
+semantics belong to the provider: `specs/workflow-workspace-spec.md` §§6.3 and
+10.1 state them.
 
 ---
 
@@ -10586,10 +10682,12 @@ The repository installer is required for the same reason and states a different
 fact: what this runtime can *operate*, rather than what it is. Deno and the
 compiled binary pass the live provider — `denoRunRepositories(HELPER)`, built
 from the same credential-helper assembly the workflow host uses — and Node and
-Bun pass `unsupportedRepositories`. Every runtime registers the same thirteen
+Bun pass `unsupportedRepositories`. Every runtime registers the same twelve
 declarations either way, so `xmd syntax` describes one language everywhere and a
 runtime that operates none of it reports an absent provider before a lock, a
-credential, a subprocess or a request exists (§5.3, §8.1).
+credential, a subprocess or a request exists (§5.3, §8.1). `<Dir>` is canonical
+core's rather than one of those declarations, so it is operational on every
+runtime that installs a Files provider.
 
 Being *supplied* by the entrypoint and being *used* are different things, and
 the commands differ:
@@ -11837,8 +11935,9 @@ Each row names the derivation it kills.
 | CR9–CR13 | Scope locality | A child shadows its parent and restores it on exit; siblings and concurrent scopes are isolated |
 | CR14 | Structural wins | A structural name resolves to the construct, never to a component |
 | CR15 | Reserved over repository | A reserved registration outranks a file on disk |
-| CR16 | Repository over default | A repository file outranks a registered default, including each of core's |
-| CR17 | Defaults resolve | Core's components resolve with nothing on disk |
+| CR16 | Repository over default | A repository file outranks a registered default, including each of core's replaceable ones |
+| CR16c | Owned names outrank disk | A repository file of each name canonical core owns loses selection, however it is spelled |
+| CR17 | Defaults resolve | Core's components resolve with nothing on disk, and the owned names resolve to core's own tier |
 | CR18 | Unresolved | The printed error names the searched directories and the registered origins considered |
 | CR19/CR20 | Candidate order | Markdown before TypeScript, earlier directories first, dots addressing subdirectories |
 | CR21 | Order independence | Reserved beats default however the two were installed, across scopes and within one |
@@ -11873,6 +11972,7 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | SY19–SY22 | Markdown documentation | String `description`/`as`/`context` reach the symbols; a non-string value documents nothing; an undocumented component stays complete; a declared `returns` reports `value` mode with its schema |
 | SY23 | Opaque TypeScript | A repository `.ts` entry is origin-only and carries no contract field |
 | SY24/SY25 | Complete contracts | `<File>`'s two forms, `<File.Delete>`'s one, `<Json>`'s one and its capture, and text and value return modes; declaration order of captures and forms survives, each canonical forms spelling is accepted, and every other one is refused |
+| SY7/SY7c/SY18 | Owned names keep their origin | A flat dotted candidate, an unreachable subtree and a link behind a prefix leave `<File.Delete>` reported with canonical core's own origin rather than a registration's |
 | SY26–SY27 | Declared components | One is described without its factory being called and a repository file still overrides it; two declarations of one name are refused before either factory; and a declaration inspection refuses is refused identically by registration |
 | SY28 | First-party documentation | Every complete built-in in the core and Agent profile states a description |
 | SY29 | Determinism | Two inspections of one environment are equal, and entries are sorted within each category |
@@ -11935,6 +12035,26 @@ and proves it unread: `-e -` refuses; bare `xmd -` executes the file named `-`
 and renders that file's marker; `xmd run -#Section` executes `Section` of that
 same file, rendering its marker and not its sibling section's; and `xmd test -`
 keeps the test command's own path behavior.
+
+### Tier FX — The filesystem components canonical core owns
+
+`<File>`, `<File.Delete>` and `<Dir>` are in the same tier `<Syntax />` and
+`<Evaluate>` are, for a different reason: they name effects on the author's own
+filesystem. Their own surfaces — forms, printed errors, containment, replay —
+are Tiers FL, FD and HF; this tier is the ownership boundary and the provider
+composition underneath it.
+
+| # | Test | Verify |
+|---|------|--------|
+| FX1–FX1c | The journey, with no repository vocabulary | Core and a Files provider enter a directory, write, read and delete inside it with a candidate for each of the three names on disk; no candidate renders; the directory persists and a later sibling resolves against the restored enclosing directory |
+| FX1b | The provider is still replaceable | Files middleware that changes a write payload changes what the later read returns, so owning the name does not own the operation |
+| FX2–FX2c | Nothing else may claim them | An ordinary and a reserved registration are refused for each name; a batch holding one of them installs nothing — checked in the still-live registration scope, where a partial installation would still be visible — and the ordinary name beside it registers cleanly afterwards; a same-name local implementation whose top level would throw is never loaded, while an open name beside it still wins |
+| FX3–FX3f | The final answer is verified | Middleware observes and delegates every fixed import; a replacement, another name's issued definition and a rebuilt definition are each refused before the body or any provider call; a deliberate refusal stays a refusal |
+| FX3c | A refused change does not become the next baseline | An in-place change to the owning definition's function *and* to its nested `path` schema is rejected where each is attempted; no replacement body or replacement I/O runs on that import or a later one in the same document; the owning definition and its whole schema are unchanged afterwards; and a **fresh execution** still validates a valid string path against the original contract |
+| FX3g | A second loaded copy | A definition carrying a dispatcher an actually bundled second copy of the identity module built is refused before its body and before any filesystem call (Deno-only, beside the `<Syntax />` case it reuses) |
+| FX4 | The dispatcher authenticates its own invocation | Reached directly, with no import to intercept, each fixed dispatcher refuses an invocation the engine did not issue |
+| FX5–FX5d | Directory ownership | A body that fails and a body cancelled inside the region both leave the created directory, and the enclosing directory is read back **in the scope that installed it** rather than in a fresh run that would install its own; a refused ensure expands no content and writes nothing; an existing directory keeps what is in it |
+| ORC3 | The shipped command | A real `xmd run` performs the whole journey with candidates for all three names beside the document, ignores them, and restores the working directory for the sibling after the region |
 
 ### Tier SYN — The public `<Syntax />` component
 
@@ -13599,7 +13719,7 @@ user's own `~/.xmd/repositories`.
 
 | # | Test | Verify |
 |---|------|--------|
-| ORC1 | One declaration surface | All thirteen names appear in the symbols with complete contracts; a repository file of one of those names shadows the default; symbol construction performs no ambient discovery, lock, Git, credential or network operation |
+| ORC1 | One declaration surface | All twelve names appear in the symbols with complete contracts; a repository file of one of those names shadows the default; `<Dir>` is described once, with canonical core's own origin; symbol construction performs no ambient discovery, lock, Git, credential or network operation |
 | ORC2 | Runtime declaration parity | The same symbols assertion holds under Deno, Node and Bun; on a runtime that installs no operational repository provider, representative Repository, Worktree, Git, Issue and PullRequest forms each report an absent provider with zero mutation, while `<Dir>` remains operational through that runtime's host `API.Files` provider |
 | ORC3 | Ambient primary checkout | From a normal repository, root Switch/Add/Commit select the ambient Repository and the contextual checkout; outside Git, a root Worktree, Git operation or PullRequest refusal names how to run inside one |
 | ORC4 | Ambient linked worktree | Invoked from a linked worktree, Repository identity follows the canonical common directory, Git acts on that worktree's root, and the primary checkout is untouched |

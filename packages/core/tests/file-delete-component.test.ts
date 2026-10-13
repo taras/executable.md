@@ -430,10 +430,13 @@ describe("Tier FD — File.Delete", () => {
       failure = error instanceof Error ? error.message : String(error);
     }
 
-    // Fatal rather than printed, because the wrapper's own function is not the
-    // one core declared a printing boundary on — which is beside the point
-    // here. What matters is where it stopped.
-    expect(failure).toContain("without the invocation the engine issued");
+    // It stops one layer earlier than it used to. The wrapper returns a
+    // definition canonical execution did not issue, and this is a name
+    // canonical core owns, so verification refuses the answer before anything
+    // is invoked with the forged invocation at all. The dispatcher's own
+    // refusal is still there underneath — `fixed-filesystem-components.test.ts`
+    // reaches it directly, without an import to intercept.
+    expect(failure).toContain("canonical execution did not produce");
     expect(reached).toEqual([]);
     expect(yield* readTextFile(join(fixture.workspace, "kept.md"))).toBe("kept");
   });

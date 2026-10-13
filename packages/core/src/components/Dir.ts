@@ -1,6 +1,8 @@
 /**
  * `<Dir path="..">` — lexical working directory
- * (specs/workflow-workspace-spec.md §6.3).
+ * (specs/executable-mdx-spec.md §6.13.2). A workflow run's logical paths and
+ * directory transactions are the same component under a different provider
+ * (specs/workflow-workspace-spec.md §§6.3, 10.1).
  *
  * Two acts, in this order. First the directory named by `path` is made to
  * exist: it is created recursively when it is missing, used as it stands when
@@ -31,11 +33,12 @@
  */
 
 import { API, cwd } from "@executablemd/runtime";
-import { content, ensureDirectory } from "@executablemd/core";
 import { parseFilesFailure } from "@executablemd/runtime";
-import type { FormDeclaration, InvocationForm } from "@executablemd/core";
 import type { Operation } from "effection";
-import type { Json } from "@executablemd/durable-streams";
+import { content } from "../component-api.ts";
+import { ensureDirectory } from "../files.ts";
+import type { FormDeclaration, InvocationForm } from "../invocation-identity.ts";
+import type { Json } from "../types.ts";
 
 export const props = {
   type: "object",

@@ -20,7 +20,9 @@
  * index and replaces only what may run.
  */
 
+import { protectedComponent } from "./components/protected.ts";
 import type { CapturedEntry } from "./evaluation-profile.ts";
+import type { FragmentCapability } from "./fragment-capabilities.ts";
 import type { CompleteComponentSyntaxEntry, SyntaxSymbols } from "./inspect.ts";
 import type { ReturnsSchema } from "./types.ts";
 
@@ -28,12 +30,53 @@ import type { ReturnsSchema } from "./types.ts";
 const UNDECLARED: ReturnsSchema = { type: "string" };
 
 /**
+ * The component canonical core owns that performs each of these operations.
+ *
+ * A capability is core's operation under the name the host chose, so neither
+ * half alone identifies a component: a host may admit `file:write` as
+ * `<Scribe>`, and nothing stops it admitting `files:glob` as `<File>`. The
+ * pair does. When a host admits the operation core's own component of that name
+ * performs, the component an author was shown under that name is the one they
+ * may run here — and availability is exactly that comparison, so reporting this
+ * entry as an ordinary registration would answer `no` for a component the
+ * fragment can write.
+ *
+ * Only the operations core owns a component for appear here. A read and a write
+ * both belong to `<File>`, because one name holds both forms.
+ */
+const OWNED_CAPABILITIES: Readonly<Partial<Record<FragmentCapability, string>>> = Object.freeze({
+  "file:read": "File",
+  "file:write": "File",
+  "file:delete": "File.Delete",
+  "directory:ensure": "Dir",
+});
+
+/**
+ * Core's documentation origin for this entry, when the entry is core's own
+ * component however the host admitted it.
+ *
+ * Documentation provenance only. The identity stays what the host stated,
+ * because that is what a continuation compares and what the grant was recorded
+ * as — a host's directory entry is still the host's grant even though the
+ * component behind the name is core's.
+ */
+function ownedOrigin(entry: CapturedEntry): string | undefined {
+  if (entry.protectedOrigin !== undefined) {
+    return entry.protectedOrigin;
+  }
+  const owned = entry.capability === undefined ? undefined : OWNED_CAPABILITIES[entry.capability];
+  return owned === entry.name ? protectedComponent(entry.name)?.origin : undefined;
+}
+
+/**
  * The symbols an evaluation admitted, in the order the tables state them.
  *
  * The identity's origin is what each entry reports it came from, because that
  * is what the host stated and what a continuation is compared against. Reported
  * as a registration for ordinary entries. An exact protected answer keeps its
- * canonical documentation origin even when a different provider delegates it.
+ * canonical documentation origin even when a different provider delegates it,
+ * and so does a capability performing an operation canonical core owns a
+ * component for, under that component's name.
  */
 export function admittedSymbols(entries: readonly CapturedEntry[]): SyntaxSymbols {
   return {
@@ -48,14 +91,15 @@ export function admittedSymbols(entries: readonly CapturedEntry[]): SyntaxSymbol
 
 function describe(entry: CapturedEntry): CompleteComponentSyntaxEntry {
   const definition = entry.definition;
+  const owned = ownedOrigin(entry);
   return {
     kind: "component",
     name: entry.name,
     origin:
-      entry.protectedOrigin === undefined
+      owned === undefined
         ? { kind: "registered", origin: entry.identity.origin, reserved: false }
-        : { kind: "protected", origin: entry.protectedOrigin },
-    sourceKind: entry.protectedOrigin === undefined ? "registered" : "protected",
+        : { kind: "protected", origin: owned },
+    sourceKind: owned === undefined ? "registered" : "protected",
     inspectability: "complete",
     // The forms the *host admitted this entry for*, which is narrower than the
     // forms the implementation accepts whenever one name holds two identities:

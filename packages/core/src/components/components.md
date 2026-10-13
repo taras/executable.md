@@ -188,6 +188,30 @@ may run more than once.
 Like `<File>`, it is an ordinary durable effect — a deletion that already
 happened is not repeated on a continuation.
 
+## Dir
+
+Creates or uses a directory, and changes the working directory for its content.
+
+```mdx
+<Dir path="notes">
+<File path="message.md">first</File>
+</Dir>
+```
+
+The directory is made to exist before the content expands: created recursively
+when it is missing, used as it stands when it is already a directory, and
+refused when something that is not a directory is there or on the way to it.
+Content never begins on the far side of a refusal, because a document that named
+a directory asked for that directory.
+
+`path` is relative to the enclosing working directory, so one `<Dir>` inside
+another nests. The enclosing directory is restored when the element ends, on
+success and on failure alike — and a directory it created stays, because a
+failure inside it says nothing about whether the directory should exist.
+
+Paired only. A self-closing `<Dir />` would install a working directory for no
+content, so it is refused rather than rendering nothing.
+
 ## TempDir
 
 Runs work in a temporary working directory.

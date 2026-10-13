@@ -29,7 +29,7 @@ import type { Json } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { RepositoryCompositionProviderError } from "../src/composition/errors.ts";
-import { DirInvocationError } from "../src/composition/components/Dir.ts";
+import { DirInvocationError } from "../../core/src/components/Dir.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { createRun, useStorageRoot, withStorage } from "../../workflow/tests/support/storage.ts";
@@ -721,8 +721,12 @@ describe("workflow Dir under a lying content chain", () => {
       }
 
       expect(error).toBeInstanceOf(Error);
+      // Canonical core owns `<Dir>`, so the wrapper's replacement definition is
+      // refused at the import rather than reaching the dispatcher with the
+      // forged invocation. The dispatcher's own refusal is proven directly in
+      // `core/tests/fixed-filesystem-components.test.ts`.
       expect(error instanceof Error ? error.message : "").toContain(
-        "without the invocation the engine issued",
+        "canonical execution did not produce",
       );
     });
   });

@@ -4,9 +4,11 @@
  * Three claims, and they are about opposite things. Describing the vocabulary
  * must reach nothing; one runtime *operates* it; and one only *describes* it.
  * All three have to be true at once, so a document written for `xmd run`
- * resolves the same thirteen names everywhere, and on a runtime that operates
+ * resolves the same twelve names everywhere, and on a runtime that operates
  * none of them every one reports an absent provider before a lock, a
- * credential, a subprocess or a request exists.
+ * credential, a subprocess or a request exists. `<Dir>` is canonical core's
+ * rather than the Plugin's, so it is here for the opposite reason: it keeps
+ * working where every one of those twelve refuses.
  *
  * The declarations are the same array in every case, which is why there is no
  * fourth thing to keep in agreement.
@@ -23,7 +25,8 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import { API, Service, useHostFiles } from "@executablemd/runtime";
 import type { RuntimeFetchResponse } from "@executablemd/runtime";
-import { exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
+import { runCli } from "@executablemd/test-support/launch";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { join } from "node:path";
 import { COMPOSITION_REGISTRATIONS } from "@executablemd/git";
@@ -60,11 +63,10 @@ const OPERATIONS: readonly { readonly name: string; readonly source: string }[] 
   { name: "Issue", source: `<Issue url="https://github.com/o/r/issues/1" as="i" />` },
 ];
 
-/** The thirteen names #643 settled, exactly as a document writes them. */
+/** The twelve names #643 settled that need a provider, as a document writes them. */
 const COMPOSITION_NAMES = [
   "Repository",
   "Worktree",
-  "Dir",
   "Git.Switch",
   "Git.Add",
   "Git.Commit",
@@ -192,11 +194,11 @@ describe("ORC1 — describing the vocabulary reaches nothing", () => {
 });
 
 describe("ORC2 — one language, described everywhere and operated somewhere", () => {
-  it("registers the same thirteen declarations the syntax catalog describes", function* () {
+  it("registers the same twelve declarations the syntax catalog describes", function* () {
     // The array itself, rather than a second list: the Plugin's own
     // registration and the catalog both consume this one, so there is nothing
     // for a runtime to disagree about.
-    expect(COMPOSITION_REGISTRATIONS).toHaveLength(13);
+    expect(COMPOSITION_REGISTRATIONS).toHaveLength(12);
     expect([...COMPOSITION_REGISTRATIONS].map((registration) => registration.name).sort()).toEqual(
       [...COMPOSITION_NAMES].sort(),
     );
@@ -302,3 +304,70 @@ function* raisedValue(operation: Operation<unknown>): Operation<unknown> {
   }
   throw new Error("the operation did not fail");
 }
+
+/**
+ * ORC3 — the journey through a real `xmd run`, with the names contested on disk.
+ *
+ * Everything above drives `execute()` in this process. This launches the actual
+ * command instead, because what the move has to survive is the shipped
+ * entrypoint: the three filesystem components are canonical core's, a candidate
+ * for each one is sitting in the document's own include path, and the Git
+ * Plugin the ordinary profile bundles no longer supplies `<Dir>`.
+ *
+ * Markers rather than implementations. Each candidate is Markdown that renders
+ * recognizable text, so a candidate that won selection shows up in stdout
+ * instead of the component's effect — which is a stronger signal than an error
+ * would be, because winning selection is exactly what must not happen.
+ */
+describe("ORC3 — the filesystem journey through the shipped command", () => {
+  it("runs the whole journey, ignores the local candidates and restores the cwd", function* () {
+    const workspace = yield* useTempDirectory("xmd-orc3-");
+    yield* writeTextFile(join(workspace, "package.json"), JSON.stringify({ type: "module" }));
+
+    // A candidate for each of the three names. `File.Delete` is probed at
+    // `File/Delete.md`, so that one is a directory and a file.
+    yield* writeTextFile(join(workspace, "File.md"), "MARKER-FILE\n");
+    yield* writeTextFile(join(workspace, "Dir.md"), "MARKER-DIR\n");
+    yield* ensureDir(join(workspace, "File"));
+    yield* writeTextFile(join(workspace, "File", "Delete.md"), "MARKER-DELETE\n");
+
+    yield* writeTextFile(
+      join(workspace, "doc.md"),
+      [
+        '<Dir path="notes">',
+        "",
+        '<File path="message.md">first</File>',
+        '<File path="message.md" as="message" />',
+        "",
+        "INSIDE {message}",
+        "",
+        '<File.Delete path="message.md" />',
+        "",
+        "</Dir>",
+        "",
+        '<File path="after.md">after</File>',
+        '<File path="after.md" as="after" />',
+        "",
+        "AFTER {after}",
+        "",
+      ].join("\n"),
+    );
+
+    const result = yield* runCli(["run", "doc.md"], { cwd: workspace }).expect();
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("INSIDE first");
+    expect(result.stdout).not.toContain("MARKER");
+
+    // The directory the document entered persists and the file it deleted is
+    // gone, so the journey ran rather than being rendered.
+    expect(yield* exists(join(workspace, "notes"))).toBe(true);
+    expect(yield* exists(join(workspace, "notes", "message.md"))).toBe(false);
+
+    // And the sibling after the region wrote to the enclosing directory, which
+    // is the restoration the shipped entrypoint has to preserve too.
+    expect(result.stdout).toContain("AFTER after");
+    expect(yield* exists(join(workspace, "after.md"))).toBe(true);
+    expect(yield* exists(join(workspace, "notes", "after.md"))).toBe(false);
+  });
+});

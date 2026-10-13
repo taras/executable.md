@@ -35,6 +35,7 @@ import {
   CORE_COMPONENT_NAMES,
   isComponentName,
   parseMarkdownDefinition,
+  PROTECTED_COMPONENT_NAMES,
   RESERVED_STRUCTURAL,
 } from "@executablemd/core";
 import type { WorkflowBundleComponent } from "@executablemd/core/host";
@@ -172,6 +173,16 @@ function usableName(name: string): WorkflowBundleUnavailableError | undefined {
     return unavailable(
       `the document declares the component "${name}", which is structural syntax the engine ` +
         "owns rather than a component.",
+    );
+  }
+  // Before the registrations below, because these names are not among them. A
+  // check that only knew the default registry would admit a declaration for
+  // `<File>` here and leave canonical core to refuse it once the bundle was
+  // already being established.
+  if (PROTECTED_COMPONENT_NAMES.has(name)) {
+    return unavailable(
+      `The workflow bundle declares the component "${name}", whose implementation is fixed by ` +
+        "the engine. Choose a different component name.",
     );
   }
   if (CORE_COMPONENT_NAMES.has(name)) {

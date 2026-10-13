@@ -24,6 +24,14 @@
  * all three runtimes by `syntax-component.test.ts` against handler-built
  * answers; what is only provable here is that a *real* second copy is one of
  * those answers.
+ *
+ * Tier FX at the end of this file asks the same question of the *other* shape
+ * in the protected tier. `<File>`, `<File.Delete>` and `<Dir>` are answered
+ * with one ordinary definition built once per loaded copy rather than a body
+ * this execution built, so a second copy of that module supplies a complete,
+ * structurally identical definition — no claimant, no private table, nothing
+ * missing. That makes it the sharpest form of the question, and the only one a
+ * locally rebuilt definition cannot stand in for.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -32,6 +40,7 @@ import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { rm } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
+import { API, Files, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -45,6 +54,9 @@ import { executeInstalled } from "../host.ts";
 import type { ExecutionInstallation } from "../host.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { SYNTAX_COMPONENT, props as syntaxProps } from "../src/components/Syntax.ts";
+import { fixedFilesystemDefinition } from "../src/components/fixed-filesystem.ts";
+import { form as fileForm, props as fileProps } from "../src/components/File.ts";
+import { parseJsonObject } from "../src/json.ts";
 import type { FunctionComponentDefinition } from "../src/types.ts";
 
 const PROTECTION_MODULE = fileURLToPath(new URL("../src/invocation-identity.ts", import.meta.url));
@@ -52,6 +64,7 @@ const REPOSITORY = fileURLToPath(new URL("../../../", import.meta.url));
 
 /** What the bundled copy exposes: its own installation, with its own tables. */
 interface LoadedCopy {
+  formDispatcher(declaration: unknown): unknown;
   installIdentities(
     components: readonly unknown[],
     privateComponents: readonly unknown[],
@@ -273,5 +286,98 @@ describe("Tier SYN — a separately loaded protected implementation", () => {
     expect(observed).toEqual(["Syntax", "Syntax"]);
     expect(projected).toEqual([undefined, undefined]);
     expect(installed.componentRouting.body(forged)).toBeUndefined();
+  });
+});
+
+describe("Tier FX — a fixed definition from a separately loaded copy", () => {
+  it("FX3g: another copy's File dispatcher answers for nothing, and reaches no I/O", function* () {
+    const copy = yield* useSeparateCopy();
+
+    // The other shape in the protected tier. `<File>` is answered with an
+    // ordinary definition rather than a body this execution built, so the
+    // dangerous foreign answer is a *complete* definition whose dispatcher the
+    // other copy built — one that would not recognize this execution's
+    // invocations, and must never be reached to find that out.
+    //
+    // Built the way SYN26 builds its foreign implementation: the declaration is
+    // this test's, because the component module does not bundle, and what is
+    // genuinely the second copy's is what decides — the dispatcher it produced
+    // from its own issuance machinery.
+    const foreign: FunctionComponentDefinition = {
+      kind: "function",
+      name: "File",
+      props: parseJsonObject(fileProps),
+      forms: ["self-closing", "paired"],
+      fn: copy.formDispatcher(fileForm) as FunctionComponentDefinition["fn"],
+    };
+
+    const local = fixedFilesystemDefinition("File");
+    if (local === undefined) {
+      throw new Error("core supplies no File definition");
+    }
+    // The premise, stated rather than assumed: the same name and accepted
+    // forms, and a different object with a different implementation.
+    expect(foreign.name).toBe(local.name);
+    expect(foreign.forms).toEqual(local.forms);
+    expect(typeof foreign.fn).toBe("function");
+    expect(foreign.fn).not.toBe(local.fn);
+
+    const workspace = yield* until(mkdtemp(join(tmpdir(), "sl-fixed-ws-")));
+    yield* ensure(() => rm(workspace, { recursive: true, force: true }));
+    const reached: string[] = [];
+
+    const refused = yield* refusal(
+      runRoot(
+        [
+          {
+            *install() {
+              yield* API.Env.around(
+                {
+                  // deno-lint-ignore require-yield
+                  *cwd() {
+                    return workspace;
+                  },
+                },
+                { at: "min" },
+              );
+              yield* useHostFiles();
+              yield* Files.around({
+                *writeTextFile([input], next) {
+                  reached.push(`write:${input.path}`);
+                  return yield* next(input);
+                },
+                *readTextFile([input], next) {
+                  reached.push(`read:${input.path}`);
+                  return yield* next(input);
+                },
+              });
+            },
+          },
+          {
+            *install() {
+              yield* Component.around(
+                {
+                  *importComponent([name, position], next) {
+                    if (name !== "File") {
+                      return yield* next(name, position);
+                    }
+                    // Delegating first is the strongest form: this handler saw
+                    // canonical execution's own answer and replaced it.
+                    yield* next(name, position);
+                    return foreign;
+                  },
+                },
+                { at: "max" },
+              );
+            },
+          },
+        ],
+        '<File path="written.md">one</File>\n',
+      ),
+    );
+
+    expect(refused).toContain("canonical core owns");
+    // Before its body and before any filesystem call.
+    expect(reached).toEqual([]);
   });
 });

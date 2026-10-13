@@ -13,6 +13,12 @@
  * This is the terminal of `selectComponent()` rather than an installation, so
  * execution and inspection resolve against the same defaults without either one
  * having to install them.
+ *
+ * The components core supplies are not all here. `<File>`, `<File.Delete>`,
+ * `<Dir>`, `<Syntax />` and `<Evaluate>` are names canonical core claims
+ * (`protected.ts`), so they are answered above every registry rather than from
+ * one — which is why `CORE_COMPONENT_NAMES` below is the registrations alone
+ * and documentation reads a wider set.
  */
 
 import type { ComponentRegistry, FunctionComponentDefinition, RegistryEntry } from "../types.ts";
@@ -21,8 +27,6 @@ import Elicit, { props as elicitProps, returns as elicitReturns } from "./Elicit
 import TempDir, { props as tempDirProps } from "./TempDir.ts";
 import { form as failForm, props as failProps } from "./Fail.ts";
 import Fetch, { props as fetchProps } from "./Fetch.ts";
-import { form as fileForm, props as fileProps } from "./File.ts";
-import { form as fileDeleteForm, props as fileDeleteProps } from "./FileDelete.ts";
 import Glob, { props as globProps, returns as globReturns } from "./Glob.ts";
 import Json, { props as jsonProps } from "./Json.ts";
 import Parse, { props as parseProps, returns as parseReturns } from "./Parse.ts";
@@ -74,8 +78,8 @@ interface CoreOptions {
  * declares nothing is form-insensitive and its function is used as it is.
  *
  * The accepted forms are read off that same declaration rather than restated,
- * so `<File>`'s two bodies and `<File.Delete>`'s one are documented by the value
- * that dispatches them. Documentation is a parameter rather than an option
+ * so `<Fail>`'s and `<CodeBlock>`'s one accepted form each is documented by the
+ * value that dispatches it. Documentation is a parameter rather than an option
  * because a core default states what it is for, and says explicitly whether
  * `as` and content apply to it.
  */
@@ -171,21 +175,6 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
     as:
       "Optional. Captures the response, which is what makes a non-2xx status data instead " +
       "of a failure.",
-    context: null,
-  }),
-  core("File", fileForm, parseJsonObject(fileProps), {
-    description:
-      'Read or write a file. `<File path="notes.md" />` reads the content; ' +
-      '`<File path="notes.md">…</File>` writes the content. The path is relative to the ' +
-      "working directory.",
-    as: "Optional. Captures the file's text instead of emitting it, in the reading form.",
-    context: "The text to write, in the writing form.",
-  }),
-  core("File.Delete", fileDeleteForm, parseJsonObject(fileDeleteProps), {
-    description:
-      'Delete a file. `<File.Delete path="notes.md" />` removes it. It does not error if the ' +
-      "file doesn't exist, and produces no output.",
-    as: "Optional. Captures the empty string this renders, as for any text component.",
     context: null,
   }),
   core(

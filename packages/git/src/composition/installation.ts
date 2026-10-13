@@ -1,11 +1,13 @@
 /**
- * The thirteen repository-composition components, as one array of ordinary
+ * The twelve repository-composition components, as one array of ordinary
  * declarations.
  *
- * Repository, Worktree, Dir, the four Git operations, PullRequest and its three
+ * Repository, Worktree, the four Git operations, PullRequest and its three
  * evidence reads, IssueTracker and Issue are ordinary registered defaults — not
  * reserved and not structural — so a repository-local component may shadow one
- * for its own scope.
+ * for its own scope. `<Dir>` is not among them: canonical core claims that name
+ * (`core/src/components/fixed-filesystem.ts`), and a document reaches it with or
+ * without this package.
  *
  * One array, three consumers, because three descriptions of one vocabulary
  * would drift. `useCompositionComponents()` registers it inside a workflow
@@ -33,7 +35,7 @@ import type {
   DocumentationContribution,
   DocumentationReader,
 } from "@executablemd/core";
-import { COMPOSITION_ORIGIN, dirDefinition } from "./definitions.ts";
+import { COMPOSITION_ORIGIN } from "./definitions.ts";
 import Repository, { props as repositoryProps } from "./components/Repository.ts";
 import Worktree, { props as worktreeProps } from "./components/Worktree.ts";
 import GitSwitch, { props as gitSwitchProps } from "./components/GitSwitch.ts";
@@ -59,17 +61,11 @@ import {
 } from "./components/PullRequestReads.ts";
 import IssueTracker, { props as issueTrackerProps } from "./components/IssueTracker.ts";
 
-// The same definition the generated-XMD write table pins, so the ordinary
-// component and the pinned identity cannot drift apart.
-const dir = dirDefinition();
-
-/** The one vocabulary every consumer of these components describes. */
 /**
  * This boundary's long-form documentation, and the components it must cover.
  *
- * Derived from `COMPOSITION_REGISTRATIONS` below — including `<Dir>`, which is
- * registered from a definition rather than spelled inline, and would be the
- * easiest one to leave undocumented if this list were maintained by hand.
+ * Derived from `COMPOSITION_REGISTRATIONS` below rather than listed again, so a
+ * component added to that array cannot be left undocumented here.
  */
 export function* compositionDocumentation(
   read?: DocumentationReader,
@@ -106,17 +102,6 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
       description: `Create or use a worktree. \`<Worktree name="review" branch="issue-643">…</Worktree>\` expands its content in the worktree.`,
       as: "Optional. The path of the linked checkout.",
       context: "The Markdown expanded in that checkout.",
-    }),
-  },
-  {
-    name: dir.name,
-    origin: COMPOSITION_ORIGIN,
-    props: dir.props,
-    fn: dir.fn,
-    ...documented({
-      description: `Create or use a directory. \`<Dir path={worktree}>…</Dir>\` changes the working directory for its content.`,
-      as: null,
-      context: "The Markdown expanded in that directory.",
     }),
   },
   {

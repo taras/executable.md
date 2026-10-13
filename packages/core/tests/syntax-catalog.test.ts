@@ -575,7 +575,8 @@ describe("Tier SY: repository mapping", () => {
         "components/.md": markdown("empty stem\n"),
         // A dot is a separator, never part of a segment. `File.Delete` is
         // probed at `File/Delete.md`, so neither of these two spellings answers
-        // to a name and neither may displace the core default.
+        // to a name — and the name is canonical core's, which no repository
+        // file displaces however it is spelled.
         "components/File.Delete.md": markdown("a flat dotted file\n"),
         "components/File.Delete": { kind: "directory" },
         "components/File.Delete/index.md": markdown("a flat dotted directory\n"),
@@ -588,9 +589,8 @@ describe("Tier SY: repository mapping", () => {
 
     expect(names(userProvided(catalog))).toEqual(["Kept"]);
     expect(find(builtIn(catalog), "File.Delete").origin).toEqual({
-      kind: "registered",
+      kind: "protected",
       origin: "@executablemd/core",
-      reserved: false,
     });
   });
 
@@ -634,9 +634,8 @@ describe("Tier SY: repository mapping", () => {
     // A dotted directory reaches no name even though the name exists: the
     // built-in keeps it.
     expect(find(builtIn(catalog), "File.Delete").origin).toEqual({
-      kind: "registered",
+      kind: "protected",
       origin: "@executablemd/core",
-      reserved: false,
     });
   });
 
@@ -914,9 +913,8 @@ describe("Tier SY: include boundaries", () => {
 
     expect(names(userProvided(catalog))).toEqual(["Kept"]);
     expect(find(builtIn(catalog), "File.Delete").origin).toEqual({
-      kind: "registered",
+      kind: "protected",
       origin: "@executablemd/core",
-      reserved: false,
     });
   });
 

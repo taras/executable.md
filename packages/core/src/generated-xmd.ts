@@ -118,6 +118,7 @@ import { CanonicalImports, retain } from "./components/component-resolution.ts";
 import type { ComponentResolution, ImportedDefinition } from "./components/component-resolution.ts";
 import { isComponentName } from "./components/registration.ts";
 import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
+import { fixedFilesystemDefinition } from "./components/fixed-filesystem.ts";
 import { createBlockCounter, expandSegmentsWithin } from "./expand.ts";
 import { extendPath } from "./expansion.ts";
 import { prepareFetchRequest, requestRecord } from "./fetch-request.ts";
@@ -580,10 +581,10 @@ export function pinnedFetch(requests: readonly GeneratedRequest[]): GeneratedObs
 /**
  * The pinned core `<File>` identity, constrained to its read form.
  *
- * Core's own default definition, and only its self-closing spelling. `<File>`
+ * Core's own fixed definition, and only its self-closing spelling. `<File>`
  * reads when it has no content and writes when it has some, so admitting the
  * unconstrained definition would admit a write — which is why this constructor
- * exists rather than a caller reaching for `CORE_REGISTRY` and hoping. The
+ * exists rather than a caller reaching for the definition itself and hoping. The
  * identity says so too, so a run that later admitted the unconstrained `File`
  * would be stating a different policy and a retained admission would refuse it.
  *
@@ -592,8 +593,8 @@ export function pinnedFetch(requests: readonly GeneratedRequest[]): GeneratedObs
  * one. There is no second filesystem path here.
  */
 export function pinnedFileRead(): GeneratedObservation {
-  const definition = CORE_REGISTRY.get("File")?.default?.definition;
-  if (definition === undefined || definition.kind !== "function") {
+  const definition = fixedFilesystemDefinition("File");
+  if (definition === undefined) {
     throw new GeneratedXmdError("core supplies no File component to admit.");
   }
   return {
@@ -692,15 +693,15 @@ export interface GeneratedMutation {
 /**
  * The pinned core `<File>` identity, constrained to its write form.
  *
- * Core's own default definition again, and only its paired spelling — including
+ * Core's own fixed definition again, and only its paired spelling — including
  * the empty paired one, which truncates. An admitted write invokes the ordinary
  * `<File>` component and therefore the installed Files provider, which under a
  * workflow run is the transaction-bound one, so the mutation crosses the run's
  * ordinary effect transaction rather than a path of the evaluator's own.
  */
 export function pinnedFileWrite(): GeneratedMutation {
-  const definition = CORE_REGISTRY.get("File")?.default?.definition;
-  if (definition === undefined || definition.kind !== "function") {
+  const definition = fixedFilesystemDefinition("File");
+  if (definition === undefined) {
     throw new GeneratedXmdError("core supplies no File component to admit.");
   }
   return {
@@ -715,7 +716,7 @@ export function pinnedFileWrite(): GeneratedMutation {
 /**
  * The pinned core `<File.Delete>` identity, in the one form it has.
  *
- * Core's own default definition, and its self-closing spelling. One name, one
+ * Core's own fixed definition, and its self-closing spelling. One name, one
  * identity: unlike `<File>`, whose two spellings do different things, this
  * component answers the self-closing form and refuses the paired one, so the
  * form stated here names what the identity is rather than narrowing it to part
@@ -732,8 +733,8 @@ export function pinnedFileWrite(): GeneratedMutation {
  * authors output around it.
  */
 export function pinnedFileDelete(): GeneratedMutation {
-  const definition = CORE_REGISTRY.get("File.Delete")?.default?.definition;
-  if (definition === undefined || definition.kind !== "function") {
+  const definition = fixedFilesystemDefinition("File.Delete");
+  if (definition === undefined) {
     throw new GeneratedXmdError("core supplies no File.Delete component to admit.");
   }
   return {

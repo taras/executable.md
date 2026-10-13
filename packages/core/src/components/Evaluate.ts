@@ -93,7 +93,7 @@ import type {
 } from "../invocation-identity.ts";
 import { admittedSymbols } from "../syntax-admitted.ts";
 import type { SyntaxReference } from "../syntax-reference.ts";
-import type { ProtectedComponent } from "./protected.ts";
+import type { ExecutionBuiltComponent } from "./protected.ts";
 import { CORE_ORIGIN } from "./registry.ts";
 import { documented } from "./documentation.ts";
 import type { FunctionComponentDefinition, Json, PropsSchema } from "../types.ts";
@@ -170,7 +170,7 @@ const NO_PROJECTION =
  * rendered, which the ordinary binding path emits where the element is written
  * or binds under `as`.
  */
-export const EVALUATE_PROTECTED: ProtectedComponent = {
+export const EVALUATE_PROTECTED: ExecutionBuiltComponent = {
   name: EVALUATE_COMPONENT,
   origin: CORE_ORIGIN,
   props,
