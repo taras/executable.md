@@ -3273,6 +3273,15 @@ contextual `API.Files` provider (§6.11), which a host installs and middleware
 still answers, transforms, delegates and refuses. What is fixed is which
 definition the name resolves to, never which filesystem it reaches.
 
+Their definitions are also **immutable**, function and schema alike, because
+one object answers for every execution in the process. The refusal above
+describes a handler that changes what it was handed; for these three a change
+does not take, so there is nothing left behind for a later execution to
+validate documents against. Canonical core keeps the copy it took when a
+definition was first issued to an execution, rather than re-copying per import,
+so a refused change cannot become the baseline the next import is compared
+against either.
+
 The definitions are module-resident and reused — one object per component for
 the life of the process. That is not what varies between runs. What each
 `<TempDir>` invocation creates fresh is the directory (§6.11); the component
@@ -12032,7 +12041,7 @@ composition underneath it.
 | FX1b | The provider is still replaceable | Files middleware that changes a write payload changes what the later read returns, so owning the name does not own the operation |
 | FX2–FX2c | Nothing else may claim them | An ordinary and a reserved registration are refused for each name; a batch holding one of them installs nothing — checked in the still-live registration scope, where a partial installation would still be visible — and the ordinary name beside it registers cleanly afterwards; a same-name local implementation whose top level would throw is never loaded, while an open name beside it still wins |
 | FX3–FX3f | The final answer is verified | Middleware observes and delegates every fixed import; a replacement, another name's issued definition and a rebuilt definition are each refused before the body or any provider call; a deliberate refusal stays a refusal |
-| FX3c | A refused change does not become the next baseline | An in-place change to the owning definition is rejected where it is attempted, no replacement body or replacement I/O runs on that import **or a later one in the same document**, and the owning definition is unchanged afterwards. Verification baselines each issuance separately, so a change that survived its own refusal would pass the next check |
+| FX3c | A refused change does not become the next baseline | An in-place change to the owning definition's function *and* to its nested `path` schema is rejected where each is attempted; no replacement body or replacement I/O runs on that import or a later one in the same document; the owning definition and its whole schema are unchanged afterwards; and a **fresh execution** still validates a valid string path against the original contract |
 | FX3g | A second loaded copy | A definition carrying a dispatcher an actually bundled second copy of the identity module built is refused before its body and before any filesystem call (Deno-only, beside the `<Syntax />` case it reuses) |
 | FX4 | The dispatcher authenticates its own invocation | Reached directly, with no import to intercept, each fixed dispatcher refuses an invocation the engine did not issue |
 | FX5–FX5d | Directory ownership | A body that fails and a body cancelled inside the region both leave the created directory, and the enclosing directory is read back **in the scope that installed it** rather than in a fresh run that would install its own; a refused ensure expands no content and writes nothing; an existing directory keeps what is in it |

@@ -55,16 +55,20 @@ import type { FunctionComponentDefinition, PropsSchema } from "../types.ts";
  * registry: a component core supplies states what it is for, and says whether
  * `as` and content apply to it.
  *
- * **Frozen, and that is load-bearing.** This object is what the public
+ * **Frozen through, and that is load-bearing.** This object is what the public
  * `Component.importComponent` chain is handed, and it is shared by every
  * execution in the process. Canonical verification compares each answer against
  * the copy taken when the definition was first issued *to that execution*
  * (`component-resolution.ts`), which is enough to refuse a change inside the
  * execution that made it — but a change left behind would be what the next
  * execution took its own first copy of, and that one would describe the change
- * already. Freezing is what the sharing requires, and it covers the descriptive
- * members for the same reason it covers `fn`: a changed schema or form list
- * decides what runs too.
+ * already. Freezing is what the sharing requires.
+ *
+ * It reaches the whole schema tree, not just the definition's own members. A
+ * props schema is nested objects and arrays, and `properties.path.type` decides
+ * which authored values are valid: a handler that changed it would be refused
+ * for its own import and would leave every later execution validating documents
+ * against a contract nobody wrote. The function and the data are one answer.
  */
 function fixed(
   name: string,
@@ -75,11 +79,36 @@ function fixed(
   return Object.freeze({
     kind: "function",
     name,
-    props,
+    props: freezeThrough(props),
     forms: Object.freeze(declaredForms(declaration)),
     ...documented(documentation),
     fn: formDispatcher(declaration),
   });
+}
+
+/**
+ * One JSON value, frozen with everything under it.
+ *
+ * `parseJsonObject()` above already copied the schema away from the module that
+ * declared it, so what this closes is the copy's own mutability rather than the
+ * original's.
+ */
+function freezeThrough<T extends PropsSchema>(schema: T): T {
+  for (const value of Object.values(schema)) {
+    if (typeof value === "object" && value !== null) {
+      freezeJson(value);
+    }
+  }
+  return Object.freeze(schema);
+}
+
+function freezeJson(value: object): void {
+  Object.freeze(value);
+  for (const member of Object.values(value)) {
+    if (typeof member === "object" && member !== null) {
+      freezeJson(member);
+    }
+  }
 }
 
 /** The definitions themselves, in the order inspection reads them. */

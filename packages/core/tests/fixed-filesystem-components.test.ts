@@ -58,6 +58,29 @@ function currentRegistry(): Operation<ComponentRegistry> {
   return Component.operations.registry;
 }
 
+/** `properties.path` of a props schema, when it has one. */
+function pathSchema(props: unknown): object | undefined {
+  if (typeof props !== "object" || props === null) {
+    return undefined;
+  }
+  const properties = Reflect.get(props, "properties");
+  if (typeof properties !== "object" || properties === null) {
+    return undefined;
+  }
+  const path = Reflect.get(properties, "path");
+  return typeof path === "object" && path !== null ? path : undefined;
+}
+
+/** The declared type of `path`, read rather than asserted. */
+function pathType(props: unknown): string | undefined {
+  const path = pathSchema(props);
+  if (path === undefined) {
+    return undefined;
+  }
+  const type = Reflect.get(path, "type");
+  return typeof type === "string" ? type : undefined;
+}
+
 /** The three names this tier is about, in the order the spec introduces them. */
 const FIXED = ["File", "File.Delete", "Dir"] as const;
 
@@ -469,15 +492,18 @@ describe("Tier FX — the final import answer is verified", () => {
       throw new Error("core supplies no File definition");
     }
     const original = definition.fn;
+    const originalPathType = pathType(definition.props);
+    expect(originalPathType).toBe("string");
+
     let attempts = 0;
-    let accepted: boolean | undefined;
+    const accepted: boolean[] = [];
     let replacementCalls = 0;
 
     // The dangerous shape is not a replacement object — it is a change to the
-    // object canonical execution handed out. Verification baselines each
-    // issuance separately, so a change that survived its own refusal would
-    // *become* the baseline every later import of the name is compared
-    // against, and the second attempt would pass the check and run.
+    // object canonical execution handed out, which every execution in the
+    // process shares. Two members are attempted, because both decide what runs:
+    // the implementation, and the schema that says which authored values reach
+    // it.
     const output = yield* run(
       fixture,
       [
@@ -501,20 +527,26 @@ describe("Tier FX — the final import answer is verified", () => {
               return answer;
             }
             attempts += 1;
-            accepted = Reflect.set(answer, "fn", function* (): Operation<string> {
-              replacementCalls += 1;
-              return "POISONED-FILE-BODY";
-            });
+            accepted.push(
+              Reflect.set(answer, "fn", function* (): Operation<string> {
+                replacementCalls += 1;
+                return "POISONED-FILE-BODY";
+              }),
+            );
+            const path = pathSchema(answer.props);
+            if (path !== undefined) {
+              accepted.push(Reflect.set(path, "type", "number"));
+            }
             return answer;
           },
         });
       },
     );
 
-    // The attempt was made and rejected where it was made, rather than the
-    // handler quietly doing nothing.
+    // Both attempts were made and both were rejected where they were made,
+    // rather than the handler quietly doing nothing.
     expect(attempts).toBe(1);
-    expect(accepted).toBe(false);
+    expect(accepted).toEqual([false, false]);
 
     // No replacement body and no replacement I/O, on this import or any later
     // one: the writes are the document's own text and the read returns it.
@@ -524,9 +556,26 @@ describe("Tier FX — the final import answer is verified", () => {
     expect(yield* readTextFile(join(fixture.workspace, "one.md"))).toBe("one");
     expect(yield* readTextFile(join(fixture.workspace, "two.md"))).toBe("two");
 
-    // And the owning definition is what it was, so no later execution inherits
-    // a changed baseline either.
+    // The owning definition and its whole schema are what they were.
     expect(fixedFilesystemDefinition("File")?.fn).toBe(original);
+    expect(pathType(fixedFilesystemDefinition("File")?.props)).toBe("string");
+
+    // And the contract a *fresh* execution validates against is unchanged. This
+    // is the half a single execution cannot establish: the first-issued
+    // baseline refuses a change inside the execution that made it, and what
+    // keeps the next execution from taking its first copy of a changed object
+    // is that there is nothing to change.
+    const later = yield* useFixture();
+    const second = yield* run(
+      later,
+      [
+        '<File path="valid.md">still a string path</File>',
+        '<File path="valid.md" as="seen" />',
+        "{seen}",
+      ].join("\n"),
+    );
+    expect(second).toContain("still a string path");
+    expect(yield* readTextFile(join(later.workspace, "valid.md"))).toBe("still a string path");
   });
 
   it("FX3c2: another name's issued definition is refused", function* () {
