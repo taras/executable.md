@@ -405,7 +405,9 @@ the corpus or enabling in-shard concurrency is not an answer to a miss.
 ## MUST READ
 
 - https://github.com/thefrontside/effection/blob/v4/AGENTS.md
-- `architecture.md` — read fully
+- [`architecture.md`](architecture.md) — read fully. Its [reading map](architecture.md#reading-this-architecture)
+  locates current invariants and their feature-interface owners; it does not
+  replace the full reading.
 - `specs/executable-mdx-spec.md` — read the sections your change touches
 
 ## Code Rules

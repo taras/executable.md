@@ -88,7 +88,10 @@ selects Claude Code, Codex, or another compatible agent without changing what
 
 ## Existing semantics
 
-The feature reuses these contracts unchanged:
+[Native Agent sessions](../architecture.md#native-agent-sessions) own the shared
+lifetime and enforcement rules. This specification owns the launch interfaces,
+phase records, compatibility exceptions and provider proof requirements. The
+feature reuses these contracts unchanged:
 
 - a static heading target is the role entry point, and sibling targets do not
   execute;
@@ -111,7 +114,7 @@ can launch a prepared native session.
 
 ## The launch operation
 
-The ACP Client specification owns the complete five-operation `AgentApi`, the
+The ACP Client specification owns the complete six-operation `AgentApi`, the
 caller-facing `launchAgentSession(instructions, options)` operation, and the
 shared `LaunchOptions` and `SessionLaunchResult` types. Native launch adds no
 second Agent or Session hierarchy. Its launch-specific routed request is:
@@ -785,10 +788,11 @@ advisory lock, and V1 emulates none: a pid, heartbeat, or stale-file timeout
 calls a paused process dead and admits two owners. So every advertised
 session, prompt, launch and incomplete replay refuses there with
 `unsupported-capability`, before contacting an agent, while read-only resolution
-and non-advertised ACP work are unaffected. A host missing only the route store
-refuses an advertised agent that names its own sessions, on the same terms and
-before any provider effect; an agent whose provider returns the identity is
-unaffected, because it constructs nothing a route governs.
+and non-advertised ACP work are unaffected. An advertised agent whose adapter
+binds a build also requires a route store and
+executable observer. Missing either refuses before any provider effect,
+whichever side names the session. An adapter that binds no build keeps its
+ordinary behavior without those dependencies.
 
 
 ## Construction route
@@ -806,7 +810,8 @@ route grants no right to ensure, prompt, detach, spawn or accept history. It
 says only which kind of thing this session is, so a later operation cannot
 quietly treat a conversation that already exists as one it may name.
 
-Two schemas are readable. The exact V1 record is:
+Three schemas are readable: released V1, bound client-native V2 and bound
+ACP-first V3. The exact V1 record is:
 
 ```ts
 type AgentSessionRouteV1 =
@@ -916,10 +921,12 @@ construction effect:
    and otherwise the adapter allocates a candidate and publishes `client-native`;
 4. a launch that adopts `acp-first` retains `identity-unavailable` at `prepared`,
    before allocation, private-file creation, detach or spawn;
-5. a `session()` or subscribed prompt that meets `client-native` raises the
-   provider's typed route error before runtime creation, ensure, turn, close or
-   accepted history. It retains no launch failure, because no launch was asked
-   for.
+5. a `session()` or subscribed prompt that meets a legacy unbound
+   `client-native` route raises the provider's typed route error before runtime
+   creation, ensure, turn, close or accepted history. It retains no launch
+   failure, because no launch was asked for. A bound route instead follows
+   [ACP attachment on a bound route](#acp-attachment-on-a-bound-route), including
+   advertisement, exact build and canonical assertion checks.
 
 The resolved agent command is carried from placement through the coordinator
 key, the route key and provider work. It is never resolved a second time inside

@@ -8,6 +8,11 @@
 
 ## 1. Overview
 
+Use this specification for authored syntax, interfaces and conformance. Start
+with [a document running](../architecture.md#a-document-running) for ordinary
+execution, retained workflows and replay; the [architecture reading map](../architecture.md#reading-this-architecture)
+routes implementation questions to their owning rules.
+
 An executable MDX document is a markdown file containing embedded JSX
 component invocations and annotated code blocks. The system treats each
 document as an executable workflow: text is emitted immediately, component
@@ -2701,10 +2706,12 @@ A component name is resolved in tiers, and the first tier that answers wins:
    They are reserved: a registration cannot claim one, and a repository file
    named after one never stands in for it. A structural name written where its
    construct gives it no meaning is a printed error, not a missing component.
-2. **a component canonical core protects** — the engine's own claim rather than
-   a host's, so the name means the same thing in every execution. `<Syntax />`
-   (§5.3.1) is the one member. The table is the resolver's own and is consulted
-   unconditionally, so no option a caller passes puts anything in front of it.
+2. **a component canonical core protects** — `Syntax`, `Evaluate`, `File`,
+   `File.Delete` and `Dir`. The table is the resolver's own and is consulted
+   unconditionally before every host or author tier. Protection fixes the
+   implementation and grants no permission; the filesystem components still use
+   contextual `API.Files` and effective `Permissions`. See
+   [the canonical protected tier](../architecture.md#the-canonical-protected-tier).
 3. **a host claiming the name** — a reserved registration protecting a language
    or security invariant, or a *declared Markdown component*: exact first-party
    Markdown a trusted host handed this execution. Both claim the name rather
@@ -2902,9 +2909,9 @@ decision, and what may run is still the execution's.
 the symbol origin kind `protected`, carrying the canonical core origin — never
 as a reserved registration, which is a *host's* claim under a name and can be
 absent, replaced or refused where this cannot. A workflow-bundle member is
-reported under the kind `workflow`, carrying its canonical repository-relative
-path **and** the blob's own object id, so it stays distinguishable from a
-repository candidate, which is whatever that path holds now. Both kinds are
+reported under the kind `workflow`, carrying its canonical logical path **and**
+the retained source's own hash, so it stays distinguishable from a repository
+candidate, which is whatever that path holds now. Both kinds are
 additions, so the symbols are **version 2**: a version-1 reader was promised a
 closed set of origins, and neither emitting an unknown kind nor reusing a
 neighbouring one would keep that promise. Nothing else about the shape changed.
@@ -2940,12 +2947,13 @@ completes its teardown and commits no record.
 
 #### The run profile's repository declarations
 
-Thirteen names — `Repository`, `Worktree`, `Dir`, `Git.Switch`, `Git.Add`,
-`Git.Commit`, `Git.Push`, `PullRequest`, `PullRequest.Reviews`,
-`PullRequest.Comments`, `PullRequest.Checks`, `IssueTracker` and `Issue` — are
-ordinary registered defaults in tier 5. A repository-local Markdown or
-TypeScript component of any of those names is chosen ahead of them, exactly as
-it is ahead of any other package's default, and for its own scope alone.
+Twelve names — `Repository`, `Worktree`, `Git.Switch`, `Git.Add`, `Git.Commit`,
+`Git.Push`, `PullRequest`, `PullRequest.Reviews`, `PullRequest.Comments`,
+`PullRequest.Checks`, `IssueTracker` and `Issue` — are ordinary
+[registered defaults](#registration-and-resolution-order). A repository-local
+Markdown or TypeScript component of any of those names is chosen ahead of them,
+for its own scope alone. `Dir` is a separate protected core component and is
+available without the Git Plugin.
 
 They are one array declared by the bundled Git Plugin and read wherever its
 profile is assembled: an ordinary document execution, `xmd syntax`, `xmd plan`'s
@@ -2959,8 +2967,8 @@ command installed (§8.1), and a host that installed none still resolves every
 one of them.
 
 The bundle tier exists only inside a workflow run, and such a run searches no
-repository directories at all — so a declared name resolves to the exact source
-its pinned commit holds and to nothing beside it in a mutable checkout. Core's
+repository directories at all — so a declared name resolves to the exact
+retained source and to nothing beside it in a mutable checkout. Core's
 own components stay available underneath, and a bundle may claim neither
 structural syntax, a name core supplies, nor a name the host reserved: those
 collisions are refused before the root document is imported. Ordinary
@@ -3358,7 +3366,8 @@ observation and delegation are unchanged.
 
 **Which imports are closed is a property of the name, not of the execution.** A
 component bundle closes every import a workflow run makes, including one that
-resolved to a core default underneath it: a run is a run *of* that pinned tree,
+resolved to a core default underneath it: a run is a run *of* those retained
+sources,
 and a name resolving outside it is what the bundle exists to prevent. A declared
 Markdown component closes only the names it declares — the component itself and
 its private closure. Every other name in that execution resolves and composes
@@ -3912,6 +3921,13 @@ filesystem operation the document authored. That is one boundary rather than a
 list of components: adding a component cannot make validation effectful.
 
 
+#### Durable component import
+
+Validation reports structure without executing a document. Import below is the
+execution boundary: it records the selected implementation and source for replay.
+The [canonical selection rules](../architecture.md#the-canonical-protected-tier)
+keep protected names fixed across both phases.
+
 Which implementation a name resolves to is an observation of the environment —
 which files exist, and what is registered — so it is made **inside** the durable
 operation, with the read it leads to. What the journal holds is serializable: a
@@ -4053,12 +4069,11 @@ One journal entry per component, whatever it resolved to. A repository entry
 captures both *which file was found* (path) and *what was in it* (content); a
 registration entry captures the origin that named it, because a function cannot
 be serialized and the implementation is looked up again on replay. A workflow
-entry captures the canonical repository-relative path of the blob inside the
-pinned commit — never the `./Name.md` a root document wrote — the blob's own
-object ID, and the exact pinned source, so a replay reconstructs the component
-from its own record without resolving a name or reading a file. Nothing else is
-added: no checkout path, no locator, no duplicate of the commit, no timestamp,
-no provider or generated identity.
+entry captures the canonical logical path — never the `./Name.md` a root
+document wrote — the source's own hash and the exact retained source. Replay
+reconstructs the component from its own record without resolving a name or
+reading a file. Nothing else is added: no checkout path, locator, timestamp,
+provider or generated identity.
 
 The trusted host that installed the bundle contributes a journal admission that
 holds every retained component import to it before public document policy or the
@@ -4526,25 +4541,16 @@ ordinary trusted-document `new Function()` path. An unbound identifier fails as
 an ordinary binding error before the consuming component runs. The rule belongs
 to generated data composition, not to Json.
 
-**Canonical execution owns projected generated work.** Each Evaluate occurrence
-retains its admission and generated effects under identities belonging to that
-occurrence. No caller-controlled context, stream, replay cursor, coroutine
-identifier, durable owner, public projection or request field participates in
-that ownership. Two Evaluate occurrences therefore cannot consume one another's
-retained work.
+**Each Evaluate occurrence owns its retained work.** Its admission and effects
+cannot be consumed by another occurrence or reassigned through caller-controlled
+state. Completed effects are ordinary history as soon as they commit; a later
+refusal, failure or cancellation does not roll them back. Partial continuation
+restores them and resumes at the first unrecorded effect.
 
-Each admission and generated effect is appended to the configured stream before
-its operation resumes and is visible through the ordinary history contract
-immediately. Evaluate neither stages nor rolls back those records and introduces
-no second persistence or settlement protocol. A later candidate refusal,
-ordinary failure, cancellation or interruption leaves completed effects as
-ordinary retained history. A partial continuation restores those effects and
-resumes at the first unrecorded effect.
-
-The generated projection remains structured work of its Evaluate invocation.
-The projection and all of its teardown complete before Evaluate returns and
-before later parent work begins. This ordering is observable without requiring
-a distinct durable cursor or child `Close` record.
+Evaluate returns only after its generated projection and all teardown finish.
+The [generated-work ownership and admission rules](../architecture.md#agent-permissions-and-generated-xmd)
+and [typed recovery boundary](../architecture.md#typed-candidate-recovery-around-evaluate)
+own the identity, publication and settlement mechanics.
 
 ### 5.4 The root document is a component
 
@@ -5374,7 +5380,7 @@ Neither this operation nor the method on the invocation selects an effect. A
 component whose forms do different things declares them, and canonical
 invocation-form dispatch (§5.6) enters the one the scan recorded — `<File>`
 (§6.13) is dual-form, `<File.Delete>` (§6.13.1) is self-closing only, and the
-bundled Git Plugin's `<Dir>` is paired only. A component that reads this
+core's protected `<Dir>` is paired only. A component that reads this
 contextual operation has no authored-form guarantee at all: what it receives is
 whatever the chain answered for that call.
 
@@ -9864,6 +9870,10 @@ workflow and returns a `DocumentExecution` handle. Options:
 
 #### The host's repository provider
 
+[Ordinary repository ownership](../architecture.md#ordinary-repository-ownership)
+owns the distinction between execution-owned resources and persistent checkout
+bytes. The contracts below describe the two providers a document can reach.
+
 A document execution reaches repository operations only through the provider
 the command installed inside the execution scope, before the root document is
 imported. There are two, and they differ in lifetime and permission rather than
@@ -10324,86 +10334,33 @@ cause-free `DocumentProtocolError`. A chain that returns without ever reaching
 the terminal fails the same way. A refused delegation consumes neither the
 request nor the expansion, so a handler may recover and delegate a valid one.
 
-A refusal stops what has not happened yet; it does not unwind what has. An
-invalid delegation authorizes no root import, no expansion and no authored
-effect — and the durable root still records the refusal as its own terminal,
-because that is what the run turned out to be. A second delegation adds no
-second expansion, import or authored effect, while the work the first valid
-delegation already did stands. A preparation refusal prevents every later
-preparation, all document policy, the root import and every authored effect,
-while durable effects earlier preparations completed stay retained and are not
-rolled back; the root records the refusal as its terminal.
+A refusal stops later work and is retained as the root's terminal outcome.
+Already completed preparation effects remain history; a second delegation starts
+no second expansion. The [document-expansion contract](../architecture.md#capability-backed-document-expansion)
+defines refusal ordering and complete-terminal admission.
 
-A failure raised before the root import is whatever a handler or a preparation
-threw, which is to say: anything. Describing it is therefore total over unknown
-and hostile values, and the boundary is a specific one:
+A failure raised before the root import may be any value. Canonical core safely
+normalizes it without coercing it or letting unreadable members escape into the
+completion or journal. A value that cannot describe itself receives a fixed
+core-owned name and message.
 
-- **Nothing is coerced.** `String(value)` is a call into whatever the value
-  decides `Symbol.toPrimitive` means.
-- **No member is read without tolerating a refusal**, and that includes
-  classification itself: `instanceof` consults a `Proxy`'s `getPrototypeOf`
-  trap, and prototype and own-property checks are calls into the value too. A
-  member that will not be read is simply absent.
-- **A trap failure never replaces the failure being handled**, never escapes,
-  and never stops the bound terminal from being written. Text a trap planted
-  does not reach the result, the journal, the diagnostic, the stack or the
-  cause.
-- **Diagnostics obtained safely from an ordinary `Error` — its name, its
-  message, a string cause — are recorded.** That is what makes a replayed
-  failure describe the one that happened, and what is recorded stays subject to
-  the journal's existing security boundary like any other recorded value.
-- **A value that will not describe itself is recorded under a fixed core-owned
-  name and message.**
+Pre-import failures are published as core-owned, repeatedly readable errors.
+Safe diagnostics remain subject to the journal's secret policy; hostile accessors
+cannot publish their trap text. Only durability and Files infrastructure failures
+cross by exact identity. The [provenance rule](../architecture.md#capability-backed-document-expansion)
+defines this boundary.
 
-What crosses the completion boundary as itself is decided by **provenance, not
-inspection**. Inspecting an untrusted value cannot establish that publishing it
-is safe: an accessor or a `Proxy` trap may answer harmlessly while core is
-looking and throw when the caller reads the same member afterwards, so a value
-that passed inspection is only a value that behaved once. Publishing it would
-move the trap into whoever reads the result.
+A canonical protocol refusal keeps its original reason even if middleware
+mutates and rethrows its error object. Completion reports a fresh
+`DocumentProtocolError`; [core's private refusal provenance](../architecture.md#capability-backed-document-expansion)
+never relies on the object's current members.
 
-So an ordinary value thrown by public `Execution.document` policy or by trusted
-durable preparation is **always** converted into a core-owned error built from
-the total description above — which keeps whatever the failure gave up safely,
-and can be read as often as anyone likes.
-
-Only a durability or Files infrastructure failure crosses by exact identity, and
-those are not converted at all. Everything else the completion publishes is a
-value this run constructed.
-
-A canonical protocol refusal keeps its classification and its original
-diagnostic, and it does so **without** publishing the object middleware saw.
-Provenance says where an object came from; it does not say what the object still
-holds. A handler can catch the very refusal the expansion raised, replace its
-members with throwing accessors, and rethrow the same object — still core's
-object, no longer core's diagnostic. So the expansion records the *reason* it
-refused beside the identity it raised, and the completion publishes a fresh
-`DocumentProtocolError` built from that reason. The returned object is never
-read. The record is private to the expansion — no brand, stable name, shape,
-ambient state or module-scoped registry carries it.
-
-Reuse is authorized by the **complete** form core writes here, not by the
-binding alone. Core reaches this position only by failing, so a recorded success
-carrying a copied binding is a record it could not have produced. Admission
-parses the whole terminal — one recorded completion, on the root coroutine, with
-no root import, an outer settlement core returned rather than threw, an inner
-result whose status is `err`, the canonical failure shape, and exactly one
-well-formed binding agreeing with the requested root. Every other form is the
-fixed cause-free unreadable-root diagnostic, and nothing planted in journal data
-escapes through it.
-
-A terminal core creates *before* the root import carries a binding to the exact
-root source and target it was about. Core builds that binding from the root
-source this execution was given and parses it on the way back in; nothing a
-host, a document or a middleware package supplies can reach it. Root-history
-admission validates it before any terminal is reused, so an identical execution
-replays the recorded failure — running no preparation, no policy, no import
-and no authored work, and appending nothing — while a different root source or
-target is refused, and a missing, malformed, duplicated or conflicting binding
-fails closed. A partial history is re-entered: a preparation that already
-recorded a durable effect finds it retained and restores it rather than
-performing it again, and a refusal that follows records a fresh terminal. A history with no recorded completion is unaffected: it continues
-live, and preparation runs again through the ordinary durable protocol.
+An identical root source and target may replay a retained pre-import failure
+without preparation, policy, import, authored work or append. A changed root or
+an unreadable binding refuses. Partial history restores completed preparation
+effects and continues live. Reuse requires the
+[complete canonical terminal](../architecture.md#capability-backed-document-expansion),
+not a copied binding on an otherwise invalid result.
 
 
 Terminal acceptance stores a **detached** structural copy of the accepted props:
@@ -12451,17 +12408,17 @@ Defined in [Workflow runs](./workflow-spec.md).
 | WR2 | One value | Every read in one execution answers with the same frozen object |
 | WR3 | Isolation | Concurrent executions each read their own run |
 | WR4 | Completed journal | The run is restored and Git is never consulted; the replayed output's middleware reads it |
-| WR5 | A different base | Refused, naming both bases, before the recorded result reaches the caller |
-| WR6 | A moving base | A branch that moved cannot change the recorded pinned commit |
-| WR7 | Git fails | No run recorded, and the root document never expands |
+| WR5 | Retired: Git base comparison | Historical Git-definition check removed by #880. Current source-bundle identity is specified in [Workflow runs §9.1](./workflow-spec.md#91-what-identifies-a-run) |
+| WR6 | Retired: moving Git base | Historical pinned-commit check removed by #880; current workflow definitions retain source bytes rather than resolving branches |
+| WR7 | Retired: Git preparation failure | The first-party Git preparation helper was removed by #880. Generic host-preparation failure and replay remain covered by WR18 and WR19 |
 | WR8 | A later failure | A document that fails after the run was recorded does not erase it |
 | WR9 | No workflow | An execution without a workflow installation invokes no process at all |
 | WR20 | One installation, two executions | A host that passes the same installation value to two concurrent executions gets two runs: each journal records its own, each document reads the run its own journal records, a sibling preparing or completing changes neither, repeated reads in one execution answer with the same frozen object, and a later ordinary execution sees no workflow run at all |
 | WR10 | No workflow, inside | `getWorkflowRun()` throws inside an execution that installed none |
 | WR11 | A malformed record | Refused, and the refusal never quotes what the journal held |
-| WR12 | A slow base | Resolving one run's base does not stall a sibling execution |
+| WR12 | Retired: slow Git base | Historical Git base-resolution concurrency check removed by #880 |
 | WR13/WR14 | Seeded journals | A completed and a truncated journal written by hand restore without any live run having happened |
-| WR18 | Recorded base-resolution failure | A programmatic installation raises no evidence objection to the journal §6 describes: Git is not consulted, the root does not expand, and nothing is appended |
+| WR18 | Recorded preparation failure | A programmatic installation raises no missing-evidence objection to its recorded preparation failure; the root does not expand and nothing is appended |
 | WR19 | Replaying a failed preparation | A preparation that failed before the root import left the bound pre-root terminal, and the identical execution reads that failure back: no Git, no preparation, no document policy, no root import, no expansion and no append |
 | WM1 | A non-delegating handler | A document handler that answers instead of delegating cannot fabricate a successful run: core refuses it, nothing expands, and the journal holds the canonical `workflow_run` record and one failed terminal rather than the handler's value |
 | WM2 | A substitute result | A result returned after delegating replaces neither the document nor the recorded run |
@@ -12728,9 +12685,9 @@ Defined in [Workflow runs](./workflow-spec.md) §3.1.
 | RR1 | Exact record | The retained run is recorded verbatim; no identifier is allocated and Git is never consulted |
 | RR2/RR3 | Restoration | A truncated and a completed journal each restore the retained run without recording it again |
 | RR4 | A different run id | Refused as `StaleInputError` naming the field, never either value, and the root document does not expand |
-| RR5 | A different base or pinned commit | Refused on the same terms, naming the fields that differ |
+| RR5 | A different bundle or target | Refused on the same terms as RR4, naming `bundleHash` or `targetPath` rather than either value |
 | RR6 | A malformed record | Refused rather than coerced, without quoting what the journal held |
-| RR7 | An unusable installation | A missing run id, base or pinned commit is refused before any document executes |
+| RR7 | An unusable installation | A missing or empty required `runId` or `bundleHash` is refused before any document executes |
 | RR8 | A completed journal recording no run, or more than one | A terminal result whose journal holds no successful `workflow_run` record, holds one that failed, or holds two is refused before the recorded root result is handed back, and without appending anything |
 | RR9 | A completed journal recording another run | A completed journal whose record names a different run, or holds a value that does not read as a run at all, is refused on the same terms as a truncated one |
 | RR10 | Suppressed guard policy | A completed run-a journal resumed as run-b is refused beneath a `ReplayGuard` that answers check, admit or decide without delegating — nothing expands, nothing is emitted, nothing is appended |
@@ -12739,7 +12696,7 @@ Defined in [Workflow runs](./workflow-spec.md) §3.1.
 | RR13 | Policy still composes | A public guard observes the admitted history, and one that rejects it still refuses |
 | RR14 | Non-canonical records | A same-typed Yield under another name, under a child coroutine, or holding a value with an extra member establishes nothing, and none of what it held is quoted back |
 | RR15 | Failed establishment in a truncated history | A recorded `workflow_run` failure fails closed rather than replaying its planted text for a run storage already describes |
-| RR16 | What a refusal retains | Inspecting the whole error object — not only its message — finds no run id, base, pinned commit or planted description member |
+| RR16 | What a refusal retains | Inspecting the whole error object — not only its message — finds no immutable run-identity values or planted description members; historical `base` and `pinnedCommit` input is not reintroduced as run identity |
 | RR17 | Suppressed or reordered `Execution` policy | A handler that hands the durable run a different stream — the package's own descriptor or one built elsewhere, registered before or after the workflow installation — cannot make another run's journal replay |
 | RR18 | One retained snapshot | A journal whose recorded value shifts between reads is settled once: identity admission, guard observation and replay are handed the same objects, and the second answer is never reached |
 | RR20 | A hostile recorded value | A value whose `ownKeys`, `getOwnPropertyDescriptor` or getter refuses, and one whose classification refuses, each become the same fixed refusal — nothing reused, executed, emitted or appended, and the whole error object carries none of the planted text |
@@ -14007,4 +13964,4 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 100 | `<Let>` → `<Json>` → `<Parse>` is the explicit JSON direction | A document names a value, renders it as text, and validates text back into a value at three boundaries a reader can see. `{binding}` interpolation keeps its ordinary string coercion — there is no hidden JSON conversion — and `<Json>` takes no `indent`, `pretty`, replacer, sorting, canonicalization or newline option, so nothing about the format has to be agreed on per invocation. A file that must end in a newline authors that newline at the point it is written, rather than buying an option every other caller then has to reason about |
 | 101 | A capture is delivered from the authored expression | The scanner resolves a `{…}` prop whose text reads as JSON, but it runs before a name resolves and so cannot know the prop is a capture. Keeping the authored text beside the reading lets expansion decide with the selected definition in hand: a captured prop gets what its expression produced, every other prop gets the reading it always had, and an overriding repository file is an ordinary component either way. Without it `value={undefined}` reached a capturing component as `null`, which is the projection a capture exists to avoid |
 | 102 | A successful `undefined` omits an ordinary prop | Absence is the fact an author has to be able to state: an optional identity that a preceding result will supply is not there yet, and there is no value that means "not there" — `null` is a value, and a second element written for the other case duplicates the invocation. The omission is decided in the one resolver both component kinds pass through, before validation, so the schema answers it: optional stays unset, a `default` applies, a required prop fails as missing. It stops at the root and at that boundary — nested members keep native `JSON.stringify` normalization, failures stay failures, and captures and `<Let>` keep binding the exact value — and it puts `undefined` nowhere durable, because a prop that was never there is nothing to record |
-| 103 | A declared `<Evaluate>` and an authored loop, not hidden `<Prompt>` behavior | A workflow Agent's request/result exchange is written in the document: `<Loop max>` owns the bound, `<Parse>` and `<If>` own the branch, and `<Evaluate text={…} />` is where a generated fragment is admitted and performed. `<Prompt>` stays exactly one durable turn, with no hidden retry, schema repair or observation loop inside it, and the Agent Api gains no second operation. A component rather than a new execution primitive, because the operation needs a name a trusted document can write and a schema a reader can check. The host does not register it: it declares it to the execution, which calls the host's factory with the claimant it minted and registers what comes back — so the registration is canonical execution's, and what it provides is availability, never permission. Every ceiling comes from values the host captured before any document existed. Exhaustion is therefore the document's own failure, stated where the bound is, with the turns that produced it retained |
+| 103 | Protected `<Evaluate>` and an authored loop, not hidden `<Prompt>` behavior | A workflow Agent's request/result exchange is written in the document: `<Loop max>` owns the bound, `<Parse>` and `<If>` own the branch, and `<Evaluate text={…} />` is where a generated fragment is admitted and performed. `<Prompt>` stays exactly one durable turn, with no hidden retry, schema repair or observation loop inside it, and the Agent Api gains no second operation. A component rather than a new execution primitive, because the operation needs a name a trusted document can write and a schema a reader can check. Canonical core supplies [protected Evaluate](#532-evaluate-the-protected-evaluation-component); the host states its evaluation profile, captured before any document existed. Protection fixes the implementation and grants no permission; every ceiling comes from the captured profile. Exhaustion is therefore the document's own failure, stated where the bound is, with the turns that produced it retained |

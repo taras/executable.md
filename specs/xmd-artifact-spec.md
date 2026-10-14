@@ -7,8 +7,10 @@ This specification defines the portable evidence form of an Executable Markdown
 workflow run. An XMD artifact is one immutable `.xmd` file that can leave CI,
 arrive on a developer machine and still describe the exact committed run that
 CI observed. It complements `specs/workflow-workspace-spec.md`, which owns live
-workflow execution and history forks, and `architecture.md`, which owns the
-structural invariants.
+workflow execution and history forks, and [Portable XMD artifacts](../architecture.md#portable-xmd-artifacts),
+which owns the structural invariants. This document owns export/inspection
+behavior, the semantic format and compatibility. Start with [A document running](../architecture.md#a-document-running)
+for the execution and replay model.
 
 The practical boundary is simple:
 
@@ -243,7 +245,7 @@ frontier and attempt a compatible history fork:
 - in a finalized artifact, one portability classification for every logical
   Agent session that contributed a retained Prompt, and the opaque bundle bytes
   of each portable one (§2.5); and
-- the workflow definition source, in the form the run's own version retains.
+- the exact retained workflow definition source closure (§2.4).
 
 “Complete” is bounded by XMD ownership. The artifact does not claim to capture
 the state of the world around the run.
@@ -416,7 +418,7 @@ The value is:
 
 ```ts
 interface XmdArtifactManifest {
-  /** The semantic format this artifact declares: 1 or 2. */
+  /** The semantic format this artifact declares: 1. */
   readonly version: number;
   readonly entries: readonly XmdArtifactManifestEntryV1[];
 }
@@ -453,7 +455,9 @@ groups, and admits nothing else:
 
 - the artifact frontier: the source run id, the final committed event id when
   the journal holds one, and the current Workspace root id;
-- the workflow run record, without definition retrieval metadata;
+- the workflow run record as `workflow-run`, carrying the storage definition
+  and the `WorkflowRun`, without definition retrieval metadata, a `base` or a
+  pinned commit;
 - every document-execution record, in its retained order;
 - the prior workflow-fork lineage, when the source run was itself a fork;
 - every journal row in append order: its event id, the exact filtered protocol
@@ -481,15 +485,13 @@ groups, and admits nothing else:
   portability kind exists; and
 - the workflow definition source closure, one pair per retained source:
 
-  - `workflow-run` carries the storage definition and the `WorkflowRun`. It
-    admits no `base` and no pinned commit;
   - `definition-source-entry` is `canonical-json` under the canonical JSON string
-  of the source's logical path, containing exactly the members `path`,
-  `sourceHash` and `byteLength`. Canonical JSON writes those keys in its
-  existing lexicographic order; a reader requires the exact member set and does
-  not treat object-member order as identity; and
-- `definition-source-content` is `bytes` under the same identity, containing
-  that source's exact BLOB bytes.
+    of the source's logical path, containing exactly the members `path`,
+    `sourceHash` and `byteLength`. Canonical JSON writes those keys in its
+    existing lexicographic order; a reader requires the exact member set and does
+    not treat object-member order as identity; and
+  - `definition-source-content` is `bytes` under the same identity, containing
+    that source's exact BLOB bytes.
 
 Semantic verification requires exactly one entry and one content value per
 descriptor path and no undeclared pair, checks both identities against the path,
@@ -533,10 +535,11 @@ marker is the four bytes `XMDA`, the integer `0x584d4441`; the live workflow-run
 marker is `XMD1`, `0x584d4431`, and recognizing that one is the categorical
 live-run refusal rather than the foreign-container refusal.
 
-The artifact format version is `1` or `2`. A container declaring any other is an
-unsupported version this build must not touch; a container declaring one of
-these two over the other's records is a file that disagrees with its own header,
-and its undeclared kinds make it corrupt.
+This build reads and writes semantic artifact format `1`, manifest version
+`1` and container schema version `1`. Other declared semantic or container
+versions are unsupported and left untouched. Undeclared content kinds under
+format 1 are corruption. The two Agent evidence profiles (§2.5) belong to this
+same semantic format; they are not separate versions.
 
 Raw tables, views, indexes, triggers, PRAGMAs and SQL queries are not public API.
 The supported readers are XMD lifecycle commands and libraries that implement

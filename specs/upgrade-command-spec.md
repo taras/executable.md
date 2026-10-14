@@ -41,7 +41,7 @@ argument parser cannot report all mean a caller was answered by a command that
 did something else:
 
 - **An option this command does not define.** The parser stops at the first
-  undefined token and drops the rest, so `--journal`, `--timeout` or `--raw`
+  undefined token and drops the rest, so `--timeout` or `--raw`
   would be accepted in silence by a command that configures none of them.
 - **A value written on a switch.** The parser resolves `--status=false` to the
   field's default, which is `false` — so the spelling that reads as "off" and
@@ -53,7 +53,7 @@ did something else:
 for the reason every non-`run` command refuses them.
 
 Nothing else is offered. This command executes no caller's document, so an
-include path, a journal, raw output, an agent, a permission mode, a workflow, a
+include path, raw output, an agent, a permission mode, a workflow, a
 timeout or a secret-detection switch would each describe work that does not
 happen. `xmd upgrade --help` states the default, both consent options, the
 entrypoint matrix, what verification does, and what the package-managed
