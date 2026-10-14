@@ -16,7 +16,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 import { scoped, useScope } from "effection";
-import { installIdentities } from "../src/invocation-identity.ts";
+import { installIdentities, isFormDispatcher } from "../src/invocation-identity.ts";
 import type { ComponentRouting, ProtectedSite } from "../src/invocation-identity.ts";
 
 import {
@@ -32,6 +32,7 @@ import { CORE_REVISION } from "../src/generated-xmd.ts";
 import { props as globProps } from "../src/components/Glob.ts";
 import { props as elicitProps } from "../src/components/Elicit.ts";
 import { capabilityReturns } from "../src/fragment-capabilities.ts";
+import { fixedFilesystemDefinition } from "../src/components/fixed-filesystem.ts";
 import type {
   CapabilityEntry,
   EvaluationProfile,
@@ -41,7 +42,6 @@ import type {
   ResolvedAnswers,
 } from "../src/evaluation-profile.ts";
 import type { Json } from "../src/types.ts";
-import { recordedFiles } from "./support/fragment-files.ts";
 
 describe("protected route projection", () => {
   function installation() {
@@ -221,7 +221,6 @@ function* capture(overrides: Partial<FragmentEvaluationInput> = {}): Operation<E
   // against no answers at all.
   const prepared = yield* prepareEvaluationProfile({
     read: [entry()],
-    files: recordedFiles(),
     ...overrides,
   });
   return yield* prepared.seal(new Map());
@@ -455,17 +454,25 @@ describe("Tier EP — a profile a host cannot state", () => {
     expect(yield* refusal({ read: [] })).toContain("no component at all");
   });
 
-  it("EP17: a file entry with no operations behind it refuses", function* () {
-    // A host that admits `<File />` and states no operations has admitted
-    // something it cannot perform. Refused at capture — rather than admitted and
-    // left to fall through to whichever provider a document installed, which is
-    // exactly the reach this profile exists to remove.
-    expect(
-      yield* refusal({
-        read: [entry()],
-        files: undefined,
-      }),
-    ).toContain("without stating the filesystem operations");
+  it("EP17: a file entry states no operations, and runs the component core owns", function* () {
+    // The inverse of what this row asserted while the profile carried a private
+    // transport, where a host admitting `<File />` without stating operations
+    // had admitted something it could not perform. There is nothing left for a
+    // host to state: the entry runs canonical core's own component, which
+    // performs its work through whichever provider is installed where the
+    // fragment runs. So the admission is complete on its own — and an absent
+    // provider is fatal at the operation, exactly as it is for an authored
+    // element.
+    const captured = yield* capture({ read: [fileReadEntry()] });
+    const admitted = captured.read[0];
+
+    expect(admitted?.kind).toBe("capability");
+    expect(admitted?.capability).toBe("file:read");
+    // The owning component's own contract, read off it rather than restated.
+    expect(admitted?.props).toEqual(fixedFilesystemDefinition("File")?.props);
+    // And the component's own dispatcher travels with it, so canonical
+    // selection enters the body the scan chose rather than a wrapper's.
+    expect(isFormDispatcher(admitted?.dispatch)).toBe(true);
   });
 
   it("EP21: core's own read entries state exactly what a host may admit them as", function* () {
@@ -500,17 +507,21 @@ describe("Tier EP — a profile a host cannot state", () => {
     expect(Object.keys(stated)).not.toContain("capability");
   });
 
-  it("EP23: one name admitted for two spellings that bind differently refuses", function* () {
+  it("EP23: one name admitted for two different components refuses", function* () {
     // `<File>` holds two capabilities under one name legitimately, because both
-    // spellings render. A name whose spellings disagreed about what `as` meant
-    // would be one component with two answers, decided by how the element
-    // happened to be written.
+    // belong to the same component: its two spellings are two bodies of one
+    // `<File>`. Two capabilities owned by *different* components would be one
+    // name with two answers, decided by how the element happened to be written
+    // — and the two would disagree about what `as` means, which is how this
+    // same mistake used to be caught. The owning component is what is compared
+    // now, because that is the earlier and more general fact: a name that runs
+    // two components is already wrong, whatever either of them binds.
     expect(
       yield* refusal({
         read: [entry({ name: "File", capability: "files:glob", forms: ["self-closing"] })],
         write: [entry({ name: "File", capability: "file:write", forms: ["paired"] })],
       }),
-    ).toContain("bind different results");
+    ).toContain("two different components");
   });
 
   it("EP16: forms are canonically ordered, so two statements of one pair match", function* () {
@@ -565,7 +576,7 @@ describe("Tier EP — a provider-backed name states one identity", () => {
 
   /** Prepare a profile holding these entries, without sealing it. */
   function prepare(input: Partial<FragmentEvaluationInput>) {
-    return prepareEvaluationProfile({ read: [entry()], files: recordedFiles(), ...input });
+    return prepareEvaluationProfile({ read: [entry()], ...input });
   }
 
   /** What preparing this profile refused with. */

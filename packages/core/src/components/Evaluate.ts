@@ -239,11 +239,12 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
       ...(basis === undefined ? {} : { workspaceRoots: basis.roots, selectedRoot: basis.current }),
       ...(expansion.position === undefined ? {} : { position: expansion.position }),
     };
-    // Every path in this fragment resolves against the directory the run is in
-    // now, and the cursor is restored however the evaluation ends — so a
-    // fragment produced inside another fragment's producer leaves the outer one
-    // where it was, and a failed one leaves nothing behind.
-    const leave = yield* profile.enterFragment();
+    // Where this fragment's relative paths resolve is the contextual working
+    // directory, exactly as it is for an authored element: an admitted name
+    // runs the ordinary component, so `<Dir>` inside the fragment installs a
+    // directory for its own content and the invocation that owns it takes it
+    // away again. There is no cursor of the evaluator's own to enter or
+    // restore.
     const narrowedBodies = site.narrowComponentRouting(
       entries.admitted.map((entry) => entry.definition.fn),
     );
@@ -251,7 +252,6 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
       return yield* evaluateProtectedGeneratedXmd(request, narrowedBodies, narrowedSyntax);
     } finally {
       narrowedBodies?.close();
-      leave();
     }
   };
 }

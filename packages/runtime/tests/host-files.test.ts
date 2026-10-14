@@ -40,6 +40,7 @@ import { join } from "node:path";
 import process from "node:process";
 import { API } from "../apis.ts";
 import { hostFilesHandler, useHostFiles } from "../host-files.ts";
+import { Permissions } from "../permissions.ts";
 import type { HostFilesEvent } from "../host-files.ts";
 import {
   FILES_ERROR,
@@ -1337,5 +1338,188 @@ describe("host Files — making a directory exist", () => {
     expect(yield* readTextFile(join(checkout, ".git", "HEAD"))).toBe("ref: refs/heads/main\n");
     expect(yield* readTextFile(join(checkout, "tracked.txt"))).toBe("committed content");
     expect(yield* entries(checkout)).toEqual([".git", "generated", "tracked.txt"]);
+  });
+});
+
+/**
+ * Permission, asked by the provider.
+ *
+ * These drive `hostFilesHandler()` directly rather than the installed Api,
+ * because that is the stronger claim: a host holding the handler — and the
+ * forwarding middleware `useHostFiles` installs is one — gets the same
+ * restriction as a document reaching it through `API.Files`. If the check lived
+ * in that middleware instead, every one of these would still pass through the
+ * Api and none of them would pass here.
+ */
+describe("host Files — permission", () => {
+  /** Every low-level reach a refused operation must not make. */
+  function* census(touched: string[]): Operation<void> {
+    yield* API.Fs.around({
+      *stat([path], next) {
+        touched.push(`stat ${path}`);
+        return yield* next(path);
+      },
+      *lstat([path], next) {
+        touched.push(`lstat ${path}`);
+        return yield* next(path);
+      },
+      *realpath([path], next) {
+        touched.push(`realpath ${path}`);
+        return yield* next(path);
+      },
+      *readTextFile([path], next) {
+        touched.push(`read ${path}`);
+        return yield* next(path);
+      },
+      *writeTextFile([path, content], next) {
+        touched.push(`write ${path}`);
+        return yield* next(path, content);
+      },
+      *remove([path, options], next) {
+        touched.push(`remove ${path}`);
+        return yield* next(path, options);
+      },
+      *ensureDir([path], next) {
+        touched.push(`ensureDir ${path}`);
+        return yield* next(path);
+      },
+      *rename([from, to], next) {
+        touched.push(`rename ${from}`);
+        return yield* next(from, to);
+      },
+      *glob([search], next) {
+        touched.push(`glob ${search.root}`);
+        return yield* next(search);
+      },
+    });
+  }
+
+  it("HF29: each operation asks its own class, and a refusal reaches no filesystem", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "untouched");
+    const files = handler();
+    const asked: string[] = [];
+    const touched: string[] = [];
+
+    yield* scoped(function* () {
+      yield* census(touched);
+      yield* Permissions.around({
+        files: ([operation]) => {
+          asked.push(operation);
+          return false;
+        },
+      });
+
+      // Arithmetic, and permitted by nothing: a path that was never admissible
+      // is not a thing to ask permission for, and an admissible one is answered
+      // without reading anything.
+      const checked = yield* files.checkFilePath({ cwd: fixture.workspace, path: "notes.md" });
+      expect(checked.ok).toBe(true);
+      expect(asked).toEqual([]);
+
+      const read = yield* files.readTextFile({ cwd: fixture.workspace, path: "notes.md" });
+      expect(parseFilesFailure(failed(read))).toEqual({
+        type: FILES_ERROR,
+        operation: "read",
+        phase: "resolution",
+        reason: "permission-denied",
+      });
+
+      const written = yield* files.writeTextFile({
+        cwd: fixture.workspace,
+        path: "notes.md",
+        content: "replacement",
+      });
+      // The target claim is the part a document acts on: a write refused before
+      // any I/O says the file it named is the file it was.
+      expect(parseFileWriteFailure(failed(written))).toEqual({
+        type: FILES_ERROR,
+        operation: "write",
+        phase: "resolution",
+        reason: "permission-denied",
+        target: "unchanged",
+      });
+
+      const deleted = yield* files.deleteFile({ cwd: fixture.workspace, path: "notes.md" });
+      expect(parseFilesFailure(failed(deleted))).toEqual({
+        type: FILES_ERROR,
+        operation: "delete",
+        phase: "resolution",
+        reason: "permission-denied",
+      });
+
+      const made = yield* files.ensureDirectory({ cwd: fixture.workspace, path: "generated" });
+      expect(parseFilesFailure(failed(made))).toEqual({
+        type: FILES_ERROR,
+        operation: "ensure-directory",
+        phase: "resolution",
+        reason: "permission-denied",
+      });
+
+      const globbed = yield* files.globFiles({
+        cwd: fixture.workspace,
+        include: ["**/*.md"],
+        exclude: [],
+      });
+      expect(parseFilesFailure(failed(globbed))).toEqual({
+        type: FILES_ERROR,
+        operation: "glob",
+        phase: "target",
+        reason: "permission-denied",
+      });
+
+      const acquired = yield* files.temporaryDirectory();
+      expect(parseFilesFailure(failed(acquired))).toEqual({
+        type: FILES_ERROR,
+        operation: "temporary-directory",
+        phase: "acquire",
+        reason: "permission-denied",
+      });
+    });
+
+    // Which class each operation belongs to, decided by the request rather than
+    // by what the filesystem holds: the deletion names a file that exists and
+    // the ensure names a directory that does not, and both are writes.
+    expect(asked).toEqual(["read", "write", "write", "write", "read", "write"]);
+    // Nothing resolved, nothing classified, nothing traversed.
+    expect(touched).toEqual([]);
+    expect(yield* readTextFile(join(fixture.workspace, "notes.md"))).toBe("untouched");
+    expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
+  });
+
+  it("HF30: a denied acquisition creates nothing under its root", function* () {
+    const { root } = yield* useFixture();
+    const files = hostFilesHandler({ temporaryRoot: root });
+
+    yield* scoped(function* () {
+      yield* Permissions.around({ files: () => false });
+      const acquired = yield* files.temporaryDirectory();
+      expect(parseFilesFailure(failed(acquired))?.reason).toBe("permission-denied");
+    });
+
+    // The one operation whose refusal cannot be proved by an `API.Fs` census:
+    // it creates with a synchronous native call, so what proves it created
+    // nothing is the namespace it would have created in.
+    expect((yield* entries(root)).filter((entry) => entry.startsWith("xmd-tempdir-"))).toEqual([]);
+  });
+
+  it("HF31: an acquired temporary is released although writes are refused", function* () {
+    const { root } = yield* useFixture();
+    const files = hostFilesHandler({ temporaryRoot: root });
+    let acquired = "";
+
+    yield* scoped(function* () {
+      acquired = value(yield* files.temporaryDirectory());
+      expect(yield* exists(acquired)).toBe(true);
+
+      // Narrowed after the acquisition, which is the case that matters:
+      // releasing what this scope already holds is the acquiring operation's
+      // own cleanup, not a new request the scope has to be permitted to make.
+      yield* Permissions.around({ files: () => false });
+      expect(yield* Permissions.operations.files("write")).toBe(false);
+    });
+
+    expect(yield* exists(acquired)).toBe(false);
+    expect((yield* entries(root)).filter((entry) => entry.startsWith("xmd-tempdir-"))).toEqual([]);
   });
 });

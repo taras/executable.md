@@ -30,7 +30,13 @@ import { collect, execute, inlineSource, registerComponents } from "@executablem
 import type { Json } from "@executablemd/durable-streams";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { API, FILES_FATAL, parseFilesFatal, useHostFiles } from "@executablemd/runtime";
+import {
+  API,
+  FILES_FATAL,
+  parseFilesFatal,
+  Permissions,
+  useHostFiles,
+} from "@executablemd/runtime";
 import type { HostFilesEvent } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
@@ -263,6 +269,19 @@ function countingRemoves(
     *remove(path, options) {
       removed.push(path);
       yield* filesystem.remove(path, options);
+    },
+  });
+}
+
+/** Every file this run actually wrote, in order. */
+function countingWrites(
+  written: string[],
+): (filesystem: DenoWorkspaceFilesystem) => DenoWorkspaceFilesystem {
+  return (filesystem) => ({
+    ...filesystem,
+    *writeFile(path, content, mode) {
+      written.push(path);
+      yield* filesystem.writeFile(path, content, mode);
     },
   });
 }
@@ -1731,6 +1750,171 @@ describe("Tier WF — the run's own directories", () => {
         expect(rootOfLastEvent(path)).toEqual(after);
       },
       { decorateFilesystem: countingMkdirs(made) },
+    );
+  });
+});
+
+/**
+ * Permission, asked by the live performer.
+ *
+ * The run is what makes these worth having separately from the host provider's
+ * rows: a workflow operation is a durable effect, so "was it permitted" and
+ * "did it already happen" are two different questions, and the second one has
+ * to win. What these assert is that current policy decides new work and says
+ * nothing about work the journal already holds.
+ */
+describe("workflow document filesystem — permission", () => {
+  /** Refuse one class of operation, recording every question asked. */
+  function restricted(asked: string[], refuse: "read" | "write"): Operation<void> {
+    return Permissions.around({
+      files: ([operation], next) => {
+        asked.push(operation);
+        return operation === refuse ? false : next(operation);
+      },
+    });
+  }
+
+  it("WF27: a denied write is published as an ordinary refusal and keeps the root", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const path = runPath(root, database.record.runId);
+      yield* mutateWorkspace(database, function* (workspace) {
+        yield* workspace.filesystem.writeFile("/kept.txt", "kept");
+      });
+      const before = committedRoot(path);
+      const asked: string[] = [];
+
+      const run = yield* scoped(function* () {
+        yield* restricted(asked, "write");
+        return yield* runDocument(
+          database,
+          ['<File path="kept.txt" />', "", '<File path="new.txt">no</File>'].join("\n"),
+        );
+      });
+
+      // The read was permitted and the write was not, so the class each
+      // operation asked for is what decided it.
+      expect(asked).toEqual(["read", "write"]);
+      expect(run.host.seen).toEqual([]);
+
+      const recorded = yield* recordedFileEffects(database);
+      expect(recorded.map((effect) => effect.name.split(":")[0])).toEqual(["read", "write"]);
+      expect(recorded[0]?.result).toEqual({
+        status: "ok",
+        value: { kind: "content", content: "kept" },
+      });
+      // An ordinary refusal, in the phase the performer stopped at, published
+      // rather than raised: the run continues and the journal says what
+      // happened.
+      expect(recorded[1]?.result).toEqual({
+        status: "ok",
+        value: { kind: "refused", phase: "resolution", reason: "permission-denied" },
+      });
+
+      // Nothing was mutated, so the root the refusal published is the one it
+      // started from and the Workspace is what it was.
+      expect(committedRoot(path)).toEqual(before);
+      const created = yield* transactWorkspaceRoots(database, function* (workspace) {
+        return yield* workspace.filesystem.stat("/new.txt");
+      });
+      expect(created.ok).toEqual(false);
+      expect(yield* workspaceText(database, "/kept.txt")).toEqual("kept");
+    });
+  });
+
+  it("WF28: a completed effect replays although writes are now refused", function* () {
+    const root = yield* useStorageRoot();
+    const written: string[] = [];
+    yield* withStorage(
+      root,
+      function* () {
+        const database = yield* createRun();
+        const source = '<File path="recorded.txt">first</File>';
+
+        yield* runDocument(database, source);
+        expect(written).toEqual(["/recorded.txt"]);
+        const recorded = yield* recordedFileEffects(database);
+        const before = yield* database.journal.readAll();
+
+        const asked: string[] = [];
+        const replayed = yield* scoped(function* () {
+          yield* restricted(asked, "write");
+          return yield* replayDocument(database, source);
+        });
+
+        // The question was never asked, because there was no work to permit:
+        // replay restores what the journal holds without entering the
+        // performer that would have asked.
+        expect(asked).toEqual([]);
+        expect(written).toEqual(["/recorded.txt"]);
+        expect(replayed.host.seen).toEqual([]);
+        expect(yield* recordedFileEffects(database)).toEqual(recorded);
+        expect((yield* database.journal.readAll()).length).toEqual(before.length);
+        expect(yield* workspaceText(database, "/recorded.txt")).toEqual("first");
+      },
+      { decorateFilesystem: countingWrites(written) },
+    );
+  });
+
+  it("WF29: work the journal does not hold asks current policy", function* () {
+    const root = yield* useStorageRoot();
+    const source = ['<File path="a.txt">A</File>', "", '<File path="b.txt">B</File>'].join("\n");
+
+    // A run interrupted between its two writes. The journal has to be
+    // *incomplete* for this row to mean anything: a complete one replays
+    // without entering a component at all, so appending work to a finished run
+    // would prove nothing about policy.
+    const reached = withResolvers<void>();
+    yield* withStorage(
+      root,
+      function* () {
+        const database = yield* createRun();
+        // Halted where the signal says, not after a deadline: the second write
+        // has landed and has not been published when the halt arrives.
+        const running = yield* spawn(() => raised(runDocument(database, source)));
+        yield* reached.operation;
+        yield* running.halt();
+
+        const recorded = yield* recordedFileEffects(database);
+        expect(recorded).toHaveLength(1);
+        expect(recorded[0]?.result).toEqual({ status: "ok", value: { kind: "written" } });
+        expect(yield* workspaceText(database, "/a.txt")).toEqual("A");
+      },
+      { decorateFilesystem: suspendingWrite("/b.txt", reached) },
+    );
+
+    const written: string[] = [];
+    const asked: string[] = [];
+    yield* withStorage(
+      root,
+      function* () {
+        const database = yield* createRun();
+        yield* scoped(function* () {
+          yield* restricted(asked, "write");
+          return yield* raised(runDocument(database, source));
+        });
+
+        // One question, asked for the one write this run still had to do. The
+        // recorded write ahead of it neither asked nor reached the filesystem.
+        expect(asked).toEqual(["write"]);
+        expect(written).toEqual([]);
+
+        const recorded = yield* recordedFileEffects(database);
+        expect(recorded).toHaveLength(2);
+        expect(recorded[0]?.result).toEqual({ status: "ok", value: { kind: "written" } });
+        expect(recorded[1]?.result).toEqual({
+          status: "ok",
+          value: { kind: "refused", phase: "resolution", reason: "permission-denied" },
+        });
+
+        const created = yield* transactWorkspaceRoots(database, function* (workspace) {
+          return yield* workspace.filesystem.stat("/b.txt");
+        });
+        expect(created.ok).toEqual(false);
+        expect(yield* workspaceText(database, "/a.txt")).toEqual("A");
+      },
+      { decorateFilesystem: countingWrites(written) },
     );
   });
 });

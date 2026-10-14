@@ -25,6 +25,22 @@
  * same admission from the same authored path. A check that was skipped,
  * replaced, or answered by another provider therefore authorizes nothing.
  *
+ * ## Who asks whether it is permitted
+ *
+ * The provider does, as the last thing before its first I/O. `Permissions`
+ * mediates these operations, but this Api does not consult it: a check made
+ * here would be made for an operation that has not been transformed yet, and
+ * every middleware between a caller and the provider is entitled to change
+ * which path or pattern is actually used. So the implementation that performs
+ * the operation authorizes the operation it is really about to perform —
+ * including a replacement provider, for which this is part of the contract
+ * rather than something inherited.
+ *
+ * A refusal is an ordinary failure, reported like any other: `permission-denied`
+ * in the phase the provider stopped at, with no I/O performed and no change to
+ * a target. A provider that answers synthetically, performing no I/O at all,
+ * has nothing to authorize and nothing to report.
+ *
  * ## Two kinds of failure
  *
  * An ordinary filesystem condition — missing, a directory, permission denied,

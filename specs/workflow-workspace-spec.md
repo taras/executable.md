@@ -2060,13 +2060,24 @@ anything else is installed. An execution accepts one profile and refuses two,
 and a run whose host states none has no evaluation at all — which `<Evaluate>`
 says when it is written rather than at startup.
 
-Each entry in that profile names a **capability** rather than a definition.
-Canonical capture reads the host's own operation off its object exactly once,
-binds it behind a revocation the execution owns, and closes core's own body over
-the bound result. An admitted `<File />` therefore reaches the `readTextFile`
-this attachment handed over — still the run's transaction-bound one — and never
-resolves `API.Files` while it runs. That is what keeps a fragment's permission
-out of reach of the document, a repository component and middleware.
+Each entry in that profile names a **component** rather than an operation.
+Canonical capture answers with core's own ordinary definition for it, held to
+the execution's lifetime, and this attachment hands the profile no operation at
+all. An admitted `<File />` therefore performs the ordinary `<File>` through
+contextual `API.Files` — which in a workflow run is the transaction-bound
+provider `withWorkflowWorkspace` installed — so an admitted write is the same
+durable effect an authored one is, published by the same effect transaction,
+observed by the same middleware and decided by the same effective
+`Permissions`. Its relative paths resolve against the run's own contextual
+working directory, which is the Workspace root as narrowed by the run's own
+`<Dir>`, `<Repository>` and `<Worktree>`, and never the directory the caller
+invoked `xmd` from.
+
+What keeps a fragment's permission bounded is therefore not which object
+answered. It is the entry tables — which names, in which spelling, under which
+identity a continuation is compared against — the ceiling an admitted `<Fetch />`
+carries, the policy in force where the element runs, and the run's own logical
+filesystem, which contains no host path to name.
 
 **How its durable operation is named.** The implementation claims on the exact
 invocation the engine handed it, in that invocation's own frame. A durable name
@@ -2370,6 +2381,17 @@ question rather than a continuation of the first.
 
 Replay rehydrates the Effection tree. Ephemeral structure executes again;
 durable observations and mutations restore.
+
+**Permission is a question about work that is about to happen.** It is asked
+inside the live performer, as its first step, so a completed effect restores
+what it recorded without asking current policy and without entering the
+performer that would ask. Only new work meets the policy in force now. A check
+placed around the effect instead would re-decide an operation that has already
+been published: a run continued under a narrower policy would contradict its own
+journal, and one continued under a wider policy would ask for permission it no
+longer needs. A denial of new work is an ordinary live outcome — the sanitized
+`permission-denied` refusal, published like any other, changing no target and
+capturing the root the run already had.
 
 | Construct | Partial replay behavior |
 | --- | --- |

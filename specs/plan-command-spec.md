@@ -700,6 +700,31 @@ construct. `<Plan>` selects only `read`. It installs no profile of its own,
 creates no second evaluator and starts no child execution; a trusted host that
 already stated a profile keeps it.
 
+*The request travels the ordinary route, and the writer frame is the reason that
+takes saying.* The frame a Plan is written under refuses every capability it can
+reach, and an admitted read is now the ordinary `<File>` or `<Glob>` performing
+its work through contextual `API.Files` — so it arrives at that same refusal.
+The one exception is this phase of the Component, recognized by **where** the
+call was made from rather than by what it asked for: the authenticated
+information phase holds a private read grant for the scope its projection runs
+in, and the frame's guard delegates `checkFilePath`, `readTextFile` and
+`globFiles` for that scope alone, through its own `next`.
+
+Delegation is all it does. Every enclosing and descendant Files middleware keeps
+its ordinary turn, the installed provider still performs the operation, and the
+effective `Permissions` of the consuming scope still decide it — so a read
+restriction in force around the document denies the request, and the denial
+becomes one safe retry context like any other ordinary refusal. The grant
+answers Permissions with nothing and runs the request in no wider scope.
+
+Reads only, and that phase only. Every mutation stays refused wherever it is
+asked from — write, delete, directory ensure and temporary acquisition — and so
+does every read outside a live projection: before one opens, after it settles,
+in a concurrent sibling of the frame that never held a grant, and in a nested
+writer frame whose own grant belongs to its own conversation. Process, Fetch and
+Service refusal and the native Agent policy are unchanged across the whole
+frame.
+
 *The budget is eight requests for one invocation*, shared across initial
 drafting, repair and revision. A success and a safe refusal each spend one. They
 neither consume nor reset the ten-draft and three-repair budgets, and those do
@@ -1118,4 +1143,8 @@ neither observation never interpreted what it wrote.
 | PI9 | Distribution | The embedded request-to-approved-Plan journey executes through source, emitted npm and compiled installations. The command journey executes through the in-process production command assembly and exact packaged command document. Npm and compiled controls verify packaged command and Plan assets, Plan identity and digest, its exact text contract and private closure, and the canonical protected Syntax/Evaluate tier |
 | PI10 | Recoverable versus terminal | A malformed request and an ordinary read `Err` are each classified by core as a refused generated request, which `<Plan>` alone turns into one safe retry context; missing or broken profile or protected route, a throwing Files provider, stale or corrupt history, journal or secret failure, unexpected runtime failure, teardown failure and outer cancellation each stop authorship. Public `<Evaluate>` still throws under ordinary use |
 | PI11 | Language, not permission | Branching, binding and bounded iteration compose with admitted reads under ordinary rules, and a prohibited component in an untaken branch refuses the whole fragment with zero reads |
+| PI20 | The shared route, from both sides | One middleware the document installed observes the request the fragment made, a second installed nearer the provider transforms it, and the findings the next turn receives carry the transformed answer — so an information request is the ordinary operation and not a private one |
+| PI21 | Current policy decides it | A read restriction the enclosing scope installed denies the request before the provider performs anything; the refusal becomes exactly one more turn carrying the sanitized sentence, and authorship still finishes. The ordering half — a descendant answering `true` cannot defeat an enclosing `false` — is Tier PM's |
+| PI22 | The writer frame still refuses everything else | Inside the frame and outside any projection, a read, a temporary directory, a semantic directory ensure, a command and the network are each refused with the frame's own fixed sentence |
+| PI23 | The shape of the grant | A frame grants nothing until a projection opens; a projection grants its own scope and every scope created under it; a sibling created while one is open is granted nothing; one frame's projection does not satisfy another frame's guard; and a retained guard answers no once its frame has ended |
 | PI12 | Disclosure order | Observe default, verbose, journal and Agent prompts for success and refusal, then place a synthetic secret in a file read by an information request. Default output stays content-free; detailed findings follow settlement; the secret appears in no output, journal entry or Agent Prompt, starts no following turn, review or artifact, and ends with the existing terminal secret rejection |

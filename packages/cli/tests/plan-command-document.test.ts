@@ -53,7 +53,8 @@ import type {
 import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
 import { elicitWriteEntry } from "@executablemd/core/host";
 import { Elicitation } from "@executablemd/core";
-import { recordedFiles } from "../../core/tests/support/fragment-files.ts";
+import { recordedFiles, useRecordedFiles } from "../../core/tests/support/fragment-files.ts";
+import type { RecordedFiles } from "../../core/tests/support/fragment-files.ts";
 import { answerProvider } from "../../core/tests/support/answer-provider.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { PLAN_COMMAND_DOCUMENT, readPackagedDocument } from "../src/packaged-document.ts";
@@ -150,10 +151,19 @@ interface RunOptions {
   /**
    * The evaluation ceiling this case's information requests run under.
    *
-   * The command's own by default. A case supplies its own when it needs to see
-   * which operation a read reached, or to withhold one.
+   * The command's own by default. A case supplies its own when it needs to
+   * narrow what a request may name, or to withhold a class.
    */
   evaluation?: FragmentEvaluationInput;
+  /**
+   * The document filesystem this execution runs against.
+   *
+   * Installed as the ordinary `API.Files` provider, which is what an admitted
+   * information request now crosses: a row reading a recorder's log is reading
+   * the same provider an authored `<File>` in this document would have reached.
+   * Absent leaves the real host provider in place.
+   */
+  files?: RecordedFiles;
   /**
    * The vocabulary this execution describes.
    *
@@ -233,6 +243,9 @@ function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
             // A case that supplies its own recorder gets that instead, which is
             // how a row proves which operation a read actually reached.
             evaluation: options.evaluation ?? ordinaryEvaluationProfile(),
+            ...(options.files === undefined
+              ? {}
+              : { install: () => useRecordedFiles(options.files!) }),
             ...(options.componentAnswers === undefined
               ? {}
               : { componentAnswers: [...options.componentAnswers] }),
@@ -765,7 +778,8 @@ describe("Tier PI — read-only information requests", () => {
     const files = recordedFiles({ "notes.md": "the retained note\n" });
     const run = yield* runDocument({
       turns: [{ reply: COMPOSED }, { reply: CANDIDATE }],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()], files },
+      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      files,
     });
 
     expect(run.failure).toBe(undefined);
@@ -795,7 +809,8 @@ describe("Tier PI — read-only information requests", () => {
     const files = recordedFiles({ "notes.md": "the retained note\n" });
     const run = yield* runDocument({
       turns: [{ reply: COMPOSED }, { reply: CANDIDATE }],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()], files },
+      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      files,
       verbose: true,
     });
 
@@ -816,7 +831,8 @@ describe("Tier PI — read-only information requests", () => {
       // A paired `<File>` write under a read-only selection: refused whole,
       // before any read.
       turns: [{ reply: '<File path="notes.md">written</File>\n' }, { reply: CANDIDATE }],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()], files },
+      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      files,
     });
 
     expect(run.failure).toBe(undefined);
@@ -842,7 +858,8 @@ describe("Tier PI — read-only information requests", () => {
       // The ninth would search a second time if it were evaluated, so the
       // recorder answers "was it?" rather than a count standing in for it.
       turns: [...turns, { reply: '<Glob include={["ninth.md"]} as="paths" />\n' }],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()], files },
+      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      files,
     });
 
     expect(String(run.failure)).toContain("asked for information 8 times");
@@ -876,7 +893,8 @@ describe("Tier PI — read-only information requests", () => {
       ],
       reviews: [{ decision: "Request changes", feedback: "say more" }, { decision: "Approve" }],
       validations: [unsound, sound],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()], files },
+      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      files,
     });
 
     expect(run.failure).toBe(undefined);
@@ -972,7 +990,8 @@ describe("Tier PI — read-only information requests", () => {
         { reply: '<Glob include={["absent.md"]} as="paths" />\n<Json value={paths} />\n' },
         { reply: CANDIDATE },
       ],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()], files },
+      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      files,
     });
 
     expect(run.failure).toBe(undefined);
@@ -996,7 +1015,8 @@ describe("Tier PI — read-only information requests", () => {
         },
         { reply: CANDIDATE },
       ],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()], files },
+      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      files,
     });
 
     expect(run.failure).toBe(undefined);
@@ -1009,7 +1029,8 @@ describe("Tier PI — read-only information requests", () => {
     const files = recordedFiles({ "notes.md": "the retained note\n" });
     const run = yield* runDocument({
       turns: [{ reply: COMPOSED }, { reply: CANDIDATE }],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()], files },
+      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      files,
       verbose: true,
     });
 
@@ -1035,7 +1056,8 @@ describe("Tier PI — read-only information requests", () => {
         { reply: '<File path="notes.md" as="note" />\n<Json value={note} />\n' },
         { reply: CANDIDATE },
       ],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()], files },
+      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      files,
       verbose: true,
     });
 
@@ -1147,10 +1169,8 @@ describe("Tier PI — read-only information requests", () => {
         { reply: '<File path="notes.md" as="note" />\n<Json value={note} />\n<Held />\n' },
         { reply: CANDIDATE },
       ],
-      evaluation: {
-        read: [fileReadEntry(), globReadEntry(), syntaxReadEntry(), heldEntry()],
-        files,
-      },
+      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry(), heldEntry()] },
+      files,
       componentAnswers: [held.provider],
       verbose: true,
       observe: function* (live) {
@@ -1208,7 +1228,8 @@ describe("Tier PI — read-only information requests", () => {
     const files = recordedFiles({ "notes.md": "the retained note\n" });
     const run = yield* runDocument({
       turns: [{ reply: '<File path="absent.md" as="gone" />\n' }, { reply: CANDIDATE }],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()], files },
+      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      files,
       verbose: true,
     });
 
@@ -1227,7 +1248,8 @@ describe("Tier PI — read-only information requests", () => {
     const files = recordedFiles({ "notes.md": "the retained note\n" });
     const run = yield* runDocument({
       turns: [{ reply: CANDIDATE }],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()], files },
+      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      files,
     });
 
     expect(run.failure).toBe(undefined);
@@ -1284,7 +1306,8 @@ describe("Tier PI — the ordinary ceiling admits the question with the write", 
           { reply: '<Elicit schema={{ type: "object" }}>Which file?</Elicit>\n' },
           { reply: CANDIDATE },
         ],
-        evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()], files },
+        evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+        files,
       });
     });
 

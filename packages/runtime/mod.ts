@@ -5,7 +5,7 @@
  * `API` is available for middleware (`.around()`).
  * For normal calls, import operations directly.
  *
- * Seven domain APIs:
+ * The domain APIs:
  * - `API.Process` — subprocess execution (`exec`)
  * - `API.Fs` — the low-level host filesystem (`readTextFile`, `writeTextFile`,
  *   `stat`, `lstat`, `readDirectory`, `glob`, `realpath`, `ensureDir`, `rename`,
@@ -21,6 +21,8 @@
  *   (`reserveTerminal`, `flushOutput`, `notifyTerminal`, `nativeLaunch`)
  * - `Config` — shared execution config (`timeout`, `timeoutExec`, `timeoutFetch`,
  *   `verbose`)
+ * - `Permissions` — whether this scope may perform the semantic operation
+ *   `API.Files` or `API.Fetch` is about to carry out (`files`, `fetch`)
  *
  * See `apis.ts` for architecture rationale.
  * See `@executablemd/runtime/test` for composable test stubs.
@@ -83,6 +85,8 @@ export type {
 export { Config, timeout, timeoutExec, timeoutFetch, verbose } from "./config.ts";
 export type { ConfigApi } from "./config.ts";
 export { asDuration, durationError, parseDuration } from "./duration.ts";
+export { FETCH_NOT_PERMITTED_MESSAGE, Permissions } from "./permissions.ts";
+export type { PermissionsApi } from "./permissions.ts";
 export type { ProcessExecOptions, ProcessOutcome } from "./apis.ts";
 export {
   asFilesFatal,

@@ -744,6 +744,22 @@ describe(
                 // its scope. It decides what to write; it writes nothing.
                 for (const [name, ask] of [
                   ["a directory", () => API.Files.operations.temporaryDirectory()],
+                  // Ambient, and therefore refused: a read is delegated only
+                  // inside an authenticated information projection, and this is
+                  // the writer frame asking for itself. Asked here because a
+                  // read is the one operation the frame now has a reason to
+                  // delegate at all.
+                  [
+                    "a file",
+                    () => API.Files.operations.readTextFile({ cwd: ".", path: "notes.md" }),
+                  ],
+                  // The semantic directory operation, named in the table rather
+                  // than left unreachable: canonical core owns `<Dir>` now, and
+                  // an admitted generated one performs this.
+                  [
+                    "a directory",
+                    () => API.Files.operations.ensureDirectory({ cwd: ".", path: "made" }),
+                  ],
                   ["a command", () => API.Process.operations.exec({ command: ["true"] })],
                   ["the network", () => API.Fetch.operations.fetch("http://localhost")],
                 ] as const) {
@@ -775,6 +791,8 @@ describe(
         expect(harness.fake.ensured[0]?.sessionOptions?.allowedTools).toEqual([]);
         // And the command document is given nothing to act with.
         expect(seen.refusals).toEqual([
+          "xmd plan asked for a directory, which the Plan writer profile grants to nothing",
+          "xmd plan asked for a file, which the Plan writer profile grants to nothing",
           "xmd plan asked for a directory, which the Plan writer profile grants to nothing",
           "xmd plan asked for a command, which the Plan writer profile grants to nothing",
           "xmd plan asked for the network, which the Plan writer profile grants to nothing",

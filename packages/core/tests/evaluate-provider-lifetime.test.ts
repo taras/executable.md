@@ -37,7 +37,6 @@ import { prepareEvaluationProfile } from "../src/evaluation-profile.ts";
 import type { ComponentAnswerEntry, ResolvedAnswer } from "../src/evaluation-profile.ts";
 import { REVOKED_CAPABILITY } from "../src/fragment-capabilities.ts";
 import { retainedSource } from "../src/root-source.ts";
-import { recordedFiles } from "./support/fragment-files.ts";
 import { answerProvider, implementation } from "./support/answer-provider.ts";
 import type { Implementation } from "./support/answer-provider.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
@@ -60,7 +59,7 @@ function answerEntry(name: string): ComponentAnswerEntry {
 
 /** The entry a host states for a provider-backed name. */
 function admits(): FragmentEvaluationInput {
-  return { read: [answerEntry("Open")], files: recordedFiles() };
+  return { read: [answerEntry("Open")] };
 }
 
 /**
@@ -395,7 +394,6 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
         {
           evaluation: {
             read: [answerEntry("Open"), answerEntry("Other")],
-            files: recordedFiles(),
           },
           componentAnswers: [
             answerProvider("Open", A.definition, { retain: stale }),
@@ -451,7 +449,6 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
         {
           evaluation: {
             read: [answerEntry("Open"), answerEntry("Other")],
-            files: recordedFiles(),
           },
           componentAnswers: [
             {

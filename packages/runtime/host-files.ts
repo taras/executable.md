@@ -54,6 +54,28 @@
  * single commit point, and nothing is acquired around it, so cancellation
  * before it changes nothing and there is no cleanup to fail.
  *
+ * ## Permission
+ *
+ * Every operation that touches the filesystem asks `Permissions` first, and
+ * asks it here rather than in `useHostFiles`'s forwarding middleware, so a
+ * caller holding this handler directly is under the same restriction as a
+ * document reaching it through the Api.
+ *
+ * Where the question goes is as load-bearing as the answer. It stands after
+ * the pure lexical check — a path that was never admissible is not a thing to
+ * ask permission for — and before the first I/O of any kind, which for most
+ * operations means before resolution: `realpath` and `stat` are already reads
+ * of the caller's filesystem, and a refusal that had resolved the path first
+ * would have read what it was about to refuse. So a denied operation leaves no
+ * trace at all: nothing resolved, nothing stat'ed, nothing traversed, nothing
+ * created, and a target reported unchanged.
+ *
+ * The class asked for is the one the *request* belongs to, not the one the
+ * filesystem turns out to need. Ensuring a directory that already exists and
+ * deleting a path that names nothing are both `write`, because deciding
+ * otherwise would mean probing the filesystem to find out which question to
+ * ask — which is the read a refusal is supposed to prevent.
+ *
  * ## What crosses the boundary
  *
  * Nothing from a caught platform error. An errno code *selects* a
@@ -73,6 +95,7 @@ import { tmpdir } from "node:os";
 import { FsApi, rm } from "@effectionx/fs";
 import { API } from "./apis.ts";
 import { fileWriteFailure, fileWriteSuccess, filesFailure, FilesInvariantError } from "./files.ts";
+import { Permissions } from "./permissions.ts";
 import type {
   FilePathInput,
   FilesHandler,
@@ -382,6 +405,10 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       return nonWriteFailure("read", "lexical", lexical);
     }
 
+    if (!(yield* Permissions.operations.files("read"))) {
+      return nonWriteFailure("read", "resolution", "permission-denied");
+    }
+
     const target = yield* destination(input);
     if ("reason" in target) {
       return nonWriteFailure("read", "resolution", target.reason);
@@ -434,6 +461,10 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     const lexical = inadmissible(input);
     if (lexical !== undefined) {
       return writeFailure({ phase: "lexical", reason: lexical });
+    }
+
+    if (!(yield* Permissions.operations.files("write"))) {
+      return writeFailure({ phase: "resolution", reason: "permission-denied" });
     }
 
     const target = yield* destination(input);
@@ -534,6 +565,10 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       return nonWriteFailure("delete", "lexical", lexical);
     }
 
+    if (!(yield* Permissions.operations.files("write"))) {
+      return nonWriteFailure("delete", "resolution", "permission-denied");
+    }
+
     const target = yield* removalDestination(input);
     if ("reason" in target) {
       return nonWriteFailure("delete", "resolution", target.reason);
@@ -608,6 +643,10 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       return nonWriteFailure("ensure-directory", "lexical", "empty-path");
     }
 
+    if (!(yield* Permissions.operations.files("write"))) {
+      return nonWriteFailure("ensure-directory", "resolution", "permission-denied");
+    }
+
     const target = yield* directoryDestination(input);
     if ("reason" in target) {
       return nonWriteFailure("ensure-directory", "resolution", target.reason);
@@ -645,6 +684,13 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
    * the same way on every host.
    */
   function* globFiles(input: GlobInput): Operation<Result<string[]>> {
+    // `target` rather than `resolution`: a glob resolves no authored path, and
+    // the first filesystem it touches is this stat of the directory it would
+    // walk.
+    if (!(yield* Permissions.operations.files("read"))) {
+      return nonWriteFailure("glob", "target", "permission-denied");
+    }
+
     try {
       const info = yield* API.Fs.operations.stat(input.cwd);
       if (!info.exists) {
@@ -692,6 +738,11 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
    */
   function temporaryDirectory(): Operation<Result<string>> {
     return resource(function* (provide) {
+      if (!(yield* Permissions.operations.files("write"))) {
+        yield* provide(nonWriteFailure("temporary-directory", "acquire", "permission-denied"));
+        return;
+      }
+
       let created: string;
       try {
         // oxlint-disable-next-line local/no-sync-filesystem

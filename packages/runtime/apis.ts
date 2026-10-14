@@ -91,6 +91,7 @@ import { race, scoped, sleep, until } from "effection";
 import type { Operation } from "effection";
 import { timeoutFetch as contextualFetchTimeout } from "./config.ts";
 import { Files } from "./files.ts";
+import { FETCH_NOT_PERMITTED_MESSAGE, Permissions } from "./permissions.ts";
 import { Service } from "./service.ts";
 
 /**
@@ -690,9 +691,19 @@ export const API: {
    *
    * Default implementation uses `@effectionx/fetch`.
    * Cancellation aborts the request via Effection scope teardown.
+   *
+   * This is also where a request is authorized, because it is the last place
+   * the request is still only a request: every `API.Fetch` middleware has
+   * already had its turn, so what `Permissions` is asked about is the
+   * destination, method and headers the transport would actually send, not the
+   * ones the caller first wrote. A refusal throws here, before transport
+   * starts, so no request is made and there is no response to bind.
    */
   Fetch: createApi("runtime.fetch", {
     *fetch(input: string, init?: FetchInit): Operation<RuntimeFetchResponse> {
+      if (!(yield* Permissions.operations.fetch(input, init))) {
+        throw new Error(FETCH_NOT_PERMITTED_MESSAGE);
+      }
       const timeout = init?.timeout ?? (yield* contextualFetchTimeout);
       const request = effectionFetch(input, {
         method: init?.method,

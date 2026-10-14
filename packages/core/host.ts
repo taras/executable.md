@@ -120,27 +120,21 @@ export type {
   ComponentAnswerRequest,
 } from "./src/component-answers.ts";
 /**
- * The private operations an admitted fragment performs, and the only ones it
- * can reach.
+ * Which component an admitted entry runs.
  *
- * A host hands its own provider methods here; canonical capture reads each one
- * off once and closes core's own fragment bodies over the bound result. There
- * is no ordinary-core export for these, no getter for a live one, and no way to
- * install one from a document — see `src/fragment-capabilities.ts`.
+ * A name a host admits, and nothing about how the operation behind it is
+ * performed: an admitted entry runs canonical core's own ordinary component,
+ * through whichever `API.Files` or `API.Fetch` provider is installed where the
+ * fragment runs — see `src/fragment-capabilities.ts`. A host that evaluates
+ * against its own filesystem installs that provider; it hands no operation to
+ * the profile.
  */
-export type {
-  FragmentCapability,
-  FragmentFetchAccess,
-  FragmentFileAccess,
-  FragmentPath,
-  FragmentSearch,
-  FragmentWrite,
-} from "./src/fragment-capabilities.ts";
+export type { FragmentCapability } from "./src/fragment-capabilities.ts";
 /**
- * The response shape a fragment transport answers with, and the detaching a
- * host needs to build one.
+ * The response shape a retained request answers with, and the detaching a host
+ * needs to read one.
  *
- * The same record an authored `<Fetch>` retains, through the same code, so a
+ * The record an authored `<Fetch>` retains, through the same code, so a
  * fragment's observation and a document's are the same shape and a continuation
  * restores either.
  */

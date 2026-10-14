@@ -16,8 +16,17 @@
  *   // render the detail a quiet run leaves out
  * }
  * ```
+ *
+ * `Permissions` is here for the same reason: a scope that permits less than
+ * its host does installs middleware around it, which is configuration of the
+ * run rather than a filesystem or a transport of its own. `FetchInit` comes
+ * with it, so a restriction can be typed without importing the host surface
+ * the request is eventually performed by.
  */
 
 export { Config, timeout, timeoutExec, timeoutFetch, verbose } from "./config.ts";
 export type { ConfigApi } from "./config.ts";
 export { asDuration, durationError, parseDuration } from "./duration.ts";
+export { FETCH_NOT_PERMITTED_MESSAGE, Permissions } from "./permissions.ts";
+export type { PermissionsApi } from "./permissions.ts";
+export type { FetchInit } from "./apis.ts";

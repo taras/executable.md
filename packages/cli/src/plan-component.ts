@@ -75,6 +75,8 @@ import type {
 import type { DocumentValidation } from "@executablemd/core";
 import type { ComponentInvocation } from "@executablemd/core";
 
+import { createPlanAccess } from "./plan-access.ts";
+import type { PlanAccess } from "./plan-access.ts";
 import {
   DEFAULT_PLAN_WRITER_ROOT,
   installPlanWriterFrame,
@@ -400,6 +402,9 @@ export function* planComponentDeclaration(
   const validate =
     assembly.validate ??
     structuralValidation(assembly.includes, declared, assembly.plugins ?? NO_PLUGINS);
+  // The private access bookkeeping these phases share, built here so the two
+  // factories below close over one set of maps and nothing else can reach them.
+  const access = createPlanAccess();
   const declaration = Markdown({
     name: PLAN_COMPONENT,
     origin: PLAN_ORIGIN,
@@ -415,12 +420,12 @@ export function* planComponentDeclaration(
     exact: true,
     privates: [
       planInputs(assembly),
-      planWriter(assembly),
+      planWriter(assembly, access),
       planProgress(assembly),
       checkDraft(validate),
       admitPlan(validate),
       classifyPlanResponseComponent(),
-      planInformation(),
+      planInformation(access),
     ],
   });
   declared.push(declaration);
@@ -629,14 +634,24 @@ function placementFor(
  * Component — the structural admission and the return — is therefore written after
  * teardown by construction rather than by a rule somebody has to remember.
  */
-function planWriter(assembly: PlanComponentAssembly): IdentityComponent {
+function planWriter(assembly: PlanComponentAssembly, access: PlanAccess): IdentityComponent {
   return {
     name: "PlanWriter",
     origin: `${PLAN_ORIGIN}#PlanWriter`,
     forms: ["paired"],
     props: PLAN_WRITER_PROPS,
-    factory: () =>
-      function* PlanWriter(props: Record<string, Json>): Operation<string> {
+    factory: (claim: IdentityClaimant) =>
+      function* PlanWriter(
+        props: Record<string, Json>,
+        invocation: ComponentInvocation,
+      ): Operation<string> {
+        // The identity canonical execution minted where resolution selected
+        // this exact implementation, for this exact expansion. Asked before the
+        // frame's access bookkeeping is opened, because what opens it has to be
+        // this invocation rather than a name, a copied function or a caller's
+        // claim that it is one.
+        yield* claim(invocation);
+        const writerAccess = yield* access.openWriter();
         // Before a directory exists, before a provider exists, and therefore
         // before any session could be placed or any turn started. A host that
         // supplies no Agent context refuses rather than writing a Plan under
@@ -666,6 +681,7 @@ function planWriter(assembly: PlanComponentAssembly): IdentityComponent {
           planWriter: context.value,
           host: assembly.host,
           session,
+          access: writerAccess,
           ...(typeof props.authoredSession === "string"
             ? { authoredSession: props.authoredSession }
             : {}),
@@ -789,6 +805,22 @@ function classifyPlanResponseComponent(): IdentityComponent {
 }
 
 /**
+ * Run `body`, and close the read grant however it settles.
+ *
+ * The grant has to outlive the projection *and* its joined teardown, and it has
+ * to be gone before the settled text is classified or scanned — which is
+ * exactly a `finally` around the one call, written here so the phase below
+ * reads as the sequence it is.
+ */
+function* holding<T>(close: () => void, body: () => Operation<T>): Operation<T> {
+  try {
+    return yield* body();
+  } finally {
+    close();
+  }
+}
+
+/**
  * Run one information request, and say how it settled.
  *
  * This is the only place in the workflow that turns a failure back into another
@@ -823,19 +855,30 @@ function classifyPlanResponseComponent(): IdentityComponent {
  * disclosed. Canonical execution owns the policy and the scanner; this asks
  * them and appends nothing.
  */
-function planInformation(): IdentityComponent {
+function planInformation(access: PlanAccess): IdentityComponent {
   return {
     name: "PlanInformation",
     origin: `${PLAN_ORIGIN}#PlanInformation`,
     forms: ["paired"],
     props: EMPTY_PROPS,
     returns: INFORMATION_RETURNS,
-    factory: () =>
-      function* PlanInformation(): Operation<Json> {
+    factory: (claim: IdentityClaimant) =>
+      function* PlanInformation(
+        _props: Record<string, Json>,
+        invocation: ComponentInvocation,
+      ): Operation<Json> {
+        // Authenticated before anything is granted, for the reason the writer
+        // phase is: a read grant anything shaped like this could open would be
+        // a read the writer frame does not get to refuse.
+        yield* claim(invocation);
+        // Bound to this body's own scope, which is the parent the engine hosts
+        // the projection's content from — held open across the projection and
+        // its joined teardown, and revoked here however it settled.
+        const close = yield* access.openInformation();
         // The child and its structured teardown have both settled by the time
         // this returns, so what is scanned below is complete text and not a
         // fragment still able to produce more.
-        const projected = yield* tryContent();
+        const projected = yield* holding(close, () => tryContent());
         const settled = ((): { status: string; text: string } => {
           if (projected.failure === undefined) {
             return { status: "found", text: projected.text };

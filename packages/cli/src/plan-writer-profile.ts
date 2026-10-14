@@ -54,6 +54,7 @@ import { API } from "@executablemd/runtime";
 import { FormOpener } from "@executablemd/web";
 
 import { hostAcpDependencies } from "./agent-stack.ts";
+import type { PlanWriterAccess } from "./plan-access.ts";
 import type { PlanWriterStack } from "./agent-stack.ts";
 import { ordinaryEvaluationProfile } from "./evaluation-profile.ts";
 import { PLAN_COMMAND_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
@@ -330,6 +331,15 @@ export interface PlanWriterFrame {
   readonly session: string;
   /** The exact authored label a trusted child host may address privately. */
   readonly authoredSession?: string;
+  /**
+   * What this frame's capability refusal asks before it refuses a read.
+   *
+   * The authenticated information phase of the Component holds a grant for the
+   * scope its projection runs in, and this is how the ambient refusal below
+   * recognizes one. A frame installed without it refuses every read, which is
+   * what a surface with no information phase wants.
+   */
+  readonly access?: PlanWriterAccess;
   observe?(reference: PlanWriterObservation): Operation<void>;
   installElicitation(): Operation<void>;
 }
@@ -370,7 +380,7 @@ export function* installPlanWriterFrame(frame: PlanWriterFrame): Operation<void>
     policy: PLAN_WRITER_POLICY,
   });
   yield* installPlanPromptFailurePolicy();
-  yield* refuseDocumentCapabilities();
+  yield* refuseDocumentCapabilities(frame.access);
   // After everything, and it is the installation rather than an account of one.
   // Whether the prompt-failure policy is installed is not reported here at all:
   // a value saying so would agree with itself however the middleware behaved,
@@ -777,21 +787,43 @@ function* releaseSessionDirectory(directory: string, claim: DirectoryClaim): Ope
  * refused rather than served. It decides what to write; writing a file,
  * running a command, starting a service and reaching the network are all the
  * approved document's business, under the caller's own configuration.
+ *
+ * ## The one exception, and how it is recognized
+ *
+ * An authenticated `<PlanInformation>` projection runs public `<Evaluate>`
+ * under the host's own ceiling, so an Agent can ask what a file holds before
+ * proposing a Plan. That read performs the ordinary `<File>` or `<Glob>`
+ * component, so it arrives here like any other — and `access.reading()` is
+ * what tells the two apart: it answers for the scope the call was made from,
+ * and only a scope inside a live projection of *this* writer frame is granted.
+ *
+ * What the exception does is **delegate**, through this middleware's own
+ * `next`. The enclosing and descendant Files middleware keep their ordinary
+ * turn, the installed provider still performs the operation, and the effective
+ * `Permissions` of the consuming scope still decide it. Nothing here answers a
+ * permission with true, and nothing runs the request in a wider scope.
+ *
+ * Reads only. Every mutation stays refused wherever it is asked from — a
+ * projection that wrote a file would be an unaudited fragment changing the
+ * caller's filesystem under a frame whose whole purpose is that it cannot —
+ * and so does every read outside a projection.
  */
-function* refuseDocumentCapabilities(): Operation<void> {
+function* refuseDocumentCapabilities(access: PlanWriterAccess | undefined): Operation<void> {
   const refuse = (capability: string) => () => {
     throw new Error(
       `xmd plan asked for ${capability}, which the Plan writer profile grants to nothing`,
     );
   };
+  /** Whether this call is the information phase's own read. */
+  function* granted(): Operation<boolean> {
+    return access === undefined ? false : yield* access.reading();
+  }
   yield* API.Files.around({
-    // deno-lint-ignore require-yield
-    *checkFilePath() {
-      return refuse("a file")();
+    *checkFilePath([input], next) {
+      return (yield* granted()) ? yield* next(input) : refuse("a file")();
     },
-    // deno-lint-ignore require-yield
-    *readTextFile() {
-      return refuse("a file")();
+    *readTextFile([input], next) {
+      return (yield* granted()) ? yield* next(input) : refuse("a file")();
     },
     // deno-lint-ignore require-yield
     *writeTextFile() {
@@ -801,9 +833,22 @@ function* refuseDocumentCapabilities(): Operation<void> {
     *deleteFile() {
       return refuse("a file")();
     },
+    /**
+     * Refused, and newly named.
+     *
+     * The table omitted the semantic directory operation while nothing in the
+     * writer frame could reach one: `<Dir>` was a Plugin's component and the
+     * frame declared none. Canonical core owns it now, and an admitted
+     * generated `<Dir>` performs it through this same Api — so the accepted
+     * no-mutation boundary has to say so rather than rely on the name being
+     * unreachable.
+     */
     // deno-lint-ignore require-yield
-    *globFiles() {
-      return refuse("a file")();
+    *ensureDirectory() {
+      return refuse("a directory")();
+    },
+    *globFiles([input], next) {
+      return (yield* granted()) ? yield* next(input) : refuse("a file")();
     },
     // deno-lint-ignore require-yield
     *temporaryDirectory() {

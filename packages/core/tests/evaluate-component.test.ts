@@ -37,7 +37,7 @@ import { elicitWriteEntry } from "../host.ts";
 import { Elicitation } from "../src/elicitation-api.ts";
 import type { ElicitationRequest } from "../src/elicitation-api.ts";
 import { retainedSource } from "../src/root-source.ts";
-import { recordedFiles } from "./support/fragment-files.ts";
+import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
 import type { RecordedFiles } from "./support/fragment-files.ts";
 import { answerProvider, implementation } from "./support/answer-provider.ts";
 import type { Implementation, ProviderOptions } from "./support/answer-provider.ts";
@@ -178,7 +178,6 @@ describe("protected generated component answers", () => {
       // Deliberately a host's own identity, and deliberately not core's: it is
       // what a continuation compares, and nothing here may rewrite it.
       write: [directoryEntry({ origin: "test://host", key: "Dir", revision: "1" }, "Dir")],
-      files: recordedFiles(),
     });
     try {
       const captured = yield* prepared.seal(new Map());
@@ -223,7 +222,6 @@ describe("protected generated component answers", () => {
         // admitted under the name it does own.
         { ...globReadEntry(), name: "File" },
       ],
-      files: recordedFiles(),
     });
     try {
       const captured = yield* prepared.seal(new Map());
@@ -401,7 +399,7 @@ const NOTE = "the retained note\n";
 
 /** A read-only profile over one recorder. */
 function reading(files: RecordedFiles): ExecutionInstallation {
-  return { evaluation: { read: [fileReadEntry()], files } };
+  return { evaluation: { read: [fileReadEntry()] }, install: () => useRecordedFiles(files) };
 }
 
 /** A profile offering both classes over one recorder. */
@@ -414,8 +412,8 @@ function both(files: RecordedFiles): ExecutionInstallation {
         directoryEntry({ origin: "test://host", key: "Dir", revision: "1" }, "Dir"),
         fileDeleteEntry(),
       ],
-      files,
     },
+    install: () => useRecordedFiles(files),
   };
 }
 
@@ -482,35 +480,45 @@ describe("Tier FE — a program the document holds", () => {
 });
 
 describe("Tier FE — a fragment reaches the captured operations and nothing else", () => {
-  it("FE13: a Files provider installed around the document is not what a fragment reads", function* () {
-    const files = recordedFiles({ "notes.md": NOTE });
-    const reachedDocumentProvider: string[] = [];
+  /**
+   * One chain, crossed by both.
+   *
+   * This row used to assert the opposite: a fragment reached the operations the
+   * host handed the profile, and a provider installed around the document was
+   * never consulted. That private transport is gone. An admitted name now runs
+   * the ordinary component, so a fragment's read is resolved through
+   * contextual `API.Files` exactly as an authored read is — and the discriminating
+   * evidence is that *one* middleware sees both payloads and that what it
+   * transforms is what the fragment gets.
+   *
+   * What protects the fragment was never which object answered. It is the names
+   * the host admitted, the identity a continuation is compared against, and the
+   * effective `Permissions` of the scope the operation runs in.
+   */
+  it("FE13: one Files middleware sees the document's read and the fragment's", function* () {
+    const files = recordedFiles({ "notes.md": NOTE, "renamed.md": "the renamed note\n" });
+    const crossed: string[] = [];
 
     const output = yield* scoped(function* () {
-      // A provider installed exactly where a document, a repository component or
-      // a middleware package would install one — nearer than anything the host
-      // set up, and answering every read.
-      yield* API.Files.around(
-        {
-          // deno-lint-ignore require-yield
-          *readTextFile([input]): Operation<never> {
-            reachedDocumentProvider.push(String(input.path));
-            throw new Error("the document's provider answered");
-          },
+      // Installed where a document, a repository component or a middleware
+      // package installs one, and it both observes and transforms.
+      yield* API.Files.around({
+        *readTextFile([input], next) {
+          crossed.push(String(input.path));
+          return yield* next(input.path === "notes.md" ? { ...input, path: "renamed.md" } : input);
         },
-        { at: "min" },
-      );
+      });
       return yield* run(
         `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
         [reading(files)],
       );
     });
 
-    // The fragment read through the captured operation. The provider the
-    // document installed was never consulted — it would have thrown.
-    expect(String(output)).toContain("the retained note");
-    expect(files.performed).toEqual(["read notes.md"]);
-    expect(reachedDocumentProvider).toEqual([]);
+    // The read the fragment asked for crossed the middleware, and the provider
+    // performed the path the middleware substituted.
+    expect(crossed).toEqual(["notes.md"]);
+    expect(files.performed).toEqual(["read renamed.md"]);
+    expect(String(output)).toContain("the renamed note");
   });
 
   it("FE13: a fragment cannot glob, however the document's provider is arranged", function* () {
@@ -608,24 +616,25 @@ describe("Tier FE — the paired form produces its own program", () => {
 
   it("FE2: a producer keeps its own permission while the fragment does not", function* () {
     // The producer's content runs at the document's site, so its `<File />` is
-    // the ordinary component and reaches the document's own provider. The
-    // program it renders reaches only the captured operations. Both are counted
-    // here, separately: narrowing what a fragment may *name* must not narrow
-    // what the producer may *do* to write it.
+    // the ordinary component written where an author wrote it. The program it
+    // renders runs under the admitted tables instead. Both now cross the same
+    // Files chain — what differs is what each may *name*, and narrowing a
+    // fragment's vocabulary must not narrow what the producer may do to write
+    // it.
     const files = recordedFiles({ "notes.md": NOTE });
-    const documentReads: string[] = [];
+    const crossed: string[] = [];
 
     const output = yield* scoped(function* () {
-      yield* API.Files.around(
-        {
-          // deno-lint-ignore require-yield
-          *readTextFile([input]): Operation<Result<string>> {
-            documentReads.push(String(input.path));
-            return Ok(`<File path="notes.md" />\n`);
-          },
+      yield* API.Files.around({
+        *readTextFile([input], next) {
+          crossed.push(String(input.path));
+          // The producer's own input is answered here, as a document's provider
+          // may; the fragment's read is delegated to the one underneath.
+          return input.path === "producer-input.md"
+            ? Ok(`<File path="notes.md" />\n`)
+            : yield* next(input);
         },
-        { at: "min" },
-      );
+      });
       return yield* run(
         `<Evaluate as="answer">\n<File path="producer-input.md" />\n</Evaluate>\n\n` +
           `<Json value={answer} />\n`,
@@ -633,7 +642,8 @@ describe("Tier FE — the paired form produces its own program", () => {
       );
     });
 
-    expect(documentReads).toEqual(["producer-input.md"]);
+    // One chain, two payloads, in the order the two sites ran.
+    expect(crossed).toEqual(["producer-input.md", "notes.md"]);
     expect(files.performed).toEqual(["read notes.md"]);
     expect(String(output)).toContain("the retained note");
   });
@@ -996,10 +1006,27 @@ describe("Tier FE — an execution with no ceiling has no evaluation", () => {
     );
   });
 
-  it("FE5: a profile admitting a file entry without operations is refused", function* () {
-    expect(
-      yield* refusal(run(`nothing asked for\n`, [{ evaluation: { read: [fileReadEntry()] } }])),
-    ).toContain("without stating the filesystem operations");
+  /**
+   * A profile states names, and no operations at all.
+   *
+   * The inverse of what this row used to assert. A file entry without stated
+   * filesystem operations was refused while the profile carried a private
+   * transport, because an entry admitting an operation the profile could not
+   * perform was a profile that admitted nothing usable. There is nothing left
+   * to state: the entry runs the ordinary component, which performs its work
+   * through whichever provider is installed where the fragment runs — so an
+   * entry alone is a complete admission, and an absent provider is fatal
+   * exactly where it is fatal for an authored element.
+   */
+  it("FE5: a file entry states no operations, and reads what the provider has", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* run(
+      `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+      [{ evaluation: { read: [fileReadEntry()] }, install: () => useRecordedFiles(files) }],
+    );
+
+    expect(String(output)).toContain("the retained note");
+    expect(files.performed).toEqual(["read notes.md"]);
   });
 });
 
@@ -1180,8 +1207,8 @@ describe("Tier FE — one occurrence, one durable decision", () => {
             identity: { origin: "@executablemd/core", key: "File:read", revision: "99" },
           },
         ],
-        files: second,
       },
+      install: () => useRecordedFiles(second),
     };
     const failed = yield* refusal(run(source, [widened], new InMemoryStream(partial)));
 
@@ -1299,10 +1326,69 @@ describe("Tier FE — protection settles which implementation runs, and grants n
       );
     });
 
-    // The fragment read the captured operation's file, not the forged one.
-    expect(String(output)).toContain("the retained note");
-    expect(String(output)).not.toContain("forged");
-    expect(files.performed).toEqual(["read notes.md"]);
+    // What a document controls is the provider, and that is now deliberately
+    // shared: the fragment's read crossed the one `<Forge>` installed, exactly
+    // as the document's own read would have. A provider is not a permission.
+    expect(String(output)).toContain("forged notes.md");
+    expect(files.performed).toEqual([]);
+  });
+
+  /**
+   * And what it still cannot do is widen the profile.
+   *
+   * The half of the row above that did not move. A component may answer the
+   * operation; it cannot add a name to the admitted vocabulary, cannot change
+   * the identity a continuation is compared against, and cannot give a
+   * selection a class the host installed no table for — none of which is
+   * reachable from anything a document holds.
+   */
+  it("FE29: a document that answers the operation still admits no name", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const failed = yield* refusal(
+      scoped(function* () {
+        yield* registerComponents([
+          {
+            name: "Forge",
+            origin: "test://forge",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            *fn(): Operation<string> {
+              // Everything a document can reach: its own provider, and its own
+              // registration under the name a fragment would have to write.
+              yield* API.Files.around(
+                {
+                  // deno-lint-ignore require-yield
+                  *readTextFile([input]): Operation<Result<string>> {
+                    return Ok(`forged ${String(input.path)}`);
+                  },
+                },
+                { at: "min" },
+              );
+              yield* registerComponents([
+                {
+                  name: "Glob",
+                  origin: "test://forge",
+                  props: { type: "object", properties: {}, additionalProperties: false },
+                  // deno-lint-ignore require-yield
+                  *fn(): Operation<string> {
+                    return "forged search";
+                  },
+                },
+              ]);
+              return yield* content();
+            },
+          },
+        ]);
+        return yield* run(
+          `<Forge>\n<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n'} />\n</Forge>\n`,
+          [reading(files)],
+        );
+      }),
+    );
+
+    // Not "the search failed" — `<Glob>` is not a name this fragment has, and a
+    // registration under that name did not give it one.
+    expect(failed).toContain("did not admit");
+    expect(files.performed).toEqual([]);
   });
 });
 
@@ -1562,8 +1648,8 @@ describe("Tier FE34 — the shared read profile", () => {
       evaluation: {
         read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()],
         write: [fileWriteEntry(), fileDeleteEntry()],
-        files,
       },
+      install: () => useRecordedFiles(files),
     };
   }
 
@@ -1694,16 +1780,15 @@ describe("Tier FE34 — the shared read profile", () => {
           `<Json value={paths} />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
         [
           {
-            evaluation: {
-              read: [globReadEntry()],
-              files: {
+            evaluation: { read: [globReadEntry()] },
+            install: () =>
+              useRecordedFiles({
                 ...files,
                 *globFiles(input) {
                   searched.push(input.cwd);
                   return yield* files.globFiles(input);
                 },
-              },
-            },
+              }),
           },
         ],
       );
@@ -1912,16 +1997,15 @@ describe("Tier FE34 — the shared read profile", () => {
     try {
       yield* run(`<Evaluate text={'<File path="missing.md" />\\n'} />\n`, [
         {
-          evaluation: {
-            read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()],
-            files: {
+          evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+          install: () =>
+            useRecordedFiles({
               ...broken,
               // deno-lint-ignore require-yield
               *readTextFile(): Operation<never> {
                 throw new Error("the Files provider failed");
               },
-            },
-          },
+            }),
         },
       ]);
     } catch (error) {
@@ -1960,8 +2044,8 @@ describe("Tier FE34 — the shared read profile", () => {
             forms: ["self-closing"],
           },
         ],
-        files,
       },
+      install: () => useRecordedFiles(files),
       componentAnswers: [answerProvider("Held", held)],
     };
 
@@ -2016,8 +2100,8 @@ describe("Tier FE34 — the shared read profile", () => {
                 forms: ["self-closing"],
               },
             ],
-            files,
           },
+          install: () => useRecordedFiles(files),
         },
       ]),
     );
@@ -2052,7 +2136,6 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
   /** The entry a host states for a provider-backed name. */
   function admits(
     identity: { origin?: string; key?: string; revision?: string } = {},
-    files: RecordedFiles = recordedFiles(),
   ): FragmentEvaluationInput {
     return {
       read: [
@@ -2067,7 +2150,6 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
           forms: ["self-closing"],
         },
       ],
-      files,
     };
   }
 
@@ -2163,7 +2245,11 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
             return name === "Open" ? B.definition : definition;
           },
         });
-        return yield* run(OPEN, [{ ...backed(A), evaluation: admits({}, files) }], stream);
+        return yield* run(
+          OPEN,
+          [{ ...backed(A), evaluation: admits({}), install: () => useRecordedFiles(files) }],
+          stream,
+        );
       }),
     );
 
@@ -2320,7 +2406,8 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
           OPEN,
           [
             {
-              evaluation: admits({}, files),
+              evaluation: admits({}),
+              install: () => useRecordedFiles(files),
               componentAnswers: [answerProvider("Open", A.definition, options)],
             },
           ],
@@ -2347,7 +2434,8 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
         OPEN,
         [
           {
-            evaluation: admits({ revision: "1" }, files),
+            evaluation: admits({ revision: "1" }),
+            install: () => useRecordedFiles(files),
             // The provider claims honestly — for a revision this host did not
             // admit. An admitted identity is the exact implementation, and a
             // changed revision is a changed grant.
@@ -2470,7 +2558,8 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
       `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
       [
         {
-          evaluation: { read: [fileReadEntry()], files },
+          evaluation: { read: [fileReadEntry()] },
+          install: () => useRecordedFiles(files),
           componentAnswers: [
             answerProvider("Open", implementation("Open", "A ran").definition, { lookups }),
           ],
@@ -2509,15 +2598,16 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
       evaluation: {
         read: [fileReadEntry()],
         write: [fileWriteEntry(), elicitWriteEntry()],
-        files,
       },
+      install: () => useRecordedFiles(files),
     };
   }
 
   /** The same tables, with the question left out of the one that holds it. */
   function withoutElicit(files: RecordedFiles): ExecutionInstallation {
     return {
-      evaluation: { read: [fileReadEntry()], write: [fileWriteEntry()], files },
+      evaluation: { read: [fileReadEntry()], write: [fileWriteEntry()] },
+      install: () => useRecordedFiles(files),
     };
   }
 
@@ -2815,8 +2905,8 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
             identity: { origin: "@executablemd/core", key: "Elicit", revision: "99" },
           },
         ],
-        files: second,
       },
+      install: () => useRecordedFiles(second),
     };
     const requests: ElicitationRequest[] = [];
     const failed = yield* refusal(
