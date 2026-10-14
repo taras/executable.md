@@ -761,14 +761,14 @@ function requirePrivate(
  *
  * Only one member changes: the private closure. A declaration's body carries
  * its own, so the names only those bytes may write resolve while they are being
- * expanded and nowhere else. Everything else — a repository component, a
- * bundled one, a registration — carries the caller's, which clears a closure
- * rather than passing it down.
+ * expanded and nowhere else. Every other body — a repository component, a
+ * bundled one, a registration — clears the caller's private closure rather
+ * than passing it down.
  *
  * Content the caller projected is not this body. It expands through the
  * invocation's projection handle, which restores the frame and the environment
- * read at the invocation site, so a `<Content />` inside a declaration reaches
- * no private name.
+ * read at the invocation site. A `<Content />` inside a declaration gains no
+ * callee-private names, but retains the caller's own lexical private names.
  */
 function environmentForBody(
   environment: ExecutionEnvironment | undefined,
@@ -2944,9 +2944,9 @@ function* expandComponent(
     const definition = imported;
 
     // What this definition's own body may write. A declaration carries its
-    // private closure here; every other body carries whatever the caller carried,
-    // which for an ordinary document is nothing. Decided from the definition
-    // canonical resolution retained — the one this expansion is about to invoke,
+    // private closure here; every other body clears the caller's private closure.
+    // Decided from the definition canonical resolution retained — the one this
+    // expansion is about to invoke,
     // reporting the origin core declared — rather than from the name alone.
     const bodyEnvironment = environmentForBody(environment, name, definition);
 
@@ -3978,19 +3978,18 @@ function asFailure(thrown: unknown): Error {
 }
 
 /**
- * Resolve eval expression props against env.values using the shared VM
- * context. Merges resolved values into the props record.
+ * Resolve expression props against the binding environment and merge the
+ * values into the props record.
  *
- * Expression props are stored as raw expression text in the
- * `expressions` field of `ComponentElement`. At expansion time,
- * they are evaluated as JavaScript using `new Function()` with
- * `env.values` destructured into scope.
+ * `ComponentElement.expressions` holds raw expression text. Generated props
+ * use the restricted data interpreter with `env.values`; they never compile
+ * JavaScript. Ordinary props use `new Function()` with those bindings as
+ * parameters, and their text comes from the trusted document author.
  *
- * Errors are thrown (not ErrorSegments), consistent with prop validation.
- *
- * Uses `new Function()` instead of `node:vm` — Deno's permission model
- * provides the security boundary. The expression text comes from the
- * document author (trusted), and results must pass serialization check.
+ * Ordinary authored expressions use `new Function()` rather than `node:vm`;
+ * Deno's permission model supplies the execution boundary. Results must pass
+ * serialization checks on either path. Errors are thrown, not ErrorSegments,
+ * consistent with prop validation.
  */
 function* resolveExpressionProps(
   props: Record<string, Json>,

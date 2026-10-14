@@ -245,10 +245,11 @@ interface Claim {
   /**
    * One retained copy per resolution this answer was identified in.
    *
-   * Weak on the window, so an identity record lasts exactly as long as
-   * somebody still holds the resolution it belongs to. Presence is the
-   * provenance check: a window that never identified this answer has no entry,
-   * and `identify` answers nothing for it however many other windows did.
+   * Window keys are weak: retaining an answer does not keep its past
+   * resolutions alive. The outer record is weakly keyed by the answer, too.
+   * Presence is the provenance check: a window that never identified this
+   * answer has no entry, and `identify` answers nothing for it however many
+   * other windows did. Neither weak association promises collection timing.
    */
   readonly copies: WeakMap<ResolutionWindow, ImportedDefinition | undefined>;
 }
@@ -548,11 +549,10 @@ export class CanonicalImports {
     const held =
       typeof answer === "object" && answer !== null ? this.#claims.get(answer) : undefined;
     if (held !== undefined) {
-      // What this object is was settled by its first claim. Restating it is what
-      // a provider installed twice does, and what a reusable one does for every
-      // import it answers; anything else is two providers disagreeing about one
-      // object, and the first statement stands — a later claim that overwrote it
-      // would let a second provider rename the first's implementation.
+      // The same installation may restate this object's identity for another
+      // import or repeat it within one resolution. A different installation
+      // cannot restate it, even identically: the first provider's statement
+      // stands, so a second cannot rename the first's implementation.
       if (
         held.installation !== installation ||
         held.name !== asked.name ||

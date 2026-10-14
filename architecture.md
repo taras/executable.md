@@ -4740,13 +4740,12 @@ other name in the execution stays the ordinary open import it has always been.
 Declaring one asset does not take component substitution away from every
 document the host runs.
 
-**Every declaration is read once, before any installation runs.** Kind, name,
-origin, source, digest, forms, prose and each private declaration are captured
-by the invocation and held by it — factory bound, arrays and schemas copied — on
-the same terms as the admissions and the bundle. The kind is copied rather than
-decided: what admission is held to is what the host stated at the moment of
-capture, so a capture that read fewer members than it was given cannot turn an
-unknown declaration into a Markdown one. A schema is copied rather than
+**Every declaration is read once, before any installation runs.** Capture reads
+the kind before any other member and immediately refuses an unknown kind. For a
+known kind, the invocation retains that discriminant and its arm's members —
+factory bound, arrays and schemas copied — on the same terms as admissions and
+the bundle. The branch and the retained kind therefore come from one read, even
+if a later read would answer differently. A schema is copied rather than
 referenced because it is a whole object graph, and holding the caller's object
 would leave the contract mutable after capture. A host that hands a declaration
 over and then replaces a member of it, or mutates a schema it still holds, has
@@ -4754,12 +4753,13 @@ replaced nothing.
 
 **The private closure is lexical and expansion-scoped.** A declaration's private
 components are minted exactly like the identity components a host declares —
-one domain, one invocation authenticator, revoked when the execution is torn down — and then
-registered nowhere. Canonical core offers one for the duration of one import,
-from the closure the segments being expanded carry, and the resolver takes it
-once. Content the caller projected expands through the invocation's projection
-handle, which restores the caller's frame and the caller's closure, so a
-`<Content />` inside a declaration reaches no private name.
+one domain, one invocation authenticator, revoked when the execution is torn
+down — and then registered nowhere. Its body carries its own closure; ordinary
+component bodies clear the caller's private closure. Canonical core offers a
+private component for the duration of one import, from the closure the segments
+being expanded carry, and the resolver takes it once. Projected caller content
+restores the caller's frame and closure, so a `<Content />` inside a declaration
+gains no callee-private names but retains the caller's own lexical private names.
 
 Eligibility belongs to the authored occurrence rather than to the name. What a
 private import may invoke is the object canonical core produced inside that ask,

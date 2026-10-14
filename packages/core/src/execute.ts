@@ -3353,10 +3353,10 @@ function retainedIdentityComponent(component: IdentityComponent): IdentityCompon
  * copied: a host that hands over a declaration and then rewrites its schema, its
  * forms or its prose from inside `install()` has rewritten nothing.
  *
- * The discriminant is copied rather than decided. A value that states neither
- * arm is carried through as it was written and refused where the declarations
- * are admitted, so capture never turns an unknown declaration into a Markdown
- * one by reading fewer of its members than it was given.
+ * Capture reads the discriminant once and refuses an unknown kind before any
+ * other member is read. A known kind is retained with its arm's copied members,
+ * so the branch and the retained declaration cannot disagree if a later read
+ * would return a different kind.
  */
 function retainedDeclaration(declaration: ExecutionDeclaration): ExecutionDeclaration {
   // Read once, before any other member of this value is read, and used for both

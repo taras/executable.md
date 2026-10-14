@@ -22,8 +22,9 @@
  * with nothing in it. `--approve-all`, `--approve-reads` and `--deny-all`
  * configure the approved document, later, and reach none of this.
  *
- * The document itself is given no Files, command, service or XMD-mediated
- * network capability either. It decides what to write; it writes nothing.
+ * The trusted document reads through the ordinary Files provider and effective
+ * Permissions. Files mutations, commands, services and XMD-mediated network
+ * requests are refused here; the approved document performs them later.
  */
 
 import { ensure, Err, Ok, scoped, until, useScope } from "effection";

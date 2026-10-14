@@ -86,6 +86,14 @@ export function getJournalProvenance(stream: DurableStream): JournalProvenance |
   return journalProvenances.get(stream);
 }
 
+/**
+ * `appendDurableEvent` creates a fresh rejection record for each durable append,
+ * shared by loaded copies through the stable, namespaced Context below.
+ * Reusing an Error in a later append carries
+ * no rejection with it: classification checks this occurrence's flag and the
+ * exact error it recorded. This scoped record is separate from the canonical
+ * module's private journal-provenance witness.
+ */
 export interface DurableEventRejectionOccurrence {
   rejected: boolean;
   error?: unknown;
@@ -136,9 +144,6 @@ export function guardDurableStream(stream: DurableStream, gate: DurableEventGate
     readAll: () => stream.readAll(),
 
     *append(event: DurableEvent): Operation<void> {
-      // The gate sees a copy so "inspect or reject" is enforced rather than
-      // merely documented: the backend always receives the event the effect
-      // produced, whatever the gate did to the one it was handed.
       try {
         yield* gate(structuredClone(event));
       } catch (error) {

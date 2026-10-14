@@ -139,7 +139,7 @@ export interface InspectComponentOptions {
   /** Where to look, matching the search path execution uses. */
   includes?: string[];
   /**
-   * The exact Markdown a host would declare to an execution, with the same
+   * The exact Markdown and structural syntax a host would declare, with the same
    * meaning `ExecutionInstallation.declarations` gives it — admissibility
    * included. Private declarations are never described: nothing a document can
    * write resolves one.
@@ -540,7 +540,7 @@ export interface InspectSyntaxOptions {
    */
   readonly components?: readonly IdentityComponent[];
   /**
-   * The exact Markdown a host would declare to an execution, with the same
+   * The exact Markdown and structural syntax a host would declare, with the same
    * meaning `ExecutionInstallation.declarations` gives it — admissibility
    * included. A private declaration contributes no entry: it is not a name a
    * document can write, so symbols that listed it would describe syntax that

@@ -160,8 +160,9 @@ export class ReplayIndex {
   /**
    * Returns true if any non-disabled coroutine still has unconsumed yields.
    *
-   * This is used by durableRun to detect early-return divergence even when
-   * unconsumed entries belong to child coroutines rather than the root.
+   * This predicate considers Yield entries only. Production terminal alignment
+   * uses `firstUnaligned()`, which also finds completed children the terminating
+   * subtree never reached, including children with no Yield entries.
    */
   hasAnyUnconsumedYields(): boolean {
     for (const [coroutineId, entries] of this.yields.entries()) {
