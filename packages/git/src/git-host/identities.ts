@@ -1,6 +1,6 @@
 /**
  * Which run each Git-host record in a history was written under, established
- * where nothing replaceable can reach it and claimed one position at a time.
+ * where nothing replaceable can reach it and consumed one position at a time.
  *
  * A Git-host effect is named by a digest that includes the run id, so a record
  * a fork inherited would compute a different name under the fork and replay
@@ -43,7 +43,7 @@
  * So the records are consumed **in order**. A call is offered the next one that
  * has not been taken, and only when that record asks exactly what the call
  * asks; anything else leaves the inherited prefix behind for good. Matching by
- * shape alone was not enough: it let a call claim a *later* record while the
+ * shape alone was not enough: it let a call consume a *later* record while the
  * record actually at this position was a different one, so a mismatch there —
  * with public divergence policy choosing to run live — became live execution
  * under a source identity.

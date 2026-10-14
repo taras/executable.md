@@ -118,14 +118,12 @@ describe("ReplayIndex", () => {
 
       expect(idx.yieldCount("root.0")).toBe(2);
 
-      // First peek
       expect(idx.peekYield("root.0")?.description).toEqual({
         type: "sleep",
         name: "sleep",
       });
       idx.consumeYield("root.0");
 
-      // Second peek
       expect(idx.peekYield("root.0")?.description).toEqual({
         type: "call",
         name: "transform",
@@ -136,7 +134,6 @@ describe("ReplayIndex", () => {
       });
       idx.consumeYield("root.0");
 
-      // Exhausted
       expect(idx.peekYield("root.0")).toBeUndefined();
       expect(idx.getCursor("root.0")).toBe(2);
     });
@@ -287,7 +284,6 @@ describe("ReplayIndex", () => {
       // root.0 has 2 yields
       expect(idx.yieldCount("root.0")).toBe(2);
 
-      // Consume both
       idx.consumeYield("root.0");
       idx.consumeYield("root.0");
       expect(idx.isFullyReplayed("root.0")).toBe(true);

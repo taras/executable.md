@@ -1,13 +1,12 @@
 /**
  * Tier WF — what a `<Git.Switch>` retains, replays and refuses to guess.
  *
- * The claims here are about the run's database rather than about a checkout. A
- * replay must move no branch and append no second transition; a retained result
- * that no longer parses must stop the run rather than be read around; a
- * cancelled switch must leave the frontier, the materialization and the journal
- * exactly as it found them; and the retained rows a switch runs against must be
- * the same rows afterwards, because creation identity does not move when HEAD
- * does.
+ * These tests inspect the run's database rather than a checkout. A replay must
+ * move no branch and append no second transition; a retained result that no
+ * longer parses must stop the run rather than be read around; a cancelled
+ * switch must leave the frontier, the materialization and the journal exactly
+ * as it found them; and the retained rows a switch runs against must be the
+ * same rows afterwards, because creation identity does not move when HEAD does.
  *
  * Every replay happens after the remote is deleted, so what continues a run is
  * what the run retained or nothing does.
@@ -603,12 +602,12 @@ describe("workflow Git.Switch durability", () => {
 /**
  * Cancellation reaches the child, not only the operation waiting on it.
  *
- * Every claim above is about what the run's database holds, which a halt that
- * left a Git process running would still satisfy. This one is about the process.
- * A named pipe is what makes a real `git` block on demand — it opens the pipe
- * for reading and waits — and the write end this test holds is what says whether
- * it is still there: writing to a pipe nothing is reading fails with `EPIPE`,
- * and writing to one a live child is reading does not.
+ * Every assertion above concerns what the run's database holds, which a halt
+ * that left a Git process running would still satisfy. This one is about the
+ * process. A named pipe is what makes a real `git` block on demand — it opens
+ * the pipe for reading and waits — and the write end this test holds is what
+ * says whether it is still there: writing to a pipe nothing is reading fails
+ * with `EPIPE`, and writing to one a live child is reading does not.
  *
  * The blocking `open` before the halt is the premise rather than a convenience:
  * it returns only once a reader has the pipe open, so the child is provably

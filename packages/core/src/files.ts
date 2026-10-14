@@ -99,7 +99,8 @@ function present(target: unknown, name: string): boolean | undefined {
  * A `Result` is only conventionally a `Result`: what a provider actually
  * returned is an arbitrary runtime value, and reading `ok` on a Proxy that
  * refuses can throw. The type says otherwise, which is exactly why the check
- * belongs here — the signature is a claim about the provider, not a guarantee.
+ * belongs here — the signature is an assertion about the provider, not a
+ * guarantee.
  *
  * The value comes back boxed so that a member which really is `undefined` is
  * distinguishable from one that could not be read. Collapsing those is how a
@@ -368,10 +369,9 @@ export function temporaryDirectory(): Operation<Result<string>> {
 /**
  * What a write reported, or nothing when it succeeded.
  *
- * A write is the one operation whose outcome makes a claim about the world: the
- * file was replaced, or it was not, or nobody can tell. Every sentence a
- * consumer could print asserts one of those, so an outcome that does not
- * validate leaves none of them available — and a provider that cannot describe
+ * A write outcome reports whether the target file was replaced: it was, it
+ * was not, or nobody can tell. Every sentence a consumer could print asserts
+ * one of those, so an outcome that does not validate leaves none of them available — and a provider that cannot describe
  * what it did is treated as one that may not have done it. Both a malformed
  * success and a malformed failure are therefore fatal, and so is a container
  * that will not say which it is.

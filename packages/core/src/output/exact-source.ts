@@ -1,14 +1,14 @@
 /**
  * Which rendered segments carry a program's source rather than prose.
  *
- * Exact presentation is a *provenance*, not a property. The question it answers
- * is "did canonical execution produce these bytes by expanding a declared
- * Markdown component the trusted host said renders source?" — and no object can
- * answer that about itself. A definition claiming the disposition, a segment
- * arriving already marked, a frontmatter key, a prop: each is data that reached
- * the engine from somewhere, and any of them would let ordinary
- * `Component.importComponent` middleware publish unpresented bytes by writing a
- * field.
+ * Exact presentation is a *provenance*, not a property. The question it
+ * answers is "did canonical execution produce these bytes by expanding a
+ * declared Markdown component the trusted host said renders source?" — and no
+ * object can answer that about itself. A definition asserting the disposition,
+ * a segment arriving already marked, a frontmatter key, a prop: each is data
+ * that reached the engine from somewhere, and any of them would let ordinary
+ * `Component.importComponent` middleware publish unpresented bytes by writing
+ * a field.
  *
  * So the record is kept beside the segments rather than on them, keyed by the
  * identity of the objects canonical expansion marked. A segment scanned from a

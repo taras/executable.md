@@ -10,8 +10,8 @@
  * scope could see.
  *
  * Everything here drives the real host provider against a real directory, and
- * every claim is checked twice: once in what the document reported, and once in
- * what the filesystem actually holds afterwards. A refusal that printed the
+ * every outcome is checked twice: once in what the document reported, and once
+ * in what the filesystem actually holds afterwards. A refusal that printed the
  * right sentence and wrote the file anyway would pass the first and fail the
  * second.
  *

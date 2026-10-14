@@ -69,7 +69,7 @@ export interface GitCommitMessageEvidence {
  * UTF-8, because that is what Git receives and what a byte length has to be
  * counted in for the two to describe the same thing. Derived once, from the
  * admitted bytes, and then compared against everything: what Git read back, and
- * what a retained result claims.
+ * what a retained result records.
  */
 export function gitCommitMessageEvidence(message: string): GitCommitMessageEvidence {
   const bytes = new TextEncoder().encode(message);

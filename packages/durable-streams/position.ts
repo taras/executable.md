@@ -1,32 +1,13 @@
 /**
- * Where a coroutine is in its own durable history.
+ * A coroutine's durable coordinate: its identity and number of settled yields.
+ * Operations without an authored name can use this to identify their position.
  *
- * A durable operation is identified by what it is and what it is called. Some
- * operations have no name to give: a wait that a document reaches at one point
- * in one procedure is that wait *because of where it is*, not because somebody
- * named it. This is the coordinate such an operation names itself by — the
- * coroutine it runs in, and how many durable yields that coroutine has already
- * settled.
+ * The count advances on replayed yields and committed live yields. The replay
+ * cursor alone stops at the retained prefix and would collide for every
+ * operation in a live suffix.
  *
- * ## Why it is not the replay cursor
- *
- * Replay already keeps a cursor per coroutine, and it looks like the same
- * number. It is not. The cursor advances only while entries are being consumed
- * from retained history; once a coroutine runs past the end of what was
- * retained, the cursor stops while the coroutine keeps performing durable work.
- * A position taken from it would be stable across replays of the retained
- * prefix and would collide for every operation in the live suffix.
- *
- * So the position advances on both — a replayed yield and a committed live one
- * — which is what makes the index a coroutine reaches at one point in its
- * procedure the same index it reaches there next time.
- *
- * ## Observation, never enforcement
- *
- * A position describes where execution is. It authorizes nothing, proves
- * nothing about who is executing, and is not durable state: it is derived by
- * counting what the journal already holds. Anything that must be trusted is
- * checked by whoever owns the decision to check it.
+ * This is derived observation, not durable state or permission. Decisions that
+ * require trusted identity are checked by their owner.
  */
 
 import { type Operation } from "effection";

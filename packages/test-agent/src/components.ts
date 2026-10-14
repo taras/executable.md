@@ -1,28 +1,17 @@
 /**
  * The `<TestAgent>` components (specs/test-agent-spec.md §TestAgent).
  *
- * A prompt that fails inside a `<Test>` fails that test. `<TestAgent>` says so
- * with `installPromptFailurePolicy`, a scoped policy the agent `<Prompt>`
- * consults — so nothing here depends on installation order, and a repository
- * component named `Prompt` is left alone.
+ * `installPromptFailurePolicy` makes a first-party Prompt failure fail its Test,
+ * independent of installation order, without affecting a repository Prompt.
  *
- * Each `<Test>` receives fresh ACPX state keyed by its lease EvalScope;
- * the state is provisioned by a suspended task spawned into that scope,
- * so halting the lease tears the provider down (canceling turns and
- * closing workers) and removes the map entry on normal and failure
- * paths alike. Outside a `<Test>`, the `<TestAgent>` scope itself is
- * the isolation boundary.
+ * Each Test's lease EvalScope owns fresh ACPX state through a suspended task;
+ * halting the lease cancels turns, closes workers and removes the partition on
+ * success and failure. Outside a Test, the TestAgent invocation owns isolation.
+ * Scenario resources belong to suspended tasks in that boundary. They are acquired
+ * in the suspending `withSessionRoute` hook before ACPX pins a synchronous route.
  *
- * Scenario scenarios are resources held by suspended tasks spawned into
- * their boundary scope, so a boundary halt releases them. Because acquiring one
- * is an operation but the ACPX registry resolves routes synchronously, every
- * instance is provisioned inside the provider's own `withSessionRoute` hook —
- * which may suspend — before the route it produces is pinned.
- *
- * One ACP provider is installed here, in the `<TestAgent>` invocation, over as
- * many partitions as there are tests. Installation says where the provider can
- * be reached from and is the only thing holding the launch coordinator; the partition
- * a dispatch selects says which state it acts on.
+ * One invocation installs one ACP provider and holds the launch coordinator;
+ * each dispatch selects the partition whose state it acts on.
  */
 
 import { createContext, Err, Ok, spawn, suspend, useScope, withResolvers } from "effection";

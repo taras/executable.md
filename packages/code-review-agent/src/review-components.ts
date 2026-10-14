@@ -1,45 +1,17 @@
 /**
- * The review and repository-analysis component graph, as this package declares
- * it to one execution.
+ * Declare the packaged review graph before a root document is imported.
  *
- * The components a review runs used to live in `.reviews/components/` and
- * `.reviews/policies/`, and every entrypoint reached them with `--include`. That
- * made the graph a property of the checkout being reviewed: a pull request could
- * add a file called `Finding.md` and the review would run the branch's own copy
- * while reporting on it. A review is exactly the program that must not be
- * answerable by its subject, so the graph moved here, into the installation, and
- * the host hands it to each execution before any document code exists.
+ * Thirty-five Markdown components cross as {@link MarkdownComponent} values
+ * with packaged bytes, stable asset origins and digests. Six TypeScript
+ * components use reserved registrations. Both reserve names so the repository
+ * being reviewed cannot replace its reviewers; duplicate host reservations
+ * refuse at admission. Ordinary includes and component discovery remain
+ * available for unreserved names.
  *
- * ## Two tiers, one claim
- *
- * Thirty-five of the components are Markdown, and each crosses as a
- * {@link MarkdownComponent}: the exact packaged bytes, a stable origin naming
- * the asset rather than a path, and the digest of what this build shipped. Six
- * are TypeScript, and each crosses as a **reserved** registration. The two
- * mechanisms differ in what they carry; they agree in what they mean — the host
- * is claiming the name rather than offering a default for it, so a repository
- * file of the same name does not win, and does not silently lose either: a
- * second claim on one name is refused at admission, before the root document is
- * imported.
- *
- * What this does *not* do is disable ordinary component discovery. A caller's
- * `--include` and a repository's own components resolve exactly as they always
- * have. Only these forty-one names are spoken for.
- *
- * ## Read from the package, never from the caller
- *
- * Every asset is located from this module's own URL. `deno compile --include`
- * embeds `src/documents/` at the same relative path, the npm build copies the
- * tree into the emitted package, and JSR publishes the sources — so one lookup
- * is correct in a source checkout, a published package and a binary with no
- * checkout at all. A build that dropped an asset fails loudly at assembly rather
- * than resolving the name and finding nothing behind it.
- *
- * The read goes to the Effection filesystem directly rather than through
- * `API.Fs` or the document-facing `Files` provider. Both of those are
- * middleware a running document can compose around, and a review whose own
- * components could be answered by the document under review would have moved the
- * shadowing problem rather than solved it.
+ * Assets resolve from this module's own URL in source, npm and compiled builds.
+ * Read them through the Effection filesystem directly: document-facing API.Fs
+ * and Files middleware must not substitute the review program. Missing assets
+ * fail assembly rather than leaving an empty component reservation.
  */
 
 import { readTextFile } from "@effectionx/fs";
@@ -97,17 +69,9 @@ export interface ReviewDocument {
 }
 
 /**
- * Every Markdown component this package declares, in the order it declares them.
- *
- * A written list rather than a directory walk. A compiled binary has no
- * directory to walk — `deno compile` embeds files, and enumerating them is not
- * something a build guarantees — so the manifest has to be data the module
- * carries. It also makes adding a component a reviewable edit rather than a
- * side effect of putting a file somewhere.
- *
- * The grouping is the same one the documents are filed under, and it travels
- * into the origin: a policy and a component are different kinds of thing to a
- * person reading a catalog, and the origin is where that shows.
+ * Declare the packaged Markdown manifest in stable order.
+ * Compiled assets cannot rely on directory enumeration. Groups also determine
+ * origins, so adding or relocating a component is an explicit identity edit.
  */
 export const REVIEW_DOCUMENTS: readonly ReviewDocument[] = [
   { name: "AbstractionNames", group: "components" },
@@ -153,30 +117,17 @@ export function reviewDocumentUrl(document: ReviewDocument): URL {
 }
 
 /**
- * How a packaged component identifies itself in a catalog.
- *
- * The package and the asset, never a filesystem path: the same component is at a
- * different absolute path in a checkout, a `node_modules` tree and a binary that
- * has no filesystem for it at all, and all three are the same component. This is
- * what lets a test compare a source run and a compiled run without knowing where
- * either one keeps its files.
+ * Identify a component by package and asset, never its host filesystem path.
+ * Source, npm and compiled distributions therefore report the same origin.
  */
 export function reviewDocumentOrigin(document: ReviewDocument): string {
   return `${REVIEW_ORIGIN}/${document.group}/${document.name}.md`;
 }
 
 /**
- * The thirty-five Markdown declarations, read from this build's own assets.
- *
- * Built fresh per assembly, exactly as `<Plan>`'s declaration is. A declaration
- * is not identified by object identity — what fixes it is the name, the origin,
- * the bytes and the digest — so two assemblies in one process declare the same
- * components without sharing a mutable array anyone could reach and edit.
- *
- * Lazy, and the reads happen here: this is trusted host assembly, before the
- * root document is imported. A missing asset, or bytes whose parse disagrees
- * with what is declared about them, fails here rather than at the moment a
- * review writes the name.
+ * Read this build's packaged Markdown lazily during trusted host assembly.
+ * Each assembly creates a fresh array; declaration identity is name, origin, bytes
+ * and digest rather than object identity. Missing assets fail before root import.
  */
 export function* reviewComponentDeclarations(): Operation<MarkdownComponent[]> {
   const declarations: MarkdownComponent[] = [];
@@ -212,24 +163,10 @@ export function* reviewComponentDeclarations(): Operation<MarkdownComponent[]> {
 }
 
 /**
- * One review implementation, as a component the engine can call.
- *
- * Each of the six destructures the props it ships a schema for, and the engine
- * validates a record against that schema before it calls anything — so by the
- * time the implementation runs, the record is that shape. What TypeScript
- * cannot see is the correspondence between a JSON Schema *value* and a
- * TypeScript *type*, so a registration whose `fn` states its own prop type does
- * not structurally satisfy `FunctionComponent`.
- *
- * The narrowing is therefore stated once, here, instead of six implementations
- * being rewritten to take `Record<string, Json>` and parse themselves. They
- * moved out of `.reviews/components/` with their bodies unchanged, which is what
- * lets a reader diff the move and see only the import lines; changing every
- * signature to satisfy a boundary would have hidden that.
- *
- * It asserts nothing the schema does not already enforce. A component whose
- * declared type disagrees with its declared schema is a mistake in this package,
- * and the schema is what the engine holds a document to either way.
+ * Adapt typed implementations after the engine validates their declared schemas.
+ * TypeScript cannot infer a prop type from its JSON Schema value. Keep each
+ * implementation's prop type aligned with that schema; the schema remains the
+ * runtime check.
  */
 // deno-lint-ignore no-explicit-any
 function reviewComponent(fn: (props: any) => Operation<unknown>): FunctionComponent {
@@ -237,19 +174,10 @@ function reviewComponent(fn: (props: any) => Operation<unknown>): FunctionCompon
 }
 
 /**
- * The six TypeScript components, as reserved registrations.
- *
- * Reserved rather than ordinary, which is the registration tier's way of saying
- * what a Markdown declaration says: the host claims the name. Leaving these
- * ordinary would have moved thirty-five components out of the subject's reach
- * and left the six that run processes, read credentials and reach the network
- * shadowable — the half worth shadowing.
- *
- * They stay public and keep their existing names, props, returns and behavior.
- * Turning the two `CommentReview` helpers into private declarations was
- * considered and rejected: a declaration's privates may only be identity
- * factories, and making them private would change a contract the review roots
- * already depend on.
+ * Reserve the six TypeScript component names alongside the Markdown declarations.
+ * These implementations run processes, read credentials and reach the network;
+ * leaving them shadowable would let the review subject replace its own reviewers.
+ * Their existing public names and contracts are retained.
  */
 export const REVIEW_REGISTRATIONS: readonly ComponentRegistration[] = [
   {

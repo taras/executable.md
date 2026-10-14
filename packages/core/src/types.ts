@@ -343,7 +343,7 @@ export type ComponentOrigin =
   | { kind: "repository"; path: string }
   | { kind: "registered"; origin: string; reserved: boolean }
   /**
-   * A component canonical core claims the name of, ahead of every host and
+   * A component canonical core reserves the name of, ahead of every host and
    * author tier (`components/protected.ts`).
    *
    * Its own kind rather than a reserved registration, because it is not one: a
@@ -393,10 +393,10 @@ export type ComponentOrigin =
 export type ComponentSelection =
   | { kind: "structural"; construct: string }
   /**
-   * A component canonical core claims the name of, ahead of every host or author
-   * tier. The declaration is core's own; the implementation belongs to whichever
-   * execution is running, so selection reports the contract and the execution
-   * supplies what it built (`components/protected.ts`).
+   * A component canonical core reserves the name of, ahead of every host or
+   * author tier. The declaration is core's own; the implementation belongs to
+   * whichever execution is running, so selection reports the contract and the
+   * execution supplies what it built (`components/protected.ts`).
    */
   | {
       kind: "protected";

@@ -12,10 +12,10 @@
  * would arrive, imports the bundle as its own module, constructs a failure with
  * *that* copy's constructor, and asks the engine's own discovery about it.
  *
- * Bundling is also the second half of a claim the smoke job makes: this module
- * has to stay reachable without the runtime's host Apis, one of which carries a
- * native addon no bundler can inline. A regression there fails here as a
- * bundling error rather than as a mysterious CI break.
+ * Bundling is also the second half of a guarantee the smoke job makes: this
+ * module has to stay reachable without the runtime's host Apis, one of which
+ * carries a native addon no bundler can inline. A regression there fails here
+ * as a bundling error rather than as a mysterious CI break.
  *
  * Deno-only: `deno bundle` is Deno's.
  */

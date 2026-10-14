@@ -323,9 +323,10 @@ interface ProjectionState {
    * Raised for the whole of one projection of this invocation's own content.
    *
    * Everything nested is reached through here, so this is where an invocation
-   * stops naming itself: a durable identity claimed while it is raised is being
-   * claimed by something inside the content, not by the invocation that owns it
-   * (`component-invocation.ts`). A Markdown body has no issuance to raise.
+   * stops naming itself: a durable identity authenticated while it is raised
+   * is being authenticated by something inside the content, not by the
+   * invocation that owns it (`component-invocation.ts`). A Markdown body has
+   * no issuance to raise.
    */
   projecting?: () => () => void;
   enclosing: ProjectionHandle | undefined;
@@ -2124,10 +2125,11 @@ function* structuralOperand(segment: ComponentElement, construct: string): Opera
  *
  * The selected case is transparent, exactly as a selected `<If>` branch is. It
  * opens no binding scope, no observation boundary and no loop boundary: a
- * `<Let>` it creates stays available after `</Switch>`, a `<Return>` claims the
- * value body that owns the switch, and a `<Break>` exits the loop that lexically
- * encloses it. Errors the construct creates itself — a broken structure, a
- * selector or matcher that fails to evaluate — are reported here, exactly once.
+ * `<Let>` it creates stays available after `</Switch>`, a `<Return>` reserves
+ * the value body that owns the switch, and a `<Break>` exits the loop that
+ * lexically encloses it. Errors the construct creates itself — a broken
+ * structure, a selector or matcher that fails to evaluate — are reported here,
+ * exactly once.
  */
 function* expandSwitch(
   segment: ComponentElement,
@@ -3461,7 +3463,6 @@ function* expandFunctionComponent(
     }
   }
 
-  // Resolve expression props
   let resolvedProps: Record<string, Json>;
   try {
     resolvedProps = yield* resolveExpressionProps(openProps, openExpressions, name, projectedEnv);
@@ -3475,7 +3476,6 @@ function* expandFunctionComponent(
     ];
   }
 
-  // Strip slot prop before validation
   const asRefused = asBindingViolation(name, resolvedProps.as);
   if (asRefused !== undefined) {
     return [yield* raise({ type: "error", message: asRefused.message, source: name })];
@@ -3484,7 +3484,6 @@ function* expandFunctionComponent(
   const owner = asBinding === undefined ? callerOwner : undefined;
   const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
 
-  // Validate props
   let validatedProps: Record<string, Json>;
   try {
     validatedProps = yield* validateProps(name, propsForValidation, definition.props);
@@ -3999,10 +3998,8 @@ function* resolveExpressionProps(
   componentName: string,
   explicitEnv?: EvalEnv,
 ): Operation<Record<string, Json>> {
-  // Start with already-resolved props
   const resolved = { ...props };
 
-  // Nothing to evaluate
   if (Object.keys(expressions).length === 0) {
     return resolved;
   }
@@ -4054,10 +4051,10 @@ function* resolveExpressionProps(
 /**
  * Evaluate one expression prop against the binding environment.
  *
- * Exported within the package because a claimed construct resolves its own
- * props: the expansion hook is offered the element before prop resolution runs,
- * so `<Answers>` and `<Answer>` reach their `value` and `delegate` expressions
- * through here rather than receiving them already evaluated.
+ * Exported within the package because an intercepted construct resolves its own
+ * props: the expansion hook is offered the element before prop resolution
+ * runs, so `<Answers>` and `<Answer>` reach their `value` and `delegate`
+ * expressions through here rather than receiving them already evaluated.
  */
 export function* evaluateExpression(
   expression: string,

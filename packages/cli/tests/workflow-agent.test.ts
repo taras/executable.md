@@ -53,7 +53,7 @@ const NOTE = "the release checklist is three items long\n";
  * What ACPX resolves this agent to, and what the base branch retained for it.
  *
  * Written out rather than read back through `createAgentRegistry()`, because
- * the claim is that this value did not move. Recomputing it from the same
+ * the requirement is that this value did not move. Recomputing it from the same
  * registry the profile now overlays would agree with whatever that registry
  * currently says, which is not the thing being asserted.
  */
@@ -787,7 +787,7 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
     /**
      * One complete run under its own materialization root.
      *
-     * Real embedded adapters, because the claim is about what a real
+     * Real embedded adapters, because the assertion covers what a real
      * materialization retains — a stub would be asserting on a value this test
      * had chosen.
      */

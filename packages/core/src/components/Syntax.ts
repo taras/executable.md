@@ -9,12 +9,12 @@
  * ## Why canonical core owns it
  *
  * The symbols describe the vocabulary an execution actually has. A repository
- * `Syntax.md`, a bundled `Syntax`, a registration, an import handler or a second
- * loaded copy answering for the name would each describe a vocabulary the run
- * does not have — to whoever is reading, and to whichever agent is being told
- * what to write next. So the name is claimed by the canonical protected tier,
- * ahead of every host and author tier, and the definition canonical core
- * selected is what runs.
+ * `Syntax.md`, a bundled `Syntax`, a registration, an import handler or a
+ * second loaded copy answering for the name would each describe a vocabulary
+ * the run does not have — to whoever is reading, and to whichever agent is
+ * being told what to write next. So the name is reserved by the canonical
+ * protected tier, ahead of every host and author tier, and the definition
+ * canonical core selected is what runs.
  *
  * Protection is about the *answer*, not about power. The component receives one
  * reference that renders symbol text and nothing else: no definitions, no
@@ -24,12 +24,12 @@
  *
  * ## What one occurrence does
  *
- * It claims the occurrence identity this execution minted, renders once, and
- * retains exactly what it rendered. A continuation reads that record and hands
- * the same text back without consulting the filesystem, the registry, the
- * bundle, the host or the lexical reference again — so an agent resuming
- * authorship is shown the vocabulary the run actually showed it, not one
- * rebuilt from a tree that has moved since.
+ * It authenticates the occurrence identity this execution minted, renders
+ * once, and retains exactly what it rendered. A continuation reads that record
+ * and hands the same text back without consulting the filesystem, the
+ * registry, the bundle, the host or the lexical reference again — so an agent
+ * resuming authorship is shown the vocabulary the run actually showed it, not
+ * one rebuilt from a tree that has moved since.
  */
 
 import { createDurableOperation, StaleInputError } from "@executablemd/durable-streams";
@@ -52,7 +52,7 @@ import { CORE_ORIGIN } from "./registry.ts";
 import { documented } from "./documentation.ts";
 import type { Json, PropsSchema, SourcePosition } from "../types.ts";
 
-/** The public name canonical core claims for the syntax component. */
+/** The public name canonical core reserves for the syntax component. */
 export const SYNTAX_COMPONENT = "Syntax";
 
 /** The durable effect one occurrence records. */

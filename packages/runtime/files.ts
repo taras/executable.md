@@ -619,8 +619,8 @@ export function asFilesFatal(error: unknown): FilesFatalFailure | undefined {
 /**
  * What a write phase is allowed to say, which is the whole validity rule.
  *
- * The phase decides the target claim: nothing selects `committed` except a
- * cleanup that failed after the commit returned, and nothing claims
+ * The phase decides the reported target state: nothing selects `committed`
+ * except a cleanup that failed after the commit returned, and nothing reports
  * `commit-unknown` except a commit that threw. Keeping the table here rather
  * than at each construction site makes an invalid combination unconstructable
  * instead of merely unwritten.
@@ -762,9 +762,9 @@ export function parseFilesFailure(error: unknown): FilesFailureData | undefined 
  * The write failure data this error carries, if it carries valid data.
  *
  * Unlike a non-write failure, malformed data here has no safe reading: every
- * sentence a consumer could print makes a claim about whether the file was
- * replaced. A caller treats `undefined` from a write as a protocol invariant
- * rather than inventing a commit state.
+ * sentence a consumer could print reports whether the file was replaced. A
+ * caller treats `undefined` from a write as a protocol invariant rather than
+ * inventing a commit state.
  */
 export function parseFileWriteFailure(error: unknown): FileWriteFailureData | undefined {
   return attempt(() => {

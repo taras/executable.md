@@ -91,7 +91,6 @@ export function useHttpDurableStream(
     const epoch = opts.epoch;
     const fetchFn = opts.fetch ?? globalThis.fetch.bind(globalThis);
 
-    // ── One-time setup: create the stream on the server ──
     yield* call(async () => {
       const res = await fetchFn(streamUrl, {
         method: "PUT",
@@ -103,15 +102,12 @@ export function useHttpDurableStream(
       }
     });
 
-    // ── Mutable state owned by the resource scope ──
     let nextSeq = 0;
     let fatalError: Error | undefined;
     let lastOffset: string | undefined;
 
-    // ── Append worker queue ──
     const queue: Queue<AppendRequest, void> = createQueue<AppendRequest, void>();
 
-    // ── Spawn the serial append worker ──
     // Processes one append at a time in FIFO order. Each HTTP POST
     // completes before the next one starts, guaranteeing server-side
     // sequence ordering. Fatal errors (stale epoch, network failure)
@@ -167,7 +163,6 @@ export function useHttpDurableStream(
 
       switch (res.status) {
         case 200: {
-          // Success — capture offset
           const offset = res.headers.get(STREAM_OFFSET_HEADER);
           if (offset) {
             lastOffset = offset;
@@ -183,7 +178,6 @@ export function useHttpDurableStream(
           return;
         }
         case 403: {
-          // Stale epoch — fatal error
           const currentEpoch = Number(res.headers.get(PRODUCER_EPOCH_HEADER) ?? 0);
           const error = new StaleEpochError(currentEpoch);
           fatalError = error;
@@ -209,7 +203,6 @@ export function useHttpDurableStream(
       }
     }
 
-    // ── Provide the DurableStream handle ──
     yield* provide({
       get lastOffset() {
         return lastOffset;
@@ -250,7 +243,6 @@ export function useHttpDurableStream(
        * all future appends to fail-fast without enqueuing.
        */
       *append(event: DurableEvent): Operation<void> {
-        // Fail-fast if a fatal error has been set
         if (fatalError) {
           throw fatalError;
         }
@@ -259,13 +251,10 @@ export function useHttpDurableStream(
         // async work, even when multiple coroutines call append concurrently
         const seq = nextSeq++;
 
-        // Create a resolver so we can wait for this specific append to complete
         const { operation, resolve, reject } = withResolvers<void>();
 
-        // Enqueue the request — the worker will process it in FIFO order
         queue.add({ event, seq, resolve, reject });
 
-        // Suspend until the worker finishes the HTTP POST for this item
         yield* operation;
       },
     });

@@ -1,12 +1,13 @@
 /**
  * Tier WA — the authentication a live provider invocation borrows from its host.
  *
- * The claim is about two things that must stay apart: a run reaches a protected
- * remote as whoever is standing at the host right now, and nothing about that
- * identity survives into what the run retains. Rendered text proves neither, so
- * every test here reads one of the places an answer actually lives — what the
- * remote received, which locator a session was opened for, how many sessions one
- * document opened, and what the journal and Workspace hold afterwards.
+ * The test distinguishes two facts that must stay apart: a run reaches a
+ * protected remote as whoever is standing at the host right now, and nothing
+ * about that identity survives into what the run retains. Rendered text proves
+ * neither, so every test here reads one of the places an answer actually lives
+ * — what the remote received, which locator a session was opened for, how many
+ * sessions one document opened, and what the journal and Workspace hold
+ * afterwards.
  *
  * Nothing here reads a developer's real credential or contacts a network host,
  * and nothing here injects one either. The provider is never handed a credential
@@ -865,8 +866,8 @@ describe("workflow ambient authentication cancellation", () => {
    * The working directories this run's own sessions opened and released.
    *
    * Watched rather than scanned for: a prefix search of the temporary directory
-   * is a claim about the whole machine, and two concurrent invocations would
-   * each see the other's.
+   * observes the whole machine, and two concurrent invocations would each see
+   * the other's.
    */
   function watching(sequence: string[] = []) {
     const opened: string[] = [];

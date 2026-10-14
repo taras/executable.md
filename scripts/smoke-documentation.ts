@@ -33,7 +33,7 @@ import { useTempDirectory } from "./lib/temp-directory.ts";
 const MISSING_ASSET = "packaged component documentation is missing";
 
 /**
- * Report the claim that did not hold and shut the program down.
+ * Report the failed assertion and shut the program down.
  *
  * Through Effection's `exit` rather than `Deno.exit`, which returns to the host
  * without unwinding anything: the temporary directory below belongs to this

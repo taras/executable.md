@@ -1,33 +1,16 @@
 /**
- * Reading this run's Workspace without performing a durable effect.
+ * Read authenticated retained Workspace state without a durable effect, journal
+ * entry or root publication. The transaction ends with the callback, before later
+ * host work such as a Git subprocess.
  *
- * Some work has to look at retained bytes and retained rows without changing
- * anything: exporting a checkout so a subprocess can run against files, or
- * proving that what a record names is still there. That is not an effect — it
- * journals nothing, publishes no root and has no result to replay — but it does
- * need the same authority as one, because the bytes it reads are the run's.
+ * The filesystem exposes six reading members; storage compiles statements under
+ * a SQLite authorizer that rejects writes, including `INSERT … RETURNING`.
+ * Both views are revoked on callback return and rechecked when deferred operations
+ * start.
  *
- * So this opens the run's ordinary authenticated transaction, hands the
- * callback a snapshot that can only read, and closes it. The transaction is
- * held for the inspection alone: everything a caller does afterwards runs
- * against host files, so a Git subprocess never keeps the run's database open.
- *
- * "Can only read" is proven rather than promised. The filesystem is the six
- * reading members and no others, and the storage view compiles every statement
- * under a SQLite authorizer that refuses to admit anything but a read, so
- * `INSERT … RETURNING` is rejected during compilation instead of returning the
- * row it just wrote. Both are revoked when the callback returns, and both
- * recheck when an operation they produced actually begins — a callback that
- * built its writes early and yielded them late is the hole that closes.
- *
- * `rootId` is what makes a historical read possible. A run sometimes has to
- * name what it published at an earlier moment, and the Workspace has moved on
- * since — so the retained root is materialized inside a rollback-only
- * savepoint, the callback reads it, and everything that materialization wrote
- * is discarded. The current root, the retained roots, the rows and the journal
- * are what they were on every path out, including a failure and a
- * cancellation. Nothing here publishes, and there is no ordering in which
- * anything else observes the Workspace selected at the historical root.
+ * An optional historical root is materialized in a rollback-only savepoint. Every
+ * exit, including failure and cancellation, restores the current root, retained
+ * roots, rows and journal; no other observer sees the historical root selected.
  */
 
 import type { Operation, Result } from "effection";

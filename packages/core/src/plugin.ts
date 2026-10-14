@@ -2,9 +2,7 @@
  * The Plugin boundary: trusted code an operator selects, installed once
  * before an execution imports a root document.
  *
- * XMD ships none and defaults to none. A command that selects no Plugin
- * installs no Plugin, and a package that happens to be installed stays inert
- * until it is named.
+ * An installed package stays inert until the host selects its Plugin value.
  *
  * A Plugin is a plain structural value. It carries a name and, optionally, one
  * `install` operation. Everything else about it — what it declares, what it
@@ -72,10 +70,10 @@ export interface PluginInstallation {
 /**
  * One Plugin: a name, and what installing it does.
  *
- * The name identifies the Plugin to an operator and to the refusal that reports
- * two selections claiming it. It is not a package identity, a version or a
- * capability: nothing resolves a name to a module, and nothing grants a Plugin
- * anything for being called one thing rather than another.
+ * The name identifies the Plugin to an operator and to the refusal that
+ * reports two selections using it. It is not a package identity, a version or
+ * a capability: nothing resolves a name to a module, and nothing grants a
+ * Plugin anything for being called one thing rather than another.
  */
 export interface Plugin {
   readonly name: string;

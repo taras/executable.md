@@ -4,8 +4,8 @@
  * These drive the shard through an injected runner rather than a real one, so
  * they can assert the exact argument vector and the exact ordering without
  * paying for hundreds of processes. That a real child's output survives, and
- * that halting a shard halts its child, are claims an injected runner cannot
- * make — `shard-execution.test.ts` makes those against real processes.
+ * that halting a shard halts its child, are behaviors an injected runner cannot
+ * establish — `shard-execution.test.ts` verifies those against real processes.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";

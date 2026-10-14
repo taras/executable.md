@@ -3,11 +3,11 @@
  * (specs/workflow-workspace-spec.md §8.6).
  *
  * A retained Agent session says which conversation this run is having. A
- * checkpoint says where in that conversation one Prompt landed. The claim under
- * test is that the second fact commits with the Prompt it describes and with
- * nothing else — so these drive the real publisher, the real transaction and the
- * real table against a real run database. A stand-in for any of them would be a
- * stand-in for exactly what is being claimed.
+ * checkpoint says where in that conversation one Prompt landed. These tests
+ * verify that the second fact commits with the Prompt it describes and with
+ * nothing else — so these drive the real publisher, the real transaction and
+ * the real table against a real run database. A stand-in for any of them would
+ * be a stand-in for exactly what is being verified.
  *
  * The provider here is a fake, and deliberately so: what an adapter puts on a
  * response is `packages/acp`'s question, and it is answered under Tier APC and

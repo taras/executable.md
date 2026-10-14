@@ -1,11 +1,11 @@
 /**
  * A whole workflow run, in a process of its own.
  *
- * A scope closing inside one process is not the same claim as a process
- * ending: the connection, the page cache and every value the first run put in
- * memory go away together only in the second. Two of the acceptances need
- * that, so both run here, through the production Deno adapter, and the test
- * observes them from outside.
+ * A scope closing inside one process is not the same proof as a process ending:
+ * the connection, the page cache and every value the first run put in memory go
+ * away together only in the second. Two of the acceptances need that, so both
+ * run here, through the production Deno adapter, and the test observes them
+ * from outside.
  *
  * ```sh
  * deno run -A restart-child.ts <root> <run-id> <marker-file> [channel]

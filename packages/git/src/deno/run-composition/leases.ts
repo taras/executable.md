@@ -1,35 +1,13 @@
 /**
- * The locks an ordinary run holds on the slots it is working in.
+ * Hold managed checkout slots under non-blocking exclusive kernel advisory locks.
+ * A busy slot refuses immediately; process death releases the lock without cleanup.
  *
- * A workflow run owns its Workspace outright, so nothing coordinates with
- * anything. A managed host root is shared: two `xmd run` processes on one
- * machine may name the same Repository at the same moment, and one of them
- * cloning into the directory the other is committing in would corrupt both.
+ * Leases belong to the installed provider's execution scope, outliving the element
+ * that selected a slot so later Dir and interactive Session siblings stay protected.
+ * Repeated selection reuses the execution's lease.
  *
- * So a slot is entered under an exclusive kernel-backed advisory lock, taken
- * without waiting. Refusing rather than waiting is what makes the answer
- * useful: "somebody else is working in this checkout" is something the person
- * running the document can act on, and a hang is not. The kernel is also what
- * makes it survive a lost host — a killed process runs no cleanup and the
- * operating system releases its locks anyway, which is the only evidence this
- * accepts that a previous holder is gone.
- *
- * ## The hold is execution-wide, deliberately
- *
- * The lease is acquired into the scope the provider was installed in rather
- * than into the component invocation that asked for it, so it outlives the
- * element. A self-closing `<Worktree as="worktree" />` binds a path that a
- * later sibling `<Dir path={worktree}>` and an interactive `<Session>` inside it
- * go on using; a lease that ended with the Worktree element would leave both
- * working in a slot another process could take.
- *
- * Selecting the same slot twice in one execution reuses the lease already held.
- * It is the same process and the same provider: taking a second exclusive lock
- * on a file this process already holds is not a coordination question.
- *
- * Nothing here unlinks a lock file. Unlinking a locked path lets the next
- * caller create and lock a different file at the same name while this lock is
- * still held, so the sidecar is created if absent and then left, empty.
+ * Lock sidecars remain empty on disk. Unlinking a locked path would let another
+ * process lock a new file at the same name while the original lock is still held.
  */
 
 import { race, suspend, useScope, withResolvers, type Operation, type Scope } from "effection";
@@ -51,10 +29,7 @@ export interface Leases {
 }
 
 export function* useLeases(root: string): Operation<Leases> {
-  // The scope the provider is installed in, captured once. Every lease is
-  // acquired into it, so all of them are released — by the kernel and by the
-  // resource's own teardown — when the document execution ends, on success,
-  // failure and cancellation alike.
+  // Capture the provider scope so leases outlive individual elements.
   const owner: Scope = yield* useScope();
   const held = new Set<string>();
 
@@ -64,12 +39,7 @@ export function* useLeases(root: string): Operation<Leases> {
       if (held.has(path)) {
         return;
       }
-      // The acquisition runs in the provider's scope and then *suspends*, which
-      // is what makes the hold last as long as the provider does. A task that
-      // returned the handle would complete, and completing releases everything
-      // the task acquired — so the lock would be gone the moment the element
-      // that asked for it finished, and a second process could take the slot
-      // out from under an interactive Session still working in it.
+      // Keep the resource task suspended; returning would release the slot immediately.
       const acquired = withResolvers<AdvisoryLockFile | undefined>();
       const failed = withResolvers<never>();
       owner.run(function* () {

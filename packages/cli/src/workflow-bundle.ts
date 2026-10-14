@@ -153,7 +153,7 @@ export function declaredBundle(
 }
 
 /**
- * Whether a declared name is one this bundle may claim, or the refusal saying
+ * Whether a declared name is one this bundle may declare, or the refusal saying
  * why it is not.
  *
  * Structural syntax and core's own components are fixed and checked here, while

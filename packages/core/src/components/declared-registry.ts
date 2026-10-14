@@ -19,11 +19,11 @@ import type { ComponentRegistry, FunctionComponentDefinition, RegistryEntry } fr
  * can decide against.
  *
  * The implementation slot holds a refusal rather than what the factory would
- * build, because building it is exactly what this cannot do: the factory
- * takes an execution's claimant, and there is no execution here. Nothing that
- * only describes a document reaches an implementation, so the refusal is
- * unreachable — it is there so that anything which ever did would fail loudly
- * rather than run a component with no execution behind it.
+ * build, because building it is exactly what this cannot do: the factory takes
+ * an execution's identity authenticator, and there is no execution here.
+ * Nothing that only describes a document reaches an implementation, so the
+ * refusal is unreachable — it is there so that anything which ever did would
+ * fail loudly rather than run a component with no execution behind it.
  */
 export function declaredRegistry(components: readonly IdentityComponent[]): ComponentRegistry {
   const entries = new Map<string, RegistryEntry>();

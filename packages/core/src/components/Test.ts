@@ -1,13 +1,13 @@
 /**
  * `<Test>` — the construct whose invocation contains a checked failure (§3.6).
  *
- * This function is the whole of core's claim. It is private to this module in
- * every sense that matters: it is never registered by another package, never
- * handed to an installation, never named in an option, and never reachable
- * through the public surface. `expandFunctionComponent` grants containment to
- * the definition it is expanding when that definition is this one, so what may
- * contain a checked command failure is decided by canonical core and by
- * nothing else.
+ * This function is the whole of core's containment authority. It is private to
+ * this module in every sense that matters: it is never registered by another
+ * package, never handed to an installation, never named in an option, and
+ * never reachable through the public surface. `expandFunctionComponent` grants
+ * containment to the definition it is expanding when that definition is this
+ * one, so what may contain a checked command failure is decided by canonical
+ * core and by nothing else.
  *
  * It is an ordinary **default**, like every other component in the core
  * registry: a repository `Test.md` or `Test.ts` is chosen ahead of it, and so

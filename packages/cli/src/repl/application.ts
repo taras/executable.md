@@ -1,28 +1,11 @@
 /**
- * The product: what is on screen, and what every action changes.
+ * Own screen state and reduce semantic actions against one resolved model prefix
+ * and this process's live overlay. Components receive detached view data, with
+ * no session, repository, route mutator or host operation.
  *
- * One boundary owns state. Everything a frame shows is derived here from a
- * resolved model prefix plus this process's explicit overlay, and every action
- * the tree returns is answered here. Components receive detached view data and
- * hand back a semantic action; they hold no session, no repository, no route
- * mutator and no host operation, so a keystroke cannot reach the Journal except
- * through this reduction.
- *
- * ## A prefix is not the present
- *
- * A view frozen at a history marker is read only and fills nothing from the
- * live head: no live output, no waiting question, no pause capability. That is
- * why the overlay is a separate member rather than merged into the model —
- * merging them is exactly the mistake that shows somebody the present while
- * they are looking at the past.
- *
- * ## Navigation that fails changes nothing
- *
- * Every navigating action builds a candidate route and resolves it against the
- * model before it is adopted. A candidate that does not resolve leaves the
- * standing route, selection and draft exactly as they were and reports why.
- * There is no half-applied navigation, because a route is adopted whole or not
- * at all.
+ * A frozen prefix fills nothing from the live head: no output, waiting question
+ * or pause capability. Navigation resolves a whole candidate route before
+ * adoption; a refusal preserves the standing route, selection and draft.
  */
 
 import { Ok, type Result } from "effection";
@@ -142,13 +125,8 @@ export interface ReplLive {
   /** Whether this process holds the continuations, and so may pause at all. */
   readonly pausable: boolean;
   /**
-   * Whether an entry's execution is still running in this process.
-   *
-   * The durable side cannot answer this. A root close is recorded the moment the
-   * document settles, while the task that produced it is still unwinding — so a
-   * screen reading only `model.settled` would offer the next entry during a
-   * teardown that has not finished, and announce readiness the session would
-   * refuse. Readiness is a fact about both halves, and this is the live half.
+   * Whether this entry's task is still running, including teardown after its
+   * recorded root close. Readiness needs both this and `model.settled`.
    */
   readonly running: boolean;
   /**
@@ -170,12 +148,8 @@ export interface ReplLive {
 }
 
 /**
- * One turn as the Sessions surface shows it, live or retained.
- *
- * One type for both, because a person is looking at one turn either way: what
- * publication changes is where a turn's facts come from, not which turn it is.
- * `key` is its mounted identity and survives that change, so the row a person
- * had focus on is the same row afterwards.
+ * One live or retained Sessions turn. Publication changes its source of facts;
+ * `key` preserves mounted identity and focus across that transition.
  */
 export interface ReplSessionTurn {
   /** The mounted identity: this process's slot, or a record's own marker. */
@@ -205,17 +179,9 @@ export interface ReplSessionTurn {
 }
 
 /**
- * Every turn this screen can show, in the order their Prompts were scheduled.
- *
- * Not a concatenation of the retained turns and the live ones. Prompts running
- * beside each other publish in whatever order their providers answer, so an
- * earlier Prompt can still be live while a later one is already durable — and
- * appending the live list to the retained one would put it second.
- *
- * The turns this process observed carry their own place, taken when each Prompt
- * was scheduled. Turns it did not observe are in the prefix it replayed, which
- * is entirely earlier than anything it went on to run, so they come first in the
- * order their records state.
+ * Order turns by Prompt scheduling, not publication: concurrent providers can
+ * publish a later Prompt first. Unobserved turns belong to the replayed prefix
+ * and precede observed slots, whose own scheduling order is retained.
  */
 function chronology(model: ReplModel, live: ReplLive): readonly ReplSessionTurn[] {
   const observed = new Set<string>();
@@ -240,18 +206,9 @@ function chronology(model: ReplModel, live: ReplLive): readonly ReplSessionTurn[
 }
 
 /**
- * The one identity a publication is correlated by.
- *
- * Both halves, because neither is unique on its own. A Prompt's durable name is
- * derived from where it was written, and names restart with each entry — two
- * entries running the same source hold the same name at the same position, which
- * is ordinary rather than damaged. Correlating by the name alone suppresses both
- * of those records and resolves both slots to whichever one the chronology
- * reached first, so one turn is shown twice and the other not at all.
- *
- * The entry is the one each side already carries: the slot's own, and the
- * record's own. Never the entry that is current, the sequence by itself, or the
- * order the two turns happened to finish in.
+ * Correlate by each slot's and record's own entry plus durable Prompt name.
+ * Names restart in every entry, so name alone conflates repeated source; the
+ * current entry, sequence and completion order cannot identify a publication.
  */
 function correlation(entry: string, name: string): string {
   return `${entry}\u0000${name}`;
@@ -348,12 +305,8 @@ export interface ReplFormMessage {
 }
 
 /**
- * The form being filled in, while a question is being asked.
- *
- * Values are keyed by field name because the fields are independent: one global
- * string would make editing either field overwrite the other. None of this is
- * durable, none of it is in the route, and all of it is discarded when the
- * question ends or its drawer is closed.
+ * Form state is process-local and discarded when the question or drawer ends.
+ * Values are keyed by field so editing one cannot overwrite another.
  */
 export interface ReplFormState {
   /** What has been typed into each field so far, by field name. */
@@ -389,7 +342,7 @@ export type ReplFocusRestore =
    *
    * Named by what it caused rather than by where it sits: the record appends
    * after the drawer is gone, so the row does not exist yet at the moment the
-   * claim is made. `known` is every answer already retained when this one was
+   * association is recorded. `known` is every answer already retained when this one was
    * taken and `answer` is exactly what was sent, which together name one
    * record — not the newest one, and not an answer somebody else caused.
    */
@@ -480,7 +433,7 @@ export interface ReplState {
   /**
    * Where focus starts again, for the one commit after a drawer went.
    *
-   * One-shot and process-local. A claim repeated every frame would drag focus
+   * One-shot and process-local. A focus request repeated every frame would drag focus
    * back after every Tab, so the next action clears it: from then on focus is
    * the tree's, which is the only thing that knows where it is.
    */
@@ -646,7 +599,7 @@ export function permissionSettled(state: ReplState, turn: string): ReplState {
  *
  * Teardown and publication can both remove a request nobody answered. The drawer
  * it left behind can resolve to nothing, so it is withdrawn — and nothing here
- * claims a choice or a denial, because none was made.
+ * reports a choice or a denial, because none was made.
  */
 export function permissionWithdrawn(state: ReplState): ReplState {
   return Object.freeze({
@@ -1682,11 +1635,11 @@ function row(
 }
 
 /**
- * Which control this frame claims focus for, because a drawer went.
+ * Which control this frame requests focus for, because a drawer went.
  *
- * Resolved against what is mounted rather than stored: a claim naming a row this
+ * Resolved against what is mounted rather than stored: a request naming a row this
  * view does not draw would be focus asked for on behalf of nothing, and the
- * commit that honoured it would throw. So the claim is silent for as long as the
+ * commit that honoured it would throw. So the request is silent for as long as the
  * row it names is not there — the answer's record has not been projected yet —
  * and the hint waits rather than being spent on nothing.
  */
@@ -1730,23 +1683,23 @@ export function focusClaim(view: ReplView): string | undefined {
 /**
  * The state after a commit settled focus.
  *
- * A restoration claim is one claim, not a standing one. It survives the frames
+ * A restoration request is one request, not a standing one. It survives the frames
  * between the answer and its record — nothing can be focused that is not there
  * yet — and is spent by the commit that puts focus where it asked. Focus
- * traversal is not an action, so a claim nobody retired would pull somebody back
+ * traversal is not an action, so a request nobody retired would pull somebody back
  * after every Tab and traversal would never move.
  */
 export function focusSettled(
   view: ReplView,
   focused: string | undefined,
   /**
-   * What the frame that satisfied the claim admitted.
+   * What the frame that satisfied the request admitted.
    *
-   * Needed because a claim can *move* a window to show the row it names, and
-   * the move was computed from the claim: spending the claim without keeping
+   * Needed because a request can *move* a window to show the row it names, and
+   * the move was computed from the request: spending the request without keeping
    * the move would scroll the catalog straight back and take the row focus has
    * just landed on off the screen. A caller with no committed frame to hand —
-   * one asking only whether a claim is spent — leaves it out.
+   * one asking only whether a request is spent — leaves it out.
    */
   admission?: ReplAdmission,
 ): ReplState {
@@ -3355,7 +3308,7 @@ function drawerContent(
    * than the generic close action that means "this changed nothing".
    */
   let dismissing: string | undefined;
-  /** Whether a field line may take the focus claim this drawer opens with. */
+  /** Whether a field line may take the focus request this drawer opens with. */
   let entering = false;
 
   if (open.kind === "binding") {
@@ -3590,7 +3543,7 @@ function drawerContent(
 /**
  * One row of a drawer's ordered content, and what it would take to focus it.
  *
- * A field's editable line is built unfocused and the claim is placed afterwards,
+ * A field's editable line is built unfocused and the focus request is placed afterwards,
  * once the window is known: focusing a row that scrolled out would put focus
  * where nothing is drawn, and which row is first inside the window is not
  * something the loop that builds them can see.
@@ -3604,7 +3557,7 @@ interface DrawerRow {
  * The rows one drawer's measured window shows.
  *
  * Nothing while the frame is being measured, because the window is what that
- * pass is asking about. The drawer's opening focus claim goes to the first field
+ * pass is asking about. The drawer's opening focus request goes to the first field
  * line the window actually holds.
  */
 function windowed(
@@ -4937,10 +4890,10 @@ export function entriesRowCount(model: ReplModel): number {
 }
 
 /**
- * How far one window is scrolled, with a row this frame claims focus for shown.
+ * How far one window is scrolled, with a row this frame requests focus for shown.
  *
  * The offset this process is holding, moved only as far as it takes to put a
- * claimed row inside the window: a claim naming a row the window does not hold
+ * requested row inside the window: a request naming a row the window does not hold
  * would be focus asked for on behalf of nothing, and an answer given at a narrow
  * size is restored to the entry that owns it — which may be above or below what
  * the catalog is showing. The window itself is the existing one and the offset is

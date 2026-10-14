@@ -1,5 +1,5 @@
 /**
- * Decide whether this pull request may claim `green`, and say why either way.
+ * Decide whether this pull request may pass `green`, and say why either way.
  *
  * What this decides lives in `lib/main-green.ts`; what it parses lives in
  * `lib/github.ts`. What is left here is the one thing neither can hold: the

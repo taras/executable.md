@@ -22,10 +22,10 @@
  *
  * ## Cleanup
  *
- * An incomplete file is removed inside the operation's own `scoped()`
- * ownership boundary, so a failure and a cancellation are cleaned up the same
- * way. Cleanup that fails is reported and never reports a successful artifact:
- * a file nobody could finish writing is not evidence, and claiming one was
+ * An incomplete file is removed inside the operation's own `scoped()` ownership
+ * boundary, so a failure and a cancellation are cleaned up the same way.
+ * Cleanup that fails is reported and never reports a successful artifact: a
+ * file nobody could finish writing is not evidence, and reporting one was
  * published would leave an operator with a path they believe is good.
  */
 
@@ -81,7 +81,7 @@ const SIDECARS = ["-journal", "-wal", "-shm"];
  * artifact.
  *
  * Adapter-private, and installed only by this package's own suites. It exists
- * because "the identity ignores physical layout" is a claim about two files
+ * because "the identity ignores physical layout" is a property of two files
  * that genuinely differ, and the only way to assert it is to produce two.
  */
 export interface XmdArtifactLayout {

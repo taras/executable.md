@@ -917,7 +917,6 @@ describe("Tier NS-F — Edge cases", () => {
         includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
-    // Replay — same stream, same output
     const output2 = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),

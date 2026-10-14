@@ -216,10 +216,10 @@ function broke(n: number): string {
 }
 
 /**
- * Claims `<Stale />` and fails its expansion with the planted durability
+ * Intercepts `<Stale />` and fails its expansion with the planted durability
  * failure. The journal no longer describes this run, so nothing between the
- * projection and the document may translate it into a printed error or present it
- * as a content failure.
+ * projection and the document may translate it into a printed error or present
+ * it as a content failure.
  */
 function useStale(planted: StaleInputError): Operation<void> {
   return Component.around({

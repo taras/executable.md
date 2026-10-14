@@ -1,67 +1,19 @@
 /**
- * The transaction-bound `API.Files` provider — a document's filesystem inside a
- * workflow run.
+ * Provide document file operations inside a workflow's logical Workspace.
+ * POSIX resolution stays under `/` and reaches DOFS, never a host filesystem path.
+ * Reads, writes, directory ensures, deletions and searches each publish one durable
+ * effect; mutation, immutable root and filtered journal result commit together.
  *
- * This is what `xmd workflow` installs where `xmd run` installs the host
- * adapter. A document names the same paths and `<File>` calls the same
- * operations; what changes is where those paths land. Here they land in the
- * run's own logical Workspace, and every read, write and search is one durable
- * effect published by the run's effect transaction — the mutation, the
- * resulting immutable Workspace root and the filtered journal result commit
- * together or not at all.
+ * `checkFilePath` is pure lexical admission: no effect, journal entry or reusable
+ * grant. Writes repeat admission from the authored path. Permissions are asked
+ * inside the live performer before I/O, so completed replay restores the recorded
+ * outcome without re-deciding it under current policy or consulting the frontier.
  *
- * ## Why an authored path never reaches a host filesystem call
- *
- * Resolution is arithmetic on POSIX segments rooted at `/`, and the result is
- * handed to the run's DOFS filesystem. No host path appears anywhere in it, so
- * the containment claim needs no stable-namespace qualification: nothing
- * outside the Workspace can be named, and no other process can replace part of
- * a tree that lives inside one database.
- *
- * `checkFilePath` stays what the Api says it is — pure lexical admission that
- * hands back nothing usable. It performs no effect and appends no journal
- * entry, so a check that was skipped or answered elsewhere authorizes nothing;
- * the write repeats the same admission from the same authored path.
- *
- * ## Where permission is asked
- *
- * Inside the live performer, as its first step. `Permissions` is a question
- * about work that is about to happen, and under replay no work is about to
- * happen: a check placed around `performed()` would re-decide an operation that
- * has already been published, so a run continued under a narrower policy would
- * contradict its own journal — and a run continued under a wider one would ask
- * for permission it no longer needs. Asking inside the performer means a
- * completed effect restores what it recorded and only new work meets current
- * policy.
- *
- * A refusal is an ordinary live outcome, published like any other and
- * sanitized the same way, so the journal reads "this operation was refused"
- * rather than "this run failed". It changes no target and captures the root it
- * already had.
- *
- * ## What replay does instead
- *
- * A recorded effect restores its recorded value. A read therefore answers with
- * the bytes it read when it ran, even where the current frontier no longer
- * holds them, and a write already recorded neither mutates nor captures a root
- * again. Nothing here consults current state to decide whether an earlier
- * effect happened, which is what lets a create/delete/create history replay in
- * order rather than collapsing to whatever the file is now.
- *
- * ## What crosses the boundary
- *
- * A documented DOFS refusal selects a `FilesReason` and nothing else travels
- * with it: no DOFS message, no errno payload, no SQLite text, no resolved path.
- * A refusal is also a *rolled back* refusal — the mutation runs inside a
- * savepoint of its own, so partial logical mutation is discarded before the
- * sanitized result is durably published, and the run's current root is the one
- * it was before.
- *
- * Everything that is not a documented refusal — connection, admission,
- * savepoint, capture, publication, routing, teardown and commit failure — stays
- * an infrastructure failure and fails the run. None of them is something a
- * document did, and printing one would let the work after this file work run as
- * though the file work had happened.
+ * Documented DOFS refusals roll back the mutation savepoint before publishing a
+ * sanitized FilesReason against the prior root. No platform message, errno, SQLite
+ * text or resolved path crosses. Connection, admission, savepoint, capture,
+ * publication, routing, teardown and commit failures remain infrastructure failures
+ * that printing cannot recover.
  */
 
 import { Err, Ok, type Operation, type Result } from "effection";
@@ -334,8 +286,8 @@ function* fileEffect<Phase extends string>(
  * The same path serves a live effect and a replayed one: live execution
  * publishes the outcome and hands it back, replay hands back the outcome that
  * was published. Neither branch is written twice here, which is what makes
- * "replay restores the recorded result" a property of the code rather than a
- * claim about it.
+ * "replay restores the recorded result" a property of the code rather than an
+ * assertion about it.
  */
 function* performed<Phase extends string>(
   database: WorkflowRunDatabase,
@@ -397,7 +349,7 @@ function* readOutcome(
  * What the target already is, when that decides the write before it starts.
  *
  * A directory cannot become a file, and saying so before anything is attempted
- * is what keeps the target claim `unchanged` rather than `rolled-back`. A path
+ * is what keeps the target state `unchanged` rather than `rolled-back`. A path
  * that does not exist yet is the ordinary case and answers `undefined`.
  */
 function* classifyWriteTarget(
@@ -476,7 +428,7 @@ function* ensureOutcome(
  * The parents and the replacement share one savepoint, so a write that creates
  * two directories and then cannot be written leaves neither behind. The refusal
  * that comes back therefore describes a Workspace that is exactly what it was,
- * which is the `rolled-back` target claim the write vocabulary already has.
+ * which is the `rolled-back` target state the write vocabulary already has.
  */
 function* writeOutcome(
   filesystem: DenoWorkspaceFilesystem,

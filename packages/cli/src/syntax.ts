@@ -63,7 +63,7 @@ export { renderSyntaxMarkdown };
  * operational and belongs to a run, so none of it happens here.
  *
  * `<Session>` travels as a declaration for the same reason: its factory takes
- * an execution's claimant, and describing an environment mints no execution.
+ * an execution's invocation authenticator, and describing an environment mints no execution.
  *
  * The scope is bounded, and everything installed in it is declarative registry
  * state and documentation middleware. Leaving it removes the layer, and there
@@ -115,7 +115,7 @@ function* profileSymbols(
  * round.
  *
  * The order is fixed rather than incidental. Nothing depends on it for
- * resolution — two declarations claiming one name is refused at admission
+ * resolution — two declarations declaring one name is refused at admission
  * rather than settled by position — but a stable order makes a catalog's bytes
  * stable, which is what lets a source run and a compiled run be compared
  * directly.

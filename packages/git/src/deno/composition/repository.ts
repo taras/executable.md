@@ -198,12 +198,12 @@ export function* prepareRepositoryAttachment(
  * carried on, restoring recorded reads that no longer describe what is there
  * while every later live effect ran against the substitute.
  *
- * So the three things the record actually claims are read back out of the
+ * So the three things the record actually states are read back out of the
  * checkout: where it came from, how it names objects, and whether the commit it
- * was created at is in it. Each is creation identity, and creation identity does
- * not move. What is deliberately *not* asked is where HEAD or the current branch
- * is: #294 moves those transactionally, and requiring them to equal creation
- * state would make an ordinary commit look like corruption.
+ * was created at is in it. Each is creation identity, and creation identity
+ * does not move. What is deliberately *not* asked is where HEAD or the current
+ * branch is: #294 moves those transactionally, and requiring them to equal
+ * creation state would make an ordinary commit look like corruption.
  *
  * The origin is compared by fingerprint rather than by bytes. The fingerprint is
  * what every other comparison in this provider uses, and it is the one form of

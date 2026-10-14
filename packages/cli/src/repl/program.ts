@@ -1252,10 +1252,10 @@ interface ReplPainted {
   /**
    * What this frame admitted.
    *
-   * Handed back because settling a focus claim has to keep what the claim
-   * moved: a window the claim scrolled to show a row is the window a person is
+   * Handed back because settling a focus request has to keep what the request
+   * moved: a window the request scrolled to show a row is the window a person is
    * now looking at, and the offset this process holds has to become that one
-   * before the claim is spent.
+   * before the request is spent.
    */
   readonly admission: ReplAdmission;
 }

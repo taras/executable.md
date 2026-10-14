@@ -58,7 +58,7 @@
  * a run that never suspended. None of them continues a suspended one. That
  * takes a run whose status is `suspended`, whose stop reason names the retained
  * request, an answer that passes the retained response schema and the secret
- * gate, and a later resume claiming it at the exact position that published it
+ * gate, and a later resume consuming it at the exact position that published it
  * — none of which is reachable from inside the execution.
  */
 
@@ -91,8 +91,8 @@ export const ELICITATION_REQUEST_KIND = "elicitation";
  * What is missing is deliberate. Core also fingerprints the question and
  * refuses a recorded answer given to a different one — a guard over its own
  * `elicit` record. There is no such record here, so there is nothing to guard:
- * the answer is claimed at the durable position that published the request, and
- * two questions in one procedure sit at two positions.
+ * the answer is consumed at the durable position that published the request,
+ * and two questions in one procedure sit at two positions.
  */
 export function* Elicit(props: Record<string, Json>): Operation<Json> {
   const prepared = yield* prepareElicitation(props.schema);

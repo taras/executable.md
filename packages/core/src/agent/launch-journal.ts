@@ -138,8 +138,8 @@ function reconciliation(value: unknown): InstructionReconciliation | undefined {
  * A merged #518 record has no provenance member, and could not have been
  * client-allocated because that path did not exist in the released format. So
  * absence reads as `provider-returned`. That is the one inference this parser
- * makes, and it only ever infers the weaker claim: client allocation must say
- * so explicitly.
+ * makes, and it only ever infers the weaker provenance: client allocation must
+ * say so explicitly.
  */
 function provenance(value: unknown): IdentityProvenance | undefined {
   if (value === undefined) {

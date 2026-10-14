@@ -765,9 +765,9 @@ function fatalCause(error: unknown, seen = new Set<unknown>()): unknown {
  * that the component shipped here really does make that call, first, and that a
  * document stops at it.
  *
- * Together they are the whole claim. Neither is sufficient alone: the stand-in
- * could pass while `<Dir>` called something else or called nothing, and this
- * could pass while the operation quietly answered instead of refusing.
+ * Together they are the complete proof. Neither is sufficient alone: the
+ * stand-in could pass while `<Dir>` called something else or called nothing,
+ * and this could pass while the operation quietly answered instead of refusing.
  */
 describe("Dir without a Files provider", () => {
   it("stops at ensureDirectory, and no directory, content or sibling follows", function* () {

@@ -36,11 +36,11 @@ export interface ComponentResolution {
    *
    * Owning a name's resolution includes refusing it canonically when no
    * definition is admitted; it does not mean a usable definition was found.
-   * It is a claim about *that name*, not about the execution that made it. A
-   * workflow bundle closes every import because a workflow run is a run of one
-   * pinned tree; a host declaring exact Markdown closes only the names it
-   * declared, so an unrelated name resolves and composes exactly as it does in
-   * an execution that closes nothing.
+   * Ownership covers *that name*, not the whole execution. A workflow bundle
+   * closes every import because a workflow run is a run of one pinned tree; a
+   * host declaring exact Markdown closes only the names it declared, so an
+   * unrelated name resolves and composes exactly as it does in an execution
+   * that closes nothing.
    */
   resolves(name: string): boolean;
   /**
@@ -190,7 +190,7 @@ export interface ClaimedIdentity {
  * One identified answer: what a provider stated, and what core kept of it.
  *
  * The two travel together because a caller needs both and must not obtain them
- * separately. The definition is core's own copy, taken when the claim was
+ * separately. The definition is core's own copy, taken when the identity was
  * recorded; it is what the caller keeps, and it is why nothing downstream ever
  * reads the object the public chain returned a second time.
  */
@@ -200,7 +200,8 @@ export interface IdentifiedAnswer {
 }
 
 /**
- * What one answer object was claimed to be, and which resolutions claimed it.
+ * What one answer object was identified as, and which resolutions identified
+ * it.
  *
  * One implementation says what it is once, so the name, the identity and the
  * installation belong to the object: a new resolution cannot rename it, restate
@@ -215,9 +216,10 @@ export interface IdentifiedAnswer {
  * cannot be forged into being the one the caller opened.
  *
  * A reusable provider returns one immutable definition to every import it
- * answers. Keying the claim by the object alone made the first resolution part
- * of the object's permanent identity and refused the same definition the second
- * time, which is a provider being punished for not copying itself.
+ * answers. Keying the identity record by the object alone made the first
+ * resolution part of the object's permanent identity and refused the same
+ * definition the second time, which is a provider being punished for not
+ * copying itself.
  */
 interface Claim {
   readonly name: string;
@@ -225,26 +227,28 @@ interface Claim {
   /** Which provider installation stated it, so a second cannot overwrite. */
   readonly installation: object;
   /**
-   * Core's copy of the definition the first claim described.
+   * Core's copy of the definition the first identity statement described.
    *
-   * The identity above is a statement about *this* definition, so a later claim
-   * of the same object has to be a claim about the same definition. Without this
-   * baseline, a provider could claim an object, edit it, and have the next window
-   * retain the edited version under the identity and revision that described the
-   * original — a different implementation wearing the first one's name.
+   * The identity above is a statement about *this* definition, so a later
+   * identity statement of the same object has to be a statement about the same
+   * definition. Without this baseline, a provider could identify an object,
+   * edit it, and have the next window retain the edited version under the
+   * identity and revision that described the original — a different
+   * implementation wearing the first one's name.
    *
-   * Absent when the first claim could not be copied at all, which is not a state
-   * a later claim can improve: an answer core could not retain is not one it can
-   * start vouching for because the object has since changed.
+   * Absent when the definition in the first identity statement could not be
+   * copied at all, which is not a state a later identity statement can
+   * improve: an answer core could not retain is not one it can start vouching
+   * for because the object has since changed.
    */
   readonly baseline: ImportedDefinition | undefined;
   /**
-   * One retained copy per resolution this answer was claimed in.
+   * One retained copy per resolution this answer was identified in.
    *
-   * Weak on the window, so a claim lasts exactly as long as somebody still holds
-   * the resolution it belongs to. Presence is the provenance check: a window
-   * that never claimed this answer has no entry, and `identify` answers nothing
-   * for it however many other windows did.
+   * Weak on the window, so an identity record lasts exactly as long as
+   * somebody still holds the resolution it belongs to. Presence is the
+   * provenance check: a window that never identified this answer has no entry,
+   * and `identify` answers nothing for it however many other windows did.
    */
   readonly copies: WeakMap<ResolutionWindow, ImportedDefinition | undefined>;
 }
@@ -254,7 +258,7 @@ export const REVOKED_ANSWER_IDENTIFICATION =
   "the execution that installed this answer provider has ended, so nothing it states identifies " +
   "an implementation here";
 
-/** A claim stated outside the handler invocation it would have been an answer to. */
+/** An identity stated outside the handler invocation it would have been an answer to. */
 export const SETTLED_CLAIM =
   "this resolution has settled, so a claim stated now identifies nothing. An answer is " +
   "identified by the handler invocation the import asked, while that invocation is still " +
@@ -279,7 +283,7 @@ export interface ResolutionWindow {
   readonly name: string;
   /** Which resolution this is, for a reader following two of them. */
   readonly occurrence: number;
-  /** Stop admitting claims for this resolution. Idempotent. */
+  /** Stop accepting identity statements for this resolution. Idempotent. */
   close(): void;
 }
 
@@ -287,11 +291,12 @@ export interface ResolutionWindow {
  * What one handler invocation may state about the import it was asked.
  *
  * Minted per invocation, and closed the moment that invocation returns, throws
- * or is cancelled. This is what a provider actually claims through:
- * the installation gives a provider the right to *be asked*, and the request
- * gives it the right to answer this one asking. Separating them is what makes a
- * claim provable — a stable installation handle can only say "some provider",
- * while a request says "this handler, deciding this import, right now".
+ * or is cancelled. This is what a provider states an identity through: the
+ * installation gives a provider the right to *be asked*, and the request gives
+ * it the right to answer this one asking. Separating them is what makes a
+ * statement provable — a stable installation handle can only say "some
+ * provider", while a request says "this handler, deciding this import, right
+ * now".
  *
  * There is no `name` parameter on `claim`. The name is fixed when the request
  * is minted, from what the chain asked, so a handler cannot state an answer for
@@ -373,17 +378,17 @@ export class CanonicalImports {
   /**
    * The one resolution this owner has open, if it has one.
    *
-   * A provider installation outlives every resolution it takes part in, while a
-   * fresh request belongs to one handler invocation. Canonical execution asks
-   * the chain for one name, reads the answer, and closes the occurrence. A
-   * claim arriving outside that window is a losing or delayed handler recording
-   * into a decision already made, which is exactly what an admission must not
-   * acquire afterwards.
+   * A provider installation outlives every resolution it takes part in, while
+   * a fresh request belongs to one handler invocation. Canonical execution
+   * asks the chain for one name, reads the answer, and closes the occurrence.
+   * An identity statement arriving outside that window is a losing or delayed
+   * handler recording into a decision already made, which is exactly what an
+   * admission must not acquire afterwards.
    *
-   * So the window carries both terms. The occurrence keeps a claim from
-   * belonging to a resolution other than the live one, and the name keeps a
-   * handler settled for one name from recording under it while a different
-   * name is being resolved.
+   * So the window carries both terms. The occurrence keeps an identity
+   * statement from belonging to a resolution other than the live one, and the
+   * name keeps a handler settled for one name from recording under it while a
+   * different name is being resolved.
    *
    * One window at a time, because component answers are resolved in one serial
    * capture phase before any document expands: the execution asks for each
@@ -433,7 +438,7 @@ export class CanonicalImports {
   }
 
   /**
-   * Open the claim window for one resolution of one name.
+   * Open the identity-recording window for one resolution of one name.
    *
    * Canonical execution calls this immediately before asking the ordinary chain
    * and closes it in a `finally`, so the window ends the same way whether the
@@ -640,13 +645,13 @@ export class CanonicalImports {
    * the caller's question.
    *
    * Both halves come back together, and the copy is the one taken when the
-   * claim was recorded rather than one made now. Answering with the identity
-   * alone would leave the caller holding the chain's object and needing to copy
-   * it itself — one more read of a value the chain controls, after the read
-   * this one checked. An alternating proxy or an accessor that answers twice
-   * would pass the check and hand the second answer to the copy. So the check
-   * and the thing kept are one result of one call, and the object that
-   * travelled through the chain is never read again.
+   * identity was recorded rather than one made now. Answering with the
+   * identity alone would leave the caller holding the chain's object and
+   * needing to copy it itself — one more read of a value the chain controls,
+   * after the read this one checked. An alternating proxy or an accessor that
+   * answers twice would pass the check and hand the second answer to the copy.
+   * So the check and the thing kept are one result of one call, and the object
+   * that travelled through the chain is never read again.
    */
   identify(resolution: ResolutionWindow, answer: unknown): IdentifiedAnswer | undefined {
     if (!this.#active || typeof answer !== "object" || answer === null) {
@@ -792,13 +797,13 @@ export interface ImportTier {
   claims(name: string): boolean;
   /**
    * Whether this tier closes every import in the execution, or only the names
-   * it claims.
+   * it reserves.
    *
    * A workflow bundle closes the execution: a run is a run *of* that pinned
    * tree, and a name resolving outside it is the thing the bundle exists to
    * prevent. Exact declared Markdown closes only what it declares: the host
-   * claimed those names and nothing else, so closing an unrelated import would
-   * take away a supported way to decide what a name means without any
+   * reserved those names and nothing else, so closing an unrelated import
+   * would take away a supported way to decide what a name means without any
    * declaration having said anything about it.
    */
   readonly closesExecution: boolean;
@@ -853,7 +858,7 @@ export class ExecutionImports implements ComponentResolution {
   /**
    * The tier this name is closed by, if any.
    *
-   * A tier that claims the name answers for it; otherwise a tier that closes
+   * A tier that reserves the name answers for it; otherwise a tier that closes
    * the whole execution does, which is what keeps a bundled run's every import
    * — and every refusal's wording — exactly what it was.
    */

@@ -1,79 +1,27 @@
 /**
- * The ACP adapters a workflow run executes, and how they reach the disk
- * (`packages/acp/vendor/adapters/PROVENANCE.md`).
+ * Materialize the patched ACP adapters that report completed-turn `_meta`
+ * (`packages/acp/vendor/adapters/PROVENANCE.md`). Their npm tarballs come from
+ * exact patched upstream commits and travel as a generated module so source, npm
+ * and compiled distributions execute identical bytes.
  *
- * A workflow Prompt needs an adapter that names the turn it just completed, on
- * `_meta`. No published adapter does yet, so this repository carries one npm
- * tarball per provider — packed from an exact patched upstream commit by that
- * project's own build — and runs those instead of whatever `npx` would resolve.
+ * A snapshot materializes under its SHA-256. Durable identity is provider, package,
+ * version and digest; the quoted host-local launch path is never retained in a
+ * session or sealed artifact.
  *
- * ## Why the bytes travel in the module graph
+ * Stage privately, publish by one rename and verify the published tree before
+ * use, including when another attempt won. Recovery of an abandoned non-empty
+ * tree requires exclusive ownership of recovery and a fresh check before
+ * removal, otherwise a stale observation could delete another process's newly
+ * published valid adapter.
  *
- * A tarball on disk is unreachable from a compiled binary and from the npm
- * artifact. The same bytes are therefore carried as a generated module, which
- * every distribution inlines identically, and this module writes them out. One
- * mechanism, so "the source tree, the npm package and the binary all run the
- * same adapter" is a fact rather than three arrangements that happen to agree.
+ * Recovery tickets are prepared directories atomically renamed to `claims/<n>`.
+ * Tickets increase monotonically and are never reused: late arrivals cannot
+ * precede an elected holder, and finishing a dead holder cannot affect a later
+ * ticket. The lowest unfinished ticket owns recovery; release marks it
+ * finished, and a later attempt may finish a dead owner's ticket.
  *
- * ## Content-addressed, so identity is the location
- *
- * A snapshot materializes under its own SHA-256. Two runs asking for the same
- * adapter name the same directory, a changed snapshot names a different one,
- * and nothing has to decide whether an existing directory is current — the
- * question does not arise.
- *
- * ## Identity is not the launch path
- *
- * Two different things are needed, and conflating them was a defect: an adapter
- * has a **stable identity** — its provider, package, version and snapshot
- * digest — and a **host-local launch path** under whatever root this machine
- * materialized into.
- *
- * Only the identity is durable. It is what a retained Agent session records and
- * what a sealed artifact carries, so two machines running the same snapshot
- * agree, and a run exported from one is readable on the other. The path appears
- * nowhere durable: it names a directory that exists on one host, and putting it
- * in an artifact would make where a file happened to live a compatibility term.
- *
- * The launch path is quoted, because a root containing a space is an ordinary
- * thing on a developer's machine and an unquoted command would split there.
- *
- * ## Published atomically, verified before use
- *
- * Materialization happens in a private temporary directory and is published by
- * one rename. A concurrent run either wins that rename or finds the directory
- * already there — both then verify before using it, so nobody executes a tree
- * another process is still filling.
- *
- * Replacing an *abandoned* tree is the one step that cannot be done by rename
- * alone, because a rename will not overwrite a non-empty directory. Removing it
- * first is a decision that goes stale: another attempt may publish a valid tree
- * between the observation and the removal, and deleting that would pull the
- * files out from under an adapter already running. So recovery is serialized on
- * an exclusive claim, and the holder re-checks under it before removing
- * anything.
- *
- * The claim is a ticket: the directory `claims/<n>`, taken by renaming a
- * prepared directory onto that name, which only one attempt can win and which
- * is never handed out a second time.
- *
- * Two properties come from that, and the claim needs both. Because numbers are
- * never reissued, finishing a dead holder's ticket can only ever act on the
- * exact ticket that was inspected. Because they are taken in ascending order,
- * an attempt arriving later cannot obtain a lower number, so it cannot come to
- * precede a holder that has already been elected.
- *
- * The holder is the lowest ticket still outstanding. Releasing is marking one
- * finished, and a process killed mid-recovery leaves a ticket whose owner a
- * later attempt reads as dead and finishes on its behalf.
- *
- * ## It refuses; it never falls back
- *
- * A digest that does not match, an extraction that fails, a dependency install
- * that fails, a missing entry file: each raises. Running the published adapter
- * instead would be running one that emits no token, which is the state this
- * exists to leave — silently, and after the run had already been told it was
- * continuing an exact conversation.
+ * Digest, extraction, installation or missing-entry failures raise. Falling back
+ * to a published adapter would lose the turn identity continuation depends on.
  */
 
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
@@ -120,10 +68,10 @@ const RECOVERY_ATTEMPTS = 400;
 const OWNER = "owner";
 const DONE = "done";
 
-/** A ceiling on ticket numbers, so a pathological claims directory cannot spin. */
+/** A ceiling on ticket numbers, so a pathological recovery-ticket directory cannot spin. */
 const MAX_TICKETS = 10_000;
 
-/** Who holds a recovery claim, so a later attempt can tell live from dead. */
+/** Who holds a recovery ticket, so a later attempt can tell live from dead. */
 interface RecoveryOwner {
   readonly pid: number;
   readonly host: string;
@@ -150,7 +98,7 @@ function parseOwner(raw: string): RecoveryOwner | undefined {
  * Signal 0 asks without delivering anything. `EPERM` means it exists and
  * belongs to somebody else, which is still alive; only `ESRCH` means gone. An
  * answer this cannot interpret is treated as alive, so an unreadable state
- * never becomes a reason to take somebody's claim.
+ * never becomes a reason to take somebody's recovery ownership.
  */
 function alive(pid: number): boolean {
   try {
@@ -431,10 +379,10 @@ export function createEmbeddedAdapters(
    * on. An attempt arriving later cannot obtain a number below one already
    * taken, so it cannot come to sit ahead of a holder.
    *
-   * Ordering names by time could not offer that. Two claims made in the same
-   * millisecond were separated only by the random part of their names, and a
-   * clock adjustment could hand a later arrival an earlier name — either way an
-   * elected holder could be preceded after the fact.
+   * Ordering names by time could not offer that. Two recovery tickets issued in
+   * the same millisecond were separated only by the random part of their names,
+   * and a clock adjustment could hand a later arrival an earlier name — either
+   * way an elected holder could be preceded after the fact.
    */
   function* takeTicket(claims: string): Operation<number> {
     yield* ensureDir(claims);
@@ -465,15 +413,15 @@ export function createEmbeddedAdapters(
   }
 
   /**
-   * Whether this attempt now holds the claim.
+   * Whether this attempt now owns recovery.
    *
    * The holder is the lowest ticket still outstanding, so every number below
-   * this attempt's own is examined in order: a finished ticket is passed over, a
-   * ticket whose owner is a dead process on this host is finished here, and a
+   * this attempt's own is examined in order: a finished ticket is passed over,
+   * a ticket whose owner is a dead process on this host is finished here, and a
    * live owner, an owner on another machine, or a record that cannot be read
    * each stop the election where it stands. The last one says so, because
    * refusing to act on what it cannot read is the only safe reading of somebody
-   * else's claim.
+   * else's recovery ticket.
    *
    * Finishing a dead holder's ticket is safe for the reason the election is:
    * the number is never reissued, so this can only ever act on the exact ticket
@@ -518,17 +466,18 @@ export function createEmbeddedAdapters(
   }
 
   /**
-   * Replace an abandoned tree at the target, holding an exclusive claim.
+   * Replace an abandoned tree at the target, under exclusive ownership of
+   * recovery.
    *
-   * Reached only when the rename failed and what is there does not verify. The
-   * claim makes "check, then remove" one decision instead of two: without it, a
-   * second attempt could publish a valid tree in the gap and this one would
-   * delete it, taking the files out from under an adapter that had already
-   * resolved and might already be running.
+   * Reached only when the rename failed and what is there does not verify.
+   * Exclusive recovery ownership makes "check, then remove" one decision
+   * instead of two: without it, a second attempt could publish a valid tree in
+   * the gap and this one would delete it, taking the files out from under an
+   * adapter that had already resolved and might already be running.
    *
-   * An attempt that does not hold the claim never removes anything. It waits
-   * and answers from what the holder published — including when the wait ends
-   * with this attempt elected, because a holder finishes its ticket only after
+   * An attempt that does not own recovery never removes anything. It waits and
+   * answers from what the holder published — including when the wait ends with
+   * this attempt elected, because a holder finishes its ticket only after
    * publishing.
    */
   function* recover(
@@ -690,9 +639,9 @@ export function createEmbeddedAdapters(
  *
  * A closed registry was the wrong shape for the same reason. It made "this
  * build has no Codex snapshot problem to solve for Gemini" into "this build
- * refuses Gemini", which is a much larger claim than the one being made, and it
- * would have changed the retained identity of agents the checkpoint work has
- * nothing to say about.
+ * refuses Gemini", which is a much broader restriction than the one being made,
+ * and it would have changed the retained identity of agents the checkpoint work
+ * has nothing to say about.
  *
  * The overlay is *qualified*: an embedded provider never falls through. A
  * snapshot that cannot be verified or materialized refuses the agent, and does

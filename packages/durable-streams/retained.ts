@@ -65,8 +65,8 @@ function resolve<T>(settled: Settled<T>): T {
  * another to the next, and no later mutation of the source changes what replay
  * used.
  *
- * The copy is ordinary JSON. Detaching is the claim against the *stream*;
- * making the copy immutable would be a claim against the *consumer*, and
+ * The copy is ordinary JSON. Detaching is the guarantee for the *stream*;
+ * making the copy immutable would be a restriction on the *consumer*, and
  * replayed values are legitimately mutable — an eval binding restored from a
  * journal is pushed to by the iteration that resumes on it. Members are
  * therefore writable and configurable like any other JSON.
@@ -114,8 +114,8 @@ export function detachJson(value: Json, seen: Set<object> = new Set()): Json {
  *
  * The authoritative retained graph is what admission validated and what replay
  * consumes, so nothing that reaches a caller may write to it. Freezing is the
- * claim against *policy*, not against a workflow: what a document finally
- * receives is a fresh mutable copy taken from this, never this.
+ * restriction on *policy*, not on a workflow: what a document finally receives
+ * is a fresh mutable copy taken from this, never this.
  */
 function sealJson(value: Json): Json {
   const detached = detachJson(value);

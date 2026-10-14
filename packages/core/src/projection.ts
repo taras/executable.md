@@ -8,9 +8,10 @@
  * its live effects belong to the invocation rather than to the caller that wrote
  * the content, and stop before the invocation cleans up its own.
  *
- * `<Content />` differs only in how its segments are chosen: slots are resolved
- * during body substitution, and the resolved segments ride on the element the
- * handle claims. The others ask the handle to select their segments.
+ * `<Content />` differs only in how its segments are chosen: slots are
+ * resolved during body substitution, and the resolved segments ride on the
+ * element the handle marks. The others ask the handle to select their
+ * segments.
  *
  * The two selecting methods differ in what a failure looks like. `project()`
  * hands ErrorSegments back structurally, which is how a function component's
@@ -48,12 +49,12 @@ export interface ProjectionHandle {
   /**
    * Mark a `<Content />` element as carrying a resolved projection, so
    * expansion runs its children in this invocation's content scope. Identity
-   * is the boundary: an unclaimed `<Content />` is not a projection.
+   * is the boundary: an unmarked `<Content />` is not a projection.
    */
   claim(element: ComponentElement): ComponentElement;
   claims(element: ComponentElement): boolean;
   /**
-   * Expand a claimed element's children inside the content scope, writing into
+   * Expand a marked element's children inside the content scope, writing into
    * the region the caller is rendering. Projected content is the caller's own
    * text, so what it produced before a failure belongs to that region.
    */

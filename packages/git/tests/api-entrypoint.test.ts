@@ -24,7 +24,7 @@
  *
  * Read through `Reflect.get` rather than a cast: what a module exported is
  * whatever it exported, and the members below are proven present rather than
- * claimed.
+ * assumed.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";

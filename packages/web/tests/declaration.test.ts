@@ -251,7 +251,7 @@ describe("declaration: __proto__ in a schema position", () => {
    * name does not survive. `properties: { "__proto__": … }` compiles and then a
    * submission carrying that key is judged as though the property were never
    * declared; `dependencies` compiles and never applies; `required` is refused by
-   * strict mode. Rather than claim a support that is not there, the declaration is
+   * strict mode. Rather than advertise support that is not there, the declaration is
    * refused before anything compiles.
    */
   it("refuses __proto__ wherever a schema declares it as a name", function* () {

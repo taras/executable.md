@@ -45,7 +45,7 @@
  * Between materialization and native Git, the retained identity is proven
  * against what was exported: placement, origin, object format, creation commit,
  * and — for a linked worktree — that it really is a worktree of the Repository
- * it claims. Then the checkout's branch, commit, HEAD tree and index tree are
+ * it names. Then the checkout's branch, commit, HEAD tree and index tree are
  * read, the operation runs, and they are read again. What the run retains is
  * those two readings rather than a summary of what changed, because a history
  * that says only "switched" cannot be checked against anything.
@@ -438,10 +438,10 @@ export function* exportCheckoutFamily(
  * localized first, because until it is, a linked worktree's pointers still name
  * Workspace paths and native Git can answer nothing about it. The working
  * directory is then proven to be a real directory inside the export. And the
- * creation identity the record claims is read back out of the bytes — where the
- * checkout came from, how it names objects, that the commit it was created at
- * is present, and for a linked worktree that it is a worktree of the Repository
- * it belongs to.
+ * creation identity the record describes is read back out of the bytes — where
+ * the checkout came from, how it names objects, that the commit it was created
+ * at is present, and for a linked worktree that it is a worktree of the
+ * Repository it belongs to.
  *
  * Everything here reads the host tree rather than the Workspace, so it belongs
  * outside the transaction that produced the export.

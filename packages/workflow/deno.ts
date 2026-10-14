@@ -132,7 +132,8 @@ export {
 /**
  * What a host declares to the execution so an authored workflow document has
  * `<Evaluate>`: its implementation names durable work after its own invocation,
- * so canonical execution builds it from the claimant it minted.
+ * so canonical execution builds it from the invocation identity function it
+ * minted.
  */
 export { evaluationProfile } from "./src/deno/workspace/evaluate.ts";
 export type { GeneratedEvaluationOptions } from "./src/deno/workspace/evaluate.ts";

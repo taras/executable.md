@@ -13,9 +13,9 @@
  * is **XMD's own writable run state** offered where evidence was expected, and
  * says so in its own sentence rather than as a confusing foreign refusal. A
  * version this build does not implement is **unsupported**: a later build may
- * read it, and this one must not touch it. A file that claims version 1 and is
- * not shaped like one is **damage** — the header says the tables are there, so
- * their absence or their wrong shape is the file disagreeing with itself.
+ * read it, and this one must not touch it. A file that declares version 1 and
+ * is not shaped like one is **damage** — the header says the tables are there,
+ * so their absence or their wrong shape is the file disagreeing with itself.
  *
  * The stored `sqlite_schema` definitions are compared with the definitions this
  * build creates, so a dropped constraint, an added trigger, a view somebody
@@ -66,8 +66,8 @@ interface DeclaredObject {
  * Version 1, one declaration at a time.
  *
  * Two tables and nothing else. The header is a singleton carrying what the
- * container claims to be and what it claims to hold; the content table is a
- * generic store keyed by an entry's kind and its canonical logical identity.
+ * container declares as its format and contents; the content table is a generic
+ * store keyed by an entry's kind and its canonical logical identity.
  *
  * The content table is `WITHOUT ROWID`, so its primary key *is* the table and
  * SQLite creates no automatic index beside it. That matters because version 1
@@ -77,7 +77,7 @@ interface DeclaredObject {
  * `identity` holds the entry's canonical JSON identity as text rather than a
  * joined key, because two different natural keys can join to one string and a
  * container whose primary key merged them would hold fewer records than its
- * manifest claims.
+ * manifest lists.
  */
 const OBJECTS: ReadonlyMap<string, DeclaredObject> = new Map([
   [

@@ -1,61 +1,24 @@
 /**
- * What a workflow run lets a generated fragment do
+ * State the host ceiling for canonical core's Evaluate component
  * (specs/workflow-workspace-spec.md §8.4).
  *
- * An Agent proposes an observation by returning a fragment of Executable
- * Markdown, and an authored workflow writes `<Evaluate>` where it wants that
- * fragment admitted and performed. The component is canonical core's — public,
- * protected, and the same in every execution. What this file states is the
- * *ceiling*, which is the only part a host owns.
+ * The workflow attachment assembles the profile once; canonical execution captures
+ * it by value before document code. Props, bindings, Context, middleware and
+ * generated names cannot widen it. Read includes core's self-closing File, Fetch
+ * only with exact permitted requests, and captured host additions. Write includes
+ * paired File, an optional host-supplied directory entry, self-closing File.Delete
+ * and captured additions, in that order. No directory entry means no directory
+ * grant. `allow` selects classes, defaulting to read, and never supplies permission.
  *
- * ## Every ceiling is captured before a document exists
+ * The private per-invocation Workspace snapshot reports retained roots and current
+ * root. Continuation requires admission roots by membership, allowing legitimate
+ * new roots and frontier advancement without changing the grant.
  *
- * This is built once, when the workflow attachment assembles the execution, and
- * canonical execution captures it by value there. Nothing a document, a prop, a
- * binding, a context, a contextual API answer, middleware or a generated name
- * does reaches back into it.
- *
- * - the read table is core's read-only `<File />`; `<Fetch />` joins it only
- *   where this host also states the exact requests it may perform;
- * - the write table is core's paired `<File>`, the directory entry this host
- *   captured — or the one released builds retained, when it captured none —
- *   and core's self-closing `<File.Delete />`;
- * - any further read or write comes from the captured host option; and
- * - the Workspace basis is answered per invocation by the private operation
- *   below, because a run's own progress legitimately advances it: every
- *   committed mutation retains another immutable root. A continuation holds the
- *   admission's roots by membership, so later publications and an advanced
- *   current root change nothing the admission was granted under.
- *
- * ## `allow` narrows; it never grants
- *
- * `allow` names an effect *class*, and the class resolves to the table stated
- * here. Omitting it asks for `read`. Asking for `write` reaches core's paired
- * `<File>`, the directory entry this host captured — `<Dir>` is canonical
- * core's own component now, and what a host supplies is the entry admitting it
- * — and core's self-closing `<File.Delete>`, and nothing else — no Git, no Git host, no Issue, no process, no credential — and
- * a host that installed no write table refuses the selection before the
- * candidate is parsed.
- *
- * A deletion is admitted on the same terms as the other two, and accounted for
- * the same way: it invokes the ordinary component, crosses the run's existing
- * effect transaction, and is retained by the `workspace_file` effect that
- * transaction publishes. Nothing about it reaches the value `<Evaluate>`
- * returns.
- *
- * ## The operations are the run's own, not this file's
- *
- * This states names, forms, identities and ceilings, and no operation at all.
- * An admitted entry runs canonical core's own component, which performs its
- * work through contextual `API.Files` and `API.Fetch` — in a workflow run,
- * the transaction-bound provider `workspace/host.ts` installed and the
- * transport the workflow host installed. So an admitted write is the same
- * durable effect an authored one is, published by the same transaction,
- * observed by the same middleware and decided by the same effective
- * `Permissions`. A fragment's relative paths resolve against the run's own
- * contextual working directory, which is the Workspace root as narrowed by the
- * run's own `<Dir>`, `<Repository>` and `<Worktree>` — never the directory the
- * caller invoked `xmd` from.
+ * Entries run ordinary canonical components through contextual API.Files/API.Fetch,
+ * existing middleware, effective Permissions and the run's effect transaction.
+ * Deletion remains a workspace_file effect. Relative paths use the run's contextual
+ * cwd, including Dir/Repository/Worktree placement, never the invocation host cwd.
+ * This profile supplies identities, forms and ceilings rather than operations.
  */
 
 import { timeoutFetch } from "@executablemd/runtime";
@@ -96,18 +59,10 @@ export interface GeneratedEvaluationOptions {
   /** Further mutation components this host admits beside the standard profile's. */
   readonly writes?: readonly FragmentEntry[];
   /**
-   * The directory component this host admits, between core's write and delete.
-   *
-   * Its own member rather than one of the additive entries above, because it is
-   * not an addition: it occupies the position the standard profile has always
-   * had a directory entry in, and a continuation compares that table position
-   * by position.
-   *
-   * Optional, and absence grants nothing. `<Dir>` belongs to
-   * `@executablemd/git`, and this package states no entry for it: a host that
-   * supplies none is a Workflow host without a directory capability, which is
-   * a thing a generic host is entitled to be. The XMD workflow profile supplies
-   * Git's.
+   * Optional directory admission, between File write and File.Delete.
+   * Canonical core owns Dir; the host supplies its admitted entry. Omission grants
+   * no directory capability. Keep this position: continuation compares the retained
+   * table entry by entry.
    */
   readonly directory?: FragmentEntry;
 }

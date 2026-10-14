@@ -200,7 +200,7 @@ const DRAWER_COMPONENT: ReplComponent<Surfaced> = component<Surfaced>({
 /**
  * The draft line, which is where typing goes.
  *
- * It claims text and Backspace as well as Enter, and answers each with its own
+ * It handles text and Backspace as well as Enter, and answers each with its own
  * semantic action. The host said what arrived; what it means to a draft — append,
  * erase, submit — is this component's to decide, which is why the same Enter that
  * activates a row submits here.

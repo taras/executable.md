@@ -1,23 +1,12 @@
 /**
- * One database, one operation at a time.
+ * Serialize all access to one provider-owned database connection.
+ * Transactions suspend, so synchronous SQLite calls alone cannot prevent another
+ * operation from joining and committing or rolling back somebody else's work.
+ * Handles for one run share this cooperative lock; SQLite coordinates processes.
  *
- * SQLite is reached synchronously, but the operations built on it are not: a
- * transaction holds the database across every `yield*` its body performs. A
- * second operation arriving in that window would run its statements inside
- * somebody else's transaction and commit or roll back with it, so the adapter
- * serializes everything that touches one database rather than relying on
- * callers to take turns.
- *
- * Turns are taken by the provider-owned entry for one database file. Every
- * handle for that run leases the same physical connection, so a second
- * operation must wait here before it can issue statements inside the first
- * operation's transaction. Waiting cooperatively leaves the host running;
- * SQLite's own locking remains responsible for contention between processes.
- *
- * Waiting is cancellable and hand-off is synchronous. A caller torn down while
- * queued leaves the queue without ever running its statements, and a caller
- * torn down in the instant between being handed the lock and resuming still
- * passes it on — the two states that would otherwise strand it.
+ * Cancellation removes queued turns before they execute. Synchronous hand-off marks
+ * the next turn granted before waking it, so cancellation between grant and resume
+ * still releases the lock rather than stranding it.
  */
 
 import { ensure, type Operation, resource, type WithResolvers, withResolvers } from "effection";

@@ -758,7 +758,6 @@ export function flatten(root: ReplBox): readonly ReplBox[] {
   return [root, ...root.children.flatMap((child) => flatten(child))];
 }
 
-/** Build one box. A helper, so no call site assembles the shape by hand. */
 export function box(input: {
   readonly id: string;
   readonly key?: string;

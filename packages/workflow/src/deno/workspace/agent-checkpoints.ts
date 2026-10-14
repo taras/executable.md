@@ -71,7 +71,7 @@ const INSERT = `INSERT INTO ${AGENT_PROMPT_CHECKPOINTS}
  *
  * The join is the ordering. `journal_events.sequence` is the run's own physical
  * order, and reading through it is what makes two associations comparable
- * without this table claiming to know which Prompt came first.
+ * without this table asserting which Prompt came first.
  */
 const SELECT_ALL = `SELECT c.event_id, c.session_key, c.provider, c.token_kind, c.token_value
   FROM ${AGENT_PROMPT_CHECKPOINTS} c

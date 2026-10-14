@@ -739,7 +739,7 @@ function mutableFieldsAgree(before: PullRequestSnapshot, after: PullRequestSnaps
 /**
  * Whether two snapshots describe the same pull request in the same state.
  *
- * What an adoption claims is that the pull request that was already there is
+ * What adoption establishes is that the pull request that was already there is
  * the one this record retains — every member, not merely the ones the request
  * named. A pre-state naming another number, another URL or another base commit
  * describes a pull request the observations are not about.

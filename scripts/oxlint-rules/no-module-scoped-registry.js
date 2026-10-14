@@ -9,7 +9,7 @@
  * scope-local inheritance the rest of the engine is built on.
  *
  * State belongs to the operation that owns it: create the table inside that
- * operation and hand it down through context, so it is reclaimed when the scope
+ * operation and hand it down through context, so it is released when the scope
  * that made it ends.
  *
  *     export function* useSegmentCauses() {

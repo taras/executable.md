@@ -1,71 +1,22 @@
 /**
- * `<Issue>` — read one issue by URL, or upsert one in the tracker a lexical
- * context names (specs/workflow-workspace-spec.md §10.3).
+ * Read an issue by URL or upsert one in a lexical tracker
+ * (specs/workflow-workspace-spec.md §10.3).
  *
- * Two forms, and the syntax chooses between them before anything is routed.
+ * `<Issue url={finding.issueUrl} as="found" />` reads without consulting tracker
+ * context and binds URL, title, description, tags and assignee. Optional `provider`
+ * addresses a URL the installed adapters do not otherwise recognize.
  *
- * ```md
- * <Issue url={finding.issueUrl} as="found" />
+ * `<Issue title="Retry" tags={["reliability"]} as="filed">…</Issue>` upserts in
+ * the enclosing IssueTracker, using its completely rendered content verbatim as
+ * the description, and binds exactly `{ url }`. Provider ids, issue numbers,
+ * workflow state and raw payloads are absent from both results.
  *
- * {found.title}: {found.description}
- * ```
- *
- * ```md
- * <IssueTracker url={props.tracker}>
- *   <Issue title="Retry the publish step" tags={["reliability"]} as="filed">
- * The publish step failed twice in a row on 503.
- *   </Issue>
- * </IssueTracker>
- *
- * Filed {filed.url}.
- * ```
- *
- * ## Why the two are one component
- *
- * They are the same subject at the same altitude: an issue, named
- * provider-neutrally. What differs is which question is being asked, and that
- * is exactly what the syntax already says — a self-closing element with a `url`
- * is asking about an issue that exists, and a paired element with a `title` is
- * asking for one to exist saying something.
- *
- * So the form decides the operation, and a form that is neither is refused
- * before a tracker is read and before `IssueApi` is invoked. A `url` with
- * content, a `title` without content, content without a title, `tags` on a
- * read: each is a document asking for something this element does not do, and
- * being told so is better than having one of the two guessed for it.
- *
- * ## Read needs no tracker
- *
- * The URL is the identity, so there is nothing for a container to add. A read
- * therefore never consults the tracker context — writing one around a read
- * changes nothing about it, which is what makes reading an issue from anywhere
- * a document happens to be safe.
- *
- * `provider` is permitted on a read for the same reason it is permitted on a
- * tracker: a self-hosted URL nobody recognizes still has to be addressable.
- *
- * ## Upsert takes its description from what it renders
- *
- * The content is the description, verbatim after expansion. There is no
- * `description` prop, because the thing a person writes at length belongs in
- * the document where it can be read, interpolated and reviewed — not squeezed
- * into an attribute.
- *
- * ## What each produces
- *
- * A read binds the fields every provider has: URL, title, description, tags and
- * assignee. An upsert binds exactly `{ url }`. Neither carries a provider's own
- * identity, a number, a workflow state or a payload, because a document that
- * branched on one of those would stop being portable across providers — which
- * is the whole point of this primitive.
- *
- * ## Failure
- *
- * A form that is neither read nor upsert, a missing tracker on an upsert, and a
- * URL that is not a credential-free container are decided here, before the
- * boundary exists in the story. What a provider answers — a conflict, an
- * ambiguity, an unavailability, a target outside its ceiling — is the
- * provider's own closed vocabulary.
+ * Form/input mismatches refuse before tracker lookup or IssueApi: URL with
+ * content, title without content, content without title and tags on reads are
+ * invalid. Upsert content must render non-empty before the destination is read.
+ * Invalid invocation, missing tracker and non-credential-free URLs are local
+ * refusals; provider conflicts, ambiguity, availability and ceiling failures keep
+ * the provider's own vocabulary.
  */
 
 import { content, hasContent } from "@executablemd/core";

@@ -194,10 +194,10 @@ function misclassified(counted: Map<string, number>): [string, number][] {
  * The subpaths a manifest's `exports` declares, or nothing when it declares no
  * readable map.
  *
- * Narrowed by asking the value what it is rather than telling the compiler.
- * The distinction matters here: this case's claim is about what the export map
- * admits, and a manifest this could not read would otherwise answer "no
- * subpaths" and satisfy the claim by accident.
+ * Narrowed by asking the value what it is rather than telling the compiler. The
+ * distinction matters here: this case verifies what the export map admits, and
+ * a manifest this could not read would otherwise answer "no subpaths" and pass
+ * the test by accident.
  */
 function subpaths(declared: unknown): string[] | undefined {
   if (typeof declared !== "object" || declared === null) {

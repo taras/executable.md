@@ -5,7 +5,7 @@ import type { ReturnsSchema } from "./types.ts";
  * The value body a `<Return>` selects for (spec §6.10).
  *
  * A value root and a Markdown value component each create one of these for the
- * body it expands, and `<Return>` claims it. This is what lets a return be
+ * body it expands, and `<Return>` reserves it. This is what lets a return be
  * written wherever the body's own flow reaches — under `<If>`, inside a
  * `<Loop>`, in content the caller projected — instead of only as a direct
  * top-level child.
@@ -31,27 +31,27 @@ import type { ReturnsSchema } from "./types.ts";
  * carrier itself is sealed: the document calls the engine's own helper with the
  * engine's own carrier.
  *
- * So there is no carrier and no context. A `ReturnBody` is a plain object whose
- * operations are closures over state nothing else holds, and it reaches the
- * `<Return>` that claims it as an ordinary parameter of expansion — down the
- * call stack, which document code has no way to read or replace. Importing this
- * module gains a document nothing: `createReturnBody()` hands back a body of its
- * own, unconnected to any execution, and no exported function takes someone
- * else's.
+ * So there is no carrier and no context. A `ReturnBody` is a plain object
+ * whose operations are closures over state nothing else holds, and it reaches
+ * the `<Return>` that reserves it as an ordinary parameter of expansion — down
+ * the call stack, which document code has no way to read or replace. Importing
+ * this module gains a document nothing: `createReturnBody()` hands back a body
+ * of its own, unconnected to any execution, and no exported function takes
+ * someone else's.
  */
 export interface ReturnBody {
   /**
    * Take the body for the return about to execute, and say what it declares.
    *
-   * Synchronous on purpose. The claim is recorded before the caller suspends to
-   * evaluate the return's expression, so two returns racing through one body
-   * cannot both believe they were first — the second throws here, having
-   * evaluated nothing.
+   * Synchronous on purpose. The reservation is recorded before the caller
+   * suspends to evaluate the return's expression, so two returns racing
+   * through one body cannot both believe they were first — the second throws
+   * here, having evaluated nothing.
    */
   claim(): { owner: string; returns: ReturnsSchema };
   /**
-   * Record the value the claiming return produced. Only a claimed body accepts
-   * one, so a value is selected exactly where a claim was taken.
+   * Record the value the reserving return produced. Only a reserved body
+   * accepts one, so a value is selected exactly where the reservation was made.
    */
   select(value: Json): void;
   /**

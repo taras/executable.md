@@ -20,8 +20,7 @@
  * argument, so the kernel never reads a home directory, an environment variable
  * or a platform name to find one.
  *
- * Writing is single-writer, which is the `DurableStream` contract and not a
- * claim this feature strengthens. Two processes appending to one execution is
+ * Writing is single-writer, which is the `DurableStream` contract and not a guarantee this feature strengthens. Two processes appending to one execution is
  * outside that contract and unsupported; no lease is taken, because a lease
  * whose crash behavior nothing here proves would be a worse answer than the
  * documented one.

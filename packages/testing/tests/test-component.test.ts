@@ -1,8 +1,9 @@
 /**
  * `<Test>` as a registered function component (specs/testing-spec.md).
  *
- * These pin the properties the migration off the `Component.expand` claim had
- * to preserve, each of which broke at least once while it was being made.
+ * These pin the properties the migration off the `Component.expand`
+ * interception had to preserve, each of which broke at least once while it was
+ * being made.
  */
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";

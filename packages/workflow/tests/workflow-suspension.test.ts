@@ -7,7 +7,7 @@
  * wait — teardown, settlement, exit code, released lock — is the CLI's, and
  * Tier WFS proves that against real processes.
  *
- * The identity claim is the one worth stating carefully. A suspension ID is
+ * The identity invariant is the one worth stating carefully. A suspension ID is
  * derived from the run and the durable coroutine position, so it is stable for
  * the same wait across executions and different for two waits in one procedure.
  * Both halves are asserted: an identity that is only stable is one that

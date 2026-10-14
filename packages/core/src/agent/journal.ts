@@ -623,7 +623,8 @@ function serializePermission(permission: PromptPermission): Json {
 const UNREADABLE = Symbol("unreadable permission audit");
 
 /**
- * The audits one durable record carries, read as the closed shape they claim.
+ * The audits one durable record carries, read as the closed shape they
+ * describe.
  *
  * Closed in both directions: every member is checked, and a member nothing here
  * defines refuses the whole record rather than being read past. An audit is
@@ -722,7 +723,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * One durable `agent_prompt` result, as the record it claims to be.
+ * One durable `agent_prompt` result, as the record it describes itself as.
  *
  * Pure and total: it reads a value nobody has authenticated and answers with
  * the record or with nothing, so a caller that has only retained bytes — a

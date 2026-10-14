@@ -133,7 +133,7 @@ const DUPLICATE_RETURN_ROOT = [
  *
  * `expand.return` is reachable by name from an eval block, so the document
  * reads the carrier the engine published, tries to write a selected value onto
- * it, tries to clear its claim, and finally replaces the context with a
+ * it, tries to clear its return-state reservation, and finally replaces the context with a
  * fully-formed forgery. Its one authored `<Return>` is unselected, so anything
  * it manages to select would be a value the engine never validated.
  */

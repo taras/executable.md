@@ -8,7 +8,7 @@
  *
  * **The runtime path is the evidence.** XP1 and XP2 execute documents and read
  * what was rendered, because that is what a resolution defect cannot hide from:
- * the retired expansion hook could claim a name and preempt execution while
+ * the retired expansion hook could intercept a name and preempt execution while
  * `inspectComponent` went on reporting the repository file it had overridden,
  * so an inspection-only suite would have passed against exactly the arrangement
  * it appeared to be testing. XP3 and XP4 add inspection on top, for origins
@@ -41,9 +41,9 @@ import { installTestAgentComponents } from "../src/components.ts";
 /**
  * Every name the three packages register. All are non-reserved defaults.
  *
- * Written out rather than derived, so the coverage each test claims is visible
- * in the file — and checked against the live registry by XP0, which is what
- * keeps the two from drifting apart as packages gain components.
+ * Written out rather than derived, so the coverage each test requires is
+ * visible in the file — and checked against the live registry by XP0, which is
+ * what keeps the two from drifting apart as packages gain components.
  */
 const AGENT = [
   "AgentProvider",
@@ -221,7 +221,8 @@ describe("Tier XP — cross-package resolution", () => {
   /**
    * The inventory below is what every other case iterates, so a name missing
    * from it is coverage silently not taken. Comparing against the live registry
-   * is what makes "every registered name" a checked claim rather than a comment.
+   * is what makes "every registered name" verified coverage rather than a
+   * comment.
    */
   it("XP0: the names under test are exactly the ones the three packages register", function* () {
     const installed = yield* scoped(function* () {

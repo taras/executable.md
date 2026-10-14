@@ -1,21 +1,11 @@
 /**
- * Whether a request addresses the run that is already stored.
+ * Compare run-id reuse by immutable identity: public id, complete definition and
+ * normalized props. Canonical prop comparison ignores object-key order.
  *
- * Reuse of a run id is the mechanism a caller has for saying "the same run
- * again", so the question is not whether two requests are byte-identical but
- * whether they describe one run. Identity is the run id, the whole definition
- * descriptor, and the normalized props. Values are compared canonically, so
- * props that differ only in key order are the same props.
- *
- * Everything a run accumulates is excluded: status, stop reason, retrieval
- * metadata, timestamps, document executions and journal records all change
- * while the run stays the run it was. A completed run that is asked for again
- * is found, not refused.
- *
- * A run is its entrypoint, the complete canonical source manifest, its
- * component mapping and its target. There is one definition shape, so there is
- * one comparison rather than a per-version one, and no member a descriptor
- * might not have.
+ * Status, stop reason, retrieval metadata, timestamps, document executions and
+ * journal records are accumulated state and do not prevent reuse, even after
+ * completion. Definition comparison includes the entrypoint, complete canonical
+ * source manifest, component mapping and exact target.
  */
 
 import type { JsonObject } from "./members.ts";

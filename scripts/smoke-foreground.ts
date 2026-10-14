@@ -2,7 +2,7 @@
  * Foreground execution through the compiled binary (#441).
  *
  * The contract is about what a caller sees and what status they get, and only
- * the binary proves both survived `deno compile`. Two claims, each observed
+ * the binary proves both survived `deno compile`. Two behaviors, each observed
  * from outside the process:
  *
  * 1. a command's output arrives while the run is still going, not at the end;

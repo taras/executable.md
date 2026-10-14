@@ -438,7 +438,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
    * `<Plan>` is packaged Markdown rather than a module, so what a build ships
    * under that name is exactly the kind of thing a module-graph emitter can
    * lose. Asking the built bin what it would let a document write is what makes
-   * "the same Component in every distribution" a checked claim: the origin names
+   * "the same Component in every distribution" a verified guarantee: the origin names
    * the asset, the digest names the bytes, and a build that shipped different
    * ones — or none — answers differently here rather than at a person's first
    * `xmd plan`.

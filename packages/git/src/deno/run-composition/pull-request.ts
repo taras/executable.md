@@ -17,7 +17,7 @@
  * ## Interruption, said plainly
  *
  * Inside one execution an attempt is made at most once. Across a process
- * interruption there is no exactly-once claim at all: GitHub may have accepted a
+ * interruption there is no exactly-once guarantee: GitHub may have accepted a
  * change for which this run recorded no result, and the next run observes what
  * is there and decides from that. Nothing pretends otherwise, and nothing is
  * retained that would let it.

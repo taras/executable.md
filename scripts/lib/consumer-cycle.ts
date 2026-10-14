@@ -10,7 +10,7 @@
  * generated module is imported and checked against its own recorded byte counts
  * rather than merely being present.
  *
- * One file runs under all three runtimes because the claim is about them
+ * One file runs under all three runtimes because the proof concerns them
  * resolving the same union of stores at the same time — three implementations
  * could drift into proving three slightly different things, invisibly. What is
  * genuinely per-runtime is only how the process is launched, which stays in

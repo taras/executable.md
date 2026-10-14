@@ -125,7 +125,7 @@ export function* suspendFor(request: WorkflowSuspensionRequest): Operation<Json>
 }
 
 /**
- * The answer, restored or claimed.
+ * The answer, restored or consumed.
  *
  * A durable operation of its own, directly behind the request, so an execution
  * that already received its answer replays it instead of asking again. Its live

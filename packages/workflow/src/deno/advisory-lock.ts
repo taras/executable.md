@@ -53,10 +53,11 @@ interface LockingRuntime {
  * Whether the global this host found is one that opens files.
  *
  * Asked rather than assumed. Describing the global's type at the point of use
- * would be this module telling its own typechecker what is out there — a claim
- * the compiler accepts and nothing verifies, which is exactly backwards for a
- * value that arrives from outside every module in this project. So the one
- * property this adapter depends on is checked, and the answer is what narrows.
+ * would be this module telling its own typechecker what is out there — an
+ * assertion the compiler accepts and nothing verifies, which is exactly
+ * backwards for a value that arrives from outside every module in this project.
+ * So the one property this adapter depends on is checked, and the answer is
+ * what narrows.
  *
  * It cannot check further than one call deep: what `openSync` returns is only
  * knowable by calling it. That is the honest boundary of a runtime reached

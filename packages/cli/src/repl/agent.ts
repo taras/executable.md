@@ -40,8 +40,8 @@
  * durable handoff, and the live turn it began is removed inside that same
  * transition, so no announced snapshot holds a turn both ways or neither.
  *
- * A direct `Agent.prompt()` call begins nothing. It gets no reading, claims no
- * record, and cannot be claimed by one. A turn replay restored asks no
+ * A direct `Agent.prompt()` call begins nothing. It gets no reading, correlates with no
+ * record, and cannot be correlated with one. A turn replay restored asks no
  * provider, so it begins nothing either: no association, and no live turn.
  *
  * ## A request without one owner is an invariant failure

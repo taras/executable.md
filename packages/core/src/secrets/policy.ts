@@ -3,7 +3,7 @@
  *
  * Detection is on unless the trusted host asks for it to be off. The policy is
  * created inside the execution that owns it, before any document work can run,
- * and is reclaimed with that execution.
+ * and is released with that execution.
  *
  * ## Why there are two mechanisms
  *

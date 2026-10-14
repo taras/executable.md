@@ -17,9 +17,9 @@
  * be refused; it cannot reach one.
  *
  * The default handler throws. There is no in-memory fallback: a Repository that
- * "starts" without a provider would retain nothing while claiming it had, and a
- * host that installs none must be distinguishable from one whose repository is
- * merely not there.
+ * "starts" without a provider would retain nothing while reporting that it had,
+ * and a host that installs none must be distinguishable from one whose
+ * repository is merely not there.
  */
 
 import { type Api, createApi } from "@effectionx/context-api";

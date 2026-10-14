@@ -32,7 +32,6 @@ export function* useNormalizedOutput(): Operation<void> {
 
       let normalized = text;
 
-      // Strip trailing whitespace on each line
       normalized = normalized.replace(/[ \t]+\n/g, "\n");
 
       // Collapse leading newlines if previous write already ended
@@ -41,10 +40,8 @@ export function* useNormalizedOutput(): Operation<void> {
         normalized = normalized.replace(/^\n+/, "\n");
       }
 
-      // Collapse runs of 3+ newlines within a single write
       normalized = normalized.replace(/\n{3,}/g, "\n\n");
 
-      // Track trailing newlines for next call
       const match = normalized.match(/\n+$/);
       trailingNewlines = match ? match[0].length : 0;
 

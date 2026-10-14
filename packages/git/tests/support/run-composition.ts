@@ -3,10 +3,10 @@
  *
  * Everything here is real: a real bare remote, a real working checkout the
  * command is "run in", real `git`, real advisory locks and a real managed root
- * in a temporary directory. What is substituted is only what a claim needs to
- * be deterministic about — the managed root, so no suite ever touches the
- * user's own `~/.xmd/repositories`, and the Git subprocess where a suite counts
- * invocations.
+ * in a temporary directory. What is substituted is only what the assertion
+ * needs to be deterministic about — the managed root, so no suite ever touches
+ * the user's own `~/.xmd/repositories`, and the Git subprocess where a suite
+ * counts invocations.
  *
  * There is no database, no journal and no WorkflowRun anywhere in this file.
  * That is the point of the profile: an ordinary run has none of them.
@@ -108,7 +108,7 @@ export function* useManagedRoot(): Operation<string> {
   return root;
 }
 
-/** What one ordinary execution reached, at the boundaries a claim is made at. */
+/** What one ordinary execution reached, at the observed boundaries. */
 export interface OrdinaryCounters {
   /** Every Git command, in order, as its argument list. */
   readonly commands: string[][];
@@ -220,9 +220,9 @@ export interface RunOptions extends Omit<RunCompositionOptions, "root" | "cwd"> 
  * A fixed identity, because the production default reads the *host's* Git
  * configuration — and a machine with no `user.name` set makes `<Git.Commit>`
  * refuse. Every CI runner is such a machine, so leaving it to the host turns
- * "this document committed" into a claim about who ran the suite: green on a
- * developer's laptop, red on every shard. A case that is *about* identity
- * resolution passes its own `identity` and overrides this.
+ * "this document committed" into an outcome dependent on who ran the suite:
+ * green on a developer's laptop, red on every shard. A case that is *about*
+ * identity resolution passes its own `identity` and overrides this.
  */
 export function runOrdinaryDocument(source: string, options: RunOptions): Operation<Json> {
   return scoped(function* () {
@@ -325,7 +325,7 @@ export function causedBy<T>(error: unknown, is: (value: unknown) => value is T):
 /**
  * Everything a directory holds, as one comparable value.
  *
- * Paths, kinds and content digests, sorted. A refusal that claims to change
+ * Paths, kinds and content digests, sorted. A refusal that promises to change
  * nothing has to survive this: a comparison of "the checkout is still there"
  * would pass while a file inside it had been rewritten.
  */
@@ -390,7 +390,7 @@ export function gateComponent(reached: () => void): ComponentRegistration {
 /**
  * Run a document that reaches `<Gate />`, then halt it there.
  *
- * The halt is the cancellation every persistence claim is made against: the
+ * The halt is the cancellation every persistence guarantee must survive: the
  * execution is torn down from outside, mid-document, with a component still in
  * flight.
  */

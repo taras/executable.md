@@ -154,7 +154,7 @@ function candidateIdentity(staged: unknown): string {
 /** A self-closing invocation, which is how every phase is written. */
 const INVOCATION: ComponentInvocation = { hasContent: () => false };
 
-/** A claimant nothing here spends: none of these phases names durable work. */
+/** An invocation authenticator nothing here uses: none of these phases names durable work. */
 // deno-lint-ignore require-yield
 function* claimNothing(): Operation<string> {
   return "unused";

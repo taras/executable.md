@@ -7,7 +7,7 @@
  *
  * They are ordinary **defaults**, not reserved names. A repository component
  * with one of these names is chosen ahead of the default, exactly as it would
- * be ahead of any other package's registration. Nothing here claims a name a
+ * be ahead of any other package's registration. Nothing here reserves a name a
  * document cannot take back.
  *
  * This is the terminal of `selectComponent()` rather than an installation, so
@@ -15,7 +15,7 @@
  * having to install them.
  *
  * The components core supplies are not all here. `<File>`, `<File.Delete>`,
- * `<Dir>`, `<Syntax />` and `<Evaluate>` are names canonical core claims
+ * `<Dir>`, `<Syntax />` and `<Evaluate>` are names canonical core reserves
  * (`protected.ts`), so they are answered above every registry rather than from
  * one — which is why `CORE_COMPONENT_NAMES` below is the registrations alone
  * and documentation reads a wider set.

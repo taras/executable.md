@@ -1,8 +1,8 @@
 /**
  * One other process publishing one route.
  *
- * The create-once race is a claim about two processes, and only two processes
- * can make it: one runtime racing itself shares a filesystem cache and a
+ * The create-once race must hold across two processes, and only two processes
+ * can demonstrate it: one runtime racing itself shares a filesystem cache and a
  * scheduler, and would agree with a broken implementation as readily as a
  * working one.
  *

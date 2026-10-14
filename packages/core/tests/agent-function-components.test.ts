@@ -1066,8 +1066,9 @@ function recordedFailure(record: Record<string, Json> | undefined): string {
  *
  * The final routed session decides. An authentic use runs under its own
  * settings; a raw session or no session at all is an ordinary unconfigured
- * route that reads and writes nothing; and a value that claims to be configured
- * and was issued by nobody refuses rather than being read as either.
+ * route that reads and writes nothing; and a value that presents itself as
+ * configured and was issued by nobody refuses rather than being read as
+ * either.
  */
 describe("Tier AF — the final routed Session decides", () => {
   it("AF37: routing the raw session a use names runs unconfigured", function* () {
@@ -1344,7 +1345,7 @@ describe("Tier AF — the final routed Session decides", () => {
  * caller went on to mutate all stay out of the journal.
  *
  * Every journal here comes from a real turn through the real Prompt, because
- * the audit's whole claim is about where in a turn the copy is taken.
+ * the audit verifies where in a turn the copy is taken.
  */
 function permissionPlan(
   requests: readonly ScriptedPermission[],

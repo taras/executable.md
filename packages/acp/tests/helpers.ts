@@ -129,7 +129,7 @@ export interface FakeRuntimeHarness {
    *
    * A discard and a release are the same call with different options, so the
    * option is the only thing that tells them apart — and "no launch path ever
-   * discards persistent state" is a claim about exactly that.
+   * discards persistent state" depends on that distinction.
    */
   closeInputs: Record<string, unknown>[];
   /**

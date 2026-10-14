@@ -2,10 +2,10 @@
  * Tier WLI — immutable lifecycle inspection.
  *
  * These suites are about what reading a run may and may not do. The provider
- * under test is the real Deno one against real SQLite files, because the claim
- * is physical: a command that reports a run must leave its bytes, its rows and
- * its file mode exactly as it found them, and must never reach the connection
- * pool execution uses.
+ * under test is the real Deno one against real SQLite files, because the
+ * invariant is physical: a command that reports a run must leave its bytes, its
+ * rows and its file mode exactly as it found them, and must never reach the
+ * connection pool execution uses.
  *
  * A snapshot is checked as one reading rather than field by field. "The record
  * says completed" and "the frontier is this event" are only worth anything

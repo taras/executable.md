@@ -121,7 +121,7 @@ export interface AgentLaunchCoordinator {
    * authored. A name answers with nothing; an ordinary session answers with
    * itself and no configuration; a use this installation issued answers with
    * the value the provider issued and what it runs under; and a value that
-   * claims to be a configured use and is not one refuses.
+   * presents itself as a configured use and is not one refuses.
    */
   sessionUse(routed: string | Session | undefined): ReadSessionUse | undefined;
   /**

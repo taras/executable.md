@@ -2,29 +2,30 @@
  * The identity a trusted host's component names its durable work after
  * (architecture.md, *Capability-backed invocation identity*).
  *
- * A component that names a durable operation after its own invocation is making
- * an ownership claim: the name decides which retained record a replay restores,
- * so two invocations arriving at one name each replay the other's work, and an
- * implementation running under somebody else's identity commits against its own
- * storage under their expansion. Code Rule 15 says such a decision never trusts
- * replaceable state, and every channel a component could *read* one from is
- * replaceable — a Context is addressed by name, a contextual Api answer is
- * composed by whoever installed a handler, and the registry is an answer a
- * handler may keep from one attachment and hand back inside another, record and
- * all.
+ * A component that names a durable operation after its own invocation is
+ * asserting ownership: the name decides which retained record a replay
+ * restores, so two invocations arriving at one name each replay the other's
+ * work, and an implementation running under somebody else's identity commits
+ * against its own storage under their expansion. Code Rule 15 says such a
+ * decision never trusts replaceable state, and every channel a component could
+ * *read* one from is replaceable — a Context is addressed by name, a
+ * contextual Api answer is composed by whoever installed a handler, and the
+ * registry is an answer a handler may keep from one attachment and hand back
+ * inside another, record and all.
  *
  * So nothing is read. The execution is *told*, before any installation runs,
  * which components name durable work; it mints one domain for each, builds the
- * implementation by handing that domain's **claimant** straight to the host's
- * factory, and registers what comes back. The domain exists only here, the
- * claimant exists only as the argument of that call, and neither is published,
- * named, or reachable from a document. An implementation from another execution
- * holds another execution's claimant, which answers for nothing here.
+ * implementation by handing that domain's **identity authenticator** straight
+ * to the host's factory, and registers what comes back. The domain exists only
+ * here, the identity authenticator exists only as the argument of that call,
+ * and neither is published, named, or reachable from a document. An
+ * implementation from another execution holds another execution's identity
+ * authenticator, which answers for nothing here.
  *
- * A claimant answers only for the invocation the engine is running: the one the
- * engine minted for a component in this domain, still live, not expanding its
- * own content, running in the frame the engine invoked it in, and not already
- * answered. Everything else refuses.
+ * An identity authenticator answers only for the invocation the engine is
+ * running: the one the engine minted for a component in this domain, still
+ * live, not expanding its own content, running in the frame the engine invoked
+ * it in, and not already answered. Everything else refuses.
  *
  * ## Which invocation is in the domain
  *
@@ -65,10 +66,10 @@ import type {
 /**
  * What a function component receives beside its props.
  *
- * Almost opaque. What it names is answered by a claimant, and only for the
- * execution that minted both; there is no shape here to copy and nothing to
- * read about the caller, the binding, the children, the environment or the
- * scope.
+ * Almost opaque. What it names is answered by an identity authenticator, and
+ * only for the execution that minted both; there is no shape here to copy and
+ * nothing to read about the caller, the binding, the children, the environment
+ * or the scope.
  *
  * The one thing it reports is how the element that caused this invocation was
  * written, because that is a fact about *this invocation* rather than about the
@@ -88,10 +89,11 @@ export interface ComponentInvocation {
    *
    * The authored shape, immutable and synchronous. It projects nothing,
    * suspends on nothing, asks nothing of the middleware chain, and does not
-   * spend this invocation's durable identity — reading it leaves the claimant
-   * exactly as it was. On an invocation the engine issued this is the canonical
-   * fact, and a component that reaches nothing else — no import, no context, no
-   * helper of its own copy — reads it by calling what it received.
+   * spend this invocation's durable identity — reading it leaves the identity
+   * authenticator exactly as it was. On an invocation the engine issued this
+   * is the canonical fact, and a component that reaches nothing else — no
+   * import, no context, no helper of its own copy — reads it by calling what
+   * it received.
    *
    * **Observation only.** Calling it is not authentication: a component
    * receives whatever its caller passed, and a wrapper can pass an object
@@ -115,7 +117,7 @@ export interface ComponentInvocation {
   hasContent(): boolean;
 }
 
-/** A durable identity that cannot be claimed here. */
+/** A durable identity that cannot be authenticated here. */
 export class ComponentInvocationError extends Error {
   override name = "ComponentInvocationError";
 }
@@ -135,7 +137,8 @@ export interface IdentityClaimant {
  *
  * Declared to the execution rather than registered by the host, because what
  * may name durable work here has to be fixed before anything can observe or
- * replace it. The factory is called once, with this execution's claimant.
+ * replace it. The factory is called once, with this execution's identity
+ * authenticator.
  */
 export interface IdentityComponent extends ComponentDocumentation {
   readonly name: string;
@@ -227,13 +230,13 @@ export interface ProtectedSite {
 /**
  * The bodies one execution will enter, keyed by the exact function it built.
  *
- * Execution-owned and reclaimed with the execution, like the domains beside it,
+ * Execution-owned and released with the execution, like the domains beside it,
  * and handed to core's own expansion by value. Two things follow. An
  * implementation another loaded copy built — which is ordinary, because a
  * component can be loaded from disk beside its own copy — is in that copy's
- * table rather than this one, so it has no body here. And an implementation kept
- * past this execution's teardown reaches nothing, because the table went with
- * the execution.
+ * table rather than this one, so it has no body here. And an implementation
+ * kept past this execution's teardown reaches nothing, because the table went
+ * with the execution.
  */
 export interface ComponentRouting {
   /** The body canonical expansion may enter for this exact implementation. */
@@ -365,7 +368,7 @@ function createComponentRouting(): ComponentRoutingInstallation {
 }
 
 /**
- * A component canonical core claims the name of, as this module builds one.
+ * A component canonical core reserves the name of, as this module builds one.
  *
  * The same declaration a host's identity component makes, except that the
  * factory hands over a body rather than an implementation: what a protected
@@ -609,7 +612,7 @@ export function isFormDispatcher(fn: unknown): boolean {
  * satisfies all of:
  *
  * - the invocation is an object **this** copy of core minted, recognized by the
- *   same private field a claimant recognizes — a structural look-alike carrying
+ *   same private field an identity authenticator recognizes — a structural look-alike carrying
  *   `hasContent()` is not one;
  * - the issuance is still live, and its frame is the one running now, so an
  *   invocation kept from a sibling or a finished element answers nothing here;
@@ -866,7 +869,7 @@ export function issueInvocation(
   };
 }
 
-/** One domain, and the claimant that is the only way to spend it. */
+/** One domain, and the identity authenticator that is the only way to spend it. */
 interface Minted {
   /** The implementation this execution built for it, by identity. */
   implementation?: FunctionComponent;
@@ -1035,20 +1038,21 @@ export interface IdentityInstallation {
   /**
    * The implementations that are declared but never registered, by name.
    *
-   * A private declaration is minted exactly like a registered one — one domain,
-   * one claimant, revoked with the execution — and then handed here instead of
-   * to registration, because what makes it private is that no registry answers
-   * for it. Canonical core resolves one only while it is expanding the body of
-   * the declaration that carries it.
+   * A private declaration is minted exactly like a registered one — one
+   * domain, one identity authenticator, revoked with the execution — and then
+   * handed here instead of to registration, because what makes it private is
+   * that no registry answers for it. Canonical core resolves one only while it
+   * is expanding the body of the declaration that carries it.
    */
   readonly privates: ReadonlyMap<string, FunctionComponentDefinition>;
   /**
    * The implementations canonical core's own protected tier resolves, by name.
    *
-   * Minted exactly like the rest — one domain, one claimant, revoked with the
-   * execution — and then registered nowhere, because a registry is precisely
-   * what must not decide a protected name. Canonical resolution answers for
-   * these from its own table (`components/protected.ts`).
+   * Minted exactly like the rest — one domain, one identity authenticator,
+   * revoked with the execution — and then registered nowhere, because a
+   * registry is precisely what must not decide a protected name. Canonical
+   * resolution answers for these from its own table
+   * (`components/protected.ts`).
    */
   readonly protected: ReadonlyMap<string, FunctionComponentDefinition>;
   /** The bodies canonical expansion may enter for those implementations. */
@@ -1060,11 +1064,11 @@ export interface IdentityInstallation {
 /**
  * Mint this execution's domains and build the implementations from them.
  *
- * The factory is called here, with a claimant that answers only for this
- * execution's own invocations of that component. Nothing is registered yet:
- * the caller registers what comes back, and activates only once that batch has
- * been validated and committed, so a refused registration leaves a claimant
- * that answers for nothing.
+ * The factory is called here, with an identity authenticator that answers only
+ * for this execution's own invocations of that component. Nothing is
+ * registered yet: the caller registers what comes back, and activates only
+ * once that batch has been validated and committed, so a refused registration
+ * leaves an identity authenticator that answers for nothing.
  */
 export function installIdentities(
   components: readonly IdentityComponent[],

@@ -17,7 +17,6 @@ import type { Operation } from "effection";
 import { installReplHost, platformDataRoot } from "./repl-assembly.ts";
 import { useDenoReplTerminal } from "./deno-repl-terminal.ts";
 
-/** Install everything the REPL needs from this host. */
 export function* useDenoRepl(): Operation<void> {
   yield* installReplHost({
     dataRoot: () => platformDataRoot(process.platform, homedir(), process.env, sep),

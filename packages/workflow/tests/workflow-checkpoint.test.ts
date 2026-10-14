@@ -1,12 +1,12 @@
 /**
  * Tier CK — what `<Elicit>` becomes under a workflow run.
  *
- * The claim is a substitution, so every case here is about which of two
- * registrations answered, and the discriminator is what each leaves behind:
- * core's `<Elicit>` wraps the asking in a durable `elicit` record, and the
- * workflow's does not. A suite that only checked "the answer bound" could not
- * tell them apart, and the whole point of the substitution is the record that
- * is missing — a durable wait cannot sit inside one.
+ * The behavior under test is a substitution, so every case here is about which
+ * of two registrations answered, and the discriminator is what each leaves
+ * behind: core's `<Elicit>` wraps the asking in a durable `elicit` record, and
+ * the workflow's does not. A suite that only checked "the answer bound" could
+ * not tell them apart, and the whole point of the substitution is the record
+ * that is missing — a durable wait cannot sit inside one.
  *
  * The attachment is the production `withWorkflowWorkspace`, not a hand-built
  * install, so what these cases prove is that the host wires it rather than that

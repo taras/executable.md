@@ -145,8 +145,7 @@ interface RunOptions {
    * Providers backing this case's `component-answer` entries.
    *
    * Only a row that admits a name core supplies no body for needs one: the
-   * profile arm has nowhere to put an implementation, so a provider has to
-   * claim it during resolution.
+   * profile arm has nowhere to put an implementation, so a provider has to register its identity during resolution.
    */
   componentAnswers?: readonly ComponentAnswerInstallation[];
   /**
@@ -1281,9 +1280,8 @@ describe("Tier PI — read-only information requests", () => {
    * A held-cleanup barrier cannot be built for this settlement, and the reason
    * is structural rather than an oversight. Cleanup inside a fragment is per
    * element: every element before the failure has already torn down, and no
-   * element after it runs. A provider handler cannot hold it either — the claim
-   * window is deliberately synchronous, so an `ensure` registered there ends the
-   * resolution ("this resolution has settled, so a claim stated now identifies
+   * element after it runs. A provider handler cannot hold it either — the registration window is deliberately synchronous, so an `ensure` registered there ends the
+   * resolution ("this resolution has settled, so an identity registered now identifies
    * nothing"). Nothing else a host supplies to a fragment has projection
    * lifetime.
    *

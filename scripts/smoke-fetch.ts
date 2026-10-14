@@ -6,7 +6,7 @@
  * response before binding it — three things that live in the module graph, and
  * only the binary shows that `deno compile` kept them.
  *
- * The server is this script's own, so the claim is observed from outside the
+ * The server is this script's own, so the behavior is observed from outside the
  * run: one request reached it, and the document bound what it answered.
  */
 

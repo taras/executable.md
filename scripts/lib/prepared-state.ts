@@ -24,28 +24,12 @@
  * relocates a root is followed rather than silently skipped, and a run whose
  * `deno info` stops reporting one of the three fails loudly.
  *
- * ## Every read and every hash is synchronous
+ * ## Cancellation stops subsequent filesystem work
  *
- * `until()` stops Effection *observing* a promise; it does not cancel the work
- * behind it. A fingerprint built on `Deno.readFile` and `crypto.subtle.digest`
- * would therefore keep reading and hashing after its task was halted — a
- * hundred-and-fifty-thousand-file walk that ignores cancellation.
- *
- * That rules out `@effectionx/fs` at this one boundary. Version 0.3.0 —
- * the version this repository vendors — implements every operation as
- * `until(fsp.…)` over `node:fs/promises` (`node_modules/@effectionx/fs/api.ts`),
- * so `readdir`, `lstat`, and `readTextFile` are exactly the uncancellable
- * adapters this module cannot use. Everywhere else in these scripts
- * `@effectionx/fs` remains the way to touch the filesystem; the direct
- * `Deno.*Sync` calls stop here.
- *
- * So the reads are `Deno.readFileSync`, `readLinkSync`, `readDirSync`, and
- * `lstatSync`, and the digest is `node:crypto`'s synchronous SHA-256 — no less
- * trustworthy than `crypto.subtle`'s, and it returns rather than resolving.
- *
- * Synchronous work still has to be interruptible, so the walk yields to the
- * scheduler every `YIELD_EVERY` entries. A halt lands on one of those yields,
- * and nothing after it reads or hashes anything.
+ * Filesystem operations may suspend, and `until()` does not cancel a host call
+ * already in flight. Once the walk is halted, no further read begins. SHA-256
+ * hashing is synchronous, so a completed read leaves no background hash behind.
+ * The walk also yields every `YIELD_EVERY` entries to keep traversal interruptible.
  */
 
 import { createContext, sleep, until } from "effection";

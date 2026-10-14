@@ -1,16 +1,10 @@
 /**
- * The portable half of a REPL terminal, over capabilities a runtime supplies.
+ * Assemble the REPL terminal over runtime-supplied capabilities: byte-stream
+ * backpressure, resize notifications and scope-owned release stay portable.
+ * Runtime-named factories supply their host operations without runtime detection.
  *
- * `terminal.ts` says what the REPL needs; this says how to build it
- * once a host has handed over five things it alone can do. Everything that is
- * the same on every runtime — turning an async byte source into a stream with
- * real backpressure, turning a resize notification into a stream of sizes,
- * ending both when the scope ends — lives here, so the runtime-named factories
- * contain nothing but their own runtime's spelling of those five capabilities.
- *
- * Nothing registers this. A runtime entrypoint installs it when the REPL
- * command exists; until then it is a factory nobody calls, which is what keeps
- * `@bomb.sh/tty` and raw mode off the path of every other command.
+ * An entrypoint installs this only for the REPL, keeping `@bomb.sh/tty` and raw
+ * mode off other command paths.
  */
 
 import {

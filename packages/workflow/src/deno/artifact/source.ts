@@ -4,7 +4,7 @@
  * A workflow definition pins a commit and a path; it does not retain the
  * document. So a closure's blob identity is computed from the bytes somebody
  * read back out of that commit, and compared with it — which is what makes
- * "these are the bytes the definition names" a checkable claim rather than an
+ * "these are the bytes the definition names" a verifiable fact rather than an
  * assertion by whoever did the reading.
  *
  * One function, because the exporter that produces a closure and the verifier

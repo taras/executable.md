@@ -1,26 +1,11 @@
 /**
- * Holding a capability to the callback it was handed to.
+ * Revoke callback-owned Workspace capabilities before later publication work.
+ * The transaction remains open after a mutation or inspection callback returns;
+ * retained filesystem, storage and savepoint views must not reach that live window.
+ * One gate revokes every projection of the callback's argument together.
  *
- * A Workspace transaction stays open after the mutation inside it returns — it
- * goes on to capture a root, publish it and enlist the journal — and an
- * inspection's transaction is open for the same reason. So a filesystem, a
- * storage view or a savepoint that a callback kept is not merely a stale
- * object: it is a live capability inside a transaction that is still running,
- * and using it would write work no effect publishes and no journal records.
- *
- * Revocation is what makes "for this callback" a fact. One gate serves every
- * projection built from one callback's argument, so the transaction ends all of
- * them together rather than each object having a lifetime of its own.
- *
- * ## Why an operation is checked twice
- *
- * Most of these members do not do the work; they return an `Operation` that
- * does it when something yields it. Checking only when the member is *called*
- * would leave the obvious hole open: a callback creates the operations it wants
- * while it is still valid, returns, and yields them afterwards. So a gated
- * member checks when it is called — which fails fast, and is what a caller
- * holding a revoked object sees — and the operation it returns checks again
- * when its body begins.
+ * Operation-returning members check both when called and when yielded, preventing
+ * a callback from constructing work while authorized and running it after return.
  */
 
 import type { Operation } from "effection";

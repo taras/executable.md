@@ -13,7 +13,7 @@
  *
  * The source in `STORY` is the one the Story publishes, exactly. The revised
  * program in `REVISED` is what a deterministic Agent returns for it, and it is
- * fixture data rather than a claim about what a model would write: what it has
+ * fixture data rather than a prediction of what a model would write: what it has
  * to be is *legal* — a generated fragment under the ordinary ceiling, which may
  * write JSON literals, its own bindings, arrays and objects and may not compute
  * anything. That is why it compares two `<Json />` renderings instead of
@@ -2342,7 +2342,7 @@ function occurrences(terminal: Terminal, text: string): number {
  * #881 PR 2 gave the Transcript the selected entry's reading, so the records of
  * every scope no longer appear there at once; the answers a nested scope
  * retained are read by selecting that scope, which is where the product says
- * they were asked. Selecting is the claim: a row counted under the wrong scope
+ * they were asked. Selection is the behavior being tested: a row counted under the wrong scope
  * would be an answer attributed to somewhere it never happened.
  */
 function* answeredUnder(terminal: Terminal, scope: string, text: string): Operation<number> {

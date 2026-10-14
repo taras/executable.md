@@ -73,8 +73,7 @@ interface Script {
 /**
  * A `main` that behaves as scripted, one `Poll` per iteration.
  *
- * Reading past the last poll throws, so a case that converges later than it
- * claims fails rather than quietly reading a repeated state. `endless` repeats
+ * Reading past the last poll throws, so a case that converges later than expected fails rather than quietly reading a repeated state. `endless` repeats
  * the final poll instead, which is the only way to reach the wait's own bound.
  */
 function world(polls: Poll[], options: { endless?: boolean } = {}): Script {

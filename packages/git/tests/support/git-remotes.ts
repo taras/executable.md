@@ -78,9 +78,9 @@ function environment(home: string): Record<string, string> {
  *
  * Untrimmed, because a fixture that reads a committed file back out of Git is
  * reading bytes: a trailing newline is part of the document, and a helper that
- * removed it would make "these are the exact bytes" a claim about something
- * else. `git()` trims, for the object ids and branch names every other caller
- * asks for.
+ * removed it would make "these are the exact bytes" an assertion about
+ * something else. `git()` trims, for the object ids and branch names every
+ * other caller asks for.
  */
 export function gitOutput(args: readonly string[], cwd: string, home: string): string {
   const output = spawnSync("git", [...args], {

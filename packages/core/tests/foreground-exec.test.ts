@@ -7,13 +7,13 @@
  * "the first chunk arrived before the child exited" is a fact rather than a
  * race.
  *
- * "Exactly" always means exactly what reached the per-exec boundary. Middleware
- * enclosing an execution is trusted preprocessing and may transform, redact,
- * redirect or consume a channel first; what a run captures, journals and
- * reports is what that leaves. What a child wrote to its pipe is not observed
- * by anything here, and no case claims it: where a case installs no enclosing
- * handler, what the boundary receives is what the command emitted, and that is
- * all such a case asserts.
+ * "Exactly" always means exactly what reached the per-exec boundary.
+ * Middleware enclosing an execution is trusted preprocessing and may
+ * transform, redact, redirect or consume a channel first; what a run captures,
+ * journals and reports is what that leaves. What a child wrote to its pipe is
+ * not observed by anything here, and no case asserts it: where a case installs
+ * no enclosing handler, what the boundary receives is what the command
+ * emitted, and that is all such a case asserts.
  */
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";

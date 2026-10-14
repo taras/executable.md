@@ -180,7 +180,7 @@ export class ReplayIndex {
    * Return the first retained coroutine not aligned with the current subtree.
    *
    * `entry` is the first unmatched retained protocol entry itself — the Yield
-   * at the cursor, or for an unclaimed completed child its first Yield when it
+   * at the cursor, or for an unmatched completed child its first Yield when it
    * has one and otherwise its Close — so a terminal diagnostic can name what
    * the terminating subtree did not reach, not just where it stopped.
    */

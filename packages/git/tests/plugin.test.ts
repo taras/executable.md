@@ -62,7 +62,7 @@ function run(runId: string): WorkflowRun {
 const SOURCE_A = run("run-plugin-source-a");
 const SOURCE_B = run("run-plugin-source-b");
 
-/** What one execution saw, at the boundaries a claim can be made about. */
+/** What one execution saw, at the observable boundaries. */
 interface Seen {
   readonly gitHost: (readonly { runId: string; claimed: boolean }[] | undefined)[];
   readonly issue: (readonly unknown[] | undefined)[];

@@ -742,9 +742,9 @@ export function screenShows(snapshot: ScreenSnapshot, marker: string): boolean {
  * Every invocation gets one, because every invocation decides what surface it
  * is looking at and a surface is a fact about the screen: the byte stream
  * retains a composer drawn before a dialog covered it, and text an erase wiped
- * out. Only an invocation that submits a turn also *watches* — see
- * {@link watching} — because latching an answer is a claim about a reply to a
- * turn, and a run that spoke none has no reply to attribute.
+ * out. Only an invocation that submits a turn also *watches* — see {@link
+ * watching} — because latching an answer attributes a reply to a turn, and a
+ * run that spoke none has no reply to attribute.
  *
  * The latch latches. Once the answer has been on the screen it stays observed,
  * because the question is whether the agent answered and a TUI is entitled to

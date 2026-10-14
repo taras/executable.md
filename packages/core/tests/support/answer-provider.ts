@@ -53,7 +53,7 @@ export function implementation(
 
 /** How one row wants its provider to differ from the honest one. */
 export interface ProviderOptions {
-  /** The provider's own name for itself; the origin every claim carries. */
+  /** The provider's own name for itself; the origin every identity statement carries. */
   readonly origin?: string;
   /** The key and revision this provider states. */
   readonly key?: string;
@@ -64,9 +64,9 @@ export interface ProviderOptions {
   readonly asked?: string[];
   /** Return the answer without stating an identity for it at all. */
   readonly unclaimed?: boolean;
-  /** State the identity, then answer with a copy of the claimed object. */
+  /** State the identity, then answer with a copy of the identified object. */
   readonly copied?: boolean;
-  /** State the identity, then edit the claimed object. */
+  /** State the identity, then edit the identified object. */
   readonly mutated?: boolean;
   /**
    * Keep answering after the capture, rather than settling.
@@ -77,51 +77,52 @@ export interface ProviderOptions {
    */
   readonly keepsAnswering?: boolean;
   /**
-   * Keep *claiming* after the capture, rather than settling.
+   * Keep *stating identities* after the capture, rather than settling.
    *
    * The other half of the same refusal, one step earlier: the resolution this
    * provider answered has settled, so there is no open window to state an
-   * identity into and the claim refuses before the witness is ever consulted.
+   * identity into and recording the identity refuses before the witness is
+   * ever consulted.
    */
   readonly reclaimsLater?: boolean;
   /**
-   * Delegate first, and answer with this provider's own claimed object.
+   * Delegate first, and answer with this provider's own identified object.
    *
    * What an *outer* provider does. The one installed first composes outermost,
    * so it sees the chain's answer before deciding, and returning its own
-   * claimed object is an honest substitution: the identity travels with the
+   * identified object is an honest substitution: the identity travels with the
    * object the chain finally gives back.
    */
   readonly delegatesFirst?: boolean;
   /**
-   * Delegate and answer with whatever came back, claiming nothing.
+   * Delegate and answer with whatever came back, stating no identity.
    *
    * What a *repeated* bootstrap does. A package entered through an inherited
    * layer and again through a local one composes twice, and the outer entry
-   * cannot claim a second identity for the object the inner one already
-   * claimed — one implementation states what it is once. So it observes and
+   * cannot state a second identity for the object the inner one already
+   * identified — one implementation states what it is once. So it observes and
    * passes the answer through, which is what keeps the layering additive.
    */
   readonly observesOnly?: boolean;
   /** What delegating answered with, for a row that has to prove it happened. */
   readonly delegated?: unknown[];
   /**
-   * Run this inside the live resolution, just before claiming.
+   * Run this inside the live resolution, just before stating the identity.
    *
-   * The one place a row can reach that is *during* an open claim window for
-   * this name — which is what a race between two resolutions has to be observed
-   * from, since there is no other way to be inside one.
+   * The one place a row can reach that is *during* an open identity-recording
+   * window for this name — which is what a race between two resolutions has to
+   * be observed from, since there is no other way to be inside one.
    */
   readonly whileResolving?: (request: ComponentAnswerRequest) => void;
   /**
    * Answer with a value whose contract reads differently each time it is read.
    *
    * The check/use gap at execution scale. `[[Get]]` alternates between the
-   * claimed schema and a substitution; comparing own descriptors, which is how
-   * the claim is checked, does not run the trap. So a capture that checked the
-   * answer and then *read it again* to take its copy would seal the
-   * substitution — and a fragment would be validated against a contract the
-   * provider never claimed.
+   * identified schema and a substitution; comparing own descriptors, which is
+   * how the identity is checked, does not run the trap. So a capture that
+   * checked the answer and then *read it again* to take its copy would seal
+   * the substitution — and a fragment would be validated against a contract
+   * the provider never identified.
    */
   readonly alternating?: { readonly substitute: PropsSchema; readonly reads: string[] };
   /** Where this provider leaves each request its handler received, for a row to keep. */
@@ -129,8 +130,8 @@ export interface ProviderOptions {
 }
 
 /**
- * One answer whose `props` alternates between what was claimed and something
- * else, read by read.
+ * One answer whose `props` alternates between what was identified and
+ * something else, read by read.
  *
  * Only `[[Get]]` is trapped, because that is what taking a copy of a definition
  * uses and what comparing own descriptors does not. The schema is the member to

@@ -2,13 +2,13 @@
  * Tier PH — installing the Plugins one command runs with.
  *
  * Order, admission and lifetime, and what each of them decides. Order fixes
- * composition and nothing else: two Plugins claiming one name are refused
+ * composition and nothing else: two Plugins using one name are refused
  * before either installs, rather than the later one winning. Admission happens
  * before the first `install()`, so a refused selection installs nothing and
  * reads no document. And the whole list has the command's lifetime, so a
  * failure part-way through unwinds what came before it.
  *
- * The review Plugin's own rows are here too, because which commands claim its
+ * The review Plugin's own rows are here too, because which commands reserve its
  * forty-one names is a property of this assembly rather than of the package —
  * and because nothing installs it until a selection names it. The graph itself
  * is `scripts/tests/review-infrastructure.test.ts`.

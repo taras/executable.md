@@ -344,8 +344,9 @@ describe("Tier FE31 — Json is composition, not an effect", () => {
  * A component whose invocation registers teardown before it returns.
  *
  * The cleanup pushes to the same log the fragment and the document push to, so
- * the order of that one array is the whole claim: whether the projection's
- * structured teardown finished before the parent's next element began.
+ * the order of that one array is the whole ordering check: whether the
+ * projection's structured teardown finished before the parent's next element
+ * began.
  */
 function unwinding(log: string[]): FunctionComponentDefinition {
   return {

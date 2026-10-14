@@ -10,6 +10,7 @@ import { requireScopeBoundEventRegistration } from "./oxlint-rules/require-scope
 export default {
   meta: { name: "executablemd" },
   rules: {
+    "no-banned-jsdoc-words": noBannedJsdocWords,
     "no-module-scoped-registry": noModuleScopedRegistry,
     "no-section-divider-comments": noSectionDividerComments,
     "no-redundant-test-scope": noRedundantTestScope,
@@ -20,3 +21,4 @@ export default {
     "require-scope-bound-event-registration": requireScopeBoundEventRegistration,
   },
 };
+import { noBannedJsdocWords } from "./oxlint-rules/no-banned-jsdoc-words.js";

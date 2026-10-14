@@ -384,7 +384,7 @@ interface RuntimeEntry {
   /** Handles created through this runtime that have not been closed. */
   handles: number;
   /**
-   * Work that has claimed this runtime and has not yet produced a handle.
+   * Work that has reserved this runtime and has not yet produced a handle.
    *
    * Counted apart from `handles` because the two are true at different times
    * and both keep the partition alive. An ensure in flight owns no handle yet,
@@ -471,9 +471,9 @@ function asName(routed: string | Session | undefined): string | undefined {
  * it.
  *
  * The coordinator is the only thing that can tell a configured use from a value
- * that merely claims to be one, so every route asks it. An embedder driving
+ * that merely reports that shape, so every route asks it. An embedder driving
  * this provider directly holds no coordinator and therefore no configured
- * session exists for it — a value that claims otherwise refuses rather than
+ * session exists for it — a value that reports otherwise refuses rather than
  * being run unconfigured.
  */
 function routedSession(
@@ -1063,14 +1063,14 @@ function* useAcpxProviderState(
   }
 
   /**
-   * Elect the runtime for this partition and claim it, in one step.
+   * Elect the runtime for this partition and reserve it, in one step.
    *
-   * Synchronous from the map read to the claim, and that is the whole point.
-   * Publishing an entry and then claiming it across a suspension leaves it in
-   * the map standing on nothing — long enough for a sibling giving up its own
-   * claim to evict it, after which this caller holds a runtime the map no
-   * longer names and the next operation builds a second child for the same
-   * build. Here the entry is published already claimed.
+   * Synchronous from the map read to the reservation, and that is the whole
+   * point. Publishing an entry and then reserving it across a suspension leaves
+   * it in the map standing on nothing — long enough for a sibling giving up its
+   * own reservation to evict it, after which this caller holds a runtime the
+   * map no longer names and the next operation builds a second child for the
+   * same build. Here the entry is published already reserved.
    */
   function electRuntime(partition: string | undefined, options: AcpRuntimeOptions): RuntimeEntry {
     const held = partition === undefined ? unbound : runtimes.get(partition);
@@ -1133,7 +1133,7 @@ function* useAcpxProviderState(
    *
    * A bound partition holds a live executable path for the work it owns, so it
    * is kept exactly as long as something is standing on it — a handle nobody
-   * has closed, or work that has claimed the runtime and not yet produced one.
+   * has closed, or work that has reserved the runtime and not yet produced one.
    * Both have to be zero: evicting while either is nonzero is how a concurrent
    * operation ends up building a second child for a build the first is still
    * talking to. The unbound runtime is ordinary ACP-first state and stays.
@@ -1148,7 +1148,8 @@ function* useAcpxProviderState(
   }
 
   /**
-   * The claimed work produced this handle, so the claim becomes ownership of it.
+   * The pending work produced this handle, so the runtime reservation becomes
+   * ownership of it.
    *
    * One step, because the two counts must never both be zero in between: that
    * gap is a partition another operation could evict out from under a handle
@@ -1160,7 +1161,7 @@ function* useAcpxProviderState(
     owned.add(session);
   }
 
-  /** The claimed work produced no handle. Nothing is standing on it here. */
+  /** The pending work produced no handle. Nothing is standing on it here. */
   function releaseReservation(entry: RuntimeEntry): void {
     entry.active = Math.max(0, entry.active - 1);
     evictIfIdle(entry);
@@ -1171,7 +1172,7 @@ function* useAcpxProviderState(
    *
    * Never called for a close that failed: a failed close released nothing, so
    * decrementing the partition, evicting it, or forgetting the handle would all
-   * be claiming something that did not happen. Idempotent, because the set
+   * be reporting something that did not happen. Idempotent, because the set
    * membership is the guard — a handle released twice must not decrement twice.
    */
   function releasedHandle(session: ManagedSession): void {
@@ -1183,8 +1184,8 @@ function* useAcpxProviderState(
   }
 
   /**
-   * Ensure through the runtime for `build`, settling that work's claim exactly
-   * once however this operation ends.
+   * Ensure through the runtime for `build`, settling that work's runtime
+   * reservation exactly once however this operation ends.
    *
    * `ensureSession()` is a Promise, and starting one is not the same as owning
    * it. Once called it runs whether or not anybody is still waiting: a scope
@@ -1195,10 +1196,10 @@ function* useAcpxProviderState(
    * So the settlement is scope-owned rather than written into a `catch`, which
    * a cancellation does not run at all. The cleanup is registered with the
    * Promise already started and before anything yields, so there is no window
-   * in which this can end with the claim unsettled and the answer unobserved.
-   * The three ways out are the three branches below, and the flag is what keeps
-   * the normal continuation and the cleanup from both taking one: nothing
-   * yields between the handle arriving and that flag being set.
+   * in which this can end with the reservation unsettled and the answer
+   * unobserved. The three ways out are the three branches below, and the flag
+   * is what keeps the normal continuation and the cleanup from both taking one:
+   * nothing yields between the handle arriving and that flag being set.
    */
   function ensureThrough(
     build: BoundBuild | undefined,
@@ -1690,7 +1691,7 @@ function* useAcpxProviderState(
   /**
    * Whether this provider still holds a handle that can act on `sessionKey`.
    *
-   * The one thing quiescence is a claim about. `quiesced()` does not mean "I
+   * The one thing quiescence establishes. `quiesced()` does not mean "I
    * finished" — it means nothing this owner started can still touch the
    * session, and a live ACP handle is exactly such a thing. So every path
    * acknowledges through this: a released handle quiesces, and a release that
@@ -2410,7 +2411,7 @@ function* useAcpxProviderState(
    * The answer is read back from the agent rather than echoed: the selectors
    * this returns are what the apply operation verified, so a provider that
    * quietly landed on something else is caught by the caller comparing them
-   * instead of having its own claim recorded.
+   * instead of having the requested value recorded.
    */
   function* configureSession(
     agentName: string,
@@ -3296,8 +3297,8 @@ function* useAcpxProviderState(
    *
    * A member the provider did not report is left absent rather than copied as
    * `undefined`, because these are merged over what earlier events reported: an
-   * explicit `undefined` would overwrite a figure the provider did give with the
-   * claim that it gave none. Zero is a figure; saying nothing is not.
+   * explicit `undefined` would overwrite a figure the provider did give with
+   * the report that it gave none. Zero is a figure; saying nothing is not.
    */
   function reportedUsage(
     breakdown: AcpRuntimeUsageBreakdown | undefined,

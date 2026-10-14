@@ -1,11 +1,12 @@
 /**
  * Tier WF — the export native Git is allowed to see.
  *
- * The materialization is a copy of what the database holds, and every claim this
- * provider makes rests on that: deleting one costs time and nothing else. These
- * are the rules about the checkout root itself — that it is a real retained
- * directory and that the export lands where it was aimed — and the control that
- * says ordinary tracked symbolic links inside a checkout are still content.
+ * The materialization is a copy of what the database holds, and every guarantee
+ * this provider offers rests on that: deleting one costs time and nothing else.
+ * These are the rules about the checkout root itself — that it is a real
+ * retained directory and that the export lands where it was aimed — and the
+ * control that says ordinary tracked symbolic links inside a checkout are still
+ * content.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -70,8 +71,8 @@ import {
  * Native Git may only operate on the provider-owned export of the retained
  * checkout.
  *
- * The materialization is a copy of what the database holds, and every claim this
- * provider makes rests on that: deleting one costs time and nothing else,
+ * The materialization is a copy of what the database holds, and every guarantee
+ * this provider offers rests on that: deleting one costs time and nothing else,
  * because the database is where the run's Git state is. A checkout root that is
  * a symbolic link breaks it in a way no identity check would notice — the
  * operating system resolves a working directory before Git ever sees it, so Git

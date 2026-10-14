@@ -442,7 +442,7 @@ class Inventory {
   }
 
   /**
-   * Refuse any entry nothing declared has claimed.
+   * Refuse any entry no declaration has consumed.
    *
    * The other half of completeness. `take()` catches a record that should be
    * there and is not; this catches one that is there and should not be, which
@@ -643,7 +643,7 @@ function ordered<T>(
 /**
  * The snapshot one accepted inventory describes.
  *
- * Total: every declared record is claimed and parsed, and anything left over
+ * Total: every declared record is consumed and parsed, and anything left over
  * refuses the file. A reader that stopped once it had what a caller asked for
  * would be reporting a status whose journal it had never looked at.
  */
@@ -1212,7 +1212,7 @@ function decodeAgentSessions(inventory: Inventory, path: string): readonly Agent
  * The source closure this artifact carries.
  *
  * Driven by the definition already decoded rather than by which entries happen
- * to be present, so the descriptor decides which kinds are claimed and
+ * to be present, so the descriptor decides which kinds are consumed and
  * `requireNothingLeftOver` refuses anything else the file carried.
  */
 function decodeDefinitionSources(
@@ -1227,7 +1227,7 @@ function decodeDefinitionSources(
  * The retained bytes this artifact carries, one pair per logical path.
  *
  * Each pair's natural identity is the canonical JSON string of its path, and
- * both halves are claimed under it: an entry whose own `path` is not the
+ * both halves are consumed under it: an entry whose own `path` is not the
  * identity it was stored under would let one source be read as another's.
  *
  * The declared hash and length are read out with the path rather than skipped
@@ -1375,7 +1375,7 @@ function verifyLifecycle(
  *
  * Sizes and hashes are recomputed rather than believed: the manifest already
  * proved the bytes are the ones that were sealed, and this proves the bytes are
- * the ones the DOFS records claim to be about.
+ * the ones the DOFS records describe.
  */
 function verifyContentStore(
   contents: XmdArtifactContents,
@@ -1529,7 +1529,8 @@ interface AnswerPublication {
 }
 
 /**
- * Every retained answer, authenticated against the history it claims to answer.
+ * Every retained answer, authenticated against the retained history of its
+ * corresponding request.
  *
  * A row naming an event the journal holds proves nothing on its own. What has
  * to be true is that the named event *is* the wait, that it is *this* wait, that
@@ -1749,7 +1750,7 @@ function* judgeRetainedAnswer(
   }
 }
 
-/** One retained record, as the durable event it claims to be. */
+/** One retained record, as the durable event it describes. */
 function parseJournalEvent(record: string, path: string): DurableEvent {
   const parsed = parseDurableEvent(record);
   if (!parsed.ok) {

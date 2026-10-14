@@ -10,12 +10,13 @@
  *
  * ## Identity is position, not a name
  *
- * A caller supplies neither an identifier nor a claim. The trusted execution
- * derives one suspension ID from the run and the exact durable coroutine
- * position, which is what makes the wait a document reaches at one point in a
- * procedure the same wait it reaches there after a resume — and what keeps two
- * different waits from receiving each other's input. A caller that could name
- * its own would be a caller that could claim another wait's answer.
+ * The caller selects neither a suspension ID nor a retained answer. The trusted
+ * execution derives one suspension ID from the run and the exact durable
+ * coroutine position, which is what makes the wait a document reaches at one
+ * point in a procedure the same wait it reaches there after a resume — and what
+ * keeps two different waits from receiving each other's input. A caller that
+ * could name its own would be a caller that could consume another wait's
+ * answer.
  *
  * ## The route composes; the request at this position admits
  *

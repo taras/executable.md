@@ -1,46 +1,16 @@
 /**
- * The storage one Workspace transaction or inspection may reach.
+ * Expose bound SQL statements and raw rows for feature-owned parsers, without
+ * handing features the database, executor lease, transaction or journal. Every call
+ * rechecks the issuing transaction's authorization, including lease and database.
  *
- * A generic view rather than a table-shaped one. Workflow owns the database,
- * the executor lease, the transaction and the journal; what a feature owns is
- * the meaning of its own rows, and this is the narrowest surface that lets it
- * keep that meaning without holding any of the rest. Statements are the
- * caller's, parameters are bound rather than interpolated, and a read comes
- * back as the stored row for the caller's own parser to read — nothing here
- * knows what a column means.
+ * Read views require SQLite's authorizer: `get` and `all` can otherwise execute
+ * `INSERT`, `UPDATE` or `DELETE … RETURNING`. Only SQLITE_SELECT, SQLITE_READ and
+ * SQLITE_FUNCTION are admitted; an adapter without authorizer support refuses.
  *
- * ## Why a read view is not merely a view without `run`
- *
- * Because SQLite does not agree that `get` and `all` only read. `INSERT INTO
- * workspace_repositories (…) VALUES (…) RETURNING name` is a statement that
- * returns rows, and `StatementSync.all()` runs it and commits the insertion.
- * The same is true of `UPDATE … RETURNING` and `DELETE … RETURNING`. Removing
- * `run` from an interface removes a spelling, not a capability.
- *
- * So a read view proves the statement reads before it executes, and SQLite is
- * what proves it. Each read compiles under an authorizer that admits
- * `SQLITE_SELECT`, `SQLITE_READ` and `SQLITE_FUNCTION` and refuses every other
- * action, so an insertion, an update, a deletion, a schema change or a pragma
- * is rejected during compilation — before a row is touched. A lexical check for
- * a leading `SELECT` would be the wrong tool twice over: it would admit
- * `WITH x AS (INSERT …)` and it would be a parser this package would then own.
- *
- * The authorizer is a property of the connection, so it is installed around one
- * read and removed in a `finally`. Nothing can run between those two points: a
- * read is synchronous from the call to the returned rows, and this runtime does
- * not interleave another coroutine inside it. It stays installed across
- * execution as well as compilation, because SQLite recompiles a statement by
- * itself when the schema changes underneath it, and a recompilation is exactly
- * the moment the check must still be there.
- *
- * An adapter that offers no authorizer cannot support a read view, and this
- * refuses to build one rather than handing back a view that would allow what it
- * says it forbids.
- *
- * Every call re-authorizes against the transaction as well. The view is built
- * inside an active transaction and closes over that transaction's own check, so
- * a retained view whose transaction has ended, whose lease has moved, or whose
- * database is not the one that issued it refuses rather than reaching SQLite.
+ * Install the authorizer around both compilation and execution, then remove it in
+ * finally. The read is synchronous, so no coroutine interleaves on the connection;
+ * keeping authorization through execution also covers SQLite's automatic schema
+ * recompilation.
  */
 
 import { constants, type DatabaseSync, type StatementSync } from "node:sqlite";

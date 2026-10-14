@@ -69,13 +69,10 @@ describe("Tier XA — ACPX provider through the rootProvider seam", () => {
       return { output, outcome, closedByCompletion };
     });
 
-    // Agent availability probed through acpx doctor().
     expect(harness.doctorCalls).toBeGreaterThan(0);
-    // A session was created.
     expect(harness.ensureCalls.length).toBeGreaterThan(0);
     // Normalized prompt output — output-stream deltas only (thought hidden).
     expect(result.output).toContain("hello world");
-    // Clean completion.
     expect(result.outcome.ok).toBe(true);
     // Handle closed before completion settled.
     expect(result.closedByCompletion).toBeGreaterThan(0);

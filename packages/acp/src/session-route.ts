@@ -1,26 +1,14 @@
 /**
- * How a logical session was first constructed
+ * Retain how a logical session was first constructed
  * (specs/native-agent-session-launch-spec.md §Construction route).
  *
- * Construction and live ownership answer different questions, and #519 keeps
- * them apart deliberately:
+ * The route is strict create-once state: never overwritten, deleted, converted,
+ * repaired or partially read. Conflicting accounts refuse rather than inventing
+ * history. It grants no right to ensure, prompt, detach, spawn, resume or accept
+ * history; the coordinator remains the live owner and owns crash behavior.
  *
- *     construction route: how this logical session was first constructed
- *     session coordinator: who may act on it now
- *
- * The coordinator is the one live owner and owns crash behavior. A route
- * grants no right to ensure, prompt, detach, spawn, resume, or accept history —
- * it only says which kind of thing this session is, so that a later attachment
- * cannot quietly treat an ACP-created conversation as a client-allocated one.
- *
- * The route is strict create-once durable state. It is never overwritten,
- * deleted, converted, repaired, or partially read. A conflict is a refusal, not
- * something to reconcile: both accounts describe a session that already exists,
- * and picking one would be inventing history.
- *
- * Both facts use the same natural key and the same digest the merged
- * coordinator already derives, so one session names one lease, one ownership
- * record, and one route.
+ * Route, lease and ownership record use the same natural key and digest, so later
+ * attachment cannot reclassify an ACP-created conversation as client-allocated.
  */
 
 import { ensure, scoped, until } from "effection";
@@ -70,7 +58,7 @@ export type AgentSessionRouteV1 =
  *
  * V1 `client-native` is not upgraded into this. A build observed later says
  * which build is installed now, not which one established the session, and
- * writing it into an old record would claim knowledge XMD never had.
+ * writing it into an old record would assert knowledge XMD never had.
  */
 export interface AgentSessionRouteV2 {
   schema: "session-route.v2";

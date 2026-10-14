@@ -1,7 +1,7 @@
 /**
  * The REPL's source boundaries (#848 S1).
  *
- * Read from the source rather than from behaviour, because these are claims about
+ * Read from the source rather than from behaviour, because these are constraints on
  * what a module *can* reach. A component that never happens to touch the Journal
  * in one test is not a component that cannot; an import is.
  *
@@ -677,7 +677,7 @@ interface Invocation {
 /**
  * Drive `runXmd` in this process with a REPL installer that counts.
  *
- * The lifecycle claim is not about what the output says: it is that describing a
+ * The lifecycle requirement is not about what the output says: it is that describing a
  * command and refusing one never reach the host at all — no per-user directory,
  * no history file, no terminal mode. An installer that is never entered is the
  * only way to see that from outside.

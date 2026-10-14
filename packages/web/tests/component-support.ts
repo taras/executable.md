@@ -1,9 +1,9 @@
 /**
  * Driving `<WebForm>` the way a document does, and counting what it caused.
  *
- * The claims this package makes hardest are negative — a failing body prints no
+ * The hardest behaviors to verify in this package are negative — a failing body prints no
  * URL, opens no browser, binds no port, journals nothing; a replay does none of
- * it either. A test can only make those claims if something observes each effect,
+ * it either. A test can only verify those behaviors if something observes each effect,
  * so every seam is instrumented and the counters are read after the run.
  */
 

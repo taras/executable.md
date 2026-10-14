@@ -1,51 +1,20 @@
 /**
- * `<Git.Push>` — publish the checkout's current branch to its origin
+ * Publish the contextual checkout's current branch to its Repository origin
  * (specs/workflow-workspace-spec.md §7.4).
  *
- * ```md
- * <Repository name="project" url={props.repository}>
- *   <Git.Switch branch="release/1.4" />
- *   <Git.Add paths="release/notes.md" />
- *   <Git.Commit message="Prepare 1.4" as="commit" />
- *   <Git.Push />
- * </Repository>
- * ```
+ * `<Git.Push />` takes no props or content, renders nothing and binds nothing.
+ * The enclosing Repository and cwd select the checkout, including a linked
+ * worktree reached through Dir. Remote, branch, commit, refspec and force are not
+ * authored inputs; reconciliation evidence stays in the journal.
  *
- * It takes no props. There is nothing to name: the remote is the Repository's
- * own `origin`, the branch is the one the checkout is on, and the commit is the
- * one that branch points at. Which checkout that is, is decided the way every
- * Git operation's place is decided — by the enclosing `<Repository>` and the
- * contextual working directory — so the same element inside a `<Dir>` at a
- * linked worktree publishes that worktree's branch instead.
+ * The remote cannot join the local transaction. Shared Git-host reconciliation
+ * observes first, adopts this exact commit, publishes a proven absence or advances
+ * a proven ancestor once, and refuses unproven compatibility. It never force-pushes
+ * or changes upstream tracking.
  *
- * A prop for any of that would be a second way to say what the document already
- * said by writing the element where it wrote it, and a `remote`, `branch`,
- * `refspec` or `force` prop would be a way to say something else entirely.
- * Publishing somewhere other than where the checkout is takes an explicit
- * contract this component does not have.
- *
- * It renders nothing, binds nothing and takes no content. A push produces no
- * value a later element reads: what the run retains is the reconciliation
- * record, which is journal evidence rather than something a document could use.
- *
- * ## The remote is not the local Git
- *
- * Switch, Add and Commit move state the run's own SQLite transaction encloses.
- * The branch this publishes to belongs to a Git host, which no local
- * transaction can enclose, so Push reconciles through the shared Git-host state
- * machine instead: it observes the destination before it mutates, adopts a
- * destination that already names this exact commit, publishes a proven-absent
- * one once, and refuses a destination that names anything else. It never
- * force-pushes, and it changes no upstream tracking.
- *
- * ## Failure
- *
- * `<Git.Switch>`'s policy, with one refusal of its own. A checkout whose HEAD
- * names no branch has nothing for this to publish, and that is something the
- * document can act on: it arrives as a fixed `GitOperationError` before any
- * remote is contacted. No Repository in scope is a failed admission and travels
- * past every printing boundary, because a document that continued past one
- * would run later siblings as though a branch had been published.
+ * Git.Switch's failure policy applies. Detached HEAD is a fixed GitOperationError
+ * before remote contact; missing Repository is an admission failure that printing
+ * cannot recover.
  */
 
 import { cwd } from "@executablemd/runtime";

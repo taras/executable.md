@@ -1,19 +1,8 @@
 /**
- * Everything a compiled `xmd` is made of, stated once.
- *
- * `deno compile` embeds what `--include` names and nothing else. An asset left
- * out costs nothing at compile time and nothing at startup: the binary runs,
- * resolves the name, and fails at the moment a person asks it for the thing
- * that was omitted. Three sites compile this entrypoint — `deno task build`,
- * `release.yml`'s matrix, and `verify:clean`'s release phase — and while each
- * carried its own copy of the list the three disagreed: the release shipped no
- * component documentation at all, so every published binary refused
- * `xmd syntax TempDir`, and `verify:clean` proved a binary narrower than the one
- * a release publishes.
- *
- * So the inputs live here and each site asks for the argv. What the sites still
- * choose for themselves is the two things that genuinely differ between them:
- * where the binary is written, and which platform it is for.
+ * Share compile inputs across local builds, releases and `verify:clean`; callers
+ * choose only the output path and target. `deno compile` embeds only `--include`
+ * assets, so a missing document can survive compilation and startup and fail
+ * only when requested, as omitted component documentation did in releases.
  */
 
 import { exec } from "@effectionx/process";
@@ -44,17 +33,9 @@ export const COMPILE_FLAGS = [
 ];
 
 /**
- * A whole package the binary executes Markdown out of.
- *
- * Empty, and that is a decision rather than an omission: the binary contains
- * the program `xmd` is, and a Plugin is not part of it. The code-review graph
- * was embedded here while it was bundled; now that it is selected with
- * `--plugin` like any other Plugin, it reads its own assets from wherever the
- * operator installed it — a source checkout, an npm install, or the path they
- * named — and the binary carries none of them.
- *
- * An entry here is for a package the binary *imports*. Adding one for a package
- * nothing in the binary imports would embed bytes no code can reach.
+ * Whole imported packages whose Markdown assets the binary needs. Selected
+ * Plugins load their own assets from their installed location. An entry here
+ * must name an imported package; unreachable bytes serve no binary code.
  */
 export const EMBEDDED_PACKAGES: readonly string[] = [];
 
@@ -65,7 +46,7 @@ export const EMBEDDED_PACKAGES: readonly string[] = [];
  * that ship documents and holds the lists above to what it finds, which is what
  * keeps a new asset from being forgotten. A package outside the binary would
  * fail that walk for the right reason and the wrong subject, so it is named
- * here — and the same test checks the claim rather than trusting it, by proving
+ * here — and the same test checks that exclusion rather than trusting it, by proving
  * no CLI production module imports one.
  */
 export const UNEMBEDDED_PACKAGES: readonly string[] = ["packages/code-review-agent"];

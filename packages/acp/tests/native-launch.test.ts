@@ -239,9 +239,9 @@ interface ProviderOptions {
   /**
    * Share one coordinator with another provider scope.
    *
-   * Contention is a claim about one owner excluding another, and it can only be
-   * made where both reach the same coordinator. Isolation is the opposite
-   * claim, and making it here would prove neither.
+   * Contention means one owner excludes another and can only be tested where
+   * both reach the same coordinator. Isolation is the opposite property.
+   * Testing isolation here would prove neither.
    */
   coordinator?: AgentSessionCoordinator;
   /** Host-owned session placement and retention, as a workflow host supplies. */
@@ -2542,9 +2542,9 @@ describe("Tier RR — racing construction routes", () => {
     /**
      * What ownership said at each route operation.
      *
-     * The ordering claim is about *when* reconciliation happens, and reading
-     * that off the production source is not evidence. The coordinator's own log
-     * is: `owned` means an acquisition is live and has not been released.
+     * The test must establish *when* reconciliation happens, and reading that
+     * off the production source is not evidence. The coordinator's own log is:
+     * `owned` means an acquisition is live and has not been released.
      */
     during: string[];
   }
@@ -4145,10 +4145,11 @@ describe("Tier CV — canonical Claude version", () => {
  * (specs/native-agent-session-launch-spec.md §Executable binding).
  *
  * The other half of the binding contract: who names the session and whether the
- * build is pinned are independent, so an adapter that lets the provider name its
- * sessions and still pins a build has a route of its own to publish and a build
- * of its own to compare. Tier CN is the same claim from the client-allocated
- * side, and Tier NL is what an adapter binding nothing still does.
+ * build is pinned are independent, so an adapter that lets the provider name
+ * its sessions and still pins a build has a route of its own to publish and a
+ * build of its own to compare. Tier CN is the same verification from the
+ * client-allocated side, and Tier NL is what an adapter binding nothing still
+ * does.
  */
 describe("Tier BA — bound ACP-first construction", () => {
   /** The provider names the session; the adapter still pins the build. */

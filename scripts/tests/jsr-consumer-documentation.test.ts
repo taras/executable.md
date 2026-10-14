@@ -1,7 +1,7 @@
 /**
  * Tier SYN — a JSR consumer's named lookup.
  *
- * Two claims, and they are different. That `components.md` appears in
+ * Two checks, and they are different. That `components.md` appears in
  * `deno publish --dry-run` says the asset is *selected into the payload* — the
  * publish filter keeps it, rather than dropping it as tooling. That a consumer
  * can render it says the asset is *reachable from the published layout*, which

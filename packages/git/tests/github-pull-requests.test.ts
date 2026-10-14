@@ -2,9 +2,9 @@
  * Tier U — the GitHub adapter, on its own.
  *
  * Which locators it will act for, where its credential comes from, what it
- * makes of an answer, and — the claim the whole reconciliation rests on — that
- * nothing it cannot read ever becomes "there is no pull request here". Every
- * test drives the real adapter; what is substituted is the transport and the
+ * makes of an answer, and — the prerequisite for reconciliation — that nothing
+ * it cannot read ever becomes "there is no pull request here". Every test
+ * drives the real adapter; what is substituted is the transport and the
  * environment, which is the whole of what it asks its host for.
  */
 

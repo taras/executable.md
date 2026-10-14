@@ -2,10 +2,10 @@
  * Tier SO — state belongs to the operation that owns it (architecture.md).
  *
  * Every table the engine keeps is created inside the run it describes and
- * reclaimed when that run ends, so nothing one execution recorded is still
- * answering questions during the next. The exception is a declaration an author
- * writes at module evaluation about a function the author owns, which has no run
- * to belong to and lives on the function itself.
+ * released when that run ends, so nothing one execution recorded is still
+ * answering questions during the next. The exception is a declaration an
+ * author writes at module evaluation about a function the author owns, which
+ * has no run to belong to and lives on the function itself.
  *
  * The evidence these tests accept is a second execution: what run 1 recorded
  * must not answer for run 2.
@@ -228,10 +228,10 @@ describe("Tier SO — each run compiles with a compiler of its own", () => {
 });
 
 /**
- * The same claim where a host actually meets it: a component registered once
- * and invoked by two executions, whose props schema object the host changed in
- * between. A validator remembered from the first run would let the second run
- * accept props its schema no longer allows.
+ * The same ownership guarantee where a host actually meets it: a component
+ * registered once and invoked by two executions, whose props schema object the
+ * host changed in between. A validator remembered from the first run would let
+ * the second run accept props its schema no longer allows.
  */
 describe("Tier SO — two executions of a registered component", () => {
   function run(files: Record<string, string>, schema: PropsSchema): Operation<Json> {

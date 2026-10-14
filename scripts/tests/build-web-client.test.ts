@@ -130,7 +130,7 @@ describe("build-web-client", () => {
   });
 
   /**
-   * The function above is only half the claim: `deno task build:web` is a
+   * The function above is only half the verification: `deno task build:web` is a
    * preflight plus a `deno run`, and `deno task build` adds a `deno compile` —
    * each its own process, each with its own node-modules mode. Automatic
    * management creates `node_modules/.deno` before a process reaches its own

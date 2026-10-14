@@ -2,8 +2,7 @@
  * Tier SX — the `xmd syntax` command.
  *
  * Two halves, matching the command's own. The profile rows run in process,
- * because what they check is which declarations `xmd run` installs — a claim
- * about assembly, not about argv. The grammar, failure and delivery rows shell
+ * because what they check is which declarations `xmd run` installs — an assertion about assembly, not about argv. The grammar, failure and delivery rows shell
  * out, so exit status, stdout and stderr are the ones an operator sees.
  *
  * Symbol behavior itself is Tier SY's; nothing here re-proves selection.

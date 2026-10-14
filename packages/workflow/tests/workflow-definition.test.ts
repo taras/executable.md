@@ -699,8 +699,8 @@ function sourceAt(path: unknown): Record<string, unknown>[] {
  * The members one serialized descriptor wrote, in the order it wrote them.
  *
  * Narrowed rather than asserted: presentation order is what these cases are
- * about, and a cast would make the claim hold for a serializer that answered
- * with an array or a scalar.
+ * about, and a cast would make the assertion pass for a serializer that
+ * answered with an array or a scalar.
  */
 function jsonMembers(value: Json): string[] {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {

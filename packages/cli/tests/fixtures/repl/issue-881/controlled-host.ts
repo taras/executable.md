@@ -38,8 +38,7 @@ import { ordinaryEvaluationProfile } from "../../../../src/evaluation-profile.ts
  * The two latch paths, narrowed once at the edge.
  *
  * Read and checked here so everything below has two strings rather than two
- * possibly-absent ones: asserting them later would be claiming what this
- * check is for.
+ * possibly-absent ones: asserting them later would be assuming what this check establishes.
  */
 function latches(): { readonly entered: string; readonly release: string } {
   const entered = process.env.XMD881_ENTERED;

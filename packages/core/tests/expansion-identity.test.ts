@@ -2,10 +2,10 @@
  * Tier XP — expansion identity (spec §5.6).
  *
  * An expansion identifier is derived from the root document and the structural
- * expansion path. These drive `expandSegments` directly, so what they assert is
- * the engine's own derivation rather than a component's report of it — and they
- * run with no execution, no journal and no workflow middleware, which is itself
- * one of the claims.
+ * expansion path. These drive `expandSegments` directly, so what they assert
+ * is the engine's own derivation rather than a component's report of it — and
+ * they run with no execution, no journal and no workflow middleware, which is
+ * itself one of the guarantees.
  *
  * Each test names the derivation it would kill: substituting the block counter,
  * dropping an iteration frame, anchoring a projection to the callee, and so on.

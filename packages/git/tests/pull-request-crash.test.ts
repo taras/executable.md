@@ -7,11 +7,11 @@
  * so the pull request is open at the host and the run's database holds no
  * result for it.
  *
- * What the next execution does with that is the whole claim: it reconstructs
- * the same request, observes the branch pair, recognizes its own pull request
- * and adopts it. One pull request exists. A run that created another — or that
- * refused because one was already there — would be the two failures this design
- * is built to avoid.
+ * What the next execution does with that is what this test verifies: it
+ * reconstructs the same request, observes the branch pair, recognizes its own
+ * pull request and adopts it. One pull request exists. A run that created
+ * another — or that refused because one was already there — would be the two
+ * failures this design is built to avoid.
  *
  * The GitHub the child talks to is a real HTTP listener over the same store the
  * test reads afterwards, because the child is a second process and cannot share

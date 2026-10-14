@@ -159,8 +159,8 @@ export function* useConfiguredSession(
  *
  * Core's own read, for the one thing core owns about a configuration: writing
  * it down. A name or an ordinary session answers with nothing; a value that
- * claims to be a configured use and is not one refuses here exactly as it would
- * at the provider.
+ * presents itself as a configured use and is not one refuses here exactly as
+ * it would at the provider.
  */
 export function* sessionUseConfiguration(
   routed: string | Session | undefined,

@@ -1483,7 +1483,7 @@ describe("REPL terminal: an owned input stream, and what releasing it costs", ()
  * A Node-shaped standard input this row pushes into by hand.
  *
  * The real `process.stdin` decides for itself when a paste becomes one chunk or
- * several, which is exactly what the claim below must not depend on. This one
+ * several, which is exactly what the assertion below must not depend on. This one
  * delivers precisely the chunks it is told to, so "two chunks were already
  * waiting" is a fact of the row rather than a hope about the host.
  */

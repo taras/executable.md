@@ -7,8 +7,8 @@
  * boundary, and it has two halves which fail in different places:
  *
  * **Selection.** A repository `File.md`, a registration, a reserved
- * registration, a declared Markdown component and a bundle claim all lose the
- * name — before any of their implementations is read, let alone run.
+ * registration, a declared Markdown component and a bundle declaration all
+ * lose the name — before any of their implementations is read, let alone run.
  *
  * **The final answer.** `Component.importComponent` middleware still composes
  * around the import. It may observe it, delegate it and refuse it by throwing;

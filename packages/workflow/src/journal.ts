@@ -23,8 +23,8 @@ import type { DurableEvent, EffectDescription } from "@executablemd/durable-stre
  * One workflow run.
  *
  * No base and no pinned commit: a run starts from exact retained bytes rather
- * than from a repository state, and a member naming one would be a claim about
- * a repository the run never had. The bundle hash is what the retained
+ * than from a repository state, and a member naming one would be an assertion
+ * about a repository the run never had. The bundle hash is what the retained
  * definition is, and the exact target is what distinguishes two runs over it.
  *
  * The value a journal records, and the value `getWorkflowRun()` answers with.
@@ -152,14 +152,14 @@ export function readWorkflowRun(value: unknown): WorkflowRun | undefined {
   return Object.freeze({ runId, bundleHash, targetPath });
 }
 
-/** What one retained event claims about the run, when it claims anything. */
+/** What one retained event records about the run, when it records anything. */
 interface RunClaim {
   readonly settled: boolean;
   readonly value: unknown;
 }
 
 /**
- * The claim this event makes, read totally and fail-closed.
+ * The workflow-run identity this event records, read totally and fail-closed.
  *
  * Every member a decision rests on is forced here — the discriminator, the
  * coroutine, both halves of the description, the settlement and a successful
@@ -169,7 +169,8 @@ interface RunClaim {
  * absent, and a recorded terminal result be reused on the difference.
  *
  * A Yield that reads cleanly but is not the root coroutine's, or is not under
- * both the canonical type and the canonical name, makes no claim at all.
+ * both the canonical type and the canonical name, records no workflow-run
+ * identity.
  */
 function runClaim(event: DurableEvent): RunClaim | undefined {
   try {

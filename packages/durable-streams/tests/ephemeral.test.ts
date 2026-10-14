@@ -102,7 +102,6 @@ describe("ephemeral", () => {
     const withoutClose = events.filter((e) => e.type !== "close");
     const replayStream = new InMemoryStream(withoutClose);
 
-    // Reset counter
     ephemeralCallCount = 0;
 
     // Second run — durable calls replay, but ephemeral re-runs
@@ -155,7 +154,6 @@ describe("ephemeral", () => {
           function* () {
             // Use ephemeral to run an Operation inside a Workflow child
             const scope = yield* ephemeral(useScope());
-            // Just verify we got a scope (infrastructure operation worked)
             if (!scope) {
               throw new Error("no scope");
             }

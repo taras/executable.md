@@ -262,7 +262,7 @@ describe("the CI smoke job", () => {
 
   /**
    * Each of these proves something about the compiled binary that no source
-   * run can: a claim that only holds if `deno compile` kept what the claim is
+   * run can: a requirement satisfied only if `deno compile` kept what the requirement is
    * about. A script removed from the job is a proof silently withdrawn, so the
    * job is held to naming them.
    */

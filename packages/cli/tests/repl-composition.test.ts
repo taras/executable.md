@@ -123,7 +123,7 @@ function banner(journal: Journal): ReplComponent<Act> {
   });
 }
 
-/** A focusable leaf that claims nothing, so events pass to its ancestors. */
+/** A focusable leaf that handles nothing, so events pass to its ancestors. */
 function control(journal: Journal): ReplComponent<Act> {
   return component<Act>({
     name: "control",

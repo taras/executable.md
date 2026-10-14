@@ -33,7 +33,7 @@ export const UPGRADE_COMMAND_DOCUMENT = "upgrade-command.md";
  * `xmd plan` reaches it through the thin root above and an ordinary run reaches
  * it by writing `<Plan>`, and both expand these exact bytes. There is no
  * generated TypeScript copy and no second Markdown implementation, which is what
- * makes "the same workflow" a fact about the file rather than a claim about two
+ * makes "the same workflow" a fact about the file rather than an assertion about two
  * of them.
  */
 export const PLAN_DOCUMENT = "Plan.md";

@@ -1,9 +1,6 @@
 /**
- * parseDiff — transforms raw git diff output into a typed PR object.
- *
- * Handles: unified diff format, rename detection, binary file skipping,
- * language inference, test/config/type-declaration classification,
- * diffPreview truncation, directory computation.
+ * Parse Git unified diffs and name-status output into review data.
+ * Binary files are omitted; previews are bounded independently of the full diff.
  */
 
 import type { PR, DiffFile, DiffHunk, DiffLine } from "./types.ts";
@@ -117,7 +114,6 @@ function parseNameStatus(raw: string): Map<string, "A" | "M" | "D" | "R" | "C"> 
     }
 
     if (statusChar === "R" || statusChar === "C") {
-      // Rename/Copy: STATUS\tOLD\tNEW — use new path
       const newPath = parts[2] ?? parts[1] ?? "";
       result.set(newPath, statusChar);
     } else {
@@ -137,20 +133,17 @@ function parseDiffContent(
 ): DiffFile[] {
   const files: DiffFile[] = [];
 
-  // Split on `diff --git` headers
   const fileSections = rawDiff.split(/^diff --git /m).filter(Boolean);
 
   for (const section of fileSections) {
     const lines = section.split("\n");
 
-    // Extract file path from the header: `a/path b/path`
     const headerMatch = lines[0]?.match(/a\/(.+?) b\/(.+)/);
     if (!headerMatch) {
       continue;
     }
     const filePath = headerMatch[2];
 
-    // Skip binary files
     if (section.includes("Binary files ")) {
       continue;
     }
@@ -207,7 +200,6 @@ function parseDiffContent(
         addLineNo++;
         removeLineNo++;
       }
-      // Skip lines starting with \ (e.g., "\ No newline at end of file")
     }
 
     files.push({

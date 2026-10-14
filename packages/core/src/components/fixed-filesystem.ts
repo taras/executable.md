@@ -1,6 +1,6 @@
 /**
- * The three filesystem components canonical core claims the names of
- * (spec §§6.13, 6.13.1, 6.13.2).
+ * The three filesystem components canonical core reserves the names of (spec
+ * §§6.13, 6.13.1, 6.13.2).
  *
  * `<File>`, `<File.Delete>` and `<Dir>` read, write, remove and enter paths. A
  * document that names one has named an effect on the author's own filesystem,

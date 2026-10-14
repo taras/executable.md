@@ -2120,9 +2120,10 @@ describe("Tier FE34 — the shared read profile", () => {
  *
  * A `component-answer` entry is the one arm of a profile where the host does
  * not supply the body. It states a name and the exact structural identity a
- * provider must have claimed, and canonical execution resolves that name once —
- * before the root import, through the complete ordinary chain — reads the claim
- * off the exact final answer, compares it whole, and seals what it retained.
+ * provider must have stated, and canonical execution resolves that name once —
+ * before the root import, through the complete ordinary chain — reads the
+ * identity off the exact final answer, compares it whole, and seals what it
+ * retained.
  *
  * So the rows here are about the two ways that could be weaker than it looks:
  * an answer nothing identified, and an answer that stopped being the thing that

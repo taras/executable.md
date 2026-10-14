@@ -128,19 +128,19 @@ describe("Tier T5 — Binding environment", () => {
  * Every row drives the real trusted-host entrypoint with real installations.
  * The installations exist to *move* while the run is in flight — a preparation
  * and an `install()` that both rewrite the caller's record — because "copied
- * before installations begin" is a claim about ordering that only something
+ * before installations begin" is an ordering guarantee that only something
  * mutating in between can disprove.
  */
 /**
  * One initialization carrying whatever `initialBindings` is at runtime.
  *
- * `initialBindings` is typed as JSON, and what has to hold is that the *parser*
- * refuses a value the type already forbids — a host loading another copy of
- * core, or reading its own record back from a file, is not type-checked against
- * this one. The value is *defined* onto the record rather than asserted into the
- * type, so nothing here claims the value is something it is not: a property
- * descriptor carries an arbitrary value by design, which is exactly the
- * untrusted shape the parser exists to meet.
+ * `initialBindings` is typed as JSON, and what has to hold is that the
+ * *parser* refuses a value the type already forbids — a host loading another
+ * copy of core, or reading its own record back from a file, is not
+ * type-checked against this one. The value is *defined* onto the record rather
+ * than asserted into the type, so nothing here asserts the value is something
+ * it is not: a property descriptor carries an arbitrary value by design, which
+ * is exactly the untrusted shape the parser exists to meet.
  */
 function initialization(initialBindings: unknown): ExecutionInitialization {
   const given: ExecutionInitialization = {};
@@ -156,9 +156,9 @@ function initialization(initialBindings: unknown): ExecutionInitialization {
 /**
  * One installation that records which of its phases ran.
  *
- * The sentinel a refusal row needs: "this input was rejected" and "this input was
- * rejected *before anything was installed*" are different claims, and only
- * something that would have been called can tell them apart.
+ * The sentinel a refusal row needs: "this input was rejected" and "this input
+ * was rejected *before anything was installed*" are different guarantees, and
+ * only something that would have been called can tell them apart.
  */
 function watching(ran: string[]): ExecutionInstallation {
   return {

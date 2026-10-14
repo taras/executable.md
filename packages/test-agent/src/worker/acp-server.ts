@@ -31,9 +31,9 @@ export interface WorkerAgent {
    *
    * The returned id is deliberately not the ACP session id. A native id is
    * something an agent asserts about its own durable state; a client that
-   * guessed one from the ACP id would be inferring an identity nobody claimed,
-   * and a test agent that returned the same string for both would make that
-   * mistake untestable.
+   * guessed one from the ACP id would be inferring an identity the provider
+   * never asserted, and a test agent that returned the same string for both
+   * would make that mistake untestable.
    */
   startSession(instructions: string | undefined): Operation<string>;
   runTurn(text: string): Operation<TurnResult>;

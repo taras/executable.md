@@ -228,7 +228,7 @@ function detachHeaders(headers: Iterable<readonly [string, string]>): ResponseHe
  *
  * Read rather than asserted: `catch` gives back `unknown`, and what arrives
  * there is only conventionally an `ErrnoException`. Narrowing says what is
- * actually known about the value instead of claiming a shape it may not have.
+ * actually known about the value instead of asserting a shape it may not have.
  */
 function errorCode(error: unknown): string | undefined {
   if (typeof error !== "object" || error === null || !("code" in error)) {
@@ -247,9 +247,9 @@ function errorCode(error: unknown): string | undefined {
  * redirects, or consumes output upstream of this call is trusted preprocessing,
  * and its result is what a caller is told the command produced.
  *
- * What this does not promise is the tail. The record is read when the `Process`
- * operation settles, and that can happen before the pumps have finished, so
- * this claims no pump-complete delivery (effectionx #244).
+ * What this does not promise is the tail. The record is read when the
+ * `Process` operation settles, and that can happen before the pumps have
+ * finished, so this does not guarantee pump-complete delivery (effectionx #244).
  */
 function* retaining(): Operation<{ stdout: () => string; stderr: () => string }> {
   let stdout = "";

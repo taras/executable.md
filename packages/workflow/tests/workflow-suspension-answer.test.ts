@@ -9,8 +9,8 @@
  * wait, publishes one durable answer event and consumes the retained value in
  * one transaction, and the document continues from the value.
  *
- * The claims worth stating carefully are the ones a weaker implementation would
- * also seem to satisfy. A value correlates to *this* wait and no other. A
+ * The invariants worth stating carefully are the ones a weaker implementation
+ * would also seem to satisfy. A value correlates to *this* wait and no other. A
  * refusal writes nothing at all. And the consume and the publication are one
  * transaction, so a failure between them leaves the answer pending rather than
  * a run whose history says it was answered and whose delivery state says it was

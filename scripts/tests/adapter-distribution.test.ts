@@ -3,7 +3,7 @@
  *
  * The snapshots travel as a module in the graph rather than as files on disk,
  * precisely so that one mechanism serves the source tree, the dnt npm artifact
- * and the compiled binary. That claim is only worth making if it is checked:
+ * and the compiled binary. That distribution guarantee is only useful if it is checked:
  * a compiled `xmd` that resolved no snapshot module would launch nothing, and
  * an npm package missing it would fail at a customer's first workflow Prompt.
  *
@@ -17,7 +17,7 @@
  *
  * This file itself runs under Deno only (`scripts/runtime-test-exclusions.ts`).
  * It asks for a module graph through `deno info`, and both distributions it
- * inspects are Deno's own build outputs; the portable half of the claim is Tier
+ * inspects are Deno's own build outputs; the portable half of the contract is Tier
  * EA and Tier AM, which do run under all three.
  */
 import { describe, it } from "@executablemd/test-support/bdd";

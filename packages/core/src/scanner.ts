@@ -229,10 +229,8 @@ export function scanSegments(
   let textStart = 0;
 
   while (pos < text.length) {
-    // Check for fenced code block
     const fenceMatch = matchFenceOpen(text, pos);
     if (fenceMatch) {
-      // Flush text before fence
       if (pos > textStart) {
         pushText(segments, text.slice(textStart, pos));
       }
@@ -277,12 +275,10 @@ export function scanSegments(
       }
     }
 
-    // Check for component invocation: `<` followed by uppercase letter
     if (text[pos] === "<" && pos + 1 < text.length && /[A-Z]/.test(text[pos + 1]!)) {
       // Make sure we're not inside a fenced code block (handled above)
       const component = parseComponentTag(text, pos, index, elements);
       if (component) {
-        // Flush text before component
         if (pos > textStart) {
           pushText(segments, text.slice(textStart, pos));
         }
@@ -297,7 +293,6 @@ export function scanSegments(
     pos++;
   }
 
-  // Flush remaining text
   if (textStart < text.length) {
     pushText(segments, text.slice(textStart));
   }
@@ -415,7 +410,6 @@ function findFenceClose(
       pos++;
     }
 
-    // Check for closing fence
     if (pos < text.length && text[pos] === fenceChar) {
       let closeFenceLen = 0;
       while (pos < text.length && text[pos] === fenceChar) {
@@ -465,7 +459,7 @@ function parseComponentTag(
   index: PositionIndex,
   elements?: SourceElement[],
 ): ParsedComponent | null {
-  let pos = start + 1; // Skip '<'
+  let pos = start + 1;
 
   // Parse tag name — must start with uppercase, can contain dots
   const nameStart = pos;
@@ -481,7 +475,6 @@ function parseComponentTag(
     return null;
   }
 
-  // Parse attributes
   const {
     props,
     expressions,
@@ -493,16 +486,14 @@ function parseComponentTag(
   }
   pos = attrEnd;
 
-  // Skip whitespace
   pos = skipWhitespace(text, pos);
 
-  // Self-closing tag?
   if (pos < text.length && text[pos] === "/") {
-    pos++; // Skip '/'
+    pos++;
     if (pos >= text.length || text[pos] !== ">") {
       return null;
     }
-    pos++; // Skip '>'
+    pos++;
 
     elements?.push(Object.freeze({ name, opening: Object.freeze({ start, end: pos }) }));
     return {
@@ -524,7 +515,7 @@ function parseComponentTag(
   if (pos >= text.length || text[pos] !== ">") {
     return null;
   }
-  pos++; // Skip '>'
+  pos++;
   const openingEnd = pos;
 
   // Parse children until closing tag. Nested elements are collected aside and
@@ -587,7 +578,6 @@ function parseAttributes(
       return { props, expressions, authoredExpressions, end: -1 };
     }
 
-    // End of attributes?
     if (text[pos] === "/" || text[pos] === ">") {
       return { props, expressions, authoredExpressions, end: pos };
     }
@@ -609,7 +599,6 @@ function parseAttributes(
       continue;
     }
 
-    // Attribute name
     const attrNameStart = pos;
     while (pos < text.length && /[A-Za-z0-9_-]/.test(text[pos]!)) {
       pos++;
@@ -641,10 +630,9 @@ function parseAttributes(
       props[attrName] = true;
       continue;
     }
-    pos++; // Skip '='
+    pos++;
     pos = skipWhitespace(text, pos);
 
-    // Attribute value
     if (pos >= text.length) {
       return { props, expressions, authoredExpressions, end: -1 };
     }
@@ -722,14 +710,12 @@ function findMatchingBrace(text: string, start: number): number {
         return pos;
       }
     } else if (ch === '"' || ch === "'") {
-      // Skip string literal
       const end = findClosingQuote(text, pos + 1, ch);
       if (end === -1) {
         return -1;
       }
       pos = end;
     } else if (ch === "`") {
-      // Skip template literal
       pos = skipTemplateLiteral(text, pos);
       if (pos === -1) {
         return -1;
@@ -747,7 +733,7 @@ function findMatchingBrace(text: string, start: number): number {
  * Returns the position of the closing backtick, or -1.
  */
 function skipTemplateLiteral(text: string, start: number): number {
-  let pos = start + 1; // Skip opening `
+  let pos = start + 1;
 
   while (pos < text.length) {
     const ch = text[pos]!;
@@ -755,7 +741,7 @@ function skipTemplateLiteral(text: string, start: number): number {
     if (ch === "`") {
       return pos;
     } else if (ch === "\\" && pos + 1 < text.length) {
-      pos += 2; // Skip escape sequence
+      pos += 2;
       continue;
     } else if (ch === "$" && pos + 1 < text.length && text[pos + 1] === "{") {
       // Template expression — find matching brace
@@ -870,20 +856,16 @@ function parseChildren(
   let textStart = pos;
   const children: Segment[] = [];
 
-  // Build the closing tag pattern
   const closingTag = `</${tagName}>`;
 
   while (pos < text.length) {
-    // Check for closing tag
     if (text.startsWith(closingTag, pos)) {
-      // Flush remaining text as child
       if (pos > textStart) {
         pushText(children, text.slice(textStart, pos));
       }
       return { children, end: pos + closingTag.length };
     }
 
-    // Check for fenced code block inside children
     const fenceMatch = matchFenceOpen(text, pos);
     if (fenceMatch) {
       if (pos > textStart) {
@@ -928,7 +910,6 @@ function parseChildren(
       }
     }
 
-    // Check for nested component
     if (text[pos] === "<" && pos + 1 < text.length && /[A-Z]/.test(text[pos + 1]!)) {
       const nested = parseComponentTag(text, pos, index, elements);
       if (nested) {

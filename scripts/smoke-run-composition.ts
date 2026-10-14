@@ -7,7 +7,7 @@
  * those is a fact about the program that is running, so only the binary shows
  * they survived `deno compile`.
  *
- * Five claims, each observed from outside the process:
+ * Five behaviors, each observed from outside the process:
  *
  * 1. a root-level `<Worktree>` belongs to the repository the binary was run in,
  *    and a command inside it runs there;

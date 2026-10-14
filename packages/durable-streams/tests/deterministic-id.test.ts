@@ -62,22 +62,18 @@ describe("deterministic IDs", () => {
       };
     }
 
-    // Run 1
     const stream1 = new InMemoryStream();
     const tracker1 = createCallTracker();
     yield* durableRun(makeWorkflow(tracker1), { stream: stream1 });
     const events1 = stream1.snapshot();
 
-    // Run 2
     const stream2 = new InMemoryStream();
     const tracker2 = createCallTracker();
     yield* durableRun(makeWorkflow(tracker2), { stream: stream2 });
     const events2 = stream2.snapshot();
 
-    // Coroutine IDs must be identical
     expect(coroutineIds(events1)).toEqual(coroutineIds(events2));
 
-    // Event traces must be identical (same types, same coroutineIds, same descriptions)
     expect(eventTrace(events1)).toEqual(eventTrace(events2));
   });
 
@@ -133,7 +129,6 @@ describe("deterministic IDs", () => {
     // IDs from the original run are what matter.
     expect(liveIds.length > 0).toBe(true);
 
-    // Verify expected IDs: root, root.0, root.1
     expect(liveIds).toEqual(["root", "root.0", "root.1"]);
   });
 
@@ -211,13 +206,7 @@ describe("deterministic IDs", () => {
 
     const partialStream = new InMemoryStream(partialEvents);
 
-    // Now replay with 3 children instead of 2 — the third child (root.2)
-    // will execute live since it has no journal entries. But the "after"
-    // step will try to replay with journal entry for root, which should
-    // now be different since root.2 has new events.
-    // Actually, root.2 will just execute live (no journal entries for it).
-    // The divergence happens only if the post-join effect's description
-    // mismatches.
+    // The new third child has no retained entries, so it executes live.
     const tracker2 = createCallTracker();
 
     // With 3 children, root's childCounter goes to 3, but journal has
@@ -276,7 +265,6 @@ describe("deterministic IDs", () => {
     const winnerYield = events.find((e) => e.type === "yield" && e.coroutineId === "root.0");
     expect(winnerYield !== undefined).toBe(true);
 
-    // Verify IDs include root.0 (winner)
     const ids = coroutineIds(events);
     expect(ids.includes("root.0")).toBe(true);
   });

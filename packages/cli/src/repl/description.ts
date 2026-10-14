@@ -34,7 +34,7 @@ import type { ReplPresentationRole } from "./presentation-style.ts";
  * What a component may be given, and therefore what a tree may hold.
  *
  * View data and nothing else. A function or a class instance would carry
- * behavior into a tree whose whole claim is that it holds values, and would be
+ * behavior into a tree whose contract is that it holds values, and would be
  * a way for a component to reach something the commit never saw. A component
  * narrows what it is given by parsing it, the way everything else in this
  * repository narrows data it did not construct.
@@ -103,7 +103,7 @@ export function runText(runs: readonly ReplTokenRun[]): string {
  * Named because each one means something structural — submit, dismiss, move
  * focus, erase, interrupt — as opposed to text, which means only itself.
  *
- * `Interrupt` is the one named key no mounted node claims: ending the command is
+ * `Interrupt` is the one named key no mounted node handles: ending the command is
  * a lifecycle outcome its owner decides, so the program answers this key where
  * it answers end of input, rather than a row answering it for the screen that
  * happens to be up.
@@ -118,7 +118,7 @@ export type ReplKey = "Enter" | "Escape" | "Tab" | "Backtab" | "Backspace" | "In
  * happened and where; it never says what it means.
  *
  * Text is its own member rather than a key with a payload, because the two are
- * answered differently: a named key is a command whoever claims it recognizes,
+ * answered differently: a named key is a command its handler recognizes,
  * and text is content that goes wherever content goes. It carries the string the
  * terminal decoded — one grapheme as typed, or `"\n"` for a newline inside a
  * paste — and never a raw terminal event.
@@ -153,7 +153,7 @@ export interface ReplNode<Action> {
   /** What this node contributes to a frame. Replaces its previous cell. */
   render(cell: string): void;
   /**
-   * Claim events reaching this node or passing through it on the way up.
+   * Handle events reaching this node or passing through it on the way up.
    *
    * Returning an action stops the walk and hands that action to the root;
    * returning nothing lets the next ancestor decide.
@@ -165,7 +165,7 @@ export interface ReplNode<Action> {
 export interface ReplDefinition<Action> {
   readonly name: string;
   /**
-   * Construct this node: what it draws, what it claims, whether it can focus.
+   * Construct this node: what it draws, which events it handles, whether it can focus.
    *
    * Synchronous and effect-free. It runs once, during the commit that mounts
    * the node, and may return what to run when the node is removed. That

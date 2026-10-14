@@ -1836,7 +1836,7 @@ function admitted(result: Result<void>): void {
 }
 
 /**
- * The same journal with its last recorded prompt claiming an earlier sequence.
+ * The same journal with its last recorded prompt reporting an earlier sequence.
  *
  * Doctored, because no run writes it: a sequence counts the Prompts of one
  * execution, so one entry holding a value twice is damage to the file rather than

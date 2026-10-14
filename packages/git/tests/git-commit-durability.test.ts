@@ -1,8 +1,8 @@
 /**
  * Tier WF — what a `<Git.Commit>` retains, replays and refuses to guess.
  *
- * The claims here are about the run's database rather than about a repository. A
- * replay must write no object, read no clock and append no second transition; a
+ * These tests inspect the run's database rather than a repository. A replay
+ * must write no object, read no clock and append no second transition; a
  * retained result that no longer describes the invocation it was recorded for
  * must stop the run; a cancelled or unretainable commit must leave the frontier
  * exactly as it was.

@@ -2,7 +2,7 @@
  * Tier WI — what a retained issue record is, and what names it.
  *
  * D1 lives here rather than in a scenario document, and the reason is that the
- * claim is compositional. "A changed request cannot consume the result retained
+ * proof is compositional. "A changed request cannot consume the result retained
  * for a different one" is three facts stacked:
  *
  * 1. the request fingerprint covers every member of the request — the canonical
@@ -22,7 +22,7 @@
  * second execution whose request differs. That is worth having and is not what
  * the scenario documents do today: a scenario that swapped root documents
  * between attempts did not exercise the mismatch path in this suite's fixture,
- * so the claim is recorded as proven compositionally rather than end to end.
+ * so the property is recorded as proven compositionally rather than end to end.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";

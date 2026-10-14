@@ -47,10 +47,8 @@ export function interpolateEvalBindings(
   content: string,
   bindings: Record<string, unknown>,
 ): string {
-  // Protect escaped braces: \{ → placeholder
   const escaped = content.replaceAll("\\{", ESCAPED_BRACE_PLACEHOLDER);
 
-  // Run interpolation on the protected content.
   // Supports dotted paths: {pr.meta.number} traverses bindings.pr.meta.number
   const interpolated = escaped.replace(BARE_BINDING_RE, (match, key: string) => {
     const parts = key.split(".");
@@ -73,6 +71,5 @@ export function interpolateEvalBindings(
     return String(value);
   });
 
-  // Restore escaped braces: placeholder → literal {
   return interpolated.replaceAll(ESCAPED_BRACE_PLACEHOLDER, "{");
 }

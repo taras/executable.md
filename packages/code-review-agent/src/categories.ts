@@ -41,13 +41,11 @@ const verbositySet = new Set<string>(VERBOSITY_RULES);
 const typeAwareSet = new Set<string>(TYPE_AWARE_RULES);
 
 /**
- * Categorize a rule ID into one or more categories.
- * Returns an array of category names the rule belongs to.
+ * A rule may belong to several categories; unmatched rules belong to `other`.
  */
 export function categorizeRule(
   ruleId: string,
 ): ("structural" | "verbosity" | "typeAware" | "other")[] {
-  // Strip plugin prefix (e.g., "eslint/no-unused-vars" → "no-unused-vars")
   const bare = ruleId.includes("/") ? ruleId.split("/").pop()! : ruleId;
 
   const categories: ("structural" | "verbosity" | "typeAware" | "other")[] = [];

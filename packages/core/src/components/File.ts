@@ -50,12 +50,12 @@
  *
  * ## Threat model
  *
- * Containment is the provider's claim, not this component's. The host provider
- * judges it against the filesystem as it observes it, which is sound while the
- * host pathname namespace is stable; a transaction-bound provider resolves
- * logical paths that never reach a host filesystem call at all. Deferring the
- * second stage until immediately before the write is what covers the
- * document's own children under either.
+ * Containment is the provider's responsibility, not this component's. The host
+ * provider judges it against the filesystem as it observes it, which is sound
+ * while the host pathname namespace is stable; a transaction-bound provider
+ * resolves logical paths that never reach a host filesystem call at all.
+ * Deferring the second stage until immediately before the write is what covers
+ * the document's own children under either.
  */
 
 import type { Operation } from "effection";

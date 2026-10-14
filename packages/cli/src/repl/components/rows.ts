@@ -1,13 +1,13 @@
 /**
  * The things a REPL screen is made of.
  *
- * Each one renders exactly what its input says and claims exactly the input it
+ * Each one renders exactly what its input says and handles exactly the input it
  * has a meaning for. A row that has no use for Escape lets Escape pass, so the
- * drawer above it still closes. That is the whole reason claims are per-node
+ * drawer above it still closes. That is the whole reason event handlers are per-node
  * rather than a table somewhere: the answer to "what does this keystroke mean"
  * depends on what is under the cursor.
  *
- * A row that has no use for text claims none, and text nothing claims reaches
+ * A row that has no use for text handles none, and text nothing handles reaches
  * nothing: propagation runs up the ancestors of whatever holds focus, and the
  * draft is a sibling of these rows rather than an ancestor of them. So typing at
  * a control leaves the draft exactly as it was — which is the behavior, not an
@@ -102,7 +102,6 @@ export function fieldText(prompt: string, text: string, focused: boolean): strin
   return `${parts.marker}${parts.prompt}${parts.earlier}${parts.value}`;
 }
 
-/** Read an optional string field. */
 function optional(input: ReplViewData, name: string): string | undefined {
   const value = fields(input)?.[name];
   return typeof value === "string" ? value : undefined;
@@ -335,7 +334,7 @@ function rendered(input: ReplViewData): string {
 /**
  * A drawer: a modal branch, closed by Escape.
  *
- * It claims Escape and nothing else. Escape closes the drawer and never answers
+ * It handles Escape and nothing else. Escape closes the drawer and never answers
  * the question inside it, because a person dismissing a prompt has not chosen
  * one of its options.
  */

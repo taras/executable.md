@@ -72,12 +72,11 @@ export class IncompleteTestingActivationError extends Error {
 }
 
 /**
- * One `<Test>`'s claim on a complete activation.
+ * One `<Test>`'s ownership of a complete activation.
  *
- * Accepted means delivered exactly once, to this claim, carrying a live
+ * Accepted means delivered exactly once, to this owner, carrying a live
  * boundary credential. Delivering the same request a second time is a protocol
- * violation rather than a second proof, so it withdraws the claim instead of
- * confirming it.
+ * violation rather than a second proof, so it invalidates confirmation.
  */
 class Claim {
   deliveries = 0;
@@ -116,7 +115,7 @@ class ActivationCredential {
   }
 }
 
-/** One `<Test>`'s request for proof, carrying a claim only its terminal holds. */
+/** One `<Test>`'s request for proof, carrying an ownership handle only its terminal holds. */
 class ActivationRequest {
   readonly #claim: Claim;
 
@@ -128,9 +127,10 @@ class ActivationRequest {
   /**
    * Deliver `request` to `claim`, with whatever credential arrived beside it.
    *
-   * The expected claim is supplied by the caller rather than read off the
+   * The expected owner is supplied by the caller rather than read off the
    * request: a request another `<Test>` issued is also canonical, and settling
-   * it on its own claim would let one invocation's proof answer another's.
+   * it against its own owner would let one invocation's proof answer
+   * another's.
    */
   static deliver(request: unknown, claim: Claim, credential: unknown): void {
     if (!ActivationRequest.own(request) || request.#claim !== claim) {

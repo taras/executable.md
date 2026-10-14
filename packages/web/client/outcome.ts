@@ -1,25 +1,11 @@
 /**
- * What a person is told after submitting, and whether they can try again.
- *
- * Three of these are ordinary and one is not. A 204 means the workflow has the
- * answer and this tab has no further purpose. A 409 means the form was already
- * answered — by another tab, or by this one before a reload — and nothing the
- * person does here will change that. A 422 or a transport failure is the only
- * case where trying again makes sense, so it is the only case that leaves the
- * form usable.
- *
- * Pure and free of the DOM, so the mapping is tested directly rather than
- * inferred from what a page rendered.
+ * A 204 or 409 ends this tab's work; validation and transport failures leave the
+ * form usable so the person can retry. This mapping needs no DOM.
  */
 
 export type OutcomeKind = "accepted" | "already-submitted" | "retryable";
 
-/**
- * How the status region is coloured. Two states, because there are only two
- * things a reader needs to tell apart: an answer that landed and one that did
- * not. `formUsable` already draws that line — an outcome that leaves the form
- * usable is one the person still has to act on.
- */
+/** A retryable outcome needs action; either terminal outcome uses `accepted`. */
 export type Banner = "accepted" | "failed";
 
 export interface Outcome {

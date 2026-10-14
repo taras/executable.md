@@ -76,9 +76,9 @@ export interface GitQueryApi {
   /**
    * The bytes one path held in one commit, as text.
    *
-   * The semantics of `git cat-file blob <commit>:<path>`. What comes back is the
-   * pinned object rather than whatever the working tree holds now, which is what
-   * lets a run claim a commit as its identity and mean it.
+   * The semantics of `git cat-file blob <commit>:<path>`. What comes back is
+   * the pinned object rather than whatever the working tree holds now, which is
+   * what lets a run use a commit as its identity and mean it.
    */
   read(commit: string, path: string): Operation<string>;
 }

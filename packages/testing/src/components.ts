@@ -79,18 +79,6 @@ import type { TestHandlers } from "./handlers.ts";
 const TEST_TIMEOUT_MS = 20_000;
 
 /**
- * Install the testing components and supply what core's `<Test>` does.
- *
- * `<Test>` itself is not registered here. The construct belongs to core, which
- * is what makes a checked command failure inside a test that test's outcome
- * rather than the run's; this session supplies its behavior and hands nobody an
- * identity (#441).
- *
- * Behavior, and nothing more: a caller that installs this and answers the
- * public `testing` boolean has registered what a test does without owning
- * anywhere for a result to go.
- */
-/**
  * Everything this package makes resolvable, as plain declarations.
  *
  * Registration and activation are separate concerns, and this is registration

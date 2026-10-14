@@ -16,21 +16,21 @@
  *
  * A repository file, a workflow bundle member and an ordinary registration can
  * all answer for a name. A declared component answers ahead of every one of
- * them, beside a reserved registration, because the host is claiming the name
- * rather than offering a default for it. Two claims on one name are a
+ * them, beside a reserved registration, because the host is reserving the name
+ * rather than offering a default for it. Two reservations of one name are a
  * configuration failure rather than a precedence question, so a declaration
- * colliding with a reserved registration or with another declaration is refused
- * before the root document is imported.
+ * colliding with a reserved registration or with another declaration is
+ * refused before the root document is imported.
  *
  * ## The private closure
  *
  * A declaration may carry components only its own bytes may write. They are
- * *lexical availability*, not permission: each is an ordinary
- * {@link IdentityComponent}, built from a claimant this execution minted, and
- * it names nothing once the invocation it was given settles. What makes them
- * private is that nothing registers them — they are resolvable only while
- * canonical core is expanding the body of the exact declaration that carries
- * them, and the register below is offered and taken inside one import.
+ * *lexical availability*, not permission: each is an ordinary {@link
+ * IdentityComponent}, built from an identity authenticator this execution
+ * minted, and it names nothing once the invocation it was given settles. What
+ * makes them private is that nothing registers them — they are resolvable only
+ * while canonical core is expanding the body of the exact declaration that
+ * carries them, and the register below is offered and taken inside one import.
  *
  * Caller-projected content is not that body. Projection restores the caller's
  * frame and the caller's own resolution, so content written by whoever invoked the
@@ -514,7 +514,7 @@ export class InstalledComponents implements ImportTier {
   }
 
   /**
-   * A declaration claims the names it declares and says nothing about any
+   * A declaration reserves the names it declares and says nothing about any
    * other, so an unrelated import composes exactly as it does in an execution
    * with no declarations at all. Closing those too would take a supported way
    * to decide what a name means away from every host that declares one asset.

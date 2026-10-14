@@ -1,38 +1,16 @@
 /**
- * `<Git.Commit>` — record exactly what is staged, and hand back its SHA
+ * Commit the staged index and bind its full object id
  * (specs/workflow-workspace-spec.md §7.3).
  *
- * ```md
- * <Repository name="project" url={props.repository}>
- *   <Git.Commit message={summary} as="commit">
- *     <Git.Add paths="release/notes.md" />
+ * `<Git.Commit message={summary} as="commit"><Git.Add paths="notes.md" /></Git.Commit>`
+ * completes child expansions and their own transactions before describing the
+ * commit effect. It performs no implicit staging, amend, empty commit or signing.
  *
- * Generated from validated release metadata.
- *   </Git.Commit>
- * </Repository>
- * ```
- *
- * Content expands first, completely, before this element describes an effect of
- * its own. That is what makes a nested `<Git.Add>` mean what a document written
- * that way reads as: the staging is its own expansion, its own effect and its
- * own transaction, finished before a commit exists to include it.
- *
- * The message is composed from what a document wrote and then canonicalized
- * once. `message` alone is the whole message; content alone is the whole
- * message; both put the prop first and the rendered text one blank line after
- * it. Line endings become LF, whitespace at the very end is removed, and exactly
- * one final newline is added — leading and interior text are untouched, because
- * a commit message is authored prose and rewriting the middle of one would
- * commit something nobody wrote. What is left is what Git receives verbatim,
- * and the digest and byte length the run retains describe those exact bytes.
- *
- * It commits the index and nothing else. There is no path, no implicit staging,
- * no amend, no empty commit and no signing — each is a different operation, and
- * a document that wants one says so with the component that owns it.
- *
- * Unlike the other two Git operations this one produces a value, so it renders
- * nothing and is written with `as`: the binding is the full object id of the
- * commit, which is the one fact a later element can act on.
+ * The message prop, rendered content or both supply the message; both place the
+ * prop first and content one blank line later. Canonicalization changes line
+ * endings to LF, removes trailing whitespace and adds one final newline, preserving
+ * leading and interior text. Git receives those bytes verbatim; the retained digest
+ * and byte length describe them. The component renders nothing and requires `as`.
  */
 
 import { cwd } from "@executablemd/runtime";

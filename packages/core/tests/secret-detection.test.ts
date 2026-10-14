@@ -159,7 +159,7 @@ function label(event: DurableEvent): string {
 
 /** Every command answers with `output`, so no real shell runs. */
 /**
- * A stand-in child, which displays what it claims to have written.
+ * A stand-in child, which displays what it reports writing.
  *
  * Retention reads the same chain a reader does (#441), so a stub that returned
  * text without writing it would leave nothing for the journal to hold — and

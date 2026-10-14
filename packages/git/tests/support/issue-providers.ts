@@ -230,7 +230,7 @@ export function useProviderComponents(log: ProviderLog): Operation<void> {
       props: {
         type: "object",
         properties: {
-          /** The URL it claims. Anything else it delegates untouched. */
+          /** The URL it handles. Anything else it delegates untouched. */
           handles: { type: "string", minLength: 1 },
           /** The URL it answers with. */
           answers: { type: "string", minLength: 1 },

@@ -155,7 +155,6 @@ export function composeModifierChain(
     };
   }
 
-  // Build the middleware array — each factory is called with its params
   const middlewares: ModifierMiddleware[] = [];
   for (const mod of modifiers) {
     const factory = registry.get(mod.name);
@@ -169,7 +168,6 @@ export function composeModifierChain(
     middlewares.push(factory(mod.params));
   }
 
-  // Combine all middlewares into a single middleware
   const composed = combine(middlewares);
 
   // Return a thunk that provides the code block contextually for the

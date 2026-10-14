@@ -165,7 +165,7 @@ export type ComponentInfo =
       returns?: ReturnsSchema;
     } & DescribedContract)
   /**
-   * A component canonical core claims the name of.
+   * A component canonical core reserves the name of.
    *
    * Its own `kind` for the same reason its origin has one: a caller asking what
    * `Syntax` is needs to learn that no registry supplies it and none can, which
@@ -533,10 +533,10 @@ export interface InspectSyntaxOptions {
    * meaning `ExecuteOptions.components` gives them — admissibility included.
    *
    * A set an execution would refuse is refused here too: two declarations of
-   * one name, and any declaration registration would not accept. Read for their
-   * structural metadata alone; the factory is never called, because it takes an
-   * execution's claimant and describing an environment mints no execution and
-   * no claimant to give it.
+   * one name, and any declaration registration would not accept. Read for
+   * their structural metadata alone; the factory is never called, because it
+   * takes an execution's identity authenticator and describing an environment
+   * mints no execution and no identity authenticator to give it.
    */
   readonly components?: readonly IdentityComponent[];
   /**

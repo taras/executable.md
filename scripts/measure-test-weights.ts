@@ -12,7 +12,7 @@
  *
  * Provenance is supplied, never inferred. A local run could read its own commit
  * from Git and its own versions from the executables on `PATH`, and would then
- * produce a file claiming to describe the runner while describing a laptop. So
+ * produce a file reporting provenance for the runner while describing a laptop. So
  * every provenance value arrives in the environment, and a missing one is a
  * refusal.
  */

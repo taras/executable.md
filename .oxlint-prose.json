@@ -1,0 +1,11 @@
+{
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "site/_fresh/**",
+    "site/vendor/**",
+    "site/*.timestamp-*.mjs"
+  ],
+  "categories": { "correctness": "off" },
+  "jsPlugins": [{ "name": "local", "specifier": "./scripts/oxlint-plugin.js" }],
+  "rules": { "local/no-banned-jsdoc-words": "error" }
+}

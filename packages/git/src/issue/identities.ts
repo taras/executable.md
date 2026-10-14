@@ -1,6 +1,6 @@
 /**
  * Which run each Issue record in a history was written under, established where
- * nothing replaceable can reach it and claimed one position at a time.
+ * nothing replaceable can reach it and consumed one position at a time.
  *
  * An upsert is named by a digest that includes the run id, and its idempotency
  * key is derived from the run id outright, so a record a fork inherited would

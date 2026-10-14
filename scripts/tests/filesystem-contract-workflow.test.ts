@@ -1,10 +1,10 @@
 /**
  * The five-target filesystem contract job, held to the release matrix.
  *
- * The claim `xmd run` makes about containment is per-platform: path arithmetic
+ * The containment guarantee `xmd run` provides is per-platform: path arithmetic
  * and `realpath` are the host's, and Windows brings drive letters, UNC paths,
  * junctions, and reparse points that POSIX does not. A job that covered four of
- * the five triples would leave the fifth's claim asserted and unproven, and
+ * the five triples would leave the fifth's guarantee asserted and unproven, and
  * nothing about adding a release target would notice.
  *
  * So the matrix is held to `RELEASE_TARGETS` by set equality, the same way
