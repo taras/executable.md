@@ -14,7 +14,7 @@
  * be constructed — only reproduced from one the provider already handed out.
  * Reproducing one is enough to name a target, which is exactly as much as a
  * selection is meant to carry: the registry answers with what the provider
- * itself recorded, never with what the caller's copy claims.
+ * itself recorded, never with what the caller's copy reports.
  *
  * The comparison is total, not a spot check. An identifier that matches while
  * a name, a checkout path or one member of the identity does not is a value

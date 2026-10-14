@@ -49,8 +49,8 @@ export class WorkflowAgentSessionError extends Error {
  * One durable identity a provider asserted, and what kind of thing it is.
  *
  * Tagged, because "the adapter's own session id" and "an ACP session id" and "a
- * record id in some store" are different claims that happen to be strings. A
- * host comparing them without the tag would accept one for another.
+ * record id in some store" are different identity assertions that happen to be
+ * strings. A host comparing them without the tag would accept one for another.
  */
 export interface ProviderAssertion {
   readonly kind: string;

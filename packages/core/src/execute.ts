@@ -281,10 +281,10 @@ type DurableSelection =
   /**
    * A component only the declaration that carries it may write.
    *
-   * Nothing else is retained: the implementation is built from a claimant this
-   * execution minted and is reachable from nowhere, so a replay reconstructs it
-   * the same way the live run did — by being inside the same declaration's body
-   * when it asks.
+   * Nothing else is retained: the implementation is built from an identity
+   * authenticator this execution minted and is reachable from nowhere, so a
+   * replay reconstructs it the same way the live run did — by being inside the
+   * same declaration's body when it asks.
    */
   | { kind: "declared-private"; origin: string }
   /**
@@ -770,9 +770,10 @@ const UNIDENTIFIED_ANSWER =
  * What a provider-backed name whose answer is somebody else's refuses with.
  *
  * Both identities are spelled the one way a reader is ever shown one, so a
- * diagnostic and a claim describe the same thing the same way. Neither is a
- * secret: an origin, a key and a revision are what a host published in order to
- * admit the name, and naming them is what makes this actionable.
+ * diagnostic and an identity statement describe the same thing the same way.
+ * Neither is a secret: an origin, a key and a revision are what a host
+ * published in order to admit the name, and naming them is what makes this
+ * actionable.
  */
 function differentAnswer(name: string, expected: FragmentIdentity, stated: AnswerIdentity): string {
   return (
@@ -787,10 +788,10 @@ function differentAnswer(name: string, expected: FragmentIdentity, stated: Answe
  *
  * A protected component's implementation is the one this execution built; an
  * ordinary core component's is the definition core registered. Both are core's
- * own object, and the identity comparison is the whole check: an answer that is
- * anything else — a repository component of the same name, a registration a
+ * own object, and the identity comparison is the whole check: an answer that
+ * is anything else — a repository component of the same name, a registration a
  * nested scope layered over, a middleware's replacement — is not this, so it
- * receives no canonical claim and the entry refuses it.
+ * receives no canonical identity and the entry refuses it.
  */
 function sealedByCore(inputs: ImportInputs, name: string): FunctionComponentDefinition | undefined {
   return inputs.guarded.get(name) ?? coreComponentDefinition(name);
@@ -809,13 +810,13 @@ function sealedByCore(inputs: ImportInputs, name: string): FunctionComponentDefi
  * is not authored work, and a durable record for it would be an effect a
  * continuation then had to account for.
  *
- * What comes back is asked about once. The provider's claim is read off the
- * *exact final answer* rather than off anything the chain held in between, and
- * that one call answers with both the identity and core's own copy of what was
- * claimed — taken when the claim was recorded, before the chain could see it
- * again. So the value this run keeps is the value the check was made about:
- * there is no second read of the chain's object for an alternating proxy or a
- * computed member to answer differently.
+ * What comes back is asked about once. The provider's identity statement is
+ * read off the *exact final answer* rather than off anything the chain held in
+ * between, and that one call answers with both the identity and core's own
+ * copy of what was identified — taken when the identity was recorded, before
+ * the chain could see it again. So the value this run keeps is the value the
+ * check was made about: there is no second read of the chain's object for an
+ * alternating proxy or a computed member to answer differently.
  *
  * The identity is then compared whole with what the host entry expects, and the
  * copy — not the answer — is what the profile seals.
@@ -2432,8 +2433,9 @@ function* executeDocument(
    * identifies.
    *
    * Built before any installation ran, so a provider could state identities
-   * during profile capture; handed here so the component resolution this execution
-   * imports through is the same table those claims went into.
+   * during profile capture; handed here so the component resolution this
+   * execution imports through is the same table those identity statements went
+   * into.
    */
   canonicalImports: CanonicalImports = new CanonicalImports(),
   /**
@@ -2999,11 +3001,11 @@ export interface ExecutionInstallation {
    * The components of this host's whose implementations name durable work
    * after their own invocation.
    *
-   * Each factory is called once, with a claimant this execution minted for that
-   * component — delivered as the argument of that call and published nowhere —
-   * and what it returns is registered through the ordinary path. A host that
-   * declares none has no component that can name a durable operation after its
-   * invocation.
+   * Each factory is called once, with an identity authenticator this execution
+   * minted for that component — delivered as the argument of that call and
+   * published nowhere — and what it returns is registered through the ordinary
+   * path. A host that declares none has no component that can name a durable
+   * operation after its invocation.
    */
   readonly components?: readonly IdentityComponent[];
   /**
@@ -3822,8 +3824,8 @@ export function executeInstalled(
  * executions in one process are unaffected by each other.
  *
  * It exists because cancelling *inside documentation-index construction* is a
- * different claim from cancelling inside symbol discovery, and there is no
- * other point in that operation a test can stand at.
+ * different cancellation boundary from cancelling inside symbol discovery, and
+ * there is no other point in that operation a test can stand at.
  */
 export function executeReadingAssetsWith(
   options: ExecuteOptions,

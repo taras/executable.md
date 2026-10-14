@@ -6,7 +6,7 @@
  * describe the same language and operate none of it — is
  * `run-composition.test.ts`, which runs everywhere.
  *
- * Three claims about a root execution's own provider: where a Session launched
+ * Three behaviors about a root execution's own provider: where a Session launched
  * in a managed Worktree lands, that an ordinary journal is diagnostic, and that
  * a diagnostic trace grants nothing. What a nested `host="run"` child gets is a
  * separate question about a separate provider instance, asked in

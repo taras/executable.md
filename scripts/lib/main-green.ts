@@ -1,6 +1,6 @@
 /**
  * Require successful CI for `main`'s exact current head before a pull request
- * claims `green`. Reuse Main Health's `selectAuthoritative()` rules so the gate
+ * passes `green`. Reuse Main Health's `selectAuthoritative()` rules so the gate
  * and its issue agree on head, branch, event, run number and attempt.
  *
  * Absent, queued and in-progress runs wait through `when()` convergence; an

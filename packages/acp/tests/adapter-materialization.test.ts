@@ -70,7 +70,7 @@ function* takenTickets(claims: string): Operation<number[]> {
     .sort((left, right) => left - right);
 }
 
-/** Wait until `ticket` has been taken, so a barrier is read from the claim. */
+/** Wait until `ticket` has been taken, so a barrier is read from the recovery ticket. */
 function* untilTicketTaken(claims: string, ticket: number): Operation<void> {
   for (let attempt = 0; attempt < 600; attempt += 1) {
     if ((yield* takenTickets(claims)).includes(ticket)) {

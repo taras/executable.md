@@ -8,16 +8,17 @@
  * version and digest; the quoted host-local launch path is never retained in a
  * session or sealed artifact.
  *
- * Stage privately, publish by one rename and verify the published tree before use,
- * including when another attempt won. Recovery of an abandoned non-empty tree
- * requires an exclusive claim and a fresh check before removal, otherwise a stale
- * observation could delete another process's newly published valid adapter.
+ * Stage privately, publish by one rename and verify the published tree before
+ * use, including when another attempt won. Recovery of an abandoned non-empty
+ * tree requires exclusive ownership of recovery and a fresh check before
+ * removal, otherwise a stale observation could delete another process's newly
+ * published valid adapter.
  *
- * Recovery claims are prepared directories atomically renamed to `claims/<n>`.
- * Tickets increase monotonically and are never reused: late arrivals cannot precede
- * an elected holder, and finishing a dead holder cannot affect a later claim.
- * The lowest unfinished ticket owns recovery; release marks it finished, and a
- * later attempt may finish a dead owner's ticket.
+ * Recovery tickets are prepared directories atomically renamed to `claims/<n>`.
+ * Tickets increase monotonically and are never reused: late arrivals cannot
+ * precede an elected holder, and finishing a dead holder cannot affect a later
+ * ticket. The lowest unfinished ticket owns recovery; release marks it
+ * finished, and a later attempt may finish a dead owner's ticket.
  *
  * Digest, extraction, installation or missing-entry failures raise. Falling back
  * to a published adapter would lose the turn identity continuation depends on.
@@ -67,10 +68,10 @@ const RECOVERY_ATTEMPTS = 400;
 const OWNER = "owner";
 const DONE = "done";
 
-/** A ceiling on ticket numbers, so a pathological claims directory cannot spin. */
+/** A ceiling on ticket numbers, so a pathological recovery-ticket directory cannot spin. */
 const MAX_TICKETS = 10_000;
 
-/** Who holds a recovery claim, so a later attempt can tell live from dead. */
+/** Who holds a recovery ticket, so a later attempt can tell live from dead. */
 interface RecoveryOwner {
   readonly pid: number;
   readonly host: string;
@@ -97,7 +98,7 @@ function parseOwner(raw: string): RecoveryOwner | undefined {
  * Signal 0 asks without delivering anything. `EPERM` means it exists and
  * belongs to somebody else, which is still alive; only `ESRCH` means gone. An
  * answer this cannot interpret is treated as alive, so an unreadable state
- * never becomes a reason to take somebody's claim.
+ * never becomes a reason to take somebody's recovery ownership.
  */
 function alive(pid: number): boolean {
   try {
@@ -378,10 +379,10 @@ export function createEmbeddedAdapters(
    * on. An attempt arriving later cannot obtain a number below one already
    * taken, so it cannot come to sit ahead of a holder.
    *
-   * Ordering names by time could not offer that. Two claims made in the same
-   * millisecond were separated only by the random part of their names, and a
-   * clock adjustment could hand a later arrival an earlier name — either way an
-   * elected holder could be preceded after the fact.
+   * Ordering names by time could not offer that. Two recovery tickets issued in
+   * the same millisecond were separated only by the random part of their names,
+   * and a clock adjustment could hand a later arrival an earlier name — either
+   * way an elected holder could be preceded after the fact.
    */
   function* takeTicket(claims: string): Operation<number> {
     yield* ensureDir(claims);
@@ -412,15 +413,15 @@ export function createEmbeddedAdapters(
   }
 
   /**
-   * Whether this attempt now holds the claim.
+   * Whether this attempt now owns recovery.
    *
    * The holder is the lowest ticket still outstanding, so every number below
-   * this attempt's own is examined in order: a finished ticket is passed over, a
-   * ticket whose owner is a dead process on this host is finished here, and a
+   * this attempt's own is examined in order: a finished ticket is passed over,
+   * a ticket whose owner is a dead process on this host is finished here, and a
    * live owner, an owner on another machine, or a record that cannot be read
    * each stop the election where it stands. The last one says so, because
    * refusing to act on what it cannot read is the only safe reading of somebody
-   * else's claim.
+   * else's recovery ticket.
    *
    * Finishing a dead holder's ticket is safe for the reason the election is:
    * the number is never reissued, so this can only ever act on the exact ticket
@@ -465,17 +466,18 @@ export function createEmbeddedAdapters(
   }
 
   /**
-   * Replace an abandoned tree at the target, holding an exclusive claim.
+   * Replace an abandoned tree at the target, under exclusive ownership of
+   * recovery.
    *
-   * Reached only when the rename failed and what is there does not verify. The
-   * claim makes "check, then remove" one decision instead of two: without it, a
-   * second attempt could publish a valid tree in the gap and this one would
-   * delete it, taking the files out from under an adapter that had already
-   * resolved and might already be running.
+   * Reached only when the rename failed and what is there does not verify.
+   * Exclusive recovery ownership makes "check, then remove" one decision
+   * instead of two: without it, a second attempt could publish a valid tree in
+   * the gap and this one would delete it, taking the files out from under an
+   * adapter that had already resolved and might already be running.
    *
-   * An attempt that does not hold the claim never removes anything. It waits
-   * and answers from what the holder published — including when the wait ends
-   * with this attempt elected, because a holder finishes its ticket only after
+   * An attempt that does not own recovery never removes anything. It waits and
+   * answers from what the holder published — including when the wait ends with
+   * this attempt elected, because a holder finishes its ticket only after
    * publishing.
    */
   function* recover(
@@ -637,9 +639,9 @@ export function createEmbeddedAdapters(
  *
  * A closed registry was the wrong shape for the same reason. It made "this
  * build has no Codex snapshot problem to solve for Gemini" into "this build
- * refuses Gemini", which is a much larger claim than the one being made, and it
- * would have changed the retained identity of agents the checkpoint work has
- * nothing to say about.
+ * refuses Gemini", which is a much broader restriction than the one being made,
+ * and it would have changed the retained identity of agents the checkpoint work
+ * has nothing to say about.
  *
  * The overlay is *qualified*: an embedded provider never falls through. A
  * snapshot that cannot be verified or materialized refuses the agent, and does

@@ -91,7 +91,7 @@ const ACP_DOCUMENT = fileURLToPath(new URL("./codex-native-to-acp-prompt.md", im
  * The compatibility point these journeys are only meaningful against
  * (`issue-755-codex-materialization-turn-implementor-handoff.md`).
  *
- * Frozen rather than read from the machine, because the whole claim is that one
+ * Frozen rather than read from the machine, because the proof requires that one
  * exact build was proven. A run against another build is not a weaker pass; it
  * is a different question, and it says so.
  */
@@ -176,10 +176,10 @@ const SURFACE_MS = 240_000;
 /**
  * How long one native answer is waited for.
  *
- * Twice the Claude proof's bound, because two Codex answers reached that one and
- * the second was still showing a working state when the classifier read the
- * screen afterwards. A bound is not a claim about the product: reaching it says
- * this harness stopped waiting, and `answerSurface` says what was on screen.
+ * Twice the Claude proof's bound, because two Codex answers reached that one
+ * and the second was still showing a working state when the classifier read the
+ * screen afterwards. A bound is not a product finding: reaching it says this
+ * harness stopped waiting, and `answerSurface` says what was on screen.
  */
 const ANSWER_MS = 600_000;
 const SETTLE_MS = 120_000;
@@ -1915,8 +1915,8 @@ function decideNativeLaunch(verdict: JourneyVerdict): void {
  * Gate, run and dismantle one journey, then report it.
  *
  * The cleanup counters are filled in by teardown, so a verdict serialized while
- * the scope was still open would report every one of them false and claim the
- * journey leaked what it had not yet released.
+ * the scope was still open would read every cleanup counter as false and
+ * incorrectly report a leak before those resources had been released.
  */
 function* runJourney(
   mode: Mode,

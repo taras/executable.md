@@ -7,7 +7,7 @@
  * value one of them issued arrives at the other looking exactly like something
  * it made itself.
  *
- * It is not. The claim a use carries is a registered symbol, deliberately
+ * It is not. The marker a use carries is a registered symbol, deliberately
  * shared: any copy can see that a value presents itself as configured. The
  * authority is a private class field, and a private field belongs to the class
  * that declared it — so the copy that did not mint this value cannot read what

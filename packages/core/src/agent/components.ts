@@ -84,9 +84,10 @@ interface SequencedFailure {
  *
  * `<Session>` is not registered with the rest of the agent words: its
  * implementation names durable work after its own invocation, and what may do
- * that is fixed by the execution before any installation runs, from a claimant
- * delivered straight to this factory. A document run by a host that declares
- * none has no `<Session>` at all, which is the safe direction.
+ * that is fixed by the execution before any installation runs, from an
+ * identity authenticator delivered straight to this factory. A document run by
+ * a host that declares none has no `<Session>` at all, which is the safe
+ * direction.
  */
 export function agentIdentityComponents(): readonly IdentityComponent[] {
   return [

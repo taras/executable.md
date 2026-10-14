@@ -1136,7 +1136,7 @@ describe("Tier FS — the final public launch surface", () => {
  * so nothing after the fact can tell them apart. The record has to say. This
  * tier is where that becomes true, and where the one compatibility inference —
  * a released format that could not have been client-allocated — is pinned to
- * the weaker claim.
+ * the weaker provenance.
  */
 const BINDING: ExecutableBuildBindingV1 = {
   schema: "executable-build.v1",

@@ -305,11 +305,11 @@ export function credentialRequest(locator: string): CredentialRequest | undefine
 /**
  * What a session did with host resources, for a suite that has to prove it.
  *
- * A claim that nothing survives teardown needs something that counted, and
- * counting by scanning the temporary directory for a name prefix is a claim
- * about the whole machine rather than about this invocation — two concurrent
- * ones would each see the other's. So a session reports its own working
- * directories, and a suite watches the invocation it started.
+ * Proving that nothing survives teardown needs something that counted, and
+ * counting by scanning the temporary directory for a name prefix measures the
+ * whole machine rather than this invocation — two concurrent ones would each
+ * see the other's. So a session reports its own working directories, and a
+ * suite watches the invocation it started.
  */
 export interface GitAuthenticationObserver {
   opened?: (directory: string) => void;

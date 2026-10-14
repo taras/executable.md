@@ -2,9 +2,9 @@
  * The reference entry, executed for real.
  *
  * Every REPL test that needs a Journal gets one from here rather than from a
- * recorded file, because the projector's whole claim is that it reads what the
+ * recorded file, because the projector's contract is that it reads what the
  * *current* runtime writes. A frozen event array would keep passing on the day
- * core changed a record's shape, which is the day the claim stopped being true.
+ * core changed a record's shape, which is the day the contract stopped being true.
  *
  * The entry is one document deliberately holding one of each thing this slice
  * projects: a durable evaluation that publishes JSON, one nested component

@@ -14,13 +14,14 @@
  * installation is the right to be asked, and it is deliberately reusable: one
  * installation answers several admitted names and the same name resolved more
  * than once. A request is the right to answer one asking, and it is closed the
- * moment that handler invocation ends. Only a request claims, which is what
- * makes a statement provable — an installation handle can prove "some provider
- * this host installed" and nothing about which invocation is speaking.
+ * moment that handler invocation ends. Only a request records an identity,
+ * which is what makes a statement provable — an installation handle can prove
+ * "some provider this host installed" and nothing about which invocation is
+ * speaking.
  *
- * The rows read what `identify()` answers rather than what a refusal says: a
- * claim that reported correctly while still identifying a substituted object
- * would satisfy an error-shape assertion and none of these.
+ * The rows read what `identify()` answers rather than what a refusal says: an
+ * identity statement that reported correctly while still identifying a
+ * substituted object would satisfy an error-shape assertion and none of these.
  *
  * The owner is `CanonicalImports`, which already holds issuance and retention.
  * One owner asks one question about one table; a second registry would be a
@@ -599,8 +600,8 @@ describe("Tier PA10b — one serial resolution window", () => {
    * That is the whole reason no scope takes part here: the execution asks for
    * each admitted name in turn, so there is one window at a time, and what a
    * request answers is the window object it captured when its handler was
-   * opened — not whichever window is open when it happens to claim, and not
-   * anything about where it is running.
+   * opened — not whichever window is open when it records the identity, and
+   * not anything about where it is running.
    */
   it("PA10b: a request answers the window it captured, not the one open later", function* () {
     const imports = owner();
@@ -822,7 +823,7 @@ describe("Tier PA10c — one definition answering more than one import", () => {
 });
 
 /**
- * Claim one shared definition in a resolution of its own, and read it back.
+ * Identify one shared definition in a resolution of its own, and read it back.
  *
  * Written once because three rows need the same second import: a fresh window,
  * the same object, and the same provider saying the same thing about it. All of

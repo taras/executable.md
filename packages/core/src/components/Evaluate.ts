@@ -98,7 +98,7 @@ import { CORE_ORIGIN } from "./registry.ts";
 import { documented } from "./documentation.ts";
 import type { FunctionComponentDefinition, Json, PropsSchema } from "../types.ts";
 
-/** The public name canonical core claims for the evaluation component. */
+/** The public name canonical core reserves for the evaluation component. */
 export const EVALUATE_COMPONENT = "Evaluate";
 
 /** The classes this component accepts, and the order a selection canonicalizes to. */
@@ -325,7 +325,7 @@ interface SelectedTables {
  * The host's captured tables, as the pinned identities the evaluator admits.
  *
  * A class the host installed nothing for is refused here — before the durable
- * name is claimed and before a program exists — rather than reaching the
+ * name is assigned and before a program exists — rather than reaching the
  * evaluator as an empty table. The identity a run retains is built from the
  * three structural parts the host stated, so a reader comparing two admissions
  * can say which part moved.

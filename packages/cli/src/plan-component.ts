@@ -432,7 +432,7 @@ export function* planComponentDeclaration(
  * run in one.
  *
  * Inspection and validation answer about what a document may write. They mint no
- * execution, so there is no claimant to build a private capability from and no
+ * execution, so there is no invocation authenticator to build a private capability from and no
  * frame to install — and none of that is describable anyway: a private name
  * is not syntax a document may write, so symbols listing one would describe an
  * environment that does not exist.
@@ -464,7 +464,7 @@ export function* planComponentDescription(): Operation<MarkdownComponent> {
  * The private closure as a description: the names, origins and contracts, with
  * no implementation behind them.
  *
- * Describing an environment mints no execution and therefore no claimant, so
+ * Describing an environment mints no execution and therefore no invocation authenticator, so
  * there is nothing to build one from. The factory is a refusal rather than an
  * omission: nothing that only describes a document reaches an implementation, so
  * it is unreachable — it is there so that anything which ever did would fail

@@ -280,10 +280,10 @@ describe("ORC10 — a conflict changes nothing", () => {
   /**
    * One refusal, fingerprinted on both sides.
    *
-   * The claim is not "it failed" but "it failed and changed nothing", so the
-   * slot's complete byte fingerprint and the checkout's own Git state are taken
-   * before the refusal and compared after it. A reset, a fetch, a switch or a
-   * rewritten sidecar would all show up here.
+   * The required outcome is not "it failed" but "it failed and changed
+   * nothing", so the slot's complete byte fingerprint and the checkout's own
+   * Git state are taken before the refusal and compared after it. A reset, a
+   * fetch, a switch or a rewritten sidecar would all show up here.
    */
   function* refusesWithoutMutating(
     slot: ReturnType<typeof repositorySlotOf>,

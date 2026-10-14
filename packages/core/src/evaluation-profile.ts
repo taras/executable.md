@@ -168,17 +168,17 @@ export interface CapabilityEntry {
  * An entry whose implementation the ordinary import chain answers for.
  *
  * The host states *what it expects* — the name, the structural identity a
- * provider must claim, and the forms — and states no implementation at all.
+ * provider must state, and the forms — and states no implementation at all.
  * There is no definition, function, resolver, provider operation or context
  * handle on this arm to hold one.
  *
  * Canonical capture resolves the name once, before the root import and before
  * any document code, through the complete ordinary `Component.importComponent`
- * chain; reads the identity the provider claimed on that exact final answer;
- * compares it with what this entry expects; retains the answer defensively; and
- * seals the result. Props and the callable definition are derived from that
- * answer rather than restated here, so a host cannot describe a contract the
- * implementation does not have.
+ * chain; reads the identity the provider stated on that exact final answer;
+ * compares it with what this entry expects; retains the answer defensively;
+ * and seals the result. Props and the callable definition are derived from
+ * that answer rather than restated here, so a host cannot describe a contract
+ * the implementation does not have.
  *
  * Resolution happens at capture and never again. A fragment invokes the sealed
  * snapshot, and a continuation resolves once more in its own capture and
@@ -192,7 +192,7 @@ export interface CapabilityEntry {
 export interface ComponentAnswerEntry {
   readonly kind: "component-answer";
   readonly name: string;
-  /** What a provider must have claimed for this name, exactly. */
+  /** What a provider must have stated for this name, exactly. */
   readonly identity: FragmentIdentity;
   readonly forms: readonly FragmentForm[];
   readonly description?: string;
@@ -468,12 +468,12 @@ function coreEntry(name: string, key: string, capability: FragmentCapability): C
 /**
  * One provider-backed name, already resolved and reconciled.
  *
- * Produced by canonical execution's capture step before this module is asked to
- * seal anything: the chain has answered, the provider's claim has been read off
- * that exact final object, it has been compared with what the host entry
- * expects, and the answer has been retained defensively. What arrives here is
- * the settled result, so nothing in this module resolves, looks up, or holds a
- * resolver it could call later.
+ * Produced by canonical execution's capture step before this module is asked
+ * to seal anything: the chain has answered, the provider's identity statement
+ * has been read off that exact final object, it has been compared with what
+ * the host entry expects, and the answer has been retained defensively. What
+ * arrives here is the settled result, so nothing in this module resolves,
+ * looks up, or holds a resolver it could call later.
  */
 export interface ResolvedAnswer {
   /** Core's own retained copy, which is what a fragment invokes. */

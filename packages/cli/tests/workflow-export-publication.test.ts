@@ -140,7 +140,7 @@ interface Step {
 interface Recorder {
   /** The steps that were reached, in order. */
   readonly log: string[];
-  /** Each step with the path it acted on, so a claim can name the path too. */
+  /** Each step with the path it acted on, so an assertion can name the path too. */
   readonly steps: Step[];
   readonly filesystem: ExportFilesystem;
 }

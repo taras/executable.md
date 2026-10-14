@@ -1,10 +1,10 @@
 /**
  * Tier WF — what a `<PullRequest>` retains, replays and refuses to guess.
  *
- * The claims here are about the run's database and the Git host together. A
- * replayed pull request must reach no host, read no credential and append no
- * second record; a retained record that no longer describes the invocation it
- * was recorded for must stop the run rather than be read around; a cancelled
+ * These tests inspect the run's database and the Git host together. A replayed
+ * pull request must reach no host, read no credential and append no second
+ * record; a retained record that no longer describes the invocation it was
+ * recorded for must stop the run rather than be read around; a cancelled
  * creation must leave the journal exactly as it found it; and what public
  * routing middleware sees must be the frozen request and nothing that can
  * answer for it.
@@ -70,9 +70,9 @@ function isHostProtocolFailure(value: unknown): value is GitHostProtocolError {
 /**
  * A Git host that refuses to be reached at all.
  *
- * What a completed replay is claimed to need: no adapter, no credential and no
- * request. Reaching for any of the three fails the run here rather than
- * quietly succeeding against a host that happens to still hold the answer.
+ * A completed replay needs no adapter, credential or request. Reaching for any
+ * of the three fails the run here rather than quietly succeeding against a host
+ * that happens to still hold the answer.
  */
 function unreachable(): GitHubAccess {
   return {

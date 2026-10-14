@@ -1,10 +1,11 @@
 /**
  * Install the packaged review graph when an operator selects this Plugin.
  *
- * Run, syntax, plan and executing workflow actions claim its thirty-five Markdown
- * declarations and six reserved registrations, so the repository being reviewed
- * cannot replace the review program. Root `xmd test` claims none; its isolated
- * `<Execution host="run">` child reinstalls this Plugin with command `run`.
+ * Run, syntax, plan and executing workflow actions reserve its thirty-five
+ * Markdown declarations and six reserved registrations, so the repository being
+ * reviewed cannot replace the review program. Root `xmd test` reserves none;
+ * its isolated `<Execution host="run">` child reinstalls this Plugin with
+ * command `run`.
  */
 
 import type { Operation } from "effection";
@@ -20,9 +21,10 @@ const EXECUTING_ACTIONS: ReadonlySet<string> = new Set(["start", "resume", "fork
 /**
  * Workflow options whose separated values must not be mistaken for actions.
  * Keep this aligned with `workflowConfig` in `packages/cli/src/workflow.ts` and
- * argv-level Plugin/root-property options; the CLI dependency prevents importing
- * its grammar here. For example, `workflow --output start export run-1` exports
- * and must not claim the review graph because the output value reads `start`.
+ * argv-level Plugin/root-property options; the CLI dependency prevents
+ * importing its grammar here. For example, `workflow --output start export
+ * run-1` exports and must not install the review graph because the output value
+ * reads `start`.
  */
 const VALUED_OPTIONS: ReadonlySet<string> = new Set([
   "--plugin",
@@ -46,9 +48,9 @@ function takesValue(token: string): boolean {
 }
 
 /**
- * Read the first positional after `workflow`, skipping options and their values.
- * Stop at `--`; unknown actions remain the command's own grammar error and claim
- * no review graph.
+ * Read the first positional after `workflow`, skipping options and their
+ * values. Stop at `--`; unknown actions remain the command's own grammar error
+ * and install no review graph.
  */
 function executesDocument(args: readonly string[]): boolean {
   const start = args.indexOf("workflow");

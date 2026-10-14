@@ -512,7 +512,7 @@ export function* compiledUpgradeComponents(
    * What every phase after the listing checks first.
    *
    * A value nothing admitted, a candidate from another invocation, and a
-   * candidate presented out of order are all the same thing: a claim of
+   * candidate presented out of order are all the same thing: an assertion of
    * admission that was never granted. None is a failure code, because
    * answering with an outcome would make a forged capability indistinguishable
    * from a release this command could not install.

@@ -409,10 +409,10 @@ describe("workflow Git.Add invocation", () => {
   /**
    * A malformed `paths` is refused before anything is staged.
    *
-   * The schema refuses most of these on the engine's own terms, which is why the
-   * claim here is about the run rather than about which error arrives: nothing
-   * ran, and nothing was recorded. `canonicalPaths()` below is what holds the
-   * same line for a caller that reaches the Api directly.
+   * The schema refuses most of these on the engine's own terms, which is why
+   * the assertion here concerns the run rather than which error arrives:
+   * nothing ran, and nothing was recorded. `canonicalPaths()` below is what
+   * holds the same line for a caller that reaches the Api directly.
    */
   const MALFORMED = [
     { name: "omits paths", written: `<Git.Add />` },

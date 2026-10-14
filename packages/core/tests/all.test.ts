@@ -12,8 +12,9 @@
  * Each test names the defect it kills: expanding the children in sequence,
  * emitting them in completion order, running them on the parent coroutine,
  * sharing one block counter, sharing the binding environment, leaving a held
- * sibling alive after a failure, publishing one child's output before the join,
- * and letting a `<Return>` or `<Break>` claim an owner outside the spawn.
+ * sibling alive after a failure, publishing one child's output before the
+ * join, and letting a `<Return>` or `<Break>` select an owner outside the
+ * spawn.
  */
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";

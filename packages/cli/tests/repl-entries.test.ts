@@ -2,10 +2,10 @@
  * Where one entry's history stops, and what the next one inherits (#827).
  *
  * Every journal here is written by really executing entries over one physical
- * stream, each through its own segment view, because the whole claim is that the
+ * stream, each through its own segment view, because the invariant is that the
  * boundary is already in the records the current runtime writes. A frozen event
  * array would keep passing on the day core changed the shape of a root
- * admission or a close — which is the day the claim stopped being true.
+ * admission or a close — which is the day the invariant stopped being true.
  *
  * The rows are named for the frozen evidence matrix: ES1 the exact segments, ES2
  * the malformed prefixes that refuse whole, EM1 the stable keys and markers, EP1
@@ -2336,7 +2336,7 @@ function* transcriptOf(view: ReplView): Operation<string[]> {
 /**
  * The Output half of the reading this view draws, caption included.
  *
- * For the cases whose claim is about what an entry *produced*, which the
+ * For the cases that assert what an entry *produced*, which the
  * reading states separately from the source that produced it.
  */
 function* outputOf(view: ReplView): Operation<string[]> {

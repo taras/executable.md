@@ -6,7 +6,7 @@
  * reading it is a total re-derivation: every retained length, every source hash
  * and the bundle hash itself are recomputed from the BLOBs before anything is
  * handed back. A retained identity nobody can reproduce is not evidence of the
- * definition it claims.
+ * definition it names.
  *
  * ## Missing and corrupt are different answers
  *

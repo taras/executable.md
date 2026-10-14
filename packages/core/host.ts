@@ -198,9 +198,10 @@ export type { SyntaxSymbolsProvider } from "./src/syntax-reference.ts";
 export type { DurablePreparation } from "./src/document-request.ts";
 
 /**
- * What a trusted host declares to an execution when one of its components names
- * durable work after its own invocation — see `src/invocation-identity.ts`.
- * The claimant is delivered to the factory and published nowhere.
+ * What a trusted host declares to an execution when one of its components
+ * names durable work after its own invocation — see
+ * `src/invocation-identity.ts`. The identity authenticator is delivered to the
+ * factory and published nowhere.
  */
 export { ComponentInvocationError } from "./src/invocation-identity.ts";
 export type { IdentityClaimant, IdentityComponent } from "./src/invocation-identity.ts";

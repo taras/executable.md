@@ -9,10 +9,10 @@
  *
  * The replacement cases are the last of those. The host contract holds while
  * the pathname namespace is stable, and the adapter's test-only observer is
- * what makes "stable" falsifiable: it swaps part of the tree between the moment
- * the adapter observes a path and the moment it uses one, synchronously, with
- * no sleeping and no racing. What they prove is the documented weakness, not a
- * containment claim.
+ * what makes "stable" falsifiable: it swaps part of the tree between the
+ * moment the adapter observes a path and the moment it uses one,
+ * synchronously, with no sleeping and no racing. What they prove is the
+ * documented weakness, not a containment guarantee.
  *
  * `mkdtemp`, `realpath`, `symlink`, `lstat`, and `readdir` have no
  * `@effectionx/fs` equivalent; everything else goes through it.
@@ -1345,11 +1345,11 @@ describe("host Files — making a directory exist", () => {
  * Permission, asked by the provider.
  *
  * These drive `hostFilesHandler()` directly rather than the installed Api,
- * because that is the stronger claim: a host holding the handler — and the
+ * because that is the stronger guarantee: a host holding the handler — and the
  * forwarding middleware `useHostFiles` installs is one — gets the same
- * restriction as a document reaching it through `API.Files`. If the check lived
- * in that middleware instead, every one of these would still pass through the
- * Api and none of them would pass here.
+ * restriction as a document reaching it through `API.Files`. If the check
+ * lived in that middleware instead, every one of these would still pass
+ * through the Api and none of them would pass here.
  */
 describe("host Files — permission", () => {
   /** Every low-level reach a refused operation must not make. */

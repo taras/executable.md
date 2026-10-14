@@ -1,5 +1,5 @@
 /**
- * What a shard does with real child processes: the claims an injected runner
+ * What a shard does with real child processes: the behaviors an injected runner
  * cannot make.
  *
  * The corpus here is a temporary Deno workspace of its own — three tiny test

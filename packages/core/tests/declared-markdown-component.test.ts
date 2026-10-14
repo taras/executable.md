@@ -11,7 +11,7 @@
  * the bytes say. A build that ships different bytes under the same name never
  * reaches a document.
  *
- * **The name is claimed, not offered.** A declared component answers ahead of a
+ * **The name is reserved, not offered.** A declared component answers ahead of a
  * repository file, a workflow bundle and every registration, and
  * `Component.importComponent` middleware may observe, delegate and refuse an
  * import without being able to answer one. What a document expands is the
@@ -93,8 +93,8 @@ const WITH_PRIVATE = ['<Secret as="answer" />', "", "policy says {answer}", ""].
 
 /**
  * A private component, as a declaration carries it: an ordinary identity
- * component whose implementation is built from the claimant this execution
- * minted, and which nothing registers.
+ * component whose implementation is built from the identity authenticator this
+ * execution minted, and which nothing registers.
  */
 function secret(name = "Secret", answer = "the private answer"): IdentityComponent {
   return {
@@ -116,8 +116,9 @@ function secret(name = "Secret", answer = "the private answer"): IdentityCompone
  *
  * A tripwire rather than a fake: what a case about the closure has to show is
  * that the implementation did not run, and rendered output cannot show that on
- * its own. It deliberately never calls its claimant — core promises the closure
- * to a private component whether or not one names durable work.
+ * its own. It deliberately never calls its identity authenticator — core
+ * promises the closure to a private component whether or not one names durable
+ * work.
  */
 function watching(entered: string[], name = "Secret"): IdentityComponent {
   return {
@@ -215,7 +216,7 @@ function answering(
   };
 }
 
-/** A private component that names its own durable work, to prove the claimant works. */
+/** A private component that names its own durable work, to prove the identity authenticator works. */
 function claiming(seen: string[], name = "Claiming"): IdentityComponent {
   return {
     name,
@@ -1439,9 +1440,10 @@ function answeringOpenName(definition: ImportedDefinition): ExecutionInstallatio
  * The `{ text, exact }` runs one child's close retained, read rather than
  * asserted.
  *
- * A row about what a durable value *is* cannot cast it into the shape it claims,
- * so every member is parsed here and anything else throws — naming what it found —
- * instead of arriving at the expectation as a plausible shape nobody checked.
+ * A row about what a durable value *is* cannot cast it into the shape it
+ * describes, so every member is parsed here and anything else throws — naming
+ * what it found — instead of arriving at the expectation as a plausible shape
+ * nobody checked.
  */
 function retainedRuns(event: DurableEvent): { text: string; exact: boolean }[] {
   if (event.type !== "close" || event.result.status !== "ok") {
@@ -2001,7 +2003,7 @@ describe("Tier MDK — the declaration states its kind", () => {
  * execution that could admit syntax it can never expand, and is refused before
  * the root document is read.
  *
- * **One name, one answer.** A declared name is claimed across both arms and
+ * **One name, one answer.** A declared name is reserved across both arms and
  * across installations, ahead of a repository file and every ordinary
  * registration, and never over the engine's own syntax or a protected
  * component.
@@ -2083,8 +2085,8 @@ function declaring(
 /**
  * What a run refused with, having read no root and imported nothing.
  *
- * Both halves are the claim: a declaration set that cannot describe one
- * environment is refused where it is installed, which is before the root
+ * Both halves establish the contract: a declaration set that cannot describe
+ * one environment is refused where it is installed, which is before the root
  * document is read and therefore before anything it says can happen.
  */
 function* refusedBeforeRoot(

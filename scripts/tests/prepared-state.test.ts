@@ -277,8 +277,7 @@ describe("cancelling a fingerprint", () => {
    * itself says when it has begun a known number of files, so the test halts at
    * the same point on a fast disk and a slow one. Counting starts rather than
    * completions is what makes "begins no further read" observable: `until()`
-   * does not cancel the host call already in flight, and this seam never
-   * claimed it did.
+   * does not cancel the host call already in flight, and this seam never promised it did.
    */
   it("begins no further read once its task is halted", function* () {
     const files = 4000;

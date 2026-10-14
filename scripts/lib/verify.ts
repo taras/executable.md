@@ -15,8 +15,7 @@
  * **A final fingerprint cannot prove that on its own.** A build that replaced a
  * manifest and put the original bytes back compares equal at the end and has
  * still broken every runtime that resolved through it in between. So the live
- * observer and consumers are the evidence, and the comparison afterwards is the
- * separate claim that nothing was left moved.
+ * observer and consumers are the evidence, and the comparison afterwards is the separate check that nothing was left moved.
  *
  * Nothing here knows which host it is on: every host-specific act arrives as a
  * capability from `scripts/verify.ts`. This module is listed in

@@ -23,7 +23,7 @@ function* declaredVersion(url: URL): Operation<string | undefined> {
 
 /**
  * Everything that breaks version lockstep in the workspace at `repoRoot`, as
- * messages naming the manifest at fault. An empty list is the whole claim: the
+ * messages naming the manifest at fault. An empty list is the required result: the
  * release publishes one version, and every manifest and the lockfile declare
  * it.
  *

@@ -32,7 +32,7 @@
  * witness for the answer it produced and verifies it at the call site.
  *
  * All of it is execution-local. The catalog is created per invocation and
- * reclaimed with it, so two concurrent workflows declaring one name with
+ * released with it, so two concurrent workflows declaring one name with
  * different sources resolve their own and can observe neither.
  */
 
@@ -145,10 +145,10 @@ export class WorkflowComponentCatalog implements ImportTier {
  * which was consulted first.
  *
  * The collision checks run here, before the root document is imported, because
- * a bundle that claims a name the engine or a host already owns describes a
- * document that cannot mean what it says. Structural syntax and core's defaults
- * are fixed; a reserved registration is whatever this host installed, read once
- * from the registry the execution starts with.
+ * a bundle that reserves a name the engine or a host already owns describes a
+ * document that cannot mean what it says. Structural syntax and core's
+ * defaults are fixed; a reserved registration is whatever this host installed,
+ * read once from the registry the execution starts with.
  */
 export function installedBundle(
   bundles: readonly WorkflowComponentBundle[],

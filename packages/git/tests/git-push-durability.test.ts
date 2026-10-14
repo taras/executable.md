@@ -1,13 +1,13 @@
 /**
  * Tier WF — what a `<Git.Push>` retains, replays and refuses to guess.
  *
- * The claims here are about the run's database and the remote together. A
- * replayed push must reach no remote and append no second transition; a
- * retained record that no longer describes the invocation it was recorded for
- * must stop the run rather than be read around; a cancelled push must leave the
- * journal, the frontier and the materializations exactly as it found them; and
- * the request one invocation admitted must be the request it publishes for,
- * however the caller edits its own objects afterwards.
+ * These tests inspect the run's database and the remote together. A replayed
+ * push must reach no remote and append no second transition; a retained record
+ * that no longer describes the invocation it was recorded for must stop the run
+ * rather than be read around; a cancelled push must leave the journal, the
+ * frontier and the materializations exactly as it found them; and the request
+ * one invocation admitted must be the request it publishes for, however the
+ * caller edits its own objects afterwards.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -397,10 +397,10 @@ describe("workflow Git.Push durability", () => {
    *
    * Containment is the live provider's first act, so a replay that performed it
    * anyway would fail here — the object graph is left in a state no push may
-   * read from before the replay runs. It succeeds, which is the claim: the
-   * shared engine hands back the retained record without reaching a provider,
-   * so no graph is walked, no control repository is built and no Git runs for
-   * the push.
+   * read from before the replay runs. It succeeds, which proves the intended
+   * isolation: the shared engine hands back the retained record without
+   * reaching a provider, so no graph is walked, no control repository is built
+   * and no Git runs for the push.
    */
   it("replays a completed push over an object graph no live push would accept", function* () {
     const root = yield* useStorageRoot();

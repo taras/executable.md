@@ -4152,7 +4152,7 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
  * Whether one of these rows carries the selection marker before this label.
  *
  * The same reading as `marked`, over rows a caller has already chosen — which is
- * what a claim about one size needs, since the accumulated buffer still holds
+ * what an assertion about one size needs, since the accumulated buffer still holds
  * the rows the other size drew.
  */
 function markedIn(rows: readonly string[], label: string): boolean {
@@ -4197,8 +4197,7 @@ const COLD_FOUR = [
  * What each category of position is called, written out here on purpose.
  *
  * A second opinion about the wording. Reading it from `pointLabel()` would make
- * the comparison below say only that one function agrees with itself, and the
- * claim is that the drawer offers *these* words — a category and an order, with
+ * the comparison below say only that one function agrees with itself, and the requirement is that the drawer offers *these* words — a category and an order, with
  * nothing of the payload in them.
  */
 const CATEGORIES: Readonly<Record<string, string>> = Object.freeze({
@@ -4247,7 +4246,7 @@ function bandOf(terminal: Terminal): string[] {
 /**
  * The same five rows, out of rows a caller has already chosen.
  *
- * What a claim about one size needs: this renderer writes diffs, so the whole
+ * What an assertion about one size needs: this renderer writes diffs, so the whole
  * accumulated buffer still holds the rows the size before it drew, and the
  * footer of a 36-row screen is not where a 20-row screen keeps its band.
  */
@@ -5333,7 +5332,7 @@ describe("REPL first use: UI1 selection", () => {
 /**
  * The narrow guidance row is composed, not cut (#870 UI10/UI16).
  *
- * Asserted by exact equality, because the claim is about the whole row. A row
+ * Asserted by exact equality, because the assertion covers the whole row. A row
  * written long and left to the renderer loses its last fact with nothing to say
  * that it has — and the facts at the end are the way out of a modal and the way
  * back to the draft. Equality catches both the overflow and the silent cut.
@@ -6170,7 +6169,7 @@ describe("REPL first use: UI8", () => {
  *
  * `UI8` walks this path at `160x36`, where there is a transcript column to read
  * the answer's output in. A narrow frame has no transcript region at all — it
- * mounts one routed outlet — so this row proves the other half of the claim: that
+ * mounts one routed outlet — so this row proves the other half of the behavior: that
  * everything a person has to *do* is reachable at `72x20`, found from the labels
  * and the one guidance row, with no hidden key and no semantic lookup.
  *

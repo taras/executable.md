@@ -205,7 +205,7 @@ describe("CP11 — the offline build phases are unchanged", () => {
   /**
    * The release phase compiles what a release compiles, argv for argv.
    *
-   * Equality rather than containment: this phase's whole claim is that what a
+   * Equality rather than containment: this phase's required guarantee is that what a
    * release does fetches nothing and moves no dependency state, and a compile
    * embedding fewer assets walks fewer module graphs than the one it stands
    * for. It used to embed neither the packaged documents nor any

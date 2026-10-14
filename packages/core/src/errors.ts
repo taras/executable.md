@@ -71,11 +71,11 @@ export function* settle(segment: ErrorSegment): Operation<ErrorSegment> {
  * built for the segment therefore has its `cause` in place before any observer —
  * including middleware that catches what `raise` throws — can look at it.
  *
- * The table belongs to the run that fills it: created when a run installs it and
- * reclaimed when its scope ends, so nothing one execution recorded is still
- * answering questions during the next. Keyed by segment identity — the object a
- * boundary handled is the object the document renders and an observer already
- * saw, and copying it to record a decision would break both.
+ * The table belongs to the run that fills it: created when a run installs it
+ * and released when its scope ends, so nothing one execution recorded is still
+ * answering questions during the next. Keyed by segment identity — the object
+ * a boundary handled is the object the document renders and an observer
+ * already saw, and copying it to record a decision would break both.
  */
 export type SegmentCauses = WeakMap<ErrorSegment, unknown>;
 

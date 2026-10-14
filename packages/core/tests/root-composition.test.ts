@@ -1,7 +1,7 @@
 /**
  * Tier RC — the root a run executes, after `Document` and `RootMetadata`.
  *
- * Two claims, and they pull against each other. A run with no Plugin
+ * Two guarantees, and they pull against each other. A run with no Plugin
  * middleware must be the run it always was — same body, same props, same
  * `returns`, same `<Output>` selection, same source positions, same expansion
  * identity — and a run with middleware must execute the envelope that

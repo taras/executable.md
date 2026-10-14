@@ -1683,10 +1683,10 @@ describe("Tier OM — caller content at a plain root leaves the printing compone
 
   /**
    * `<File>` says what it did not write, which is a sentence about its own
-   * work. It is not a claim on the failure: the caller's region decided that
-   * one, so the account of it passes outward through `<File>`'s own
-   * `printErrors(fn)` declaration and is settled where the element was written
-   * (§6.8.1, §6.13). At a plain root that ends the run.
+   * work. It does not confer ownership of the failure: the caller's region
+   * decided that one, so the account of it passes outward through `<File>`'s
+   * own `printErrors(fn)` declaration and is settled where the element was
+   * written (§6.8.1, §6.13). At a plain root that ends the run.
    */
   it("OM21: an ordinary failure in <File>'s children writes nothing and ends the run", function* () {
     const result = yield* runRecordingWrites({

@@ -342,7 +342,7 @@ export type ReplFocusRestore =
    *
    * Named by what it caused rather than by where it sits: the record appends
    * after the drawer is gone, so the row does not exist yet at the moment the
-   * claim is made. `known` is every answer already retained when this one was
+   * association is recorded. `known` is every answer already retained when this one was
    * taken and `answer` is exactly what was sent, which together name one
    * record — not the newest one, and not an answer somebody else caused.
    */
@@ -433,7 +433,7 @@ export interface ReplState {
   /**
    * Where focus starts again, for the one commit after a drawer went.
    *
-   * One-shot and process-local. A claim repeated every frame would drag focus
+   * One-shot and process-local. A focus request repeated every frame would drag focus
    * back after every Tab, so the next action clears it: from then on focus is
    * the tree's, which is the only thing that knows where it is.
    */
@@ -599,7 +599,7 @@ export function permissionSettled(state: ReplState, turn: string): ReplState {
  *
  * Teardown and publication can both remove a request nobody answered. The drawer
  * it left behind can resolve to nothing, so it is withdrawn — and nothing here
- * claims a choice or a denial, because none was made.
+ * reports a choice or a denial, because none was made.
  */
 export function permissionWithdrawn(state: ReplState): ReplState {
   return Object.freeze({
@@ -1635,11 +1635,11 @@ function row(
 }
 
 /**
- * Which control this frame claims focus for, because a drawer went.
+ * Which control this frame requests focus for, because a drawer went.
  *
- * Resolved against what is mounted rather than stored: a claim naming a row this
+ * Resolved against what is mounted rather than stored: a request naming a row this
  * view does not draw would be focus asked for on behalf of nothing, and the
- * commit that honoured it would throw. So the claim is silent for as long as the
+ * commit that honoured it would throw. So the request is silent for as long as the
  * row it names is not there — the answer's record has not been projected yet —
  * and the hint waits rather than being spent on nothing.
  */
@@ -1683,23 +1683,23 @@ export function focusClaim(view: ReplView): string | undefined {
 /**
  * The state after a commit settled focus.
  *
- * A restoration claim is one claim, not a standing one. It survives the frames
+ * A restoration request is one request, not a standing one. It survives the frames
  * between the answer and its record — nothing can be focused that is not there
  * yet — and is spent by the commit that puts focus where it asked. Focus
- * traversal is not an action, so a claim nobody retired would pull somebody back
+ * traversal is not an action, so a request nobody retired would pull somebody back
  * after every Tab and traversal would never move.
  */
 export function focusSettled(
   view: ReplView,
   focused: string | undefined,
   /**
-   * What the frame that satisfied the claim admitted.
+   * What the frame that satisfied the request admitted.
    *
-   * Needed because a claim can *move* a window to show the row it names, and
-   * the move was computed from the claim: spending the claim without keeping
+   * Needed because a request can *move* a window to show the row it names, and
+   * the move was computed from the request: spending the request without keeping
    * the move would scroll the catalog straight back and take the row focus has
    * just landed on off the screen. A caller with no committed frame to hand —
-   * one asking only whether a claim is spent — leaves it out.
+   * one asking only whether a request is spent — leaves it out.
    */
   admission?: ReplAdmission,
 ): ReplState {
@@ -3308,7 +3308,7 @@ function drawerContent(
    * than the generic close action that means "this changed nothing".
    */
   let dismissing: string | undefined;
-  /** Whether a field line may take the focus claim this drawer opens with. */
+  /** Whether a field line may take the focus request this drawer opens with. */
   let entering = false;
 
   if (open.kind === "binding") {
@@ -3543,7 +3543,7 @@ function drawerContent(
 /**
  * One row of a drawer's ordered content, and what it would take to focus it.
  *
- * A field's editable line is built unfocused and the claim is placed afterwards,
+ * A field's editable line is built unfocused and the focus request is placed afterwards,
  * once the window is known: focusing a row that scrolled out would put focus
  * where nothing is drawn, and which row is first inside the window is not
  * something the loop that builds them can see.
@@ -3557,7 +3557,7 @@ interface DrawerRow {
  * The rows one drawer's measured window shows.
  *
  * Nothing while the frame is being measured, because the window is what that
- * pass is asking about. The drawer's opening focus claim goes to the first field
+ * pass is asking about. The drawer's opening focus request goes to the first field
  * line the window actually holds.
  */
 function windowed(
@@ -4890,10 +4890,10 @@ export function entriesRowCount(model: ReplModel): number {
 }
 
 /**
- * How far one window is scrolled, with a row this frame claims focus for shown.
+ * How far one window is scrolled, with a row this frame requests focus for shown.
  *
  * The offset this process is holding, moved only as far as it takes to put a
- * claimed row inside the window: a claim naming a row the window does not hold
+ * requested row inside the window: a request naming a row the window does not hold
  * would be focus asked for on behalf of nothing, and an answer given at a narrow
  * size is restored to the entry that owns it — which may be above or below what
  * the catalog is showing. The window itself is the existing one and the offset is

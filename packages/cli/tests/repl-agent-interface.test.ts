@@ -2821,7 +2821,7 @@ function* showing(terminal: Terminal, expected: string): Operation<void> {
  *
  * Bounded by the same real-time deadline every other wait here uses, and it
  * reports the rendered footer on timeout: a wait that only says it timed out
- * leaves whoever reads it guessing which half of the claim failed.
+ * leaves whoever reads it guessing which half of the synchronization failed.
  */
 function* untilScreen(
   terminal: Terminal,
@@ -3835,7 +3835,7 @@ function* focusTheDraft(terminal: Terminal, limit = 240): Operation<void> {
  * Read from the file rather than from the screen, because what a catalog row
  * proves is that an entry exists — not which bytes became it. The draft
  * clearing and `2.` appearing are both true of an entry admitted from the wrong
- * source, so neither is the claim.
+ * source, so neither is the asserted behavior.
  *
  * Through the product's own reader, so the records are *parsed* rather than
  * trusted: a journal is whatever is on disk, and annotating `JSON.parse` would
@@ -3860,7 +3860,7 @@ function* admittedSources(hostRoot: string): Operation<readonly string[]> {
  *
  * Read off the bottom-most row that carries the draft's own prompt, because the
  * draft owns the last footer row at every size and shares it with nothing. Exact
- * rather than a containment check: the claim is that what somebody typed survived
+ * rather than a containment check: the requirement is that what somebody typed survived
  * byte for byte, and `contains` would pass on a draft that had grown a character.
  */
 function draftOn(terminal: Terminal): string {

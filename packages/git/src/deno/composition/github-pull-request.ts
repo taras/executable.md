@@ -46,7 +46,7 @@ function unusable(reason: string): never {
 }
 
 /**
- * A pre-state that claims nothing.
+ * A pre-state that asserts no prior remote state.
  *
  * The three refusing observations publish no record — the engine journals a
  * conflict, an ambiguity and an unavailability as the effect's failed result

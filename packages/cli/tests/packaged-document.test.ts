@@ -29,7 +29,7 @@ import { useWorkingDirectory } from "./support/plan-harness.ts";
 /**
  * The whole of the adapter's body, exactly.
  *
- * Pinned rather than sampled, because "there is nothing else here" is the claim:
+ * Pinned rather than sampled, because "there is nothing else here" is the requirement:
  * `xmd plan` drains this root's rendered transcript onto stderr as the operator's
  * progress, so any prose the adapter regained would be printed in the middle of
  * a Plan being written.

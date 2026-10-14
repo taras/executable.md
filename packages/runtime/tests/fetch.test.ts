@@ -2,7 +2,7 @@
  * Tier FR — the runtime Fetch adapter (spec §Runtime Context APIs).
  *
  * The adapter is what turns a live host response into something a caller can
- * keep. Two claims are under test and they pull against each other: the
+ * keep. Two guarantees are under test and they pull against each other: the
  * response must be *detached*, so nothing a caller holds depends on a socket
  * that has since closed, and the seams callers already use — `headers.get()`
  * and `text()` — must keep meaning exactly what they meant.

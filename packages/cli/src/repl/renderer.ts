@@ -98,7 +98,7 @@ export interface ReplFrameMap {
 /**
  * One box the committed frame may publish a target for.
  *
- * Membership is the claim: a target exists because an admitted box mounted a
+ * Membership determines eligibility: a target exists because an admitted box mounted a
  * live node and that node is a control. Bounds alone cannot establish it — the
  * engine reports a clipped child's full rectangle, so geometry says nothing
  * about whether anything was painted.

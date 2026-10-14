@@ -1,9 +1,10 @@
 /**
  * The structural constructs (spec §5.3).
  *
- * These names are the language's own syntax, not components. The expansion loop
- * handles each one directly, so none of them reaches component resolution: a
- * repository file cannot supply them and a registration cannot claim them.
+ * These names are the language's own syntax, not components. The expansion
+ * loop handles each one directly, so none of them reaches component
+ * resolution: a repository file cannot supply them and a registration cannot
+ * reserve them.
  *
  * The table below is the single place that decides which names are reserved,
  * and it carries the documentation `xmd syntax` prints beside each one.

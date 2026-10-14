@@ -23,7 +23,7 @@
  * participant that subscribed for itself would keep its own clock running after
  * a sibling left, and a distant ancestor would hold the timer alive for a
  * subtree that stopped animating. The ancestor in between is the one whose
- * lifetime matches the animation's, so a claim from anywhere else is refused.
+ * lifetime matches the animation's, so an ownership request from anywhere else is refused.
  *
  * `delta` is in **seconds**, because that is what the layout engine's
  * transitions take; handing it milliseconds runs every transition 1000x fast.
@@ -81,13 +81,13 @@ export type ReplAncestry = readonly string[];
 
 /** Who wants frames, and for what. */
 export interface ReplFrameRequest {
-  /** The node claiming ownership. */
+  /** The node requesting ownership. */
   readonly owner: string;
   /** The ancestry of each participant, one entry per participating node. */
   readonly participants: readonly ReplAncestry[];
 }
 
-/** A claim that is not the nearest common ancestor of its participants. */
+/** An ownership request naming something other than its participants' nearest common ancestor. */
 export class ReplFrameOwnerError extends Error {
   constructor(owner: string, expected: string | undefined) {
     super(
@@ -129,7 +129,7 @@ export interface ReplFrames {
   /**
    * Ask for frames for as long as the result is held.
    *
-   * A refused claim registers no demand at all, so holding an `Err` keeps no
+   * A refused ownership request registers no demand at all, so holding an `Err` keeps no
    * timer alive.
    */
   subscribe(request: ReplFrameRequest): Operation<Result<ReplFrameSubscription>>;

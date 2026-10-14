@@ -5,9 +5,9 @@
  * Repository, Worktree, the four Git operations, PullRequest and its three
  * evidence reads, IssueTracker and Issue are ordinary registered defaults — not
  * reserved and not structural — so a repository-local component may shadow one
- * for its own scope. `<Dir>` is not among them: canonical core claims that name
- * (`core/src/components/fixed-filesystem.ts`), and a document reaches it with or
- * without this package.
+ * for its own scope. `<Dir>` is not among them: canonical core reserves that
+ * name (`core/src/components/fixed-filesystem.ts`), and a document reaches it
+ * with or without this package.
  *
  * One array, three consumers, because three descriptions of one vocabulary
  * would drift. `useCompositionComponents()` registers it inside a workflow

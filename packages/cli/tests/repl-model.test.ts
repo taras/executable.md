@@ -38,7 +38,7 @@ function projected(events: readonly DurableEvent[], selection?: string): ReplMod
 /**
  * The root scope of the one entry a one-entry journal projects.
  *
- * Read off `entries` at the public boundary, which is where this suite's claim
+ * Read off `entries` at the public boundary, which is where this suite's assertions
  * now lives: every journal here holds one entry, and what these assertions are
  * about is what that entry holds rather than how many the collection can hold.
  */

@@ -766,7 +766,7 @@ interface CoordinatorLog extends AgentLaunchCoordinator {
   checkpoints: unknown[];
 }
 
-/** The claim an authentic use carries, which any copy of it also carries. */
+/** The configuration marker an authentic use carries, which any copy of it also carries. */
 const CONFIGURED_SESSION = Symbol.for("executablemd.agent.session.configured");
 
 function stubCoordinator(): CoordinatorLog {
@@ -1363,7 +1363,7 @@ describe("Tier PT — partitioned provider installation", () => {
  * the Deno workflow host composes it: a host-decided working directory, no MCP
  * servers, an empty requested tool set, and a permission path the public Agent
  * chain does not reach. The contextual cwd is a Workspace root throughout,
- * because "the Agent never sees it" is the claim.
+ * because "the Agent never sees it" is the property under test.
  */
 
 /** The logical Workspace root a workflow document's contextual cwd answers with. */
@@ -2714,7 +2714,7 @@ describe("Tier SO — agent option discovery", () => {
  * An established session is reattached eagerly, so the reconfiguration happens
  * while this run holds both a handle and the session's ownership. Neither may
  * outlive the attempt: a handle kept past it is a second owner of a
- * conversation a native process may be in, and ownership left claimed is a
+ * conversation a native process may be in, and ownership left active is a
  * session no other operation can reach.
  */
 describe("Tier SE — reconfiguring an owned session", () => {

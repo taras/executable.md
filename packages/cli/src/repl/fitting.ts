@@ -79,7 +79,7 @@ export interface ReplPreparedRow {
    * whitespace of the logical line it continues as well — so a line that
    * wrapped is still read at the column it was written at. Without it a
    * continuation sits further left than the row above it and reads as a new,
-   * shallower line, which is a claim about structure that the source does not
+   * shallower line, which is a structural distinction that the source does not
    * make.
    *
    * Display only. No source byte and no offset moves, and concatenating a

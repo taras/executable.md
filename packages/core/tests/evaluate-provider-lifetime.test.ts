@@ -47,7 +47,7 @@ const OPEN = `<Evaluate text={'<Open />\\n'} as="answer" />\n\n<Json value={answ
 /** What a provider states for the one name these rows admit. */
 const IDENTITY = { key: "Open", revision: "1" } as const;
 
-/** One provider-backed entry, under the identity this suite's providers claim. */
+/** One provider-backed entry, under the identity this suite's providers state. */
 function answerEntry(name: string): ComponentAnswerEntry {
   return {
     kind: "component-answer",

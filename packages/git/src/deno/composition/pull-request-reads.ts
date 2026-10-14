@@ -114,8 +114,8 @@ export function parseGitHubPullRequestUrl(url: string): GitHubPullRequestName | 
  *
  * Public GitHub only. A self-hosted deployment wearing the same path shape is
  * reachable by naming `provider="github"` explicitly — implicit selection must
- * not claim a host nobody said was GitHub, because a search is how a document
- * that named one service quietly reaches a different one.
+ * not select a host nobody identified as GitHub, because a search is how a
+ * document that named one service quietly reaches a different one.
  */
 export function recognizesGitHubPullRequestUrl(url: string): boolean {
   const parsed = parseGitHubPullRequestUrl(url);

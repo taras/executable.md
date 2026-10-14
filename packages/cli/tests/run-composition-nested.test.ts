@@ -121,7 +121,7 @@ function runOrdinary(
 
 describe("ORC19 — a nested run profile", () => {
   /**
-   * The claims here are about a real `<Execution host="run">` child, so they
+   * These cases exercise a real `<Execution host="run">` child, so they
    * are asked of a real `xmd run` — a subprocess, launched the way a person
    * launches one.
    *
@@ -149,7 +149,7 @@ describe("ORC19 — a nested run profile", () => {
    *
    * ## Why `<Testing>` rather than `xmd test`
    *
-   * Two of these claims are about what a *parent* holds while its child runs —
+   * Two of these cases exercise what a *parent* holds while its child runs —
    * publication evidence, and a lease. `xmd test` installs no repository
    * provider for its own document, by design: only its children get one. So the
    * parent here is an ordinary `xmd run`, which has a provider of its own, and
@@ -418,7 +418,7 @@ describe("ORC19 — a nested run profile", () => {
    * `<PullRequest>` reaches its Git host through `source.open()`, and the
    * evidence gate runs ahead of it. The refusal says so itself — "Nothing was
    * observed at the Git host, and no pull request was created" — so that
-   * sentence is the claim rather than an inference from it.
+   * sentence is the assertion rather than an inference from it.
    *
    * The second assertion is the corroborating one: a local file origin is not
    * a Git host, so an execution that had got past the gate would have failed

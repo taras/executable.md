@@ -5,7 +5,7 @@
  * composition layer has a meaning for and hands them over in its own closed
  * shape. Nothing here knows an action name: a normalized event says what
  * happened and where, and what it means is decided by whichever mounted node
- * claims it.
+ * handles it.
  *
  * ## A lone Escape is not yet Escape
  *
@@ -61,7 +61,7 @@ export interface ReplNormalized {
  * The keys this composition layer has a meaning for.
  *
  * Everything else a terminal can send is decoded and then dropped here rather
- * than invented into an action: a key nothing claims is not an event the tree
+ * than invented into an action: a key nothing handles is not an event the tree
  * should be asked about.
  *
  * `Backspace` is the terminal's `DEL` (`0x7f`), which is what a keyboard's
@@ -111,7 +111,7 @@ const INTERRUPT_CHORD = "c";
  * so here, where the spelling stops mattering.
  *
  * Control is not consulted: a chord is dropped before this is asked, so
- * Control-Shift-Tab stays a chord nothing claims rather than becoming a way to
+ * Control-Shift-Tab stays a chord nothing handles rather than becoming a way to
  * traverse.
  */
 function backward(event: Extract<InputEvent, { type: "keydown" | "keyrepeat" }>): boolean {
@@ -184,7 +184,7 @@ export interface ReplInputScan {
  *
  * Resize arrives here because the scanner decodes it, and leaves again as a
  * flag rather than an event: it is a host fact about the terminal, not
- * something a mounted node claims.
+ * something a mounted node handles.
  */
 export function scanInput(input: Input, bytes?: Uint8Array): ReplInputScan {
   const result: ScanResult = bytes === undefined ? input.scan() : input.scan(bytes);

@@ -131,8 +131,8 @@ function importedValue(event: DurableEvent): { value: unknown } | undefined | ty
  * Every branch is a decision about what the record *is*, taken before anything
  * is replayed from it. A declared name must have been recorded as a bundled
  * component, with this bundle's exact path, hash, and source; an undeclared
- * name must not claim to be one; and a repository selection is admitted only
- * for the root, which core holds to the run's own root source.
+ * name must not report itself as one; and a repository selection is admitted
+ * only for the root, which core holds to the run's own root source.
  */
 function admitImport(
   event: DurableEvent,

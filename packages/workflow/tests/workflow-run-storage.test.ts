@@ -1616,7 +1616,7 @@ describe("Tier WS — version 1 amended in place", () => {
   }
 
   /**
-   * One shape that once claimed to be a complete version 1.
+   * One shape that once declared itself a complete version 1.
    *
    * Built by leaving out whichever amendments had not been made yet, so a new
    * amendment adds one name here and one prior shape rather than silently

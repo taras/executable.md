@@ -29,7 +29,7 @@ function createPropsCompiler(): Ajv {
  * was handed and never evicted, so a single instance would hold one entry per
  * schema per run for the life of the process — and a schema object mutated
  * between runs would get the first run's validator. The compiler therefore
- * belongs to the run: created when a run installs it, reclaimed with everything
+ * belongs to the run: created when a run installs it, released with everything
  * it compiled when the run's scope ends. That `Map` is also the whole cache
  * this module needs, which is why there is no second one beside it.
  */
@@ -48,9 +48,9 @@ export function* usePropsCompiler(): Operation<Ajv> {
 /**
  * The run's compiler, or one that lives exactly as long as this call.
  *
- * Compiling outside a run — a host describing a component, a test — has nothing
- * to reclaim and nothing to share, so it gets an instance of its own rather
- * than reaching for one that would outlive it.
+ * Compiling outside a run — a host describing a component, a test — has no
+ * run scope to own or share a compiler, so the call gets an instance of its
+ * own rather than reaching for one that would outlive it.
  */
 function* compiler(): Operation<Ajv> {
   return (yield* PropsCompiler.get()) ?? createPropsCompiler();

@@ -15,8 +15,9 @@
  * contextual working directory select a retained checkout the way they do for
  * every other Git operation; the observed record is compared with the retained
  * row member for member, every row is held to the identity naming it, and the
- * exported family is proven to be the checkout the record claims. Only then are
- * the branch and the commit read — from the checkout, never from a document.
+ * exported family is proven to be the checkout the record describes. Only then
+ * are the branch and the commit read — from the checkout, never from a
+ * document.
  *
  * A checkout whose HEAD names no branch stops here. That is the one condition a
  * document can act on, and it is decided before a durable effect exists and

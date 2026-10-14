@@ -26,7 +26,7 @@ export const HEAD = "a".repeat(40);
  * The routes one modeled pull request answers a reviews read on.
  *
  * The pull request itself is one of them: an answer is authenticated against
- * the subject it claims, so a collection with no pull request behind it is
+ * the subject it names, so a collection with no pull request behind it is
  * refused rather than bound.
  */
 export function reviewRoutes(endpoint: string): Record<string, string> {

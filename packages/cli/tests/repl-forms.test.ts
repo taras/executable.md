@@ -1,7 +1,7 @@
 /**
  * Bounded Elicit forms (#854 F1, F2, F3).
  *
- * Three levels, each as small as the claim allows. F1 is the schema language on
+ * Three levels, each as small as the behavior being tested allows. F1 is the schema language on
  * its own, because parsing is a pure question. F2 drives the real provider — the
  * one `useReplElicitation()` installs — through the real reducer, so what judges
  * a submission is the compiled schema and not a test's idea of one. F3 reads the

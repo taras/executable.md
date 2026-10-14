@@ -5,7 +5,7 @@
  * seam to inject a transport through: what the adapter talks to has to be a
  * socket. This is that socket — the three review endpoints and the pull request
  * itself, answering the shapes the adapter parses, and recording every request
- * so a fork that performed one cannot claim it restored instead.
+ * so a fork that performed one cannot report that it restored instead.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";

@@ -6,7 +6,7 @@
  * and does not authorize, lexical working directories, and the local Git
  * operations that write to the caller's own tree.
  *
- * The claims here are about a filesystem rather than a database. There is no
+ * These assertions concern a filesystem rather than a database. There is no
  * WorkflowRun, no Workspace, no journal and nothing to replay. Every repository
  * is real, every Git command is real, and the managed root is a temporary
  * directory of the suite's own — no test ever touches the user's

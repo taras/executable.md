@@ -3,7 +3,7 @@
  * (specs/workflow-workspace-spec.md §8.4).
  *
  * A trusted host hands the evaluator candidate source and the ceilings it may
- * run under. Everything here is about one of three claims.
+ * run under. Everything here is about one of three guarantees.
  *
  * **The whole fragment is read before anything happens.** A refusal costs no
  * request, no observation, and no generated-XMD event — whether the construct
@@ -2026,8 +2026,8 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
   /**
    * One admission whose policy and result carry whatever members a case wants.
    *
-   * Built as a literal rather than by rewriting a real record, so a case states
-   * the exact shape it is claiming this build must refuse.
+   * Built as a literal rather than by rewriting a real record, so a case
+   * states the exact shape this build must refuse.
    */
   function forgedAdmission(policy: JsonObject, extra: JsonObject = {}): DurableEvent {
     return {
@@ -2875,8 +2875,8 @@ describe("Tier WGAC — the pinned read-only File", () => {
  * Tier GXC — the effect classes a fragment draws on
  * (specs/workflow-workspace-spec.md §8.4).
  *
- * The host states two tables and the caller selects between them. Three claims
- * follow from that, and everything here is one of them.
+ * The host states two tables and the caller selects between them. Three
+ * guarantees follow from that, and everything here is one of them.
  *
  * **A selection is not a grant.** `allow` chooses among identities the host
  * already installed. An empty, repeated or unavailable selection is the host's

@@ -62,7 +62,7 @@ export type EvidenceReading =
   | { readonly state: "protocol-invalid" };
 
 /**
- * Something was read, and it was not what it claimed to be.
+ * Something was read, and it was not the expected representation.
  *
  * Told apart from unavailable because they mean opposite things about the host:
  * unavailable is a host that did not answer, and this is a host that answered

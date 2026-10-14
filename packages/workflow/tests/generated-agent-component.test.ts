@@ -2,15 +2,15 @@
  * Tier WGAC — `<Evaluate text={…} />`, the registered generated-XMD boundary
  * (specs/workflow-workspace-spec.md §8.4).
  *
- * The claim under test is the split between availability and permission.
- * Registering the component is what makes the operation reachable from a
- * trusted workflow document; it carries none of the ceilings the operation runs
- * under, and nothing a document writes can supply or widen one.
+ * The test verifies the split between availability and permission. Registering
+ * the component is what makes the operation reachable from a trusted workflow
+ * document; it carries none of the ceilings the operation runs under, and
+ * nothing a document writes can supply or widen one.
  *
  * So these drive the real component through a real attachment against a real
  * run database. A stand-in for the run's storage would be a stand-in for the
- * exact thing being claimed: that the roots come from the run rather than from
- * the element.
+ * exact boundary being verified: that the roots come from the run rather than
+ * from the element.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";

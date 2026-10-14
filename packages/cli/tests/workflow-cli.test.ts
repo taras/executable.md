@@ -70,7 +70,7 @@ const RELEASE = [
  *
  * A `<File>` refusal is a *printed* error — data, and the run still completes —
  * so a failed run needs an error nothing recovers. The unresolvable component
- * is one, and it doubles as the evidence for the other claim this fixture
+ * is one, and it doubles as the evidence for the other invariant this fixture
  * carries: a workflow definition is one immutable object, so the component
  * search path is empty and a repository component fails to resolve rather than
  * resolving to content beside the definition in a mutable checkout.

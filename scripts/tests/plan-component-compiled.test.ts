@@ -14,8 +14,7 @@
  * environment costs nothing, which is exactly why it is the right probe.
  *
  * It runs against `dist/xmd`, so `deno task build` has to have happened. A
- * missing binary is reported as the setup it is rather than as a failure of the
- * claim.
+ * missing binary is reported as the setup it is rather than as a failed assertion.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -374,7 +373,7 @@ describe(
      * pass this case for the wrong reason.
      *
      * The unrelated `CustomProbe.md` in the same directory is the other half:
-     * claiming forty-one names is not the same as turning discovery off, and a
+     * reserving forty-one names is not the same as turning discovery off, and a
      * change that secured the review by disabling `--include` would be a
      * regression this would catch.
      *

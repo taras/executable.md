@@ -2,8 +2,7 @@
  * Measured admission (#875 TL2–TL5).
  *
  * One real layout engine pair, one real Freedom tree, and a terminal cell grid
- * that accumulates what every frame actually wrote. What is under test is the
- * one claim the whole boundary rests on: **the rows and controls a person can
+ * that accumulates what every frame actually wrote. What is under test is the invariant the whole boundary rests on: **the rows and controls a person can
  * see, focus and click are exactly the rows and controls the measured frame
  * admitted.**
  *

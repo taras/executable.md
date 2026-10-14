@@ -81,9 +81,9 @@ export function* useEmptyDirectory(path: string): Operation<string> {
  * Own this run's provider-session sidecar for one attachment.
  *
  * It creates nothing. A run whose document never prompts an Agent allocates no
- * sidecar at all, which is what keeps "this run had no agent" a fact about the
- * filesystem rather than a claim: the directories below appear when a session is
- * placed and a record is written, and not before.
+ * sidecar at all, which is what keeps "this run had no agent" observable in the
+ * filesystem rather than merely asserted: the directories below appear when a
+ * session is placed and a record is written, and not before.
  *
  * What it does own is the end. The retained half — the mapping records and the
  * provider's own session store — outlives the attachment, because that is what a

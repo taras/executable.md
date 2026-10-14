@@ -1,7 +1,7 @@
 /**
  * Tier ORC — how the command line assembles repository operations.
  *
- * Three claims, and they are about opposite things. Describing the vocabulary
+ * Three requirements, and they are about opposite things. Describing the vocabulary
  * must reach nothing; one runtime *operates* it; and one only *describes* it.
  * All three have to be true at once, so a document written for `xmd run`
  * resolves the same twelve names everywhere, and on a runtime that operates
@@ -13,7 +13,7 @@
  * The declarations are the same array in every case, which is why there is no
  * fourth thing to keep in agreement.
  *
- * Everything here runs under Deno, Node and Bun. The parity claim is not one to
+ * Everything here runs under Deno, Node and Bun. The parity requirement is not one to
  * defer to CI: what it asserts is that a runtime with no operational provider
  * still describes and resolves the whole language.
  */

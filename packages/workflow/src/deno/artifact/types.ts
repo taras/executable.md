@@ -94,8 +94,8 @@ export interface XmdArtifactAgentCheckpoint {
  * A durable session identity a provider asserted, and what kind of thing it is.
  *
  * Tagged for the same reason the live mapping's assertion is: "an ACP session
- * id" and "a record id in some store" are different claims that happen to be
- * strings.
+ * id" and "a record id in some store" are different identity assertions that
+ * happen to be strings.
  */
 export interface XmdArtifactProviderSessionIdentity {
   readonly kind: string;

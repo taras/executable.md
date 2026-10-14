@@ -2,8 +2,9 @@
  * Tier WLA — who may advance a run.
  *
  * The subject is an operating-system lock, so these tests take it for real and,
- * where exclusion across processes is the claim, from a real second process.
- * An in-process stand-in would prove that this module agrees with itself.
+ * where the test requires exclusion across processes, from a real second
+ * process. An in-process stand-in would prove that this module agrees with
+ * itself.
  *
  * The lock's whole value is that the workflow executor cannot retain it beyond
  * its scope. Every test that acquires one also says what happens after that

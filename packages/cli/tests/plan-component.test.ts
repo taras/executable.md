@@ -613,7 +613,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
      * the projection — and the refusal it produces is an ordinary one, which
      * this workflow turns into exactly one more turn.
      *
-     * The ordering half of this claim — that a descendant answering `true`
+     * The ordering half of this behavior — that a descendant answering `true`
      * cannot defeat an enclosing `false` — is Tier PM's, proved there against
      * the Api itself rather than duplicated here as another permutation.
      */
@@ -675,9 +675,9 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
      * trusted workflow reads through the ordinary chain either way.
      *
      * This drives the **real private body** off the declaration the production
-     * path builds, with a claimant that refuses the way core's does for a forged
-     * invocation; the control beside it, a claimant that answers, shows the body
-     * gets past the claim and on to its projection. So the ordering is what is
+     * path builds, with an authenticator that refuses the way core's does for a forged
+     * invocation; the control beside it, an authenticator that answers, shows the body
+     * gets past authentication and on to its projection. So the ordering is what is
      * asserted rather than the fact that something threw.
      */
     it("PI25: the private information body runs only for its own invocation", function* () {

@@ -6,12 +6,13 @@
  * the public `Component.expand` chain composes around it, and exactly one
  * delegation of that exact request runs the work.
  *
- * Observation only. What middleware returns is ignored, what it catches it does
- * not rescue, and the outgoing result stays private until canonical acceptance
- * has reconciled it — so an observer learns what happened and decides nothing
- * about it. The authority is the same one `bound-exec.ts` keeps: a private
- * brand nothing outside can forge, a claim that can be spent once, and a
- * settlement readable whether or not the chain returned normally.
+ * Observation only. What middleware returns is ignored, what it catches it
+ * does not rescue, and the outgoing result stays private until canonical
+ * acceptance has reconciled it — so an observer learns what happened and
+ * decides nothing about it. The authority is the same one `bound-exec.ts`
+ * keeps: a private brand nothing outside can forge, a request that can be
+ * consumed once, and a settlement readable whether or not the chain returned
+ * normally.
  */
 
 import { createQueue, ensure, Err, Ok } from "effection";

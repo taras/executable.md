@@ -1,11 +1,11 @@
 /**
  * How a trusted host says what is behind a provider-backed fragment entry.
  *
- * A `component-answer` entry names something the ordinary import chain resolves
- * rather than an operation core supplies a body for. The host does not hand
- * over the implementation — it states which name, and which structural identity
- * a provider must have claimed for that name. This module is the seam a
- * provider uses to make that claim.
+ * A `component-answer` entry names something the ordinary import chain
+ * resolves rather than an operation core supplies a body for. The host does
+ * not hand over the implementation — it states which name, and which
+ * structural identity a provider must have stated for that name. This module
+ * is the seam a provider uses to state that identity.
  *
  * ## Being asked and answering are two separate rights
  *
@@ -29,14 +29,13 @@
  * context name behind any of these objects, which is what lets a separately
  * loaded copy of core hold one without any of those being a way in.
  *
- * ## Claiming is not permission
+ * ## Identifying is not permission
  *
- * Claiming identifies an answer. It permits nothing. A fragment still needs
- * the host entry, an exact identity match, the right `allow` class, whole-
- * fragment preflight and canonical generated import — all of them
- * independently. Middleware that answers an import without claiming anything is
- * an ordinary replacement and stays exactly as valid as it was; what it cannot
- * do is enter an admitted fragment.
+ * An identity statement permits nothing. A fragment still needs the host entry, an exact identity match, the right `allow`
+ * class, whole- fragment preflight and canonical generated import — all of
+ * them independently. Middleware that answers an import without stating an
+ * identity is an ordinary replacement and stays exactly as valid as it was;
+ * what it cannot do is enter an admitted fragment.
  */
 
 import type { Operation } from "effection";
@@ -58,7 +57,7 @@ export type { ComponentAnswerRequest } from "./components/component-resolution.t
  * the asked name and position arriving as a request rather than as loose
  * arguments. Delegation is unchanged: `yield* next()` reaches the rest of the
  * chain, and an outer handler may delegate, look at what came back, and then
- * claim its own replacement before returning.
+ * identify its own replacement before returning.
  */
 export type ComponentAnswerHandler = (
   request: ComponentAnswerRequest,

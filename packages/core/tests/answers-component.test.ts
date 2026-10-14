@@ -901,10 +901,11 @@ describe("Answers: reservation", () => {
   /**
    * Membership in the reserved set, which nothing above reaches.
    *
-   * Keeping a repository file out is the expansion loop's doing — it dispatches
-   * both names before resolution runs, and would go on doing so if they were
-   * dropped from the set. What the set uniquely decides is that a *registration*
-   * cannot claim either name, so this is the assertion that fails if they are.
+   * Keeping a repository file out is the expansion loop's doing — it
+   * dispatches both names before resolution runs, and would go on doing so if
+   * they were dropped from the set. What the set uniquely decides is that a
+   * *registration* cannot reserve either name, so this is the assertion that
+   * fails if they are.
    */
   it("refuses a registration for either name", function* () {
     for (const name of ["Answers", "Answer"]) {

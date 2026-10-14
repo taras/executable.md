@@ -23,12 +23,12 @@
  *
  * ## One error for the catalog, one for the bytes
  *
- * Everything this module decides about a *set* — a malformed structural member,
- * a schema that will not compile, a name claimed twice, a pair that cannot
- * expand — is an `ExecutionDeclarationError`. What exact Markdown's own bytes
- * say about themselves stays `DeclaredMarkdownError`, and so does an unknown
- * discriminant, which is a value that never reached either arm. A host reading
- * one of those two knows which question it failed.
+ * Everything this module decides about a *set* — a malformed structural
+ * member, a schema that will not compile, a name reserved twice, a pair that
+ * cannot expand — is an `ExecutionDeclarationError`. What exact Markdown's own
+ * bytes say about themselves stays `DeclaredMarkdownError`, and so does an
+ * unknown discriminant, which is a value that never reached either arm. A host
+ * reading one of those two knows which question it failed.
  *
  * ## The pair is derived from the regions
  *
@@ -41,9 +41,9 @@
  * ## What crosses to the handler
  *
  * Nothing here calls a handler. The declarations are admitted, the handler an
- * installation supplied is retained beside them, and the entry that holds it is
- * reachable only by holding this catalog. There is no registry, registrar,
- * plugin object, contextual slot, token or claim.
+ * installation supplied is retained beside them, and the entry that holds it
+ * is reachable only by holding this catalog. There is no registry, registrar,
+ * plugin object, contextual slot, token or authentication handle.
  */
 
 import type { Operation, Stream } from "effection";

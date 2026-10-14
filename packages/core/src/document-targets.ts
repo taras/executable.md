@@ -205,10 +205,10 @@ function targetList(value: unknown): string[] | undefined {
  *
  * The check re-derives the outcome rather than trusting the three fields to
  * agree: the selector is parsed, matched against the catalog the candidate
- * supplied, and the result compared with the matches it claims. A record whose
- * kind, selector, matches, and catalog cannot all be true at once is refused,
- * so an inconsistent journal or a hand-built candidate cannot describe a
- * selection that never happened.
+ * supplied, and the result compared with the matches it reports. A record
+ * whose kind, selector, matches, and catalog cannot all be true at once is
+ * refused, so an inconsistent journal or a hand-built candidate cannot
+ * describe a selection that never happened.
  */
 function consistentOutcome(fields: TargetFailureFields): boolean {
   const levels = parseSelector(fields.selector);
@@ -453,10 +453,10 @@ export function documentTargetError(data: DocumentTargetFailure): DocumentTarget
  * copy's constructor is a different function producing the same name.
  *
  * The shell is checked as strictly as the data. The message has to be the one
- * the data derives, so a diagnostic cannot disagree with the fields it claims;
- * there can be no cause and no enumerable member beyond the contract, so a
- * candidate cannot carry a path, a foreign object, or a second message under a
- * recognized tag.
+ * the data derives, so a diagnostic cannot disagree with the fields it
+ * reports; there can be no cause and no enumerable member beyond the contract,
+ * so a candidate cannot carry a path, a foreign object, or a second message
+ * under a recognized tag.
  */
 function readDocumentTargetError(error: unknown): DocumentTargetFailure | undefined {
   return attempt(() => {

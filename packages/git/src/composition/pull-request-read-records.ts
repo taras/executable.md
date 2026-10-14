@@ -11,7 +11,7 @@
  *
  * `id` is a decimal string. Provider identifiers already exceed what a JSON
  * number holds exactly, and a value that silently loses its last digits is
- * worse than one that never claimed to be arithmetic.
+ * worse than one that was never presented as arithmetic.
  *
  * Timestamps are the provider's own RFC 3339 strings, unparsed. What a reader
  * needs is what the host said, and reformatting is a second contract to get

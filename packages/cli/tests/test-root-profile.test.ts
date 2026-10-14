@@ -4,7 +4,7 @@
  * XMD bundles one Plugin and activates it for the commands that execute or
  * describe a document. `xmd test` is not one of them: the root is a harness
  * that decides what its children run, and a harness that quietly gained the
- * repository vocabulary would be claiming names its children are entitled to
+ * repository vocabulary would be reserving names its children are entitled to
  * shadow.
  *
  * So the same element resolves in two places and not in a third, and that

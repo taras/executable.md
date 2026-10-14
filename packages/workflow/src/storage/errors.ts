@@ -85,7 +85,7 @@ export class WorkflowRunIdMismatchError extends WorkflowStorageError {
  * other side: nobody asked for this run, and the file it was found in is not
  * the one its id names. Reported as its own sentence because "the run you asked
  * for is not here" and "this run is not where it belongs" read as opposite
- * claims about the same file.
+ * findings about the same file.
  */
 export class WorkflowRunLocationMismatchError extends WorkflowRunIdMismatchError {
   override name = "WorkflowRunLocationMismatchError";
@@ -181,7 +181,7 @@ export class WorkflowInspectionRecoveryError extends WorkflowStorageError {
   }
 }
 
-/** A stored row does not describe what its column claims to hold. */
+/** A stored row does not describe what its column declares. */
 export class WorkflowRecordMalformedError extends WorkflowStorageError {
   override name = "WorkflowRecordMalformedError";
 
@@ -269,7 +269,7 @@ export class WorkflowDefinitionSourceMissingError extends WorkflowStorageError {
  * Distinct from absence because an operator acts on it differently. A path, a
  * length, a source hash, a component mapping or the bundle hash disagrees with
  * what the descriptor states, so what is retained is no longer evidence of the
- * definition it claims. No partial closure is returned.
+ * definition it names. No partial closure is returned.
  */
 export class WorkflowDefinitionCorruptError extends WorkflowStorageError {
   override name = "WorkflowDefinitionCorruptError";
@@ -428,7 +428,7 @@ export class XmdArtifactFormatVersionError extends XmdArtifactError {
   }
 }
 
-/** The container claims this version and is not shaped like it. */
+/** The container declares this version and is not shaped like it. */
 export class XmdArtifactSchemaError extends XmdArtifactError {
   override name = "XmdArtifactSchemaError";
 
@@ -441,7 +441,7 @@ export class XmdArtifactSchemaError extends XmdArtifactError {
   }
 }
 
-/** A retained record does not describe what its kind claims. */
+/** A retained record does not describe what its kind declares. */
 export class XmdArtifactRecordError extends XmdArtifactError {
   override name = "XmdArtifactRecordError";
 

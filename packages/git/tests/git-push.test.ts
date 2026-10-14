@@ -2,11 +2,11 @@
  * Tier WF — `<Git.Push>` as a document writes it.
  *
  * These drive the real component through a real run database, a real local bare
- * remote and a real `git`, because the claim under test is about two places at
- * once: what the other end of the transport holds afterwards, and what this
- * run's journal says it published. Rendered text proves neither — a push
- * renders nothing — so every test here reads the remote's refs and the retained
- * reconciliation record.
+ * remote and a real `git`, because the test checks two places at once: what the
+ * other end of the transport holds afterwards, and what this run's journal says
+ * it published. Rendered text proves neither — a push renders nothing — so
+ * every test here reads the remote's refs and the retained reconciliation
+ * record.
  *
  * Nothing here reaches a network. A remote is a bare repository in a temporary
  * directory, and an unreachable host is one that has been deleted.

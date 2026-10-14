@@ -786,7 +786,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
  * One real `<Prompt>` turn, one real generated-XMD observation and one real
  * file mutation, all before the question. Each is an ordinary durable effect
  * with its own journal entry, which is what makes "the resume repeated none of
- * them" a claim about the journal rather than about a counter this suite kept.
+ * them" an assertion about the journal rather than about a counter this suite kept.
  */
 const CHECKPOINT_SCHEMA = `{"type":"object","properties":{"proceed":{"type":"boolean"}},"required":["proceed"]}`;
 

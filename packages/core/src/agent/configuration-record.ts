@@ -18,10 +18,10 @@
  * asked for.
  *
  * So they are read and dropped: validated, because a member that does not read
- * back means the record is not the record it claims to be, and then discarded.
- * Neither is ever written again, and a record carrying one *beside* a canonical
- * configuration is ambiguous about which account is current — which is a
- * refusal rather than a precedence rule.
+ * back means the record is not the record it describes itself as, and then
+ * discarded. Neither is ever written again, and a record carrying one *beside*
+ * a canonical configuration is ambiguous about which account is current —
+ * which is a refusal rather than a precedence rule.
  */
 
 import { Err, Ok } from "effection";

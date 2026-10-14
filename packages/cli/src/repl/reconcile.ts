@@ -53,7 +53,7 @@ import type {
   ReplViewData,
 } from "./description.ts";
 
-/** An event reached a live node and nothing claimed it. */
+/** An event reached a live node and nothing handled it. */
 export class ReplUnownedEventError extends Error {
   constructor(ancestry: readonly string[]) {
     super(
@@ -97,9 +97,9 @@ export interface ReplFrame {
  * What delivering one normalized event did.
  *
  * Closed, so every outcome has to be handled and none of them is the absence
- * of another: an action a node claimed, a focus move the tree itself owns, or
+ * of another: an action a node produced, a focus move the tree itself owns, or
  * an event that never reached a live node at all. An event that reached one
- * and nothing claimed is not in here — that is an `Err`.
+ * and nothing handled is not in here — that is an `Err`.
  */
 export type ReplDispatched<Action> =
   | {

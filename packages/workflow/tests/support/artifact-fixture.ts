@@ -534,8 +534,8 @@ function agentSession(
  *
  * What a bundle may hold is a provider's business — transcripts, tool state, a
  * secret a conversation repeated, the exporting host's own paths — and the
- * claim these prove is that the container returns those bytes exactly and that
- * no ordinary presentation renders them. A literal that looked like a real
+ * property these prove is that the container returns those bytes exactly and
+ * that no ordinary presentation renders them. A literal that looked like a real
  * credential would be the same evidence and would also arrive in every diff of
  * this file.
  */

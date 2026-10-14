@@ -1640,8 +1640,8 @@ function decideTwoTurn(verdict: JourneyVerdict): void {
  * Gate, run and dismantle one journey, then report it.
  *
  * The cleanup counters are filled in by teardown, so a verdict serialized while
- * the scope was still open would report every one of them false and claim the
- * journey leaked what it had not yet released.
+ * the scope was still open would read every cleanup counter as false and
+ * incorrectly report a leak before those resources had been released.
  */
 function* runJourney(
   mode: Mode,

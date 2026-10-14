@@ -68,7 +68,8 @@ export interface AgentPromptPublication {
    * This is the only thing that says which live turn this publication ends. A
    * prompt that never began canonically — a direct `Agent.prompt()` call from
    * a component, which core does not journal — reaches no publication at all,
-   * so it can neither claim this one nor be claimed by it.
+   * so this publication cannot be associated with that prompt in either
+   * direction.
    */
   readonly begun: AgentPromptHandle;
   /**

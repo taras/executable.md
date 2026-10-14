@@ -7,11 +7,11 @@
  * appended; `SIGKILL` then runs no application cleanup, so the remote holds the
  * branch and the run's database holds no result for it.
  *
- * What the next execution does with that is the whole claim: it reconstructs
- * the same request, observes the destination, recognizes its own completion and
- * adopts it. The remote is mutated once. A run that pushed again — or that
- * refused because the destination was no longer absent — would be the two
- * failures this design is built to avoid.
+ * What the next execution does with that is what this test verifies: it
+ * reconstructs the same request, observes the destination, recognizes its own
+ * completion and adopts it. The remote is mutated once. A run that pushed again
+ * — or that refused because the destination was no longer absent — would be the
+ * two failures this design is built to avoid.
  *
  * The handshake is a line of JSON on standard output, never a sleep.
  */

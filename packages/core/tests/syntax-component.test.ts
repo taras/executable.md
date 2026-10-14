@@ -16,8 +16,8 @@
  * code ran, and it travels lexically on canonical core's own expansion
  * resolution — not through a context, where a name is not a secret.
  *
- * **One occurrence renders once.** It claims the identity this execution minted
- * and records a closed payload carrying exactly one member:
+ * **One occurrence renders once.** It authenticates the identity this execution
+ * minted and records a closed payload carrying exactly one member:
  *
  * ```
  * { symbols: string } | { refused: non-empty string }
@@ -992,8 +992,8 @@ describe("Tier SYN — the named form", () => {
    * The layering is the same shape as SYN25l.5 — the inner scope descends from
    * the outer, and both enter the same bootstrap. What the repeat means for a
    * provider is that the outer entry observes and delegates rather than
-   * claiming again: one implementation states what it is once, so an additive
-   * layering has exactly one claim behind the name.
+   * stating an identity again: one implementation states what it is once, so
+   * an additive layering has exactly one identity statement behind the name.
    *
    * These rows reuse #765's collector rather than adding one. The
    * documentation halves here are the same asks SYN25l.1/.2/.5 make, and what

@@ -8,7 +8,7 @@
  *
  * The retained lifecycle reads that store and holds what it finds to the
  * descriptor it asked about, which is what makes "these are the bytes this run
- * is a run of" a checkable claim rather than an assertion by whoever did the
+ * is a run of" a verifiable fact rather than an assertion by whoever did the
  * reading.
  */
 

@@ -234,8 +234,7 @@ describe("markdown: sanitization is last", () => {
 
   /**
    * The policy denies what the page would do on its own, not what a person
-   * chooses to do. A safe link keeps its destination, so the threat model claims
-   * no more than "cannot *automatically* navigate or issue external requests".
+   * chooses to do. A safe link keeps its destination, so the threat model guarantees no more than "cannot *automatically* navigate or issue external requests".
    */
   it("still preserves a link a person can choose to follow", function* () {
     const html = renderBody("[docs](https://example.test/guide)\n");

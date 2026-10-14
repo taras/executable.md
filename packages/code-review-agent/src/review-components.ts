@@ -1,16 +1,17 @@
 /**
  * Declare the packaged review graph before a root document is imported.
  *
- * Thirty-five Markdown components cross as {@link MarkdownComponent} values with
- * packaged bytes, stable asset origins and digests. Six TypeScript components use
- * reserved registrations. Both claim names so the repository being reviewed
- * cannot replace its reviewers; duplicate host claims refuse at admission.
- * Ordinary includes and component discovery remain available for unclaimed names.
+ * Thirty-five Markdown components cross as {@link MarkdownComponent} values
+ * with packaged bytes, stable asset origins and digests. Six TypeScript
+ * components use reserved registrations. Both reserve names so the repository
+ * being reviewed cannot replace its reviewers; duplicate host reservations
+ * refuse at admission. Ordinary includes and component discovery remain
+ * available for unreserved names.
  *
  * Assets resolve from this module's own URL in source, npm and compiled builds.
- * Read them through the Effection filesystem directly: document-facing API.Fs and
- * Files middleware must not substitute the review program. Missing assets fail
- * assembly rather than leaving an empty component claim.
+ * Read them through the Effection filesystem directly: document-facing API.Fs
+ * and Files middleware must not substitute the review program. Missing assets
+ * fail assembly rather than leaving an empty component reservation.
  */
 
 import { readTextFile } from "@effectionx/fs";

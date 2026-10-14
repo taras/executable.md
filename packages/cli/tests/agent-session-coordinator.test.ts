@@ -2,7 +2,7 @@
  * Tier HC — which hosts can own an agent session, and what the others do
  * (specs/native-agent-session-launch-spec.md §Hosts).
  *
- * This file runs under all three runtimes, because the claim it makes is about
+ * This file runs under all three runtimes, because the behavior it tests is about
  * the differences between them: Deno and the compiled binary build a
  * coordinator, Node and Bun build none, and a provider handed none refuses
  * every advertised provider-returned operation before contacting an agent.
@@ -227,7 +227,7 @@ const CLIENT_ALLOCATED: NativeAdapter = {
 /**
  * A route store that records every operation performed on it.
  *
- * "Performs no route work" is a claim about absence, and absence is only
+ * "Performs no route work" is an assertion about absence, and absence is only
  * provable where something was watching.
  */
 function countingRoutes(): { store: AgentSessionRouteStore; operations: string[] } {

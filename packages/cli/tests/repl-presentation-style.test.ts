@@ -9,7 +9,7 @@
  *
  * Every assertion names a rectangle the committed frame published and reads the
  * characters and the attributes out of it. That is the whole discrimination: a
- * cyan code written anywhere else on the screen cannot satisfy a claim about the
+ * cyan code written anywhere else on the screen cannot satisfy an assertion about the
  * selected field, and a role attached to a candidate the manifest left out paints
  * nothing at all.
  *

@@ -33,9 +33,9 @@ export interface AgentPromptCheckpoint {
   /**
    * What kind of identity the value is.
    *
-   * Tagged, because "an App Server turn id" and "an assistant message uuid" are
-   * different claims that happen to be strings. A host comparing them without
-   * the tag would accept one for the other.
+   * Tagged, because "an App Server turn id" and "an assistant message uuid"
+   * are different identifiers that happen to be strings. A host comparing them
+   * without the tag would accept one for the other.
    */
   readonly kind: string;
   /**

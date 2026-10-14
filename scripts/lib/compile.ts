@@ -46,7 +46,7 @@ export const EMBEDDED_PACKAGES: readonly string[] = [];
  * that ship documents and holds the lists above to what it finds, which is what
  * keeps a new asset from being forgotten. A package outside the binary would
  * fail that walk for the right reason and the wrong subject, so it is named
- * here — and the same test checks the claim rather than trusting it, by proving
+ * here — and the same test checks that exclusion rather than trusting it, by proving
  * no CLI production module imports one.
  */
 export const UNEMBEDDED_PACKAGES: readonly string[] = ["packages/code-review-agent"];

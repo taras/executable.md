@@ -106,7 +106,7 @@ const WITNESSED_REFUSAL = "You've hit your usage limit.";
  * Wording this does not recognize is not exhaustion here, even if it is
  * exhaustion in fact. That direction is the safe one: an unrecognized surface
  * is reported as a harness that could not read the screen, which costs an
- * investigation, where the other direction costs a false claim about the
+ * investigation, where the other direction costs an incorrect finding about the
  * product's environment.
  */
 export function exhaustedUsage(snapshot: ScreenSnapshot): boolean {

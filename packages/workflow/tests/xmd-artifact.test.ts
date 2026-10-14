@@ -6,7 +6,7 @@
  * would open it, damaged the way somebody with write access could damage it.
  * Nothing stands in for the filesystem, for SQLite, or for the hashes.
  *
- * The claims are grouped the way a reviewer reads them: that version 1 is a
+ * The assertions are grouped the way a reviewer reads them: that version 1 is a
  * distinct sealed container, that its identity is about the evidence rather
  * than the encoding, that the inventory is complete, that verification finishes
  * before any of it is returned, that each way of not being an artifact has its

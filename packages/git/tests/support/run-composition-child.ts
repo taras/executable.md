@@ -1,7 +1,7 @@
 /**
  * A second process asking for the same managed checkout.
  *
- * Exclusive ownership is a claim about two operating-system processes, so it is
+ * Exclusive ownership must hold across two operating-system processes, so it is
  * proved by two operating-system processes. This one constructs its own
  * ordinary repository provider — its own leases, its own invocation identity —
  * against a managed root and a starting directory the parent names, selects

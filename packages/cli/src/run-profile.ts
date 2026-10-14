@@ -16,7 +16,7 @@
  * here, without loading a module, and writing it once or five times leaves the
  * profile exactly as it was: Git appears once, first. That is a property of the
  * *host's own selector for its own bundled value*, and of nothing else — a
- * module that merely claims the same Plugin name is a duplicate like any other,
+ * module that merely uses the same Plugin name is a duplicate like any other,
  * and `admitPlugins()` refuses it before anything installs.
  *
  * ## What this is not
@@ -104,7 +104,7 @@ export function* assembleRunProfile(
  * dropped is the one object this host statically bundled — an operator who
  * wrote the reserved selector is holding exactly that value, and prefixing it
  * twice would be the host duplicating itself. A *different* Plugin that merely
- * claims the same name is not this value, is not dropped, and meets
+ * uses the same name is not this value, is not dropped, and meets
  * `admitPlugins()`'s duplicate-name refusal like any other collision. Comparing
  * names here would have let an impostor disappear instead of collide.
  */

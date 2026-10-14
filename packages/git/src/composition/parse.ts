@@ -1,5 +1,5 @@
 /**
- * Reading a value that arrived from outside as the shape it claims to be.
+ * Reading a value that arrived from outside as the shape it reports.
  *
  * Every record these components retain comes back through the journal or a
  * database column, so nothing about it is this package's own word by the time it

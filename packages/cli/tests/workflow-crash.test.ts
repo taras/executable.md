@@ -69,8 +69,7 @@ function definition(count: number): string {
  * in a position to notice one, and a runtime notices at its event loop. A
  * document made only of file effects is a long stretch of work that reaches the
  * event loop rarely, so a `SIGINT` aimed at it may be observed nowhere near
- * where it was sent — the interruption is real but its timing is not the test's
- * to claim. This document has a place where the run is unambiguously waiting,
+ * where it was sent — the interruption is real but its timing is not the test's to determine. This document has a place where the run is unambiguously waiting,
  * and everything about interruption is asserted there.
  *
  * Its shape also makes the wait *observable from outside*: the effects before it

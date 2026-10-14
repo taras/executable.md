@@ -550,8 +550,8 @@ describe("single-quoted fields after serialization", () => {
  * The earlier "one segment does not excuse the value" fixtures did not catch
  * this. They all carried mixed case or digits, so the word pattern rejected
  * them before the placeholder-word check ever ran — they passed for a reason
- * unrelated to what they claimed to test. These are all lowercase, so the
- * placeholder logic is the only thing standing between them and a finding.
+ * unrelated to what they were intended to test. These are all lowercase, so
+ * the placeholder logic is the only thing standing between them and a finding.
  */
 describe("lowercase passphrases containing placeholder words", () => {
   const PASSPHRASES = [

@@ -2,10 +2,11 @@
  * The names canonical core answers for, ahead of every other tier.
  *
  * Resolution already had a protected tier — a reserved registration, or exact
- * Markdown a host declared — but both of those are *a host's* claim, made by
- * whoever assembled the run. This tier is the engine's own, and it sits above
- * them: a protected name means the same thing in every execution, whichever host
- * built it, whichever package registered what, and whatever a repository holds.
+ * Markdown a host declared — but both of those are *a host's* reservation,
+ * made by whoever assembled the run. This tier is the engine's own, and it
+ * sits above them: a protected name means the same thing in every execution,
+ * whichever host built it, whichever package registered what, and whatever a
+ * repository holds.
  *
  * There are five components in it, for two reasons. `<Syntax />` describes the
  * vocabulary of the site it is written at, and a description of a run's
@@ -21,13 +22,13 @@
  *
  * ## Two shapes, one tier
  *
- * What a protected name claims is settled here; how its implementation comes
+ * What a protected name denotes is settled here; how its implementation comes
  * about is not the same for all five. `<Syntax />` and `<Evaluate>` are handed
  * a site canonical execution built for them, so each execution builds their
- * bodies from a claimant it minted. The three filesystem components are
- * ordinary components whose bodies reach the filesystem through contextual
- * operations, so each is one definition built once per loaded copy of core and
- * answered with as it stands.
+ * bodies from an identity authenticator it minted. The three filesystem
+ * components are ordinary components whose bodies reach the filesystem through
+ * contextual operations, so each is one definition built once per loaded copy
+ * of core and answered with as it stands.
  *
  * Both shapes carry the same descriptive members, because selection,
  * inspection, documentation and validation ask every protected component the
@@ -71,24 +72,25 @@ import type { ProtectedDeclaration } from "../invocation-identity.ts";
 import type { ComponentOrigin, FunctionComponentDefinition } from "../types.ts";
 
 /**
- * One component canonical core claims the name of, whose body each execution
+ * One component canonical core reserves the name of, whose body each execution
  * builds.
  *
- * The same contract an identity component declares, minus the choice of origin:
- * a protected component is core's, so it reports core's origin. Its body is
- * built once per execution, with the claimant that execution minted, and the
- * implementation the execution wraps it in is the only thing that name resolves
- * to there.
+ * The same contract an identity component declares, minus the choice of
+ * origin: a protected component is core's, so it reports core's origin. Its
+ * body is built once per execution, with the identity authenticator that
+ * execution minted, and the implementation the execution wraps it in is the
+ * only thing that name resolves to there.
  */
 export interface ExecutionBuiltComponent extends ProtectedDeclaration, ComponentDocumentation {}
 
 /**
- * One component canonical core claims the name of and supplies as it stands.
+ * One component canonical core reserves the name of and supplies as it stands.
  *
- * The definition is the whole of it. There is no claimant to mint and no site
- * to build, so the execution's protected table answers with this exact object —
- * which is also what the generated-XMD write table pins, so an authored element
- * and an admitted generated one invoke one implementation.
+ * The definition is the whole of it. There is no identity authenticator to
+ * mint and no site to build, so the execution's protected table answers with
+ * this exact object — which is also what the generated-XMD write table pins,
+ * so an authored element and an admitted generated one invoke one
+ * implementation.
  */
 export interface FixedComponent extends ComponentDocumentation {
   readonly name: string;
@@ -100,7 +102,7 @@ export interface FixedComponent extends ComponentDocumentation {
   readonly definition: FunctionComponentDefinition;
 }
 
-/** One component canonical core claims the name of, however it is supplied. */
+/** One component canonical core reserves the name of, however it is supplied. */
 export type ProtectedComponent = ExecutionBuiltComponent | FixedComponent;
 
 /**
@@ -134,7 +136,7 @@ export const FIXED_COMPONENTS: readonly FixedComponent[] = Object.freeze(
   FIXED_FILESYSTEM_DEFINITIONS.map(fixedComponent),
 );
 
-/** Every name the engine itself claims. */
+/** Every name the engine itself reserves. */
 export const PROTECTED_COMPONENTS: readonly ProtectedComponent[] = Object.freeze([
   ...EXECUTION_BUILT_COMPONENTS,
   ...FIXED_COMPONENTS,
@@ -158,10 +160,10 @@ export function protectedComponent(name: string): ProtectedComponent | undefined
  * Its own kind, because reusing `registered` with `reserved: true` said
  * something untrue. A reserved registration is a *host* installing a component
  * under a name it wants kept, so it can be absent from another execution,
- * replaced by a different host, or refused when two hosts claim it. A protected
- * component is core's own declaration: present in every execution, supplied by
- * no registry, and unable to be registered at all. Reporting one as the other
- * told a reader the name was a host's to take.
+ * replaced by a different host, or refused when two hosts reserve it. A
+ * protected component is core's own declaration: present in every execution,
+ * supplied by no registry, and unable to be registered at all. Reporting one
+ * as the other told a reader the name was a host's to take.
  */
 export function protectedOrigin(
   component: ProtectedComponent,
@@ -169,12 +171,12 @@ export function protectedOrigin(
   return { kind: "protected", origin: component.origin };
 }
 
-/** A protected name a host, a bundle or a registration tried to claim. */
+/** A protected name a host, a bundle or a registration tried to reserve. */
 export class ProtectedComponentError extends Error {
   override name = "ProtectedComponentError";
 }
 
-/** What a name that canonical core owns refuses a second claim with. */
+/** What a name that canonical core owns refuses a second reservation with. */
 export function protectedNameRefusal(name: string, claim: string): string {
   return (
     `cannot ${claim} "${name}": canonical core owns that name, so what it means is the same in ` +
@@ -199,9 +201,10 @@ const REFUSED: Record<ImportRefusal, string> = {
 /**
  * The tier a protected import is verified through.
  *
- * It closes the names it claims and nothing else, exactly as a declaration does:
- * claiming `Syntax` says nothing about what any other name in the execution may
- * resolve to, and every other import stays the open one it has always been.
+ * It closes the names it reserves and nothing else, exactly as a declaration
+ * does: reserving `Syntax` says nothing about what any other name in the
+ * execution may resolve to, and every other import stays the open one it has
+ * always been.
  */
 export class ProtectedImports implements ImportTier {
   claims(name: string): boolean {

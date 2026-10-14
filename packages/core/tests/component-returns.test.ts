@@ -399,9 +399,10 @@ describe("Tier RV — component return values", () => {
 
   describe("definition-owned return flow", () => {
     /**
-     * A value component whose declaration is satisfied from inside `directive`.
-     * Each row is the same claim — the directive keeps the body that owns it —
-     * written in the four structural forms a document has today.
+     * A value component whose declaration is satisfied from inside
+     * `directive`. Each row is the same ownership rule — the directive keeps
+     * the body that owns it — written in the four structural forms a document
+     * has today.
      */
     const OWNED = [
       { name: "If", body: ["<If condition={true}>", '<Return value="picked" />', "</If>"] },

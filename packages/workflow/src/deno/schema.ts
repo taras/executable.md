@@ -8,9 +8,9 @@
  * that belongs to another program is a **format** failure: nothing here will
  * ever read it. A schema version this build does not implement is a **version**
  * failure: a later build might read it, and this one must not touch it. A file
- * that claims to be a version-1 workflow database and is not shaped like one is
- * **damage** — the header says the tables are there, so their absence or their
- * wrong shape is the file disagreeing with itself.
+ * that declares itself a version-1 workflow database and is not shaped like one
+ * is **damage** — the header says the tables are there, so their absence or
+ * their wrong shape is the file disagreeing with itself.
  *
  * Recognizing it is not the same as reading its table names. The stored
  * definition of every table is compared with the definition this build creates,
@@ -19,7 +19,7 @@
  *
  * Nothing in this module writes to a database it did not just create. An
  * incompatible or damaged file is described and left exactly as it was found: a
- * host that silently replaced it would be claiming to continue a run whose
+ * host that silently replaced it would be reporting continuation of a run whose
  * history it had just deleted.
  */
 
@@ -764,7 +764,7 @@ export function verifyRecognizedSchema(
 /**
  * Hold a recognized database to the schema this build writes for its version.
  *
- * The header already claims a version, so anything missing or differently
+ * The header already declares a version, so anything missing or differently
  * shaped is the file disagreeing with itself rather than a version this build
  * has not learned yet. A version-1 object inside a version-2 file — the
  * `workflow_run` table with a `base` column, say — fails here as a shape that

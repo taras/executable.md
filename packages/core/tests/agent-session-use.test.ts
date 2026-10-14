@@ -4,8 +4,9 @@
  * A configured `<Session>` says what a conversation runs under, and that fact
  * travels to the provider on the value that names the conversation. Every such
  * value travels the public Agent chain, where middleware may read it, copy it
- * and route something else — so what these rows establish is which values carry
- * an answer and which are refused for claiming to.
+ * and route something else — so what these rows establish is which values
+ * carry an answer and which are refused for presenting themselves as
+ * configured.
  *
  * The refusal is the point. A value that presents itself as configured and is
  * not one must not be read as an ordinary session and run unconfigured: that is

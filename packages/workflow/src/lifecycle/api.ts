@@ -113,8 +113,8 @@ export interface WorkflowLifecycleSnapshot extends WorkflowInspectionSnapshot {
 /**
  * What deletion actually removed.
  *
- * Categories, not a claim about the world: a push that happened is not undone
- * by removing the record of it, and nothing here says otherwise.
+ * Categories, not a determination of external state: a push that happened is
+ * not undone by removing the record of it, and nothing here says otherwise.
  */
 export interface WorkflowDeletion {
   readonly removed: readonly ("run-storage" | "provider-sessions")[];

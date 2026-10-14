@@ -141,7 +141,8 @@ export const rootMetadata: Operation<Readonly<Record<string, unknown>>> = {
  * The complete list, installed before the first `install()` runs, so every
  * Plugin and every later consumer reads the same one. An execution nobody
  * installed Plugins for reads the empty list rather than failing: the API is
- * how a Plugin asks what it is running beside, not a claim that any exist.
+ * how a Plugin asks what it is running beside, not an assertion that any
+ * exist.
  */
 export interface ActivePluginsApi {
   readonly plugins: readonly Plugin[];

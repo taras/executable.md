@@ -2,11 +2,12 @@
  * A function component's printed error, observed and settled exactly once
  * (spec §6.9).
  *
- * Rescued from the expansion-hook suite, which pinned this against a claiming
- * handler. The contract belongs to the component boundary rather than to that
- * hook, so it is pinned here against a component instead — supplied through the
- * `importComponent` seam, because this drives `expandSegments` directly and
- * only `execute()` installs a provider that reads registrations.
+ * Rescued from the expansion-hook suite, which pinned this against an
+ * intercepting handler. The contract belongs to the component boundary rather
+ * than to that hook, so it is pinned here against a component instead —
+ * supplied through the `importComponent` seam, because this drives
+ * `expandSegments` directly and only `execute()` installs a provider that
+ * reads registrations.
  *
  * `raise()` is where settlement happens: it puts the segment through the
  * observation chain and applies the ambient error mode. What the component returns

@@ -1008,7 +1008,7 @@ function* journalEvents(path: string): Operation<DurableEvent[]> {
  *
  * Only the newline-terminated ones. An append this command made and the
  * filesystem then failed is not a transaction — `appendFile` can write some of
- * a record and stop — so what a case about a *failed* append may claim is the
+ * a record and stop — so what a case about a *failed* append may establish is the
  * sequence that committed before it, and anything after the last terminator is
  * not part of that sequence. A case about an ending where no append failed
  * reads the whole file instead, and compares its bytes.

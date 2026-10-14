@@ -36,7 +36,7 @@ import process from "node:process";
 import { randomBytes } from "node:crypto";
 import { ensure, type Operation, scoped, sleep, spawn, withResolvers } from "effection";
 
-/** Let every ready task run, so "still unwinding" is a claim about turns. */
+/** Let every ready task run, so "still unwinding" is an observation about turns. */
 function* settled(turns = 8): Operation<void> {
   for (let turn = 0; turn < turns; turn += 1) {
     yield* sleep(0);
@@ -49,7 +49,7 @@ const WINDOW = { columns: 160, rows: 36 };
 /**
  * How long reaching the screen may take, and how long leaving may take.
  *
- * Two deadlines because they are two claims. Reaching the screen compiles an
+ * Two deadlines because they are two timing requirements. Reaching the screen compiles an
  * entrypoint, which is slow and uninteresting. Leaving is the subject: a command
  * that has been told to go and is waiting for a keystroke nobody will press is
  * the defect, and seconds are generous for a teardown that joins what it owns.
@@ -138,9 +138,9 @@ function described(attempt: Attempt): string {
 /**
  * A child this scope owns, from before it exists until after it has closed.
  *
- * The lifecycle claim this file is about applies to the file itself: a test that
+ * The lifecycle requirement this file is about applies to the file itself: a test that
  * proved a command joins what it owns, while leaking the process it proved it
- * with, would be making the claim and breaking it in one row.
+ * with, would be stating the requirement and breaking it in one row.
  *
  * So the release is registered before the child is spawned — a cancellation
  * between the two must leave nothing running — and on teardown the child is

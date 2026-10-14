@@ -1428,10 +1428,10 @@ function retainedIdentityRecord(identity: RetainedIdentity): Json {
 /**
  * Whether an object carries exactly these members and nothing else.
  *
- * Every retained shape below is closed, which is a stronger claim than "the
- * members it needs are present and well-typed". A record carrying an extra
- * member was written by something this build does not know the rules of, and
- * reading the members it recognizes would be admitting a grant on terms it
+ * Every retained shape below is closed, which is a stronger requirement than
+ * "the members it needs are present and well-typed". A record carrying an
+ * extra member was written by something this build does not know the rules of,
+ * and reading the members it recognizes would be admitting a grant on terms it
  * never saw. Destructuring alone cannot say that, because a destructure is
  * blind to what it did not name.
  */
@@ -1978,9 +1978,9 @@ interface Lexical {
  * What encloses the fragment's own top level.
  *
  * A generated fragment is not a component body and not a value body: there is
- * no caller content for `<Content>` to claim, no output region for `<Output>`
- * to select, and no value body for `<Return>` to answer. It is also not inside
- * a loop.
+ * no caller content for `<Content>` to project, no output region for
+ * `<Output>` to select, and no value body for `<Return>` to answer. It is also
+ * not inside a loop.
  */
 const ROOT_LEXICAL: Lexical = Object.freeze({ insideLoop: false });
 

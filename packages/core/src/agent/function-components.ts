@@ -217,11 +217,13 @@ export function* AgentComponent(props: Record<string, Json>): Operation<Json> {
 }
 
 /**
- * `<Session>`, closed over the claimant that names its placements.
+ * `<Session>`, closed over the identity authenticator that names its
+ * placements.
  *
- * Built per execution, from the claimant that execution delivered to this
- * factory: an implementation built for one execution's `<Session>` names
- * nothing under another's, and nothing at some other element's invocation.
+ * Built per execution, from the identity authenticator that execution
+ * delivered to this factory: an implementation built for one execution's
+ * `<Session>` names nothing under another's, and nothing at some other
+ * element's invocation.
  */
 export function sessionComponent(claim: IdentityClaimant): FunctionComponent {
   return function* SessionComponent(

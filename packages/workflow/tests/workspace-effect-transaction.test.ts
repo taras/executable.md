@@ -2038,10 +2038,10 @@ describe("Tier WAR — read-only Workspace inspection", () => {
    * inspection *succeeds*, the transaction commits, and only that savepoint
    * stands between a historical read and a run left on a root it never
    * published. Here the transaction itself ends without committing, so the
-   * rollback is over-determined — which is the point. The claim is the outcome
-   * the caller is owed on every exit, and the case also proves the run is still
-   * usable afterwards rather than poisoned by a materialization that was
-   * interrupted half way through.
+   * rollback is over-determined — which is the point. The invariant is the
+   * outcome the caller is owed on every exit, and the case also proves the run
+   * is still usable afterwards rather than poisoned by a materialization that
+   * was interrupted half way through.
    */
   it("WAR3: a failure and a cancellation each leave the run where they found it", function* () {
     const root = yield* useStorageRoot();

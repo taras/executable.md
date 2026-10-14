@@ -1,10 +1,10 @@
 /**
  * Tier WF — what a `<Git.Add>` retains, replays and refuses to guess.
  *
- * The claims here are about the run's database rather than about an index. A
- * replay must stage nothing and append no second transition; a retained result
- * that no longer describes the invocation it was recorded for must stop the run;
- * a cancelled or unretainable staging must leave the frontier exactly as it was.
+ * These tests inspect the run's database rather than an index. A replay must
+ * stage nothing and append no second transition; a retained result that no
+ * longer describes the invocation it was recorded for must stop the run; a
+ * cancelled or unretainable staging must leave the frontier exactly as it was.
  *
  * Every replay happens after the remote is deleted, so what continues a run is
  * what the run retained or nothing does.

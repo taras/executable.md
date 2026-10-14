@@ -41,7 +41,7 @@ export type RetainedOutcome<T> =
     };
 
 /**
- * The effect types replay bookkeeping writes, which no ordered claim is about.
+ * Replay bookkeeping effect types, excluded from ordered assertions.
  *
  * Fixed and private. A caller-configurable list would let two suites disagree
  * about what this repository considers bookkeeping, which is the disagreement
@@ -54,7 +54,7 @@ const BOOKKEEPING = new Set(["import_component", "loop", "loop_iteration", "work
  *
  * The position is where the event sits in *this* selection — not a durable
  * event id and not a SQLite sequence — so it stays the coordinate a reader can
- * use to say which one a claim is about.
+ * use to say which one an assertion is about.
  */
 export function selectYields(
   events: readonly DurableEvent[],
@@ -75,7 +75,7 @@ export function selectYields(
  * The meaningful effect order, as values that diff readably.
  *
  * Numbering happens after the bookkeeping types are dropped, so adding or
- * removing one of them does not renumber everything a claim is about.
+ * removing one of them does not renumber everything an assertion is about.
  */
 export function effectSequence(events: readonly DurableEvent[]): readonly string[] {
   const sequence: string[] = [];

@@ -88,9 +88,9 @@ export { WORKSPACE_GIT_COMMIT } from "./commit.ts";
 /**
  * What a provider may observe about itself, for suites that count.
  *
- * A claim that replay performs no effect and reaches no remote is only worth
- * making if something counted. This is how: the host counts Git invocations,
- * and the provider counts the effects and attachments it performed.
+ * Proving replay performs no effect and reaches no remote requires counting
+ * those crossings. This is how: the host counts Git invocations, and the
+ * provider counts the effects and attachments it performed.
  */
 export interface CompositionObserver {
   effect?: (kind: "repository" | "worktree" | "git", name: string) => void;

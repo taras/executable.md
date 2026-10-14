@@ -4,19 +4,19 @@
  * Usage:
  *   deno task verify:clean
  *
- * The chain is the claim this repository makes:
+ * The chain is the preparation and build sequence this repository verifies:
  *
  *     deno task setup → deps:target → build:web → build → the release compile
  *                     → resolution probe → the interference proof
  *
- * Two claims, because a build and a check are different things.
+ * Two guarantees, because a build and a check are different things.
  *
  * **A build is cache-pure.** `build:web`, `build`, and the release compile run
  * offline and must leave `node_modules`, the Deno cache's dependency content,
  * and `deno.lock` byte-identical — a build that fetches has installed
  * something.
  *
- * **The interference proof is not, and does not claim to be.** It resolves
+ * **The interference proof is not, and does not purport to be.** It resolves
  * modules no build walks, so it adds to the Deno cache, which the runtime owns.
  * What it may never move is what this repository owns: `node_modules` and
  * `deno.lock`. That is the comparison its phases make. What it proves beyond

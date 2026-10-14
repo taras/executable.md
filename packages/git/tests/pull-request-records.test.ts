@@ -1,12 +1,12 @@
 /**
  * Tier U — what a pull-request record is, and what authorizes one.
  *
- * Two claims live here and neither needs a Git host, a database or a document.
- * The first is that the retained shapes are exact: a record is read back for
- * the request that produced it, and a value carrying more, fewer or different
- * members than the contract declares describes something else. The second is
- * the admission scan — the closed reading of this run's own journal that
- * decides whether the branch a pull request would name is one the run
+ * Two invariants are checked here and neither needs a Git host, a database or a
+ * document. The first is that the retained shapes are exact: a record is read
+ * back for the request that produced it, and a value carrying more, fewer or
+ * different members than the contract declares describes something else. The
+ * second is the admission scan — the closed reading of this run's own journal
+ * that decides whether the branch a pull request would name is one the run
  * published.
  */
 

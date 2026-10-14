@@ -70,10 +70,10 @@ export interface PluginInstallation {
 /**
  * One Plugin: a name, and what installing it does.
  *
- * The name identifies the Plugin to an operator and to the refusal that reports
- * two selections claiming it. It is not a package identity, a version or a
- * capability: nothing resolves a name to a module, and nothing grants a Plugin
- * anything for being called one thing rather than another.
+ * The name identifies the Plugin to an operator and to the refusal that
+ * reports two selections using it. It is not a package identity, a version or
+ * a capability: nothing resolves a name to a module, and nothing grants a
+ * Plugin anything for being called one thing rather than another.
  */
 export interface Plugin {
   readonly name: string;

@@ -2,19 +2,21 @@
  * Tier CIV — the identity a trusted host's component names its work after
  * (specs/executable-mdx-spec.md §5.6).
  *
- * A component that names a durable operation after its own invocation is making
- * an ownership claim: the name decides which retained record a replay restores,
- * and an implementation running under somebody else's identity commits against
- * its own storage under their expansion. Code Rule 15 says a decision like that
- * never trusts replaceable state, so nothing here is read from one.
+ * A component that names a durable operation after its own invocation is
+ * asserting ownership: the name decides which retained record a replay
+ * restores, and an implementation running under somebody else's identity
+ * commits against its own storage under their expansion. Code Rule 15 says a
+ * decision like that never trusts replaceable state, so nothing here is read
+ * from one.
  *
  * The execution is told, before any installation runs, which components name
- * durable work. It mints a domain for each, hands that domain's claimant
- * straight to the host's factory, registers what comes back, and activates the
- * claimant only once that registration has committed. What a document, a
- * component or middleware can reach is the implementation — never the claimant,
- * never the domain — and the claimant answers only for the invocation the
- * engine is running at that moment.
+ * durable work. It mints a domain for each, hands that domain's identity
+ * authenticator straight to the host's factory, registers what comes back, and
+ * activates the identity authenticator only once that registration has
+ * committed. What a document, a component or middleware can reach is the
+ * implementation — never the identity authenticator, never the domain — and
+ * the identity authenticator answers only for the invocation the engine is
+ * running at that moment.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -83,8 +85,8 @@ function record(): Seen {
 
 /**
  * `<Probe />`, as a host declares it: a factory the execution calls with the
- * claimant it minted, and content-bearing so one probe can be another's live
- * ancestor.
+ * identity authenticator it minted, and content-bearing so one probe can be
+ * another's live ancestor.
  */
 function probe(seen: Seen, name = "Probe"): IdentityComponent {
   return {
@@ -217,7 +219,8 @@ function rendered(
 function* nothing(): Operation<void> {}
 
 /**
- * One activated domain and its claimant, without an execution around them.
+ * One activated domain and its identity authenticator, without an execution
+ * around them.
  *
  * The engine expands one element at a time, so the cases that need two live
  * issuances — or one the engine has already ended — are stated here, at the
@@ -1251,7 +1254,7 @@ describe("Tier CIV — two canonical imports live at the same time", () => {
       "",
     ].join("\n");
 
-    /** A probe that says when it has claimed, so the failure lands after it. */
+    /** A probe that says when it has authenticated its invocation, so the failure lands after it. */
     function claiming(seen: Seen, done: { resolve(value: void): void }): IdentityComponent {
       return {
         name: "Probe",
@@ -1273,7 +1276,7 @@ describe("Tier CIV — two canonical imports live at the same time", () => {
       };
     }
 
-    /** The sibling that decides the run's outcome once the survivor claimed. */
+    /** The sibling that decides the run's outcome once the survivor authenticated its invocation. */
     function tripwire(waited: Operation<void>, outcome: "fails" | "finishes"): IdentityComponent {
       return {
         name: "Boom",

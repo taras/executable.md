@@ -1497,7 +1497,7 @@ describe("Tier TX — a terminal result needs its own root import", () => {
 /**
  * Tier TX — a detached retained value is still ordinary JSON.
  *
- * Detaching is a claim against the journal, not against the document. A
+ * Detaching protects the journal; it does not restrict the document. A
  * replayed value a document goes on to update must behave as it did when the
  * run first produced it.
  */

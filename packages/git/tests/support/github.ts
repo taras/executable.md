@@ -2,7 +2,7 @@
  * A GitHub that answers pull-request and issue calls, without a network.
  *
  * One store, two ways to reach it. Most suites install {@link fakeGitHubAccess}
- * and drive the adapter directly, which keeps every claim deterministic and
+ * and drive the adapter directly, which keeps every assertion deterministic and
  * lets a test count exactly how many requests were made and refuse the ones it
  * wants to fail. The crash suite needs a second process to reach the same
  * GitHub, so {@link useGitHubServer} puts the identical handler behind a real

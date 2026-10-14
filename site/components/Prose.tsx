@@ -15,7 +15,7 @@ export const P_MD =
   "margin:0;max-width:74ch;font-size:0.9375rem;line-height:1.6;color:var(--body);";
 export const P_MEASURED = `${P_SM}max-width:74ch;`;
 
-/** A claim set at the weight of a heading, opening a panel or closing a list. */
+/** A statement set at the weight of a heading, opening a panel or closing a list. */
 export const CLAIM =
   "margin:0;font-size:1.0625rem;line-height:1.45;color:var(--ink);font-weight:800;letter-spacing:-0.01em;";
 

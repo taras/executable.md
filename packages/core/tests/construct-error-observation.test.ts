@@ -32,13 +32,13 @@ import type {
  * original segment objects — the ones `Component.raise` already returned. Their
  * identity is what proves the transport reports nothing a second time.
  *
- * The constructs under test are the engine's, so nothing here claims a name.
- * `<Broken />` is a component that fails on its own terms, resolved through the
- * `importComponent` middleware these install because they drive `expandSegments`
- * directly — there is no registry in this harness. The printed error the engine
- * builds for a failed invocation is the ErrorSegment they observe. See
- * `error-observation.test.ts` for the same contract measured across the
- * extension boundary instead.
+ * The constructs under test are the engine's, so nothing here reserves a name.
+ * `<Broken />` is a component that fails on its own terms, resolved through
+ * the `importComponent` middleware these install because they drive
+ * `expandSegments` directly — there is no registry in this harness. The
+ * printed error the engine builds for a failed invocation is the ErrorSegment
+ * they observe. See `error-observation.test.ts` for the same contract measured
+ * across the extension boundary instead.
  */
 
 const OPEN_SCHEMA: PropsSchema = { type: "object", properties: {}, additionalProperties: true };

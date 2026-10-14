@@ -79,7 +79,7 @@ export function* gitPluginAdmissions(): Operation<ExecutionInstallation> {
   return { admissions: [...(installed?.admissions ?? [])] };
 }
 
-/** What one execution did, at the boundaries a claim can be made about. */
+/** What one execution did, at the observable boundaries. */
 export interface CompositionCounters {
   /** Every Git command, in order, as its argument list. */
   readonly commands: string[][];
@@ -452,9 +452,9 @@ export function* workspaceTree(
 /**
  * What the index of one retained checkout holds staged, as native Git reads it.
  *
- * The direct observation a staging claim needs. Index trees say *that* something
- * changed; this says *what*, by exporting the retained family into a disposable
- * host tree — the same way the provider does — and asking Git.
+ * The direct observation staging verification needs. Index trees say *that*
+ * something changed; this says *what*, by exporting the retained family into a
+ * disposable host tree — the same way the provider does — and asking Git.
  */
 export function* stagedPaths(
   database: WorkflowRunDatabase,
@@ -568,9 +568,10 @@ export function* checkoutConfig(
 /**
  * The commit one retained checkout is on, read out of the object itself.
  *
- * `cat-file commit` rather than a pretty format: what a message claim is about
- * is the bytes in the object, and reading them through the same formatting the
- * provider uses would prove only that one command agrees with itself.
+ * `cat-file commit` rather than a pretty format: what message verification
+ * checks is the bytes in the object, and reading them through the same
+ * formatting the provider uses would prove only that one command agrees with
+ * itself.
  */
 export interface CheckoutCommit {
   readonly commit: string;

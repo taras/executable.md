@@ -1,11 +1,11 @@
 /**
  * What every Repository and Worktree replay suite needs to see.
  *
- * These reach past the adapter on purpose. A replay claim is about what another
- * process would find, so the observations here open their own connection to the
- * run's database — a row written inside an open transaction is invisible to one
- * until that transaction commits, which is what makes these say whether a commit
- * happened rather than whether a row is there afterwards.
+ * These reach past the adapter on purpose. Replay verification concerns what
+ * another process would find, so the observations here open their own
+ * connection to the run's database — a row written inside an open transaction
+ * is invisible to one until that transaction commits, which is what makes these
+ * say whether a commit happened rather than whether a row is there afterwards.
  *
  * The fixtures that damage a run are here for the same reason: no supported
  * operation can produce the states these suites replay from, so they are written
@@ -201,9 +201,9 @@ export function isStale(candidate: unknown): candidate is RepositoryStaleStateEr
 /**
  * What one composition effect recorded, as the journal holds it.
  *
- * The status is the whole point of these claims. A refusal that the run reports
- * to the document and records as a success is a history that disagrees with
- * itself, and only the retained result says which one happened.
+ * The status is the outcome these assertions check. A refusal that the run
+ * reports to the document and records as a success is a history that disagrees
+ * with itself, and only the retained result says which one happened.
  */
 export function* compositionResults(
   database: WorkflowRunDatabase,

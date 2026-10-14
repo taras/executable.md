@@ -7,7 +7,7 @@
  * is decided — and an empty list installs nothing at all. That order fixes how
  * middleware composes — the first Plugin installed is the outermost wrapper —
  * and decides nothing else:
- * two Plugins claiming one name, one component name or one structural construct
+ * two Plugins reserving one name, one component name or one structural construct
  * are refused rather than settled by position.
  *
  * Installation happens once per command, in the scope that encloses everything
@@ -99,7 +99,7 @@ function incomplete(name: string, half: IncompleteStructural): Error {
   );
 }
 
-/** What two selections claiming one Plugin name are refused with. */
+/** What two selections using one Plugin name are refused with. */
 function duplicate(name: string): Error {
   return new Error(
     `two selected Plugins are named ${name}. A Plugin name identifies one Plugin to this ` +

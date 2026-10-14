@@ -295,7 +295,7 @@ function* judgeAnswer(
  * in the framing each will have. A credential that reached a run's file has
  * already leaked, whatever the resume that would have published it does next.
  *
- * The scanner is created for this delivery and reclaimed with it, so its
+ * The scanner is created for this delivery and released with it, so its
  * fingerprints mean nothing outside this call and are not reported.
  */
 function* scanDelivery(

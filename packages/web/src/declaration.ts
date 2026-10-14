@@ -43,7 +43,7 @@ export interface Declaration {
  * `schema` is required; `uiSchema` is optional and `undefined` means absent.
  *
  * `label` names the component the author actually wrote, so a diagnostic from a
- * form served for `<Elicit>` does not claim to come from `<WebForm>`. It mirrors
+ * form served for `<Elicit>` does not report that it comes from `<WebForm>`. It mirrors
  * `compileParseSchema(componentName, …)` in core.
  */
 export function parseDeclaration(label: string, schema: unknown, uiSchema?: unknown): Declaration {
@@ -122,7 +122,7 @@ function rejectAsyncSchema(label: string, schema: JsonObject): void {
  * a document could see or work around.
  *
  * Supporting the name would mean reimplementing what Ajv does with schema keys,
- * so this slice refuses it and says so, rather than claiming a support it does
+ * so this slice refuses it and says so, rather than advertising support it does
  * not have. The same string as *data* — a `const`, an `enum` member, a title, a
  * default — is untouched, because nothing reads it as a key.
  */

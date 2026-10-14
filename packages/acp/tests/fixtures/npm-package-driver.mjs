@@ -6,9 +6,9 @@
  * and completes a real ACP exchange against the fake provider.
  *
  * A separate process rather than an import into the test, because what an npm
- * package is *for* is being consumed by Node: running it that way is the claim,
- * and it keeps the assertion independent of whichever runtime the suite is
- * executing under.
+ * package is *for* is being consumed by Node: the test must exercise that
+ * consumption, and it keeps the assertion independent of whichever runtime the
+ * suite is executing under.
  *
  * Prints one line per observation, which the test parses.
  */

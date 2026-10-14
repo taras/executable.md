@@ -18,8 +18,8 @@
  * second is an authored, marker-free `<Session name="implementer"><Prompt>` —
  * an ordinary ACP turn, through the same built binary, in the same directory.
  *
- * Recovering the marker there is the whole claim. Equal identities are not:
- * two accounts agreeing about a UUID says nothing about whether the
+ * Recovering the marker there is the behavior being proved. Equal identities
+ * are not: two accounts agreeing about a UUID says nothing about whether the
  * conversation behind it is the one the native turn happened in.
  *
  * The first command runs inside a byte-for-byte copy of the repository's own
@@ -1874,8 +1874,8 @@ function decideAttachment(verdict: JourneyVerdict): void {
  * Gate, run and dismantle one journey, then report it.
  *
  * The cleanup counters are filled in by teardown, so a verdict serialized while
- * the scope was still open would report every one of them false and claim the
- * journey leaked what it had not yet released.
+ * the scope was still open would read every cleanup counter as false and
+ * incorrectly report a leak before those resources had been released.
  */
 function* runJourney(
   mode: Mode,

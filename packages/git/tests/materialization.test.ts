@@ -3,9 +3,9 @@
  *
  * The Workspace is a database and native Git is a program that reads
  * directories, so every native operation happens in a disposable host tree
- * exported from one. Everything the rest of #293 claims rests on that export
- * being a faithful copy of what the database holds, and on it staying inside
- * the directory this provider owns.
+ * exported from one. Every other guarantee in #293 depends on that export being
+ * a faithful copy of what the database holds, and on it staying inside the
+ * directory this provider owns.
  *
  * These drive the exporter directly rather than through a component, because
  * the properties are the exporter's own and no component exists to reach them

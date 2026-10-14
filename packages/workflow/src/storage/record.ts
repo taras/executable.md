@@ -68,9 +68,9 @@ export type WorkflowStopReason =
  * One workflow run's retained metadata.
  *
  * No `base` and no pinned commit. A run starts from exact retained bytes rather
- * than from a repository state, so a member naming one would be a claim about a
- * repository this run never had — read back by anything comparing identity as
- * though the run had named it.
+ * than from a repository state, so a member naming one would be an assertion
+ * about a repository this run never had — read back by anything comparing
+ * identity as though the run had named it.
  */
 export interface WorkflowRunRecord {
   readonly runId: string;

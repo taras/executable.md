@@ -270,11 +270,11 @@ export function parseGitPushNaturalKey(value: unknown): GitPushNaturalKey | unde
 /**
  * The pre-state this value describes, or `undefined` when it describes none.
  *
- * The two variants are read separately so each stays closed. A relation is a
- * claim about a commit, so it means nothing beside a destination proven absent;
- * a word other than `ancestor` is a relation this version cannot account for;
- * and either variant carrying a member it does not declare describes something
- * else entirely.
+ * The two variants are read separately so each stays closed. A relation is an
+ * ancestry assertion about a commit, so it means nothing beside a destination
+ * proven absent; a word other than `ancestor` is a relation this version cannot
+ * account for; and either variant carrying a member it does not declare
+ * describes something else entirely.
  */
 export function parseGitPushPreState(
   value: unknown,

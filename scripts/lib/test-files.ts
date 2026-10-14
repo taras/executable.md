@@ -65,7 +65,7 @@ function posix(path: string): string {
  *
  * Compares filesystem paths rather than a URL pathname: on Windows those
  * disagree — `/C:/repo/tests/` against `C:\repo\tests\file.ts` — and a naive
- * match yields an absolute path while claiming to be repository-relative.
+ * match yields an absolute path while reporting it as repository-relative.
  * Anything outside `directory` is a discovery bug, so it throws rather than
  * silently returning an absolute path.
  */

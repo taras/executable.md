@@ -108,7 +108,7 @@ const CurrentWorkflowRun: Context<RunSlot | undefined> = createContext<RunSlot |
  * afterwards. So the installation puts an empty slot in the execution's scope
  * before either of them runs, and they fill it.
  *
- * The slot is created per installed execution and reclaimed with it. Nothing
+ * The slot is created per installed execution and released with it. Nothing
  * lives at module scope, and one execution cannot see another's.
  */
 interface RunSlot {

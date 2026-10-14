@@ -5,11 +5,11 @@
  * disagree about which tier won:
  *
  * 1. structural syntax the engine owns;
- * 2. a component canonical core protects. The engine's own claim rather than a
- *    host's, so a protected name means the same thing in every execution,
+ * 2. a component canonical core protects. The engine reserves the name rather
+ *    than a host, so a protected name means the same thing in every execution,
  *    whichever host assembled it and whatever a repository holds;
- * 3. a host claiming the name — a reserved registration, or the exact Markdown
- *    and structural syntax this environment declares. Two claims on one name
+ * 3. a host reserving the name — a reserved registration, or the exact Markdown
+ *    and structural syntax this environment declares. Two reservations of one name
  *    are refused where they are installed, so this tier never has to choose
  *    between them;
  * 4. the workflow component bundle this execution is closed over;

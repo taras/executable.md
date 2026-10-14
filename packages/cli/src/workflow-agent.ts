@@ -42,7 +42,7 @@
  * Every other agent resolves through the baseline registry, to the same command
  * it always did, and retains the same compatibility identity it always did.
  * Carrying a patched Codex adapter says nothing about Gemini, and a registry
- * that refused one would be making a far larger claim than this work needs.
+ * that refused one would be making a far broader restriction than this work needs.
  *
  * The override is qualified: an embedded provider never falls through. A
  * snapshot that cannot be verified, materialized or launched refuses that agent

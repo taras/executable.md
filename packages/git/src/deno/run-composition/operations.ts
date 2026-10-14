@@ -10,7 +10,7 @@
  *
  * What is different is everything around them. There is no Workspace
  * transaction to enclose a person's own repository in, so a failure rolls back
- * nothing and this makes no such claim; there is no journal, so nothing is
+ * nothing and this promises no rollback; there is no journal, so nothing is
  * retained and nothing replays; and the commit lands in the checkout the person
  * is standing in rather than in a root the run owns.
  *

@@ -58,7 +58,7 @@ export type AgentSessionRouteV1 =
  *
  * V1 `client-native` is not upgraded into this. A build observed later says
  * which build is installed now, not which one established the session, and
- * writing it into an old record would claim knowledge XMD never had.
+ * writing it into an old record would assert knowledge XMD never had.
  */
 export interface AgentSessionRouteV2 {
   schema: "session-route.v2";

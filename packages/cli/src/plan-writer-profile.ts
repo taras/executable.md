@@ -308,7 +308,7 @@ export function planAgentContext(
   });
 }
 
-/** What claiming one conversation's directory needs, and nothing more. */
+/** What exclusively acquiring one conversation's directory needs, and nothing more. */
 export interface PlanWriterPlacement {
   /** Where this host keeps its authorship session directories. */
   readonly root: string;

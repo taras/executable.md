@@ -286,8 +286,8 @@ function* fileEffect<Phase extends string>(
  * The same path serves a live effect and a replayed one: live execution
  * publishes the outcome and hands it back, replay hands back the outcome that
  * was published. Neither branch is written twice here, which is what makes
- * "replay restores the recorded result" a property of the code rather than a
- * claim about it.
+ * "replay restores the recorded result" a property of the code rather than an
+ * assertion about it.
  */
 function* performed<Phase extends string>(
   database: WorkflowRunDatabase,
@@ -349,7 +349,7 @@ function* readOutcome(
  * What the target already is, when that decides the write before it starts.
  *
  * A directory cannot become a file, and saying so before anything is attempted
- * is what keeps the target claim `unchanged` rather than `rolled-back`. A path
+ * is what keeps the target state `unchanged` rather than `rolled-back`. A path
  * that does not exist yet is the ordinary case and answers `undefined`.
  */
 function* classifyWriteTarget(
@@ -428,7 +428,7 @@ function* ensureOutcome(
  * The parents and the replacement share one savepoint, so a write that creates
  * two directories and then cannot be written leaves neither behind. The refusal
  * that comes back therefore describes a Workspace that is exactly what it was,
- * which is the `rolled-back` target claim the write vocabulary already has.
+ * which is the `rolled-back` target state the write vocabulary already has.
  */
 function* writeOutcome(
   filesystem: DenoWorkspaceFilesystem,

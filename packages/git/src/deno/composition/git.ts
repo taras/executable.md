@@ -444,9 +444,9 @@ export function* switchBranch(git: GitSession, request: BranchSwitch): Operation
  * savepoint takes back the attempt — so the Workspace never holds a partial
  * staging, and the failed result describes a root that did not move.
  *
- * Four conditions are refusals a document can act on, and the set is closed. Any
- * other nonzero exit is infrastructure: naming it the nearest refusal would
- * publish a durable result claiming this run knows what happened.
+ * Four conditions are refusals a document can act on, and the set is closed.
+ * Any other nonzero exit is infrastructure: an unsupported refusal
+ * classification must not become a durable outcome.
  */
 export function* addPaths(
   git: GitSession,
@@ -542,9 +542,8 @@ function addFailure(outcome: GitOutcome, paths: readonly string[]): GitFailureRe
  * The message selects a word and is then discarded, on the same terms as every
  * other reading here; `LC_ALL=C` is what makes it stable. A condition this
  * cannot recognize is *not* given a word. The set of refusals is closed because
- * each of them is something a document can act on, and calling an unrecognized
- * exit the nearest one would publish a durable result claiming this run knows
- * what happened.
+ * each of them is something a document can act on, and classifying an
+ * unrecognized exit as one would falsely establish a durable refusal.
  */
 function switchFailure(outcome: GitOutcome): GitFailureReason | undefined {
   if (checkedOutElsewhere(outcome)) {
@@ -577,7 +576,7 @@ export function* checkoutReadable(
  *
  * `remote.origin.url` is what a clone writes and what this provider's clone
  * wrote. Reading it back is how the bytes in the Workspace are tied to the
- * identity the record claims for them: a checkout of another repository sitting
+ * identity the record assigns to them: a checkout of another repository sitting
  * at the retained path answers with another locator, and no amount of HEAD
  * being readable would have said so.
  */
@@ -597,10 +596,10 @@ export function* commitPresent(
 /**
  * The shared `.git` directory a checkout belongs to.
  *
- * For a primary checkout this is its own `.git`; for a linked worktree it is the
- * repository the worktree is a worktree *of*. Comparing it with the place the
- * enclosing Repository was materialized is what proves a retained worktree
- * belongs to the retained Repository it claims, rather than to some other
+ * For a primary checkout this is its own `.git`; for a linked worktree it is
+ * the repository the worktree is a worktree *of*. Comparing it with the place
+ * the enclosing Repository was materialized is what proves a retained worktree
+ * belongs to the retained Repository it names, rather than to some other
  * repository whose administration happens to resolve.
  */
 export function* commonDirectory(

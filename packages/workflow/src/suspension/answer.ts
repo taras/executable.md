@@ -144,7 +144,7 @@ function describeAnswer(id: string): EffectDescription {
 }
 
 /**
- * The wait's answer: replayed when one was published, claimed when one is
+ * The wait's answer: replayed when one was published, consumed when one is
  * retained, and otherwise the wait itself.
  *
  * `enter` is the public composable route into the wait. It is reached only when

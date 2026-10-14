@@ -12,8 +12,7 @@
  * depended on it would be testing this machine rather than the product.
  *
  * It runs against `dist/xmd`, so `deno task build` has to have happened. A
- * missing binary is reported as the setup it is rather than as a failure of the
- * claim.
+ * missing binary is reported as the setup it is rather than as a failed assertion.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";

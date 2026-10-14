@@ -13,15 +13,15 @@
  * provider returned and wraps it: the result *is* that session — same
  * `sessionKey`, same `cwd`, same asserted identity — so every consumer written
  * against `string | Session` keeps working and nothing new appears in the
- * public signatures. What the wrapper adds is a claim anyone can see and an
+ * public signatures. What the wrapper adds is a marker anyone can see and an
  * authority nobody can copy.
  *
- * The claim is a symbol-keyed marker, deliberately visible and deliberately
- * copied by a spread. The authority is a private field, which appears in no key
- * list, no descriptor and no copy. A value carrying the claim without the
- * authority is therefore not an ordinary session that happens to look like one:
- * it is something that presented itself as a configured use and cannot be, and
- * it is refused rather than quietly run unconfigured.
+ * The marker is symbol-keyed, deliberately visible and deliberately copied by
+ * a spread. The authority is a private field, which appears in no key list, no
+ * descriptor and no copy. A value carrying the marker without the authority is
+ * therefore not an ordinary session that happens to look like one: it is
+ * something that presented itself as a configured use and cannot be, and it is
+ * refused rather than quietly run unconfigured.
  *
  * Authority belongs to the installation that issued it. A use from another
  * document installation, or from a second loaded copy of this package, carries
@@ -32,10 +32,10 @@
 import type { Session, SessionConfiguration } from "./agent-api.ts";
 
 /**
- * What a configured use claims to be.
+ * What a configured use presents itself as.
  *
  * Exported so a reader can recognize the shape; holding it grants nothing,
- * because the claim is not the authority.
+ * because the marker is not the authority.
  */
 export const CONFIGURED_SESSION: unique symbol = Symbol.for(
   "executablemd.agent.session.configured",
@@ -60,7 +60,7 @@ export interface ReadSessionUse {
   readonly configuration?: SessionConfiguration;
 }
 
-/** Why a routed value that claims to be a configured use is not one. */
+/** Why a routed value that presents itself as a configured use is not one. */
 export class AgentSessionUseError extends Error {
   override name = "AgentSessionUseError";
 }
@@ -152,13 +152,13 @@ export function sessionOf(value: string | Session | undefined): Session | undefi
 /**
  * What a routed value says its conversation runs under.
  *
- * Nothing for a name or an ordinary session. The frozen configuration for a use
- * this build issued. A refusal for a value that claims to be one and is not:
- * reading such a value as an ordinary session would run the conversation under
- * settings nobody chose, which is the failure this whole shape exists to
- * prevent. Whether a use belongs to *this* installation is a further question,
- * and it is answered where the operation acts — through the coordinator core
- * delivers to the installed provider.
+ * Nothing for a name or an ordinary session. The frozen configuration for a
+ * use this build issued. A refusal for a value that presents itself as one and
+ * is not: reading such a value as an ordinary session would run the
+ * conversation under settings nobody chose, which is the failure this whole
+ * shape exists to prevent. Whether a use belongs to *this* installation is a
+ * further question, and it is answered where the operation acts — through the
+ * coordinator core delivers to the installed provider.
  */
 export function configurationOf(
   value: string | Session | undefined,
@@ -202,7 +202,7 @@ export function issueSessionUse(
  * - nothing, for a name or an ordinary `Session` — an unconfigured operation,
  *   which reads and writes no configuration at all;
  * - the frozen configuration, for a use this installation issued;
- * - a refusal, for a value that claims to be a configured use and is not one —
+ * - a refusal, for a value that presents itself as a configured use and is not one —
  *   a spread, a descriptor-for-descriptor copy, the real session paired with
  *   different settings, a use from another installation or another loaded copy.
  *

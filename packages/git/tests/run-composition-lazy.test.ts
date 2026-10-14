@@ -5,7 +5,7 @@
  * Installing it must cost nothing at all, and a document that writes no
  * repository component must keep costing nothing. Proving that by looking for
  * an absent managed root proves only one of six things — so each capability is
- * counted separately here, and the claim is that *every* count is zero.
+ * counted separately here, and *every* count must be zero.
  *
  * Counted rather than forbidden, because these are not all refusable: a Git
  * session is a temporary directory, an invocation identity is a random string,

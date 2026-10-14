@@ -8,8 +8,7 @@
  * can change. A source suite that passes says nothing about that.
  *
  * So this is deliberately small and self-verifying: it asserts the contract's
- * observable claims and exits non-zero if any does not hold. It prints every
- * claim it checked, because a probe that passes silently is indistinguishable
+ * observable requirements and exits non-zero if any does not hold. It prints every requirement it checked, because a probe that passes silently is indistinguishable
  * from one that checked nothing.
  *
  * Usage:

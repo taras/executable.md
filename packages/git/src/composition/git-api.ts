@@ -12,7 +12,7 @@
  * completed one restores from the journal and moves no branch. The ordinary
  * `xmd run` provider performs them directly against the selected checkout:
  * there is no transaction to enclose a person's own repository in, and none is
- * claimed.
+ * promised.
  *
  * The default handler throws. There is no host-less fallback, because a Git
  * operation that "ran" without a provider would report a branch this run never

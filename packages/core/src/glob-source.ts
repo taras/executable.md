@@ -57,7 +57,7 @@ export const GLOB_RETURNS: ReturnsSchema = {
  * The patterns a prop holds, checked for the two things that make one unusable.
  *
  * Prop validation has already established an array of strings, so the shape is
- * re-read rather than asserted (`as` would claim it instead) and a value that
+ * re-read rather than asserted (`as` would assert it instead) and a value that
  * somehow is not one contributes nothing. What validation cannot express is
  * *meaning*: patterns match paths relative to the working directory, so an
  * absolute pattern and one that starts by leaving cannot match anything a

@@ -980,9 +980,9 @@ describe("Tier DT — structural recognition", () => {
   });
 
   /**
-   * The reconstruction claim, made where it can fail. A boundary that returned
-   * the candidate would pass every field assertion above and still hand a
-   * caller arrays somebody else can rewrite.
+   * The reconstruction guarantee, made where it can fail. A boundary that
+   * returned the candidate would pass every field assertion above and still
+   * hand a caller arrays somebody else can rewrite.
    */
   it("DT54: recognition returns a fresh local error, never the candidate", function* () {
     const foreign = foreignError();

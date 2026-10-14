@@ -14,12 +14,12 @@
  * invented an outcome would decide what the document read.
  *
  * So a bound block is asked for through a request only this module issues, and
- * canonical core composes the chain against the context it kept rather than the
- * one that came back. Middleware still composes around the operation: it may
- * observe it, refuse it by throwing, and delegate it. What it cannot do is
+ * canonical core composes the chain against the context it kept rather than
+ * the one that came back. Middleware still composes around the operation: it
+ * may observe it, refuse it by throwing, and delegate it. What it cannot do is
  * produce the outcome — whatever it returns is ignored, a failure canonical
  * execution raised stays raised even if it is caught, and a request that was
- * not issued here, was issued for another block, or has already been claimed
+ * not issued here, was issued for another block, or has already been consumed
  * runs nothing at all.
  */
 

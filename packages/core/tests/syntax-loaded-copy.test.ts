@@ -2,10 +2,10 @@
  * Tier SYN — a protected implementation from a second loaded copy answers for
  * nothing.
  *
- * A component can be loaded from disk beside its own copy of core: that is what
- * `--include` does, and what a middleware package holding its own copy is. So
- * "another loaded copy cannot answer for `<Syntax />`" is a claim about ordinary
- * arrangements rather than a hypothetical, and it has two halves.
+ * A component can be loaded from disk beside its own copy of core: that is
+ * what `--include` does, and what a middleware package holding its own copy
+ * is. So "another loaded copy cannot answer for `<Syntax />`" is a guarantee
+ * for ordinary arrangements rather than a hypothetical, and it has two halves.
  *
  * **The answer is refused.** Canonical execution issues a witness for the
  * definition it produced and verifies it where the component is invoked, keyed
@@ -29,9 +29,9 @@
  * in the protected tier. `<File>`, `<File.Delete>` and `<Dir>` are answered
  * with one ordinary definition built once per loaded copy rather than a body
  * this execution built, so a second copy of that module supplies a complete,
- * structurally identical definition — no claimant, no private table, nothing
- * missing. That makes it the sharpest form of the question, and the only one a
- * locally rebuilt definition cannot stand in for.
+ * structurally identical definition — no identity authenticator, no private
+ * table, nothing missing. That makes it the sharpest form of the question, and
+ * the only one a locally rebuilt definition cannot stand in for.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";

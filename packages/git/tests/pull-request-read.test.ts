@@ -1,10 +1,10 @@
 /**
  * Tier PRR — the evidence a network-denied reviewer is given.
  *
- * The claim these cases defend is a negative one: this surface never answers
- * "there is nothing there" on the strength of something it could not read. So
- * every refusal case asserts that the read *fails* rather than binding a
- * shorter list, and the one case that binds `[]` proves the provider said so.
+ * These cases defend a refusal boundary: this surface never answers "there is
+ * nothing there" on the strength of something it could not read. So every
+ * refusal case asserts that the read *fails* rather than binding a shorter
+ * list, and the one case that binds `[]` proves the provider said so.
  *
  * The adapter runs against a transport this suite supplies. Nothing here
  * contacts a network host, and no case reads a developer's real credential.

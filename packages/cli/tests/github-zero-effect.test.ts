@@ -35,7 +35,7 @@ function forbidden(): never {
 /**
  * The bundled adapters, installed as a run profile installs them.
  *
- * Present but untouched is the whole claim: describing a profile that *has*
+ * Present but untouched is the required behavior: describing a profile that *has*
  * the GitHub adapters in it must still read nothing. Without them installed
  * these cases would pass for the trivial reason that there was no adapter to
  * read anything.

@@ -1,7 +1,7 @@
 /**
  * Tier FE — who answers for the name `Evaluate`, and what answering grants.
  *
- * Two separate claims, and they are proved separately here because one is
+ * Two separate guarantees, and they are proved separately here because one is
  * routinely mistaken for the other.
  *
  * *Ownership* is that canonical core decides which implementation runs. A

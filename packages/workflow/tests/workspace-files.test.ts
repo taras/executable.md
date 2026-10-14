@@ -207,7 +207,7 @@ function* workspaceEvents(database: WorkflowRunDatabase): Operation<DurableEvent
  * What a document rendered is not evidence that a file effect happened: an
  * element's own expansion is journaled too, so a provider that never recorded
  * anything can still replay the text it produced. These rows are the provider's
- * own history, which is what the durability claims are about.
+ * own history, which is what the durability assertions concern.
  */
 function* recordedFileEffects(
   database: WorkflowRunDatabase,
