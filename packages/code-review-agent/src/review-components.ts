@@ -2,7 +2,7 @@
  * Declare the packaged review graph before a root document is imported.
  *
  * Thirty-five Markdown components cross as {@link MarkdownComponent} values
- * with packaged bytes, stable asset origins and digests. Six TypeScript
+ * with packaged bytes, stable asset origins and digests. Seven TypeScript
  * components use reserved registrations. Both reserve names so the repository
  * being reviewed cannot replace its reviewers; duplicate host reservations
  * refuse at admission. Ordinary includes and component discovery remain
@@ -51,6 +51,10 @@ import RepositoryInventory, {
   props as repositoryInventoryProps,
   returns as repositoryInventoryReturns,
 } from "./components/RepositoryInventory.ts";
+import ReviewDiagnostics, {
+  props as reviewDiagnosticsProps,
+  returns as reviewDiagnosticsReturns,
+} from "./components/ReviewDiagnostics.ts";
 import ReviewContext, {
   props as reviewContextProps,
   returns as reviewContextReturns,
@@ -174,7 +178,7 @@ function reviewComponent(fn: (props: any) => Operation<unknown>): FunctionCompon
 }
 
 /**
- * Reserve the six TypeScript component names alongside the Markdown declarations.
+ * Reserve the seven TypeScript component names alongside the Markdown declarations.
  * These implementations run processes, read credentials and reach the network;
  * leaving them shadowable would let the review subject replace its own reviewers.
  * Their existing public names and contracts are retained.
@@ -245,6 +249,21 @@ export const REVIEW_REGISTRATIONS: readonly ComponentRegistration[] = [
     }),
   },
   {
+    name: "ReviewDiagnostics",
+    origin: REVIEW_ORIGIN,
+    reserved: true,
+    props: reviewDiagnosticsProps,
+    returns: reviewDiagnosticsReturns,
+    fn: reviewComponent(ReviewDiagnostics),
+    ...documented({
+      description:
+        `Group normalized Oxlint diagnostics for review policies. ` +
+        `\`<ReviewDiagnostics raw={rawDiagnostics} pr={pr} doctor={doctor} as="diagnostics" />\`.`,
+      as: "The grouped diagnostics, categories, density, and review summary.",
+      context: null,
+    }),
+  },
+  {
     name: "RepositoryInventory",
     origin: REVIEW_ORIGIN,
     reserved: true,
@@ -303,7 +322,7 @@ export function* reviewDocumentation(
 }
 
 /**
- * Install the six reserved registrations and the documentation describing them.
+ * Install the seven reserved registrations and the documentation describing them.
  *
  * One call, both halves, for the reason every other package bootstrap is one
  * call: a scope that has the components has the words that describe them, and

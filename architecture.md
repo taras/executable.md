@@ -3878,6 +3878,9 @@ turns the one recoverable class into retry context after settlement.
 
 ### Plan information requests
 
+Plan produces a program, Run executes a program from the host/CLI, and
+composition decides whether and when a planned program runs.
+
 Write `<Plan session="optional-name">…</Plan>` to author source in an ordinary
 document. The shared writer frame uses `~/.xmd/plan/sessions` as its default
 host root and one structural check, `validateDocumentStructure`, for draft,

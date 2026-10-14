@@ -1,19 +1,19 @@
 Long-form documentation for the code-review agent's TypeScript components.
 
-Six components that gather the evidence a review reasons about: the pull request
-and its diff, the checkout's readiness, the Oxlint sensor's diagnostics, the
+Seven components gather or group the evidence a review reasons about: the pull
+request and its diff, the checkout's readiness, the Oxlint sensor's diagnostics, the
 repository's source inventory, and the review comments already on the pull
-request. Each one *reads* — none of them writes a comment, pushes a branch or
-changes a file.
+request. They read or transform evidence without writing a comment, pushing a
+branch or changing a file.
 
-They are reserved: this package claims these six names, so a repository under
+They are reserved: this package claims these seven names, so a repository under
 review cannot supply its own `ReviewContext.ts` and have a review run it. The
 Markdown components that compose them are declared by this package for the same
 reason, and are documented by their own bodies rather than here.
 
-Every one of them runs against the working directory. A review of another
-checkout establishes that checkout first — with `<Worktree>` or `<Dir>` — and
-these report on whatever is current.
+The evidence-gathering components run against the working directory. A review
+of another checkout establishes that checkout first — with `<Worktree>` or
+`<Dir>` — and these report on whatever is current.
 
 ## ReviewContext
 
@@ -66,6 +66,18 @@ It fails rather than returning nothing when the sensor crashes or emits output i
 cannot use. A silent empty result would be indistinguishable from a clean run,
 and a review that reported "no findings" because its sensor died is worse than
 one that stopped.
+
+## ReviewDiagnostics
+
+Group normalized Oxlint diagnostics for review policies.
+
+```mdx
+<ReviewDiagnostics raw={rawDiagnostics} pr={pr} doctor={doctor} as="diagnostics" />
+```
+
+Groups the sensor results by rule, applies the Doctor's import-noise filtering,
+and computes categories, density and summary through the package's existing
+`buildDiagnostics` helper. This transformation uses only its supplied values.
 
 ## RepositoryInventory
 

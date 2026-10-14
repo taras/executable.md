@@ -1071,19 +1071,20 @@ describe("the trusted review graph", () => {
     }
   });
 
-  it("reserves the six TypeScript components rather than offering them as defaults", function* () {
+  it("reserves the seven TypeScript components rather than offering them as defaults", function* () {
     expect(REVIEW_REGISTRATIONS.map((one) => one.name)).toEqual([
       "CommentReviewData",
       "CommentReviewState",
       "Doctor",
       "OxlintDiagnostics",
+      "ReviewDiagnostics",
       "RepositoryInventory",
       "ReviewContext",
     ]);
     for (const registration of REVIEW_REGISTRATIONS) {
       // Reserved is the registration tier's way of saying what a declaration
       // says. Ordinary would have moved thirty-five components out of a
-      // subject's reach and left shadowable exactly the six that run processes,
+      // subject's reach and left shadowable the implementations that run processes,
       // read credentials and reach the network.
       expect(registration.reserved).toBe(true);
       expect(registration.origin).toBe("@executablemd/code-review-agent");
@@ -1103,7 +1104,7 @@ describe("the trusted review graph", () => {
     // root document is imported, so an overlap here is a build that cannot run
     // a review at all rather than a precedence question.
     expect(new Set(all).size).toBe(all.length);
-    expect(all).toHaveLength(41);
+    expect(all).toHaveLength(42);
   });
 
   /**

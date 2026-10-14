@@ -164,11 +164,11 @@ function parseDiff(
 ```
 packages/code-review-agent/
   src/
-    components/            # the six reserved TypeScript components
+    components/            # the seven reserved TypeScript components
     documents/
       components/          # 28 review components + Sample.md + Instruction.md
       policies/            # the five policy documents
-    components.md          # long-form documentation for the six registrations
+    components.md          # long-form documentation for the seven registrations
     review-components.ts   # the one assembly boundary
     plugin.ts              # the Plugin built from that boundary
     parse-diff.ts
@@ -182,7 +182,7 @@ The package depends on `@executablemd/core`, `@executablemd/runtime`,
 ### 3.5 The declared component graph
 
 `src/review-components.ts` is the only assembly boundary, exported as
-`@executablemd/code-review-agent/review-components`. It supplies forty-one
+`@executablemd/code-review-agent/review-components`. It supplies forty-two
 components in two tiers:
 
 - **Thirty-five declared Markdown components.** The twenty-eight review
@@ -192,15 +192,15 @@ components in two tiers:
   `@executablemd/code-review-agent/components/<Name>.md` or
   `…/policies/<Name>.md`. `forms` is deliberately unstated, so both invocation
   spellings keep working.
-- **Six reserved registrations.** `CommentReviewData`, `CommentReviewState`,
-  `Doctor`, `OxlintDiagnostics`, `RepositoryInventory` and `ReviewContext`, with
-  origin `@executablemd/code-review-agent`. `useReviewComponents()` installs them
+- **Seven reserved registrations.** `CommentReviewData`, `CommentReviewState`,
+  `Doctor`, `OxlintDiagnostics`, `ReviewDiagnostics`, `RepositoryInventory` and
+  `ReviewContext`, with origin `@executablemd/code-review-agent`. `useReviewComponents()` installs them
   together with the documentation in `src/components.md`, which the
   documentation index validates against this same registration list.
 
 Both tiers claim their names: a checkout under review cannot supply a component
-of any of these forty-one names and have a review run it, and a second claim on
-one name is refused at admission rather than ordered. Names outside the forty-one
+of any of these forty-two names and have a review run it, and a second claim on
+one name is refused at admission rather than ordered. Names outside the forty-two
 resolve through ordinary inclusion and repository discovery, unchanged.
 
 The assets are located from the module's own URL, never from the working
@@ -224,7 +224,7 @@ export default Plugin({
 });
 ```
 
-The Plugin claims the forty-one names for the commands that can run a review:
+The Plugin claims the forty-two names for the commands that can run a review:
 `run`, `syntax`, `plan`, and a `workflow` action that executes a document
 (`start`, `resume`, `fork`). It returns `undefined` for `xmd test` at its root,
 for `xmd upgrade`, for the workflow management actions and for every other
@@ -239,7 +239,7 @@ option written before it — `--plugin` included — is never read as one.
 Nothing in the CLI names this package. XMD bundles only `@executablemd/git`,
 so this graph arrives only when an operator selects it — `--plugin @executablemd/code-review-agent`
 where the package is installed, or `--plugin ./packages/code-review-agent/mod.ts`
-by path — and a command that names none has none of the forty-one names.
+by path — and a command that names none has none of the forty-two names.
 
 One installation per command then serves every surface that describes or
 validates the vocabulary — ordinary execution, `xmd syntax`, structural
@@ -1006,10 +1006,7 @@ The local root uses the same composition without `GitHubComment`.
   typeAware={doctor.recommendation !== "syntax-only"}
   as="rawDiagnostics"
 />
-```ts eval
-import { buildDiagnostics } from "@executablemd/code-review-agent";
-const diagnostics = buildDiagnostics(rawDiagnostics, context.pr, doctor);
-```
+<ReviewDiagnostics raw={rawDiagnostics} pr={context.pr} doctor={doctor} as="diagnostics" />
 <DeepInfraProvider model="Qwen/Qwen3-30B-A3B">
   <GitHubComment>
     <PrPolicyReport pr={context.pr} diagnostics={diagnostics} doctor={doctor} />
@@ -1019,9 +1016,11 @@ const diagnostics = buildDiagnostics(rawDiagnostics, context.pr, doctor);
 </Output>
 ```
 
-The two eval blocks in the checked-in roots only select bounded values and
-adapt package results. Git, GitHub, Oxlint execution, configuration, and
-normalization live in typed function components or package modules.
+The remaining eval block in each checked-in PR root only selects bounded values.
+`ReviewDiagnostics` groups the normalized values through the existing
+`buildDiagnostics` helper inside the selected Plugin, so compiled execution
+needs no review-package import from an eval module. Git, GitHub, Oxlint
+execution, configuration, and normalization live in typed function components or package modules.
 
 ## 8. CI Workflow
 
@@ -1067,13 +1066,14 @@ and no command passes a component `--include`.
 packages/code-review-agent/
   src/
     review-components.ts         The one assembly boundary
-    components.md                Long-form docs for the six registrations
+    components.md                Long-form docs for the seven registrations
 
     components/                  Reserved TypeScript registrations
       CommentReviewData.ts       Pair extraction + GitHub response parsing
       CommentReviewState.ts      Model-response and checklist state
       Doctor.ts                  Checkout readiness for review analysis
       OxlintDiagnostics.ts       Pinned Oxlint sensor run + normalization
+      ReviewDiagnostics.ts       Diagnostic grouping and policy summary
       RepositoryInventory.ts     Repository source paths and totals
       ReviewContext.ts           Revision range, PR metadata, changed files
 
@@ -1165,8 +1165,8 @@ packages/code-review-agent/
 | **`VerbosityCheck.md`** | **0** | |
 | **`SemanticReview.md`** | **0** | |
 | **`ReviewBody.md`** | **0** | |
-| `ReviewPR.md` | 2 | Changed-file selection + diagnostic grouping |
-| `ReviewPR.local.md` | 2 | Changed-file selection + diagnostic grouping |
+| `ReviewPR.md` | 1 | Changed-file selection |
+| `ReviewPR.local.md` | 1 | Changed-file selection |
 
 The authored Markdown keeps the review prompts and policy composition. The
 procedural components are typed TypeScript modules, while only short binding
