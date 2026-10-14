@@ -157,6 +157,7 @@ import { installFormSyntax, invocationForm } from "./invocation-identity.ts";
 import type { FormSyntax, ComponentRouting } from "./invocation-identity.ts";
 import type { ComponentInvocation } from "./invocation-identity.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
+import { useNarrowedSyntax } from "./syntax-api.ts";
 import type {
   ComponentElement,
   FunctionComponentDefinition,
@@ -2443,6 +2444,12 @@ function expand(
 ): Operation<string> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
+    // The admission this fragment was evaluated under, reported for the length
+    // of the fragment. Named documentation stays with the enclosing owner, so a
+    // generated body can still be told about a component it may not run.
+    if (syntax !== undefined) {
+      yield* useNarrowedSyntax(syntax);
+    }
     // Every expression this expansion resolves — an ordinary prop and a
     // declared capture alike — reads the declarative grammar rather than the
     // trusted-document evaluator. Set on this scope, so it ends with the

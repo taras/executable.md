@@ -142,8 +142,9 @@ import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
 import {
   renderSyntaxDocumentation,
   renderSyntaxJson,
-  renderSyntaxMarkdown,
+  syntaxText,
   syntaxSymbols,
+  useCommandSyntax,
 } from "./syntax.ts";
 import { assembleRunProfile } from "./run-profile.ts";
 import type { PluginModuleLoader } from "./plugin-loader.ts";
@@ -2858,7 +2859,11 @@ function* dispatch(
         {
           ...(sessions === undefined ? {} : { sessions }),
           plugins,
-          symbols: (includes) => syntaxSymbols(includes, plugins),
+          // What the Plan being written will be run under. The same declarative
+          // assembly `xmd syntax` prints from, entered inside the authorship
+          // scope so the documentation this host's packages contribute is
+          // captured with it.
+          installSyntax: (includes) => useCommandSyntax(includes, plugins),
           // The two facts about this process's own stderr that nothing further
           // in may go and read: whether it is a terminal, and whether it took
           // what it was handed. The approved Plan's sinks are stdout and
@@ -3083,10 +3088,9 @@ function* dispatch(
           // The compact list of symbols, unchanged: routine discovery output and
           // every default Plan prompt read it, and long documentation would make
           // both unnecessarily large.
-          const catalog = yield* syntaxSymbols(command.config.include, plugins);
           rendered = command.config.json
-            ? renderSyntaxJson(catalog)
-            : renderSyntaxMarkdown(catalog);
+            ? renderSyntaxJson(yield* syntaxSymbols(command.config.include, plugins))
+            : yield* syntaxText(command.config.include, plugins);
         } else {
           // The same selection, index and renderer `<Syntax names={…}>` uses, so
           // the command and the component cannot describe one component two

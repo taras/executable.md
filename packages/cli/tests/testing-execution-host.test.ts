@@ -19,7 +19,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { Err, Ok, ensure, resource, scoped, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, readdir, rm, writeTextFile } from "@effectionx/fs";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, realpath } from "node:fs/promises";
 import { until } from "effection";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -1095,5 +1095,52 @@ describe("deterministic dependencies declared for a nested run", () => {
     const result = yield* runCli(["test", "README.md"], { cwd: project, ...WORKER }).join();
     expect(result.stdout + result.stderr).not.toContain("❌");
     expect(result.code).toBe(0);
+  });
+});
+
+describe("execution initialization in isolated run children", () => {
+  it("EI-child: chosen Plugin setup is reinstalled after cwd and parent middleware stays outside", function* () {
+    const project = yield* useProject({});
+    const api = new URL("../../core/api.ts", import.meta.url).href;
+    const runtime = new URL("../../runtime/mod.ts", import.meta.url).href;
+    yield* writeTextFile(
+      join(project, "init-plugin.ts"),
+      [
+        `import { Execution, Plugin, Syntax } from ${JSON.stringify(api)};`,
+        `import { cwd } from ${JSON.stringify(runtime)};`,
+        "const calls: string[] = [];",
+        "export default Plugin({ name: 'init-evidence', *install(request) {",
+        "  yield* Execution.around({ *init(_args, next) {",
+        "    calls.push(`${request.command}@${yield* cwd()}`);",
+        "    yield* Syntax.around({ *text() { return calls.join(','); } }, { at: 'min' });",
+        "    yield* next();",
+        "  } });",
+        "  return undefined;",
+        "} });",
+      ].join("\n"),
+    );
+    const canonical = yield* until(realpath(project));
+    const expected = `test@${canonical},run@${canonical}`;
+    yield* writeTextFile(
+      join(project, "README.md"),
+      doc(
+        '<Test name="child initialization">',
+        '<Execution host="run" source={"<Syntax />\\n"} as="child">',
+        '<CollectOutput as="output" />',
+        '<AssertEquals actual={child.kind} expected="settled" />',
+        "<AssertEquals actual={child.result.ok} expected={true} />",
+        `<AssertStringIncludes actual={output} expected={${JSON.stringify(expected)}} />`,
+        "</Execution>",
+        "</Test>",
+      ),
+    );
+    const result = yield* runCli(["test", "--plugin", "./init-plugin.ts", "README.md"], {
+      cwd: project,
+    }).join();
+    if (result.code !== 0) {
+      throw new Error(result.stdout + result.stderr);
+    }
+    expect(result.code).toBe(0);
+    expect(result.stdout + result.stderr).not.toContain("❌");
   });
 });

@@ -256,7 +256,8 @@ export {
 } from "./src/documentation-api.ts";
 export type { DocumentationApi } from "./src/documentation-api.ts";
 export { select as selectDocumented } from "./src/syntax-reference.ts";
-export { NO_DOCUMENTATION, UnknownComponentError } from "./src/documentation-index.ts";
+export { UnknownComponentError } from "./src/documentation-index.ts";
+export { NO_DOCUMENTATION } from "./src/syntax-markdown.ts";
 export type { DocumentationIndex } from "./src/documentation-index.ts";
 export { PROTECTED_COMPONENT_NAMES, ProtectedComponentError } from "./src/components/protected.ts";
 export { SYNTAX_COMPONENT } from "./src/components/Syntax.ts";
@@ -450,3 +451,10 @@ export type { FileSecretFinding } from "./src/secrets/files.ts";
 // here can disable, replace, or outlive the detection an execution runs under.
 export { scanSecrets, secretPolicy } from "./src/secrets/policy.ts";
 export type { SecretPolicy } from "./src/secrets/policy.ts";
+
+// What a document may write here. The same descriptor `./api` exports — one
+// stable name, so middleware composes across separately loaded copies — kept at
+// the root as well because reading a description is ordinary work, not a
+// consumer-boundary concern.
+export { Syntax } from "./src/syntax-api.ts";
+export type { SyntaxApi } from "./src/syntax-api.ts";

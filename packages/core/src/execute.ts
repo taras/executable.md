@@ -158,6 +158,7 @@ import {
 import { coreComponentDefinition, CORE_ORIGIN } from "./components/registry.ts";
 import { CORE_REVISION } from "./generated-xmd.ts";
 import { rootSyntaxReference } from "./syntax-reference.ts";
+import { useRootSyntaxReference } from "./syntax-api.ts";
 import { capturedDocumentation } from "./documentation-api.ts";
 import {
   CANONICAL_PROFILE_ANSWERS,
@@ -176,7 +177,6 @@ import { componentAnswerRegistrar } from "./component-answers.ts";
 import type { ComponentAnswerInstallation } from "./component-answers.ts";
 import { packagedAssetReader } from "./component-documentation.ts";
 import type { DocumentationContribution, DocumentationReader } from "./component-documentation.ts";
-import type { SyntaxSymbolsProvider } from "./syntax-reference.ts";
 import type { WorkflowComponentBundle, WorkflowComponentCatalog } from "./components/bundle.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
@@ -2417,13 +2417,12 @@ function* executeDocument(
   bundles: readonly WorkflowComponentBundle[] = [],
   identityComponents: readonly IdentityComponent[] = [],
   installed: readonly RetainedInstallation[] = [],
-  providers: readonly SyntaxSymbolsProvider[] = [],
   /**
    * The documentation each bootstrapped package contributed.
    *
-   * Carried by value from the collection boundary, like the symbols provider
-   * beside it, so the index a document's own `<Syntax names={…}>` reads is the
-   * index the profile actually assembled.
+   * Carried by value from the collection boundary, so the index a document's
+   * own `<Syntax names={…}>` reads is the index the profile actually
+   * assembled.
    */
   documentation: readonly DocumentationContribution[] = [],
   /** This execution's packaged-asset reader, carried by value from the caller. */
@@ -2442,8 +2441,8 @@ function* executeDocument(
    * The one evaluation profile this host stated, copied and bound, when it
    * stated one.
    *
-   * Carried by value like the symbols provider beside it. It is sealed below,
-   * once the provider-backed names it admits have been resolved, and the sealed
+   * Carried by value from the collection boundary. It is sealed below, once
+   * the provider-backed names it admits have been resolved, and the sealed
    * result is handed to core's own expansion on the private environment rather
    * than through any context: it is the ceiling `<Evaluate>` narrows from, and a
    * document that could reach it could raise it.
@@ -2702,6 +2701,25 @@ function* executeDocument(
         return imports === undefined ? definition : imports.issue(name, definition);
       }
 
+      // Built from what this execution captured before any installation,
+      // middleware or document code ran, and asked only when an occurrence
+      // renders: a run whose document never writes `<Syntax />` enumerates
+      // nothing.
+      const derivedSyntax = rootSyntaxReference(
+        {
+          includes,
+          registry: startingRegistry,
+          components: identityComponents,
+          declarations: installed.flatMap((one) => [...one.declarations]),
+          ...(bundle === undefined ? {} : { workflow: bundle }),
+        },
+        documentation,
+      );
+      // Bound as the contextual Api's fallback, not installed in front of
+      // anything: a host that stated its own profile with `useSyntax()` still
+      // answers, and this is what answers when none did.
+      yield* useRootSyntaxReference(derivedSyntax);
+
       const environment: ExecutionEnvironment = {
         componentResolution: imports,
         // Everything this host declared, admitted above. Expansion asks it
@@ -2716,21 +2734,7 @@ function* executeDocument(
         // document, a component, middleware or a separately loaded copy can
         // name reaches this object.
         sourceSegments: createExactSource(),
-        // Built from what this execution captured before any installation,
-        // middleware or document code ran, and asked only when an occurrence
-        // renders: a run whose document never writes `<Syntax />` enumerates
-        // nothing.
-        syntax: rootSyntaxReference(
-          {
-            includes,
-            registry: startingRegistry,
-            components: identityComponents,
-            declarations: installed.flatMap((one) => [...one.declarations]),
-            ...(bundle === undefined ? {} : { workflow: bundle }),
-          },
-          providers[0],
-          documentation,
-        ),
+        syntax: derivedSyntax,
         // The ceiling a generated fragment is evaluated under, when this host
         // offers evaluation at all. Absent is a host that offers none, and
         // `<Evaluate>` refuses on that rather than inventing one.
@@ -3009,24 +3013,6 @@ export interface ExecutionInstallation {
    */
   readonly components?: readonly IdentityComponent[];
   /**
-   * The symbols this host's profile describes, when its profile is not the one
-   * the execution itself would derive.
-   *
-   * Omitted is the ordinary case — canonical core derives the symbols from the
-   * selection inputs this execution captured, which is what makes an ordinary
-   * run's reference the run's own.
-   *
-   * `xmd plan` states one, because the Plan being written is a program a later
-   * `xmd run` executes: the vocabulary the agent must be shown is that profile's
-   * rather than the authorship execution's. One execution accepts one.
-   *
-   * Documentation does not travel here. It is additive — a profile installing
-   * four packages has four boundaries — so each package's bootstrap contributes
-   * its own through the `Documentation` Api, and this execution collects them
-   * once at the same boundary.
-   */
-  readonly symbols?: SyntaxSymbolsProvider;
-  /**
    * The maximum permission a generated fragment may be evaluated under here.
    *
    * `<Evaluate>` is public, so any author may write it; the permission ceiling
@@ -3062,6 +3048,27 @@ export interface ExecutionInstallation {
  * it returns is ignored: only canonical execution completes a document.
  */
 export interface ExecutionApi {
+  /**
+   * Establish the live dependencies this execution runs on.
+   *
+   * The seam a command host uses to install what it provides — a Files
+   * provider, a recorder, a service — once per execution, inside the scope the
+   * invocation already owns. So a resource acquired here belongs to this
+   * execution, ordinary descendants inherit it, two concurrent executions get
+   * their own, and teardown is joined before the invocation settles.
+   *
+   * It receives nothing. There is no request to brand, no installation array
+   * to read and no receipt to return, because initialization is not a decision
+   * about this run: it is the run's dependencies being put in place. A layer
+   * establishes its state and delegates with `yield* next()`.
+   *
+   * Invoked after the trusted host contributions are copied and their
+   * revocation armed, and before installation callbacks, documentation capture
+   * and `execute`'s policy — so what a host installs here is visible to all
+   * three, and nothing a host installs here can reach back and change what was
+   * already captured.
+   */
+  init(): Operation<void>;
   execute(request: ExecutionRequest): Operation<void>;
   /**
    * The document's expansion, as `durableRun` runs it.
@@ -3082,6 +3089,11 @@ export interface ExecutionApi {
  * handed to it. Canonical core dispatches through a private instance instead.
  */
 export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution", {
+  // No-op rather than a refusal, unlike the two below. Initialization is not a
+  // protocol a caller can complete on core's behalf — there is nothing to
+  // settle and nothing to record — so an execution with no host middleware
+  // simply has no live dependencies to establish, and invents none.
+  *init() {},
   // deno-lint-ignore require-yield
   *execute(_request: ExecutionRequest): Operation<void> {
     throw new ExecutionProtocolError("invoked execution outside canonical core");
@@ -3098,10 +3110,11 @@ export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution",
  *
  * The order is the contract. Admissions are copied and frozen first, so what
  * ends up authoritative is fixed before any installation, any middleware and
- * any document code exists. Installations then run, then the chain is invoked
- * with one opaque request, then the request must have reached the terminal
- * exactly once, and only then does canonical core execute the document with the
- * options the terminal recorded.
+ * any document code exists. Initialization then establishes the live
+ * dependencies, installations run, and the chain is invoked with one opaque
+ * request; then the request must have reached the terminal exactly once, and
+ * only then does canonical core execute the document with the options the
+ * terminal recorded.
  *
  * One structured owner task holds the invocation scope. Everything an
  * installation established, and every child the document spawned, lives inside
@@ -3528,23 +3541,6 @@ function* invoke(
     }),
   );
 
-  // Read once and frozen with the rest, and before any installation runs: which
-  // profile a document is shown is settled before anything can replace it. Two
-  // are refused rather than ordered — symbols chosen by installation order
-  // would make what an agent is told to write depend on assembly order.
-  const providers = Object.freeze(
-    installations.flatMap((installation) => {
-      const provider = installation.symbols;
-      return provider === undefined ? [] : [provider];
-    }),
-  );
-  if (providers.length > 1) {
-    throw new Error(
-      "two installations stated the symbols this execution describes. One execution describes " +
-        "one vocabulary, so which profile a document is shown is never a question of order.",
-    );
-  }
-
   // What each installation will actually be asked to do, read once and in
   // order, before the first of them runs. Both members are read here for the
   // reason everything else on the installation is: a property that answered
@@ -3604,6 +3600,15 @@ function* invoke(
   });
   canonicalImports.activate();
 
+  // The host's live dependencies, established here: after everything trusted
+  // has been copied and its revocation armed, so initialization cannot reach
+  // back and change what is already authoritative, and before the installation
+  // callbacks and documentation capture below, so what it establishes is there
+  // for all of them. In this scope, which the owner task holds — so what a
+  // layer acquires is torn down with this execution and joined before it
+  // settles, and a failure here reaches no policy, no root import and no body.
+  yield* Execution.operations.init();
+
   // Each provider installer first, then that installation's ordinary `install`,
   // in the order the installations were captured. A provider registers
   // middleware through its registrar, and each invocation states what it is
@@ -3659,7 +3664,6 @@ function* invoke(
     bundles,
     identityComponents,
     installed,
-    providers,
     documentation,
     readAsset,
     canonicalImports,

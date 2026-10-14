@@ -36,6 +36,7 @@ import { fileURLToPath } from "node:url";
 import process from "node:process";
 
 import * as cliModule from "../src/cli.ts";
+import { syntaxSymbols } from "../src/syntax.ts";
 import { runPlan } from "../src/plan.ts";
 import type { PlanCommand } from "../src/plan.ts";
 import type { PlanWriterStack } from "../src/agent-stack.ts";
@@ -1805,19 +1806,22 @@ describe(
 
     it("PO15: the catalog is built once, from inside the command document", function* () {
       yield* useWorkingDirectory(function* (dir, planWriterRoot) {
-        const harness = createPlanHarness({ planWriterRoot });
-        harness.fake.script({ reply: PLAIN });
-        harness.script({ decision: "Approve" });
-
         // Recorded against the progress the drain had at the time, so what this
         // observes is that Preparing reached the operator before the catalog
-        // was read rather than merely that both happened.
+        // was read rather than merely that both happened. Observed at the lazy
+        // source rather than at the setup that binds it: binding happens when
+        // the authorship scope opens, and what this case is about is when the
+        // description is *built*.
         const before: string[][] = [];
-        const catalog = harness.deps.symbols;
-        harness.deps.symbols = function* (includes) {
-          before.push(phasesOf(harness.progress.join("")));
-          return yield* catalog(includes);
-        };
+        const harness = createPlanHarness({
+          planWriterRoot,
+          *symbols(includes) {
+            before.push(phasesOf(harness.progress.join("")));
+            return yield* syntaxSymbols(includes);
+          },
+        });
+        harness.fake.script({ reply: PLAIN });
+        harness.script({ decision: "Approve" });
 
         const { value } = yield* delivered(harness, () => runPlan(planning(dir), harness.deps));
 

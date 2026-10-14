@@ -112,15 +112,17 @@ export const COMPONENT_BOUNDARIES: BoundaryPartition = {
  * exits until the run is over, which makes it the right anchor for *which*
  * expansion is being paused and a useless place to rest.
  *
- * `execute` is not an expansion boundary. It is the request-policy seam, asked
- * once before a document exists, and canonical core dispatches it through a
- * private instance — so holding it would delay building the run rather than
- * stopping its expansion, and would not reliably be reached at all.
+ * Neither `init` nor `execute` is an expansion boundary. `execute` is the
+ * request-policy seam, asked once before a document exists, and canonical core
+ * dispatches it through a private instance — so holding it would delay building
+ * the run rather than stopping its expansion, and would not reliably be reached
+ * at all. `init` is earlier still: it establishes the run's live dependencies
+ * before there is any expansion to step.
  */
 export const EXECUTION_BOUNDARIES: BoundaryPartition = {
   walks: ["document"],
   gates: [],
-  unheld: ["execute"],
+  unheld: ["execute", "init"],
 };
 
 /**

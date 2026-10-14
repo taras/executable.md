@@ -18,7 +18,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { useTempFileCompiler } from "@executablemd/core";
 import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { ensure, race, scoped, sleep, spawn, until } from "effection";
+import { createContext, ensure, race, scoped, sleep, spawn, until } from "effection";
 import type { Operation, Result } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
@@ -917,5 +917,45 @@ describe("REPL execution: one execution's file", () => {
 
     const opened = yield* openExecutionFile(root, "kf39sla2");
     expect(yield* opened.stream.readAll()).toEqual([]);
+  });
+});
+
+describe("execution initialization in REPL entries", () => {
+  it("EI-REPL: two entries own fresh state below the same session attachment", function* () {
+    const State = createContext<object | undefined>("executablemd.test.repl.init", undefined);
+    const initialized: object[] = [];
+    const observed: object[] = [];
+    yield* Execution.around({
+      *init(_args, next) {
+        const state = {};
+        initialized.push(state);
+        yield* State.set(state);
+        yield* next();
+      },
+      *document([request], next) {
+        const state = yield* State.expect();
+        if (state === undefined) {
+          throw new Error("entry has no initialized state");
+        }
+        observed.push(state);
+        yield* next(request);
+      },
+    });
+    const session = opened(
+      yield* submitReplEntry({ ...options(execution()), source: "first entry\n" }),
+    );
+    yield* session.join();
+    const submitted = yield* session.submit("second entry\n");
+    if (!submitted.ok) {
+      throw submitted.error;
+    }
+    yield* session.join();
+    expect(initialized).toHaveLength(2);
+    expect(observed).toEqual(initialized);
+    expect(initialized[0]).not.toBe(initialized[1]);
+    expect(yield* State.get()).toBe(undefined);
+    expect(session.model.entries).toHaveLength(2);
+    yield* session.join();
+    expect(initialized).toHaveLength(2);
   });
 });

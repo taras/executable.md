@@ -29,15 +29,13 @@
 
 import { planComponentDescription } from "./plan-component.ts";
 import { scoped } from "effection";
+import { Component, Syntax } from "@executablemd/core/api";
+import { useSyntax } from "@executablemd/core/host";
 import type { Operation } from "effection";
 import {
   agentIdentityComponents,
-  capturedDocumentation,
-  documentationIndexFor,
   inspectSyntax,
-  renderSelectedDocumentation,
   renderSyntaxMarkdown,
-  selectDocumented,
   useAgentComponents,
 } from "@executablemd/core";
 import type { SyntaxSymbols } from "@executablemd/core";
@@ -74,24 +72,58 @@ export function* syntaxSymbols(
   plugins: CommandPlugins = NO_PLUGINS,
 ): Operation<SyntaxSymbols> {
   return yield* scoped(function* () {
-    yield* useCommandComponents();
-    return yield* profileSymbols(includes, plugins);
+    yield* useCommandSyntax(includes, plugins);
+    return yield* Syntax.operations.symbols;
   });
 }
 
-/** The profile's symbols, inside a scope that has already bootstrapped it. */
-function* profileSymbols(
+/**
+ * Describe this scope with the command's profile.
+ *
+ * The one descriptive setup every `xmd syntax` projection and `xmd plan`
+ * authorship goes through, so an operator printing a profile and an agent being
+ * told to write against it are shown one construction.
+ *
+ * Capture now, inspect later. The bootstraps are entered and their registry and
+ * declarations are read here, into one object the source closes over, because
+ * those are the *target* inputs: what this command installed, before anything
+ * else registers. Inspection itself is deferred to the source, so a command
+ * that never renders a description enumerates no includes and parses no
+ * component. Calling the helper in this same scope is also what captures the
+ * documentation those bootstraps contributed.
+ */
+export function* useCommandSyntax(
   includes: readonly string[],
-  plugins: CommandPlugins,
-): Operation<SyntaxSymbols> {
-  return yield* inspectSyntax({
-    includes,
+  plugins: CommandPlugins = NO_PLUGINS,
+): Operation<void> {
+  yield* useCommandComponents();
+  const inputs = {
+    includes: [...includes],
+    registry: new Map(yield* Component.operations.registry),
     components: agentIdentityComponents(),
     // `<Plan>` is part of the run profile, so symbols that left it out would
     // describe a vocabulary no run has. Described from the packaged bytes:
     // inspection mints nothing, so it reports the Component's identity and
     // contract without building the capabilities only a run can build.
     declarations: commandDeclarations(plugins, yield* planComponentDescription()),
+  };
+  yield* useSyntax(() => inspectSyntax(inputs));
+}
+
+/**
+ * The profile's symbols as Markdown, through the contextual construction.
+ *
+ * Read from the Api rather than rendered from the value beside it, so this
+ * command prints what a document writing `<Syntax />` under the same profile
+ * would be shown — including whatever middleware the profile installed.
+ */
+export function syntaxText(
+  includes: readonly string[],
+  plugins: CommandPlugins = NO_PLUGINS,
+): Operation<string> {
+  return scoped(function* () {
+    yield* useCommandSyntax(includes, plugins);
+    return yield* Syntax.operations.text;
   });
 }
 
@@ -185,9 +217,7 @@ export function* renderSyntaxDocumentation(
   plugins: CommandPlugins = NO_PLUGINS,
 ): Operation<string> {
   return yield* scoped(function* () {
-    yield* useCommandComponents();
-    const catalog = yield* profileSymbols(includes, plugins);
-    const index = documentationIndexFor(yield* capturedDocumentation());
-    return renderSelectedDocumentation(selectDocumented(catalog, catalog, names, index));
+    yield* useCommandSyntax(includes, plugins);
+    return yield* Syntax.operations.documentation(names);
   });
 }

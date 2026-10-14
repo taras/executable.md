@@ -1,38 +1,40 @@
 /**
  * What a document may write here, as one thing an execution carries.
  *
- * `xmd syntax` answers that question for an environment nobody is running.
- * Canonical `<Syntax>` answers it for the site an element was actually written
- * at, and the two have to be the same answer — symbols an agent is shown and
- * symbols an operator prints describe one vocabulary or they describe none.
+ * `xmd syntax` answers that question for an environment nobody is running, and
+ * canonical `<Syntax>` answers it for the site an element was actually written
+ * at. Both reach the answer through the contextual `Syntax` Api, so there is
+ * one construction and one renderer, and this module owns what that Api falls
+ * back to when nothing nearer answers.
  *
- * So there is one construction and one renderer, and this module is where an
- * execution keeps its own use of them. The reference is built from the
- * selection inputs the execution captured before any installation, middleware or
- * document code ran: the includes it resolves against, the registry it started
- * with, the identity components and exact Markdown its host declared, and the
- * component bundle it is closed over when it has one. Nothing is read from a
- * context, a registry answer, or anything a document can reach.
+ * Two references are built here. The execution's own is built from the
+ * selection inputs it captured before any installation, middleware or document
+ * code ran: the includes it resolves against, the registry it started with, the
+ * identity components and exact Markdown its host declared, and the component
+ * bundle it is closed over when it has one. A host's own is built from the lazy
+ * source `useSyntax()` was handed, closed over the documentation contributions
+ * that were in scope when it was called. `xmd plan` uses that one, because a
+ * Plan is a program a later `xmd run` executes: the vocabulary the agent must
+ * be shown is that profile's rather than the authorship execution's.
  *
- * A trusted host may state the symbols for its own profile instead. `xmd plan`
- * does: a Plan is written to be run by `xmd run`, so the vocabulary the agent
- * must be shown is the run profile's rather than the authorship execution's.
- * That provider is captured with the rest of the installation, before any
- * installed code exists, and one execution accepts one — two are refused rather
- * than ordered, because ordering them would make which profile a document is
- * shown depend on installation order.
+ * Either way the reference holds the *default* answer, not the effective one.
+ * It is reached through ordinary contextual dispatch, so nearer middleware can
+ * answer instead, delegate to it, or transform what it returns — which is why
+ * `documentation()` asks the Api for the symbols availability is decided
+ * against rather than deciding that for itself.
  *
- * The reference decides nothing at all. It answers with text. Seeing a
- * component named in the symbols neither registers it, resolves it, nor
+ * The reference admits nothing at all. It answers with symbols and with text.
+ * Seeing a component named in either neither registers it, resolves it, nor
  * admits it: what a name means is still `selectComponent()`'s decision, and
  * what may run is still the execution's.
  */
 
-import type { Operation } from "effection";
+import { type Operation, scoped } from "effection";
+import { NamedBasis, Syntax } from "./syntax-api.ts";
 
 import { inspectSyntax } from "./inspect.ts";
 import type { SyntaxSymbols } from "./inspect.ts";
-import { renderSelectedDocumentation, renderSyntaxMarkdown } from "./syntax-markdown.ts";
+import { renderSelectedDocumentation } from "./syntax-markdown.ts";
 import type { SelectedEntry } from "./syntax-markdown.ts";
 import { documentationIndexFor } from "./component-documentation.ts";
 import type { DocumentationContribution } from "./component-documentation.ts";
@@ -45,21 +47,23 @@ import { SyntaxSelectionRefusal } from "./syntax-refusal.ts";
 import type { ComponentOrigin, ComponentRegistry } from "./types.ts";
 
 /**
- * The symbols in scope for the segments being expanded.
+ * The default description for the segments being expanded.
  *
  * Held by the execution and handed to core's own expansion by value, beside the
- * component resolution and the identity domains. It is not a Context: a context
- * resolves by name, and a name is not a secret, so a document could build one
- * and answer for the vocabulary it is shown.
+ * component resolution and the identity domains. It is not itself a Context: a
+ * context resolves by name, and a name is not a secret, so a document could
+ * build one and answer for the vocabulary it is shown. What a document *can*
+ * reach is the public `Syntax` Api in front of it, which answers with text and
+ * grants nothing.
  */
 export interface SyntaxReference {
-  /** The symbols this site describes, rendered as Markdown. */
-  symbols(): Operation<string>;
+  /** The symbols this site describes, structured. */
+  symbols(): Operation<SyntaxSymbols>;
   /**
    * The selected components' metadata and long-form documentation.
    *
    * Two inputs, not one, and this is the reason the reference is an object
-   * rather than a string. *What may I write here* and *what may I read about*
+   * rather than a value. *What may I write here* and *what may I read about*
    * are different questions, and a narrowing evaluation boundary answers them
    * differently on purpose: the vocabulary it admits is smaller than the
    * vocabulary an author is entitled to understand.
@@ -69,6 +73,10 @@ export interface SyntaxReference {
    * and each rendered entry states whether it is available in the current
    * evaluation. Collapsing the two would either hide reference material an
    * author needs or imply a permission they do not have.
+   *
+   * Availability is decided against the *effective* symbols, read once through
+   * the Api, so a host or boundary that customized what may run here is the
+   * same thing that decides what this annotation says.
    */
   documentation(names: readonly string[]): Operation<string>;
   /**
@@ -88,16 +96,6 @@ export interface SyntaxReference {
    */
   available(symbols: SyntaxSymbols): SyntaxReference;
 }
-
-/**
- * A trusted host's statement of the symbols its profile describes.
- *
- * Captured by value with the rest of the installation, before any installed
- * code, middleware or document code runs. It returns the symbols and core
- * renders them, so a host cannot make its profile print differently from the
- * way `xmd syntax` prints the same symbols.
- */
-export type SyntaxSymbolsProvider = () => Operation<SyntaxSymbols>;
 
 /** The selection inputs an execution captured, as symbol construction reads them. */
 export interface CapturedSymbolInputs {
@@ -124,7 +122,6 @@ export interface CapturedSymbolInputs {
  */
 export function rootSyntaxReference(
   inputs: CapturedSymbolInputs,
-  provider: SyntaxSymbolsProvider | undefined,
   /**
    * The documentation the installed packages contribute.
    *
@@ -135,9 +132,6 @@ export function rootSyntaxReference(
    */
   contributions: readonly DocumentationContribution[] = [],
 ): SyntaxReference {
-  function* current(): Operation<SyntaxSymbols> {
-    return provider === undefined ? yield* derived(inputs) : yield* provider();
-  }
   // Snapshotted once, here, so the contributions a reference reads are the
   // ones the collection boundary captured rather than whatever the caller's
   // objects hold by the time a document asks.
@@ -145,7 +139,7 @@ export function rootSyntaxReference(
   // No admission at a root: nothing has narrowed what may execute, so the one
   // set of symbols this resolves is both what a document may write and what it
   // may read about.
-  return referencing(current, undefined, captured);
+  return referencing(() => derived(inputs), undefined, captured);
 }
 
 /**
@@ -171,31 +165,40 @@ function referencing(
   contributions: readonly DocumentationContribution[],
 ): SyntaxReference {
   return {
-    *symbols(): Operation<string> {
+    *symbols(): Operation<SyntaxSymbols> {
       // A narrowed reference reports its admission and asks the enclosing
-      // symbols for nothing — the bare form is about what runs.
-      return renderSyntaxMarkdown(admitted ?? (yield* authoring()));
+      // symbols for nothing — the bare form is about what runs. Otherwise this
+      // is the default answer, and the basis below is consulted first so that
+      // the one occurrence already resolving a basis gets that same value back
+      // instead of resolving a moving root a second time.
+      return admitted ?? (yield* NamedBasis.get()) ?? (yield* authoring());
     },
-    *documentation(names: readonly string[]): Operation<string> {
-      // One resolution, both decisions. The provider is asked first and its
-      // failures propagate untouched: a symbols provider that throws is this
-      // run's infrastructure, whatever it happens to call its error.
-      const readable = yield* authoring();
-      const runnable = admitted ?? readable;
-      const index = documentationIndexFor(contributions);
-      // Only the selection this module performs itself is restated under core's
-      // own namespaced identity. The provider has already returned, so nothing
-      // it raised can reach this.
-      let selected;
-      try {
-        selected = select(readable, runnable, names, index);
-      } catch (error) {
-        if (error instanceof UnknownComponentError) {
-          throw new SyntaxSelectionRefusal(error.message);
+    documentation(names: readonly string[]): Operation<string> {
+      return scoped(function* () {
+        // One basis per occurrence, resolved here and published for the length
+        // of this lookup only. Availability is then read through the Api, so a
+        // host or boundary that customized what runs decides the annotation —
+        // and when that read reaches *this* reference's default, it comes back
+        // with the basis above rather than inspecting the root again. Two
+        // occurrences enter two scopes and resolve independently.
+        const readable = yield* authoring();
+        yield* NamedBasis.set(readable);
+        const runnable = yield* Syntax.operations.symbols;
+        const index = documentationIndexFor(contributions);
+        // Only the selection this module performs itself is restated under
+        // core's own namespaced identity. Both symbol reads have already
+        // returned, so nothing either of them raised can reach this.
+        let selected;
+        try {
+          selected = select(readable, runnable, names, index);
+        } catch (error) {
+          if (error instanceof UnknownComponentError) {
+            throw new SyntaxSelectionRefusal(error.message);
+          }
+          throw error;
         }
-        throw error;
-      }
-      return renderSelectedDocumentation(selected);
+        return renderSelectedDocumentation(selected);
+      });
     },
     available(next: SyntaxSymbols): SyntaxReference {
       // The enclosing authoring symbols and the enclosing contributions,
@@ -383,4 +386,23 @@ export function syntaxReference(
     admitted,
     captured,
   );
+}
+
+/**
+ * The reference a host's own profile carries.
+ *
+ * What `useSyntax()` binds. The source is lazy for the reason the derived one
+ * is — a command that never renders a description inspects nothing — and the
+ * contributions are snapshotted here, from the scope that called the helper,
+ * because a host that bootstrapped a profile and then handed over a bare
+ * symbols callback would lose the index its own packages contributed.
+ *
+ * No admission: a host states one profile, and what narrows it afterwards is a
+ * canonical evaluation boundary rather than this.
+ */
+export function profileSyntaxReference(
+  source: () => Operation<SyntaxSymbols>,
+  contributions: readonly DocumentationContribution[],
+): SyntaxReference {
+  return referencing(source, undefined, snapshotContributions(contributions));
 }

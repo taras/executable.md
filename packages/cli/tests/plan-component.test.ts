@@ -40,6 +40,7 @@ import {
   syntaxReadEntry,
 } from "@executablemd/core/host";
 import type { FragmentEvaluationInput } from "@executablemd/core/host";
+import { useSyntax } from "@executablemd/core/host";
 import { API, Permissions } from "@executablemd/runtime";
 import { recordedFiles, useRecordedFiles } from "../../core/tests/support/fragment-files.ts";
 import type { RecordedFiles } from "../../core/tests/support/fragment-files.ts";
@@ -192,6 +193,7 @@ function* runDocument(options: {
       yield* useNormalizedOutput();
     }
     try {
+      yield* useSyntax(harness.symbols);
       const execution = yield* executeInstalled(
         {
           ...retainedSource(ROOT, options.source),
@@ -206,7 +208,6 @@ function* runDocument(options: {
             // Where the profile a document observes is settled now: the
             // `<Syntax />` the packaged Plan writes is canonical core's public
             // component, and what it answers with is this execution's.
-            symbols: harness.symbols,
             ...(options.evaluation === undefined ? {} : { evaluation: options.evaluation }),
             ...(options.files === undefined && options.installing === undefined
               ? {}

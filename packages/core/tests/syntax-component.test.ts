@@ -65,6 +65,9 @@ import { retainedSource } from "../src/root-source.ts";
 import { renderSyntaxMarkdown } from "../src/syntax-markdown.ts";
 import { syntaxReference, rootSyntaxReference } from "../src/syntax-reference.ts";
 import type { SyntaxReference } from "../src/syntax-reference.ts";
+import { useRootSyntaxReference } from "../src/syntax-api.ts";
+import { useSyntax } from "../host.ts";
+import { Syntax } from "../api.ts";
 import {
   capturedDocumentation,
   contributeDocumentation,
@@ -123,9 +126,11 @@ function symbolsOf(...names: readonly string[]): SyntaxSymbols {
 function stating(symbols: SyntaxSymbols, calls: { count: number } = { count: 0 }) {
   const installation: ExecutionInstallation = {
     // deno-lint-ignore require-yield
-    *symbols(): Operation<SyntaxSymbols> {
-      calls.count += 1;
-      return symbols;
+    *install(): Operation<void> {
+      yield* useSyntax(function* (): Operation<SyntaxSymbols> {
+        calls.count += 1;
+        return symbols;
+      });
     },
   };
   return { installation, calls };
@@ -321,13 +326,22 @@ function symbolsNamed(name: string, origin: NamedOrigin): SyntaxSymbols {
 function* rootObservation(): Operation<SyntaxReference> {
   return rootSyntaxReference(
     { includes: [], registry: new Map(), components: [], declarations: [] },
-    undefined,
     // What canonical execution hands it: whatever the scope bootstrapped,
     // terminating in core's own. Passing nothing here would leave the reference
     // with no index at all, and a case about narrowing would then be reading a
     // fallback sentence rather than real documentation.
     yield* capturedDocumentation(),
   );
+}
+
+function observedDocumentation(
+  reference: SyntaxReference,
+  names: readonly string[],
+): Operation<string> {
+  return scoped(function* () {
+    yield* useRootSyntaxReference(reference);
+    return yield* Syntax.operations.documentation(names);
+  });
 }
 
 /** A working directory of this case's own, torn down on the way out. */
@@ -601,11 +615,10 @@ describe("Tier SYN — the named form", () => {
 
     // And the snapshot renders that way through the reference an execution
     // builds from it, rather than only reading that way as a value.
-    const rendered = yield* syntaxReference(
-      symbolsOf("Marker"),
-      symbolsOf("Marker"),
-      captured,
-    ).documentation(["Marker"]);
+    const rendered = yield* observedDocumentation(
+      syntaxReference(symbolsOf("Marker"), symbolsOf("Marker"), captured),
+      ["Marker"],
+    );
     expect(rendered).toContain("THE CAPTURED PROSE.");
     expect(rendered).not.toContain("SUBSTITUTED AFTER COLLECTION");
   });
@@ -1314,9 +1327,11 @@ describe("Tier SYN — the named form", () => {
     const calls = { count: 0 };
     const moving: ExecutionInstallation = {
       // deno-lint-ignore require-yield
-      *symbols(): Operation<SyntaxSymbols> {
-        calls.count += 1;
-        return symbolsOf(`Marker${calls.count}`);
+      *install(): Operation<void> {
+        yield* useSyntax(function* (): Operation<SyntaxSymbols> {
+          calls.count += 1;
+          return symbolsOf(`Marker${calls.count}`);
+        });
       },
     };
 
@@ -1942,8 +1957,10 @@ describe("Tier SYN — the record one occurrence keeps", () => {
     // contribution refuses to answer at all.
     const moved: ExecutionInstallation = {
       // deno-lint-ignore require-yield
-      *symbols(): Operation<SyntaxSymbols> {
-        throw new Error("the continuation rebuilt the symbols");
+      *install(): Operation<void> {
+        yield* useSyntax(function* (): Operation<SyntaxSymbols> {
+          throw new Error("the continuation rebuilt the symbols");
+        });
       },
     };
     const continued = String(yield* run("<Syntax />\n", [moved], yield* continuing(first)));
@@ -1982,12 +1999,14 @@ describe("Tier SYN — the record one occurrence keeps", () => {
     const teardown: string[] = [];
     const stream = new InMemoryStream();
     const hanging: ExecutionInstallation = {
-      *symbols(): Operation<SyntaxSymbols> {
-        yield* ensure(function* () {
-          teardown.push("released");
+      *install(): Operation<void> {
+        yield* useSyntax(function* (): Operation<SyntaxSymbols> {
+          yield* ensure(function* () {
+            teardown.push("released");
+          });
+          yield* suspend();
+          throw new Error("unreachable");
         });
-        yield* suspend();
-        throw new Error("unreachable");
       },
     };
 
@@ -2085,10 +2104,10 @@ describe("Tier SYN — reference never permits", () => {
   it("SYN25b: a narrowed reference answers with exactly the symbols it was given", function* () {
     const narrowed = symbolsOf("Admitted");
     const reference = syntaxReference(narrowed);
-    expect(yield* reference.symbols()).toBe(renderSyntaxMarkdown(narrowed));
+    expect(renderSyntaxMarkdown(yield* reference.symbols())).toBe(renderSyntaxMarkdown(narrowed));
     // Nothing of the enclosing site leaks into it: a name the wider profile has
     // is absent, because the symbols it was handed do not hold one.
-    expect(yield* reference.symbols()).not.toContain("### `<Syntax>`");
+    expect(renderSyntaxMarkdown(yield* reference.symbols())).not.toContain("### `<Syntax>`");
   });
 
   /**
@@ -2105,26 +2124,26 @@ describe("Tier SYN — reference never permits", () => {
 
     // What may execute here is the narrowed set, and the bare form reports
     // exactly that.
-    const available = yield* reference.symbols();
+    const available = renderSyntaxMarkdown(yield* reference.symbols());
     expect(available).toContain("### `<Admitted>`");
     expect(available).not.toContain("### `<Withheld>`");
 
     // Reference material comes from the enclosing symbols, so a component this
     // subtree may not run can still be explained — and the entry says so
     // rather than leaving a reader to assume they have both.
-    const documented = yield* reference.documentation(["Withheld"]);
+    const documented = yield* observedDocumentation(reference, ["Withheld"]);
     expect(documented).toContain("### `<Withheld>`");
     expect(documented).toContain("**Available in this evaluation:** no");
 
     // And one that is admitted reports the other answer, so the field is
     // discriminating rather than a constant.
-    const admitted = yield* reference.documentation(["Admitted"]);
+    const admitted = yield* observedDocumentation(reference, ["Admitted"]);
     expect(admitted).toContain("**Available in this evaluation:** yes");
 
     // A boundary that narrows nothing has one set, and everything in it is
     // available — the ordinary case.
     const open = syntaxReference(enclosing);
-    expect(yield* open.documentation(["Withheld"])).toContain(
+    expect(yield* observedDocumentation(open, ["Withheld"])).toContain(
       "**Available in this evaluation:** yes",
     );
   });
@@ -2192,7 +2211,7 @@ describe("Tier SYN — reference never permits", () => {
 
     for (const [what, origin] of Object.entries(impostors)) {
       const nested = syntaxReference(holding(origin), holding(authored));
-      const rendered = yield* nested.documentation(["Elicit"]);
+      const rendered = yield* observedDocumentation(nested, ["Elicit"]);
       expect([what, rendered.includes("**Available in this evaluation:** no")]).toEqual([
         what,
         true,
@@ -2209,12 +2228,14 @@ describe("Tier SYN — reference never permits", () => {
     };
     const moved: NamedOrigin = { ...bundled, sourceHash: "c".repeat(40) };
     expect(
-      yield* syntaxReference(holding(moved), holding(bundled)).documentation(["Elicit"]),
+      yield* observedDocumentation(syntaxReference(holding(moved), holding(bundled)), ["Elicit"]),
     ).toContain("**Available in this evaluation:** no");
 
     // The positive control: one exact identity, admitted.
     expect(
-      yield* syntaxReference(holding(authored), holding(authored)).documentation(["Elicit"]),
+      yield* observedDocumentation(syntaxReference(holding(authored), holding(authored)), [
+        "Elicit",
+      ]),
     ).toContain("**Available in this evaluation:** yes");
   });
 
@@ -2229,20 +2250,20 @@ describe("Tier SYN — reference never permits", () => {
     const narrowed = enclosing.available(admitted);
 
     // What may run is the admission.
-    const executable = yield* narrowed.symbols();
+    const executable = renderSyntaxMarkdown(yield* narrowed.symbols());
     expect(executable).toContain("### `<Admitted>`");
     expect(executable).not.toContain("### `<Elicit>`");
 
     // What may be read about is still the enclosing site's, with the enclosing
     // index behind it — so a real component's real documentation survives.
-    const documented = yield* narrowed.documentation(["Elicit"]);
+    const documented = yield* observedDocumentation(narrowed, ["Elicit"]);
     expect(documented).toContain("### `<Elicit>`");
     expect(documented).toContain("Asks a person a structured question");
     expect(documented).toContain("**Available in this evaluation:** no");
 
     // And the enclosing reference is unchanged by having been narrowed.
-    expect(yield* enclosing.symbols()).toContain("### `<Elicit>`");
-    expect(yield* enclosing.documentation(["Elicit"])).toContain(
+    expect(renderSyntaxMarkdown(yield* enclosing.symbols())).toContain("### `<Elicit>`");
+    expect(yield* observedDocumentation(enclosing, ["Elicit"])).toContain(
       "**Available in this evaluation:** yes",
     );
   });
@@ -2271,7 +2292,7 @@ describe("Tier SYN — reference never permits", () => {
     supplies.add("Beta");
     supplies.delete("Alpha");
 
-    const rendered = yield* reference.documentation(["Alpha"]);
+    const rendered = yield* observedDocumentation(reference, ["Alpha"]);
     expect(rendered).toContain("The captured documentation.");
     expect(rendered).not.toContain("SUBSTITUTED AFTER CAPTURE");
   });
