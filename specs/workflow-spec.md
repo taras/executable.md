@@ -14,7 +14,7 @@ A **workflow run** is a workflow being carried out, with its progress and
 outcome recorded durably. Document executions perform its work; the run itself
 outlives any one of them.
 
-A run has one definition, chosen once, and it comes in two versions.
+A run has one definition: the exact source bytes chosen when it starts.
 
 A **source-bundle** definition is the exact bytes themselves, addressed by
 portable logical paths and retained with the run. A file outside a repository,
@@ -22,10 +22,14 @@ an untracked file and a file edited since its last commit are all ordinary
 starts, and the run executes what each said at the moment it began. Editing,
 moving or deleting the original afterwards changes nothing about the run.
 
-There is one definition shape and it carries no version. Nothing released names
-an older one, so a later format is a clean break rather than a second arm
-admitted beside this one — and because a definition holds the bytes it executes,
-no host ever supplies a capability for fetching them.
+The definition has one closed shape, with no `version` or `kind` member
+(§9.1). Older development shapes are refused; no migration or legacy reader
+exists. Creation, resume, fork and export read the run's retained source rather
+than asking a host to fetch its definition.
+
+For the execution and replay model, read [A document running](../architecture.md#a-document-running).
+This specification owns the run and storage interfaces; [Workflow Workspace](workflow-workspace-spec.md)
+owns lifecycle commands and the authored workflow environment.
 
 ```ts
 import { executeInstalled } from "@executablemd/core/host";
@@ -67,8 +71,9 @@ interface WorkflowRun {
 }
 ```
 
-`runId` is opaque, allocated with cryptographic randomness, and supports
-equality only. `bundleHash` is the identity of the bytes the run retains, and
+`runId` is opaque and supports equality only. The CLI generates cryptographically
+random IDs by default; an authorized local caller may [select an ID](workflow-workspace-spec.md#33-callers-may-select-a-run-id).
+A programmatic host supplies its ID through its own preparation (§3). `bundleHash` is the identity of the bytes the run retains, and
 `targetPath` is the exact section it runs, when it runs one. There is no base
 and no pinned commit: a run starts from exact retained bytes rather than from a
 repository state, so a member naming one would be a claim about a repository the
@@ -99,10 +104,14 @@ workspace or continuation capability.
 
 ## 3. Where the run is prepared
 
-`retainedWorkflowInstallation(run)` returns an `ExecutionInstallation` — a
-value, not an installation act. **Constructing it creates no workflow run**;
-executing a document under it does. A trusted host passes it to `executeInstalled()`, and
-the installation contributes exactly two things:
+A trusted host supplies one of two preparations. For a run already created
+by the lifecycle, `retainedWorkflowInstallation(run)` records that exact run.
+A programmatic host instead supplies `WorkflowRunPreparation.allocate()` to
+`createWorkflowRunInstallation(preparation)` and decides how to allocate its
+run and obtain its inputs.
+
+Both return an `ExecutionInstallation`; constructing one starts no execution.
+The host passes it to `executeInstalled()`, where it contributes two things:
 
 - **an admission**, which canonical core captures before any installation,
   middleware or document code exists and applies inside its own trusted journal
@@ -139,7 +148,7 @@ record storage already holds.
 yield* executeInstalled(options, [retainedWorkflowInstallation(run)]);
 ```
 
-`run` is whichever member of the `WorkflowRun` union the record retains.
+`run` is the closed `WorkflowRun` value the record retains.
 
 This installs the same middleware in the same place and records through the same
 `workflow_run` durable operation. What differs is both ends of it. The live path
@@ -148,13 +157,13 @@ repository is consulted. And every journal state holds the record to that value
 in full — run id, bundle hash and exact target — rather than to one member of
 it.
 
-A journal recording a different run is refused as `StaleInputError`, naming the
-fields that differ and never their values: a run id may be caller-selected and a
-base is any revision expression, so both are external text on the same terms as
-retained props. Two versions are never the same run, and a record of the other
-version disagrees as its definition version rather than field by field. A value
-installed without a complete member set for its version identifies no run and is
-refused before any document executes.
+A journal recording a different run is refused as `StaleInputError`, naming
+the differing fields and never their values. Run IDs and targets can contain
+external text, just as retained props can. A serialized journal value missing a
+required member or carrying any extra member identifies no run and is refused.
+The host input is a separate boundary: the retained installation projects the
+named run fields from a possibly wider record, then validates them. Missing,
+unreadable or empty required fields are refused before document execution.
 
 ### 3.2 Where workflow-run identity is decided
 
@@ -256,42 +265,41 @@ otherwise identical under either installation.
 
 ## 4. The three journal states
 
-The journal decides which middleware does the work.
+Admission and durable preparation have different jobs in each journal state:
 
 | State | What runs | What happens |
 | --- | --- | --- |
-| **live** — no record | the admission, then `prepare` | the admission finds nothing to hold the run to; preparation allocates the run id, resolves the base through the Git Plugin's `GitQuery.resolve()`, records one immutable value, and only then is the root imported |
-| **truncated** — record present, root not closed | the admission, then `prepare` | the admission restores the recorded value; preparation re-enters and its durable operation restores what it already recorded, so neither the identifier nor Git is reached again and the journal cursor still advances past its own entry |
-| **completed** — root `Close` recorded | the admission only | canonical core returns the recorded result without entering the durable body, so preparation never runs and the admission is the only place the run is restored — or a disagreeing one refused |
+| **live** — no record | the admission, then `prepare` | admission finds no earlier identity; preparation records the supplied retained run, or calls the programmatic host's `allocate()`, before the root is imported |
+| **truncated** — record present, root not closed | the admission, then `prepare` | admission restores the recorded run; the preparation's durable operation consumes its recorded result and advances its cursor without allocating again |
+| **completed** — root `Close` recorded | the admission only | canonical core validates the run and returns the recorded result without entering preparation or expanding the document |
 
-The admission runs before the recorded root result is returned. That ordering is
-what lets a completed journal refuse a supplied base that disagrees with the
-recorded one, rather than handing back a result the caller did not ask for.
-
-Replay invokes neither run-id allocation nor `GitQuery.resolve()`. The current value
-of a moving branch is never consulted.
+Admission precedes reuse of a completed root, so a history naming a different
+run is refused instead of returning that run's result. Partial replay restores
+preparation; completed-root replay does not enter it. Neither asks Git to
+resolve a definition.
 
 ## 5. Refusals
 
 The journal is parsed, never trusted.
 
-- A record that does not describe a workflow run is refused. The stored value is
-  described, never quoted: it is external data, and reporting it would carry
-  whatever it held into logs and rendered output. A value matching neither
-  version's exact member set describes none.
-- A recorded base that differs from the supplied base is refused, naming both.
+- A record that does not describe the closed `WorkflowRun` shape is refused.
+  Stored values and unexpected member names are never quoted in diagnostics.
+- A retained run whose `runId`, `bundleHash` or exact target differs from the
+  supplied run is refused, naming the differing fields rather than their values.
 
-Both are `StaleInputError`: the journal no longer describes this run, and the
-document is re-run from the start rather than resumed.
+Both are `StaleInputError`: the journal does not describe the requested run and
+cannot be resumed as that run. Refusal stops this continuation; starting over
+uses a new journal.
 
 ## 6. When a run exists
 
 A workflow run exists once its `WorkflowRun` value is durably recorded. A
 document failure or cancellation after that point does not erase it.
 
-Failure *before* that point creates no run and expands no root document. For a
-programmatic Git run that is Git failing to be invoked, a working directory that
-is not a Git repository, or a base that does not resolve to a commit.
+Failure *before* that point records no `WorkflowRun` value and expands no
+root document. A programmatic host's `allocate()` may fail while preparing its
+inputs; that generic preparation failure is still a durable outcome. A retained
+lifecycle run already exists in storage before this installation executes.
 
 Such a failure is journaled the way every durable effect's failure is — as a
 recorded failed effect, and no `WorkflowRun` value exists, which is what
@@ -300,23 +308,18 @@ recorded failed effect, and no `WorkflowRun` value exists, which is what
 Preparation fails before the root import, so the durable root records the
 **bound pre-root terminal** canonical core writes at that position: a terminal
 carrying core's own binding to the exact root source and target it was about.
-Resuming that journal reports the recorded failure — it does not retry Git, does
-not re-enter preparation, does not run document policy, imports no root, expands
-nothing, and appends nothing. The workflow installation raises no objection to
+Resuming that journal reports the recorded failure: it does not retry
+allocation or re-enter preparation, run document policy, import the root, expand
+content or append anything. The workflow installation raises no objection to
 it (§3.2).
 
 ## 7. The Git capability — moved
 
-This section described the read-only Git query capability while it was this
-package's. It is `@executablemd/git`'s now and is specified in
-[the Workspace spec](./workflow-workspace-spec.md). What remains here is the
-shape a reader of a journal may still meet:
-
-```ts
-interface GitQueryApi {
-  resolve(revision: string): Operation<string>;
-}
-```
+Git queries belong to `@executablemd/git`, not workflow definition or run
+identity. Repository and Git operations are specified in [Workflow Workspace
+§§6–7](workflow-workspace-spec.md#6-repository-and-worktree); the current query
+interface is [GitQueryApi](../packages/git/src/git.ts). Retained definitions
+are read from their own source store (§9.4).
 
 `GitQuery.resolve(revision)` has the semantics of
 
@@ -331,8 +334,7 @@ parsed by a shell.
 
 The default provider invokes the Git CLI through the contextual process and
 working-directory Apis. A non-zero exit fails, reporting what Git said; a clean
-exit naming nothing fails too, because an empty object id would pin a run to no
-repository state at all.
+exit naming nothing fails too: an empty object ID identifies no commit.
 
 Another provider replaces it lexically with
 `GitQuery.around({ *resolve(…) {…} }, { at: "min" })`. Providers install at
@@ -790,15 +792,12 @@ authorized lease and transaction handle. The provider invalidates that record
 before commit or rollback, so a retained handle or token never becomes valid
 again in a later transaction.
 
-Creating that physical connection takes recovery coordination, and holds it
-until the connection closes. The opening performs one first read that touches a
-page, which is what makes SQLite put back a rollback journal a lost host left
-behind; the hold continues past it because any later read through the same
-connection can be the one that meets a journal a process crashing afterwards
-left. It is taken once per physical opening — never per transaction, lease or
-effect — and a cached entry answers without taking anything, because the
-connection it answers with already holds it. Closing and reopening a path is a
-new physical opening and takes it again.
+Each physical connection holds recovery coordination from opening through
+closing. Cached leases reuse that hold; reopening takes a new one. This keeps
+SQLite recovery and read-only inspection from reading different versions of a
+database-and-journal pair. [Read-only lifecycle inspection](../architecture.md#read-only-lifecycle-inspection)
+owns the recovery ordering and connection lifetime; §9.7 owns the storage
+refusals.
 
 Opening existing storage performs structural recognition, retained-root and
 content validation, the live/current comparison and the singleton run-row read
