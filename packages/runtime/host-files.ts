@@ -745,6 +745,10 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
 
       let created: string;
       try {
+        // Synchronous on purpose: nothing may suspend between naming the
+        // directory and registering the cleanup that removes it, and an
+        // asynchronous creation halted mid-flight would finish afterwards and
+        // leave a directory nothing owns.
         // oxlint-disable-next-line local/no-sync-filesystem
         created = mkdtempSync(join(options.temporaryRoot ?? tmpdir(), "xmd-tempdir-"));
       } catch (error) {
