@@ -32,6 +32,10 @@ import {
 } from "@executablemd/core";
 import type { Json, SyntaxSymbols } from "@executablemd/core";
 import { content, registerComponents, validateDocument } from "@executablemd/core";
+// Core's own seam for substituting a scanner, which is how a case reaches the
+// moment after an information projection settled and before its findings are
+// disclosed. Deliberately not a package export: tests are its only consumer.
+import { useSecretScannerFactory } from "../../core/src/secrets/policy.ts";
 import {
   executeInstalled,
   fileReadEntry,
@@ -673,6 +677,10 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       return harness;
     }
 
+    /** What the writer frame refuses a read with. */
+    const FRAME_REFUSAL =
+      "xmd plan asked for a file, which the Plan writer profile grants to nothing";
+
     /** What an ambient read inside the frame answered with. */
     function* ambient(): Operation<string> {
       try {
@@ -744,9 +752,9 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         expect(files.performed).toEqual(["read notes.md"]);
         // And all three ambient attempts were refused by the frame's own guard.
         expect(asked).toEqual([
-          "before: xmd plan asked for a file, which the Plan writer profile grants to nothing",
-          "during: xmd plan asked for a file, which the Plan writer profile grants to nothing",
-          "after: xmd plan asked for a file, which the Plan writer profile grants to nothing",
+          `before: ${FRAME_REFUSAL}`,
+          `during: ${FRAME_REFUSAL}`,
+          `after: ${FRAME_REFUSAL}`,
         ]);
       });
     });
@@ -995,6 +1003,64 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         expect(prompts[1] ?? "").toContain("That request was refused");
         // Outside it: performed, and the findings are what the next turn got.
         expect(prompts[3] ?? "").toContain("the retained note");
+      });
+    });
+
+    /**
+     * The grant ends with the projection, observed from the scope that held it.
+     *
+     * This is the one assertion the rows above cannot make. A cancelled run and
+     * a refused writer sibling both leave the revocation untested: the sibling
+     * never held the grant, and a halted run takes the whole frame with it — so
+     * removing the `finally` that closes the grant keeps every other case here
+     * green. The Planner demonstrated exactly that, and this is their probe
+     * kept as a regression.
+     *
+     * What makes it possible is where the secret scan runs: inside the
+     * information body, after `tryContent()` and its joined teardown have
+     * settled and after the grant was closed, and still in that body's own
+     * scope. A read attempted there is a read from the scope that *was*
+     * granted, at a moment when it must not be any more. The scanner factory is
+     * core's own test seam for substituting a scanner, which is what makes that
+     * moment reachable without a product hook.
+     */
+    it("PI29: the read grant has ended by the time the findings are scanned", function* () {
+      yield* useWorkingDirectory(function* () {
+        const observed: string[] = [];
+        const files = recordedFiles({ "notes.md": "the retained note\n" });
+
+        const run = yield* scoped(function* () {
+          yield* useSecretScannerFactory(() => ({
+            *scan(text: string) {
+              // The findings, and not the draft: only they carry the note.
+              if (text.includes("the retained note")) {
+                observed.push(yield* ambient());
+              }
+              return [];
+            },
+          }));
+          return yield* runDocument({
+            source: SOURCE,
+            harness: yield* reading_(yield* planWriterRoot()),
+            reviews: [],
+            evaluation: reading(),
+            files: files,
+          });
+        });
+
+        expect(run.failure).toBe(undefined);
+        expect(run.output).toContain(`got: ${PLAN}`);
+        // The scan happened — this is not a case where nothing ran — and the
+        // read it attempted from the still-live body scope was refused.
+        // The findings cross the scanner more than once — the phase's own gate
+        // and the disclosure that follows it — so what is asserted is that the
+        // scan happened at all and that every attempt from that scope was
+        // refused, rather than a count this row has no business fixing.
+        expect(observed.length).toBeGreaterThan(0);
+        expect([...new Set(observed)]).toEqual([FRAME_REFUSAL]);
+        // One read, the projection's own: the probe's attempt reached no
+        // provider.
+        expect(files.performed).toEqual(["read notes.md"]);
       });
     });
 
