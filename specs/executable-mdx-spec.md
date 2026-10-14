@@ -2784,9 +2784,10 @@ The documentation is read from the owning package through the direct filesystem,
 not through `API.Fs` or the document-facing `Files` provider. Both of those are
 middleware a running document can compose around, and a document that could
 answer the read would decide what the product says about itself. What that read
-produces is the *captured default* catalog. Live `Syntax` middleware composes in
-front of it and may transform or replace the answer an occurrence receives —
-which is a composition the host assembled, not a read a document answered.
+produces is the *captured default* catalog, and canonical collection owns it.
+The effective answer an occurrence receives is a separate thing: live `Syntax`
+middleware composes in front of that catalog and may transform or replace what
+it produced.
 
 **Documentation composes with the components it describes.** A package's
 bootstrap installs its registrations and its documentation together — the
@@ -2858,10 +2859,13 @@ this is one.
 Default bare `<Syntax />` reports the effective contextual symbols at this
 site. The named form selects from the **enclosing authoring symbols** and
 states, per entry,
-`**Available in this evaluation:** yes` or `no`. At a root the two are one set
-of symbols and everything selected is available; a trusted evaluation boundary that
-narrows execution keeps the enclosing reference, so a nested author can be told
-how a component works where they may not run one — and is told which it is.
+`**Available in this evaluation:** yes` or `no`. Uncustomized at a root the two
+are one set of symbols and everything selected is available; a trusted
+evaluation boundary that narrows execution keeps the enclosing reference, so a
+nested author can be told how a component works where they may not run one —
+and is told which it is. Descriptive middleware that filters the effective
+symbols separates the two at a root as well, and the per-entry label is what
+says so.
 Neither input carries definitions, import witnesses, invocation capabilities,
 providers, registrations or any other execution capability.
 
@@ -2901,35 +2905,29 @@ interface SyntaxApi {
 }
 ```
 
-Callers yield `Syntax.operations.symbols` and `.text` without parentheses.
-Property middleware and its continuation return Operations. Defaults are
-reusable lazy Operations, not stored consumable generator instances. Default
-text renders effective contextual symbols through `renderSyntaxMarkdown()`.
-Text middleware may then transform or replace that answer. Synthetic answers
-that do not delegate perform no default inspection.
-
-The execution's private reference supplies its root fallback. A host can call
+Callers yield `Syntax.operations.symbols` and `.text` without parentheses;
+property middleware and its continuation return Operations. A host binds a
+complete descriptive profile of its own with
 `useSyntax(source: () => Operation<SyntaxSymbols>): Operation<void>` from
-`@executablemd/core/host` to bind a different complete descriptive profile. The
-helper captures and snapshots existing scoped documentation contributions and
-installs ordinary symbols/documentation providers at `min` without reading the
-source. `ExecutionInstallation` carries no symbols provider or descriptive
-provider count rule. Ordinary middleware composition decides the live answer.
+`@executablemd/core/host`, which installs ordinary symbols and documentation
+providers without reading the source. `ExecutionInstallation` carries no symbols
+provider and no descriptive provider count rule: ordinary middleware
+composition decides the live answer. How the defaults, the execution's own
+fallback and a narrowing boundary rank against each other is
+[the syntax symbols boundary](../architecture.md#the-syntax-symbols-boundary).
 
-Default named lookup retains its enclosing catalog for metadata and long-form
-text and reads effective symbols once for availability. Its authoring basis is
-resolved once per occurrence and reused by that occurrence's default symbols
-provider. Later occurrences resolve independently. Filtering symbols affects
-bare text and named availability, while an omitted enclosing component remains
-documentable. Text-only customization changes neither symbols nor named lookup.
-A synthetic named answer skips the catalog entirely.
-
-Generated producer and body scopes narrow symbols only, retaining the enclosing
-named-documentation owner. Their descriptive bindings end with those scopes.
-Standalone Plan and CLI inspection bind the target run's declarative profile
-through `useSyntax`; embedded Plan inherits its enclosing profile. CLI
-inspection starts no execution initialization or operational provider merely to
-print.
+Default text renders the effective contextual symbols, and text middleware may
+transform or replace that answer. Default named lookup retains its enclosing
+catalog for metadata and long-form text and reads effective symbols once for
+availability, so filtering symbols affects bare text and named availability
+while an omitted enclosing component remains documentable; text-only
+customization changes neither symbols nor named lookup, and a synthetic answer
+that does not delegate skips the default work entirely. Generated producer and
+body scopes narrow symbols only, retaining the enclosing named-documentation
+owner, and their descriptive bindings end with those scopes. Standalone Plan
+and CLI inspection bind the target run's declarative profile through
+`useSyntax`; embedded Plan inherits its enclosing profile. CLI inspection
+starts no execution initialization or operational provider merely to print.
 
 Seeing a component in the symbols grants nothing. It neither registers, resolves
 nor authorizes that component: what a name means is still this section's
@@ -9904,11 +9902,13 @@ workflow and returns a `DocumentExecution` handle. Options:
 `Execution.init(): Operation<void>` runs once in the existing invocation-owned
 scope. Its default is no-op and supplies no Files provider. A host registers
 ordinary middleware, installs its live dependencies there and delegates with
-`yield* next()`. Core copies trusted admissions, declarations, preparations,
-provider/install callbacks and the generated profile's host inputs and arms
-revocation before calling init. Init finishes before installation callbacks,
-documentation capture and public `Execution.execute` policy. The generated
-profile's provider-bound definitions are resolved during document assembly.
+`yield* next()`. Where that sits in the order core already guarantees — after
+the trusted host contributions are copied and their revocation armed, before
+installation callbacks, documentation capture and public `Execution.execute`
+policy — is
+[capability-backed execution](../architecture.md#capability-backed-execution).
+The generated profile's provider-bound definitions are resolved during document
+assembly.
 
 Failure or cancellation during init prevents execution policy, root import and
 body and waits for all acquired cleanup before settlement. Concurrent
@@ -9920,9 +9920,9 @@ while completed durable operations and Syntax answers replay passively.
 `runDocument`, REPL `runEntry` and isolated ordinary `runProfileChild` all reach
 this core initialization point. Isolated children explicitly reinstall selected
 host/Plugin middleware after cwd assembly and inherit no arbitrary parent
-handlers. REPL state is per entry below the existing Agent attachment; init does
-not replace that attachment, durable preparation or the journal owner. The
-REPL expansion controller does not pause at initialization.
+handlers. REPL state is per entry below the existing Agent attachment, which
+init does not replace, and so are durable preparation and the journal owner.
+The REPL expansion controller does not pause at initialization.
 
 #### The host's repository provider
 

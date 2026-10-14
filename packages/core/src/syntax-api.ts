@@ -3,8 +3,7 @@
  *
  * `<Syntax />`, `xmd syntax` and a Plan's authorship all ask the same three
  * questions — what are the symbols, what is the text, what do these names
- * mean — and before this they asked three different things in three places. So
- * they are one descriptor, dispatched by name, and a host, a trusted boundary
+ * mean — of one descriptor, dispatched by name, so a host, a trusted boundary
  * or ordinary middleware can answer, delegate or transform any of them.
  *
  * ## Why the properties are Operations
@@ -35,8 +34,12 @@
  *   to shadow: it is reporting an admission, not offering a fallback, and it
  *   ends with the scope that installed it.
  *
- * Neither grants anything. A description that names a component does not admit
- * it, and one that hides a component does not disable it.
+ * Neither grants anything, and neither takes anything away: a description that
+ * names a component does not admit it, and one that hides a component does not
+ * disable it. Component selection, invocation identity and durable recording
+ * stay canonical whatever the description says, which is why composing on this
+ * Api is ordinary rather than privileged work. The boundary itself is
+ * architecture.md's *The syntax symbols boundary*.
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
@@ -47,9 +50,14 @@ import { renderSyntaxMarkdown } from "./syntax-markdown.ts";
 
 /** The three questions anything describing this site answers. */
 export interface SyntaxApi {
-  /** What may be written here, structured. */
+  /** The effective structured description of this site. */
   readonly symbols: Operation<SyntaxSymbols>;
-  /** The same answer as Markdown, which is what `xmd syntax` prints. */
+  /**
+   * The effective text, which is what `xmd syntax` prints.
+   *
+   * Its *default* renders {@link SyntaxApi.symbols}. Middleware may answer with
+   * text of its own, so the two are not two views of one value by construction.
+   */
   readonly text: Operation<string>;
   /** These components' metadata and long-form documentation. */
   documentation(names: readonly string[]): Operation<string>;

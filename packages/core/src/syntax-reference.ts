@@ -50,11 +50,11 @@ import type { ComponentOrigin, ComponentRegistry } from "./types.ts";
  * The default description for the segments being expanded.
  *
  * Held by the execution and handed to core's own expansion by value, beside the
- * component resolution and the identity domains. It is not itself a Context: a
- * context resolves by name, and a name is not a secret, so a document could
- * build one and answer for the vocabulary it is shown. What a document *can*
- * reach is the public `Syntax` Api in front of it, which answers with text and
- * grants nothing.
+ * component resolution and the identity domains: this is what the public
+ * `Syntax` Api answers from when nothing nearer does, not a second place where
+ * anything is decided. Composing in front of it is ordinary and expected. What
+ * protection keeps canonical is component selection, invocation identity and
+ * durable recording — none of which a description reaches.
  */
 export interface SyntaxReference {
   /** The symbols this site describes, structured. */
@@ -75,8 +75,8 @@ export interface SyntaxReference {
    * author needs or imply a permission they do not have.
    *
    * Availability is decided against the *effective* symbols, read once through
-   * the Api, so a host or boundary that customized what may run here is the
-   * same thing that decides what this annotation says.
+   * the Api, so whatever customized the descriptive view here is the same thing
+   * that decides what this annotation says.
    */
   documentation(names: readonly string[]): Operation<string>;
   /**

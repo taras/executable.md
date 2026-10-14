@@ -3759,8 +3759,9 @@ cancellation join partially acquired teardown before the invocation settles.
 Ordinary descendants inherit initialized state; concurrent executions and REPL
 entries own distinct state. Completed handle observation initializes nothing.
 An isolated run child reinstalls the selected host/Plugin middleware after cwd
-assembly; arbitrary parent handlers do not cross that isolation. Existing REPL
-Agent attachment and durable preparation keep their owners and ordering.
+assembly; arbitrary parent handlers do not cross that isolation. REPL Agent
+attachment and durable preparation are owned and ordered elsewhere, and
+initialization neither replaces nor reorders them.
 
 Canonical core is authoritative for document execution. It invokes the stable
 `Execution` middleware through a private, per-invocation same-name Api whose

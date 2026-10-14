@@ -3041,11 +3041,12 @@ export interface ExecutionInstallation {
 /**
  * Execution Api — a policy surface around document execution.
  *
- * A handler is given an `ExecutionRequest`, not the execution. It may inspect
- * the options, narrow or replace them with `withOptions()`, register an
- * additive completion failure, install contextual behavior the document will
- * inherit, refuse by throwing, and delegate. It returns nothing, and whatever
- * it returns is ignored: only canonical execution completes a document.
+ * No handler is given the execution, and whatever a handler returns is
+ * ignored: only canonical execution completes a document. What a handler *is*
+ * given differs by member — `init` nothing, `execute` an `ExecutionRequest`,
+ * `document` a `DocumentRequest` — and each one below says what it may decide
+ * with what it was handed. Any of them may install contextual behavior the
+ * document will inherit, refuse by throwing, and delegate.
  */
 export interface ExecutionApi {
   /**
@@ -3069,6 +3070,12 @@ export interface ExecutionApi {
    * already captured.
    */
   init(): Operation<void>;
+  /**
+   * The policy seam for one execution request.
+   *
+   * A handler may inspect the options, narrow or replace them with
+   * `withOptions()`, register an additive completion failure, and delegate.
+   */
   execute(request: ExecutionRequest): Operation<void>;
   /**
    * The document's expansion, as `durableRun` runs it.

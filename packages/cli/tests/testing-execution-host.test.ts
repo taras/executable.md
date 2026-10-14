@@ -1103,12 +1103,15 @@ describe("execution initialization in isolated run children", () => {
     const project = yield* useProject({});
     const api = new URL("../../core/api.ts", import.meta.url).href;
     const runtime = new URL("../../runtime/mod.ts", import.meta.url).href;
+    // ESM by extension, because the project is a bare directory with no
+    // `package.json`: a `.ts` plugin there loads as CommonJS under Node, and
+    // the dependencies core reaches through publish an import condition only.
     yield* writeTextFile(
-      join(project, "init-plugin.ts"),
+      join(project, "init-plugin.mjs"),
       [
         `import { Execution, Plugin, Syntax } from ${JSON.stringify(api)};`,
         `import { cwd } from ${JSON.stringify(runtime)};`,
-        "const calls: string[] = [];",
+        "const calls = [];",
         "export default Plugin({ name: 'init-evidence', *install(request) {",
         "  yield* Execution.around({ *init(_args, next) {",
         "    calls.push(`${request.command}@${yield* cwd()}`);",
@@ -1134,7 +1137,7 @@ describe("execution initialization in isolated run children", () => {
         "</Test>",
       ),
     );
-    const result = yield* runCli(["test", "--plugin", "./init-plugin.ts", "README.md"], {
+    const result = yield* runCli(["test", "--plugin", "./init-plugin.mjs", "README.md"], {
       cwd: project,
     }).join();
     if (result.code !== 0) {
