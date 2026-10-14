@@ -1,12 +1,7 @@
 /**
- * Tier TC — what `<Testing>` and `<Test>` guarantee, pinned before they move.
- *
- * These are characterization tests: every one passes against the handlers as
- * they are today, and the migration onto the function-component boundary (#202
- * PR 3) has to keep them passing. They exist because the behaviors the
- * migration is most likely to lose quietly are the ones nothing else asserts —
- * partial output, where a stray error settles, and which failure a teardown
- * produces.
+ * Tier TC — partial output, stray errors and teardown failures under
+ * `<Testing>` and `<Test>`. These distinguish content projection that preserves
+ * the report from one that aborts the boundary and loses it.
  */
 
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";

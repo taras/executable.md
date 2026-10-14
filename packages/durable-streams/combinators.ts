@@ -42,16 +42,8 @@ import type { Close, Json, Workflow, WorkflowValue } from "./types.ts";
  * Run a child workflow within a spawned scope, setting up its own
  * DurableContext and emitting a Close event when it terminates.
  *
- * This is the core building block for all structured concurrency combinators.
- *
- * It:
- *  1. Checks if the child already completed (has Close event) — short-circuits
- *  2. Sets DurableContext on the child's scope with the child's coroutineId
- *  3. Runs the child workflow (its DurableEffects use the child's coroutineId)
- *  4. Appends Close(ok|err) when the child terminates
- *
- * IMPORTANT: This must be called inside a spawn() so it gets its own scope.
- * The caller is responsible for spawn().
+ * The caller must spawn it so the child owns its scope. A recorded Close
+ * restores the result without running the child again.
  */
 function* runDurableChild<T extends WorkflowValue>(
   childWorkflow: () => Workflow<T>,
@@ -92,7 +84,6 @@ function* runDurableChild<T extends WorkflowValue>(
     }
   }
 
-  // Set child's DurableContext on this scope
   const scope = yield* useScope();
   parentCtx.durability ??= {};
   const childCtx: DurableContext = {
@@ -228,11 +219,9 @@ export function durableSpawn<T extends WorkflowValue>(
       const scope = yield* useScope();
       const ctx = scope.expect<DurableContext>(DurableContext);
 
-      // Assign deterministic child ID
       const childIndex = ctx.childCounter++;
       const childId = `${ctx.coroutineId}.${childIndex}`;
 
-      // Spawn the child with durable wrapping
       return yield* spawn(() => runDurableChild(childWorkflow, childId, ctx));
     })(),
   );
@@ -260,8 +249,6 @@ export function durableAll<T extends WorkflowValue>(
       const scope = yield* useScope();
       const ctx = scope.expect<DurableContext>(DurableContext);
 
-      // Build child Operations, one per workflow. Each gets its own
-      // deterministic coroutineId and Close event handling.
       const childOps: Operation<T>[] = workflows.map((workflow) => {
         const childIndex = ctx.childCounter++;
         const childId = `${ctx.coroutineId}.${childIndex}`;
@@ -273,11 +260,7 @@ export function durableAll<T extends WorkflowValue>(
         };
       });
 
-      // Delegate to Effection's native all() which uses trap() internally
-      // for proper error isolation. This means:
-      // - Child errors are catchable by the caller via try/catch
-      // - When any child fails, remaining siblings are cancelled
-      // - The error propagates with the original message intact
+      // Native all() isolates child failures so the caller can catch them.
       return yield* effectionAll(childOps);
     })(),
   );
@@ -307,8 +290,6 @@ export function durableRace<T extends WorkflowValue>(
       const scope = yield* useScope();
       const ctx = scope.expect<DurableContext>(DurableContext);
 
-      // Build Operations for each child — each gets its own coroutineId
-      // and Close event handling via runDurableChild.
       const childOps: Operation<T>[] = workflows.map((workflow) => {
         const childIndex = ctx.childCounter++;
         const childId = `${ctx.coroutineId}.${childIndex}`;
@@ -320,7 +301,6 @@ export function durableRace<T extends WorkflowValue>(
         };
       });
 
-      // Use Effection's native race() which handles cancellation properly
       return yield* effectionRace(childOps);
     })(),
   );

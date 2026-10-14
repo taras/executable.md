@@ -75,7 +75,6 @@ describe("parseDiff", () => {
 
     const pr = parseDiff(rawDiff, rawFiles, META);
 
-    // Renamed files produce a file entry with R status and zero hunks
     expect(pr.files).toHaveLength(1);
     expect(pr.files[0].path).toBe("new-name.ts");
     expect(pr.files[0].status).toBe("R");

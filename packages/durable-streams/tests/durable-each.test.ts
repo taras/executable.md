@@ -78,14 +78,12 @@ describe("durableEach", () => {
     const yieldEvents = events.filter((e) => e.type === "yield");
     expect(yieldEvents.length).toBe(4); // 3 items + 1 done sentinel
 
-    // Check each event description
     for (const y of yieldEvents) {
       if (y.type === "yield") {
         expect(y.description).toEqual({ type: "each", name: "queue" });
       }
     }
 
-    // Check result values
     if (yieldEvents[0]!.type === "yield") {
       expect(yieldEvents[0]!.result).toEqual({
         status: "ok",
@@ -111,7 +109,6 @@ describe("durableEach", () => {
       });
     }
 
-    // Root Close event
     const closeEvents = events.filter((e) => e.type === "close");
     expect(closeEvents.length).toBe(1);
     expect(closeEvents[0]!.coroutineId).toBe("root");
@@ -268,7 +265,6 @@ describe("durableEach", () => {
 
     expect(tracker.calls).toEqual(["process-msg1", "process-msg2"]);
 
-    // Verify interleaved journal structure
     const events = stream.snapshot();
     const nonClose = events.filter((e) => e.type === "yield");
 

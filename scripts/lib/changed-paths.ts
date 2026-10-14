@@ -1,32 +1,12 @@
 /**
- * Which paths this branch and worktree touched, from git's two answers.
+ * Read both sides of renames and copies from Git's two NUL-delimited formats.
+ * Porcelain places NEW then OLD paths (`R  new\0old\0`); name-status places
+ * OLD then NEW (`R100\0old\0new\0`), so they need distinct parsers.
  *
- * Verify asks one question of these: did anything under `site/` change? The
- * answer has to survive a rename, which is where the two sources stop agreeing.
- * Measured on this repository, renaming `site/page.md` to `moved-out.md`:
- *
- * ```text
- * git status --porcelain=v1 -z   "R  moved-out.md"\0"site/page.md"\0
- *                                ^^^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^
- *                                status and NEW path share one field, then old
- *
- * git diff --name-status -z -M -C   "R100"\0"site/page.md"\0"moved-out.md"\0
- *                                    ^^^^^   ^^^^^^^^^^^^^   ^^^^^^^^^^^^
- *                                    status  OLD path        new path
- * ```
- *
- * The path order is reversed between them, so one parser cannot read both.
- * Both paths are always yielded: a rename out of `site/` changes `site/` just
- * as much as a rename into it does.
- *
- * Two more shapes came out of the same measurements. An *unstaged* rename is
- * not reported as a rename at all — git emits ` D site/page.md` and
- * `?? moved-out.md` — so nothing here may assume an `R` exists. And a copy does
- * reach porcelain when `status.renames=copies` is configured
- * (`C  site/copy2.md\0keep.md\0`), so `C` is read, not guessed at.
- *
- * A status neither parser recognises raises. Reading one path where git meant
- * two would silently drop the side that mattered.
+ * An unstaged rename can appear as a deletion and an untracked path rather than
+ * `R`; porcelain can also report `C` under `status.renames=copies`. Both paths
+ * matter when checking a directory a file moved into or out of. Unknown statuses
+ * raise rather than silently dropping a path.
  */
 
 export class ChangedPathsError extends Error {}

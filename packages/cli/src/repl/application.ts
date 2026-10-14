@@ -1,28 +1,11 @@
 /**
- * The product: what is on screen, and what every action changes.
+ * Own screen state and reduce semantic actions against one resolved model prefix
+ * and this process's live overlay. Components receive detached view data, with
+ * no session, repository, route mutator or host operation.
  *
- * One boundary owns state. Everything a frame shows is derived here from a
- * resolved model prefix plus this process's explicit overlay, and every action
- * the tree returns is answered here. Components receive detached view data and
- * hand back a semantic action; they hold no session, no repository, no route
- * mutator and no host operation, so a keystroke cannot reach the Journal except
- * through this reduction.
- *
- * ## A prefix is not the present
- *
- * A view frozen at a history marker is read only and fills nothing from the
- * live head: no live output, no waiting question, no pause capability. That is
- * why the overlay is a separate member rather than merged into the model —
- * merging them is exactly the mistake that shows somebody the present while
- * they are looking at the past.
- *
- * ## Navigation that fails changes nothing
- *
- * Every navigating action builds a candidate route and resolves it against the
- * model before it is adopted. A candidate that does not resolve leaves the
- * standing route, selection and draft exactly as they were and reports why.
- * There is no half-applied navigation, because a route is adopted whole or not
- * at all.
+ * A frozen prefix fills nothing from the live head: no output, waiting question
+ * or pause capability. Navigation resolves a whole candidate route before
+ * adoption; a refusal preserves the standing route, selection and draft.
  */
 
 import { Ok, type Result } from "effection";
@@ -142,13 +125,8 @@ export interface ReplLive {
   /** Whether this process holds the continuations, and so may pause at all. */
   readonly pausable: boolean;
   /**
-   * Whether an entry's execution is still running in this process.
-   *
-   * The durable side cannot answer this. A root close is recorded the moment the
-   * document settles, while the task that produced it is still unwinding — so a
-   * screen reading only `model.settled` would offer the next entry during a
-   * teardown that has not finished, and announce readiness the session would
-   * refuse. Readiness is a fact about both halves, and this is the live half.
+   * Whether this entry's task is still running, including teardown after its
+   * recorded root close. Readiness needs both this and `model.settled`.
    */
   readonly running: boolean;
   /**
@@ -170,12 +148,8 @@ export interface ReplLive {
 }
 
 /**
- * One turn as the Sessions surface shows it, live or retained.
- *
- * One type for both, because a person is looking at one turn either way: what
- * publication changes is where a turn's facts come from, not which turn it is.
- * `key` is its mounted identity and survives that change, so the row a person
- * had focus on is the same row afterwards.
+ * One live or retained Sessions turn. Publication changes its source of facts;
+ * `key` preserves mounted identity and focus across that transition.
  */
 export interface ReplSessionTurn {
   /** The mounted identity: this process's slot, or a record's own marker. */
@@ -205,17 +179,9 @@ export interface ReplSessionTurn {
 }
 
 /**
- * Every turn this screen can show, in the order their Prompts were scheduled.
- *
- * Not a concatenation of the retained turns and the live ones. Prompts running
- * beside each other publish in whatever order their providers answer, so an
- * earlier Prompt can still be live while a later one is already durable — and
- * appending the live list to the retained one would put it second.
- *
- * The turns this process observed carry their own place, taken when each Prompt
- * was scheduled. Turns it did not observe are in the prefix it replayed, which
- * is entirely earlier than anything it went on to run, so they come first in the
- * order their records state.
+ * Order turns by Prompt scheduling, not publication: concurrent providers can
+ * publish a later Prompt first. Unobserved turns belong to the replayed prefix
+ * and precede observed slots, whose own scheduling order is retained.
  */
 function chronology(model: ReplModel, live: ReplLive): readonly ReplSessionTurn[] {
   const observed = new Set<string>();
@@ -240,18 +206,9 @@ function chronology(model: ReplModel, live: ReplLive): readonly ReplSessionTurn[
 }
 
 /**
- * The one identity a publication is correlated by.
- *
- * Both halves, because neither is unique on its own. A Prompt's durable name is
- * derived from where it was written, and names restart with each entry — two
- * entries running the same source hold the same name at the same position, which
- * is ordinary rather than damaged. Correlating by the name alone suppresses both
- * of those records and resolves both slots to whichever one the chronology
- * reached first, so one turn is shown twice and the other not at all.
- *
- * The entry is the one each side already carries: the slot's own, and the
- * record's own. Never the entry that is current, the sequence by itself, or the
- * order the two turns happened to finish in.
+ * Correlate by each slot's and record's own entry plus durable Prompt name.
+ * Names restart in every entry, so name alone conflates repeated source; the
+ * current entry, sequence and completion order cannot identify a publication.
  */
 function correlation(entry: string, name: string): string {
   return `${entry}\u0000${name}`;
@@ -348,12 +305,8 @@ export interface ReplFormMessage {
 }
 
 /**
- * The form being filled in, while a question is being asked.
- *
- * Values are keyed by field name because the fields are independent: one global
- * string would make editing either field overwrite the other. None of this is
- * durable, none of it is in the route, and all of it is discarded when the
- * question ends or its drawer is closed.
+ * Form state is process-local and discarded when the question or drawer ends.
+ * Values are keyed by field so editing one cannot overwrite another.
  */
 export interface ReplFormState {
   /** What has been typed into each field so far, by field name. */

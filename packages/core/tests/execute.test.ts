@@ -261,7 +261,6 @@ describe("Tier B — durable import", () => {
 
     expect(result).toContain("Click me");
 
-    // Verify journal has the import with correct path
     const events = stream.snapshot();
     const [compImport] = events.flatMap((e) =>
       e.type === "yield" &&
@@ -319,7 +318,6 @@ describe("Tier D — code execution and modifiers", () => {
     expect(run.stdout).toContain("hello");
     expect(result).not.toContain("hello");
 
-    // Verify journal
     const events = stream.snapshot();
     const [execEvent] = events.flatMap((e) =>
       e.type === "yield" && e.description.type === "exec" ? [e] : [],
@@ -413,7 +411,6 @@ describe("Tier D — code execution and modifiers", () => {
       }),
     );
 
-    // Verify the command array in journal contains full script
     const events = stream.snapshot();
     const [execEvent] = events.flatMap((e) =>
       e.type === "yield" && e.description.type === "exec" ? [e] : [],
@@ -454,7 +451,6 @@ describe("Tier D — code execution and modifiers", () => {
     expect(run.stdout).toContain("hello");
     expect(run.value).not.toContain("hello");
 
-    // Verify command in journal
     const events = stream.snapshot();
     const [execEvent] = events.flatMap((e) =>
       e.type === "yield" && e.description.type === "exec" ? [e] : [],
@@ -741,14 +737,12 @@ describe("execute", () => {
     });
     const result = run.value;
 
-    // Check output contains expected content
     expect(result).toContain("# My Project");
     expect(result).toContain("hi Hello, world!");
     // The listing was displayed as it arrived, not rendered into the document.
     expect(run.stdout).toContain("main.ts");
     expect(run.stdout).toContain("utils.ts");
 
-    // Check journal has events
     const events = stream.snapshot();
     expect(events.length).toBeGreaterThan(0);
 

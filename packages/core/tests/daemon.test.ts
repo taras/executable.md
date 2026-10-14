@@ -58,7 +58,6 @@ describe("Tier Q — Daemon modifier", () => {
 
   // Q10: daemonFactory is a terminal modifier — it does not call next
   it("Q10: daemon is a terminal modifier", function* () {
-    // Verify the factory returns a middleware that takes (args, next) correctly
     const factory = daemonFactory(undefined);
     // The function arity indicates it accepts (args, next)
     expect(factory.length).toBe(2);

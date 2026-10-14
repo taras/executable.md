@@ -1,80 +1,31 @@
 /**
- * One shared reconciliation for every external Git-host effect.
+ * Reconcile external Git-host mutations through {@link reconcileGitHostEffect}.
+ * Push and pull-request upsert share this boundary; Issue has its own ordinary
+ * middleware and durable envelope, and Prompt keeps its Agent/session contract.
  *
- * A Git host — the external service that owns remote repositories, pull
- * requests and issues — holds state this repository's SQLite transaction cannot
- * enclose. Push, pull-request creation and issue creation therefore cannot
- * commit "the remote changed" and "the journal says so" together, and each of
- * them would otherwise have to invent its own answer to the same question: what
- * does an attempt do when it cannot tell whether the previous one already
- * succeeded?
+ * A live attempt observes before mutating: perform proven absence once, adopt
+ * proven compatible completion, refuse conflict or permanent ambiguity, and report
+ * temporary unavailability for authored retry policy. After interruption between
+ * remote mutation and local publication, the same external identity lets observation
+ * adopt completion without repeating it.
  *
- * They do not invent it. All three run through {@link reconcileGitHostEffect},
- * and one live attempt always observes before it mutates:
+ * Run and expansion identify the effect; the complete detached request's digest
+ * names the durable operation so changed inputs cannot consume an earlier answer.
+ * Retained identities and abandoned-history enforcement remain checked on the live
+ * path before provider work.
  *
- * - proven absence is performed, once;
- * - a proven compatible completion is adopted, and nothing is performed;
- * - conflict is refused;
- * - permanent ambiguity is refused; and
- * - temporary unavailability fails as itself, so the document's own structure
- *   or explicit middleware — not this engine — decides on a retry.
+ * {@link GitHost} exposes one frozen, one-use routing request. Public middleware
+ * may observe, refuse, narrow policy or delegate; it receives no credential,
+ * capability, answer operation or phase evidence, and its return value is ignored.
+ * Each phase uses its own descriptor under the stable Api name: names share the
+ * middleware chain, while that descriptor owns its private terminal.
+ * `withGitHostProvider()` places the selected handler at the terminal end; only
+ * its captured continuation inspects the exact request and submits parsed answers.
+ * Copied, substituted, reused, stale or unsolicited messages refuse before work.
  *
- * That ordering is what survives the gap this exists for. If a remote accepted
- * the mutation and the host died before the local result was published, the
- * next execution finds no journal entry, observes under the same external
- * identity, recognizes its own completion and adopts it. The remote is mutated
- * once. Removing the observation, or adopting anything weaker than a proven
- * compatible completion, is what would make it twice.
- *
- * Prompt is not a Git-host effect and does not run through here; it keeps its
- * Agent provider and session contract.
- *
- * ## Identity, and what may name it
- *
- * The external identity is the run and the expansion — derived here, from the
- * host-established `getWorkflowRun()` and the engine's own `getExpansion()`.
- * Neither the document nor the provider supplies either member, because a party
- * that could name the identity could name someone else's completion.
- *
- * The durable operation is named by a digest of the complete detached request
- * instead. Identity is where the effect *is*; the fingerprint is what it *asks*,
- * and separating them is what stops a changed input from consuming the retained
- * result of a different question at the same journal position.
- *
- * ## One surface, and a terminal nobody can address
- *
- * There is a single contextual operation, {@link GitHost}. Public middleware
- * receives one frozen, one-use routing request and may read it, refuse it,
- * narrow policy around it, or delegate it. It gets no credential, no
- * capability, no answer operation and no phase evidence, and its return value
- * is ignored. There is nothing for two handlers to combine, which is the
- * property the previous two-surface design did not have: a selection that
- * handed back a credential plus a coordination request that handed over a
- * capability let ordinary middleware answer a phase itself, and the durable
- * journal then recorded a completion no provider had ever produced.
- *
- * Each phase instead builds its own `createApi()` descriptor under that same
- * stable name. Sharing the name shares the middleware chain; owning the
- * descriptor owns the default, and that default is this invocation's
- * authoritative terminal. `withGitHostProvider()` installs the selected
- * provider's handler at the terminal end of the chain, so the handler's own
- * continuation — a parameter of its generator, held by nothing else — is the
- * only way to reach that terminal. Through it the handler asks the terminal to
- * inspect the exact request, calls the provider, and submits the answer.
- *
- * A handler that short-circuits, forges a return, substitutes the request,
- * replays it, or reconstructs the stable name reaches the provider's handler or
- * the public refusing default. It never reaches the terminal, and a message
- * that is not the initial routing request is refused before any provider work.
- *
- * ## What is durable
- *
- * The record — the request, the pre-state, the observations, the decision and
- * the result — is the value of one ordinary durable operation, published
- * through the existing stream and its existing pre-persistence gate. There is
- * no side journal, no payload cache and no schema change. A completed record
- * replays without installing or contacting a provider at all, and is parsed and
- * held to the current request before it is handed back.
+ * One ordinary durable operation retains request, pre-state, observations, decision
+ * and result through the existing pre-persistence gate. Completed replay parses and
+ * matches that record without selecting or contacting a provider or appending.
  */
 
 import { createApi } from "@effectionx/context-api";

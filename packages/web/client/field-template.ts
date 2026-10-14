@@ -1,15 +1,7 @@
 /**
- * Move the required marker from the label's text into the stylesheet's reach.
- *
- * The shadcn theme renders a required field's label as `[label, "*"]`, so the
- * marker is a bare text node — and no selector reaches one, which leaves it
- * unable to take the destructive colour the theme calls for. Spending
- * `required` here suppresses that text node and marks the field instead; the
- * stylesheet draws the same marker back on as `::after`.
- *
- * Nothing else in the field template reads the prop. The widgets take their own
- * `required` from the field, which is where the select's unanswered-required
- * styling comes from, so it is unaffected.
+ * The shadcn label's bare `"*"` text node cannot be styled by a selector. Suppress
+ * it with `required: false` and let the field class draw a `::after` marker.
+ * Widgets receive their own `required` prop and keep their validation styling.
  */
 
 import { createElement } from "react";
@@ -23,7 +15,6 @@ export interface RequiredMarking {
   classNames: string;
 }
 
-/** Pure and free of React, so the substitution is tested rather than rendered. */
 export function markingFor(classNames: string | undefined): RequiredMarking {
   return {
     required: false,

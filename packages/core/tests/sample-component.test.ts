@@ -450,7 +450,6 @@ describe("Tier EO — eval output() function", () => {
 
     expect(output1).toContain("journaled-output");
 
-    // Replay
     const output2 = yield* collect(
       yield* execute({
         path: "test.md",

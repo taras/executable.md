@@ -1,34 +1,14 @@
 /**
- * Which provider turn a completed Prompt was, as this package reads it.
+ * Read a completed Prompt's opaque provider turn identity from `_meta`.
  *
- * ACP carries per-response metadata under `_meta`, and an adapter that knows
- * how to name its own turns puts that name there. The runtime carries the whole
- * value across untouched and recognizes nothing in it, because which keys mean
- * something is this package's decision rather than a transport's.
+ * Recognized identities are `_meta.codex.turnId` (App Server turn id) and
+ * `_meta.claudeCode.assistantMessageUuid` (assistant message uuid). The runtime
+ * passes metadata through; this package discards every other field.
  *
- * Two namespaces mean something here, one per adapter, and each is the
- * adapter's own:
- *
- * | Adapter | Where it says it | What that is |
- * | --- | --- | --- |
- * | Codex | `_meta.codex.turnId` | the App Server turn id |
- * | Claude | `_meta.claudeCode.assistantMessageUuid` | the assistant message uuid |
- *
- * Everything else in `_meta` is discarded. Quota, failure detail and whatever
- * else an adapter reports are that adapter's business; nothing here reads them,
- * and nothing here treats an unfamiliar key as a checkpoint because it happens
- * to look like one.
- *
- * The value is opaque. It is compared, never interpreted: this does not check
- * it against a UUID grammar, does not shorten or normalize it, and does not
- * reconstruct one from anything else. Transcript text repeats, another turn's
- * token is a different turn, a provider's current head is a later point in the
- * conversation, and prompt or journal position is order rather than identity —
- * so a completion that names no turn simply names none.
- *
- * Ambiguity is refused for the same reason. Two adapters both claiming one turn
- * is two answers to which conversation this was, and there is no rule for
- * choosing between them, so such a completion carries no checkpoint at all.
+ * Exactly one recognized non-empty string yields a checkpoint. Missing or
+ * ambiguous identities yield none; transcript text, current session head and
+ * journal position never substitute for one. Values are compared unchanged,
+ * without UUID validation or normalization.
  */
 
 import type { AgentPromptCheckpoint } from "@executablemd/core";

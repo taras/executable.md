@@ -2939,22 +2939,22 @@ export type JournalAdmission = (retained: readonly DurableEvent[]) => Operation<
 /**
  * What a trusted host attaches to one execution.
  *
- * `install` runs contextual behavior the document inherits. `admissions` is
- * copied by canonical execution *before* `install` runs, so nothing an
- * installation does afterwards — including anything it composes — can add to,
- * remove from or observe the collection that ends up authoritative.
+ * Canonical execution captures the host inputs below by value before any
+ * installation runs. Later installation, middleware and document code cannot
+ * replace those captured inputs or alter the collections execution owns.
+ * `install` runs contextual behavior the document inherits.
  */
 export interface ExecutionInstallation {
+  /**
+   * Retained-history requirements, copied into an execution-owned collection
+   * that installed code cannot observe, add to or remove from.
+   */
   readonly admissions?: readonly JournalAdmission[];
   /**
    * The component bundle this execution is closed over.
    *
    * Plain immutable data: the authored names, their canonical paths inside the
    * pinned tree, their blob object ids, and the exact sources read from it.
-   * Captured by value alongside the admissions, before any installation runs,
-   * so what a name resolves to — and which answers a document may invoke — is
-   * fixed before anything can observe or replace it.
-   *
    * One execution runs under one bundle. Two installations supplying one is
    * refused rather than merged.
    */
@@ -2966,26 +2966,22 @@ export interface ExecutionInstallation {
    * origin, the bytes, their digest, the forms and any private declarations
    * those bytes alone may write; structural syntax states the name, the origin,
    * the forms, the props schema, its documentation, and whether it is a
-   * construct or one of that construct's regions. Captured by value alongside
-   * the admissions, before any installation runs, so what a declared name
-   * resolves to — and which answers a document may invoke — is fixed before
-   * anything can observe or replace it.
+   * construct or one of that construct's regions.
    */
   readonly declarations?: readonly ExecutionDeclaration[];
   /**
    * How this installation expands the structural syntax it declared.
    *
-   * Read once and bound with the declarations it belongs to, before any
-   * installation runs. An installation that declares structural syntax supplies
-   * one, and one that supplies it declares structural syntax: either half alone
-   * is refused before the root document is read.
+   * Read once and bound with the declarations it belongs to. An installation
+   * that declares structural syntax supplies one, and one that supplies it
+   * declares structural syntax: either half alone is refused before the root
+   * document is read.
    */
   expand?(request: ExpansionRequest): Operation<void>;
   /**
    * What this installation records inside the durable root.
    *
-   * Captured by value alongside the admissions, before any installation runs,
-   * and invoked after retained-history admission and before any public document
+   * Invoked after retained-history admission and before any public document
    * policy or the root import. A handler cannot prevent it, and cannot observe
    * the run before it exists.
    */
@@ -2994,35 +2990,29 @@ export interface ExecutionInstallation {
    * Who receives the harness canonical `<Test>` mints for each of its
    * invocations.
    *
-   * Captured by value alongside the admissions, before any installation runs,
-   * for the same reason: what a test may deliver its harness to is fixed
-   * before anything can observe or replace it. Nothing is published — the
-   * capability exists only as the argument of this call — so a document run by
-   * a host that attaches none has no nested-execution permission anywhere in it.
+   * Nothing is published — the capability exists only as the argument of this
+   * call — so a document run by a host that attaches none has no nested-execution
+   * permission anywhere in it.
    */
   readonly testHarness?: TestHarnessInstaller;
   /**
    * The components of this host's whose implementations name durable work
    * after their own invocation.
    *
-   * Captured by value alongside the admissions, before any installation runs,
-   * for the reason all of these are: what may name durable work here is fixed
-   * before anything can observe or replace it. Each factory is called once,
-   * with a claimant this execution minted for that component — delivered as the
-   * argument of that call and published nowhere — and what it returns is
-   * registered through the ordinary path. A host that declares none has no
-   * component that can name a durable operation after its invocation.
+   * Each factory is called once, with a claimant this execution minted for that
+   * component — delivered as the argument of that call and published nowhere —
+   * and what it returns is registered through the ordinary path. A host that
+   * declares none has no component that can name a durable operation after its
+   * invocation.
    */
   readonly components?: readonly IdentityComponent[];
   /**
    * The symbols this host's profile describes, when its profile is not the one
    * the execution itself would derive.
    *
-   * Captured by value alongside the admissions, before any installation runs,
-   * for the reason the rest are: what a document is shown is settled before
-   * anything can observe or replace it. Omitted is the ordinary case — canonical
-   * core derives the symbols from the selection inputs this execution captured,
-   * which is what makes an ordinary run's reference the run's own.
+   * Omitted is the ordinary case — canonical core derives the symbols from the
+   * selection inputs this execution captured, which is what makes an ordinary
+   * run's reference the run's own.
    *
    * `xmd plan` states one, because the Plan being written is a program a later
    * `xmd run` executes: the vocabulary the agent must be shown is that profile's
@@ -3037,13 +3027,10 @@ export interface ExecutionInstallation {
   /**
    * The maximum permission a generated fragment may be evaluated under here.
    *
-   * Captured by value alongside the rest, before any installation runs, for a
-   * reason the others share and this one sharpens: `<Evaluate>` is a public
-   * component, so any author may write it, and what stops that from being a
-   * capability is that the ceiling was stated by the host before a document
-   * existed. Nothing a running document reaches names this — not a context,
-   * whose name is not a secret; not a registry, which a nested scope layers
-   * over; not a prop, which an author writes.
+   * `<Evaluate>` is public, so any author may write it; the permission ceiling
+   * comes only from the trusted host. Nothing a running document reaches names
+   * this — not a context, whose name is not a secret; not a registry, which a
+   * nested scope layers over; not a prop, which an author writes.
    *
    * Omitted is the ordinary case for a host that offers no evaluation at all:
    * `<Evaluate>` then refuses before the producer runs, rather than evaluating
@@ -3057,8 +3044,7 @@ export interface ExecutionInstallation {
    * Run during profile capture, before this installation's ordinary
    * `install()`, and handed a registrar fixed to each provider installation.
    * Every registered handler receives a fresh request carrying that
-   * installation's origin. Captured by value with the rest: what a provider may
-   * identify is settled before any document code exists.
+   * installation's origin.
    */
   readonly componentAnswers?: readonly ComponentAnswerInstallation[];
   install?(): Operation<void>;

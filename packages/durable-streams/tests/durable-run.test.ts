@@ -100,13 +100,10 @@ describe("durableRun", () => {
 
     const result = yield* durableRun(workflow, { stream });
 
-    // Verify result
     expect(result).toBe("alpha-beta");
 
-    // Verify all effects were called
     expect(tracker.calls).toEqual(["stepA", "stepB"]);
 
-    // Verify stream has 2 Yield events + 1 Close event
     const events = stream.snapshot();
     expect(events.length).toBe(3);
 

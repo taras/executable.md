@@ -2,9 +2,7 @@
  * The Plugin boundary: trusted code an operator selects, installed once
  * before an execution imports a root document.
  *
- * XMD ships none and defaults to none. A command that selects no Plugin
- * installs no Plugin, and a package that happens to be installed stays inert
- * until it is named.
+ * An installed package stays inert until the host selects its Plugin value.
  *
  * A Plugin is a plain structural value. It carries a name and, optionally, one
  * `install` operation. Everything else about it — what it declares, what it

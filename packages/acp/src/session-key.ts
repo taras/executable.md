@@ -1,22 +1,14 @@
 /**
  * Session identity (specs/acp-client-spec.md §Session).
  *
- * Keys are namespaced `xmd:v1:` so they can never collide with sessions
- * owned by other ACPX consumers (ACPX's only key convention is an
- * optional `agent:<name>:` prefix, which this scheme avoids). Every
- * variable-length identity component — the agent command, the directory
- * and an explicit session name — is digested, so a key stays bounded and
- * filesystem-safe however long its inputs are. A session store may use
- * the key as a file name and encode it again, which an undigested
- * component overruns.
+ * `xmd:v1:` separates these keys from other ACPX consumers. Variable-length
+ * agent-command, directory and explicit-name inputs are digested so a store may
+ * encode the key again as a bounded filesystem-safe filename.
  *
- * Session resolution walks candidates from the contextual cwd toward the
- * Git repository root and reuses the nearest candidate whose record
- * already exists — checked through the ACPX session store, never through
- * `ensureSession()`, which would create one. ACPX only reuses a record
- * when the cwd matches, so the matched candidate's directory (not the
- * caller cwd) becomes the session cwd. When nothing exists yet, the
- * session is created for the exact contextual cwd.
+ * Resolution reuses the nearest existing ACPX record between contextual cwd and
+ * the repository root, without calling `ensureSession()` and creating one. ACPX
+ * requires matching cwd, so the selected candidate's directory becomes session
+ * cwd. With no record, placement uses the exact contextual cwd.
  */
 
 import { until } from "effection";

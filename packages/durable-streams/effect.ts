@@ -114,7 +114,6 @@ function checkReplay<T>(
   const entry = ctx.replayIndex.peekYield(ctx.coroutineId);
   let abandoned: YieldEntry | undefined;
 
-  // ── REPLAY PATH ──
   // Use a labeled block so that divergence decisions of type "run-live"
   // can break out to fall through to the live execution path.
   // biome-ignore lint/suspicious/noConfusingLabels: deliberate labeled block for break-out-of-replay pattern
@@ -127,7 +126,6 @@ function checkReplay<T>(
       // The current desc is passed to the Divergence API as `actual` so
       // guards can compare both sides if needed.
       if (entry.description.type !== desc.type || entry.description.name !== desc.name) {
-        // Delegate divergence policy to the Divergence API.
         const cursor = ctx.replayIndex.getCursor(ctx.coroutineId);
         const decision = Divergence.invoke(routine.scope, "decide", [
           {
@@ -152,7 +150,6 @@ function checkReplay<T>(
       }
 
       // Description matches — now check replay guards before replaying.
-      // ── REPLAY GUARD: Decide phase ──
       // An isolated observation, like the check and admit phases: a decision is
       // policy, and policy reads. Handing the retained description or result
       // here would let a guard rewrite what replay is about to consume.
@@ -187,7 +184,6 @@ function checkReplay<T>(
         return { path: "replayed", teardown: (exit) => exit(VOID_OK) };
       }
 
-      // All guards approved — consume the entry and advance cursor
       ctx.replayIndex.consumeYield(ctx.coroutineId);
       advanceDurablePosition(ctx);
 
@@ -267,7 +263,6 @@ export function createDurableEffect<T>(
         return replay.teardown;
       }
 
-      // ── LIVE PATH ──
       let settled = false;
       let tornDown = false;
       let teardown: () => void = () => {};
@@ -325,7 +320,6 @@ export function createDurableEffect<T>(
         return (exit) => exit(VOID_OK);
       }
 
-      // Return teardown that Effection calls during scope destruction
       return (exit: Resolve<EffectionResult<void>>) => {
         if (tornDown) {
           exit(VOID_OK);
@@ -389,7 +383,6 @@ export function createDurableOperation<T extends Json>(
         return replay.teardown;
       }
 
-      // ── LIVE PATH ──
       // Run the entire execute → capture → persist → resolve sequence
       // as a structured operation in the routine's scope.
       routine.scope.run(function* () {

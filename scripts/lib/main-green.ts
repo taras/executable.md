@@ -1,28 +1,12 @@
 /**
- * Decide whether a pull request may claim `green`.
+ * Require successful CI for `main`'s exact current head before a pull request
+ * claims `green`. Reuse Main Health's `selectAuthoritative()` rules so the gate
+ * and its issue agree on head, branch, event, run number and attempt.
  *
- * Main Health reports a red `main` and assigns it to a person. Reporting is not
- * gating: an ordinary pull request could still pass every check of its own and
- * merge onto a base nothing had proven, which makes the next `main` failure
- * indistinguishable from the one already open. This gate closes that by
- * refusing the aggregate check until CI has completed successfully for `main`'s
- * *exact* current head.
- *
- * Exact is the whole claim. A successful run for the previous head says only
- * that `main` used to work, and that is precisely the state a red `main` is in
- * one commit after it broke. So the authoritative run is selected by
- * `selectAuthoritative()` — the same head/branch/event/number/attempt rules
- * Main Health decides a report with, rather than a second interpretation of
- * main health that could disagree with the issue an operator is reading.
- *
- * Exactness is also why the gate waits rather than answering once. `main`'s
- * verdict arrives minutes after its push, and a pull request that asked too
- * early has no verdict to read — that is a missing answer, not a red `main`.
- * So an absent, queued or in-progress run is a state to wait through, an
- * advancing head is one to follow, and only a completed run for the head that
- * is still current is a verdict at all. Waiting is a convergence — `when()`
- * from `@effectionx/converge` — and running out of it means this pull request
- * obtained no proof, which is not the same claim as `main` having failed.
+ * Absent, queued and in-progress runs wait through `when()` convergence; an
+ * advancing head restarts the question. Only a completed verdict for the still
+ * current head passes or fails. Timeout means no proof arrived, not that `main`
+ * failed. A previous head's success proves nothing about the current one.
  */
 import { createContext, Err, Ok } from "effection";
 import type { Context, Operation, Result } from "effection";
@@ -33,13 +17,8 @@ import { selectAuthoritative } from "./main-health.ts";
 import type { Run } from "./main-health.ts";
 
 /**
- * The one exception, applied by a maintainer to one pull request.
- *
- * Restoring a red `main` needs a pull request that cannot satisfy this gate, by
- * construction — the base it would prove is the broken one. The label buys only
- * the remote lookup: the labelled pull request additionally runs
- * `composability`, the clean-checkout battery `main` pushes run, so the branch
- * that claims to repair `main` proves it the same way `main` itself is proven.
+ * Maintainer-applied exception for repairing red `main`: bypass only the remote
+ * lookup and require the clean-checkout `composability` proof instead.
  */
 export const REPAIR_LABEL = "ci-main-red-fix";
 
@@ -47,25 +26,14 @@ export const REPAIR_LABEL = "ci-main-red-fix";
 export const REPAIR_LABEL_DESCRIPTION =
   "Maintainer-controlled: lands one PR while main is red, only with the full clean-checkout proof";
 
-/**
- * How long the waiter sleeps between polls.
- *
- * An authoritative `main` run takes tens of minutes, so this is not a race to
- * observe the finish; it is short enough that following an advancing head costs
- * one interval, and long enough that a waiting job is not a poller.
- */
 export const POLL_INTERVAL_MILLISECONDS = 15 * 1000;
 
 /** The `timeout-minutes` on the job, held here so the two cannot drift. */
 export const JOB_TIMEOUT_MINUTES = 60;
 
 /**
- * When the waiter gives up, which is deliberately before the job does.
- *
- * The job's timeout kills the step mid-poll and leaves the log saying nothing
- * about what was awaited. Converging inside that bound means the gate reports
- * the state it last saw, so "no verdict arrived" is legible and stays distinct
- * from `main` having failed.
+ * Expire before the job's hard timeout so the gate reports its last observation
+ * and distinguishes missing proof from a failed `main` run.
  */
 export const WAIT_TIMEOUT_MILLISECONDS = 55 * 60 * 1000;
 

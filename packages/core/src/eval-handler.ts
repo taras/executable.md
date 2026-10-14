@@ -158,7 +158,6 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         ...sourceDescription(ctx.position),
       },
       function* (): Operation<Json> {
-        // Merge incoming bindings snapshot into env before execution
         Object.assign(evalEnv.values, bindings);
 
         const fn = yield* compileBlock(transformed.code, transformed.userImports ?? []);
@@ -216,11 +215,9 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
 
     if (result.value && typeof result.value === "object") {
       const restored = result.value as Record<string, unknown>;
-      // Extract __output before merging into env
       if (typeof restored.__output === "string") {
         outputRef.text = restored.__output;
       }
-      // Remove __output from exports before assigning to env
       const { __output: _, ...exports } = restored;
       Object.assign(evalEnv.values, exports);
     }

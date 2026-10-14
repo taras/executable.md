@@ -1,17 +1,7 @@
 /**
- * The page's HTTP calls, as operations.
- *
- * `XMLHttpRequest` rather than `fetch` because nothing in this bundle may be a
- * promise: the page runs inside one Effection scope, and a promise is work that
- * scope cannot cancel. `action()` closes that gap — its executor returns a
- * cleanup function that Effection calls however the operation ends, so a halted
- * page removes its listeners and aborts the request in flight instead of leaving
- * a callback pointed at a torn-down page.
- *
- * A transport failure is reported as status 0 rather than thrown. The caller has
- * to tell a person what happened either way, and `outcomeFor` already treats an
- * unrecognized status as retryable — so there is one path through the outcome,
- * not two.
+ * `XMLHttpRequest` exposes abort and listener removal to `action()` cleanup, so
+ * leaving the page cancels in-flight calls. Transport failures return status 0
+ * for the same retryable outcome path as other unrecognized statuses.
  */
 
 import { action } from "effection";

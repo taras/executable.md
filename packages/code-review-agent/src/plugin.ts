@@ -1,26 +1,10 @@
 /**
- * The review graph as a Plugin.
+ * Install the packaged review graph when an operator selects this Plugin.
  *
- * `@executablemd/code-review-agent` is a library, and its default export is the
- * Plugin a host installs once an operator has selected this package. Nothing
- * about the graph changes here: the same thirty-five Markdown declarations, the
- * same six reserved registrations, the same origins, digests and packaged
- * assets, read through the same boundary. What changes is who assembles them —
- * a Plugin the host installs, rather than a package the CLI imports by name at
- * four separate call sites.
- *
- * ## Which commands claim the graph
- *
- * A review is the program that must not be answerable by the repository it is
- * reviewing, so every command that can *run* a review document claims the
- * forty-one names: `xmd run`, `xmd syntax` (which describes what a run may
- * write), `xmd plan` (which validates a candidate against the profile a later
- * run supplies) and a workflow action that executes a document.
- *
- * `xmd test` claims none of them. A test document is a different profile and
- * may still supply its own component of any of these names — while the nested
- * `<Execution host="run">` child a test can launch *is* the run profile, and
- * reinstalls this Plugin with command `run`.
+ * Run, syntax, plan and executing workflow actions claim its thirty-five Markdown
+ * declarations and six reserved registrations, so the repository being reviewed
+ * cannot replace the review program. Root `xmd test` claims none; its isolated
+ * `<Execution host="run">` child reinstalls this Plugin with command `run`.
  */
 
 import type { Operation } from "effection";
@@ -34,22 +18,11 @@ import { reviewComponentDeclarations, useReviewComponents } from "./review-compo
 const EXECUTING_ACTIONS: ReadonlySet<string> = new Set(["start", "resume", "fork"]);
 
 /**
- * Every `xmd workflow` option that takes a separated value.
- *
- * A value is not an action however much it reads like one, so the scan below
- * steps over the token after each of these. The list is every non-boolean field
- * of the command's own grammar (`workflowConfig` in
- * `packages/cli/src/workflow.ts`) plus the two options read out of argv before
- * that grammar exists: `--plugin`, and the aggregate and generated root
- * properties. The boolean switches — `--verbose`/`-V`, `--raw`,
- * `--secret-detection`, `--no-secret-detection`, `--json`, `--forkable` — take
- * no value and are skipped as the options they are.
- *
- * It has to be written out here rather than read from the command, because the
- * CLI depends on this package and not the other way round. What makes the
- * omission of one visible is the rule it breaks: `xmd workflow --output start
- * export run-1` exports a run, and a scan that read `start` as the action would
- * have installed the review graph for a command that executes no document.
+ * Workflow options whose separated values must not be mistaken for actions.
+ * Keep this aligned with `workflowConfig` in `packages/cli/src/workflow.ts` and
+ * argv-level Plugin/root-property options; the CLI dependency prevents importing
+ * its grammar here. For example, `workflow --output start export run-1` exports
+ * and must not claim the review graph because the output value reads `start`.
  */
 const VALUED_OPTIONS: ReadonlySet<string> = new Set([
   "--plugin",
@@ -73,13 +46,9 @@ function takesValue(token: string): boolean {
 }
 
 /**
- * Whether this workflow command line executes a document.
- *
- * The action is the first positional after `workflow`: the first token that is
- * neither an option nor an option's value. Everything after `--` is positional
- * by definition and is not scanned for one, and a token this command defines no
- * action for is not one — a malformed command line executes no document either
- * way, and the command itself is what says so.
+ * Read the first positional after `workflow`, skipping options and their values.
+ * Stop at `--`; unknown actions remain the command's own grammar error and claim
+ * no review graph.
  */
 function executesDocument(args: readonly string[]): boolean {
   const start = args.indexOf("workflow");

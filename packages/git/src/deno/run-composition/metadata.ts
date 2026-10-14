@@ -1,28 +1,11 @@
 /**
- * The sidecar that says what a managed slot is, and what it was created from.
+ * Retain managed-slot creation identity in a closed, versioned sidecar.
+ * Every member is parsed. Publication uses an exclusive temporary sibling and an
+ * atomic rename only after the checkout is complete and verified.
  *
- * A workflow run answers that question from its database. An ordinary run has
- * none, so the answer lives beside the checkout — and because it lives on a
- * filesystem several processes share, everything about it is defensive: the
- * shape is closed and versioned, every member is parsed, and the file is only
- * ever written by an exclusive temporary sibling plus an atomic rename, after
- * the checkout it describes is complete and verified.
- *
- * ## Paths are derived, never read back
- *
- * A slot's checkout path is a function of the root and the identity. It is
- * deliberately absent from the metadata: a path read out of a file somebody
- * could edit would be a path this provider then joined and followed, and the
- * whole point of digesting authored strings into slots is that no authored
- * string decides where anything is.
- *
- * ## What compatibility means
- *
- * Every member here is *creation* state: what was asked for, and what was true
- * the moment the checkout came into being. None of it is current state. HEAD,
- * the current branch, the index and the working tree are the mutable work the
- * checkout exists to preserve, and a reuse that required them to match creation
- * would refuse every checkout anybody had used.
+ * Checkout paths are derived from the host root and identity, never read from this
+ * editable metadata. Members describe creation, not current HEAD, branch, index or
+ * working-tree state; reuse must preserve work done since creation.
  */
 
 import { members, optionalText, text } from "../../composition/parse.ts";

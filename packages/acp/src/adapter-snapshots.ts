@@ -1,79 +1,26 @@
 /**
- * The ACP adapters a workflow run executes, and how they reach the disk
- * (`packages/acp/vendor/adapters/PROVENANCE.md`).
+ * Materialize the patched ACP adapters that report completed-turn `_meta`
+ * (`packages/acp/vendor/adapters/PROVENANCE.md`). Their npm tarballs come from
+ * exact patched upstream commits and travel as a generated module so source, npm
+ * and compiled distributions execute identical bytes.
  *
- * A workflow Prompt needs an adapter that names the turn it just completed, on
- * `_meta`. No published adapter does yet, so this repository carries one npm
- * tarball per provider — packed from an exact patched upstream commit by that
- * project's own build — and runs those instead of whatever `npx` would resolve.
+ * A snapshot materializes under its SHA-256. Durable identity is provider, package,
+ * version and digest; the quoted host-local launch path is never retained in a
+ * session or sealed artifact.
  *
- * ## Why the bytes travel in the module graph
+ * Stage privately, publish by one rename and verify the published tree before use,
+ * including when another attempt won. Recovery of an abandoned non-empty tree
+ * requires an exclusive claim and a fresh check before removal, otherwise a stale
+ * observation could delete another process's newly published valid adapter.
  *
- * A tarball on disk is unreachable from a compiled binary and from the npm
- * artifact. The same bytes are therefore carried as a generated module, which
- * every distribution inlines identically, and this module writes them out. One
- * mechanism, so "the source tree, the npm package and the binary all run the
- * same adapter" is a fact rather than three arrangements that happen to agree.
+ * Recovery claims are prepared directories atomically renamed to `claims/<n>`.
+ * Tickets increase monotonically and are never reused: late arrivals cannot precede
+ * an elected holder, and finishing a dead holder cannot affect a later claim.
+ * The lowest unfinished ticket owns recovery; release marks it finished, and a
+ * later attempt may finish a dead owner's ticket.
  *
- * ## Content-addressed, so identity is the location
- *
- * A snapshot materializes under its own SHA-256. Two runs asking for the same
- * adapter name the same directory, a changed snapshot names a different one,
- * and nothing has to decide whether an existing directory is current — the
- * question does not arise.
- *
- * ## Identity is not the launch path
- *
- * Two different things are needed, and conflating them was a defect: an adapter
- * has a **stable identity** — its provider, package, version and snapshot
- * digest — and a **host-local launch path** under whatever root this machine
- * materialized into.
- *
- * Only the identity is durable. It is what a retained Agent session records and
- * what a sealed artifact carries, so two machines running the same snapshot
- * agree, and a run exported from one is readable on the other. The path appears
- * nowhere durable: it names a directory that exists on one host, and putting it
- * in an artifact would make where a file happened to live a compatibility term.
- *
- * The launch path is quoted, because a root containing a space is an ordinary
- * thing on a developer's machine and an unquoted command would split there.
- *
- * ## Published atomically, verified before use
- *
- * Materialization happens in a private temporary directory and is published by
- * one rename. A concurrent run either wins that rename or finds the directory
- * already there — both then verify before using it, so nobody executes a tree
- * another process is still filling.
- *
- * Replacing an *abandoned* tree is the one step that cannot be done by rename
- * alone, because a rename will not overwrite a non-empty directory. Removing it
- * first is a decision that goes stale: another attempt may publish a valid tree
- * between the observation and the removal, and deleting that would pull the
- * files out from under an adapter already running. So recovery is serialized on
- * an exclusive claim, and the holder re-checks under it before removing
- * anything.
- *
- * The claim is a ticket: the directory `claims/<n>`, taken by renaming a
- * prepared directory onto that name, which only one attempt can win and which
- * is never handed out a second time.
- *
- * Two properties come from that, and the claim needs both. Because numbers are
- * never reissued, finishing a dead holder's ticket can only ever act on the
- * exact ticket that was inspected. Because they are taken in ascending order,
- * an attempt arriving later cannot obtain a lower number, so it cannot come to
- * precede a holder that has already been elected.
- *
- * The holder is the lowest ticket still outstanding. Releasing is marking one
- * finished, and a process killed mid-recovery leaves a ticket whose owner a
- * later attempt reads as dead and finishes on its behalf.
- *
- * ## It refuses; it never falls back
- *
- * A digest that does not match, an extraction that fails, a dependency install
- * that fails, a missing entry file: each raises. Running the published adapter
- * instead would be running one that emits no token, which is the state this
- * exists to leave — silently, and after the run had already been told it was
- * continuing an exact conversation.
+ * Digest, extraction, installation or missing-entry failures raise. Falling back
+ * to a published adapter would lose the turn identity continuation depends on.
  */
 
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";

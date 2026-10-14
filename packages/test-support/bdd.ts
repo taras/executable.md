@@ -34,7 +34,6 @@ async function getPrimitives(): Promise<TestPrimitives> {
   const g = globalThis as any;
 
   if (typeof g.Deno !== "undefined" && g.Deno.test) {
-    // Deno runtime — use @std/testing/bdd
     // @ts-ignore: Deno-only module, unreachable on Node/Bun
     const bdd = await import("@std/testing/bdd");
     _primitives = {
@@ -47,7 +46,6 @@ async function getPrimitives(): Promise<TestPrimitives> {
       afterAll: (fn) => bdd.afterAll(fn),
     };
   } else if (typeof g.Bun !== "undefined") {
-    // Bun runtime — use bun:test
     // @ts-ignore: Bun-only module, unreachable on Node/Deno
     const bunTest = await import("bun:test");
     _primitives = {
@@ -60,7 +58,6 @@ async function getPrimitives(): Promise<TestPrimitives> {
       afterAll: (fn) => bunTest.afterAll(fn),
     };
   } else {
-    // Node runtime — use node:test
     const nodeTest = await import("node:test");
     _primitives = {
       describe: (name, _options, fn) => nodeTest.describe(name, fn),
@@ -76,9 +73,7 @@ async function getPrimitives(): Promise<TestPrimitives> {
   return _primitives;
 }
 
-// Eagerly resolve primitives at module load time.
-// On Deno this import is synchronous (already cached); on Node/Bun
-// the dynamic import resolves before any test registration.
+// Resolve the runtime adapter before any test registration.
 const primitivesPromise = getPrimitives();
 let p: TestPrimitives | undefined;
 primitivesPromise.then((v) => {
@@ -95,10 +90,8 @@ function prims(): TestPrimitives {
 // Block until primitives are loaded (covers the async gap on first import).
 // deno-lint-ignore no-explicit-any
 if (typeof (globalThis as any).Deno !== "undefined") {
-  // Deno: synchronous import resolution, p is already set
   p = await primitivesPromise;
 } else {
-  // Node/Bun: top-level await
   p = await primitivesPromise;
 }
 

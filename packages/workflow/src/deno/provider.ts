@@ -1,28 +1,11 @@
 /**
- * The Deno workflow-run storage provider.
+ * The Deno workflow-run storage provider owns run-id hashing, authorized-root
+ * paths, SQLite access and storage-error classification.
  *
- * This module is where the host stops being provider-neutral: it hashes run
- * ids, resolves paths beneath the authorized root, opens SQLite, and decides
- * what each of SQLite's refusals means. Nothing above it names any of those.
- *
- * ## Finding a run
- *
- * A run's file is the SHA-256 of its public run id beneath the root, so
- * discovery is arithmetic and there is no index that could disagree with the
- * files. Because a path can be derived by anyone, the run id is also stored
- * inside the database and checked: a file at the right path holding a different
- * run is a collision or tampering, and is refused rather than adopted.
- *
- * ## Creating is reusing
- *
- * `create()` answers with the stored run when the request describes it, and
- * refuses when any immutable field differs. That is what makes a
- * caller-selected id usable twice — as a retry, or as a second process
- * addressing the same work — without a separate idempotency concept.
- *
- * Two callers creating at once converge through SQLite's own write lock: the
- * first initializes the file, the second finds it already initialized and
- * compares instead of writing.
+ * A run's path is its public id's SHA-256 beneath the root, with no index. The
+ * stored id must still match: a correctly located file holding another run refuses.
+ * `create()` reuses a run only when every immutable field agrees. Concurrent creators
+ * converge through SQLite's write lock: initialize once, then compare.
  */
 
 import { dirname, isAbsolute } from "node:path";

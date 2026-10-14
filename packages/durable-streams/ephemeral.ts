@@ -34,14 +34,9 @@ const VOID_OK: EffectionResult<void> = {
 /**
  * Create a DurableEffect that runs an Operation transparently.
  *
- * - No journal write (no Yield event appended)
- * - No replay index consumption (cursor not advanced)
- * - The Operation runs via scope.run() with full structured concurrency
- * - Cancellation of the scope cancels the inner Operation
- * - On replay, the Operation re-runs (not cached)
- *
- * The effect is invisible to the durable execution protocol — it exists
- * solely to satisfy the Workflow<T> type constraint.
+ * The effect satisfies Workflow<T>'s yield constraint without writing or
+ * consuming journal entries. It re-runs on replay, and the routine's scope
+ * owns its cancellation.
  */
 function createEphemeralEffect<T>(operation: Operation<T>): DurableEffect<T> {
   return {
@@ -52,8 +47,6 @@ function createEphemeralEffect<T>(operation: Operation<T>): DurableEffect<T> {
       resolve: Resolve<EffectionResult<T>>,
       routine,
     ): (resolve: Resolve<EffectionResult<void>>) => void {
-      // Run the operation in the routine's scope — full structured
-      // concurrency, proper cancellation. No journal interaction.
       routine.scope.run(function* () {
         try {
           const value = yield* operation;

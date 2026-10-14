@@ -1,38 +1,18 @@
 /**
- * `<IssueTracker>` — which tracker or project the issues inside it belong in
+ * Select the issue destination for a lexical subtree
  * (specs/workflow-workspace-spec.md §10.3).
  *
- * ```md
- * <IssueTracker url={props.tracker}>
- *   <Issue title="Retry the publish step" as="issue">
- *     {finding.evidence}
- *   </Issue>
- * </IssueTracker>
- * ```
+ * `<IssueTracker url={props.tracker}>
+ *   <Issue title="Retry" as="issue">{finding.evidence}</Issue>
+ * </IssueTracker>`
+ * names a credential-free issue container. Optional `provider` selects the only
+ * adapter that may act; without it, each installed middleware recognizes its own
+ * URLs, and complete delegation reaches NoIssueProvider.
  *
- * `url` is a credential-free URL naming the container new issues are created
- * in — a GitHub repository issue collection, an Atlassian project. `provider`
- * is optional and names the only adapter allowed to act on it. Without one the
- * request is offered to the installed middleware, and each provider decides for
- * itself whether it recognizes the URL — nothing resolves one centrally, and a
- * URL every provider delegated reaches `NoIssueProvider`.
- *
- * ## It requests a destination; it grants nothing
- *
- * This installs composition data, not permission. A document can write any URL
- * here and reach nothing it was not already allowed to reach: the trusted host
- * installs an adapter-private ceiling beside its credentials, and a target
- * outside that ceiling fails before any provider observes anything. Narrowing
- * within the ceiling is what a context is for; widening it is not something a
- * context can express.
- *
- * ## Nesting replaces, and never merges
- *
- * A nested target replaces the whole target for its descendants. Parent and
- * child members are never merged, because a child that kept its parent's
- * `provider` while replacing its `url` would ask one service about another
- * service's container — and that is exactly the mistake an explicit
- * discriminator exists to prevent.
+ * The context carries composition data, never permission. The adapter-private
+ * ceiling beside its credentials refuses outside targets before observation.
+ * Nesting replaces the entire target rather than merging URL and provider from
+ * different trackers.
  */
 
 import { content, hasContent } from "@executablemd/core";

@@ -105,14 +105,11 @@ export function transformBlock(
     source.slice(node.start - offset, node.end - offset),
   );
 
-  // Build AST with only body nodes for mode detection, export collection, etc.
   // deno-lint-ignore no-explicit-any
   const ast = { body: bodyNodes, type: "Program" } as any;
 
-  // 2. Detect mode
   const mode = detectMode(ast);
 
-  // 3. Collect exports from top-level declarations
   const exports = collectExports(ast);
 
   // 4. Collect imports — free variables present in env.
@@ -124,10 +121,8 @@ export function transformBlock(
   const freeVars = collectFreeVariables(ast, declaredNames);
   const imports = freeVars.filter((name) => envKeySet.has(name));
 
-  // 5–7. Build transformed code
   const s = new MagicString(source);
 
-  // 5a. Remove import declarations from the body.
   for (const node of importNodes) {
     let start = node.start - offset;
     let end = node.end - offset;
@@ -156,10 +151,8 @@ export function transformBlock(
     }
   }
 
-  // 7. Append sourceURL
   s.append(`\n//# sourceURL=eval:${blockId}`);
 
-  // 8. Generate source map
   const map = s.generateMap({ source: blockId, hires: true });
 
   return {
@@ -364,7 +357,6 @@ function collectFreeVariables(ast: AstNode, declaredNames: Set<string>): string[
   const references = new Set<string>();
   const localDecls = new Set(declaredNames);
 
-  // Also collect names from all top-level variable declarations
   for (const node of ast.body) {
     const names = extractDeclaredNames(node);
     for (const name of names) {
@@ -403,14 +395,12 @@ function collectReferences(node: AstNode, references: Set<string>, localDecls: S
 
   // Skip key names in object properties (not computed)
   if (node.type === "Property" && !node.computed) {
-    // Only visit the value, not the key
     collectReferences(node.value, references, localDecls);
     return;
   }
 
   // For variable declarations, skip the declared name(s) and visit init
   if (node.type === "VariableDeclarator") {
-    // Don't visit the id (it's a declaration, not a reference)
     collectReferences(node.init, references, localDecls);
     return;
   }

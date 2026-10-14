@@ -1,43 +1,19 @@
 /**
- * Reading and applying one conversation's model and effort
+ * Translate ACP session configuration into core's model and effort choices
  * (specs/acp-client-spec.md §Session configuration).
  *
- * ACP advertises configuration as `configOptions` on a session's status: a list
- * of selectors, each with an id, a name, a current value and either a flat list
- * of values or a list of groups (`SessionConfigOption` in
- * `@agentclientprotocol/sdk`). None of that vocabulary leaves this package. What
- * crosses into core is `AgentOptionSet` — exact ids, display names, optional
- * descriptions, and the group each value was filed under — in the order the
- * provider gave them.
+ * ACP selectors stay inside this package. `AgentOptionSet` preserves exact ids,
+ * display names, optional descriptions, groups and provider order. Category takes
+ * precedence; the exact id `model` also identifies an uncategorized model selector.
+ * Other controls are ignored. Recognized selectors with malformed or ambiguous
+ * choices, duplicate ids or a selected value absent from their choices fail the
+ * operation rather than reporting an empty option set.
  *
- * Two selectors are recognized and no others. Category is the preferred signal
- * because ACP says a category is a presentation hint rather than a correctness
- * requirement, so an agent that files its model selector under no category is
- * still recognized by the exact id `model`. `model_config`, booleans, unknown
- * categories and every other control are not this feature and are passed over.
- *
- * Reading is strict about the selector it recognized and incurious about the
- * rest. A recognized selector that does not read back — the wrong type, two
- * equally preferred candidates, a malformed value, a duplicate id, a current
- * value that is not one of the choices — fails the operation rather than
- * degrading to an empty list, because an empty list reads as "this agent offers
- * you nothing", which is a different answer from "this run could not tell".
- *
- * ## Applying
- *
- * Model first, then effort, because effort choices belong to a model: an agent
- * asked to change model answers with that model's levels, and validating effort
- * against the previous model's would accept a value the new one does not have.
- * So the sequence is read, validate, write model, refresh, validate effort
- * against the refreshed choices, write effort, refresh, verify — and a request
- * that omits a setting writes nothing for it.
- *
- * Once a write may have happened, any later failure restores what was there
- * before, in the same model-first order, and the original failure is what the
- * caller is told. A restoration that cannot be verified leaves a conversation
- * whose configuration nobody can state, so the session is marked unusable for
- * the rest of the run rather than being prompted under a configuration the
- * document did not ask for.
+ * Apply model first, refresh its effort choices, then apply effort and verify the
+ * result. Omitted settings cause no write. Once a write may have landed, any later
+ * failure restores the previous settings in model-first order and preserves the
+ * original failure. Unverifiable restoration marks the session unusable for the
+ * rest of the run.
  */
 
 import { ensure, scoped } from "effection";

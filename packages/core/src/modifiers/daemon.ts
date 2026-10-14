@@ -67,6 +67,5 @@ export const daemonFactory: ModifierFactory = (_params) => (_args, _next) =>
     };
     yield* ephemeral(launchDaemon);
 
-    // Control returns here immediately after the fork.
     return { output: "", exitCode: 0, stderr: "" };
   })();

@@ -17,7 +17,6 @@ import type { Operation } from "effection";
 import { installReplHost, platformDataRoot } from "./repl-assembly.ts";
 import { useBunReplTerminal } from "./bun-repl-terminal.ts";
 
-/** Install everything the REPL needs from this host. */
 export function* useBunRepl(): Operation<void> {
   yield* installReplHost({
     dataRoot: () => platformDataRoot(process.platform, homedir(), process.env, sep),

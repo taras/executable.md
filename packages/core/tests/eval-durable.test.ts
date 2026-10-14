@@ -55,7 +55,6 @@ describe("Tier T4 — eval factory and journal integration", () => {
       }),
     );
 
-    // Replay
     const output2 = yield* collect(
       yield* execute({
         path: "test.md",
@@ -82,7 +81,6 @@ describe("Tier T4 — eval factory and journal integration", () => {
       }),
     );
 
-    // Replay
     const output2 = yield* collect(
       yield* execute({
         path: "test.md",

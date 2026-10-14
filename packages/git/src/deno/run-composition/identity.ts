@@ -1,46 +1,18 @@
 /**
- * Who an ordinary run's commits are by.
+ * Capture the invoking user's effective Git author and committer for ordinary
+ * commits. Workflow commits keep their fixed identity.
  *
- * A workflow run's Git state must not depend on whose machine it was created
- * on, so its provider commits under one fixed identity and builds Git's
- * environment from nothing. An ordinary run is the opposite case: the commit
- * lands in a person's own checkout, on a branch they will look at tomorrow, and
- * attributing it to `Executable.md workflow` would put a name in their history
- * that nobody there recognizes.
+ * The first Git.Commit captures `git var GIT_AUTHOR_IDENT` and
+ * `GIT_COMMITTER_IDENT` once through the trusted entrypoint's reader, using the
+ * invocation directory and host environment/configuration. A run that commits
+ * nothing reads no identity. Props, Context and middleware cannot select or
+ * replace it.
  *
- * So the invoking user's effective identity is captured once, by the first
- * `<Git.Commit>` that needs it, and used for that alone. A run that commits
- * nothing asks the host nothing about who it is.
- *
- * ## Captured from the trusted host, and nowhere else
- *
- * `git var GIT_AUTHOR_IDENT` and `GIT_COMMITTER_IDENT` are exactly what native
- * Git would use: the `GIT_*_NAME`/`GIT_*_EMAIL` variables, then `user.name` and
- * `user.email` from the configuration Git itself resolves, then whatever the
- * host can auto-detect. Reading it takes the caller's own environment and the
- * directory the command was run in, which is why the reader is the trusted
- * entrypoint's — constructed at provider installation, where no document code
- * exists, and consulted later from the commit that needs an answer.
- *
- * It is not a prop, a Context value, a component result or a middleware answer,
- * and no document can read it, replace it or ask for a different one.
- *
- * ## Only the identity is borrowed
- *
- * The commands that run afterwards keep every other protection: hooks,
- * file-system monitors, signing programs and repository-supplied credential
- * helpers stay disabled by the same fixed command-line configuration a workflow
- * run uses, and `HOME` still points at a disposable directory. What crosses
- * from the caller's environment is four strings.
- *
- * ## An unresolvable identity refuses, and refuses narrowly
- *
- * A host where Git cannot say who the user is is a host that cannot commit, and
- * substituting the workflow identity would be writing somebody else's name into
- * a person's repository to avoid saying so. `<Git.Commit>` reports it and names
- * the two commands that fix it. Every other component — Repository, Worktree,
- * Dir, Switch, Add, Push, Issue, PullRequest — is unaffected: none of them
- * writes a commit object.
+ * Only four identity strings are borrowed. Hooks, filesystem monitors, signing
+ * programs and repository credential helpers remain disabled by fixed command-line
+ * configuration, and HOME stays disposable. Missing identity refuses Git.Commit
+ * with corrective commands; it never substitutes the workflow identity or affects
+ * other components.
  */
 
 import type { Operation } from "effection";

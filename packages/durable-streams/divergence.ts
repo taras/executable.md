@@ -30,9 +30,6 @@ export type DivergenceKind = "description-mismatch" | "continue-past-close";
 
 /**
  * Information about a detected divergence.
- *
- * Discriminated union on `kind` so that TypeScript enforces correct
- * field access per variant.
  */
 export type DivergenceInfo =
   | {

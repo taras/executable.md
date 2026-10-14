@@ -1,18 +1,9 @@
 /**
- * What "a transaction is open here" means, in two pieces.
- *
- * Shared state has two forms, and this needed both. Which database the current
- * scope is inside a transaction on is composition data: a plain structural
- * value under a stable, namespaced name, which any code may read and which can
- * only ever cause an operation to be refused. Taking a savepoint inside that
- * transaction is an operation, so it lives behind a contextual Api instead of
- * being an executable member of a context value.
- *
- * The savepoint is the seam a Workspace filesystem needs: nested work rolls
- * back its own mutations while staying inside the one transaction that
- * publishes the effect and its journal result together. It is adapter-private —
- * neither piece is exported from the package root — and it hands out no
- * database, so nothing above this boundary can reach SQLite through it.
+ * Track transaction membership separately from savepoint operations.
+ * Membership is structural data under a stable namespaced context and can only
+ * cause refusal. Savepoints use an adapter-private contextual Api and expose no
+ * database. They let Workspace mutations roll back nested work while the outer
+ * transaction still publishes the effect and journal result atomically.
  */
 
 import { type Api, createApi } from "@effectionx/context-api";

@@ -214,7 +214,6 @@ describe("structured concurrency", () => {
     expect(result).toBe("a+b-B");
     expect(tracker.calls.sort()).toEqual(["innerA", "innerB", "outerB"]);
 
-    // Verify nested coroutine IDs
     const events = stream.snapshot();
     const coroutineIds = [...new Set(events.map((e) => e.coroutineId))].sort();
     expect(coroutineIds).toEqual(["root", "root.0", "root.0.0", "root.0.1", "root.1"]);
@@ -271,7 +270,6 @@ describe("structured concurrency", () => {
       { stream },
     );
 
-    // Replay
     const tracker2 = createCallTracker();
     const replayStream = new InMemoryStream(stream.snapshot());
 
@@ -525,7 +523,6 @@ describe("structured concurrency", () => {
 
     expect(result).toBe("PRE-a,b");
 
-    // Replay
     const replayStream = new InMemoryStream(stream.snapshot());
     const tracker2 = createCallTracker();
 

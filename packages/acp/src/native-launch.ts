@@ -2,35 +2,17 @@
  * Native launcher adapters (specs/native-agent-session-launch-spec.md
  * §Provider-native identity).
  *
- * An adapter knows one thing a document must never state: the argv that makes
- * a particular coding-agent CLI resume one exact provider-native session.
- * `claude --resume <id>` and `codex resume <id>` are adapter implementation
- * details, not authored values, and neither an executable path nor a session
- * id ever appears in a document.
+ * Adapters own native resume argv; executable paths and provider-native session
+ * ids are never document inputs. Command knowledge alone grants no launch:
+ * `provider-returned` adapters must prove ACP and the native UI reach the same
+ * conversation; `client-allocated` adapters must prove native creation uses the
+ * allocated identity, applies private instructions to the first user turn without
+ * a bootstrap, and later resumes that conversation.
  *
- * Knowing the command shape is not the same as being launch-capable.
- * Advertisement is separate, and what an adapter has to prove depends on who
- * names its sessions. An adapter the provider names proves that the session
- * ACP created is the session the native UI resumes; an adapter that names its
- * own sessions creates one directly, so what it proves instead is that the
- * native process makes that exact conversation, that the private instruction
- * layer governs its first user turn without a bootstrap, and that a later
- * invocation resumes the same identity rather than making a second one.
- * Until an adapter has proven its own contract against the installed CLI,
- * `<Session.Launch>` refuses that agent before anything of the session moves —
- * before a provider-returned adapter's ACP session is released, and before a
- * client-allocated one allocates an identity or writes a private file. That is
- * the failure the contract asks for rather than a hopeful spawn.
- *
- * Adapters differ along two structural axes, and both are discriminated rather
- * than inferred. The first is who chooses the provider-native session identity:
- * a `provider-returned` adapter can only resume a session something else
- * created and named, while a `client-allocated` adapter names the session first
- * and hands that name to the native process, which is what lets a launch
- * construct a conversation instead of merely reattaching to one. The second is
- * whether the adapter pins the build behind its executable, and it is
- * independent of the first: a name means one conversation only beside the build
- * that issued or accepted it, whichever side chose the name.
+ * Until that contract is proven against the installed CLI, launch refuses before
+ * ACP detach, client identity allocation or private-file creation. Build pinning
+ * is an independent discriminator: either construction route may bind a session
+ * to the exact executable build that issued or accepted its identity.
  */
 
 import { randomUUID } from "node:crypto";

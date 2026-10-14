@@ -1,20 +1,11 @@
 /**
- * Session ownership for one `<TestAgent>` partition
- * (specs/test-agent-spec.md §Scenarios).
+ * Coordinate native launch, session and prompt ownership within one TestAgent
+ * partition (specs/test-agent-spec.md §Scenarios).
  *
- * The test agent advertises native launch, so every session, prompt and launch
- * it serves passes through a coordinator before reaching ACPX. A host that
- * installs none refuses, which is right for a host that cannot see whether a
- * native UI is in the session — and wrong for a document whose agent is a
- * worker this process started and owns outright.
- *
- * So this answers the same question deterministically, in memory, with the
- * semantics the Deno adapter gives: one live owner at a time, and an owner that
- * never proved it stopped leaves the session owned. What it deliberately does
- * not have is a machine-wide namespace. Its lifetime is the partition that
- * constructed it, which is why sibling `<Test>` elements naming the same agent,
- * session and directory do not contend — they are not two owners of one
- * session, they are two sessions.
+ * The worker belongs to this process, so coordination is deterministic in-memory
+ * state: one live owner at a time, with ownership retained until quiescence is
+ * proven. There is no machine-wide namespace. Sibling tests naming the same agent,
+ * session and directory own separate partitions and do not contend.
  */
 
 import { ensure, Err, Ok, scoped } from "effection";

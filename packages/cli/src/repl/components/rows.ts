@@ -102,7 +102,6 @@ export function fieldText(prompt: string, text: string, focused: boolean): strin
   return `${parts.marker}${parts.prompt}${parts.earlier}${parts.value}`;
 }
 
-/** Read an optional string field. */
 function optional(input: ReplViewData, name: string): string | undefined {
   const value = fields(input)?.[name];
   return typeof value === "string" ? value : undefined;

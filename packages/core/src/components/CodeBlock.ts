@@ -1,41 +1,18 @@
 /**
- * `<CodeBlock>` — place any text inside one fenced Markdown code block
+ * `<CodeBlock>` — quote text in a fenced Markdown block
  * (specs/executable-mdx-spec.md §6.19).
  *
- * A document that shows generated source, a diagnostic, or anything else it did
- * not write needs the text to arrive as text. The hazard is the fence itself: a
- * value that happens to contain three backticks closes a three-backtick block
- * early, and the rest of it lands in the document as Markdown — as headings, as
- * component invocations, as another fence. Writing that arithmetic in an eval
- * block puts the safety of the surrounding document in the hands of every
- * author who needs to quote something.
+ * The fence has one more backtick than the value's longest run, with a minimum
+ * of three, so the value cannot close it. The value is otherwise unchanged:
+ * nothing is trimmed, normalized, escaped, re-encoded or removed, and returned
+ * text is rendered without being rescanned as source (§6.8).
  *
- * So the fence is chosen here, from the value, and it is the only thing this
- * component decides. It scans for the longest run of backticks and opens with
- * one more than that, never fewer than three, which is a fence the value cannot
- * close no matter what it holds.
+ * The envelope adds one line feed before and after the value and none after the
+ * closing fence. A document that wants a final line feed writes it.
  *
- * ## The value is not read for anything else
- *
- * Nothing is trimmed, normalized, escaped, re-encoded or removed. Text that
- * looks like a fence, an element, an interpolation, HTML or an executable code
- * block stays exactly as it arrived, because a function component's return is
- * rendered rather than rescanned as document source (§6.8). The two line feeds
- * that frame the value belong to the envelope, not to the value, and there is
- * no line feed after the closing fence: a document that wants one writes it.
- *
- * ## `value` is an ordinary prop
- *
- * Unlike `<Json>` (§6.12), whose operand must arrive by reference or lose the
- * very failures it exists to report, a string crosses the component JSON
- * boundary as itself. Keeping `value` on the ordinary boundary is what lets a
- * repository `CodeBlock.md` receive it the way it receives every other prop,
- * instead of inheriting a capture from core's registration that it never
- * declared.
- *
- * `language` is closed to one token — the info string a Markdown reader expects
- * — so that a value cannot reach the opening fence line, where it would be read
- * as syntax rather than shown as text.
+ * `value` is an ordinary string prop: it crosses the JSON boundary unchanged,
+ * and a repository replacement receives it without inheriting a capture.
+ * `language` is limited to one token so it cannot inject opening-fence syntax.
  */
 
 import type { Operation } from "effection";

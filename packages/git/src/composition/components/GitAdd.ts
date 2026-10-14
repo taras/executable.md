@@ -1,36 +1,15 @@
 /**
- * `<Git.Add>` — stage exactly the paths a document names
- * (specs/workflow-workspace-spec.md §7.2).
+ * Stage exactly the authored Git pathspecs (specs/workflow-workspace-spec.md §7.2).
  *
- * ```md
- * <Repository name="project" url={props.repository}>
- *   <Git.Add paths="release/notes.md" />
- *   <Git.Add paths={["packages/core", "deno.lock"]} />
- * </Repository>
- * ```
+ * `<Git.Add paths={["packages/core", "deno.lock"]} />` stages one array in one
+ * command and effect, preserving order, repetitions, spelling and pathspec magic.
+ * Paths are required; `"."` explicitly selects everything beneath contextual cwd,
+ * including a Dir inside the selected Repository. They never select a checkout.
  *
- * `paths` is a Git pathspec, and that is all it is. It does not choose a
- * checkout — where this stages is decided the way every Git operation's place is
- * decided, by the enclosing `<Repository>` and the contextual working directory
- * — and it is never optional. Omitting it does not mean everything; `"."` is how
- * a document says everything here, and "here" is the directory the element was
- * written in, so `<Git.Add paths="." />` inside a `<Dir path="packages">` stages
- * that directory rather than the checkout.
- *
- * What a document wrote is what Git receives. One string is the one-entry array,
- * and an array keeps its order, its repetitions, its spelling and its pathspec
- * magic, because each of those changes what Git stages. The whole array is one
- * command and one effect: Git decides what a pathspec matches, and staging entry
- * by entry would be several transitions where the document wrote one.
- *
- * It renders nothing, binds nothing and takes no content. What the run retains
- * is journal evidence — the pathspecs, and the checkout on both sides — rather
- * than anything a later element could read.
- *
- * Failure policy is `<Git.Switch>`'s. An invocation this cannot read is a fixed
- * `GitOperationError`; no Repository in scope is a failed admission and travels
- * past every printing boundary, because a document that continued past one would
- * run later siblings as though something had been staged.
+ * The component takes no content, renders nothing and binds nothing. The journal
+ * retains pathspecs and checkout evidence before and after staging. Invalid input
+ * is a fixed GitOperationError; missing or invalid Repository admission bypasses
+ * printing boundaries under the Git.Switch failure contract.
  */
 
 import { cwd } from "@executablemd/runtime";

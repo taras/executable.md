@@ -162,7 +162,6 @@ describe("Eval block return value", () => {
 
     expect(output1).toContain("replay-me");
 
-    // Replay
     const output2 = yield* collect(
       yield* execute({
         path: "test.md",

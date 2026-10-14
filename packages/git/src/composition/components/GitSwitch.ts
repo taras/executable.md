@@ -1,42 +1,17 @@
 /**
- * `<Git.Switch>` — put the contextual checkout on a named branch
+ * Switch the contextual checkout to a branch
  * (specs/workflow-workspace-spec.md §7.1).
  *
- * ```md
- * <Repository name="project" url={props.repository}>
- *   <Git.Switch branch="release/1.4" base="main" />
- * </Repository>
- * ```
+ * `<Git.Switch branch="release/1.4" base="main" />` uses the enclosing Repository
+ * and contextual cwd; a Dir may select one of its linked worktrees. Both values
+ * are observations the provider verifies against retained state, never permission.
+ * The component renders and binds nothing; before/after evidence is journal-only.
  *
- * There is no path prop, and there is no repository prop. Which checkout this
- * moves is decided by where it is written: the enclosing `<Repository>` names
- * the repository, and the contextual working directory names the checkout
- * inside it, so the same element inside a `<Dir path={worktree}>` moves that
- * linked worktree instead. Both are observations. This component holds no
- * permission over either, and the installed provider rereads what this run
- * retained rather than believing what it was handed.
- *
- * It renders nothing and binds nothing. A switch is a state change, not a value
- * a later element reads; what the run retains about it is journal evidence
- * rather than something a document could have used, and returning a branch name
- * a document already wrote would only invite reading it back as though it were
- * an answer.
- *
- * ## Two kinds of failure, and only one of them is the document's
- *
- * A refusal is something the document asked for and did not get: a base that
- * names no commit, a branch another checkout holds, local changes Git would
- * overwrite. Each arrives as a fixed `GitOperationError` and then fails the
- * operation it is part of, and an authored `<PrintErrors>` region decides
- * otherwise for its whole region.
- *
- * Admission is not that. No Repository in scope, a Repository this run does not
- * retain, a working directory inside none of its checkouts, retained state that
- * has stopped agreeing with the identity naming it — none of these is an outcome
- * a document could have avoided by asking for something else, and continuing
- * past one would run later siblings as though a branch had moved. They travel as
- * `GitOperationAdmissionError`, past every printing boundary, and nothing is
- * published for them.
+ * Git refusals such as an unresolved base, an occupied branch or overwritten local
+ * changes become fixed GitOperationError failures recoverable by PrintErrors.
+ * Missing or unretained Repository selection, cwd outside its checkouts and identity
+ * mismatch are GitOperationAdmissionError failures: printing cannot recover them,
+ * and they publish no outcome.
  */
 
 import { cwd } from "@executablemd/runtime";

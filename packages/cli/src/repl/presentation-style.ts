@@ -1,43 +1,14 @@
 /**
- * What a row means, and what that means for the cells it is drawn in.
+ * Map typed row roles to colour, weight and surface in one pure, private module.
+ * No model, host Api, Journal access or mutable state reaches this mapping.
  *
- * The application knows what every row *is* while it still has the typed facts
- * that produced it — a recorded output, an event's metadata, an entry that
- * failed, the position a reader has selected. This module is where that meaning
- * becomes colour, weight and a surface, and it is the only place that decides
- * one. Nothing above it names a colour and nothing below it reads a model: the
- * renderer is handed ops, and the ops carry whatever this said.
+ * Role, selection and history belong to the reading; keyboard focus arrives
+ * after reconciliation and adds weight without changing geometry or replacing
+ * token foregrounds. Only its marker takes the focus colour. Selection keeps
+ * its own surface, so moving focus cannot erase it.
  *
- * It is pure. There is no operation here, no host Api, no Journal access and no
- * mutable state, so a role is recomputed from the frame's own reading every time
- * and owns nothing that could outlive it. It is private to the REPL; no package
- * exports it and no plugin extends it.
- *
- * ## Three facts, and what each may change
- *
- * A row carries one immutable **role**, and separately whether it is
- * **selected** and whether it is being read as **history**. Those are facts
- * about the reading. Keyboard **focus** is not: it belongs to the mounted tree
- * and is known only after reconciliation, so it arrives at draw time and adds
- * weight to whatever the row already was. That division is what keeps selection
- * visible while focus is somewhere else — the two are drawn by different
- * properties of the same cell, so neither can erase the other.
- *
- * Focus takes no colour of its own away from a row. A row's foregrounds say
- * what its characters *are* — a delimiter, a tag, a quoted value, a failure —
- * and a focus that repainted them all one colour would cost a reader the
- * reading in exchange for a fact the marker in front of the row already
- * carries. The marker is the one cyan thing, and it is a run of its own.
- *
- * No geometry is decided here. Width, height, padding and borders are the
- * layout's, and a focused row occupies exactly the cells an unfocused one does.
- *
- * ## A colourless reading still works
- *
- * Every state this colours is also said in text: an outcome is spelled `[ok]` or
- * `[err]`, a selected row keeps its `*`, and a focused control keeps its `>`.
- * Colour is emphasis on a reading that is already complete, which is why a
- * terminal that ignores it loses nothing a person needs.
+ * Text remains sufficient without colour: outcomes spell `[ok]` or `[err]`,
+ * selection keeps `*`, and focus keeps `>`.
  */
 
 import { rgba } from "@bomb.sh/tty";
@@ -143,7 +114,6 @@ export interface ReplRowStyle {
   readonly inspected: boolean;
 }
 
-/** Build one row's style. A helper, so no call site assembles the shape. */
 export function styleOf(
   role: ReplPresentationRole,
   facts: { readonly selected?: boolean; readonly inspected?: boolean } = {},

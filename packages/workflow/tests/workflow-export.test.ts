@@ -448,7 +448,6 @@ describe("exporting a run that really ran", () => {
     expect(artifact.run.status).toBe("completed");
     expect(artifact.executions).toHaveLength(1);
 
-    // --- Retained history --------------------------------------------------
     // Six Workspace effects, in the order the document writes them. Asserted
     // before the state they produced, so a run that silently did less than the
     // document says fails here rather than passing a thinner comparison.
@@ -467,7 +466,6 @@ describe("exporting a run that really ran", () => {
     // The component the definition declares is nowhere in what ran.
     expect(artifact.journal.some((row) => row.record.includes("Unused"))).toBe(false);
 
-    // --- Multiple Workspace roots -----------------------------------------
     const rootIds = artifact.roots.map((root) => root.rootId);
     expect(new Set(rootIds).size).toBe(rootIds.length);
     expect(rootIds.length).toBeGreaterThan(1);
@@ -480,7 +478,6 @@ describe("exporting a run that really ran", () => {
       expect(rootIds).toContain(rootId);
     }
 
-    // --- File bytes, mode, symlink and hardlink state ---------------------
     const current = artifactWorkspace(artifact, artifact.frontier.currentWorkspaceRootId);
     // Whole tree, path by path: kind, mode and link target for every node the
     // run's own filesystem holds.
@@ -523,7 +520,6 @@ describe("exporting a run that really ran", () => {
       Buffer.from("rich evidence").toString("base64"),
     );
 
-    // --- Repository and Worktree ------------------------------------------
     expect(artifact.repositories).toHaveLength(1);
     expect(artifact.repositories[0]).toMatchObject({
       name: "project",
@@ -547,7 +543,6 @@ describe("exporting a run that really ran", () => {
       retainedRecord(history, "workspace_worktree")["checkoutPath"],
     );
 
-    // --- The definition, and the component nothing expanded ---------------
     const decode = (path: string): string | undefined => {
       const retained = artifact.definition.sources.find((each) => each.path === path);
       return retained === undefined ? undefined : new TextDecoder().decode(retained.bytes);

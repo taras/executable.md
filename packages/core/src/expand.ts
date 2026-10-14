@@ -3461,7 +3461,6 @@ function* expandFunctionComponent(
     }
   }
 
-  // Resolve expression props
   let resolvedProps: Record<string, Json>;
   try {
     resolvedProps = yield* resolveExpressionProps(openProps, openExpressions, name, projectedEnv);
@@ -3475,7 +3474,6 @@ function* expandFunctionComponent(
     ];
   }
 
-  // Strip slot prop before validation
   const asRefused = asBindingViolation(name, resolvedProps.as);
   if (asRefused !== undefined) {
     return [yield* raise({ type: "error", message: asRefused.message, source: name })];
@@ -3484,7 +3482,6 @@ function* expandFunctionComponent(
   const owner = asBinding === undefined ? callerOwner : undefined;
   const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
 
-  // Validate props
   let validatedProps: Record<string, Json>;
   try {
     validatedProps = yield* validateProps(name, propsForValidation, definition.props);
@@ -3999,10 +3996,8 @@ function* resolveExpressionProps(
   componentName: string,
   explicitEnv?: EvalEnv,
 ): Operation<Record<string, Json>> {
-  // Start with already-resolved props
   const resolved = { ...props };
 
-  // Nothing to evaluate
   if (Object.keys(expressions).length === 0) {
     return resolved;
   }

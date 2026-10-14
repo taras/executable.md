@@ -722,19 +722,11 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
   /**
    * A directory this call created, named by its canonical path.
    *
-   * Creation is synchronous so that nothing can suspend between it and the
-   * `ensure` that removes it. `until()` cannot cancel the promise it is waiting
-   * on, so an asynchronous `mkdtemp` halted mid-flight would go on to create a
-   * directory after the generator had already stopped — one nothing owns and
-   * nothing removes. `mkdtemp` names and creates at once, so the directory is
-   * never one an earlier run left behind.
-   *
-   * Everything after that is ordinary work and suspends. The path is
-   * canonicalized: on macOS `tmpdir()` is a symlink (`/var/folders/…`) while a
-   * child process resolves it (`/private/var/…`), and canonicalizing is what
-   * makes the rendered path, the contextual directory, and a subprocess's own
-   * `cwd` the same string. Cleanup is already registered by then, so a halt
-   * during it still takes the directory away.
+   * Synchronous `mkdtemp` creates a fresh directory without a cancellation gap
+   * before cleanup registration; an uncancellable asynchronous creation could
+   * finish after its owner halted. The path is canonicalized after cleanup is
+   * registered so macOS's symlinked temporary root and a subprocess's `cwd`
+   * agree. Cancellation during canonicalization still removes the directory.
    */
   function temporaryDirectory(): Operation<Result<string>> {
     return resource(function* (provide) {
