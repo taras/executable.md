@@ -89,10 +89,10 @@ export function getJournalProvenance(stream: DurableStream): JournalProvenance |
 /**
  * `appendDurableEvent` creates a fresh rejection record for each durable append,
  * shared by loaded copies through the stable, namespaced Context below.
- * Reusing an Error in a later append carries
- * no rejection with it: classification checks this occurrence's flag and the
- * exact error it recorded. This scoped record is separate from the canonical
- * module's private journal-provenance witness.
+ * Reusing an Error in a later append carries no rejection with it:
+ * classification checks this occurrence's flag and the exact error it recorded.
+ * This scoped record is separate from the canonical module's private
+ * journal-provenance witness.
  */
 export interface DurableEventRejectionOccurrence {
   rejected: boolean;

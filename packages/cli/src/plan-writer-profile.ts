@@ -23,8 +23,7 @@
  * configure the approved document, later, and reach none of this.
  *
  * The trusted document reads through the ordinary Files provider and effective
- * Permissions. Files mutations, commands, services and XMD-mediated network
- * requests are refused here; the approved document performs them later.
+ * Permissions. This frame refuses Files mutations, Process, Service and Fetch.
  */
 
 import { ensure, Err, Ok, scoped, until, useScope } from "effection";

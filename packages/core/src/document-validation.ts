@@ -126,9 +126,9 @@ export interface ValidateDocumentSettings {
    *
    * A declared Markdown component describes itself completely, so an invocation
    * is checked against its contract exactly as a registration is. Its Markdown
-   * body is not walked: those bytes are the host's, an author cannot change them, and
-   * the names only they may write resolve nowhere else — so reporting on them
-   * would be reporting a document's author for the engine's own asset.
+   * body is not walked: those bytes are the host's, an author cannot change them,
+   * and the names only they may write resolve nowhere else — so reporting on
+   * them would be reporting a document's author for the engine's own asset.
    */
   readonly declarations?: readonly ExecutionDeclaration[];
 }

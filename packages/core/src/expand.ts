@@ -2946,8 +2946,8 @@ function* expandComponent(
     // What this definition's own body may write. A declaration carries its
     // private closure here; every other body clears the caller's private closure.
     // Decided from the definition canonical resolution retained — the one this
-    // expansion is about to invoke,
-    // reporting the origin core declared — rather than from the name alone.
+    // expansion is about to invoke, reporting the origin core declared — rather
+    // than from the name alone.
     const bodyEnvironment = environmentForBody(environment, name, definition);
 
     const placementError = validateBodyStructure(definition.bodySegments, definition.returns);
@@ -3986,10 +3986,8 @@ function asFailure(thrown: unknown): Error {
  * JavaScript. Ordinary props use `new Function()` with those bindings as
  * parameters, and their text comes from the trusted document author.
  *
- * Ordinary authored expressions use `new Function()` rather than `node:vm`;
- * Deno's permission model supplies the execution boundary. Results must pass
- * serialization checks on either path. Errors are thrown, not ErrorSegments,
- * consistent with prop validation.
+ * Results must pass serialization checks on either path. Errors are thrown,
+ * not ErrorSegments, consistent with prop validation.
  */
 function* resolveExpressionProps(
   props: Record<string, Json>,

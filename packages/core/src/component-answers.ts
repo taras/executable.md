@@ -33,8 +33,7 @@
  * an exact identity match, the right `allow` class, whole-fragment preflight
  * and canonical generated import — all of them independently. Middleware that
  * answers an import without stating an identity is an ordinary replacement
- * and stays exactly as valid as it was;
- * what it cannot do is enter an admitted fragment.
+ * and stays exactly as valid as it was; it cannot enter an admitted fragment.
  */
 
 import type { Operation } from "effection";
