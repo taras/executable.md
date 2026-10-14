@@ -189,12 +189,6 @@ export { generatedRequestRefusal } from "./src/generated-request-refusal.ts";
  */
 export { classifyPlanResponse } from "./src/plan-response.ts";
 export type { PlanResponseKind } from "./src/plan-response.ts";
-/**
- * The symbols a host's profile describes, when they are not the ones the
- * execution would derive from its own captured inputs — see
- * `src/syntax-reference.ts`.
- */
-export type { SyntaxSymbolsProvider } from "./src/syntax-reference.ts";
 export type { DurablePreparation } from "./src/document-request.ts";
 
 /**
@@ -407,3 +401,18 @@ export type { AnswerConfiguration, AnswerMatcher } from "./src/answers.ts";
  */
 export { DeclarationScan } from "./src/declaration-scan.ts";
 export type { AnswersPlacement, DeclarationScanner } from "./src/declaration-scan.ts";
+
+/**
+ * Where a trusted host states the description its profile shows.
+ *
+ * A setup operation rather than a value on the installation, because what it
+ * binds is two things: the lazy source, and the documentation contributions
+ * that are in scope where it is called. `xmd plan` needs both — a Plan is a
+ * program a later `xmd run` executes, so the vocabulary the agent must be shown
+ * is that profile's, and so is the long-form prose a named lookup renders.
+ *
+ * It reads nothing when called and installs ordinary providers, so nearer
+ * middleware still answers, delegates or transforms. Stating a description
+ * confers no execution authority.
+ */
+export { useSyntax } from "./src/use-syntax.ts";

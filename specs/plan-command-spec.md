@@ -342,9 +342,11 @@ The host supplies two fixed internal inputs as that root's props:
 
 They are the adapter's own, and nothing a Plan declares is bound here: the
 properties a Plan's root declares are resolved by whoever runs it. The symbols
-are not among them either. The command states the vocabulary its profile
-describes at the execution boundary, captured before any installed code runs,
-and the packaged Component reaches them by writing the public `<Syntax />` any
+are not among them either. The command enters the target run's declarative
+bootstraps and binds a lazy source through core's `useSyntax` helper before
+execution. The source inspects captured target registry/declaration inputs, and
+setup snapshots the same assembly's documentation contributions. The packaged
+Component reaches the contextual answer by writing the public `<Syntax />` any
 document may write — so an authored phase can say that preparation is starting
 before the read happens, and the symbols the Agent is shown are the ones an
 operator can print.

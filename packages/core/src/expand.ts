@@ -122,6 +122,7 @@ import { isPrivateImplementation, issueInvocation } from "./invocation-identity.
 import type { IdentityDomain } from "./invocation-identity.ts";
 import { protectedContentLease } from "./protected-content.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
+import { useNarrowedSyntax } from "./syntax-api.ts";
 import { withInvocation } from "./invocation.ts";
 import { observeExpansion } from "./component-expansion.ts";
 import type { ObservedExpansion } from "./component-expansion.ts";
@@ -369,6 +370,17 @@ interface ProjectionState {
    */
   checkedFailures: CheckedFailures | undefined;
   environment: ExecutionEnvironment | undefined;
+  /**
+   * The admission a protected producer's content is narrowed to, when one
+   * narrowed it.
+   *
+   * Set only where a boundary replaced the reference, and reported to the
+   * contextual Api in the content scope below. The ordinary handle leaves it
+   * absent on purpose: the execution's own reference is already the Api's
+   * fallback, and reinstalling it here as middleware would shadow a host that
+   * stated its own profile.
+   */
+  narrowedSyntax: SyntaxReference | undefined;
   imports: ComponentImportTerminal | undefined;
 }
 
@@ -493,6 +505,9 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       const task = contentScope.scope.run(function* () {
         try {
           yield* ErrorMode.set(options.mode);
+          if (state.narrowedSyntax !== undefined) {
+            yield* useNarrowedSyntax(state.narrowedSyntax);
+          }
           if (options.segments.length === 0) {
             outcome.resolve({ segments: [] });
             return;
@@ -592,6 +607,9 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         const task = contentScope.scope.run(function* () {
           try {
             yield* ErrorMode.set(mode);
+            if (state.narrowedSyntax !== undefined) {
+              yield* useNarrowedSyntax(state.narrowedSyntax);
+            }
             if (!slotErrorsEmitted && slots.errors.length > 0) {
               slotErrorsEmitted = true;
               for (const slotError of slots.errors) {
@@ -3074,6 +3092,7 @@ function* expandComponent(
         invocation,
         enclosing,
         children,
+        narrowedSyntax: undefined,
         caller: {
           env: capturedCallerEnv,
           meta: callerMeta,
@@ -3587,6 +3606,7 @@ function* expandFunctionComponent(
           projecting: issued.projecting,
           enclosing,
           children,
+          narrowedSyntax: undefined,
           caller: {
             env: undefined,
             meta: callerMeta,
@@ -3741,6 +3761,7 @@ function* expandFunctionComponent(
                   // content scope, not a second expansion.
                   const narrowed = createProjectionHandle({
                     ...projectionState,
+                    narrowedSyntax: syntax,
                     // Only the reference is replaced, and only where there is an
                     // environment to replace it on: an expansion driven without
                     // one narrows nothing because it admitted nothing.

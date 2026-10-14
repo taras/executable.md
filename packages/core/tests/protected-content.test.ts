@@ -24,6 +24,7 @@ import type { Operation } from "effection";
 
 import { ComponentInvocationError } from "../src/invocation-identity.ts";
 import { protectedContentLease } from "../src/protected-content.ts";
+import type { SyntaxSymbols } from "../api.ts";
 import type { SyntaxReference } from "../src/syntax-reference.ts";
 
 /**
@@ -36,8 +37,15 @@ import type { SyntaxReference } from "../src/syntax-reference.ts";
  */
 const REFERENCE: SyntaxReference = {
   // deno-lint-ignore require-yield
-  *symbols(): Operation<string> {
-    return "";
+  *symbols(): Operation<SyntaxSymbols> {
+    return {
+      version: 2,
+      categories: [
+        { kind: "structural", entries: [] },
+        { kind: "built-in", entries: [] },
+        { kind: "user-provided", entries: [] },
+      ],
+    };
   },
   // deno-lint-ignore require-yield
   *documentation(): Operation<string> {

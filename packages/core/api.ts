@@ -128,3 +128,29 @@ export type {
   ComponentExpansionRequest,
 } from "./src/component-api.ts";
 export type { Expansion } from "./src/expansion.ts";
+
+/**
+ * The execution a host composes around, and the requests its layers are handed.
+ *
+ * Three seams. `init` is the one a command host installs on: it establishes
+ * the live dependencies this execution runs on, once, inside the scope the
+ * invocation already owns. `execute` is the request-policy seam and `document`
+ * wraps the whole expansion; both of those defaults refuse, because only
+ * canonical core completes a document.
+ */
+export { Execution } from "./src/execute.ts";
+export type { ExecutionApi } from "./src/execute.ts";
+export type { ExecutionRequest } from "./src/execution-request.ts";
+export type { DocumentRequest } from "./src/document-request.ts";
+
+/**
+ * The description in effect, as the thing a consumer composes on.
+ *
+ * The same descriptor the root exports, reachable from here as well because a
+ * consumer installing middleware imports from `./api`. What the three
+ * properties answer, and what composing on them does and does not change, is
+ * in `src/syntax-api.ts`; `./host`'s `useSyntax` is how a host supplies one.
+ */
+export { Syntax } from "./src/syntax-api.ts";
+export type { SyntaxApi } from "./src/syntax-api.ts";
+export type { SyntaxSymbols } from "./src/inspect.ts";

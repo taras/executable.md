@@ -24,8 +24,19 @@ import type {
   StructuralSyntaxEntry,
   SyntaxSymbols,
 } from "./inspect.ts";
-import { NO_DOCUMENTATION } from "./documentation-index.ts";
 import type { ComponentOrigin, Json, PropsSchema } from "./types.ts";
+
+/**
+ * What a component with no authored documentation renders instead of prose.
+ *
+ * Here, with the renderer that emits it, rather than with the index that
+ * returns nothing for such a component: an absent entry and the sentence
+ * standing in for one are different facts, and only the renderer needs the
+ * second. Keeping it here is also what lets this module stay a leaf of the
+ * documentation index, so the contextual `Syntax` Api can reach the renderer
+ * without the component registry reaching back through it.
+ */
+export const NO_DOCUMENTATION = "No long-form documentation is available for this component.";
 
 /** The three category kinds, taken from the symbols rather than restated. */
 type CategoryKind = SyntaxSymbols["categories"][number]["kind"];

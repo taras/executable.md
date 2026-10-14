@@ -53,6 +53,7 @@ import type {
 } from "@executablemd/core/host";
 import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
 import { elicitWriteEntry } from "@executablemd/core/host";
+import { useSyntax } from "@executablemd/core/host";
 import { Elicitation } from "@executablemd/core";
 import { recordedFiles, useRecordedFiles } from "../../core/tests/support/fragment-files.ts";
 import type { RecordedFiles } from "../../core/tests/support/fragment-files.ts";
@@ -229,6 +230,7 @@ function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
     // would show an operator whitespace nobody wrote.
     yield* useNormalizedOutput();
     try {
+      yield* useSyntax(harness.symbols);
       const execution = yield* executeInstalled(
         {
           ...retainedSource(PLAN_COMMAND_IDENTITY, source),
@@ -244,7 +246,6 @@ function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
           {
             components: agentIdentityComponents(),
             declarations: [harness.declaration],
-            symbols: harness.symbols,
             // The ceiling the command installs, so an information request this
             // document evaluates reads through exactly what `xmd run` states.
             // A case that supplies its own recorder gets that instead, which is
@@ -569,6 +570,7 @@ describe("the packaged plan command document", () => {
       yield* scoped(function* () {
         yield* installAgentComponents({ defaultAgent: AGENT, permissionMode: "deny-all" });
         yield* useNormalizedOutput();
+        yield* useSyntax(harness.symbols);
         const execution = yield* executeInstalled(
           {
             ...retainedSource(PLAN_COMMAND_IDENTITY, source),
@@ -581,7 +583,6 @@ describe("the packaged plan command document", () => {
             {
               components: agentIdentityComponents(),
               declarations: [installed],
-              symbols: harness.symbols,
             },
           ],
         );

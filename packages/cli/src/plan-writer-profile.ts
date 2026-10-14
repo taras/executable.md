@@ -45,7 +45,7 @@ import {
   useTerminalOutput,
 } from "@executablemd/core";
 import type { AgentProviderOptions, Json } from "@executablemd/core";
-import type { SyntaxSymbolsProvider, MarkdownComponent } from "@executablemd/core/host";
+import type { MarkdownComponent } from "@executablemd/core/host";
 import { executeInstalled, installInvocationAgentProvider } from "@executablemd/core/host";
 import { createAcpxProvider } from "@executablemd/acp";
 import type { AcpxProviderDependencies } from "@executablemd/acp";
@@ -170,15 +170,16 @@ export interface PlanWriterProfile {
    */
   declaration: MarkdownComponent;
   /**
-   * The symbols this authorship describes.
+   * Install the description this authorship shows.
    *
-   * The `run` profile's, because a Plan is a program a later `xmd run` executes:
-   * deriving them from this execution — which searches no repository and
-   * refuses almost every capability — would describe a vocabulary the approved
-   * program would not have. Captured with the rest of the installation, before
-   * any installed code, middleware or document code runs.
+   * Invoked inside the bounded scope below, before the execution exists, which
+   * is the only place a target-run profile can be both bootstrapped and
+   * captured: the helper core exports snapshots the documentation contributions
+   * that are in scope when it is called, so a host that bootstrapped elsewhere
+   * and handed over a bare symbols callback would lose them, and named metadata
+   * would fall back to this restricted authorship execution's own catalog.
    */
-  symbols: SyntaxSymbolsProvider;
+  installSyntax(): Operation<void>;
 }
 
 /** What building the constrained provider needs, and nothing more. */
@@ -428,84 +429,88 @@ export function* runPlanCommandDocument(profile: PlanWriterProfile): Operation<R
       defaultAgent: context.value.defaultAgent,
       permissionMode: PLAN_WRITER_POLICY.permissionMode,
     });
-    const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
-    try {
-      // The presentation every phase this command renders passes through. A raw
-      // capture would show an operator whitespace nobody wrote, and terminal
-      // formatting belongs to a terminal — which is the host's fact about its
-      // own stream, not something this module may go and detect.
-      yield* useNormalizedOutput();
-      if (profile.progress.terminal) {
-        yield* useTerminalOutput();
-      }
-
-      // The command root is a thin adapter: it projects the request into
-      // `<Plan>` and returns what comes back. Everything that used to be
-      // installed around it — the directory, the provider, the Elicitation, the
-      // refusals — is installed by the Component itself, inside the invocation that
-      // owns it, so the command and an ordinary document run one workflow rather
-      // than two arrangements of one.
-      const execution = yield* executeInstalled(
-        {
-          ...retainedSource(PLAN_COMMAND_IDENTITY, source),
-          stream: profile.stream,
-          // No repository component search. What the adapter may name is
-          // what this command declares, so a file in the caller's tree
-          // cannot answer for `<Plan>` or anything else.
-          includes: [],
-          // The one secret boundary this command has. Every live durable event
-          // crosses the serialized pre-append gate, so a draft or a diagnostic
-          // becomes readable — to the journal and to the phase that presents it
-          // — only after the event supplying it has cleared and committed.
-          secretDetection: true,
-          props: {
-            request: profile.request,
-            session: profile.session,
-          },
-        },
-        [
-          {
-            components: agentIdentityComponents(),
-            declarations: [profile.declaration],
-            // What a Plan may write is the `run` profile's vocabulary, not this
-            // authorship execution's — the adapter searches no repository, the
-            // Component installs a ceiling that refuses almost everything, and
-            // symbols derived from *that* would describe a program nobody can
-            // run. Captured before any installation runs, so no prop, binding,
-            // middleware answer or projected content reaches it.
-            symbols: profile.symbols,
-            // The ordinary run's evaluation ceiling, so an information request
-            // this authorship evaluates reads through exactly what `xmd run`
-            // states — File, Glob and canonical Syntax, with the write table
-            // present and never selected. The host installs it, not `<Plan>`:
-            // a component that installed its own would be choosing its
-            // ceiling instead of being given one.
-            evaluation: ordinaryEvaluationProfile(),
-          },
-        ],
-      );
-
-      // Drains while the document is still producing. A destination that fails
-      // raises here, and leaving this scope cancels the execution and waits for
-      // its teardown before anything is reported.
-      yield* forEach(function* (chunk: string) {
-        const written = yield* profile.progress.write(chunk);
-        if (!written.ok) {
-          throw new ProgressDeliveryError(written.error);
+    // A scope of its own, because the descriptive setup below enters the target
+    // run's declarative bootstraps, and those register names — `AgentProvider`
+    // among them — that the operational install above already registered here.
+    // Registration refuses two for one name at one scope and says to nest the
+    // one that shadows, which is what this is.
+    return yield* scoped(function* () {
+      // One descriptive setup, here, before `executeInstalled()` below — so the
+      // packaged `<Syntax />` the Component writes reads the profile the Plan
+      // is being written for. Nothing further in may state another.
+      yield* profile.installSyntax();
+      const source = yield* readPackagedDocument(PLAN_COMMAND_DOCUMENT);
+      try {
+        // The presentation every phase this command renders passes through. A raw
+        // capture would show an operator whitespace nobody wrote, and terminal
+        // formatting belongs to a terminal — which is the host's fact about its
+        // own stream, not something this module may go and detect.
+        yield* useNormalizedOutput();
+        if (profile.progress.terminal) {
+          yield* useTerminalOutput();
         }
-      }, execution.output);
 
-      const completed = yield* execution;
-      if (!completed.ok) {
-        return completed;
+        // The command root is a thin adapter: it projects the request into
+        // `<Plan>` and returns what comes back. Everything that used to be
+        // installed around it — the directory, the provider, the Elicitation, the
+        // refusals — is installed by the Component itself, inside the invocation that
+        // owns it, so the command and an ordinary document run one workflow rather
+        // than two arrangements of one.
+        const execution = yield* executeInstalled(
+          {
+            ...retainedSource(PLAN_COMMAND_IDENTITY, source),
+            stream: profile.stream,
+            // No repository component search. What the adapter may name is
+            // what this command declares, so a file in the caller's tree
+            // cannot answer for `<Plan>` or anything else.
+            includes: [],
+            // The one secret boundary this command has. Every live durable event
+            // crosses the serialized pre-append gate, so a draft or a diagnostic
+            // becomes readable — to the journal and to the phase that presents it
+            // — only after the event supplying it has cleared and committed.
+            secretDetection: true,
+            props: {
+              request: profile.request,
+              session: profile.session,
+            },
+          },
+          [
+            {
+              components: agentIdentityComponents(),
+              declarations: [profile.declaration],
+              // The ordinary run's evaluation ceiling, so an information request
+              // this authorship evaluates reads through exactly what `xmd run`
+              // states — File, Glob and canonical Syntax, with the write table
+              // present and never selected. The host installs it, not `<Plan>`:
+              // a component that installed its own would be choosing its
+              // ceiling instead of being given one.
+              evaluation: ordinaryEvaluationProfile(),
+            },
+          ],
+        );
+
+        // Drains while the document is still producing. A destination that fails
+        // raises here, and leaving this scope cancels the execution and waits for
+        // its teardown before anything is reported.
+        yield* forEach(function* (chunk: string) {
+          const written = yield* profile.progress.write(chunk);
+          if (!written.ok) {
+            throw new ProgressDeliveryError(written.error);
+          }
+        }, execution.output);
+
+        const completed = yield* execution;
+        if (!completed.ok) {
+          return completed;
+        }
+        if (typeof completed.value !== "string") {
+          return Err(new Error("the plan command document returned something that is not a Plan"));
+        }
+        return Ok(completed.value);
+      } catch (error) {
+        return Err(error instanceof Error ? error : new Error(String(error)));
       }
-      if (typeof completed.value !== "string") {
-        return Err(new Error("the plan command document returned something that is not a Plan"));
-      }
-      return Ok(completed.value);
-    } catch (error) {
-      return Err(error instanceof Error ? error : new Error(String(error)));
-    }
+    });
   });
 }
 

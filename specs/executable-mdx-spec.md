@@ -2790,7 +2790,11 @@ the bare form continues to list structural syntax alongside components.
 The documentation is read from the owning package through the direct filesystem,
 not through `API.Fs` or the document-facing `Files` provider. Both of those are
 middleware a running document can compose around, and a document that could
-answer the read would decide what the product says about itself.
+answer the read would decide what the product says about itself. What that read
+produces is the *captured default* catalog, and canonical collection owns it.
+The effective answer an occurrence receives is a separate thing: live `Syntax`
+middleware composes in front of that catalog and may transform or replace what
+it produced.
 
 **Documentation composes with the components it describes.** A package's
 bootstrap installs its registrations and its documentation together — the
@@ -2859,12 +2863,16 @@ host-maintained list of every package's registrations, is two lists that drift;
 this is one.
 
 **Reference and availability are separate.** The reference carries two inputs.
-Bare `<Syntax />` reports what may **execute** at this site. The named form
-selects from the **enclosing authoring symbols** and states, per entry,
-`**Available in this evaluation:** yes` or `no`. At a root the two are one set
-of symbols and everything selected is available; a trusted evaluation boundary that
-narrows execution keeps the enclosing reference, so a nested author can be told
-how a component works where they may not run one — and is told which it is.
+Default bare `<Syntax />` reports the effective contextual symbols at this
+site. The named form selects from the **enclosing authoring symbols** and
+states, per entry,
+`**Available in this evaluation:** yes` or `no`. Uncustomized at a root the two
+are one set of symbols and everything selected is available; a trusted
+evaluation boundary that narrows execution keeps the enclosing reference, so a
+nested author can be told how a component works where they may not run one —
+and is told which it is. Descriptive middleware that filters the effective
+symbols separates the two at a root as well, and the per-entry label is what
+says so.
 Neither input carries definitions, import witnesses, invocation capabilities,
 providers, registrations or any other execution capability.
 
@@ -2892,14 +2900,41 @@ the import, delegate it and refuse it by throwing, but cannot answer it, replace
 what came back, mutate it, or hand back a definition kept from another import or
 built by another loaded copy.
 
-**The symbols are the execution's own.** Canonical core builds them at the root from
-the selection inputs that execution captured before any installation, middleware
-or document code ran — its includes, the registry it started with, the identity
-components and exact Markdown its host declared, and the component bundle it is
-closed over — and carries them lexically on canonical core's own expansion
-environment. A trusted host may state the symbols its profile describes instead,
-captured on the same terms; one execution accepts one, and two are refused rather
-than ordered. Nothing is built until an occurrence asks.
+**Live descriptions use the contextual Syntax API.** Core exports this API and
+its types from `@executablemd/core/api`, alongside the same Execution descriptor
+exported from the package root:
+
+```ts
+interface SyntaxApi {
+  readonly symbols: Operation<SyntaxSymbols>;
+  readonly text: Operation<string>;
+  documentation(names: readonly string[]): Operation<string>;
+}
+```
+
+Callers yield `Syntax.operations.symbols` and `.text` without parentheses;
+property middleware and its continuation return Operations. A host binds a
+complete descriptive profile of its own with
+`useSyntax(source: () => Operation<SyntaxSymbols>): Operation<void>` from
+`@executablemd/core/host`, which installs ordinary symbols and documentation
+providers without reading the source. `ExecutionInstallation` carries no symbols
+provider and no descriptive provider count rule: ordinary middleware
+composition decides the live answer. How the defaults, the execution's own
+fallback and a narrowing boundary rank against each other is
+[the syntax symbols boundary](../architecture.md#the-syntax-symbols-boundary).
+
+Default text renders the effective contextual symbols, and text middleware may
+transform or replace that answer. Default named lookup retains its enclosing
+catalog for metadata and long-form text and reads effective symbols once for
+availability, so filtering symbols affects bare text and named availability
+while an omitted enclosing component remains documentable; text-only
+customization changes neither symbols nor named lookup, and a synthetic answer
+that does not delegate skips the default work entirely. Generated producer and
+body scopes narrow symbols only, retaining the enclosing named-documentation
+owner, and their descriptive bindings end with those scopes. Standalone Plan
+and CLI inspection bind the target run's declarative profile through
+`useSyntax`; embedded Plan inherits its enclosing profile. CLI inspection
+starts no execution initialization or operational provider merely to print.
 
 Seeing a component in the symbols grants nothing. It neither registers, resolves
 nor authorizes that component: what a name means is still this section's
@@ -9868,6 +9903,33 @@ workflow and returns a `DocumentExecution` handle. Options:
 - `secretDetection?` — detect credentials before durable events persist
   (default: enabled)
 
+#### Execution initialization
+
+`Execution.init(): Operation<void>` runs once in the existing invocation-owned
+scope. Its default is no-op and supplies no Files provider. A host registers
+ordinary middleware, installs its live dependencies there and delegates with
+`yield* next()`. Where that sits in the order core already guarantees — after
+the trusted host contributions are copied and their revocation armed, before
+installation callbacks, documentation capture and public `Execution.execute`
+policy — is
+[capability-backed execution](../architecture.md#capability-backed-execution).
+The generated profile's provider-bound definitions are resolved during document
+assembly.
+
+Failure or cancellation during init prevents execution policy, root import and
+body and waits for all acquired cleanup before settlement. Concurrent
+executions have independent initialized state; ordinary descendants inherit it.
+A later sibling inherits no completed execution's state. Observing a completed
+handle starts no new init. A fresh continuation establishes fresh live state
+while completed durable operations and Syntax answers replay passively.
+
+`runDocument`, REPL `runEntry` and isolated ordinary `runProfileChild` all reach
+this core initialization point. Isolated children explicitly reinstall selected
+host/Plugin middleware after cwd assembly and inherit no arbitrary parent
+handlers. REPL state is per entry below the existing Agent attachment, which
+init does not replace, and so are durable preparation and the journal owner.
+The REPL expansion controller does not pause at initialization.
+
 #### The host's repository provider
 
 [Ordinary repository ownership](../architecture.md#ordinary-repository-ownership)
@@ -12132,6 +12194,31 @@ composition underneath it.
 | FX4 | The dispatcher authenticates its own invocation | Reached directly, with no import to intercept, each fixed dispatcher refuses an invocation the engine did not issue |
 | FX5–FX5d | Directory ownership | A body that fails and a body cancelled inside the region both leave the created directory, and the enclosing directory is read back **in the scope that installed it** rather than in a fresh run that would install its own; a refused ensure expands no content and writes nothing; an existing directory keeps what is in it |
 | ORC3 | The shipped command | A real `xmd run` performs the whole journey with candidates for all three names beside the document, ignores them, and restores the working directory for the sibling after the region |
+
+
+### Tier EI — Execution initialization
+
+| ID | Assertion |
+| --- | --- |
+| EI1 | Root and `/api` export the same descriptor; init defaults to no-op, dispatches once per fresh execution, and does not rerun for completed handle observation. |
+| EI2 | Init-installed state is visible to assembly, documentation capture and execute/document policy in that order. |
+| EI3 | Init cannot replace already captured admissions, declarations or generated profile tables. |
+| EI4–EI5 | Initializer failure and deterministic cancellation reach no policy/root and settle only after held cleanup finishes. |
+| EI6–EI7 | Concurrent state is independent and inherited by ordinary descendants; sibling state restores; no-op init invents no Files provider while explicit init supplies one. |
+| EI-REPL | Two entries beneath the same session attachment own distinct initialized state and completed observation does not reinitialize. |
+| EI-child | An isolated run child reinstalls chosen Plugin initialization after cwd assembly and does not inherit unrelated parent middleware. |
+
+### Tier SA — Contextual Syntax
+
+| ID | Assertion |
+| --- | --- |
+| SA1 | Exact public Operation-valued properties use reusable lazy defaults and a suspending source/transform. |
+| SA2–SA3 | Symbols affect default text and named availability, text-only middleware changes neither structured symbols nor named lookup, synthetic answers skip default work, and scoped providers restore. |
+| SA4 | Moving named occurrences each resolve one authoring basis and one effective symbols answer and retain the final transformed text. |
+| SA5 | Complete and partial replay restore final bare/named text while every live symbols, text, catalog and source provider in scope is one that throws if consulted. |
+| SA6–SA7 | Generated scopes retain host-only metadata while reporting availability; adding descriptions admits nothing and hiding an admitted component disables nothing. |
+| SA8 | Canonical unknown names retain safe refusal values while provider-thrown UnknownComponentError remains an operation error. |
+| SA9 | Independently constructed same-name API descriptors compose ordinary middleware. |
 
 ### Tier SYN — The public `<Syntax />` component
 
