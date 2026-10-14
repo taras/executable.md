@@ -34,7 +34,7 @@ import { fileDeleteEntry, fileReadEntry, fileWriteEntry } from "../host.ts";
 import type { ExecutionInstallation } from "../host.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { retainedSource } from "../src/root-source.ts";
-import { recordedFiles } from "./support/fragment-files.ts";
+import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
 import type { RecordedFiles } from "./support/fragment-files.ts";
 
 const ROOT_PATH = "evaluate.md";
@@ -42,7 +42,7 @@ const NOTE = "the retained note\n";
 
 /** A read-only profile: no write table at all. */
 function reading(files: RecordedFiles): ExecutionInstallation {
-  return { evaluation: { read: [fileReadEntry()], files } };
+  return { evaluation: { read: [fileReadEntry()] }, install: () => useRecordedFiles(files) };
 }
 
 /** A profile offering both classes. */
@@ -51,8 +51,8 @@ function both(files: RecordedFiles): ExecutionInstallation {
     evaluation: {
       read: [fileReadEntry()],
       write: [fileWriteEntry(), fileDeleteEntry()],
-      files,
     },
+    install: () => useRecordedFiles(files),
   };
 }
 

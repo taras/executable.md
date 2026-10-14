@@ -106,6 +106,16 @@ function runDocument(
   // the attachment and outside the execution, which is where the run's own
   // `<Dir>` installs one — modelled by this host rather than imported, for the
   // same reason the directory entry above is stated rather than imported.
+  //
+  // At `min`, because that is what it is modelling. `<Dir>`, `<TempDir>` and
+  // the run's own Workspace root all install the contextual directory there,
+  // and the ordering is the reason: a `min` handler installed in an inner scope
+  // answers ahead of one installed further out, which is how a nested
+  // directory narrows an enclosing one. A `max` handler here would answer
+  // ahead of *every* `min` and so could not be narrowed at all — it modelled
+  // the site's directory in a way no run installs one, which went unnoticed
+  // while a generated fragment resolved its paths through the evaluator's own
+  // cursor instead of the contextual directory.
   within?: string,
 ): Operation<Attempt> {
   return scoped(function* () {
@@ -127,12 +137,15 @@ function runDocument(
         database,
         scoped(function* () {
           if (within !== undefined) {
-            yield* API.Env.around({
-              // deno-lint-ignore require-yield
-              *cwd(): Operation<string> {
-                return within;
+            yield* API.Env.around(
+              {
+                // deno-lint-ignore require-yield
+                *cwd(): Operation<string> {
+                  return within;
+                },
               },
-            });
+              { at: "min" },
+            );
           }
           return yield* collect(
             yield* executeInstalled(

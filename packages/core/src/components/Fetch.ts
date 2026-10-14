@@ -78,8 +78,14 @@ function isSuccess(status: number): boolean {
  * not depend on a provider that invalidates its own header collection once the
  * body has been consumed. A `HEAD` never calls `text()`: there is no body to
  * read, and asking for one would fail against a provider that says so.
+ *
+ * Exported for the one other caller that performs an authored request: an
+ * admitted generated `<Fetch />` performs the request its entry's ceiling
+ * admitted rather than the props it was written with, so it cannot enter this
+ * component through its props — and a second observation of its own would be a
+ * second answer to what a retained response is.
  */
-function* observe(request: FetchRequest): Operation<FetchResponseRecord> {
+export function* observeFetch(request: FetchRequest): Operation<FetchResponseRecord> {
   const response = yield* fetch(request.url, {
     method: request.method,
     headers: request.headers,
@@ -105,7 +111,7 @@ export default function* Fetch(props: Record<string, Json>): Operation<Json> {
       ...(expansion.position === undefined ? {} : { position: expansion.position }),
     },
     request,
-    () => observe(request),
+    () => observeFetch(request),
   );
 
   const response = parseResponseRecord(retained);

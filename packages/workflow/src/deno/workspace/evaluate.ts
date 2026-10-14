@@ -31,8 +31,9 @@
  *
  * `allow` names an effect *class*, and the class resolves to the table stated
  * here. Omitting it asks for `read`. Asking for `write` reaches core's paired
- * `<File>`, workflow's `<Dir>` and core's self-closing `<File.Delete>` and
- * nothing else — no Git, no Git host, no Issue, no process, no credential — and
+ * `<File>`, the directory entry this host captured — `<Dir>` is canonical
+ * core's own component now, and what a host supplies is the entry admitting it
+ * — and core's self-closing `<File.Delete>`, and nothing else — no Git, no Git host, no Issue, no process, no credential — and
  * a host that installed no write table refuses the selection before the
  * candidate is parsed.
  *
@@ -41,29 +42,37 @@
  * effect transaction, and is retained by the `workspace_file` effect that
  * transaction publishes. Nothing about it reaches the value `<Evaluate>`
  * returns.
+ *
+ * ## The operations are the run's own, not this file's
+ *
+ * This states names, forms, identities and ceilings, and no operation at all.
+ * An admitted entry runs canonical core's own component, which performs its
+ * work through contextual `API.Files` and `API.Fetch` — in a workflow run,
+ * the transaction-bound provider `workspace/host.ts` installed and the
+ * transport the workflow host installed. So an admitted write is the same
+ * durable effect an authored one is, published by the same transaction,
+ * observed by the same middleware and decided by the same effective
+ * `Permissions`. A fragment's relative paths resolve against the run's own
+ * contextual working directory, which is the Workspace root as narrowed by the
+ * run's own `<Dir>`, `<Repository>` and `<Worktree>` — never the directory the
+ * caller invoked `xmd` from.
  */
 
-import { API, cwd, timeoutFetch } from "@executablemd/runtime";
+import { timeoutFetch } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import {
-  detachHeaders,
-  detachStatus,
   fetchEntry,
   fileDeleteEntry,
   fileReadEntry,
   fileWriteEntry,
 } from "@executablemd/core/host";
 import type {
-  FetchResponseRecord,
   FragmentEntry,
   FragmentEvaluationInput,
-  FragmentFetchAccess,
-  FragmentFileAccess,
   FragmentWorkspaceAccess,
   GeneratedRequest,
 } from "@executablemd/core/host";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
-import { workflowFilesHandler } from "./files.ts";
 import { workspaceRootSelection } from "./effect.ts";
 
 /**
@@ -120,58 +129,6 @@ function workspaceAccess(database: WorkflowRunDatabase): FragmentWorkspaceAccess
 }
 
 /**
- * The exact filesystem operations an admitted fragment performs in this run.
- *
- * This run's own transaction-bound handler, built here and handed to the
- * profile, so an admitted effect still crosses the run's effect transaction and
- * is still retained by the `workspace_file` effect that transaction publishes.
- * What changed is where the handler comes from: a fragment no longer resolves
- * `API.Files` when it runs, so the provider a document, a repository component
- * or middleware installed nearer is not between a fragment and the Workspace.
- *
- * Six operations, not seven. The handler also makes temporary directories, and
- * an admitted fragment never does. The search is stated because the interface
- * lists it, and this profile admits no `<Glob>` entry for anything to reach it
- * through — an operation a fragment may perform is one an entry names, exactly
- * as the ordinary run's `ensureDirectory` is stated and admitted to nothing.
- */
-function workspaceFiles(database: WorkflowRunDatabase): FragmentFileAccess {
-  const handler = workflowFilesHandler(database);
-  return {
-    checkFilePath: (input) => handler.checkFilePath(input),
-    readTextFile: (input) => handler.readTextFile(input),
-    globFiles: (input) =>
-      handler.globFiles({
-        cwd: input.cwd,
-        include: [...input.include],
-        exclude: [...input.exclude],
-      }),
-    writeTextFile: (input) => handler.writeTextFile(input),
-    deleteFile: (input) => handler.deleteFile(input),
-    ensureDirectory: (input) => handler.ensureDirectory(input),
-    // The directory the run is in now, which is what every authored path in
-    // this run resolves against. Read when a fragment runs rather than frozen
-    // at assembly, so a fragment and the document that produced it resolve the
-    // same relative path to the same entry — an `<Evaluate>` written inside
-    // `<Dir path={worktree}>` proposes into that checkout, and the authored
-    // `<Git.Add paths="." />` beside it stages what the fragment wrote.
-    //
-    // Still a logical path rather than a host one: this run's `API.Env.cwd` is
-    // installed at `at: "min"` as the Workspace root and narrowed only by the
-    // run's own `<Dir>`, `<Repository>` and `<Worktree>`, so every answer names
-    // a directory inside the run's own filesystem and nothing an admitted
-    // fragment writes reaches the directory the caller invoked `xmd` from.
-    //
-    // It is not permission. The admitted tables, the path admission each
-    // operation performs and the run's effect transaction are the same at every
-    // directory, and the working directory is no member of the `generated_xmd`
-    // record a continuation compares — so narrowing from the root to the
-    // checkout the element was written in grants nothing it did not have.
-    workingDirectory: () => cwd(),
-  };
-}
-
-/**
  * The ceiling a workflow run's generated fragments are admitted under.
  *
  * An operation, because the effective Fetch timeout is resolved here — once,
@@ -184,11 +141,6 @@ export function* evaluationProfile(
   options: GeneratedEvaluationOptions = {},
 ): Operation<FragmentEvaluationInput> {
   const requests = [...(options.requests ?? [])];
-  // The transport, read once here rather than by a fragment when it runs. It is
-  // the run's own `API.Fetch` as this assembly sees it — which is the provider
-  // the workflow host installed, not whichever one a document later composes
-  // around itself.
-  const transport = yield* fetchAccess();
   const timeout = yield* timeoutFetch;
   return {
     read: [
@@ -198,10 +150,11 @@ export function* evaluationProfile(
     ],
     write: [
       fileWriteEntry(),
-      // The directory capability is the host's to supply, and a host that
-      // supplies none grants none: `<Dir>` belongs to `@executablemd/git`, and
-      // a generic Workflow host composing this profile without it is not
-      // withholding a capability so much as never having had one.
+      // The directory entry is the host's to supply, and a host that supplies
+      // none grants none. Canonical core owns `<Dir>` itself, so what a host
+      // states here is the admission rather than the component: a generic
+      // Workflow host composing this profile without it is not withholding an
+      // implementation so much as never having admitted the name.
       //
       // Its position is the contract. A released journal holds this table
       // position by position, so the entry a host does supply occupies the
@@ -211,42 +164,7 @@ export function* evaluationProfile(
       fileDeleteEntry(),
       ...(options.writes ?? []),
     ],
-    files: workspaceFiles(database),
-    ...(requests.length === 0 ? {} : { fetch: transport }),
     workspace: workspaceAccess(database),
     ...(timeout === undefined ? {} : { fetchTimeout: timeout }),
-  };
-}
-
-/**
- * The transport an admitted `<Fetch />` performs its request through.
- *
- * Resolved at assembly, so the operation the profile holds is the one this host
- * installed. A fragment reaches this bound function and never `API.Fetch`, so a
- * handler composed around the contextual chain while the document runs neither
- * sees the request nor answers it.
- */
-// deno-lint-ignore require-yield
-function* fetchAccess(): Operation<FragmentFetchAccess> {
-  // Read here, at assembly, and closed over. `API.Fetch.operations` resolves
-  // against whatever chain is current when it is *called*, so reading it inside
-  // the fragment's own body would be the dynamic lookup this exists to remove.
-  const perform = API.Fetch.operations.fetch;
-  return {
-    *fetch(request): Operation<FetchResponseRecord> {
-      const response = yield* perform(request.url, {
-        method: request.method,
-        headers: { ...request.headers },
-        ...(request.timeout === undefined ? {} : { timeout: request.timeout }),
-      });
-      // Detached before the body is read, because a provider may invalidate its
-      // own header collection once the body has been consumed. A `HEAD` never
-      // asks for a body: there is none, and asking would fail against a
-      // provider that says so.
-      const status = detachStatus(response.status);
-      const headers = detachHeaders(response.headers);
-      const body = request.method === "HEAD" ? "" : yield* response.text();
-      return { status, headers, body };
-    },
   };
 }

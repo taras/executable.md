@@ -29,7 +29,7 @@ import { executeInstalled } from "../host.ts";
 import { fileDeleteEntry, fileReadEntry, fileWriteEntry } from "../host.ts";
 import type { ExecutionInstallation } from "../host.ts";
 import { retainedSource } from "../src/root-source.ts";
-import { recordedFiles } from "./support/fragment-files.ts";
+import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
 import type { RecordedFiles } from "./support/fragment-files.ts";
 import { answerProvider } from "./support/answer-provider.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -40,11 +40,14 @@ const NOTE = "the retained note\n";
 const OTHER = "the other note\n";
 
 function reading(files: RecordedFiles): ExecutionInstallation {
-  return { evaluation: { read: [fileReadEntry()], files } };
+  return { evaluation: { read: [fileReadEntry()] }, install: () => useRecordedFiles(files) };
 }
 
 function writing(files: RecordedFiles): ExecutionInstallation {
-  return { evaluation: { read: [], write: [fileWriteEntry(), fileDeleteEntry()], files } };
+  return {
+    evaluation: { read: [], write: [fileWriteEntry(), fileDeleteEntry()] },
+    install: () => useRecordedFiles(files),
+  };
 }
 
 function both(files: RecordedFiles): ExecutionInstallation {
@@ -52,8 +55,8 @@ function both(files: RecordedFiles): ExecutionInstallation {
     evaluation: {
       read: [fileReadEntry()],
       write: [fileWriteEntry(), fileDeleteEntry()],
-      files,
     },
+    install: () => useRecordedFiles(files),
   };
 }
 
@@ -328,10 +331,8 @@ describe("Tier FE31 — Json is composition, not an effect", () => {
     const message = yield* refusal(
       run(evaluating(`<Json value={1} />\n`), [
         {
-          evaluation: {
-            read: [{ ...fileReadEntry(), name: "Json" }],
-            files,
-          },
+          evaluation: { read: [{ ...fileReadEntry(), name: "Json" }] },
+          install: () => useRecordedFiles(files),
         },
       ]),
     );

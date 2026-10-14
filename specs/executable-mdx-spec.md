@@ -183,6 +183,48 @@ directory persists and content failure or cancellation does not remove it; the
 component's scope restores only the enclosing cwd. Repository context is not
 installed or replaced by Dir.
 
+#### Who may perform a document operation
+
+One boundary, and one policy on it. An authored element, an element inside an
+admitted generated fragment (§5.3.2) and a component calling the contextual
+operation itself all perform the *same* operation through the same `API.Files`
+provider, so one middleware observes, transforms, delegates or refuses all
+three, and all three resolve their relative paths against the same contextual
+`Env.cwd`. There is no second filesystem for generated work and no working
+directory of the evaluator's own.
+
+Whether the scope asking may perform the operation is `Permissions`, a runtime
+Api with two members — `files("read" | "write")` and `fetch(input, init?)` —
+both answering `true` until something says otherwise. A scope that permits less
+installs middleware that returns `false` for what it refuses and delegates
+everything else unchanged; delegation is what makes restrictions intersect, so a
+scope nested inside a read-only region cannot permit a write by answering
+`true`, and a sibling outside that region keeps its enclosing allowance.
+
+The question is asked by the implementation that performs the operation,
+immediately before its first I/O — the provider for a filesystem operation, the
+network terminal for a request — and nowhere else. Two consequences are part of
+the contract. A request is authorized *after* the contextual middleware that may
+transform it, so what is permitted is what would actually be performed. And a
+denied operation performs no I/O of any kind on its target: nothing resolved,
+nothing classified, nothing traversed, nothing created, and a write reports an
+unchanged target. The refusal is an ordinary filesystem failure carrying
+`permission-denied`, never an infrastructure error.
+
+Which class a request belongs to is decided by what the caller asked for rather
+than by what the filesystem turns out to hold: ensuring a directory that already
+exists and deleting a path that names nothing are both `write`, because deciding
+otherwise would mean probing the filesystem to find out which question to ask.
+`checkFilePath` asks nothing, because it reaches nothing. Acquired resources are
+cleaned up by the operation that acquired them without a fresh request, and a
+completed durable effect restores its recorded outcome without asking current
+policy at all.
+
+`Permissions` mediates those semantic operations and nothing by implication. The
+low-level `API.Fs`, subprocesses, Git host operations and every other native
+reach are not covered by it, and a `true` answer supplies no capability — the
+operation still needs a provider that can perform it.
+
 #### The contextual working directory
 
 `exec` and `daemon` blocks launch their processes in the **contextual working
@@ -1931,6 +1973,7 @@ run but are absent from the diagnostic trace.
 | `src/modifiers/timeout.ts` | `timeoutFactory` |
 | `packages/runtime/duration.ts` | `asDuration()`, `parseDuration()`, `durationError()` — the one duration grammar |
 | `packages/runtime/config.ts` | `Config`, the validated `timeout` / `timeoutExec` / `timeoutFetch` operations, and the validated `verbose` operation |
+| `packages/runtime/permissions.ts` | `Permissions` — whether the scope asking may perform the semantic operation `API.Files` or `API.Fetch` is about to carry out (§1.3) |
 | `src/modifiers/daemon.ts` | `daemonFactory` — long-running subprocess terminal modifier |
 | `src/modifiers/ephemeral.ts` | `ephemeralFactory` — replay-safe live eval wrapper |
 | `src/modifiers/service.ts` | `serviceFactory` — scoped service attachment |
@@ -4242,22 +4285,31 @@ effect tables refuse at profile capture. Generated Syntax describes the same
 union preflight and execution use, and continuation reconciles every admitted
 composition identity.
 
-**Entries name capabilities, not definitions.** A host states which operation an
-admitted name runs; canonical capture reads that operation off the host's object
-exactly once, binds it behind a revocation the execution owns, and closes core's
-own body over the bound result. An admitted element therefore reaches those
-operations and never `API.Files`, `API.Fetch` or `API.Env` — so what a fragment
-may do is not a property of what the document, a repository component or
-middleware installed. A directory an admitted fragment creates scopes its
-content through the evaluation's own cursor rather than the contextual
-environment.
+**Entries name components, not operations.** A host states which component an
+admitted name runs, and canonical capture answers with canonical core's own
+ordinary definition for it — the same `<File>`, `<File.Delete>`, `<Dir>`,
+`<Glob>`, `<Fetch>` or `<Elicit>` an author writes. The host supplies no
+operation of its own: an admitted element performs its work through contextual
+`API.Files` and `API.Fetch` exactly as an authored element does, so a generated
+read crosses the middleware an authored read crosses, reaches the provider the
+host installed — the caller's own filesystem under `xmd run`, a workflow run's
+transaction-bound one under `xmd workflow` — and is decided by the effective
+`Permissions` of the scope it runs in. A directory an admitted fragment creates
+scopes its content through the ordinary invocation-owned working directory, and
+the invocation that installed it takes it away again.
 
-A capability states what it binds when the ordinary component does. The
-admitted definition carries that return contract, so `as` is mandatory, the
-element renders nothing, and the bound value is validated — decided by the
-ordinary value-component rule, before the operation behind the entry runs. A
-name admitted for two spellings that would bind different results is refused at
-capture.
+What a host decides is admission and nothing about performance: which names a
+fragment may write, which spelling each name is admitted for, which requests an
+admitted `<Fetch />` may perform, and how long any of it lasts. An admitted
+implementation is held to the execution that captured it and refuses once that
+execution has ended.
+
+A capability states what it binds when the ordinary component does, because it
+*is* the ordinary component: the definition carries that return contract, so
+`as` is mandatory, the element renders nothing, and the bound value is validated
+— decided by the ordinary value-component rule, before the operation behind the
+entry runs. One name runs one component, so a name admitted for capabilities
+owned by two different components is refused at capture.
 
 **The ordinary read table is File, Glob and canonical Syntax.** `xmd run` and
 every `host="run"` child state one profile: `read` holds the self-closing
@@ -4299,10 +4351,10 @@ An admitted `<Glob />` is the same element an author writes. Its props, return
 contract, source rules and sanitized failure sentence are one shared definition
 with the ordinary component, so a pattern that cannot match anything under a
 relative root is refused before the search runs, and a provider failure is
-normalized to a sentence naming no path. It performs that search through the
-captured search operation and the captured working directory, never `API.Files`
-and never `Env.cwd`, and the provider still owns matching, ordering,
-deduplication, POSIX-relative results and traversal.
+normalized to a sentence naming no path. It performs that search through contextual
+`API.Files` against the contextual working directory, exactly as the authored
+element does, and the provider still owns matching, ordering, deduplication,
+POSIX-relative results and traversal.
 
 `<Syntax />` is admitted as a component answer at canonical core's own origin,
 key and revision, never as a capability: a protected name is one canonical core
@@ -7876,6 +7928,12 @@ pwd
 The block prints a fresh directory, and by the time the document finishes that
 directory is gone.
 
+Acquiring one is a `write`, asked of `Permissions` by the provider before the
+directory is created (§1.2): a refused acquisition creates nothing at all.
+Releasing one the scope already holds asks nothing — the cleanup belongs to the
+operation that acquired it, so a scope that narrowed its own permission
+afterwards still has its temporary directory removed.
+
 #### The two forms
 
 Written **with content**, `<TempDir>` is a working directory. It creates a
@@ -8251,6 +8309,14 @@ member or import-handler answer supplies it. It takes one required prop,
 ```md
 <File path="request.md" />
 ```
+
+Both forms perform their work through the installed `API.Files` provider, which
+asks `Permissions` whether the scope reading or writing may do so before its
+first I/O (§1.2): a refused read or write is an ordinary `permission-denied`
+failure that resolved nothing, classified nothing and left its target exactly as
+it was. Which class is asked for is the form — reading asks `read`, writing asks
+`write` — and the pure path check a write performs before its children asks
+nothing at all.
 
 Because the path is contextual, `<File>` composes with `<TempDir>` (§6.11)
 without either component knowing about the other:
@@ -8884,6 +8950,10 @@ contextual `Env.cwd` a set of patterns selects:
 <Glob include={["**/AGENTS.md"]} as="instructionPaths" />
 ```
 
+The search is a `read`, asked of `Permissions` by the provider before it touches
+the directory it would walk (§1.2); a refusal traverses nothing and reports the
+ordinary sanitized sentence.
+
 `include` is required and holds at least one pattern. `exclude` is optional and
 defaults to empty. Both are lists of glob patterns, and both are evaluated
 relative to `Env.cwd`, so `<Glob>` composes with `<TempDir>` (§6.11) and with
@@ -9451,6 +9521,13 @@ contextual `API.Fetch` provider, binds the response as JSON, and records that
 observation as one durable effect. It is how an Agent that has no network of its
 own is given external information: the document performs the read and the result
 reaches the prompt as data.
+
+The network terminal asks `Permissions.fetch` with the request as it would go
+out — after every `API.Fetch` middleware has had its turn, so a restriction
+reads the destination, method and headers that would actually be sent rather
+than the caller's first draft (§1.2). A refusal throws a fixed sanitized
+sentence before transport starts: no request is made, and there is no response
+to bind.
 
 #### The props
 
@@ -11772,6 +11849,49 @@ platform's.
 | HF26 | Non-directory refusal | A regular file and a supported special entry, at the target and as an intermediate entry, each refuse before content with a sanitized reason and no host path, platform code, raw message or cause |
 | HF27 | Direct persistence | A directory created by `<Dir>` remains after successful content, failed content and cancellation; cwd restoration performs no teardown deletion |
 | HF28 | Repository independence | Ensuring and entering a directory beneath a selected checkout leaves every Repository identity member and provider selection unchanged |
+| HF29 | Each operation asks its own class | Read and search ask `read`; write, delete, directory ensure and temporary acquisition ask `write`; `checkFilePath` asks nothing and still answers. A refusal returns valid sanitized failure data with `permission-denied`, reports an unchanged write target, and performs no `API.Fs` call at all — nothing resolved, classified or traversed. Asserted against the handler directly, so the obligation is the provider's rather than the installing middleware's |
+| HF30 | A denied acquisition creates nothing | The configured temporary root holds no minted directory afterwards, which is the one refusal an `API.Fs` census cannot prove |
+| HF31 | Cleanup needs no fresh permission | A temporary acquired before a write restriction is installed is still released when its scope ends, and its root is empty afterwards |
+
+### Tier PM — The Permissions Api
+
+Composition, and nothing else: no filesystem, no transport and no provider
+appears, because the rows proving a provider asks the question live beside the
+provider. Every restriction installs at the default order, which is the
+convention a host writing one follows and the ordering the guarantee depends on.
+
+| # | Test | Verify |
+|---|------|--------|
+| PM1 | Defaults | Both members permit when nothing is installed |
+| PM2 | One class, and the actual request | A restriction refuses its own class and leaves the other alone; a Fetch restriction reads the exact input and init the caller passed |
+| PM3 | Ordering | A descendant answering `true` never runs for a class the enclosing restriction refuses, and does run for one it permits — so the ordering rather than the reading is what decides |
+| PM4 | Intersection and the sibling | Two delegated restrictions refuse both classes; leaving the narrower scope restores the enclosing allowance, and leaving both restores the default |
+| PM5 | One Api | A restriction installed through `/api` is read through the root export and answers once |
+
+### Tier PRM — Authored, generated and direct operations under one restriction
+
+What only a document can show: an authored element, an element inside an
+admitted generated fragment and a direct contextual call are the same
+operation, so one restriction decides all three. Every claim is checked in what
+the document reported *and* in what the filesystem holds afterwards. The region
+is a component, because a region has an inside and an outside and the sibling
+written after it is what makes the outside observable.
+
+| # | Test | Verify |
+|---|------|--------|
+| PRM1 | Every class of read | Authored, generated and direct reads are all answered inside a read-only region, with no printed error |
+| PRM1b | The authored write | Refused with `permission-denied`, the target absent afterwards, and the sibling written outside the region committed — the restriction belonged to the region rather than to the run |
+| PRM1c | The direct write | A component calling the contextual operation itself is refused on the same terms, and its sibling outside the region commits |
+| PRM1d | The generated write | The write form is admitted so preflight lets the fragment try; the live restriction refuses it at the provider, the element fails as public `<Evaluate>` does, and nothing is written |
+| PRM2 | A widening descendant | A nested region answering `true` at the default order changes nothing: the provider still reads a refusal |
+| PRM3 | Authored order under refusal | The pure path check runs, the children expand — the read inside really happens — and authorization stands at the write, which is refused with the target absent |
+| PRM4 | One chain, both payloads | A document's own middleware observes the fragment's read and write in the fragment's order, and the content it substituted is what the provider committed |
+| PRM5 | A generated directory | `<Dir>` inside a fragment creates the directory, scopes the file written inside it, and restores the enclosing directory for the file written after it |
+| PRM6 | The admitted request | A generated `<Fetch />` performs its entry's admitted request and a real loopback accepts exactly it |
+| PRM7 | The ceiling at the transport | Middleware rewriting the destination off the entry's ceiling is refused by the terminal with the fixed sentence, and the transport accepts nothing |
+| PRM7b | The whole request is the ceiling | The element asks for exactly the admitted request and middleware changes one admitted header: the terminal refuses with the fixed sentence and the transport accepts nothing, while the same element without the change is accepted with the admitted header |
+| PRM7c | A baseline nothing can edit | A handler editing the outgoing headers *in place* is refused the same way, and the admitted request in the same capture is accepted — so the comparison is held by value taken at capture rather than read from the object the chain was handed |
+| PRM7d | What the next invocation sends | An in-place edit that stays inside the ceiling is permitted, and the element after it sends the request the host admitted rather than the edited one |
 
 ### Tier FF — Files infrastructure failure
 
@@ -12136,13 +12256,13 @@ through the captured capability because there is no other way to reach it.
 | FE26 | Protection itself grants nothing: a profile with no write table stays unable to write, and adding `<Evaluate>` to the protected table does not add a class or component identity to `allow`. |
 | FE27 | Structural constructs remain selected by structural dispatch, while repository replacements for ordinary `<File>`, `<Fetch>`, and `<Elicit>` still win at ordinary authored sites. Their replaceability does not let them enter a generated fragment unless the trusted profile admitted that exact identity and form. |
 | FE28 | Source, npm, and compiled symbols report `<Evaluate>` with protected origin and the approved description, and no host bootstrap is needed to make the name available. |
-| FE29 | Each execution accepts one private fragment-evaluation profile containing exact composition, read and write tables; a missing or duplicate profile and conflicts across its tables refuse before paired-content production or fragment effects, and document-controlled state cannot read, replace, or widen it. |
+| FE29 | Each execution accepts one private fragment-evaluation profile containing exact composition, read and write tables; a missing or duplicate profile and conflicts across its tables refuse before paired-content production or fragment effects, and document-controlled state cannot read or widen it — it cannot add a name to the admitted vocabulary, change the identity a continuation is compared against, or give a selection a class the host installed no table for. What a document *can* do is answer the operation, because the provider is deliberately shared: a handler installed anywhere in the document's own scope is what an admitted element reaches, exactly as an authored one does. |
 | FE30 | A trusted nested-run or evaluation-host layering control enters the same declarative package bootstrap through inherited and local layers. The child keeps the package registration and renders the same named documentation as the single-bootstrap control; Evaluate still admits only the identity selected by `allow`. A non-identical owner/component overlap refuses before child root or fragment effects. This receives #765's SYN25l.5 rather than creating a second collector in Evaluate. |
 | FE31 | One fragment binds File and protected Syntax results locally and explicitly renders a chosen object through Json. Nested literal arrays and objects, binding shorthand, finite JSON numbers and a directly attached leading minus such as `<Json value={-1} />` work in scalar, array and object positions. `1e999`, `-1e999`, `+1`, `-note`, `!note`, `typeof note`, an unbound identifier, call, operator, spread, computed property, template or global reference is refused before any earlier effect. |
 | FE32 | Generated admission and effect events follow ordinary persist-before-resume publication. A later refusal, failure, cancellation or interruption retains completed effects, and continuation resumes at the occurrence's first unrecorded effect; Evaluate adds no staging or rollback. |
 | FE33 | Each Evaluate occurrence retains its admission and generated effects under identities belonging to that occurrence; two occurrences cannot consume one another's retained work, and no caller-controlled context, stream, replay cursor, coroutine identifier or durable owner participates. A projected body installs observable structured cleanup, and later parent work proves that cleanup completed before it began. No distinct child cursor, child `Close`, staging, rollback, provisional publication or second settlement protocol is required. |
 | FE35 | A fragment composes admitted reads with `<Let>`, `<Each>`, `<If>`/`<Else>` and `<Switch>`/`<Case>` under ordinary rules, performing exactly the reads the taken paths name. A prohibited component in an untaken `<Else>` arm or an unreached `<Case>` refuses the whole fragment with zero reads, and the refusal names the selected permission rather than the branch. An `<Each>` item binding does not escape its body while `<Each as>` does, and a binding the body itself makes cannot be read after the construct. Neither arm of an `<If>` nor either `<Case>` of a `<Switch>` can read a binding another alternative produces; each such refusal performs no read. A `<Loop>` holding a valid `<Break>` and a `<PrintErrors>` region around an admitted read completes, proving those constructs reach their own handlers rather than a generic structural refusal. A prohibited component inside a paired `<Answer>`'s template children, and one in the ordinary `<Answers>` body, are each refused before any effect. An untaken self-closing `<File />` before a selected paired `<File>` write does not surrender its admission to that write: the write performs, the read does not, and the untaken file is unchanged. A two-item `<Each>` around one `<File />` performs the read twice with no import refusal, an empty iteration consumes no admission, and a continuation cut between the two repeated effects restores the completed one and resumes at the second. An executable fence and an interpolated caller binding stay refused inside a construct. An ill-formed construct, one the generated root gives no context for, a stray branch and a `<Break>` outside every `<Loop>` are refused as structural mistakes rather than as withheld components. |
-| FE34 | One fragment binds Glob, File and canonical Syntax and renders chosen findings through Json; an unmatched search binds `[]`. A search written without `as`, a paired search, and a paired `<File>` under a `read` selection each refuse before any operation. An unusable pattern refuses with the ordinary sentence before the search, and a provider failure becomes one safe sentence naming no path. The search reaches the captured operation and the captured working directory while a nearer `API.Files` provider is never consulted. Bare generated Syntax reports the composition table plus the selected read vocabulary and not the unselected write table; named Syntax describes a component that stays unavailable. Canonical Syntax resolves at core's own identity, and a middleware replacement of that answer refuses. Core answers for that one protected name, so an entry hand-written at `<Evaluate>`'s canonical identity is refused as an answer nothing identified. `xmd run` and a `host="run"` child of `xmd test` state the same profile. |
+| FE34 | One fragment binds Glob, File and canonical Syntax and renders chosen findings through Json; an unmatched search binds `[]`. A search written without `as`, a paired search, and a paired `<File>` under a `read` selection each refuse before any operation. An unusable pattern refuses with the ordinary sentence before the search, and a provider failure becomes one safe sentence naming no path. The search reaches the installed `API.Files` provider and the contextual working directory, so one middleware around the document sees the fragment's request and a transformation it makes is what the provider performs. Bare generated Syntax reports the composition table plus the selected read vocabulary and not the unselected write table; named Syntax describes a component that stays unavailable. Canonical Syntax resolves at core's own identity, and a middleware replacement of that answer refuses. Core answers for that one protected name, so an entry hand-written at `<Evaluate>`'s canonical identity is refused as an answer nothing identified. `xmd run` and a `host="run"` child of `xmd test` state the same profile. |
 
 Each refusal case needs a negative control proving no producer, middleware
 answer, request, file mutation, or other program effect occurred. The
@@ -12657,6 +12777,9 @@ Defined in [Workflow runs](./workflow-spec.md) §10.
 | WF24 | Directory refusal rollback | A target or intermediate non-directory rolls its savepoint back, publishes only the sanitized refusal against the unchanged root and begins no content; neither a partial parent nor host detail survives |
 | WF25 | Existing directory and retained root | Ensuring an existing populated directory preserves its contents and commits a successful effect whose resulting root is the run's authoritative current root |
 | WF26 | Directory replay and cancellation | Completed replay restores the recorded success and retained root without creating again; cancellation before commit publishes no effect or root, while cancellation of later content leaves the committed directory and restores the enclosing cwd |
+| WF27 | A denied write | The live performer publishes the ordinary sanitized `permission-denied` refusal in the phase it stopped at, the current root and the Workspace are the ones it started with, and a read in the same run is still permitted — the class each operation asked for is what decided it |
+| WF28 | A completed effect under a narrower policy | Replay restores the recorded outcome, asks no permission at all and enters no performer, and appends no journal event |
+| WF29 | Unrecorded work | After an interrupted run, the continuation's one unrecorded write asks current policy and is refused, while the recorded write ahead of it neither asks nor reaches the filesystem |
 
 ### Tier EP — The execution protocol
 
@@ -13482,6 +13605,8 @@ Runs against a loopback server, so what is asserted is what a real host reports.
 | FR9–FR10 | The chainable shape | `text()`, `json()`, and `expect()` — the calling shape authored eval code uses |
 | FR11 | One transport | Every form of the call crosses `API.Fetch`, so a host refusal covers all of them |
 | FR12 | The contextual default | A call that names no timeout resolves `Config.timeoutFetch` |
+| FR13 | The request a restriction answers for | A host handler routes and marks every request; the restriction reads the routed URL and the added header rather than the caller's spelling, the permitted one reaches the loopback, and a refused one — through the direct Api and the public chain alike — throws the fixed sanitized sentence with no request sent and no response bound |
+| FR14 | A synthetic answer | Middleware that answers without delegating succeeds under a restriction refusing everything, asks no permission at all, and reaches no transport |
 
 ### Tier FT — `<Fetch>` (§6.18)
 

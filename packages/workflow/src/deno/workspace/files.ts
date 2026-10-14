@@ -23,6 +23,22 @@
  * entry, so a check that was skipped or answered elsewhere authorizes nothing;
  * the write repeats the same admission from the same authored path.
  *
+ * ## Where permission is asked
+ *
+ * Inside the live performer, as its first step. `Permissions` is a question
+ * about work that is about to happen, and under replay no work is about to
+ * happen: a check placed around `performed()` would re-decide an operation that
+ * has already been published, so a run continued under a narrower policy would
+ * contradict its own journal — and a run continued under a wider one would ask
+ * for permission it no longer needs. Asking inside the performer means a
+ * completed effect restores what it recorded and only new work meets current
+ * policy.
+ *
+ * A refusal is an ordinary live outcome, published like any other and
+ * sanitized the same way, so the journal reads "this operation was refused"
+ * rather than "this run failed". It changes no target and captures the root it
+ * already had.
+ *
  * ## What replay does instead
  *
  * A recorded effect restores its recorded value. A read therefore answers with
@@ -56,6 +72,7 @@ import {
   FilesInvariantError,
   FilesOperationDeniedError,
   filesFailure,
+  Permissions,
   fileWriteFailure,
   fileWriteSuccess,
   parseFilesPhase,
@@ -359,6 +376,9 @@ function* readOutcome(
   filesystem: DenoWorkspaceFilesystem,
   path: string,
 ): Operation<FileEffectOutcome<FilesPhase>> {
+  if (!(yield* Permissions.operations.files("read"))) {
+    return refused("resolution", "permission-denied");
+  }
   const info = yield* statPath(filesystem, path);
   if (!info.ok) {
     return refused("resolution", refusalReason(info.error));
@@ -421,6 +441,9 @@ function* ensureOutcome(
   filesystem: DenoWorkspaceFilesystem,
   path: string,
 ): Operation<FileEffectOutcome<FilesPhase>> {
+  if (!(yield* Permissions.operations.files("write"))) {
+    return refused("resolution", "permission-denied");
+  }
   if (path === WORKSPACE_ROOT) {
     return { kind: "ensured" };
   }
@@ -460,6 +483,9 @@ function* writeOutcome(
   path: string,
   content: string,
 ): Operation<FileEffectOutcome<FileWritePhase>> {
+  if (!(yield* Permissions.operations.files("write"))) {
+    return refused("resolution", "permission-denied");
+  }
   const existing = yield* classifyWriteTarget(filesystem, path);
   if (existing !== undefined) {
     return existing;
@@ -499,6 +525,9 @@ function* deleteOutcome(
   filesystem: DenoWorkspaceFilesystem,
   path: string,
 ): Operation<FileEffectOutcome<FilesPhase>> {
+  if (!(yield* Permissions.operations.files("write"))) {
+    return refused("resolution", "permission-denied");
+  }
   const info = yield* lstatPath(filesystem, path);
   if (!info.ok) {
     const reason = refusalReason(info.error);
@@ -623,6 +652,9 @@ function* globOutcome(
   include: string[],
   exclude: string[],
 ): Operation<FileEffectOutcome<FilesPhase>> {
+  if (!(yield* Permissions.operations.files("read"))) {
+    return refused("target", "permission-denied");
+  }
   const info = yield* statPath(filesystem, directory);
   if (!info.ok) {
     return refused("target", refusalReason(info.error));

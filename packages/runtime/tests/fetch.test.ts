@@ -23,6 +23,7 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { API, fetch } from "../apis.ts";
 import type { RuntimeFetchResponse } from "../apis.ts";
 import { Config } from "../config.ts";
+import { FETCH_NOT_PERMITTED_MESSAGE, Permissions } from "../permissions.ts";
 
 interface Loopback {
   /** Where the server is listening. */
@@ -376,6 +377,96 @@ describe("Tier FR — the chainable calling shape", () => {
     });
 
     expect(failure?.message).toContain("timed out after 60ms");
+  });
+
+  it("FR13: the request a restriction answers for is the one that would be sent", function* () {
+    const server = yield* useLoopback(respond([], "body"));
+    const asked: Array<{ input: string; method?: string; routed?: string }> = [];
+
+    yield* scoped(function* () {
+      // A host that routes every request through one prefix and marks it.
+      yield* API.Fetch.around({
+        *fetch([input, init], next): Operation<RuntimeFetchResponse> {
+          const url = new URL(input);
+          return yield* next(`${server.origin}/routed${url.pathname}`, {
+            ...init,
+            method: init?.method ?? "GET",
+            headers: { ...init?.headers, "x-routed": "yes" },
+          });
+        },
+      });
+
+      yield* Permissions.around({
+        fetch: ([input, init], next) => {
+          asked.push({ input, method: init?.method, routed: init?.headers?.["x-routed"] });
+          return new URL(input).pathname.startsWith("/routed/public") ? next(input, init) : false;
+        },
+      });
+
+      const allowed = yield* fetch(`${server.origin}/public/doc`);
+      expect(allowed.status).toBe(200);
+      expect(yield* allowed.text()).toBe("body");
+
+      // The direct Api call and the public chain are the same route, so one
+      // restriction covers both.
+      for (const attempt of [
+        function* (): Operation<unknown> {
+          return yield* API.Fetch.operations.fetch(`${server.origin}/private/doc`);
+        },
+        function* (): Operation<unknown> {
+          return yield* fetch(`${server.origin}/private/doc`).text();
+        },
+      ]) {
+        expect((yield* thrown(attempt))?.message).toBe(FETCH_NOT_PERMITTED_MESSAGE);
+      }
+    });
+
+    // What the restriction read is the routed URL and the header the host
+    // added, never the spelling the caller wrote: the question is asked where
+    // the request has stopped changing.
+    expect(asked).toEqual([
+      { input: `${server.origin}/routed/public/doc`, method: "GET", routed: "yes" },
+      { input: `${server.origin}/routed/private/doc`, method: "GET", routed: "yes" },
+      { input: `${server.origin}/routed/private/doc`, method: "GET", routed: "yes" },
+    ]);
+    // Two refusals, and the transport saw neither of them.
+    expect(server.requests.map((request) => request.path)).toEqual(["/routed/public/doc"]);
+  });
+
+  it("FR14: a synthetic answer asks nothing and reaches no transport", function* () {
+    const server = yield* useLoopback(respond([], "live"));
+    let asked = 0;
+
+    yield* scoped(function* () {
+      yield* Permissions.around({
+        fetch: () => {
+          asked += 1;
+          return false;
+        },
+      });
+
+      // Answers from what it already holds, delegating nothing. There is no
+      // request to permit, because there is no request.
+      yield* API.Fetch.around({
+        // deno-lint-ignore require-yield
+        *fetch(): Operation<RuntimeFetchResponse> {
+          return {
+            status: 200,
+            headers: { get: () => null, entries: () => [] },
+            *text() {
+              return "remembered";
+            },
+          };
+        },
+      });
+
+      const answered = yield* fetch(`${server.origin}/remembered`);
+      expect(answered.status).toBe(200);
+      expect(yield* answered.text()).toBe("remembered");
+    });
+
+    expect(asked).toBe(0);
+    expect(server.requests).toEqual([]);
   });
   /**
    * The listener's error observer belongs to the loopback resource, not to the

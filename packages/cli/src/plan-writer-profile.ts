@@ -777,6 +777,23 @@ function* releaseSessionDirectory(directory: string, claim: DirectoryClaim): Ope
  * refused rather than served. It decides what to write; writing a file,
  * running a command, starting a service and reaching the network are all the
  * approved document's business, under the caller's own configuration.
+ *
+ * ## Reading is not one of them
+ *
+ * The packaged workflow is trusted source, and reading is how it decides what
+ * to propose: it inspects the project before drafting, and the agent's own
+ * information request is public read-only `<Evaluate>` under the host's
+ * admitted vocabulary and complete preflight. So reads are absent from this
+ * table rather than refused and re-permitted somewhere — `checkFilePath`,
+ * `readTextFile` and `globFiles` are simply not members of it, and they take
+ * the ordinary chain: the provider the entrypoint or the enclosing host
+ * installed, the middleware around it, and the effective `Permissions` of the
+ * scope asking. An enclosing read restriction therefore still denies them, and
+ * this frame answers `Permissions` with nothing.
+ *
+ * What stays refused is every way of *changing* anything, wherever it is asked
+ * from. An agent's text is not trusted source; what bounds it is the generated
+ * admission it runs under rather than a read denial here.
  */
 function* refuseDocumentCapabilities(): Operation<void> {
   const refuse = (capability: string) => () => {
@@ -786,14 +803,6 @@ function* refuseDocumentCapabilities(): Operation<void> {
   };
   yield* API.Files.around({
     // deno-lint-ignore require-yield
-    *checkFilePath() {
-      return refuse("a file")();
-    },
-    // deno-lint-ignore require-yield
-    *readTextFile() {
-      return refuse("a file")();
-    },
-    // deno-lint-ignore require-yield
     *writeTextFile() {
       return refuse("a file")();
     },
@@ -801,9 +810,19 @@ function* refuseDocumentCapabilities(): Operation<void> {
     *deleteFile() {
       return refuse("a file")();
     },
+    /**
+     * Refused, and newly named.
+     *
+     * The table omitted the semantic directory operation while nothing in the
+     * writer frame could reach one: `<Dir>` was a Plugin's component and the
+     * frame declared none. Canonical core owns it now, and an admitted
+     * generated `<Dir>` performs it through this same Api — so the accepted
+     * no-mutation boundary has to say so rather than rely on the name being
+     * unreachable.
+     */
     // deno-lint-ignore require-yield
-    *globFiles() {
-      return refuse("a file")();
+    *ensureDirectory() {
+      return refuse("a directory")();
     },
     // deno-lint-ignore require-yield
     *temporaryDirectory() {

@@ -20,6 +20,16 @@
  * Elicitation provider the run already has. It reaches nothing else at all: no
  * network read, no process, no repository, no Git, no credential and no agent.
  *
+ * ## It states no filesystem of its own
+ *
+ * An admitted name runs canonical core's own component, which performs its
+ * operation through contextual `API.Files` — the provider this command's
+ * entrypoint installed, and the same one every authored `<File>` in the
+ * document crosses. So a fragment's read is observed, transformed, delegated
+ * and refused by exactly the middleware an author's read is, and the effective
+ * `Permissions` of the scope it runs in decide it. This file hands the profile
+ * no operation at all, because there is no second filesystem for it to hand.
+ *
  * Reading and writing stay separate spellings of one name. A selection of
  * `read` admits `<File />` and not `<File>…</File>`, so a fragment that asks to
  * search and read cannot also write, and `<Syntax />` describing a component
@@ -52,54 +62,13 @@ import {
   globReadEntry,
   syntaxReadEntry,
 } from "@executablemd/core/host";
-import type {
-  ExecutionInstallation,
-  FragmentEvaluationInput,
-  FragmentFileAccess,
-} from "@executablemd/core/host";
-import { cwd, hostFilesHandler } from "@executablemd/runtime";
-
-/**
- * The exact filesystem operations an admitted fragment performs.
- *
- * A handler of this command's own, constructed here rather than read from
- * `API.Files` when a fragment runs. The document's provider and this one behave
- * identically — both are `hostFilesHandler()` — and the difference is that
- * nothing a document, a repository component or middleware installs is between
- * a fragment and this instance.
- *
- * Only the six operations a fragment can name are copied across. The handler
- * also offers temporary directories; an admitted fragment has none, and not
- * copying it is what makes that true.
- */
-function ordinaryFiles(): FragmentFileAccess {
-  const handler = hostFilesHandler();
-  return {
-    checkFilePath: (input) => handler.checkFilePath(input),
-    readTextFile: (input) => handler.readTextFile(input),
-    globFiles: (input) =>
-      handler.globFiles({
-        cwd: input.cwd,
-        include: [...input.include],
-        exclude: [...input.exclude],
-      }),
-    writeTextFile: (input) => handler.writeTextFile(input),
-    deleteFile: (input) => handler.deleteFile(input),
-    ensureDirectory: (input) => handler.ensureDirectory(input),
-    // The caller's working directory, which is what `xmd run` resolves every
-    // authored path against. Read when a fragment runs rather than frozen at
-    // assembly, so a fragment and the document that produced it resolve the
-    // same relative path to the same file.
-    workingDirectory: () => cwd(),
-  };
-}
+import type { ExecutionInstallation, FragmentEvaluationInput } from "@executablemd/core/host";
 
 /** The ceiling `xmd run` and its run children state. */
 export function ordinaryEvaluationProfile(): FragmentEvaluationInput {
   return {
     read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()],
     write: [fileWriteEntry(), fileDeleteEntry(), elicitWriteEntry()],
-    files: ordinaryFiles(),
   };
 }
 

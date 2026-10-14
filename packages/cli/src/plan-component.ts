@@ -635,8 +635,17 @@ function planWriter(assembly: PlanComponentAssembly): IdentityComponent {
     origin: `${PLAN_ORIGIN}#PlanWriter`,
     forms: ["paired"],
     props: PLAN_WRITER_PROPS,
-    factory: () =>
-      function* PlanWriter(props: Record<string, Json>): Operation<string> {
+    factory: (claim: IdentityClaimant) =>
+      function* PlanWriter(
+        props: Record<string, Json>,
+        invocation: ComponentInvocation,
+      ): Operation<string> {
+        // The identity canonical execution minted where resolution selected
+        // this exact implementation, for this exact expansion. What it protects
+        // is the private invocation and the projection beneath it — a name, a
+        // copied function or a caller's claim that it is one cannot stand here —
+        // and it decides nothing about permission.
+        yield* claim(invocation);
         // Before a directory exists, before a provider exists, and therefore
         // before any session could be placed or any turn started. A host that
         // supplies no Agent context refuses rather than writing a Plan under
@@ -830,8 +839,17 @@ function planInformation(): IdentityComponent {
     forms: ["paired"],
     props: EMPTY_PROPS,
     returns: INFORMATION_RETURNS,
-    factory: () =>
-      function* PlanInformation(): Operation<Json> {
+    factory: (claim: IdentityClaimant) =>
+      function* PlanInformation(
+        _props: Record<string, Json>,
+        invocation: ComponentInvocation,
+      ): Operation<Json> {
+        // Authenticated, for the reason the writer phase is: this phase runs
+        // the agent's text under the host's read-only generated selection, and
+        // an invocation canonical execution did not issue is not that phase.
+        // It authorizes no filesystem access of its own — the trusted workflow
+        // reads through the ordinary chain either way.
+        yield* claim(invocation);
         // The child and its structured teardown have both settled by the time
         // this returns, so what is scanned below is complete text and not a
         // fragment still able to produce more.

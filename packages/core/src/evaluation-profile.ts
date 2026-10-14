@@ -42,17 +42,16 @@ import { CORE_ORIGIN, ELICIT_COMPONENT } from "./components/registry.ts";
 import { SYNTAX_COMPONENT } from "./components/Syntax.ts";
 import {
   CAPABILITY_FORMS,
-  capabilityDefinition,
+  capabilityImplementation,
   capabilityProps,
   captureCapabilities,
   FragmentCapabilityError,
   REVOKED_CAPABILITY,
 } from "./fragment-capabilities.ts";
 import type {
+  CapabilityImplementation,
   CapturedCapabilities,
   FragmentCapability,
-  FragmentFetchAccess,
-  FragmentFileAccess,
 } from "./fragment-capabilities.ts";
 import { isFormDispatcher } from "./invocation-identity.ts";
 import type { ComponentInvocation, ComponentRouting } from "./invocation-identity.ts";
@@ -235,17 +234,6 @@ export interface FragmentEvaluationInput {
   readonly write?: readonly FragmentEntry[];
   /** How this host answers for its Workspace, when it evaluates against one. */
   readonly workspace?: FragmentWorkspaceAccess;
-  /**
-   * The exact filesystem operations the admitted entries run.
-   *
-   * Required by every file and directory entry, and read off this object once
-   * at capture. A profile that admits `<File />` without stating them is a
-   * profile that admitted an operation it cannot perform, and is refused rather
-   * than falling through to whatever provider a document installed.
-   */
-  readonly files?: FragmentFileAccess;
-  /** The exact transport an admitted `<Fetch />` performs its request through. */
-  readonly fetch?: FragmentFetchAccess;
   /**
    * The effective Fetch timeout this host resolved, in milliseconds.
    *
@@ -563,16 +551,7 @@ export interface EvaluationProfile {
   readonly read: readonly CapturedEntry[];
   readonly write: readonly CapturedEntry[];
   readonly workspace?: FragmentWorkspaceAccess;
-  /**
-   * Begin one fragment, and answer with how to end it.
-   *
-   * Reads the host's working directory once per fragment rather than once per
-   * element, and restores whatever was current afterwards — so a fragment
-   * produced inside another fragment's producer leaves the outer one where it
-   * was.
-   */
-  readonly enterFragment: () => Operation<() => void>;
-  /** Whether this profile's bound operations are still usable. */
+  /** Whether this profile's admitted implementations are still usable. */
   readonly live: () => boolean;
   /**
    * End them.
@@ -625,6 +604,8 @@ interface PreparedEntry {
   readonly props?: PropsSchema;
   readonly capability?: FragmentCapability;
   readonly definition?: FunctionComponentDefinition;
+  /** The owning component's own form dispatcher, when its implementation wraps one. */
+  readonly dispatch?: unknown;
   readonly legacy?: readonly string[];
   readonly requests?: readonly FetchRequest[];
 }
@@ -674,13 +655,11 @@ export interface PreparedProfile {
 export function* prepareEvaluationProfile(
   input: FragmentEvaluationInput,
 ): Operation<PreparedProfile> {
-  // Every live operation is read off the host's objects here, once, before a
-  // single installation has run. What comes back is bound and revocable, and
-  // the host's own objects are never consulted again.
-  const capabilities = captureCapabilities({
-    ...(input.files === undefined ? {} : { files: input.files }),
-    ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
-  });
+  // The lifetime every admitted implementation is held to, opened here before a
+  // single installation has run. There is no host operation to read off an
+  // object any more: an admitted name runs canonical core's own component,
+  // through the provider installed where the fragment runs.
+  const capabilities = captureCapabilities();
   // One definition per *name*, built from every capability that name holds
   // across both tables. `<File />` observing and `<File>…</File>` writing are
   // two entries under one name, and the evaluator resolves an import by name —
@@ -738,7 +717,6 @@ export function* prepareEvaluationProfile(
         read: sealEntries(read, sealed),
         write: sealEntries(write, sealed),
         ...(workspace === undefined ? {} : { workspace }),
-        enterFragment: () => capabilities.enterFragment(),
         live: () => capabilities.live(),
         revoke: () => {
           capabilities.revoke();
@@ -817,7 +795,7 @@ function bindWorkspace(access: FragmentWorkspaceAccess): FragmentWorkspaceAccess
 function buildDefinitions(
   input: FragmentEvaluationInput,
   capabilities: CapturedCapabilities,
-): Map<string, FunctionComponentDefinition> {
+): Map<string, CapabilityImplementation> {
   const admitted = new Map<
     string,
     { "self-closing"?: FragmentCapability; paired?: FragmentCapability }
@@ -839,11 +817,16 @@ function buildDefinitions(
       ceilings.set(entry.name, entry.requests);
     }
   }
-  const built = new Map<string, FunctionComponentDefinition>();
+  const built = new Map<string, CapabilityImplementation>();
   for (const [name, forms] of admitted) {
     built.set(
       name,
-      capabilityDefinition(name, forms, capabilities, normalizedCeiling(ceilings.get(name), input)),
+      capabilityImplementation(
+        name,
+        forms,
+        capabilities,
+        normalizedCeiling(ceilings.get(name), input),
+      ),
     );
   }
   return built;
@@ -870,7 +853,7 @@ function normalizedCeiling(
 function* prepareEntries(
   entries: readonly FragmentEntry[],
   fetchTimeout: number | undefined,
-  built: Map<string, FunctionComponentDefinition>,
+  built: Map<string, CapabilityImplementation>,
 ): Operation<readonly PreparedEntry[]> {
   const prepared: PreparedEntry[] = [];
   for (const entry of entries) {
@@ -882,7 +865,7 @@ function* prepareEntries(
 function* prepareEntry(
   entry: FragmentEntry,
   fetchTimeout: number | undefined,
-  built: Map<string, FunctionComponentDefinition>,
+  built: Map<string, CapabilityImplementation>,
 ): Operation<PreparedEntry> {
   const forms = canonicalForms(entry.forms);
   if (forms.length === 0) {
@@ -917,10 +900,10 @@ function* prepareEntry(
   // Detached, so a host that edits its schema afterwards does not change what a
   // fragment's props are validated against.
   const props = detach(entry.props);
-  // The definition every entry under this name shares, built before any entry
-  // was prepared.
-  const definition = built.get(entry.name);
-  if (definition === undefined) {
+  // The implementation every entry under this name shares, built before any
+  // entry was prepared.
+  const implementation = built.get(entry.name);
+  if (implementation === undefined) {
     throw new EvaluationProfileError(
       "an evaluation profile admitted a name with no operation behind it.",
     );
@@ -934,7 +917,8 @@ function* prepareEntry(
     kind: "capability" as const,
     capability: entry.capability,
     ...described,
-    definition,
+    definition: implementation.definition,
+    ...(implementation.dispatch === undefined ? {} : { dispatch: implementation.dispatch }),
     ...(legacy === undefined ? {} : { legacy }),
     ...(requests === undefined ? {} : { requests }),
   });
@@ -1126,6 +1110,7 @@ function sealEntry(entry: PreparedEntry, sealed: ReadonlyMap<string, SealedAnswe
     ...(entry.capability === undefined ? {} : { capability: entry.capability }),
     ...described,
     definition,
+    ...(entry.dispatch === undefined ? {} : { dispatch: entry.dispatch }),
     ...(entry.legacy === undefined ? {} : { legacy: entry.legacy }),
     ...(entry.requests === undefined ? {} : { requests: entry.requests }),
   });

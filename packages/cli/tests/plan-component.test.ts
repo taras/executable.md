@@ -15,7 +15,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, spawn, until } from "effection";
+import { ensure, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
@@ -31,7 +31,7 @@ import {
   useNormalizedOutput,
 } from "@executablemd/core";
 import type { Json, SyntaxSymbols } from "@executablemd/core";
-import { registerComponents, validateDocument } from "@executablemd/core";
+import { content, registerComponents, validateDocument } from "@executablemd/core";
 import {
   executeInstalled,
   fileReadEntry,
@@ -40,7 +40,8 @@ import {
   syntaxReadEntry,
 } from "@executablemd/core/host";
 import type { FragmentEvaluationInput } from "@executablemd/core/host";
-import { recordedFiles } from "../../core/tests/support/fragment-files.ts";
+import { API, Permissions } from "@executablemd/runtime";
+import { recordedFiles, useRecordedFiles } from "../../core/tests/support/fragment-files.ts";
 import type { RecordedFiles } from "../../core/tests/support/fragment-files.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -60,6 +61,16 @@ import {
 import type { StructuralValidation } from "../src/plan-component.ts";
 import { syntaxSymbols } from "../src/syntax.ts";
 import { PLAN_DOCUMENT, readPackagedDocument } from "../src/packaged-document.ts";
+
+/** What one operation failed with, so a row can drive a cancellation itself. */
+function* raised<T>(operation: Operation<T>): Operation<string> {
+  try {
+    yield* operation;
+    return "";
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
 
 const ROOT = "document.md";
 
@@ -118,6 +129,22 @@ function* runDocument(options: {
    * is what makes "this execution offers no evaluation" the default.
    */
   evaluation?: FragmentEvaluationInput;
+  /**
+   * The document filesystem this execution runs against.
+   *
+   * Installed as the ordinary `API.Files` provider, which is what an admitted
+   * information request crosses: a row reading a recorder's log is reading the
+   * same provider an authored `<File>` in this document would have reached.
+   */
+  files?: RecordedFiles;
+  /**
+   * Anything else this case installs inside the execution.
+   *
+   * Runs after the recorder, so middleware installed here sits between the
+   * document and that provider — which is where a document's own handler, and a
+   * region's own policy, go.
+   */
+  installing?: () => Operation<void>;
   /**
    * Install the output middleware an ordinary `xmd run` installs.
    *
@@ -181,6 +208,18 @@ function* runDocument(options: {
             // component, and what it answers with is this execution's.
             symbols: harness.symbols,
             ...(options.evaluation === undefined ? {} : { evaluation: options.evaluation }),
+            ...(options.files === undefined && options.installing === undefined
+              ? {}
+              : {
+                  *install(): Operation<void> {
+                    if (options.files !== undefined) {
+                      yield* useRecordedFiles(options.files);
+                    }
+                    if (options.installing !== undefined) {
+                      yield* options.installing();
+                    }
+                  },
+                }),
           },
         ],
       );
@@ -475,8 +514,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       "\n",
     );
 
-    function reading(files: RecordedFiles): FragmentEvaluationInput {
-      return { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()], files };
+    function reading(): FragmentEvaluationInput {
+      return { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] };
     }
 
     /** A harness whose agent answers a request first and a Plan second. */
@@ -498,13 +537,381 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           harness: yield* asking(yield* planWriterRoot()),
           reviews: [],
-          evaluation: reading(files),
+          evaluation: reading(),
+          files: files,
         });
 
         expect(run.failure).toBe(undefined);
         // The search reached the profile this *document's* host installed.
         expect(files.performed).toEqual(["glob notes.md"]);
         expect(run.output).toContain(`got: ${PLAN}`);
+      });
+    });
+
+    /**
+     * The route an information request takes, observed from both sides of it.
+     *
+     * This is the row the shared route is worth having: the request leaves the
+     * authenticated projection, crosses the middleware the document installed
+     * *and* the middleware installed nearer the provider, and what the findings
+     * carry is what the provider was asked for after both of them had their
+     * turn. Before U2 none of this was reachable — the fragment performed an
+     * operation the host handed the profile, which no handler in the document's
+     * scope could observe, transform or refuse.
+     */
+    it("PI20: enclosing and descendant middleware both see the request, and the transform decides it", function* () {
+      yield* useWorkingDirectory(function* () {
+        // The file the request asks for does not exist; the one the transform
+        // substitutes does. So a finding naming it can only have come from the
+        // transformed request.
+        const files = recordedFiles({ "renamed.md": "the renamed note\n" });
+        const enclosing: string[] = [];
+        const run = yield* runDocument({
+          source: SOURCE,
+          harness: yield* asking(yield* planWriterRoot()),
+          reviews: [],
+          evaluation: reading(),
+          files: files,
+          *installing(): Operation<void> {
+            // Nearer the provider, and transforming: installed after the
+            // recorder, so it is the last handler the request crosses.
+            yield* API.Files.around(
+              {
+                *globFiles([input], next) {
+                  return yield* next({ ...input, include: ["renamed.md"] });
+                },
+              },
+              { at: "min" },
+            );
+            // Where a document's own handler goes, and observing only.
+            yield* API.Files.around({
+              *globFiles([input], next) {
+                enclosing.push(`glob ${input.include.join(",")}`);
+                return yield* next(input);
+              },
+            });
+          },
+        });
+
+        expect(run.failure).toBe(undefined);
+        // What the document's handler saw is what the fragment asked for.
+        expect(enclosing).toEqual(["glob notes.md"]);
+        // What the provider performed is what the nearer handler substituted.
+        expect(files.performed).toEqual(["glob renamed.md"]);
+        // And the findings the next turn was given carry that answer.
+        expect(run.harness.fake.prompts[1] ?? "").toContain("renamed.md");
+        expect(run.output).toContain(`got: ${PLAN}`);
+      });
+    });
+
+    /**
+     * And the effective policy of the scope it runs in decides it.
+     *
+     * The projection delegates through the writer's guard; it does not answer
+     * `Permissions` with true, and it does not run the request anywhere wider.
+     * So a read restriction the enclosing scope installed is in force inside
+     * the projection — and the refusal it produces is an ordinary one, which
+     * this workflow turns into exactly one more turn.
+     *
+     * The ordering half of this claim — that a descendant answering `true`
+     * cannot defeat an enclosing `false` — is Tier PM's, proved there against
+     * the Api itself rather than duplicated here as another permutation.
+     */
+    it("PI21: a read restriction denies the request and becomes one safe retry", function* () {
+      yield* useWorkingDirectory(function* () {
+        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const run = yield* runDocument({
+          source: SOURCE,
+          harness: yield* asking(yield* planWriterRoot()),
+          reviews: [],
+          evaluation: reading(),
+          files: files,
+          *installing(): Operation<void> {
+            yield* Permissions.around({
+              files: ([operation], next) => (operation === "read" ? false : next(operation)),
+            });
+          },
+        });
+
+        // Authorship finished: the refusal was feedback rather than a failure.
+        expect(run.failure).toBe(undefined);
+        expect(run.output).toContain(`got: ${PLAN}`);
+        // Denied before the provider performed anything.
+        expect(files.performed).toEqual([]);
+        // One more turn, carrying a sentence about the refusal and nothing from
+        // a platform: the next prompt is what the Agent was given.
+        expect(run.harness.fake.prompts).toHaveLength(2);
+        const retry = run.harness.fake.prompts[1] ?? "";
+        expect(retry).toContain("That request was refused");
+        // The sanitized sentence, in the words an author would be told, and
+        // carrying nothing a platform or a provider wrote.
+        expect(retry).toContain("cannot search the working directory: permission denied.");
+        expect(retry).not.toContain("/");
+      });
+    });
+
+    /** A request that reads a file, so the recorder's hold fires on it. */
+    const READ_REQUEST = '<File path="notes.md" as="note" />\n<Json value={note} />\n';
+
+    /** A harness answering a file read first and a Plan second. */
+    function* reading_(root: string): Operation<PlanDeclarationHarness> {
+      const harness = yield* planDeclarationHarness({
+        surface: "component",
+        planWriterRoot: root,
+      });
+      harness.fake.script({ reply: READ_REQUEST });
+      harness.fake.script({ reply: PLAN });
+      harness.script({ decision: "Approve" });
+      return harness;
+    }
+
+    /**
+     * The private phase runs for the invocation the engine issued, and no other.
+     *
+     * `claim(invocation)` is canonical execution's own authentication, and it is
+     * the first thing this phase does: an invocation it did not issue is refused
+     * before the projection exists. What that protects is the private phase and
+     * the program it projects — it authorizes no filesystem access, because the
+     * trusted workflow reads through the ordinary chain either way.
+     *
+     * This drives the **real private body** off the declaration the production
+     * path builds, with a claimant that refuses the way core's does for a forged
+     * invocation; the control beside it, a claimant that answers, shows the body
+     * gets past the claim and on to its projection. So the ordering is what is
+     * asserted rather than the fact that something threw.
+     */
+    it("PI25: the private information body runs only for its own invocation", function* () {
+      yield* useWorkingDirectory(function* () {
+        const harness = yield* planDeclarationHarness({
+          surface: "component",
+          planWriterRoot: yield* planWriterRoot(),
+        });
+        const information = harness.declaration.privates?.find(
+          (component) => component.name === "PlanInformation",
+        );
+        expect(information).toBeDefined();
+        const forged = { hasContent: () => true };
+
+        // The claimant canonical execution would hand this body for an
+        // invocation it did not issue: it refuses.
+        const refused = information?.factory(
+          // deno-lint-ignore require-yield
+          function* (): Operation<string> {
+            throw new Error("this component was called without the invocation the engine issued");
+          },
+        );
+        let unauthenticated = "";
+        try {
+          yield* refused?.({}, forged) ?? ("" as unknown as Operation<unknown>);
+        } catch (error) {
+          unauthenticated = error instanceof Error ? error.message : String(error);
+        }
+        expect(unauthenticated).toContain("without the invocation the engine issued");
+
+        // The control: a claimant that answers. The body now gets past the
+        // claim — and fails further on, at the projection it has no content
+        // host for — which is how we know the refusal above was the claim and
+        // not something earlier.
+        const allowed = information?.factory(
+          // deno-lint-ignore require-yield
+          function* (): Operation<string> {
+            return "claimed";
+          },
+        );
+        let authenticated = "";
+        try {
+          yield* allowed?.({}, forged) ?? ("" as unknown as Operation<unknown>);
+        } catch (error) {
+          authenticated = error instanceof Error ? error.message : String(error);
+        }
+        expect(authenticated).not.toBe("");
+        expect(authenticated).not.toContain("without the invocation the engine issued");
+      });
+    });
+
+    /**
+     * A provider that throws is not a refused request.
+     *
+     * The recovery this workflow owns is narrow by design: an ordinary `Err`
+     * from a captured read is the fragment's own text being refused, and gets
+     * another turn. A provider that *raises* is infrastructure, and nothing the
+     * candidate rewrites fixes it — so authorship ends, with no following turn
+     * and no Plan.
+     */
+    it("PI26: a throwing Files provider ends authorship with no retry turn", function* () {
+      yield* useWorkingDirectory(function* () {
+        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const run = yield* runDocument({
+          source: SOURCE,
+          harness: yield* reading_(yield* planWriterRoot()),
+          reviews: [],
+          evaluation: reading(),
+          files: {
+            ...files,
+            // deno-lint-ignore require-yield
+            *readTextFile(): Operation<never> {
+              throw new Error("the Files provider failed");
+            },
+          },
+        });
+
+        expect(run.failure).not.toBe(undefined);
+        // One prompt, and no second one: the request was never turned into
+        // retry context.
+        expect(run.harness.fake.prompts).toHaveLength(1);
+        expect(run.output).not.toContain(PLAN);
+      });
+    });
+
+    /**
+     * Cancelling an information read, with its cleanup held open.
+     *
+     * The grant is live exactly across `tryContent()` and the teardown the
+     * projection joins, so the interesting interruption is one that lands
+     * *inside* the provider: the read is in flight, a cleanup registered with it
+     * holds, and the halt may not be allowed to complete until that cleanup
+     * finishes. `joined` read while the cleanup is still held is what proves it
+     * waited — a flag checked afterwards would be true either way.
+     *
+     * What it shows about access is what a cancelled run can show: nothing
+     * further is performed under the grant. The retained-guard case — a guard
+     * answering no once its frame has ended — is Tier PLA's, where a scope can
+     * outlive what it was asking about.
+     */
+    it("PI27: cancelling an entered information read waits for its cleanup", function* () {
+      yield* useWorkingDirectory(function* () {
+        const entered = withResolvers<void>();
+        const cleanupEntered = withResolvers<void>();
+        const cleanupReleased = withResolvers<void>();
+        const order: string[] = [];
+        let joined = false;
+
+        const files = recordedFiles(
+          { "notes.md": "the retained note\n" },
+          {
+            *hold(path) {
+              if (path !== "notes.md") {
+                return;
+              }
+              // Registered with the read, so it runs as the read unwinds.
+              yield* ensure(function* () {
+                order.push("cleanup entered");
+                cleanupEntered.resolve();
+                yield* cleanupReleased.operation;
+                order.push("cleanup finished");
+              });
+              entered.resolve();
+              // The read never settles on its own: the halt is what ends it.
+              yield* suspend();
+            },
+          },
+        );
+
+        const harness = yield* reading_(yield* planWriterRoot());
+        const running = yield* spawn(() =>
+          raised(
+            runDocument({
+              source: SOURCE,
+              harness,
+              reviews: [],
+              evaluation: reading(),
+              files,
+            }),
+          ),
+        );
+
+        yield* entered.operation;
+        const halting = yield* spawn(function* () {
+          yield* running.halt();
+          joined = true;
+        });
+        yield* cleanupEntered.operation;
+        // Read while the cleanup is still held: the halt is waiting for it.
+        order.push(`joined while held: ${joined}`);
+        cleanupReleased.resolve();
+        yield* halting;
+        order.push(`joined after: ${joined}`);
+
+        expect(order).toEqual([
+          "cleanup entered",
+          "joined while held: false",
+          "cleanup finished",
+          "joined after: true",
+        ]);
+        // The read that was cancelled is the only operation the provider ever
+        // saw: nothing continued under the grant afterwards.
+        expect(files.performed).toEqual(["read notes.md"]);
+      });
+    });
+
+    /**
+     * The restriction belongs to the region, and leaving it restores what was
+     * there.
+     *
+     * One document, two `<Plan>` elements: the first written inside a read-only
+     * region and the second outside it. The first one's request is denied and
+     * becomes one more turn; the second one's is performed. That transition is
+     * the thing PI21 cannot show — it installs a restriction for the whole
+     * execution — and it is scoped permission behaving the way every other
+     * region does. The general ordering proof stays Tier PM's.
+     */
+    it("PI28: a Plan outside the narrower region uses the restored allowance", function* () {
+      yield* useWorkingDirectory(function* () {
+        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const harness = yield* planDeclarationHarness({
+          surface: "component",
+          planWriterRoot: yield* planWriterRoot(),
+        });
+        // Four turns: a denied request and a Plan for the first element, a
+        // performed request and a Plan for the second.
+        harness.fake.script({ reply: READ_REQUEST });
+        harness.fake.script({ reply: PLAN });
+        harness.fake.script({ reply: READ_REQUEST });
+        harness.fake.script({ reply: PLAN });
+        harness.script({ decision: "Approve" });
+        harness.script({ decision: "Approve" });
+
+        const run = yield* runDocument({
+          source: [
+            "<ReadOnlyRegion>",
+            "",
+            '<Plan as="first">Write a program.</Plan>',
+            "",
+            "</ReadOnlyRegion>",
+            "",
+            '<Plan as="second">Write a program.</Plan>',
+            "",
+          ].join("\n"),
+          harness,
+          reviews: [],
+          evaluation: reading(),
+          files: files,
+          *installing(): Operation<void> {
+            yield* registerComponents([
+              {
+                name: "ReadOnlyRegion",
+                origin: "test://regions",
+                props: { type: "object", properties: {}, additionalProperties: false },
+                *fn(): Operation<string> {
+                  yield* Permissions.around({
+                    files: ([operation], next) => (operation === "read" ? false : next(operation)),
+                  });
+                  return yield* content();
+                },
+              },
+            ]);
+          },
+        });
+
+        expect(run.failure).toBe(undefined);
+        // Exactly one read reached the provider: the second element's.
+        expect(files.performed).toEqual(["read notes.md"]);
+        const prompts = run.harness.fake.prompts;
+        expect(prompts).toHaveLength(4);
+        // Inside the region: refused, and the refusal is what the next turn got.
+        expect(prompts[1] ?? "").toContain("That request was refused");
+        // Outside it: performed, and the findings are what the next turn got.
+        expect(prompts[3] ?? "").toContain("the retained note");
       });
     });
 
@@ -515,7 +922,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           harness: yield* asking(yield* planWriterRoot()),
           reviews: [],
-          evaluation: reading(files),
+          evaluation: reading(),
+          files: files,
           // The presentation an ordinary `xmd run` installs, so a phase written
           // into the document would arrive here exactly as an operator would
           // read it rather than being normalized away.
@@ -563,7 +971,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           harness,
           reviews: [],
-          evaluation: reading(files),
+          evaluation: reading(),
+          files: files,
         });
 
         expect(run.failure).toBe(undefined);
@@ -580,7 +989,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           harness: yield* asking(yield* planWriterRoot()),
           reviews: [],
-          evaluation: reading(files),
+          evaluation: reading(),
+          files: files,
           stream: first,
         });
         expect(one.failure).toBe(undefined);
@@ -593,7 +1003,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         const two = yield* runDocument({
           source: SOURCE,
           reviews: [],
-          evaluation: reading(tripwire),
+          evaluation: reading(),
+          files: tripwire,
           stream: first,
         });
 
@@ -613,7 +1024,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           harness: yield* asking(yield* planWriterRoot()),
           reviews: [],
-          evaluation: reading(files),
+          evaluation: reading(),
+          files: files,
           stream: first,
         });
         expect(one.failure).toBe(undefined);
@@ -626,7 +1038,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         const two = yield* runDocument({
           source: SOURCE,
           reviews: [],
-          evaluation: reading(resumed),
+          evaluation: reading(),
+          files: resumed,
           stream: yield* continuing(first),
         });
 
@@ -661,7 +1074,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           harness,
           reviews: [],
-          evaluation: reading(files),
+          evaluation: reading(),
+          files: files,
           stream: first,
         });
         expect(one.failure).toBe(undefined);
@@ -676,7 +1090,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         const two = yield* runDocument({
           source: SOURCE,
           reviews: [],
-          evaluation: reading(recordedFiles({ "notes.md": "the retained note\n" })),
+          evaluation: reading(),
+          files: recordedFiles({ "notes.md": "the retained note\n" }),
           stream: yield* continuing(first),
           harness: yield* planDeclarationHarness({
             surface: "component",
@@ -727,7 +1142,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           root,
           harness: yield* asking(root),
           reviews: [],
-          evaluation: reading(files),
+          evaluation: reading(),
+          files: files,
           stream: first,
         });
         expect(one.failure).toBe(undefined);
@@ -742,7 +1158,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           props: { request: "Write something else." },
           root,
           reviews: [],
-          evaluation: reading(changed),
+          evaluation: reading(),
+          files: changed,
           stream: yield* continuing(first),
         });
 
@@ -1573,8 +1990,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
  */
 describe("Tier FE — Plan produces text, Evaluate runs it", () => {
   /** A profile admitting one read, over a recorder these rows can count. */
-  function profile(files: RecordedFiles): FragmentEvaluationInput {
-    return { read: [fileReadEntry()], files };
+  function profile(): FragmentEvaluationInput {
+    return { read: [fileReadEntry()] };
   }
 
   /**
@@ -1619,7 +2036,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
    * inside an evaluation names `test://fe713/read` and the admitted capability
    * is core's file read behind it.
    */
-  function fixtureProfile(files: RecordedFiles): FragmentEvaluationInput {
+  function fixtureProfile(): FragmentEvaluationInput {
     return {
       read: [
         {
@@ -1629,7 +2046,6 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
           description: READ_COMPONENT.description,
         },
       ],
-      files,
     };
   }
 
@@ -1689,7 +2105,8 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
           "",
         ].join("\n"),
         reply: PROGRAM,
-        evaluation: profile(files),
+        evaluation: profile(),
+        files: files,
       });
 
       expect(run.failure).toBe(undefined);
@@ -1709,7 +2126,8 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
       const run = yield* runDocument({
         source: ['<Plan as="approved">Write a program.</Plan>', "", "done", ""].join("\n"),
         reply: `# Read the note\n\n<File path="notes.md" />\n`,
-        evaluation: profile(files),
+        evaluation: profile(),
+        files: files,
       });
 
       expect(run.failure).toBe(undefined);
@@ -1738,7 +2156,8 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
             "",
           ].join("\n"),
           reply: `# Read the note\n\n<FE713.Read path="notes.md" />\n`,
-          evaluation: fixtureProfile(files),
+          evaluation: fixtureProfile(),
+          files: files,
         });
       });
 
@@ -1789,7 +2208,8 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
           // The agent writes the component it was *not* told about. It resolves
           // at the ordinary site and is not in the profile.
           reply: `# Use the wide component\n\n<FE713.WideOnly />\n`,
-          evaluation: fixtureProfile(files),
+          evaluation: fixtureProfile(),
+          files: files,
         });
       });
 
@@ -1820,7 +2240,8 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
           // the component only the authored site has. Titled, so it is a draft
           // the review approves rather than an information request.
           reply: `# Use the wide component\n\n<FE713.Read path="notes.md" />\n<FE713.WideOnly />\n`,
-          evaluation: fixtureProfile(files),
+          evaluation: fixtureProfile(),
+          files: files,
         });
       });
 
@@ -1874,7 +2295,8 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
         // information request — and it still carries the executable fence the
         // later, narrower `<Evaluate>` must refuse.
         reply: '# Read and run\n\n<File path="notes.md" />\n\n```bash exec\nprintf ran\n```\n',
-        evaluation: profile(files),
+        evaluation: profile(),
+        files: files,
       });
 
       expect(run.failure).not.toBe(undefined);
