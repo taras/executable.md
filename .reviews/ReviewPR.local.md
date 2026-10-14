@@ -23,11 +23,7 @@ const changedTsFiles = pr.files
   as="rawDiagnostics"
  />
 
-```ts eval
-import { buildDiagnostics } from "@executablemd/code-review-agent";
-
-const diagnostics = buildDiagnostics(rawDiagnostics, pr, doctor);
-```
+<ReviewDiagnostics raw={rawDiagnostics} pr={pr} doctor={doctor} as="diagnostics" />
 
 <ReleaseSpecWarning files={changedFilePaths} />
 

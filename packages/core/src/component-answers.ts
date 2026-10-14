@@ -14,12 +14,10 @@
  * handler invocation then receives its own {@link ComponentAnswerRequest},
  * which is the right to answer *that* asking and nothing else.
  *
- * The split is the whole point. A stable handle a provider retains can only
- * ever prove "some provider installed by this host" — it cannot prove which
- * invocation is speaking, so a handler that has already returned, or one that
- * lost, could state an answer to an import it is not deciding. A request proves
- * it, because it is minted for one invocation, captures the resolution it was
- * asked in by object identity, and is closed the moment that invocation ends.
+ * An installation is reusable, but cannot identify which invocation is
+ * speaking. Each request captures its resolution by object identity and closes
+ * when its handler returns, throws or is cancelled, so a finished or losing
+ * handler cannot state an answer to an import it is no longer deciding.
  *
  * So `claim` takes no name. The name is fixed when the request is minted, from
  * what the chain asked, and a handler cannot state an answer for a component it
@@ -31,11 +29,11 @@
  *
  * ## Identifying is not permission
  *
- * An identity statement permits nothing. A fragment still needs the host entry, an exact identity match, the right `allow`
- * class, whole- fragment preflight and canonical generated import — all of
- * them independently. Middleware that answers an import without stating an
- * identity is an ordinary replacement and stays exactly as valid as it was;
- * what it cannot do is enter an admitted fragment.
+ * An identity statement permits nothing. A fragment still needs the host entry,
+ * an exact identity match, the right `allow` class, whole-fragment preflight
+ * and canonical generated import — all of them independently. Middleware that
+ * answers an import without stating an identity is an ordinary replacement
+ * and stays exactly as valid as it was; it cannot enter an admitted fragment.
  */
 
 import type { Operation } from "effection";
@@ -67,9 +65,8 @@ export type ComponentAnswerHandler = (
 /**
  * What a provider installs through, in place of anything it could keep.
  *
- * Registering composes the middleware; canonical execution owns the request
- * lifetime around each invocation of it, so a provider cannot hold the lease
- * open past its own handler.
+ * Registering composes import middleware without handing the provider a
+ * request it can retain to answer a future invocation.
  */
 export interface ComponentAnswerRegistrar {
   /**
@@ -113,11 +110,6 @@ export function componentAnswerRegistrar(
     *around(handler: ComponentAnswerHandler): Operation<void> {
       yield* Component.around({
         *importComponent([name, position], next) {
-          // One request for this handler invocation, capturing the resolution
-          // window that is open right now. Minted here rather than carried on
-          // the installation: one installation serves every name it registered,
-          // and a retained handle states nothing about which resolution is
-          // being decided.
           const asked = installation.open(name, position);
           try {
             return yield* handler(
@@ -126,10 +118,6 @@ export function componentAnswerRegistrar(
                 next(forName ?? name, forPosition ?? position),
             );
           } finally {
-            // Synchronous, and in `finally`, so the lease ends the same way the
-            // invocation did — returned, threw, or was cancelled. Nothing
-            // yields here: a close that needed a suspension point would leave
-            // the request open across one.
             asked.close();
           }
         },

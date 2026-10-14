@@ -2,7 +2,7 @@
  * Install the packaged review graph when an operator selects this Plugin.
  *
  * Run, syntax, plan and executing workflow actions reserve its thirty-five
- * Markdown declarations and six reserved registrations, so the repository being
+ * Markdown declarations and seven reserved registrations, so the repository being
  * reviewed cannot replace the review program. Root `xmd test` reserves none;
  * its isolated `<Execution host="run">` child reinstalls this Plugin with
  * command `run`.
@@ -100,7 +100,7 @@ const reviewPlugin: Plugin = Plugin({
     if (!claimsGraph(request)) {
       return undefined;
     }
-    // The six reserved registrations and the documentation describing them, in
+    // The seven reserved registrations and the documentation describing them, in
     // the scope the command runs in. Declarative only: nothing here installs a
     // provider, spawns a process, reads a credential or reaches the network.
     yield* useReviewComponents();

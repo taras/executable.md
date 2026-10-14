@@ -156,11 +156,9 @@ function runDocument(
               [
                 {
                   evaluation: yield* evaluationProfile(database, {
-                    // A directory capability, stated by this host. This package
-                    // states none of its own — `<Dir>` belongs to
-                    // `@executablemd/git`, and a Workflow host that wants the
-                    // capability supplies an entry for it, exactly as WGAC16
-                    // shows a host doing explicitly.
+                    // Canonical core implements `<Dir>`; this host supplies its
+                    // admission entry. The profile states no directory entry of
+                    // its own, as WGAC16 demonstrates explicitly.
                     directory: HOST_DIRECTORY,
                     ...evaluation,
                   }),
@@ -977,11 +975,10 @@ describe("Tier WGAC — the registered Evaluate component", () => {
  * compatibility data — several rows below assert the table a run admits, and
  * what they assert is exactly these strings.
  *
- * This package states no entry of its own any more: `<Dir>` belongs to
- * `@executablemd/git`, and the XMD workflow profile supplies Git's. A test
- * host standing in for that profile therefore states the same identity rather
- * than importing it, which is what keeps this suite free of the package under
- * it.
+ * Canonical core implements `<Dir>`. This host states its admission identity;
+ * the origin and version-1 alias below are retained compatibility strings,
+ * not the implementation's package. The profile supplies no directory entry
+ * of its own.
  */
 const HOST_DIRECTORY: FragmentEntry = directoryEntry(
   { origin: "@executablemd/workflow/composition", key: "Dir", revision: "3" },
@@ -994,10 +991,10 @@ const HOST_DIRECTORY: FragmentEntry = directoryEntry(
  * (specs/workflow-workspace-spec.md §8.4).
  *
  * The same seam, asked for a class rather than only for a fragment. What these
- * add to the core matrix is the production assembly: the real `<File>` and the
- * real `<Dir>` this package registers, the run's own transaction-bound Files
- * provider, and the run's authoritative current root — so an admitted write
- * lands where the run keeps its Workspace and nowhere else.
+ * add to the core matrix is the production assembly: canonical core's real
+ * `<File>` and `<Dir>`, admitted under this host's entries, the run's own
+ * transaction-bound Files provider, and its authoritative current root — so
+ * an admitted write lands where the run keeps its Workspace and nowhere else.
  */
 
 /** What the run's Workspace holds at one logical path, read back independently. */

@@ -6,8 +6,11 @@
 This specification defines the observable contract of `xmd workflow`: a
 provider-neutral retained environment in which readable Markdown procedures run
 as repeatable workflows. It complements `architecture.md`, which owns the
-implementation invariants. The executable MDX specification continues to own
-parsing, expansion, bindings, error modes and ordinary component behavior.
+implementation invariants. Start with [A document running](../architecture.md#a-document-running)
+for the ordinary/workflow and replay model. This document owns lifecycle
+commands, workflow profiles and observable behavior; [Workflow runs](workflow-spec.md)
+owns retained identity and storage, and the [Executable MDX specification](executable-mdx-spec.md)
+owns authored syntax, bindings and ordinary component behavior.
 
 ## 1. First workflow
 
@@ -115,7 +118,8 @@ environment.
 - Partial replay reattaches the same Workspace and continues at the frontier.
 - Unsupported operations fail instead of falling back to unrelated host
   filesystem or process behavior.
-- Agents inspect the Workspace read-only and cannot mutate it directly.
+- Agents receive observations through authored Prompts and cannot access the
+  Workspace directly. XMD performs its reads and mutations (§8).
 
 The same declarative components work in both environments. Durability comes
 from the workflow host, not from another spelling of `<File>` or `<Git.Commit>`.
@@ -711,16 +715,14 @@ foreign, incompatible, damaged or unparseable candidate fails the request and
 is reported distinctly. The command does not return the healthy subset as
 though it were complete, and it changes no candidate.
 
-A run whose host was lost mid-transaction is reported like any other. Its
-database carries a rollback journal that only a write-capable connection can put
-back, so `status`, `list` and `history` copy the database and that journal into
-a private scratch directory, let SQLite recover the copy, and read the answer
-from it. The retained pair is unchanged, still awaiting its next write-capable
-owner, and the copy is removed before the answer is observable. `list` processes
-at most one such candidate at a time. Recovery grants nothing else: these
-commands still obtain no executor lock and no lifecycle ownership, and a copy
-that cannot be produced or removed is reported as its own refusal rather than as
-damage to the run.
+A crash does not prevent read-only inspection of the last committed state.
+When SQLite requires rollback recovery, inspection reads a privately recovered
+copy and leaves the retained database and journal unchanged. It processes one
+candidate at a time and returns success only after removing its scratch copy.
+Failure to produce or remove that copy is an inspection-recovery refusal,
+separate from damage revealed in the recovered run. Recovery obtains neither an
+executor lock nor lifecycle ownership. [Read-only lifecycle inspection](../architecture.md#read-only-lifecycle-inspection)
+owns coordination, recognition and teardown ordering.
 
 ### 4.2 History
 
@@ -1870,11 +1872,20 @@ classes this fragment draws on. Before the first effect, the evaluator:
 - resolves each admitted name **and authored form** to the exact pinned
   definition and identity the host supplied, never to a component search path, a
   registration, or the workflow component bundle;
-- refuses executable code blocks, expression props, interpolation that reads a
-  binding, a result binding, every component the host did not admit, and every
-  form the selected classes hold no exact entry for; and
+- permits ordinary structural constructs, fragment-local `as`/`Let` bindings
+  and declarative data-expression props, while refusing executable code blocks,
+  arbitrary JavaScript, prose interpolation that reads a binding, unadmitted
+  components and forms outside the selected tables; and
 - refuses a request that is malformed, or that does not normalize to one the
   host stated exactly.
+
+Data expressions compose JSON literals, finite numbers, local binding
+identifiers, arrays, objects and object shorthand; they do not execute
+JavaScript. The [generated-XMD language contract](executable-mdx-spec.md#533-ordinary-generated-composition)
+owns numeric spellings, prohibited expressions and structural composition.
+A binding is available after its producer; child bindings do not leak to
+following siblings. No caller binding enters the fragment and no fragment
+binding escapes it.
 
 A refusal ends the whole fragment. Its diagnostic names the construct class, and
 so does what the run retains of it, so a rejected fragment publishes nothing —
@@ -1914,34 +1925,20 @@ retained admission.
 
 #### A continuation is held to the ceilings it was admitted under
 
-A retained admission is a grant, and a continuation is held to it. Durable
-replay matches an effect by its type and name, and what a description carries
-is stored rather than compared, so the normalized policy is retained in the
-admission's own result. Before one generated component is invoked or one
-request is performed, a continuation checks the retained policy against the one
-the run now states — and holds two kinds of term differently, on purpose.
+A continuation uses the exact source and selected policy retained by the
+admission, not a newly supplied candidate. It checks them before invoking a
+generated component or performing a request.
 
-The admission's Workspace roots and selected root are an as-of-admission
-retained basis, not a frozen future state: every committed mutation retains
-another immutable root and advances the authoritative current root, and that is
-the run's own recorded progress rather than a moved ceiling. So the basis is
-checked by membership. Every admission root and the admission's selected root
-must still be retained, and the root the run now stands on must be a retained
-one; additional retained roots and an advanced retained current root pass. Loss
-of any admission root — the selected one included — refuses before generated
-work, with the same fixed diagnostic that names none of what it compared.
+Root checks preserve the run's own progress: every admission root, including
+its selected root, must remain retained, and the current root must be retained.
+Additional roots and an advanced current root pass. Losing an admission root
+refuses without revealing compared values.
 
-Every non-root term compares whole and exactly, in canonical order. A changed
-class selection, a changed pinned identity behind an unchanged name, a changed
-admitted form, and a widened or otherwise altered request ceiling are each
-refused. Only the tables the selection reached take part, so a run that changed
-a write table a read-only admission never drew on has changed nothing that
-admission was granted under.
-
-The fragment is decided inside that durable effect rather than before it. So a
-continuation restores what was admitted without parsing the current candidate at
-all: a later caller holding different source changes nothing about what expands,
-and what expands is the source this run admitted.
+Non-root terms must match exactly in canonical order: selected classes, pinned
+identities and forms, and normalized request ceilings. Only selected tables
+participate, so changing an unused write table does not invalidate a read-only
+admission. [Generated admission and continuation](../architecture.md#agent-permissions-and-generated-xmd)
+owns the retained-basis comparison and durable policy identity.
 
 `File` is admitted as two identities, never as one. Core's pinned **read**
 identity is the self-closing form and core's pinned **write** identity is the
@@ -1959,32 +1956,20 @@ carry the same definition and disjoint forms; overlapping forms or two
 definitions are a malformed host table, refused before anything is retained
 rather than settled by whichever entry the host listed first.
 
-**The admitted form holds at the invocation too.** Which identity was admitted
-is preflight's, decided from the scan: a name outside the selected tables, and a
-form the selected tables hold no exact entry for, refuse the whole fragment
-before its first effect.
-
-Which branch the admitted component then takes inside itself is held to the same
-decision, and the component does not make it. A component declares the forms it
-answers and canonical engine dispatch enters the body for the form the scan
-recorded, before the body runs (executable-mdx-spec §5.6); every admitted
-invocation is checked against that same fact beforehand too, refusing when it is
-not the form its identity was chosen for. Neither decision consults
-`Component.hasContent()`, whose outermost handler answers first and may answer
-differently on each call, nor a `hasContent()` method on whatever invocation
-object a caller handed over — a caller can mint that object, and it cannot mint
-the engine's issuance. So an admitted `File:read` does not become a write and an
-admitted `File:write` does not become a read, however many times something is
-asked, and an admitted self-closing `File.Delete` is the only spelling of that
-name that reaches a provider at all. A refusal there lands before any provider is
-reached, and the fragment performs nothing.
+**The admitted form also holds at invocation.** Preflight selects the exact
+name and form before the first effect; canonical dispatch then holds the body
+to that selection before any provider is reached. An admitted `File:read`
+cannot become a write, an admitted `File:write` cannot become a read, and only
+self-closing `File.Delete` is admitted. The [generated-XMD boundary](../architecture.md#agent-permissions-and-generated-xmd)
+owns the engine-authenticated form check; replaceable `Component.hasContent()`
+answers and caller-created invocation objects cannot decide it.
 
 #### The authored loop, and where it is written
 
-The host adds no control flow. `<Evaluate text={…} />` is the workflow host's
-component an authored document writes where an observation should happen — the
-host declares it and canonical execution registers it (below) — and everything
-around it is ordinary Markdown:
+The document owns control flow. It writes canonical core's protected
+`<Evaluate text={…} />` where a generated fragment should run; the workflow host supplies
+the evaluation ceiling, not the component. Everything around it is ordinary
+trusted Markdown:
 
 ```md
 <Loop name="observations" max={4}>
@@ -2010,46 +1995,41 @@ not the loop's failure — the document states what exhaustion means, which the
 representative flow does with a final `<Parse>` that requires a proposal. The
 completed Prompt and observation records are the evidence for exhaustion.
 
-`<Evaluate>`'s schema is closed on one required string prop and one optional
-`allow` array, and paired content is refused: a `source` the element rendered is
-not a fragment anybody handed it. A write-enabled invocation is written the same
-way, with the class it draws on stated where a reader can see it:
+Evaluate accepts disjoint inputs: a self-closing element supplies the
+fragment in the string `text` prop; a paired element renders its content to
+produce the fragment and refuses a simultaneous `text` prop. `allow` is an
+optional array selecting the host's effect classes. The closed schema accepts only `text` and `allow`;
+every profile refuses `source` and `program`. A write-enabled invocation states its class where a reader can see
+it:
 
 ```md
 <Evaluate text={proposal.changes} allow={["write"]} />
 ```
 
-It answers with a detached value, not text:
+Evaluate returns the fragment's rendered text. To return structured
+findings, the fragment captures a component result and renders the structure
+explicitly:
 
-```json
-{
-  "observations": [{ "name": "Fetch", "value": {} }],
-  "output": ""
-}
+```mdx
+<File path="notes.md" as="note" />
+<Json value={{ note }} />
 ```
 
-Each admitted read's own returned value, in the order the fragment invoked them,
-with whatever the fragment rendered under `output` — beside them, never instead
-of them. An admitted `<Fetch>` written without a binding renders nothing at all,
-so a result taken from the rendered fragment would answer the Agent's question
-with an empty string.
+Ordinary `as` suppresses a component's output and binds its result locally;
+`Let` may bind a value or capture rendered content. Pure `<Json>` remains
+available under read, write and mixed selections without granting an effect.
+Prose interpolation of bindings remains forbidden inside the generated
+fragment; the surrounding trusted loop keeps its ordinary expressions.
 
-An admitted mutation contributes neither an entry nor a synthetic receipt: its
-own durable effect record is the authoritative account of what it did, and a
-second copy on this value would be a second thing to keep true. A write-only
-fragment of a paired `<File>` under a `<Dir>` therefore answers with
-`{ "observations": [], "output": "" }`.
+Evaluate written with `as` binds the rendered string and emits none; without
+`as`, it emits that string. It declares no `returns`. No implicit observation
+array, result envelope or mutation receipt exists. A write-only fragment may
+render only whitespace unless it authors other output; the mutation's own
+durable record remains its evidence.
 
-`allow` and `as` are independent. `as` grants nothing — it is the language's
-ordinary caller-owned binding, valid for a read, a write and a mixed selection
-alike, and it binds the same shape for each. The caller's binding environment
-does not cross into the fragment, and no fragment-local binding is exported from
-it.
-
-It declares no `returns`, so the value binds by reference under `as` and nothing
-about it is rewritten on the way to the document. Turning it into text is the
-document's decision, made where the text is wanted: the representative flow binds
-it and renders it into the next `<Prompt>` with `<Json>`.
+The loop above renders the captured string through `Json` into the next
+Prompt. No caller binding crosses into the fragment, and no local binding is
+exported from it. `allow` narrows effects independently of ordinary capture.
 
 **How it is supplied.** `<Evaluate>` is canonical core's own protected
 component, and this host supplies none of it. Core claims the name ahead of
@@ -2079,50 +2059,29 @@ identity a continuation is compared against — the ceiling an admitted `<Fetch 
 carries, the policy in force where the element runs, and the run's own logical
 filesystem, which contains no host path to name.
 
-**How its durable operation is named.** The implementation claims on the exact
-invocation the engine handed it, in that invocation's own frame. A durable name
-never comes from an Effection Context or a contextual Api answer: a Context is
-addressed by name, so a loaded component may bind one for its descendants, and a
-handler installed outside an invocation answers ahead of the engine's own. Nor
-from anything `importComponent` middleware can supply: a handler may wrap this
-implementation, and an identity it could build — or one it captured from the
-element these sites are written inside, which is live for as long as they run —
-would be one it could give both sites. Two observation sites sharing one name
-would each replay the other's admitted fragment.
-
-What the claimant answers for is fixed by the execution that minted it and by
-what canonical resolution selected: an implementation kept from this attachment
-and run at another element's invocation, at a second attachment's own
-`<Evaluate>` site, or under a registry answer carrying the first attachment's
-whole registration record, admits nothing there. An implementation closed over
-one attachment's storage and ceilings names nothing under another's, so no
-run's database receives a record another run's expansion named.
+**Each occurrence owns its durable operation.** Canonical execution
+authenticates the Evaluate invocation; a Context, contextual Api answer,
+import wrapper or reused implementation cannot substitute another element's
+identity or another run's storage. [Generated execution ownership](../architecture.md#agent-permissions-and-generated-xmd)
+owns the claimant and cross-attachment checks that keep two sites from replaying
+one another's admission.
 
 `<Evaluate>` is deliberately not a printing boundary: a refused or failed
 observation stops the authored loop unless the document places a recovery
 boundary around it, because returning a refusal as observation text would leave
 the Agent reasoning from a read that never happened.
 
-Being reachable from a trusted document is all the registration decides. It
-carries none of the permission. The component closes over the exact run storage
-and the immutable host options the declaration supplied, takes its durable
-identity from its own invocation through the claimant, reads the retained roots
-and the run's authoritative current root from that storage at invocation — an
-as-of-admission provenance a continuation holds by membership, so the run's own
-later publications and an advanced retained current root invalidate nothing —
-and takes the read-only `File` identity from core. No prop, binding, Context,
-contextual API answer, component registration, generated name or middleware
-return value supplies or widens any of them.
+The host captures one immutable evaluation profile before installation;
+Evaluate reads retained roots and the authoritative current root from the owning
+run at invocation. No prop, binding, Context, contextual API answer,
+registration, generated name or middleware result supplies or widens the
+ceiling. Protection fixes the component, while contextual Files and Permissions
+still govern its operations.
 
-A repository component named `Evaluate` does not shadow this one, and neither
-does a registration, a bundle member, a declared Markdown component or a second
-loaded copy: the name is canonical core's, and claiming it is refused where the
-claim is made. `Component.importComponent` middleware composes around the import
-exactly as it composes around any other — it may observe it, delegate it and
-refuse it by throwing — and what it cannot do is answer one. Agent-generated
-source resolves through none of that: the evaluator consults only its own closed
-table of pinned identities, so a fragment naming `<Evaluate>` is refused like any
-other unadmitted component.
+The [canonical protected tier](../architecture.md#the-canonical-protected-tier)
+owns import enforcement: middleware may observe, delegate or refuse the import,
+but cannot replace Evaluate. Generated source resolves only through its closed
+admission tables; naming `Evaluate` there is an unadmitted-component refusal.
 
 #### Mutation-proposal admission
 
@@ -2142,7 +2101,7 @@ written even though canonical core now owns the component
 (`specs/executable-mdx-spec.md` §6.13.2).
 
 That order is retained identity. A continuation compares the entries position by
-position (§8.4, *A resumed run is held to its ceilings*), so a run admitted under
+position ([§8.4, continuation ceilings](#a-continuation-is-held-to-the-ceilings-it-was-admitted-under)), so a run admitted under
 a table with fewer entries is refused before any generated effect rather than
 resumed under the wider one. A read-only admission never selected the write table
 and is unaffected by a change to it.
@@ -2205,12 +2164,12 @@ events and outcomes for replay and training. It does not claim to reconstruct
 provider-internal summaries, hidden context or tool state.
 
 **Identity is the engine's.** Within one run a logical Agent session is
-identified by the Agent/Session expansion identity the engine derived, and by
-nothing else. The authored `<Session name>` is descriptive: two sibling
-`<Session name="review">` elements are two sessions. The name travels the
-compositional `Agent.session()` chain, where a handler may change it; the
-identity travels inside an opaque placement the element routes, readable only
-through the coordinator delivered to the installed provider.
+identified by the engine-derived Agent/Session expansion identity. The
+authored `<Session name>` is descriptive: two sibling
+`<Session name="review">` elements are two sessions, even if a handler gives
+them the same display name. [Agent session ownership](../architecture.md#agent-permissions-and-generated-xmd)
+owns authenticated placement and provider routing. The public `Agent.session()`
+chain may change the name; it cannot choose the durable identity.
 
 The provider and the resolved agent command are stored beside that identity as
 compatibility attributes. Changing either refuses reattachment rather than
@@ -2227,30 +2186,19 @@ owns a session, how it was constructed and which executable build accepted its
 identity; a workflow session is named by the row below instead, and an agent
 served here is served over ACP alone. Composing the two is a separate design.
 
-**The mapping lives in the run.** It is a row in the run's own database,
-committed in the run's own transaction — a mapping that could commit while the
-run did not would describe a session the run never had. The table is part of the
-schema the run is created with, so it appears with every other table or not at
-all. What stays beside the run on disk is the provider's own session store and
-one empty working directory per session; both are disposable, and neither is
-retained state.
+**The mapping lives in the run.** Its database row commits in the run's
+transaction and is part of the initial schema. Provider session stores and empty
+working directories beside the run are disposable attachment state, not retained
+workflow identity.
 
-**A canonical assertion comes before the mapping.** The order is placement, then
-the backend's acceptance of the session's first turn, then the provider's
-canonical, tagged assertion of a durable identity, then the mapping commit — and
-only then whatever that first turn produced.
-
-Placement is inert. A `<Session>` says where a session will live and which agent
-it is compatible with; it creates no provider session, contacts no backend and
-commits no row. The session comes into existence when the first subscribed
-`<Prompt>` starts a turn the backend accepts, and acceptance is reported by the
-adapter rather than inferred from anything the turn then produced.
-
-Occupancy of a key in the provider's own store is not an assertion — it says
-something is there, not what conversation it is — and a record the provider
-holds for a first turn nobody accepted asserts nothing at all. Nothing is
-retained for it, and the next attempt on that placement creates rather than
-resumes.
+**First-turn publication follows the mapping commit.** Placement is inert:
+`<Session>` contacts no backend, creates no provider session and writes no row.
+After the first subscribed Prompt's turn is accepted by the backend, the
+provider must make one canonical tagged assertion of its durable identity. The
+run commits that mapping before exposing any first-turn output. Store-key
+occupancy or an unaccepted turn asserts no identity; the next attempt creates
+rather than resumes. [Agent session ownership](../architecture.md#agent-permissions-and-generated-xmd)
+owns the acceptance, assertion and publication ordering.
 
 Partial replay attaches lazily. Completed Prompts restore without contacting the
 provider, and full replay never attaches one. Before a later live Prompt, the
@@ -2434,9 +2382,9 @@ creation identity does not. Missing, damaged or conflicting retained state is a 
 stale-input condition: children and later siblings do not begin, `<PrintErrors>`
 cannot print it, and nothing is recloned or repaired.
 
-Before any of that, a run closed over a component bundle obtains it, by the
-version it retains — under the executor lock, before a document-execution record
-is begun, before a Workspace is attached and before anything is appended.
+Before replay, a run authenticates its retained component bundle under the
+executor lock, before beginning a document-execution record, attaching a
+Workspace or appending anything.
 
 A run authenticates it from its own retained source BLOBs. Every retained length
 and content hash is recomputed from the bytes the run holds, and so is the bundle
@@ -2452,9 +2400,9 @@ recorded import naming a component the bundle does not declare, or holding a
 different path, hash or source, appends nothing and invokes nothing.
 
 A completed root result returns without expanding the document or attaching
-Workspace, Agent or external providers. It still obtains the bundle the same way
-its version requires, and still applies that admission, so retained output is
-accepted only for a history this run is a run of.
+Workspace, Agent or external providers. It still authenticates the retained
+bundle and applies admission, so retained output is accepted only for this run's
+history.
 
 A partial replay that reaches a completed Git-host effect may still reconstruct
 what that effect needed locally — a Push rebuilds its checkout from the Workspace
@@ -3553,10 +3501,10 @@ fetch operation requires its own language and durability contract.
 | XMD artifact export, inspection and fork source | specified in `specs/xmd-artifact-spec.md`; `xmd workflow export` and artifact `status`/`history` are built, Deno provider only. The artifact-backed fork remains unbuilt |
 | Agent session portability evidence in an artifact | specified in `specs/xmd-artifact-spec.md` §2.5; the format and its complete verifier are built. Provider bundle capture, Agent-aware export, intrinsic Agent-aware inspection and artifact-backed fork are unbuilt |
 | workflow Agent isolation | built by #302: no directory attachment, an empty host-owned working directory, no MCP servers, an empty requested tool set and deny-all with a failing permission path; the portable no-tool proof is tracked by #496 |
-| workflow Agent session retention | built by #302: a row in the run's own database, keyed by the engine-derived Session expansion identity alone — the authored name is descriptive — with provider, agent command and policy fingerprint beside it as compatibility attributes. A `<Session>` places one and creates nothing; the first subscribed Prompt constructs it, and the mapping commits after the backend accepted that turn and the provider made its canonical tagged assertion, before anything the turn produced is exposed. Occupancy of a provider key is never identity — including a record held for a first turn nobody accepted — and missing, mismatched, replaced or ambiguous assertions each refuse instead of starting a replacement session |
-| generated-XMD admission | built by #369, through `@executablemd/core/host`; the workflow policy wrapper is internal. Host policy is a read table and a write table of exact pinned identities, each entry carrying the authored forms it is admitted for, and an authored `allow` selects a canonical subset of the closed classes `read` and `write` — omitted means `read`. The complete fragment is preflighted inside one `generated_xmd` effect before its first generated effect |
-| `<Evaluate>` and the authored loop | built by #302 and #369 and made canonical by #713: core's own protected component, with a closed schema of `text`, this host's released `source` alias and an optional `allow`. The attachment supplies no component — it supplies one captured evaluation profile whose entries name capabilities rather than definitions, so an admitted element reaches the run's transaction-bound operations directly. Ceilings come from the run's own storage, core's `<File>` read, write and delete identities at revision 2 and the paired `@executablemd/workflow/composition#Dir` at revision 3; iteration, branching, approval and exhaustion are ordinary Markdown |
-| generated-XMD mutation-proposal admission | built by #369 and #567, amended by #643: the standard Deno profile's write table is core's paired `File:write`, the paired versioned `@executablemd/workflow/composition/dir-v2#Dir` and core's self-closing `File.Delete`, in that retained order and followed by any host extension. `allow={["write"]}` intentionally authorizes the current Dir's persistent recursive creation; the former unversioned identity never authorizes it and a retained table naming that identity refuses before generated execution. Admitted mutations run as the ordinary components they are through the run's effect transactions, directory ensure and deletion each publishing the same `workspace_file` effect their authored forms do; the evaluator adds no receipt or result entry, so a write-only fragment still binds `{ observations: [], output: "" }`; and approval is authored control flow before the element. Local Git, Git-host, issue, process, execution, credential and external-write effects are outside the class |
+| workflow Agent session retention | built by #302; [§8.5](#85-agent-session-continuity) owns logical session identity, compatibility, first-turn publication and reattachment/refusal behavior |
+| generated-XMD admission | built by #369 through `@executablemd/core/host`; the workflow policy wrapper is internal. [§8.4](#84-generated-xmd) owns the workflow tables and selected classes; [architecture](../architecture.md#agent-permissions-and-generated-xmd) owns admission and continuation mechanics |
+| `<Evaluate>` and the authored loop | built by #302 and #369, canonical since #713; [§8.4](#the-authored-loop-and-where-it-is-written) owns text/paired inputs, the closed `text`/`allow` schema, rendered-string output and authored iteration/approval. The host supplies a captured ceiling; core supplies the protected component |
+| generated-XMD mutation-proposal admission | built by #369 and #567, amended by #643; [§8.4](#mutation-proposal-admission) owns the ordered write profile, retained Dir compatibility, ordinary effect transactions and authored approval. Evaluate returns rendered text, with no result envelope or mutation receipt |
 | Deno-local DOFS persistence | POC proven by #349 / PR #350 |
 | scoped Deno Worker Shell | containment proven by #351 / PR #353 and transactions by #357 / PR #362; production integration unbuilt |
 | Worker JavaScript | deferred |

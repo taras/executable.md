@@ -2,12 +2,32 @@
 
 Decisions made during implementation, including learnings discovered along the way.
 
+## Finding the current rule
+
+This log records decisions in their historical context. For the current
+implementation contract, start at [the architecture reading map](../architecture.md#reading-this-architecture).
+The [vision](markdown-agents-vision.md) is non-normative; language interfaces and
+conformance belong to [the language specification](executable-mdx-spec.md).
+
+| Topic | Decision and current owner |
+| --- | --- |
+| Mixed durable expansion and intentionally non-durable Operations | [DEC-015](#dec-015-generated-continuation--root-basis-membership-and-an-operation-evaluator) partially supersedes [DEC-001](#dec-001-workflowt-vs-operationt--the-type-boundary) and [DEC-002](#dec-002-expansion-generators-are-workflows); [DEC-034](../packages/durable-streams/specs/DECISIONS.md#dec-034-ephemeral--explicit-escape-hatch-for-non-durable-operations-in-workflows) still governs genuinely non-durable work. Current [generated admission](../architecture.md#agent-permissions-and-generated-xmd) preserves both rules. |
+| Plan information-request delivery | [DEC-017](#dec-017-plan-information-requests--delivery-history) records sequencing; [Plan architecture](../architecture.md#plan-information-requests) and [the Plan interface](plan-command-spec.md) own current behavior. |
+| Main health and verification ownership | [DEC-013](#dec-013-a-red-main-is-reported-as-an-issue-and-gates-pull-requests-no-merge-queue), [DEC-014](#dec-014-composability-proves-ownership-not-correctness-a-second-time), and [contribution verification](../AGENTS.md#verification). |
+| Withdrawn terminal-grid surface | [DEC-016](#dec-016-withdraw-the-unimplemented-terminal-grid-surface); [installed structural syntax](../architecture.md#the-installed-structural-syntax-boundary) remains the extension boundary. |
+
 ---
 
 ## DEC-001: `Workflow<T>` vs `Operation<T>` — the type boundary
 
 **Status:** Decided  
 **Date:** 2026-03-08
+
+**Current scope:** [DEC-015](#dec-015-generated-continuation--root-basis-membership-and-an-operation-evaluator)
+partially supersedes this decision for generated mixed expansion that yields
+durable effects. The historical examples below remain as recorded; `ephemeral()`
+is still the explicit adapter for genuinely non-durable Operations under
+[DEC-034](../packages/durable-streams/specs/DECISIONS.md#dec-034-ephemeral--explicit-escape-hatch-for-non-durable-operations-in-workflows).
 
 ### Context
 
@@ -80,6 +100,12 @@ accidentally mixing durable and non-durable yields.
 
 **Status:** Decided  
 **Date:** 2026-03-08
+
+**Current scope:** [DEC-015](#dec-015-generated-continuation--root-basis-membership-and-an-operation-evaluator)
+partially supersedes this decision for generated mixed expansion that yields
+durable effects. The historical examples below remain as recorded; `ephemeral()`
+is still the explicit adapter for genuinely non-durable Operations under
+[DEC-034](../packages/durable-streams/specs/DECISIONS.md#dec-034-ephemeral--explicit-escape-hatch-for-non-durable-operations-in-workflows).
 
 ### Context
 
@@ -701,7 +727,7 @@ whose state has legitimately advanced.
 
 Separately, the evaluator crossed from the durable `Workflow` typing to
 Operations through `ephemeral()` bridges, `ephemeral(expand(...))` among them —
-an adapter DEC-034 reserves for intentionally non-durable Operations, wrapped
+an adapter [DEC-034](../packages/durable-streams/specs/DECISIONS.md#dec-034-ephemeral--explicit-escape-hatch-for-non-durable-operations-in-workflows) reserves for intentionally non-durable Operations, wrapped
 here around an expansion that yields ordinary durable effects.
 
 ### Decision
@@ -714,13 +740,15 @@ the current selected root must be retained, while additional roots and an
 advanced current root pass. Loss of any admission root refuses before generated
 work, with the unchanged fixed diagnostic. Every non-root term — class
 selection, selected pinned identities and forms, request ceilings — still
-compares whole, exactly, and in canonical order. This supersedes DEC-001 and
-DEC-002 only where a generated mixed expansion can yield durable effects: the
+compares whole, exactly, and in canonical order. This supersedes [DEC-001](#dec-001-workflowt-vs-operationt--the-type-boundary) and
+[DEC-002](#dec-002-expansion-generators-are-workflows) only where a generated mixed expansion can yield durable effects: the
 evaluator chain (`persistAdmission`, `evaluateGeneratedXmd`,
 `evaluateGeneratedFragment`, the host's `admit()`) is typed `Operation`, and no
 `ephemeral()` bridge encloses it, so the admission and every nested generated
 effect belong to the owning expansion's own durable sequence. `ephemeral()`
-remains the valid, explicit adapter for truly non-durable Operations.
+remains the valid, explicit adapter for truly non-durable Operations. The
+[current generated-admission contract](../architecture.md#agent-permissions-and-generated-xmd)
+preserves that distinction.
 
 ### Consequences
 
@@ -790,3 +818,69 @@ was never released.
 Removing the surface is surgical rather than a commit revert. The unrelated
 catalog corrections that landed with #729, the generic structural installation
 work from #806, and every root native-launch change remain.
+
+## DEC-017: Plan information requests — delivery history
+
+**Status:** Historical delivery record; current rules remain in the
+[architecture](../architecture.md#plan-information-requests) and
+[Plan specification](plan-command-spec.md).
+
+**Date:** 2026-09-07 (the accepted Evaluate forms and ordinary-output changes,
+`d56d5ba016150b7750384ba4a2ba81f56a5b1ab9` and
+`426df00656a9a38087e2c961454a9b8015161f4a`).
+
+The following amendment and sequence were recorded during delivery. References
+to this stack describe that historical sequence, rather than prerequisites for
+current use. The later 2026-10-14 correction
+`cdcfe328f1c8ec0cd7a62329a99d17b7edd60d1e` preserves ordinary host-governed reads
+throughout the trusted Plan frame while refusing mutations.
+
+### Delivery status and standing of this amendment
+
+This section records the Product Owner's #762 amendment against
+`1a7b96ab6c75f29fcf82513017f6daabab4d0d82`. PR #776 delivers protected Syntax
+routing and PR #786 the ordinary generated output and `as` bindings the requests
+compose with. The contracts below replace the earlier Planner artifacts'
+Syntax-only child execution, prohibition on file reads, output-only context, and
+profile-owned evaluation limits.
+
+Everything below is delivered on this stack. The shared ordinary read profile —
+`xmd run` and every `host="run"` child stating one profile whose read table is
+canonical self-closing `<File />`, canonical self-closing `<Glob />` and exact
+canonical protected self-closing `<Syntax />`, with the write table unchanged.
+Every built-in structural construct inside generated evaluation, with ordinary
+semantics and whole-fragment preflight across every alternative and nested body.
+The lexical response classifier, the eight-request loop the packaged `<Plan>`
+owns, and the narrow typed recovery around the public throwing `<Evaluate>`.
+
+### Delivery order and deferred access policy
+
+After #776 and #786, delivery is three independently reviewed PRs, all of them
+on this stack:
+
+1. **Shared read profile.** Canonical self-closing Glob and canonical protected
+   Syntax join self-closing File in the ordinary `read` table, through their
+   captured capabilities and the existing component-answer route, preserving
+   ordinary value, binding, persistence and replay behavior. The shared write
+   table is unchanged.
+2. **Generated structural constructs.** Every built-in structural construct
+   becomes available inside generated evaluation with its ordinary semantics,
+   declarative expressions and fragment-local bindings. Preflight validates
+   every branch and nested body before any effect, and every effectful component
+   reached through a construct stays limited by the selected permission.
+3. **The Plan loop.** Both command hosts install the shared profile, and Plan
+   gains the classifier, prompts, narrow typed recovery, counters, records,
+   progress, disclosure, journal behavior and the source/npm/compiled journeys.
+
+No temporary Plan-private evaluator bridges them.
+
+[#787](https://github.com/taras/executable.md/issues/787) owns question-based
+selection and request-aware rewriting of relevant Syntax documentation; explicit
+`names` lookup here does not wait for it.
+[#788](https://github.com/taras/executable.md/issues/788) owns the general
+`<Timeout>` component, which is why this design adds no Plan-local deadline.
+[#777](https://github.com/taras/executable.md/issues/777) owns the later workspace
+selection and user-approval escalation policy. Existing host containment remains
+in force with its stable-namespace limitation; #227 owns concurrent
+path-replacement hardening. Deferring those decisions does not defer File or
+Glob reads. #679 remains separate evaluation work after product delivery.

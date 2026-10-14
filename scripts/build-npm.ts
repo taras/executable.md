@@ -515,9 +515,10 @@ function unpublishable(manifest: unknown, repoRoot: URL): string | undefined {
 }
 
 /**
- * Phase 2. Every artifact this invocation produced becomes publishable at once,
- * after the last dnt call returned — see the two-phase note at the top of this
- * file for why it cannot happen package by package.
+ * Phase 2. After the last dnt call returns, prepare and validate every artifact
+ * manifest before writing any. Valid manifests are then written sequentially;
+ * this is not an atomic publication of the closure. See the two-phase note
+ * above for why validation waits for the complete build.
  */
 function* finalizeClosure(ctx: BuildContext): Operation<void> {
   yield* ctx.observe({ type: "closure-finalization-started" });
@@ -545,8 +546,8 @@ function* finalizeClosure(ctx: BuildContext): Operation<void> {
     candidates.push({ name: artifact.name, url, manifest });
   }
 
-  // Every manifest is judged before any is written, so a closure that cannot be
-  // published in full is never half-published.
+  // A validation refusal leaves every manifest untouched. Successful validation
+  // precedes the sequential writes below; it does not make those writes atomic.
   for (const candidate of candidates) {
     const refusal = unpublishable(candidate.manifest, ctx.repoRoot);
     if (refusal !== undefined) {

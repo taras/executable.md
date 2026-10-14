@@ -600,20 +600,6 @@ describe("workflow Git.Switch durability", () => {
 });
 
 /**
- * Cancellation reaches the child, not only the operation waiting on it.
- *
- * Every assertion above concerns what the run's database holds, which a halt
- * that left a Git process running would still satisfy. This one is about the
- * process. A named pipe is what makes a real `git` block on demand — it opens
- * the pipe for reading and waits — and the write end this test holds is what
- * says whether it is still there: writing to a pipe nothing is reading fails
- * with `EPIPE`, and writing to one a live child is reading does not.
- *
- * The blocking `open` before the halt is the premise rather than a convenience:
- * it returns only once a reader has the pipe open, so the child is provably
- * running at the moment the scope is torn down.
- */
-/**
  * The encoding behind a Git operation's durable identity, on its own.
  *
  * The replay above proves one collision cannot happen; this proves the shape of
@@ -667,6 +653,20 @@ describe("workflow Git operation identity", () => {
   });
 });
 
+/**
+ * Cancellation reaches the child, not only the operation waiting on it.
+ *
+ * The durability assertions concern what the run's database holds, which a halt
+ * that left a Git process running would still satisfy. This one is about the
+ * process. A named pipe is what makes a real `git` block on demand — it opens
+ * the pipe for reading and waits — and the write end this test holds is what
+ * says whether it is still there: writing to a pipe nothing is reading fails
+ * with `EPIPE`, and writing to one a live child is reading does not.
+ *
+ * The blocking `open` before the halt is the premise rather than a convenience:
+ * it returns only once a reader has the pipe open, so the child is provably
+ * running at the moment the scope is torn down.
+ */
 describe("workflow Git operation teardown", () => {
   it("kills the Git child it spawned when the scope is halted", function* () {
     const directory = yield* useTempDirectory("xmd-git-teardown-");

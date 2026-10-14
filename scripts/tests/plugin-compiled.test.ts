@@ -18,7 +18,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, until } from "effection";
-import { ensureDir, exists, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { timebox } from "@effectionx/timebox";
 import type { ProcessResult } from "@effectionx/process";
@@ -152,6 +152,105 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
       const names = describedNames(run.stdout);
       expect(names).toContain("Finding");
       expect(names).toContain("ReviewContext");
+    });
+  });
+
+  it("groups diagnostics through the checked-in review roots in the compiled host", function* () {
+    const rawDiagnostics = [
+      {
+        ruleId: "no-console",
+        message: "console",
+        severity: "warning",
+        file: "a.ts",
+        line: 2,
+        column: 3,
+      },
+      {
+        ruleId: "no-console",
+        message: "console",
+        severity: "warning",
+        file: "b.ts",
+        line: 4,
+        column: 1,
+      },
+      {
+        ruleId: "import/no-unresolved",
+        message: "Cannot find module",
+        severity: "warning",
+        file: "a.ts",
+        line: 1,
+        column: 1,
+      },
+    ];
+    const pr = { stats: { additions: 100 } };
+    const doctor = {
+      oxlintInstalled: true,
+      oxlintVersion: "1.74.0",
+      tsgolintInstalled: true,
+      tsgolintVersion: "0.25.0",
+      tsconfigExists: true,
+      nodeModulesExists: true,
+      typeAwareAvailable: true,
+      filesAnalyzed: 2,
+      filesSkipped: 0,
+      importErrors: 1,
+      availableRuleIds: [],
+      bloatRulesAvailable: [],
+      bloatRulesMissing: [],
+      recommendation: "type-aware-filtered",
+      nativeSpecifiers: { count: 0, files: [], jsr: 0, npm: 0 },
+    };
+    const header = `---
+props:
+  type: object
+  properties:
+    rawDiagnostics: { type: array }
+    pr: { type: object }
+    doctor: { type: object }
+  required: [rawDiagnostics, pr, doctor]
+  additionalProperties: false
+---
+`;
+    const review = path.join(ROOT, "packages/code-review-agent/mod.ts");
+    yield* useElsewhere(function* (dir) {
+      for (const root of ["ReviewPR.md", "ReviewPR.local.md"]) {
+        const source = yield* readTextFile(path.join(ROOT, ".reviews", root));
+        const sensorEnd = source.indexOf("/>", source.indexOf('as="rawDiagnostics"')) + 2;
+        const stageEnd = source.indexOf("<", sensorEnd + 1);
+        // The stage is taken from the actual root, so restoring its old import
+        // fails this compiled path even if the adapter itself still works.
+        const remainder = source.slice(sensorEnd);
+        const stage = remainder.startsWith("\n\n```ts eval")
+          ? remainder.slice(0, remainder.indexOf("```", remainder.indexOf("```") + 3) + 3)
+          : source.slice(sensorEnd, source.indexOf("/>", stageEnd) + 2);
+        const document = path.join(dir, "diagnostics.md");
+        yield* writeTextFile(
+          document,
+          `${header}<Let value={props.rawDiagnostics} as="rawDiagnostics" />\n<Let value={props.pr} as="pr" />\n<Let value={props.doctor} as="doctor" />\n${stage}\n<Json value={diagnostics} />\n`,
+        );
+        const run = yield* runBinary(
+          [
+            "run",
+            `--plugin=${review}`,
+            document,
+            "--props",
+            JSON.stringify({ rawDiagnostics, pr, doctor }),
+          ],
+          dir,
+        );
+        if (run.code !== 0) {
+          throw new Error(`${root}: compiled diagnostics exited ${run.code}\n${run.stderr}`);
+        }
+        const grouped = JSON.parse(run.stdout);
+        expect(grouped.total).toBe(2);
+        expect(grouped.fileCount).toBe(2);
+        expect(grouped.ruleCount).toBe(1);
+        expect(grouped.density).toBe(0.02);
+        expect(grouped.groups[0].files).toEqual(["a.ts", "b.ts"]);
+        expect(grouped.groups[0].instances).toEqual(rawDiagnostics.slice(0, 2));
+        expect(grouped.byCategory.verbosity[0].ruleId).toBe("no-console");
+        expect(grouped.summary).toContain("2 diagnostics across 2 files (1 rule)");
+      }
     });
   });
 

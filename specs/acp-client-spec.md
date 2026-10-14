@@ -3,7 +3,14 @@
 The `Agent` Api, the `<Agent>` / `<Session>` / `<Prompt>` components, prompt
 journaling and replay, the provider-factory seam, and the `Config` timeouts are
 implemented in `@executablemd/core`. A provider is supplied through
-the `rootProvider` factory seam described below.
+the `rootProvider` factory seam described below. This specification owns the
+public operations, configuration and retained record shapes.
+[Agent permissions and generated work](../architecture.md#agent-permissions-and-generated-xmd)
+own workflow isolation and mapping publication;
+[native Agent sessions](../architecture.md#native-agent-sessions) own the shared
+session lifetime and enforcement rules. Exact native handoff interfaces and
+compatibility exceptions remain in the
+[native launch specification](./native-agent-session-launch-spec.md).
 
 ## The Agent Api
 
@@ -110,9 +117,11 @@ routes an opaque request and cannot manufacture that result.
   contextual Api for the same reason the coordinator is not: executable
   validation decides which retained history may be accepted.
 - While ownership is held and before any provider construction effect, the
-  provider reconciles the route. A first `session()` or subscribed `prompt()`
-  publishes or adopts `acp-first` before runtime creation, `ensureSession()` or
-  a turn, and an ensure that fails afterwards leaves that route standing. A
+  provider reconciles the route. A fresh `session()` places the session and
+  publishes no route. The first subscribed consuming `prompt()` publishes or
+  adopts `acp-first` before runtime creation, `ensureSession()` or a turn; an
+  established `session()` reconciles its retained route eagerly. An ensure that
+  fails afterwards leaves that route standing. A
   launch by an adapter that names its own sessions publishes `client-native`
   under an identity that adapter allocated, unless existing durable ACPX state
   or an existing route says the session was constructed through ACP — in which
@@ -536,28 +545,11 @@ omits the member entirely, which is also how every record written before this
 member existed reads. Parsing an older record is unchanged, and nothing rewrites
 one.
 
-Observing a request changes no decision, and what observes one is deliberately
-somewhere else from what answers it. A policy decides every request inside its
-scope and never defers outward, so an observer installed inside a policy — or
-inside the turn, below a policy a host installed around the execution — sees
-nothing of the decision it exists to record. Auditing is therefore installed with the
-Agent itself, outside every policy installed after it, and it owns both sides:
-each `Agent.prompt()` call is given its own private ledger, and the cold stream
-that call returns is wrapped so every event is read with that ledger in place. A
-request raised while a turn's stream is being read inherits that turn's ledger,
-so two turns asking at the same time keep their audits apart without anything
-correlating by recency, prompt text, agent, conversation or the order decisions
-settled in. Nothing a turn does installs its own audit, and a turn reads what it
-was allowed to do from the exact stream it consumed.
-
-The ledger is a destination and grants no authority: holding it says which turn a
-decision belongs to, never what the decision is. The observer reserves the
-request's place on the way in, delegates exactly once to whatever answers it, and
-copies the returned outcome into that same place — which is why two overlapping
-requests from one turn keep the order they arrived in however their answers
-interleave. A place nobody completed is published as nothing: a policy that
-raised, and one cancelled with its turn during teardown, both leave no member
-rather than a fabricated outcome.
+The audit observes decisions without granting permission. Each turn has its own
+ledger, and overlapping turns cannot take one another's entries. A request that
+raises or is cancelled before a decision returns contributes no member. The
+[Agent permission-audit boundary](../architecture.md#agent-permissions-and-generated-xmd)
+owns observer placement, per-stream ownership and arrival-order publication.
 
 On a **full replay** (the journal already holds the root `Close`), completed
 records are restored from the journal without contacting any provider —
@@ -699,40 +691,19 @@ omitted MCP and session options, and its public permission routing.
 A provider session outlives one execution, so a continued run reattaches the
 conversation it was having rather than replaying its transcript into a new one.
 
-**Identity is the engine's.** Within one workflow run a session is identified by
-the Agent/Session expansion identity the engine derived, and by nothing else. The
-authored `<Session name>` is descriptive: two sibling `<Session name="review">`
-elements are two sessions, and a document that reuses a name cannot make them
-one. The name travels the public `Agent.session()` chain, where a handler may
-observe or change it; the identity travels inside an opaque placement the
-`<Session>` element routes and is readable only through the coordinator delivered
-to the installed provider. Middleware holding the placement reads the name and
-reaches no further.
+**Each Session site owns one conversation.** The engine-derived Agent/Session
+expansion identity names it within the run. Authored names remain descriptive:
+two sibling `<Session name="review">` elements stay distinct even if middleware
+changes their names. Provider and resolved agent command are compatibility
+attributes; changing either refuses reattachment. ACPX's arrangement key does
+not replace this logical identity.
 
-Where the element gets that identity is the other half. `<Session>` does not
-read it from anywhere: the execution mints it for that invocation and answers
-for it only through the claimant it delivered to this `<Session>` factory. So an
-implementation kept from one execution's `<Session>` names nothing at another's,
-one kept from a different component names nothing here, and an issuance
-belonging to another element — finished, still projecting, or live in a frame of
-its own — names nothing either. Two attachments running side by side hold two
-claimants, and neither answers for the other.
-
-The provider and the resolved agent command are stored beside that identity as
-compatibility attributes. Changing either refuses reattachment rather than
-addressing a second mapping. The key ACPX places a session under is a different
-thing and namespaces both, because ACPX's store is shared; that key is
-arrangement, not this run's session identity.
-
-**A canonical assertion comes before the mapping.** The order is: placement,
-then the backend's acceptance of the session's first turn, then the provider's
-canonical, tagged assertion of a durable identity, then the mapping commit — and
-only then whatever that first turn produced. Placement is inert: it creates no
-provider session and commits no row. Holding a key in ACPX's store is not an
-assertion — it says something is there, not what conversation it is — and a
-record held for a first turn nobody accepted asserts nothing at all, so a mapping
-is committed only from one canonical assertion, and an interruption before that
-commit is reconciled only the same way.
+Placement is inert. The backend must accept the first turn and provide exactly
+one canonical tagged assertion before the mapping commits; the first turn's
+output is disclosed only after that commit. A stored ACPX key or an unaccepted
+first turn proves no identity. The
+[workflow Agent ownership contract](../architecture.md#agent-permissions-and-generated-xmd)
+owns the opaque invocation claim, mapping transaction and interruption ordering.
 
 Continuation is decided before a turn starts:
 
@@ -931,10 +902,12 @@ ceiling that has nothing in it; they configure the approved document later. A
 provider that cannot establish this ceiling refuses before session
 materialization or a turn.
 
-The command document itself is given no Files, command, service or XMD-mediated
-network capability, and the host decides for that whole execution that a failing
-`<Prompt>` ends it — so a turn that streamed text and then failed presents
-nothing.
+The [Plan writer profile](./plan-command-spec.md#agent-permissions-under-the-plan-writer-profile)
+refuses document mutations, commands, services and XMD-mediated network access.
+Reads retain the ordinary host provider, middleware and effective `Permissions`;
+the frame grants no read permission of its own. A failing `<Prompt>` ends the
+whole authorship execution, so a turn that streamed text and then failed
+presents nothing.
 
 Those refusals are installed on a scope holding the document execution and
 nothing else, so what the ceiling covers is what it says it covers.
@@ -949,26 +922,12 @@ installs the ceiling and states those two acts as its own; they run there, and
 everything else stays refused. An ended command takes an unfinished install with
 it, and a failed open stays a warning beside the printed URL.
 
-The profile's working directory is derived from the logical session name rather
-than shared or freshly made: `~/.xmd/plan/sessions/<sha256(name)>`, with the
-digest in the path and never the name. A session's key includes the directory it
-lives in, so a shared location would put two conversations in one ambient
-directory while a fresh one would leave `--session` unable to name a conversation
-that already exists. It is created empty and required to be empty before the
-provider is constructed or a session is materialized; a non-empty one is a
-terminal refusal rather than something to clean. Nothing this profile grants can
-write there.
-
-An explicitly named session keeps its directory afterwards, because that is what
-the next invocation derives the same session identity from, and no cleanup
-applies to it. An invocation-unique default keeps nothing: its release is
-registered before the directory is created, and once the profile has torn down,
-on every ending, exactly one cleanup is attempted — the leaf is removed
-non-recursively if it is still the empty directory that was handed over, and if
-it has gained content or disappeared it is left as found and the command fails
-terminally. Which applies is a trusted host value —
-whether `--session` was written — and where the directories live is a host
-dependency no caller or document can select.
+The [Plan session-directory contract](./plan-command-spec.md#agent-permissions-under-the-plan-writer-profile)
+owns establishment, named versus invocation-unique lifetime and cleanup. The
+provider gets the same digest-derived directory on named continuation. A
+non-empty directory refuses before provider construction; an invocation-unique
+leaf that gains content or disappears at cleanup is preserved as found and
+fails authorship terminally. No caller or document selects its host dependency.
 
 Only the profile's provider receives `newSessionOptions.systemPrompt`. It carries
 one fixed statement — that an answer belongs to the message that asked for it —

@@ -22,6 +22,21 @@ Three documents own the rest:
 - [`specs/executable-mdx-spec.md`](specs/executable-mdx-spec.md) — what the
   product does, with the conformance matrix that pins it.
 
+Follow a question into the [architecture reading map](architecture.md#reading-this-architecture):
+
+- [Execution and diagnostic journals](architecture.md#a-document-running): what
+  runs, what a Plan produces, and which journal can continue a workflow.
+- [Partial and completed replay](architecture.md#replay-and-effect-transactions):
+  why a historical file read survives a later deletion.
+- [Native Agent ownership](architecture.md#native-agent-sessions): handoff,
+  release and executable compatibility.
+- [Installed structural regions](architecture.md#the-installed-structural-syntax-boundary):
+  demand, output and cancellation.
+- [Plan recovery](architecture.md#typed-candidate-recovery-around-evaluate): why
+  cleanup failure stops a candidate retry.
+- [Current rules and historical decisions](specs/decisions.md#finding-the-current-rule):
+  where the architecture, feature contracts and vision differ in authority.
+
 Locate the package that owns the behavior you are about to change:
 
 - `packages/core/` — the engine: the boundary scanner, component expansion,
@@ -33,7 +48,7 @@ Locate the package that owns the behavior you are about to change:
 - `packages/durable-streams/` — the journal protocol, replay and divergence.
 - `packages/workflow/` — workflow runs, run storage, and the Workspace.
 - `packages/git/` — repository collaboration: `<Repository>`, `<Worktree>`,
-  `<Dir>`, the `Git.*` operations, pull requests and issues, and the GitHub
+  the `Git.*` operations, pull requests and issues, and the GitHub
   adapter behind them. It is the one Plugin `xmd` bundles, active by default for
   the run-profile commands — `run`, `plan`, `syntax`, and `workflow start`,
   `resume` and `fork`. The `xmd test` root is deliberately not one of them, so a

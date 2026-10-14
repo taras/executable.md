@@ -767,17 +767,11 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     /**
      * Cancelling an information read, with its cleanup held open.
      *
-     * The grant is live exactly across `tryContent()` and the teardown the
-     * projection joins, so the interesting interruption is one that lands
-     * *inside* the provider: the read is in flight, a cleanup registered with it
-     * holds, and the halt may not be allowed to complete until that cleanup
-     * finishes. `joined` read while the cleanup is still held is what proves it
-     * waited — a flag checked afterwards would be true either way.
-     *
-     * What it shows about access is what a cancelled run can show: nothing
-     * further is performed under the grant. The retained-guard case — a guard
-     * answering no once its frame has ended — is Tier PLA's, where a scope can
-     * outlive what it was asking about.
+     * The interruption lands inside the provider: the read is in flight and
+     * its registered cleanup is held open. The projection joins that teardown,
+     * so halting the run must wait until the cleanup finishes. Reading `joined`
+     * before releasing the cleanup proves the halt waited — a flag checked
+     * afterwards would be true either way.
      */
     it("PI27: cancelling an entered information read waits for its cleanup", function* () {
       yield* useWorkingDirectory(function* () {

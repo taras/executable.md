@@ -7,9 +7,10 @@
  * among those tables rather than adding to them.
  *
  * Every row drives the real component through a real execution against a real
- * captured profile. The filesystem operations are a recorder rather than a disk,
- * and it is never installed as a provider: a read that appears in its log went
- * through the captured operation, because there is no other way to reach it.
+ * captured profile. Filesystem rows install a recorder as contextual Files
+ * middleware rather than using a disk. Ordinary admitted components reach it
+ * through `API.Files`, so its log records the operations those components ask
+ * the provider to perform.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
