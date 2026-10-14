@@ -34,6 +34,7 @@ import {
 import type { ExecutionInstallation, FragmentEvaluationInput } from "../host.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { elicitWriteEntry } from "../host.ts";
+import { useSyntax } from "../host.ts";
 import { Elicitation } from "../src/elicitation-api.ts";
 import type { ElicitationRequest } from "../src/elicitation-api.ts";
 import { retainedSource } from "../src/root-source.ts";
@@ -1922,10 +1923,12 @@ describe("Tier FE34 — the shared read profile", () => {
         shared(files),
         {
           // deno-lint-ignore require-yield
-          *symbols(): Operation<never> {
-            const error = new Error("the provider could not build the symbols");
-            error.name = "executablemd.core.syntax-selection-refusal";
-            throw error;
+          *install(): Operation<void> {
+            yield* useSyntax(function* (): Operation<never> {
+              const error = new Error("the provider could not build the symbols");
+              error.name = "executablemd.core.syntax-selection-refusal";
+              throw error;
+            });
           },
         },
       ]);

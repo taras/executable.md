@@ -29,7 +29,8 @@ import { planComponentDeclaration } from "../../src/plan-component.ts";
 import type { PlanSurface, StructuralValidation } from "../../src/plan-component.ts";
 import { planAgentContext } from "../../src/plan-writer-profile.ts";
 import type { PlanWriterStack } from "../../src/agent-stack.ts";
-import type { SyntaxSymbolsProvider, MarkdownComponent } from "@executablemd/core/host";
+import { useSyntax } from "@executablemd/core/host";
+import type { MarkdownComponent } from "@executablemd/core/host";
 import type { PlanDependencies } from "../../src/plan.ts";
 import { createFakeAcp, makeRegistry, makeStore } from "./fake-acp.ts";
 import type { FakeAcp, FakeStore } from "./fake-acp.ts";
@@ -184,9 +185,14 @@ export function createPlanHarness(options: {
         sessionStore: options.store ?? makeStore(),
         agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
       },
-      *symbols(includes) {
-        symbolCalls.push([...includes]);
-        return yield* (options.symbols ?? syntaxSymbols)(includes);
+      *installSyntax(includes) {
+        // The harness's own lazy source, bound through the helper production
+        // uses — so what a case replaces is the description, not the way it
+        // reaches the execution.
+        yield* useSyntax(function* () {
+          symbolCalls.push([...includes]);
+          return yield* (options.symbols ?? syntaxSymbols)(includes);
+        });
       },
       planWriterRoot: options.planWriterRoot,
       *installElicitation() {
@@ -287,7 +293,7 @@ export interface PlanDeclarationHarness {
    * public, canonical core owns it, and what it answers with is the execution's
    * own.
    */
-  symbols: SyntaxSymbolsProvider;
+  symbols: () => Operation<SyntaxSymbols>;
   /** How many times that provider was asked. */
   symbolCalls: number;
   /** Review answers, taken in order. Running out is a test defect, not a case. */

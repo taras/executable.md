@@ -3746,6 +3746,23 @@ by registration order. They may refuse; they may not complete.
 
 ### Capability-backed execution
 
+`Execution.init(): Operation<void>` establishes live dependencies once in each
+existing execution-owned scope. Its public default is no-op; middleware installs
+ordinary package behavior and delegates. Core invokes it after copying trusted
+host contributions and arming their revocation, before provider/installation
+callbacks, documentation capture and public execution policy. Setup receives no
+installation array, request, entry identifier or receipt and creates no second
+execution owner.
+
+Initialization failure prevents policy, root import and body. Failure and
+cancellation join partially acquired teardown before the invocation settles.
+Ordinary descendants inherit initialized state; concurrent executions and REPL
+entries own distinct state. Completed handle observation initializes nothing.
+An isolated run child reinstalls the selected host/Plugin middleware after cwd
+assembly; arbitrary parent handlers do not cross that isolation. REPL Agent
+attachment and durable preparation are owned and ordered elsewhere, and
+initialization neither replaces nor reorders them.
+
 Canonical core is authoritative for document execution. It invokes the stable
 `Execution` middleware through a private, per-invocation same-name Api whose
 instance-owned default handler is the authoritative terminal. A stable name
@@ -5067,11 +5084,11 @@ cannot repair a missing or multiply selected domain. Paired producers retain
 their lexical site route and operational permission.
 
 A trusted provider may therefore delegate and register canonical self-closing
-`<Syntax>` as a component answer. Its bare form reports the admitted vocabulary;
-its named form renders the enclosing authoring documentation with narrowed
-availability. Verified protected documentation provenance survives sealing even
-when the delegating provider has a different origin. That provenance is
-descriptive data and never a callable lookup key.
+`<Syntax>` as a component answer. Its default bare form reports the admitted
+vocabulary; its named form renders the enclosing authoring documentation with
+narrowed availability. Verified protected documentation provenance survives
+sealing even when the delegating provider has a different origin. That
+provenance is descriptive data and never a callable lookup key.
 
 Routes, projection edges, bodies, domains, callable sets and site operations
 belong to one live execution. Child closure and execution teardown invalidate
@@ -5233,40 +5250,58 @@ declared origin and digest as its origin. Its private closure contributes
 nothing: those names are not syntax a document may write, so a set of symbols
 that listed them would describe an environment that does not exist.
 
-**An execution carries one of its own, lexically.** The symbols a running
-document is shown travel by value on canonical core's private expansion
-environment, beside component resolution and the identity domains — not through a
-Context, because a context resolves by name and a name is not a secret, so a
-document could build one and answer for the vocabulary it is shown.
+**Live descriptions compose through Syntax.** Core exports `Syntax` and
+`SyntaxApi` from `@executablemd/core/api`. Its `symbols` and `text` properties
+are `Operation<SyntaxSymbols>` and `Operation<string>`; callers yield the
+properties without parentheses. `documentation(names)` is an Operation-valued
+method. Defaults are reusable lazy Operations, so each live read starts fresh
+work. Default text renders the effective contextual symbols through the shared
+Markdown renderer. Middleware may answer, delegate or transform these views.
 
-Canonical core builds it at the execution root from the selection inputs that
-execution captured before any installation, middleware or document code ran: the
-includes it resolves against, the registry it started with, the identity
-components and exact Markdown its host declared, and the component bundle it is
-closed over when it has one. A bundled name is described from the pinned bytes
-already in hand — nothing is imported, executed, or read from a file to describe
-one — and reported at the canonical repository-relative path that blob has in the
-commit, which is where a reader of a workflow run looks for it.
+The execution-derived private reference supplies the fallback. It is built from
+the selection inputs that execution captured before any installation,
+middleware or document code ran: the includes it resolves against, the registry
+it started with, the identity components and exact Markdown its host declared,
+and the component bundle it is closed over when it has one. A bundled name is
+described from the pinned bytes already in hand — nothing is imported, executed,
+or read from a file to describe one — and reported at the canonical
+repository-relative path that blob has in the commit, which is where a reader of
+a workflow run looks for it. It is bound as the Api's fallback rather than as
+inner middleware, so it does not shadow an enclosing host profile.
 
-A trusted host may state the symbols its profile describes instead, on the terms
-every other trusted-host value travels: captured by value with the rest of the
-installation, before any installed code exists. One execution accepts one, and
-two are refused rather than ordered, because ordering them would make which
-profile a document is shown depend on assembly order. `xmd plan` states one — a
-Plan is a program a later `xmd run` executes, so the vocabulary the agent must be
-shown is that profile's rather than the authorship execution's, which searches no
-repository and refuses almost every capability. An ordinary run states none and
-describes itself.
+`useSyntax(source)` from `@executablemd/core/host` binds a host's lazy complete
+descriptive profile and snapshots the documentation contributions already in its
+calling scope. It installs ordinary symbols and documentation
+providers at `min` without reading the source. There is no installation-member
+count rule for descriptive providers.
 
-Nothing is built until an occurrence asks, so a run whose document never writes
-`<Syntax />` enumerates no includes, parses no component and reads no
-frontmatter. Each ask builds afresh, which is what makes an occurrence's retained
-symbols its own rather than a copy of whichever one ran first.
+Standalone Plan enters the ordinary run profile's declarative bootstraps and
+installs this helper before its constrained authorship execution. Its source
+inspects captured target registry/declaration inputs lazily, so named metadata
+also describes the program it is preparing. An embedded Plan keeps its enclosing
+profile. CLI inspection uses the same bounded declarative assembly and helper,
+without running execution initialization or operational providers.
 
-A trusted canonical evaluation boundary may install a narrower reference for
-the subtree it evaluates, and leaving that subtree restores the enclosing one. It
-adds nothing: the symbols it installs are the ones its own admission already
-selected, so an entry absent from that admission is absent from the reference.
+Named documentation retains the enclosing catalog for metadata and long-form
+text and reads effective contextual symbols once for availability. Each
+occurrence resolves its authoring basis once; its default symbols provider
+reuses that basis rather than inspecting a moving root twice. Later occurrences
+resolve independently. A symbols filter can hide an entry from the bare view
+while named documentation still explains it as unavailable. Text-only
+middleware changes neither structured symbols nor named lookup.
+
+Generated producer and body scopes narrow symbols through ordinary middleware
+while keeping the enclosing named-documentation owner. Leaving those scopes
+restores the enclosing view. Synthetic answers that do not delegate perform no
+default inspection. Descriptions register, resolve and authorize nothing, so a
+custom view may describe a forbidden name without admitting it, or hide an
+admitted name without disabling it.
+
+The protected Syntax component records the final middleware answer inside its
+existing durable live callback. Completed replay restores that final text
+without consulting any live symbols, text or catalog provider. Its authenticated
+invocation, safe canonical named refusal, publication and secret gate remain
+separate from descriptive composition.
 
 **Inspection is observation, never execution.** Producing symbols installs
 only the declarative registration layer selection needs. It does not enter

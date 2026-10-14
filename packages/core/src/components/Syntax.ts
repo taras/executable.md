@@ -3,39 +3,41 @@
  *
  * An author asking "which components do I have here?" and an agent being told
  * what to write are the same question, and `xmd syntax` already answers it from
- * outside. This is the same answer from inside: the symbols for the site the
- * element was written at, as the Markdown that command prints.
+ * outside. This is the same answer from inside: the description in effect at
+ * the site the element was written at, as the Markdown that command prints.
  *
  * ## Why canonical core owns it
  *
- * The symbols describe the vocabulary an execution actually has. A repository
- * `Syntax.md`, a bundled `Syntax`, a registration, an import handler or a
- * second loaded copy answering for the name would each describe a vocabulary
- * the run does not have — to whoever is reading, and to whichever agent is
- * being told what to write next. So the name is reserved by the canonical
- * protected tier, ahead of every host and author tier, and the definition
- * canonical core selected is what runs.
+ * The description is what an agent is told to write next, so whoever answers
+ * for it decides what gets written. A repository `Syntax.md`, a bundled
+ * `Syntax`, a registration, an import handler or a second loaded copy answering
+ * for the name would each do that from outside the composition the run
+ * assembled. So the name is reserved by the canonical protected tier, ahead of
+ * every host and author tier, and the definition canonical core selected is
+ * what runs.
  *
- * Protection is about the *answer*, not about power. The component receives one
- * reference that renders symbol text and nothing else: no definitions, no
- * import witness, no invocation capability, no policy table, no provider and no
- * registration handle. Naming a component in the symbols is not permission to
- * run it.
+ * Protection is about *who answers*, not about power. The description itself is
+ * ordinary composed state: a host binds its own profile, a trusted boundary
+ * narrows it, and middleware may transform the text — none of which registers,
+ * resolves or admits anything. Naming a component in a description is not
+ * permission to run it, and hiding one does not disable it.
  *
  * ## What one occurrence does
  *
- * It authenticates the occurrence identity this execution minted, renders
- * once, and retains exactly what it rendered. A continuation reads that record
- * and hands the same text back without consulting the filesystem, the
- * registry, the bundle, the host or the lexical reference again — so an agent
- * resuming authorship is shown the vocabulary the run actually showed it, not
- * one rebuilt from a tree that has moved since.
+ * It authenticates the occurrence identity this execution minted, asks the
+ * contextual `Syntax` Api inside its own durable live callback, and retains
+ * exactly the final answer that came back. A continuation reads that record and
+ * hands the same text back without consulting the filesystem, the registry, the
+ * bundle, the host, or any live symbols, text or catalog provider again — so an
+ * agent resuming authorship is shown the vocabulary the run actually showed it,
+ * not one rebuilt from a tree, or a composition, that has moved since.
  */
 
 import { createDurableOperation, StaleInputError } from "@executablemd/durable-streams";
 import type { Json as DurableJson, Workflow } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 
+import { Syntax } from "../syntax-api.ts";
 import { getExpansion } from "../expansion.ts";
 import { markGeneratedRequestRefusal } from "../generated-request-refusal.ts";
 import { SyntaxSelectionRefusal } from "../syntax-refusal.ts";
@@ -132,7 +134,6 @@ function syntax(claim: IdentityClaimant): ProtectedBody {
     invocation: ComponentInvocation,
     site: ProtectedSite,
   ): Operation<string> {
-    const reference = site.syntax;
     // Read off the issuance the engine holds rather than off a method the
     // caller could have written, and answered before anything is claimed or
     // rendered: a paired spelling is a document asking for something this
@@ -155,7 +156,12 @@ function syntax(claim: IdentityClaimant): ProtectedBody {
     // that somebody validated them.
     const names = requestedNames(props.names);
     const id = yield* claim(invocation);
-    if (reference === undefined) {
+    // Site validation, kept where the element is: an expansion driven outside
+    // an execution established no description at all, so there is nothing for
+    // the contextual Api to answer from. Answering that here rather than
+    // leaving it to the Api's own default is what makes the refusal name the
+    // element a reader is looking at.
+    if (site.syntax === undefined) {
       throw new Error(NO_REFERENCE_REFUSAL);
     }
     const expansion = yield* getExpansion();
@@ -169,8 +175,8 @@ function syntax(claim: IdentityClaimant): ProtectedBody {
         return {
           symbols:
             names === undefined
-              ? yield* reference.symbols()
-              : yield* reference.documentation(names),
+              ? yield* Syntax.operations.text
+              : yield* Syntax.operations.documentation(names),
         };
       } catch (error) {
         if (error instanceof SyntaxSelectionRefusal) {

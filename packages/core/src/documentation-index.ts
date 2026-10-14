@@ -113,9 +113,6 @@ export interface DocumentationIndex {
   bundleDocumentation(origin: ComponentOrigin): string | undefined;
 }
 
-/** What a component with no authored documentation renders instead of prose. */
-export const NO_DOCUMENTATION = "No long-form documentation is available for this component.";
-
 /** A level-two heading, captured without its marker. */
 const HEADING = /^##\s+(.+?)\s*$/;
 /** Any ATX heading, so a deeper one can be told from a section boundary. */
