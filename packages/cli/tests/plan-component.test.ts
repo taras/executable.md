@@ -32,10 +32,6 @@ import {
 } from "@executablemd/core";
 import type { Json, SyntaxSymbols } from "@executablemd/core";
 import { content, registerComponents, validateDocument } from "@executablemd/core";
-// Core's own seam for substituting a scanner, which is how a case reaches the
-// moment after an information projection settled and before its findings are
-// disclosed. Deliberately not a package export: tests are its only consumer.
-import { useSecretScannerFactory } from "../../core/src/secrets/policy.ts";
 import {
   executeInstalled,
   fileReadEntry,
@@ -658,18 +654,10 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     const READ_REQUEST = '<File path="notes.md" as="note" />\n<Json value={note} />\n';
 
     /** A harness answering a file read first and a Plan second. */
-    function* reading_(
-      root: string,
-      hooks: {
-        readonly insideFrame?: () => Operation<void>;
-        readonly atReview?: () => Operation<void>;
-      } = {},
-    ): Operation<PlanDeclarationHarness> {
+    function* reading_(root: string): Operation<PlanDeclarationHarness> {
       const harness = yield* planDeclarationHarness({
         surface: "component",
         planWriterRoot: root,
-        ...(hooks.insideFrame === undefined ? {} : { insideFrame: hooks.insideFrame }),
-        ...(hooks.atReview === undefined ? {} : { atReview: hooks.atReview }),
       });
       harness.fake.script({ reply: READ_REQUEST });
       harness.fake.script({ reply: PLAN });
@@ -677,101 +665,22 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       return harness;
     }
 
-    /** What the writer frame refuses a read with. */
-    const FRAME_REFUSAL =
-      "xmd plan asked for a file, which the Plan writer profile grants to nothing";
-
-    /** What an ambient read inside the frame answered with. */
-    function* ambient(): Operation<string> {
-      try {
-        yield* API.Files.operations.readTextFile({ cwd: ".", path: "notes.md" });
-        return "granted";
-      } catch (error) {
-        return error instanceof Error ? error.message : String(error);
-      }
-    }
-
     /**
-     * The frame refuses its own reads before, during and after the one it
-     * delegates.
+     * The private phase runs for the invocation the engine issued, and no other.
      *
-     * The grant belongs to the scope the projection runs in, so the discriminating
-     * case is a *concurrent* one: an ordinary sibling task of the frame, running
-     * while the information read is held open inside the provider. It asks
-     * through the real guard — the frame's own installed Files middleware — and
-     * must reach no provider at all.
+     * `claim(invocation)` is canonical execution's own authentication, and it is
+     * the first thing this phase does: an invocation it did not issue is refused
+     * before the projection exists. What that protects is the private phase and
+     * the program it projects — it authorizes no filesystem access, because the
+     * trusted workflow reads through the ordinary chain either way.
      *
-     * The handshake is what makes it an ordering claim rather than a timing
-     * one: the provider resolves `entered` from inside the read, the sibling
-     * asks and then releases it, and the read returns afterwards.
+     * This drives the **real private body** off the declaration the production
+     * path builds, with a claimant that refuses the way core's does for a forged
+     * invocation; the control beside it, a claimant that answers, shows the body
+     * gets past the claim and on to its projection. So the ordering is what is
+     * asserted rather than the fact that something threw.
      */
-    it("PI24: a concurrent writer sibling is refused while the information read is held", function* () {
-      yield* useWorkingDirectory(function* () {
-        const entered = withResolvers<void>();
-        const released = withResolvers<void>();
-        const asked: string[] = [];
-        const files = recordedFiles(
-          { "notes.md": "the retained note\n" },
-          {
-            *hold(path) {
-              if (path === "notes.md") {
-                entered.resolve();
-                yield* released.operation;
-              }
-            },
-          },
-        );
-
-        const run = yield* runDocument({
-          source: SOURCE,
-          harness: yield* reading_(yield* planWriterRoot(), {
-            *insideFrame(): Operation<void> {
-              // Before any turn, in the frame itself: the frame reads nothing.
-              asked.push(`before: ${yield* ambient()}`);
-              yield* spawn(function* () {
-                yield* entered.operation;
-                asked.push(`during: ${yield* ambient()}`);
-                released.resolve();
-              });
-            },
-            *atReview(): Operation<void> {
-              // Strictly after the information phase settled: the review is of
-              // the draft the *next* turn produced.
-              asked.push(`after: ${yield* ambient()}`);
-            },
-          }),
-          reviews: [],
-          evaluation: reading(),
-          files: files,
-        });
-
-        expect(run.failure).toBe(undefined);
-        expect(run.output).toContain(`got: ${PLAN}`);
-        // The delegated read happened, exactly once, and it is the only
-        // operation the provider ever saw.
-        expect(files.performed).toEqual(["read notes.md"]);
-        // And all three ambient attempts were refused by the frame's own guard.
-        expect(asked).toEqual([
-          `before: ${FRAME_REFUSAL}`,
-          `during: ${FRAME_REFUSAL}`,
-          `after: ${FRAME_REFUSAL}`,
-        ]);
-      });
-    });
-
-    /**
-     * And access does not open for something merely shaped like the phase.
-     *
-     * The grant is opened after `claim(invocation)`, which is canonical
-     * execution's own authentication: an invocation it did not issue is refused
-     * there, before any bookkeeping exists. This drives the **real private
-     * body** off the declaration the production path builds, with a claimant
-     * that refuses the way core's does for a forged invocation — and the
-     * control beside it, a claimant that answers, shows the body gets past the
-     * claim and on to its projection. So the ordering is what is asserted
-     * rather than the fact that something threw.
-     */
-    it("PI25: the private information body opens no access without its claimant", function* () {
+    it("PI25: the private information body runs only for its own invocation", function* () {
       yield* useWorkingDirectory(function* () {
         const harness = yield* planDeclarationHarness({
           surface: "component",
@@ -1003,64 +912,6 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         expect(prompts[1] ?? "").toContain("That request was refused");
         // Outside it: performed, and the findings are what the next turn got.
         expect(prompts[3] ?? "").toContain("the retained note");
-      });
-    });
-
-    /**
-     * The grant ends with the projection, observed from the scope that held it.
-     *
-     * This is the one assertion the rows above cannot make. A cancelled run and
-     * a refused writer sibling both leave the revocation untested: the sibling
-     * never held the grant, and a halted run takes the whole frame with it — so
-     * removing the `finally` that closes the grant keeps every other case here
-     * green. The Planner demonstrated exactly that, and this is their probe
-     * kept as a regression.
-     *
-     * What makes it possible is where the secret scan runs: inside the
-     * information body, after `tryContent()` and its joined teardown have
-     * settled and after the grant was closed, and still in that body's own
-     * scope. A read attempted there is a read from the scope that *was*
-     * granted, at a moment when it must not be any more. The scanner factory is
-     * core's own test seam for substituting a scanner, which is what makes that
-     * moment reachable without a product hook.
-     */
-    it("PI29: the read grant has ended by the time the findings are scanned", function* () {
-      yield* useWorkingDirectory(function* () {
-        const observed: string[] = [];
-        const files = recordedFiles({ "notes.md": "the retained note\n" });
-
-        const run = yield* scoped(function* () {
-          yield* useSecretScannerFactory(() => ({
-            *scan(text: string) {
-              // The findings, and not the draft: only they carry the note.
-              if (text.includes("the retained note")) {
-                observed.push(yield* ambient());
-              }
-              return [];
-            },
-          }));
-          return yield* runDocument({
-            source: SOURCE,
-            harness: yield* reading_(yield* planWriterRoot()),
-            reviews: [],
-            evaluation: reading(),
-            files: files,
-          });
-        });
-
-        expect(run.failure).toBe(undefined);
-        expect(run.output).toContain(`got: ${PLAN}`);
-        // The scan happened — this is not a case where nothing ran — and the
-        // read it attempted from the still-live body scope was refused.
-        // The findings cross the scanner more than once — the phase's own gate
-        // and the disclosure that follows it — so what is asserted is that the
-        // scan happened at all and that every attempt from that scope was
-        // refused, rather than a count this row has no business fixing.
-        expect(observed.length).toBeGreaterThan(0);
-        expect([...new Set(observed)]).toEqual([FRAME_REFUSAL]);
-        // One read, the projection's own: the probe's attempt reached no
-        // provider.
-        expect(files.performed).toEqual(["read notes.md"]);
       });
     });
 

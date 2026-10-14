@@ -505,8 +505,24 @@ provider:
 - an empty requested native-tool allowlist on a fresh session;
 - strict denial of every native permission request, answered inside the provider
   without consulting an authored approval scope; and
-- no Files, command, service or XMD-mediated network capability for the command
-  document itself.
+- no write, delete, directory-ensure, temporary-directory, command, service or
+  XMD-mediated network capability for the command document itself.
+
+**Reading is not one of the refusals.** The packaged workflow is trusted source
+and reading is how it decides what to propose, so `checkFilePath`,
+`readTextFile` and `globFiles` are absent from that table rather than refused:
+they take the ordinary route — the provider the entrypoint or the enclosing host
+installed, the middleware around it, and the effective `Permissions` of the
+scope asking. A read before, during or after an information projection, and one
+made by a concurrent trusted workflow task, are all the same ordinary
+operation. An enclosing read restriction therefore still denies them before
+target I/O, and the frame answers `Permissions` with nothing.
+
+What that boundary does *not* relax is anything an agent supplies. Agent text is
+either an unexecuted draft or an information program that enters public
+read-only `<Evaluate>`, under the host's admitted vocabulary and complete
+preflight; the frame's mutation, Process, Fetch and Service refusals and the
+native-tool denial above are unchanged.
 
 The provider may use its own transport to perform the model turn; that does not
 grant the Agent a native network tool. Nor do the two acts the command performs
@@ -700,30 +716,15 @@ construct. `<Plan>` selects only `read`. It installs no profile of its own,
 creates no second evaluator and starts no child execution; a trusted host that
 already stated a profile keeps it.
 
-*The request travels the ordinary route, and the writer frame is the reason that
-takes saying.* The frame a Plan is written under refuses every capability it can
-reach, and an admitted read is now the ordinary `<File>` or `<Glob>` performing
-its work through contextual `API.Files` — so it arrives at that same refusal.
-The one exception is this phase of the Component, recognized by **where** the
-call was made from rather than by what it asked for: the authenticated
-information phase holds a private read grant for the scope its projection runs
-in, and the frame's guard delegates `checkFilePath`, `readTextFile` and
-`globFiles` for that scope alone, through its own `next`.
-
-Delegation is all it does. Every enclosing and descendant Files middleware keeps
-its ordinary turn, the installed provider still performs the operation, and the
-effective `Permissions` of the consuming scope still decide it — so a read
-restriction in force around the document denies the request, and the denial
-becomes one safe retry context like any other ordinary refusal. The grant
-answers Permissions with nothing and runs the request in no wider scope.
-
-Reads only, and that phase only. Every mutation stays refused wherever it is
-asked from — write, delete, directory ensure and temporary acquisition — and so
-does every read outside a live projection: before one opens, after it settles,
-in a concurrent sibling of the frame that never held a grant, and in a nested
-writer frame whose own grant belongs to its own conversation. Process, Fetch and
-Service refusal and the native Agent policy are unchanged across the whole
-frame.
+*The request travels the ordinary route.* An admitted read is the ordinary
+`<File>` or `<Glob>` performing its work through contextual `API.Files`, so
+every enclosing and descendant handler keeps its ordinary turn, the installed
+provider performs the operation, and the effective `Permissions` of the
+consuming scope decide it — a read restriction in force around the document
+denies the request, and the denial becomes one safe retry context like any other
+ordinary refusal. The writer frame adds nothing to that route and takes nothing
+away from it: it refuses mutations, Process, Fetch and Service wherever they are
+asked from, and reads are not among them.
 
 *The budget is eight requests for one invocation*, shared across initial
 drafting, repair and revision. A success and a safe refusal each spend one. They
@@ -1145,12 +1146,9 @@ neither observation never interpreted what it wrote.
 | PI11 | Language, not permission | Branching, binding and bounded iteration compose with admitted reads under ordinary rules, and a prohibited component in an untaken branch refuses the whole fragment with zero reads |
 | PI20 | The shared route, from both sides | On both surfaces: one middleware the document installed observes the request the fragment made, a second installed nearer the provider transforms it, and the findings the next turn receives carry the transformed answer — so an information request is the ordinary operation and not a private one |
 | PI21 | Current policy decides it | A read restriction the enclosing scope installed denies the request before the provider performs anything; the refusal becomes exactly one more turn carrying the sanitized sentence, and authorship still finishes. The ordering half — a descendant answering `true` cannot defeat an enclosing `false` — is Tier PM's |
-| PI22 | The writer frame still refuses everything else | Inside the frame and outside any projection, a read, a temporary directory, a semantic directory ensure, a command and the network are each refused with the frame's own fixed sentence |
-| PI24 | Isolation around a live projection | With an information read held open inside the provider, a concurrent sibling task of the writer frame asks through the real guard and is refused, reaching no provider; the same frame is refused before any turn and again at review time, strictly after the information phase settled; the delegated read is the only operation the provider ever saw |
-| PI25 | Authenticity at the private body | The real private information body, built from the production declaration, refuses an invocation its claimant does not authenticate and opens no access; with a claimant that answers, the same body gets past the claim and fails later at its projection |
+| PI22 | Trusted reads, and the refusals that remain | From inside the writer frame and outside any information projection, a read of the caller's own file reaches the installed ordinary chain and returns its exact bytes — a no-throw or a missing-file `Err` would not discriminate it. A temporary directory, a semantic directory ensure, a command and the network are each still refused with the frame's own fixed sentence, and the native-tool denial, empty MCP set and session directory claims are unchanged |
+| PI25 | Authenticity at the private body | The real private information body, built from the production declaration, refuses an invocation its claimant does not authenticate, so the phase and the program it projects run only for the invocation the engine issued; with a claimant that answers, the same body gets past the claim and fails later at its projection. It authorizes no filesystem access either way |
 | PI26 | A provider that raises | A throwing Files provider ends authorship with one prompt and no retry turn, and no Plan |
 | PI27 | Cancelling an entered read | A halt landing inside the provider runs the cleanup registered with the read and does not complete while it is held — read while it is held, not afterwards — and the cancelled read is the only operation performed |
 | PI28 | The region, and leaving it | One document with two `<Plan>` elements: the first inside a read-only region has its request denied and gets one more turn; the second, outside it, performs the request through the restored enclosing allowance |
-| PI29 | The grant ends with the projection | A read attempted from the information body's *still-live* scope, at the moment its settled findings are scanned — after the projection and its joined teardown finished — is refused by the frame. It is the one case a cancelled run and a refused writer sibling cannot make: neither distinguishes a grant that is never closed |
-| PI23 | The shape of the grant | A frame grants nothing until a projection opens; a projection grants its own scope and every scope created under it; a sibling created while one is open is granted nothing; one frame's projection does not satisfy another frame's guard; and a retained guard answers no once its frame has ended |
 | PI12 | Disclosure order | Observe default, verbose, journal and Agent prompts for success and refusal, then place a synthetic secret in a file read by an information request. Default output stays content-free; detailed findings follow settlement; the secret appears in no output, journal entry or Agent Prompt, starts no following turn, review or artifact, and ends with the existing terminal secret rejection |

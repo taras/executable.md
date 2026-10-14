@@ -330,25 +330,6 @@ export function* planDeclarationHarness(options: {
   /** Absent leaves the harness with no stack at all, as `xmd test` has none. */
   stack?: PlanWriterStack | null;
   store?: FakeStore;
-  /**
-   * Work this case runs *inside* the Plan writer frame, before any turn.
-   *
-   * The one place a case can stand where the frame's own refusals apply to it:
-   * the frame's own observation point, reached after the capability refusals
-   * are installed and before any turn. A task spawned here is an ordinary
-   * sibling of the Component's phases and reaches the real guard rather than a
-   * model of it, which is how a concurrent writer read is attempted while an
-   * information projection is open.
-   */
-  insideFrame?: () => Operation<void>;
-  /**
-   * Work this case runs inside the frame when a review is asked.
-   *
-   * Strictly after the information phase settled, because the review is of the
-   * draft a later turn produced — which is what makes it the "afterwards"
-   * position for an ambient read.
-   */
-  atReview?: () => Operation<void>;
 }): Operation<PlanDeclarationHarness> {
   const fake = createFakeAcp();
   const checked: string[] = [];
@@ -376,39 +357,16 @@ export function* planDeclarationHarness(options: {
       },
     ),
     planWriterRoot: options.planWriterRoot,
-    // Where the frame reports itself, which is *after* its capability refusals
-    // are installed and before any turn — so work a case runs here is work the
-    // frame's own guard answers for.
-    ...(options.insideFrame === undefined
-      ? {}
-      : {
-          *observePlanWriter(): Operation<void> {
-            yield* options.insideFrame!();
-          },
-        }),
     ...(options.session === undefined ? {} : { session: options.session }),
     ...(options.explicitSession === undefined ? {} : { explicitSession: options.explicitSession }),
     ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
     host: yield* useScope(),
-    // Where the frame reports itself, which is *after* its capability refusals
-    // are installed and before any turn — so work a case runs here is work the
-    // frame's own guard answers for.
-    ...(options.insideFrame === undefined
-      ? {}
-      : {
-          *observePlanWriter(): Operation<void> {
-            yield* options.insideFrame!();
-          },
-        }),
-
     *installElicitation() {
       yield* Elicitation.around(
         {
+          // deno-lint-ignore require-yield
           *elicit([request], _next) {
             reviews.push(request);
-            if (options.atReview !== undefined) {
-              yield* options.atReview();
-            }
             const answer = answers.shift();
             if (answer === undefined) {
               throw new Error("the case scripted no answer for this review");

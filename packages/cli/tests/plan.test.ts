@@ -731,7 +731,12 @@ describe(
 
         const harness = createPlanHarness({ planWriterRoot });
         harness.fake.script({ reply: VALID });
-        const seen: { cwd?: string; entries?: string[]; refusals: string[] } = { refusals: [] };
+        const seen: {
+          cwd?: string;
+          entries?: string[];
+          refusals: string[];
+          read?: string;
+        } = { refusals: [] };
         harness.deps.installElicitation = function* () {
           yield* Elicitation.around(
             {
@@ -740,19 +745,24 @@ describe(
                 const cwd = harness.fake.created[0]?.cwd;
                 seen.cwd = cwd;
                 seen.entries = cwd === undefined ? undefined : yield* until(readdir(cwd));
-                // The command document's own capabilities, asked for from inside
-                // its scope. It decides what to write; it writes nothing.
+                // The trusted workflow reading the caller's tree, from inside
+                // the writer frame and outside any information projection. It
+                // is the ordinary contextual operation: the provider this
+                // command's entrypoint installed, the middleware around it, and
+                // the effective Permissions of this scope. The frame adds no
+                // read denial of its own, and asserting the *bytes* is what
+                // makes that a read rather than an absent refusal — a no-throw
+                // or a missing-file `Err` would pass against a provider that
+                // reached nothing.
+                const read = yield* API.Files.operations.readTextFile({
+                  cwd: dir,
+                  path: "secret.txt",
+                });
+                seen.read = read.ok ? read.value : `refused: ${String(read.error)}`;
+                // And the capabilities it does not get, asked for from the same
+                // scope. It decides what to write; it writes nothing.
                 for (const [name, ask] of [
                   ["a directory", () => API.Files.operations.temporaryDirectory()],
-                  // Ambient, and therefore refused: a read is delegated only
-                  // inside an authenticated information projection, and this is
-                  // the writer frame asking for itself. Asked here because a
-                  // read is the one operation the frame now has a reason to
-                  // delegate at all.
-                  [
-                    "a file",
-                    () => API.Files.operations.readTextFile({ cwd: ".", path: "notes.md" }),
-                  ],
                   // The semantic directory operation, named in the table rather
                   // than left unreachable: canonical core owns `<Dir>` now, and
                   // an admitted generated one performs this.
@@ -789,10 +799,13 @@ describe(
         // allows no native tool on a fresh session.
         expect(harness.fake.created[0]?.mcpServers).toEqual([]);
         expect(harness.fake.ensured[0]?.sessionOptions?.allowedTools).toEqual([]);
-        // And the command document is given nothing to act with.
+        // The trusted workflow read the caller's file, through the ordinary
+        // chain, and got its bytes.
+        expect(seen.read).toBe("the caller's tree\n");
+        // And it is given nothing to *change* with, nor a command, nor the
+        // network. The read above does not reinterpret any of these.
         expect(seen.refusals).toEqual([
           "xmd plan asked for a directory, which the Plan writer profile grants to nothing",
-          "xmd plan asked for a file, which the Plan writer profile grants to nothing",
           "xmd plan asked for a directory, which the Plan writer profile grants to nothing",
           "xmd plan asked for a command, which the Plan writer profile grants to nothing",
           "xmd plan asked for the network, which the Plan writer profile grants to nothing",
