@@ -11889,6 +11889,9 @@ written after it is what makes the outside observable.
 | PRM5 | A generated directory | `<Dir>` inside a fragment creates the directory, scopes the file written inside it, and restores the enclosing directory for the file written after it |
 | PRM6 | The admitted request | A generated `<Fetch />` performs its entry's admitted request and a real loopback accepts exactly it |
 | PRM7 | The ceiling at the transport | Middleware rewriting the destination off the entry's ceiling is refused by the terminal with the fixed sentence, and the transport accepts nothing |
+| PRM7b | The whole request is the ceiling | The element asks for exactly the admitted request and middleware changes one admitted header: the terminal refuses with the fixed sentence and the transport accepts nothing, while the same element without the change is accepted with the admitted header |
+| PRM7c | A baseline nothing can edit | A handler editing the outgoing headers *in place* is refused the same way, and the admitted request in the same capture is accepted — so the comparison is held by value taken at capture rather than read from the object the chain was handed |
+| PRM7d | What the next invocation sends | An in-place edit that stays inside the ceiling is permitted, and the element after it sends the request the host admitted rather than the edited one |
 
 ### Tier FF — Files infrastructure failure
 

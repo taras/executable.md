@@ -388,6 +388,22 @@ function boundedRequests(
   inner: FunctionComponent,
   requests: readonly FetchRequest[],
 ): FunctionComponent {
+  // The baseline, taken once and kept as strings. A comparison against the
+  // objects this entry hands the transport would be a comparison against
+  // something the chain can edit: the request travels through middleware by
+  // reference, so an in-place edit would rewrite both what the restriction
+  // checks and what a later invocation of this entry treats as admitted.
+  // Strings cannot be edited from anywhere.
+  const ceiling: ReadonlySet<string> = new Set(
+    requests.flatMap((request) => {
+      // An admitted request cannot be ambiguous — `admitHeaders` refuses two
+      // spellings of one name before a ceiling is ever normalized — so this
+      // drops nothing in practice and refuses rather than guesses if it ever
+      // could.
+      const held = signature(request.url, request.method, request.headers);
+      return held === undefined ? [] : [held];
+    }),
+  );
   return function* performed(props: Record<string, Json>): Operation<unknown> {
     const url = String(props.url);
     const admitted = requests.find((request) => request.url === url);
@@ -399,8 +415,10 @@ function boundedRequests(
     const expansion = yield* getExpansion();
     const retained = yield* scoped(function* () {
       yield* Permissions.around({
-        fetch: ([input, init], next) =>
-          permitted(requests, input, init) ? next(input, init) : false,
+        fetch: ([input, init], next) => {
+          const outgoing = signatureOf(input, init);
+          return outgoing !== undefined && ceiling.has(outgoing) ? next(input, init) : false;
+        },
       });
       return yield* persistFetch(
         {
@@ -408,7 +426,10 @@ function boundedRequests(
           ...(expansion.position === undefined ? {} : { position: expansion.position }),
         },
         admitted,
-        () => observeFetch(admitted),
+        // A copy per invocation, for the same reason the baseline is a string:
+        // what goes down the chain is editable by anything in it, and this
+        // entry's ceiling must not be what gets edited.
+        () => observeFetch({ ...admitted, headers: { ...admitted.headers } }),
       );
     });
     // The status rule is the authored one: a fragment binds nothing, so a
@@ -425,20 +446,44 @@ function boundedRequests(
 }
 
 /**
- * Whether the request about to be sent is still one this entry admits.
+ * One request as the single string a ceiling is compared by.
  *
- * The destination and the method, which are what a ceiling is about: a
- * transformation that sends the request somewhere else, or sends it as a
- * different method, is performing a request the host never admitted. Headers
- * are deliberately not compared — the host that stated this ceiling is the same
- * host whose middleware signs and routes what leaves it, and a restriction that
- * refused its own authentication header would make that unusable.
+ * The destination, the method and the headers — the whole of what the host
+ * admitted. Normalized the way an authored request is: the method defaults to
+ * `GET`, header names are lowercased, and the names are sorted, so two
+ * spellings of one request produce one signature and comparison does not depend
+ * on the order a transformation happened to build its object in.
+ *
+ * Two names that become the same key answer `undefined` rather than one of
+ * them. An authored request is refused outright for that ambiguity
+ * (`fetch-request.ts`), and a request built by middleware says two things about
+ * one header; a signature that silently kept either would be deciding which.
+ * `undefined` matches no ceiling, so the ambiguity fails closed.
  */
-function permitted(
-  requests: readonly FetchRequest[],
+function signature(
+  url: string,
+  method: string,
+  headers: Record<string, string> | undefined,
+): string | undefined {
+  const held = new Map<string, string>();
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const key = name.toLowerCase();
+    if (held.has(key)) {
+      return undefined;
+    }
+    held.set(key, value);
+  }
+  const ordered = [...held.keys()].sort().map((key) => [key, held.get(key)]);
+  return JSON.stringify([url, method, ordered]);
+}
+
+/** The signature of the request that is actually about to be sent. */
+function signatureOf(
   input: string,
-  init: { readonly method?: string } | undefined,
-): boolean {
-  const method = init?.method ?? "GET";
-  return requests.some((request) => request.url === input && request.method === method);
+  init: { readonly method?: string; readonly headers?: Record<string, string> } | undefined,
+): string | undefined {
+  return signature(input, init?.method ?? "GET", init?.headers);
 }

@@ -23,6 +23,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, sleep, spawn, useScope, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
+import { API } from "@executablemd/runtime";
 import { ensureDir, rm } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -165,6 +166,13 @@ interface RunOptions {
    */
   files?: RecordedFiles;
   /**
+   * Anything else this case installs inside the execution.
+   *
+   * Runs after the recorder, so middleware installed here sits between the
+   * document and that provider — which is where a document's own handler goes.
+   */
+  installing?: () => Operation<void>;
+  /**
    * The vocabulary this execution describes.
    *
    * {@link CASE_CATALOG} by default, whose single entry is the marker the
@@ -243,9 +251,18 @@ function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
             // A case that supplies its own recorder gets that instead, which is
             // how a row proves which operation a read actually reached.
             evaluation: options.evaluation ?? ordinaryEvaluationProfile(),
-            ...(options.files === undefined
+            ...(options.files === undefined && options.installing === undefined
               ? {}
-              : { install: () => useRecordedFiles(options.files!) }),
+              : {
+                  *install(): Operation<void> {
+                    if (options.files !== undefined) {
+                      yield* useRecordedFiles(options.files);
+                    }
+                    if (options.installing !== undefined) {
+                      yield* options.installing();
+                    }
+                  },
+                }),
             ...(options.componentAnswers === undefined
               ? {}
               : { componentAnswers: [...options.componentAnswers] }),
@@ -773,6 +790,63 @@ describe("Tier PI — read-only information requests", () => {
       { kind: "user-provided", entries: [] },
     ],
   };
+
+  /**
+   * The standalone surface takes the same route, and middleware decides it.
+   *
+   * `xmd plan` installs the same ordinary profile `xmd run` does, so an
+   * information request here is the ordinary component performing the ordinary
+   * operation — observable from both sides of the provider. The document's own
+   * handler sees what the fragment asked for; the handler installed nearer the
+   * provider substitutes what is actually read; and the findings the next turn
+   * is given carry that substituted answer rather than the request's.
+   */
+  it("PI20: the standalone request crosses enclosing and nearer middleware", function* () {
+    // The requested file does not exist; the substituted one does. A finding
+    // naming it can only have come from the transformed request.
+    const files = recordedFiles({ "renamed.md": "the renamed note\n" });
+    const enclosing: string[] = [];
+    const run = yield* runDocument({
+      turns: [{ reply: COMPOSED }, { reply: CANDIDATE }],
+      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      files,
+      *installing(): Operation<void> {
+        // Nearer the provider, and transforming.
+        yield* API.Files.around(
+          {
+            *globFiles([input], next) {
+              return yield* next({ ...input, include: ["renamed.md"] });
+            },
+            *readTextFile([input], next) {
+              return yield* next({ ...input, path: "renamed.md" });
+            },
+          },
+          { at: "min" },
+        );
+        // Where a document's own handler goes, observing only.
+        yield* API.Files.around({
+          *globFiles([input], next) {
+            enclosing.push(`glob ${input.include.join(",")}`);
+            return yield* next(input);
+          },
+          *readTextFile([input], next) {
+            enclosing.push(`read ${input.path}`);
+            return yield* next(input);
+          },
+        });
+      },
+    });
+
+    expect(run.failure).toBe(undefined);
+    // What the request asked for.
+    expect(enclosing).toEqual(["glob notes.md", "read notes.md"]);
+    // What the provider was actually asked to perform.
+    expect(files.performed).toEqual(["glob renamed.md", "read renamed.md"]);
+    // And what the next turn was given is that answer.
+    const followUp = run.prompts[1] ?? "";
+    expect(followUp).toContain("the renamed note");
+    expect(followUp).toContain("renamed.md");
+  });
 
   it("PI2, PI12: findings reach the next turn, and default progress says only how many", function* () {
     const files = recordedFiles({ "notes.md": "the retained note\n" });

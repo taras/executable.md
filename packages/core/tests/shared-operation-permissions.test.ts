@@ -141,6 +141,25 @@ function* useRegions(): Operation<void> {
       },
     },
     {
+      name: "Editing",
+      origin: "test://regions",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn(): Operation<string> {
+        // Changes the outgoing headers *in place* rather than building a new
+        // object, which is the shape a comparison against the request's own
+        // objects would be defeated by.
+        yield* API.Fetch.around({
+          *fetch([input, init], next) {
+            if (init?.headers !== undefined) {
+              init.headers["x-bound"] = "changed";
+            }
+            return yield* next(input, init);
+          },
+        });
+        return yield* content();
+      },
+    },
+    {
       name: "DirectRead",
       origin: "test://regions",
       props: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
@@ -203,6 +222,8 @@ function* refusal(fixture: Fixture, source: string): Operation<string> {
 interface Accepted {
   readonly method: string;
   readonly path: string;
+  /** The one bounded header these rows are about, as it arrived. */
+  readonly bound?: string;
 }
 
 interface Loopback {
@@ -222,7 +243,12 @@ function useLoopback(): Operation<Loopback> {
   return resource(function* (provide) {
     const accepted: Accepted[] = [];
     const server: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
-      accepted.push({ method: request.method ?? "", path: request.url ?? "" });
+      const bound = request.headers["x-bound"];
+      accepted.push({
+        method: request.method ?? "",
+        path: request.url ?? "",
+        ...(typeof bound === "string" ? { bound } : {}),
+      });
       response.writeHead(200, { "content-type": "text/plain" });
       response.end("from the network");
     });
@@ -577,6 +603,221 @@ describe("Tier PRM — authored, generated and direct operations under one restr
     // request: the transport accepted nothing at all.
     expect(failed).toContain("not permitted in this scope");
     expect(accepted).toEqual([]);
+  });
+
+  /**
+   * The ceiling is the whole request, and headers are part of it.
+   *
+   * PRM7 rewrites the destination, which any comparison catches. This is the
+   * case a URL-and-method comparison lets through: the element asks for exactly
+   * the admitted request, and contextual middleware changes one admitted header
+   * on the way out. The host that stated the ceiling stated that header, so a
+   * transformation that sends a different one is sending a request this entry
+   * never admitted — and middleware being available in the consuming scope is
+   * not evidence the host approved it.
+   */
+  it("PRM7b: a changed admitted header is refused at the transport", function* () {
+    const fixture = yield* useFixture();
+    let control: readonly Accepted[] = [];
+    let afterChange: readonly Accepted[] = [];
+    let failed = "";
+
+    yield* scoped(function* () {
+      const server = yield* useLoopback();
+      yield* useHost(fixture);
+      yield* useRegions();
+      const admitted = {
+        url: `${server.origin}/admitted`,
+        method: "GET",
+        headers: { "x-bound": "admitted" },
+      };
+      const source =
+        `<Evaluate text={'<Fetch url="${admitted.url}" headers={{"x-bound":"admitted"}} ` +
+        `as="answer" />\\n<Json value={answer} />\\n'} />\n`;
+      const admitting: ExecutionInstallation = {
+        evaluation: {
+          read: [fileReadEntry(), globReadEntry(), syntaxReadEntry(), fetchEntry([admitted])],
+        },
+      };
+
+      // The positive control first, in the same scope and against the same
+      // server: the element, the ceiling and the header all agree, and the
+      // request goes out.
+      yield* collect(
+        yield* executeInstalled(
+          { ...retainedSource(ROOT_PATH, source), stream: new InMemoryStream() },
+          [admitting],
+        ),
+      );
+      control = [...server.accepted];
+
+      yield* scoped(function* () {
+        // Ordinary `API.Fetch` middleware, changing one admitted header and
+        // delegating everything else unchanged.
+        yield* API.Fetch.around({
+          *fetch([input, init], next) {
+            return yield* next(input, {
+              ...init,
+              headers: { ...init?.headers, "x-bound": "changed" },
+            });
+          },
+        });
+        try {
+          yield* collect(
+            yield* executeInstalled(
+              { ...retainedSource(ROOT_PATH, source), stream: new InMemoryStream() },
+              [admitting],
+            ),
+          );
+        } catch (error) {
+          failed = error instanceof Error ? error.message : String(error);
+        }
+      });
+      afterChange = [...server.accepted];
+    });
+
+    expect(control).toEqual([{ method: "GET", path: "/admitted", bound: "admitted" }]);
+    expect(failed).toContain("not permitted in this scope");
+    // Nothing further reached the transport: the refusal is a request that was
+    // never sent rather than one the server answered.
+    expect(afterChange).toEqual(control);
+  });
+
+  /**
+   * And the baseline is not the object the chain was handed.
+   *
+   * The request travels through middleware by reference, so a handler can edit
+   * the outgoing headers *in place* rather than building a new object. Against
+   * a comparison that read those same objects both sides would move together,
+   * the edited request would still "match", and it would be sent — so the
+   * refusal below is exactly the assertion that the ceiling is held by value
+   * taken at capture and the transport is handed a copy.
+   *
+   * The permitted element ahead of it shares one capture with it, which is what
+   * makes it evidence rather than decoration: the entry is demonstrably working
+   * for the request the host admitted, in this very run, and the edit is what
+   * the terminal refuses.
+   */
+  it("PRM7c: an in-place edit is refused, and the admitted request in the same capture is not", function* () {
+    const fixture = yield* useFixture();
+    let accepted: readonly Accepted[] = [];
+    let failed = "";
+
+    yield* scoped(function* () {
+      const server = yield* useLoopback();
+      yield* useHost(fixture);
+      yield* useRegions();
+      const admitted = {
+        url: `${server.origin}/admitted`,
+        method: "GET",
+        headers: { "x-bound": "admitted" },
+      };
+      const element =
+        `<Evaluate text={'<Fetch url="${admitted.url}" headers={{"x-bound":"admitted"}} ` +
+        `as="answer" />\\n<Json value={answer} />\\n'} />`;
+
+      try {
+        yield* collect(
+          yield* executeInstalled(
+            {
+              ...retainedSource(
+                ROOT_PATH,
+                // Permitted first — a generated refusal ends the run, so the
+                // element that proves the entry works has to be the one ahead
+                // of it.
+                [element, "", "<Editing>", "", element, "", "</Editing>", ""].join("\n"),
+              ),
+              stream: new InMemoryStream(),
+            },
+            [
+              {
+                evaluation: {
+                  read: [
+                    fileReadEntry(),
+                    globReadEntry(),
+                    syntaxReadEntry(),
+                    fetchEntry([admitted]),
+                  ],
+                },
+              },
+            ],
+          ),
+        );
+      } catch (error) {
+        failed = error instanceof Error ? error.message : String(error);
+      }
+      accepted = [...server.accepted];
+    });
+
+    expect(failed).toContain("not permitted in this scope");
+    // One request: the admitted one. The edited element sent nothing, so the
+    // edit neither reached the network nor became something this entry admits.
+    expect(accepted).toEqual([{ method: "GET", path: "/admitted", bound: "admitted" }]);
+  });
+
+  /**
+   * The half a refusal cannot show: what the *next* invocation sends.
+   *
+   * An in-place edit that happens to stay inside the ceiling is permitted, and
+   * that is the case which reveals whether the edit reached the entry's own
+   * copy of the admitted request. Both headers are admitted here, so the edited
+   * element goes out as `changed`; the element after it, outside the editing
+   * region, asks for the same entry again. It sends `admitted` — so the edit
+   * changed the request on its way out and nothing else.
+   *
+   * Against an entry that handed the transport its own ceiling object, the edit
+   * would have landed in that object and this second element would send
+   * `changed` too.
+   */
+  it("PRM7d: an in-place edit does not change what the next invocation sends", function* () {
+    const fixture = yield* useFixture();
+    let accepted: readonly Accepted[] = [];
+
+    yield* scoped(function* () {
+      const server = yield* useLoopback();
+      yield* useHost(fixture);
+      yield* useRegions();
+      const url = `${server.origin}/admitted`;
+      const element =
+        `<Evaluate text={'<Fetch url="${url}" headers={{"x-bound":"admitted"}} ` +
+        `as="answer" />\\n<Json value={answer} />\\n'} />`;
+
+      yield* collect(
+        yield* executeInstalled(
+          {
+            ...retainedSource(
+              ROOT_PATH,
+              ["<Editing>", "", element, "", "</Editing>", "", element, ""].join("\n"),
+            ),
+            stream: new InMemoryStream(),
+          },
+          [
+            {
+              evaluation: {
+                read: [
+                  fileReadEntry(),
+                  globReadEntry(),
+                  syntaxReadEntry(),
+                  // Both spellings admitted, so the edit below is inside the
+                  // ceiling and the row is about the copy rather than about the
+                  // refusal.
+                  fetchEntry([
+                    { url, method: "GET", headers: { "x-bound": "admitted" } },
+                    { url, method: "GET", headers: { "x-bound": "changed" } },
+                  ]),
+                ],
+              },
+            },
+          ],
+        ),
+      );
+      accepted = [...server.accepted];
+    });
+
+    expect(accepted).toEqual([
+      { method: "GET", path: "/admitted", bound: "changed" },
+      { method: "GET", path: "/admitted", bound: "admitted" },
+    ]);
   });
 
   it("PRM5: a generated Dir scopes what follows it and restores the directory", function* () {
