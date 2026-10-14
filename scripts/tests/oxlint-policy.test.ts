@@ -51,6 +51,7 @@ const DENIED = [
 
 const GATE_RULES = [
   "eslint/curly",
+  "local/no-banned-jsdoc-words",
   "local/no-module-scoped-registry",
   "local/no-section-divider-comments",
   "local/no-sync-filesystem",
@@ -192,6 +193,22 @@ function parseReport(source: string, origin: string): Report {
 }
 
 describe("Oxlint policy", () => {
+  it("checks prose beyond packages/scripts without widening other rules or formatting", function* () {
+    const manifest = JSON.parse(yield* readTextFile(path.join(ROOT, "package.json")));
+    expect(manifest.scripts.lint).toContain("oxlint -c .oxlint-prose.json site smoke-test");
+    expect(manifest.scripts.lint).toContain("node scripts/lint-architecture.js");
+    expect(manifest.scripts.lint).toContain("oxfmt --check packages scripts");
+    const prose = yield* config(".oxlint-prose.json");
+    expect(prose.rules).toEqual({ "local/no-banned-jsdoc-words": "error" });
+    expect(prose.categories).toEqual({ correctness: "off" });
+    const directory = yield* scratch("oxlint-prose-policy");
+    const file = path.join(directory, "surface.ts");
+    yield* writeTextFile(file, "export function probe() { if (true) return 1; }\n");
+    expect((yield* runOxlint(".oxlint-prose.json", [file])).code).toBe(0);
+    yield* writeTextFile(file, "/** Claim */\nexport {};\n");
+    expect((yield* runOxlint(".oxlint-prose.json", [file])).code).not.toBe(0);
+  });
+
   it("extends one canonical shared policy from both profiles", function* () {
     const gate = yield* config(GATE);
     const sensor = yield* config(SENSOR);

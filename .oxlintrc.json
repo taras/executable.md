@@ -14,6 +14,7 @@
 
   "rules": {
     "eslint/curly": "error",
+    "local/no-banned-jsdoc-words": "error",
     "local/no-module-scoped-registry": "error",
     "local/no-section-divider-comments": "error",
     "local/no-sync-filesystem": "error",

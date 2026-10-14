@@ -503,6 +503,12 @@ the corpus or enabling in-shard concurrency is not an answer to a miss.
    alternatives, defensive qualifications, and exhaustive detail that does not
    help a reader understand or use the design.
 
+### Banned words
+
+Avoid words in the canonical [banned-words list](scripts/banned-words.js) when
+writing architecture prose or JSDoc. Choose wording for the specific meaning;
+keep literal code references intact. `deno task lint` enforces the list.
+
 ### Component descriptions
 
 Write a component description for an author deciding what to type. Lead with an
