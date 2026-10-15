@@ -106,19 +106,15 @@ describe("Tier FE — the workflow host's profile", () => {
     });
   });
 
-  it("FE23: Git's directory entry is the exact identity retained history holds", function* () {
-    // Written out here rather than compared against the implementation, so a
-    // change to either side is a change to this row. Every released journal
-    // holds these strings: the origin a released build recorded, the revision
-    // it recorded, and the version-1 alias whose grant this entry answers for.
+  it("FE23: Git's directory entry admits core's own Dir and states no identity", function* () {
+    // What this host decides is that a workflow run has a `<Dir>` at all. What
+    // admitting it grants is core's: the identity and the effect its paired
+    // spelling runs under are on the declaration that owns the component, so
+    // there is nothing here for a host to restate or to move.
     const entry = gitDirectoryEntry();
     expect(entry.name).toBe("Dir");
-    expect(entry.identity).toEqual({
-      origin: "@executablemd/workflow/composition",
-      key: "Dir",
-      revision: "3",
-    });
-    expect(Reflect.get(entry, "legacy")).toEqual(["@executablemd/workflow/composition/dir-v2#Dir"]);
+    expect(Object.keys(entry)).not.toContain("identity");
+    expect(Object.keys(entry)).not.toContain("legacy");
     // It is the directory capability, not some other entry wearing the name.
     expect(Reflect.get(entry, "capability")).toBe("directory:ensure");
   });

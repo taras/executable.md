@@ -52,6 +52,8 @@ import { useScope } from "effection";
 import type { Operation, Scope } from "effection";
 import { printErrors, printsErrors } from "./component-failures.ts";
 import { documentationOf } from "./components/documentation.ts";
+import { captureGenerated } from "./components/generated-metadata.ts";
+import type { GeneratedForms } from "./components/generated-metadata.ts";
 import type { ComponentDocumentation } from "./components/documentation.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
 import type { EvaluationProfile } from "./evaluation-profile.ts";
@@ -147,6 +149,8 @@ export interface IdentityComponent extends ComponentDocumentation {
   readonly captures?: readonly string[];
   /** The authored forms this component accepts. Omitted means both. */
   readonly forms?: readonly InvocationForm[];
+  /** The generated use each authored form is offered for, when it offers any. */
+  readonly generated?: GeneratedForms;
   readonly origin: string;
   factory(claim: IdentityClaimant): FunctionComponent;
 }
@@ -381,6 +385,8 @@ export interface ProtectedDeclaration {
   readonly returns?: ReturnsSchema;
   readonly captures?: readonly string[];
   readonly forms?: readonly InvocationForm[];
+  /** The generated use each authored form is offered for, when it offers any. */
+  readonly generated?: GeneratedForms;
   readonly origin: string;
   build(claim: IdentityClaimant): ProtectedBody;
 }
@@ -1027,6 +1033,7 @@ export interface IdentityRegistration extends ComponentDocumentation {
   readonly returns?: ReturnsSchema;
   readonly captures?: readonly string[];
   readonly forms?: readonly InvocationForm[];
+  readonly generated?: GeneratedForms;
   readonly fn: FunctionComponent;
 }
 
@@ -1131,6 +1138,9 @@ export function installIdentities(
       ...(component.returns === undefined ? {} : { returns: component.returns }),
       ...(component.captures === undefined ? {} : { captures: component.captures }),
       ...(component.forms === undefined ? {} : { forms: component.forms }),
+      ...(component.generated === undefined
+        ? {}
+        : { generated: captureGenerated(component.generated) }),
       ...documentationOf(component),
       fn: implementation,
     });
@@ -1151,6 +1161,9 @@ export function installIdentities(
       ...(component.returns === undefined ? {} : { returns: component.returns }),
       ...(component.captures === undefined ? {} : { captures: component.captures }),
       ...(component.forms === undefined ? {} : { forms: component.forms }),
+      ...(component.generated === undefined
+        ? {}
+        : { generated: captureGenerated(component.generated) }),
       ...documentationOf(component),
       fn: implementation,
     });
@@ -1169,6 +1182,9 @@ export function installIdentities(
       ...(component.returns === undefined ? {} : { returns: component.returns }),
       ...(component.captures === undefined ? {} : { captures: component.captures }),
       ...(component.forms === undefined ? {} : { forms: component.forms }),
+      ...(component.generated === undefined
+        ? {}
+        : { generated: captureGenerated(component.generated) }),
       ...documentationOf(component),
       fn: implementation,
     });

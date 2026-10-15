@@ -35,6 +35,8 @@ import Test, { props as testProps } from "./Test.ts";
 import { parseJsonObject } from "../json.ts";
 import { declaredForms, formDispatcher } from "../invocation-identity.ts";
 import { documented } from "./documentation.ts";
+import { captureGenerated } from "./generated-metadata.ts";
+import type { GeneratedForms } from "./generated-metadata.ts";
 import type { FirstPartyDocumentation } from "./documentation.ts";
 import type {
   FormDeclaration,
@@ -57,6 +59,15 @@ export const CORE_ORIGIN = "@executablemd/core";
 interface CoreOptions {
   returns?: ReturnsSchema;
   captures?: readonly string[];
+  /**
+   * The generated use each authored form is offered for.
+   *
+   * On the registration that owns the implementation, because that is what a
+   * generated table admits: `<Glob />`, `<Fetch />` and `<Elicit>` are offered,
+   * each in the one spelling it is written in, and every other core default
+   * offers none.
+   */
+  generated?: GeneratedForms;
   /**
    * The forms this component accepts, when it is form-sensitive without being
    * a dispatcher.
@@ -92,7 +103,7 @@ function core(
 ): [string, RegistryEntry] {
   const declaration = typeof implementation === "function" ? undefined : implementation;
   const fn = typeof implementation === "function" ? implementation : formDispatcher(implementation);
-  const { returns, captures } = options;
+  const { returns, captures, generated } = options;
   const forms = declaration === undefined ? options.forms : declaredForms(declaration);
   return [
     name,
@@ -105,6 +116,7 @@ function core(
           ...(returns === undefined ? {} : { returns }),
           ...(captures === undefined ? {} : { captures }),
           ...(forms === undefined ? {} : { forms }),
+          ...(generated === undefined ? {} : { generated: captureGenerated(generated) }),
           ...documented(documentation),
           fn,
         },
@@ -149,7 +161,12 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
       as: "Required. The validated answer, as a structured value.",
       context: "The request message the person is shown.",
     },
-    { returns: parseJsonObject(elicitReturns) },
+    {
+      returns: parseJsonObject(elicitReturns),
+      generated: {
+        paired: { identity: "https://executable.md/components/elicit/ask", effect: "write" },
+      },
+    },
   ),
   core("TempDir", TempDir, parseJsonObject(tempDirProps), {
     description:
@@ -167,16 +184,26 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
     as: null,
     context: null,
   }),
-  core("Fetch", Fetch, parseJsonObject(fetchProps), {
-    description:
-      'Fetch a URL. `<Fetch url="https://example.com/status" as="response" />` binds the ' +
-      "response, and any status is data you can branch on. Without `as`, a non-2xx status " +
-      "fails. Only GET and HEAD methods currently supported.",
-    as:
-      "Optional. Captures the response, which is what makes a non-2xx status data instead " +
-      "of a failure.",
-    context: null,
-  }),
+  core(
+    "Fetch",
+    Fetch,
+    parseJsonObject(fetchProps),
+    {
+      description:
+        'Fetch a URL. `<Fetch url="https://example.com/status" as="response" />` binds the ' +
+        "response, and any status is data you can branch on. Without `as`, a non-2xx status " +
+        "fails. Only GET and HEAD methods currently supported.",
+      as:
+        "Optional. Captures the response, which is what makes a non-2xx status data instead " +
+        "of a failure.",
+      context: null,
+    },
+    {
+      generated: {
+        "self-closing": { identity: "https://executable.md/components/fetch/read", effect: "read" },
+      },
+    },
+  ),
   core(
     "Glob",
     Glob,
@@ -189,7 +216,12 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
       as: "Required. The matched paths, as a string array.",
       context: null,
     },
-    { returns: parseJsonObject(globReturns) },
+    {
+      returns: parseJsonObject(globReturns),
+      generated: {
+        "self-closing": { identity: "https://executable.md/components/glob/read", effect: "read" },
+      },
+    },
   ),
   core("CodeBlock", codeBlockForm, parseJsonObject(codeBlockProps), {
     description:

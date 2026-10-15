@@ -1076,8 +1076,9 @@ export function runWorkflow(
         // about the component. Stated where the Workspace is attached — a
         // completed replay restores its retained output and expands nothing, so
         // it needs no ceiling of its own.
-        // `<Dir>`'s entry comes from the package that owns the component, so
-        // the write table names one identity rather than two copies of it.
+        // `<Dir>`'s entry comes from the Git Plugin, which decides that a
+        // workflow run has one at all; the identity it is admitted under is
+        // core's, from the declaration that owns the component.
         ...(completed || replay
           ? []
           : [

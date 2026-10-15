@@ -387,13 +387,20 @@ function* plant(database: WorkflowRunDatabase, path: string, content: string): O
 }
 
 /**
- * One capability identity, in the closed structural shape a run retains.
+ * One admitted spelling, as the row a run retains.
  *
  * Written out here rather than imported from the profile, so a row states what
- * the journal must hold rather than agreeing with whatever the profile computed.
+ * the journal must hold rather than agreeing with whatever the profile
+ * computed. The identity is the URL the declaration that owns the component
+ * offers that spelling under.
  */
-function capability(origin: string, key: string, revision: string): Record<string, string> {
-  return { kind: "capability", origin, key, revision };
+function row(
+  name: string,
+  form: "self-closing" | "paired",
+  identity: string,
+  effect: "read" | "write" | "composition",
+): Record<string, string> {
+  return { name, form, identity, kind: "capability", effect };
 }
 
 describe("Tier WGAC — the registered Evaluate component", () => {
@@ -980,11 +987,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
  * not the implementation's package. The profile supplies no directory entry
  * of its own.
  */
-const HOST_DIRECTORY: FragmentEntry = directoryEntry(
-  { origin: "@executablemd/workflow/composition", key: "Dir", revision: "3" },
-  "Dir",
-  ["@executablemd/workflow/composition/dir-v2#Dir"],
-);
+const HOST_DIRECTORY: FragmentEntry = directoryEntry("Dir");
 
 /**
  * Tier WGAC — the effect classes `<Evaluate>` selects between
@@ -1103,26 +1106,10 @@ describe("Tier WGAC — the standard write table", () => {
       expect(policy?.allowed).toEqual([
         // The trusted composition table leads every policy, whatever the
         // selection asked for.
-        {
-          name: "Json",
-          identity: capability("@executablemd/core", "Json", "2"),
-          forms: ["self-closing"],
-        },
-        {
-          name: "File",
-          identity: capability("@executablemd/core", "File:write", "2"),
-          forms: ["paired"],
-        },
-        {
-          name: "Dir",
-          identity: capability("@executablemd/workflow/composition", "Dir", "3"),
-          forms: ["paired"],
-        },
-        {
-          name: "File.Delete",
-          identity: capability("@executablemd/core", "File.Delete", "2"),
-          forms: ["self-closing"],
-        },
+        row("Json", "self-closing", "https://executable.md/components/json", "composition"),
+        row("File", "paired", "https://executable.md/components/file/write", "write"),
+        row("Dir", "paired", "https://executable.md/components/dir/ensure", "write"),
+        row("File.Delete", "self-closing", "https://executable.md/components/file/delete", "write"),
       ]);
     });
   });
@@ -1164,7 +1151,7 @@ describe("Tier WGAC — the standard write table", () => {
       // rest of the ceiling. A host that states none is admitted under no
       // directory entry at all, which is why every case here supplies one.
       const attempt = yield* runDocument(database, evaluates(WRITES, ["write"]), {
-        directory: directoryEntry({ origin: "tier-wgac", key: "Dir", revision: "1" }, "Dir"),
+        directory: directoryEntry("Dir"),
       });
 
       expect(attempt.failure).toBe(undefined);
@@ -1175,26 +1162,10 @@ describe("Tier WGAC — the standard write table", () => {
       // continuation compares one directory grant and not two.
       const policy = policyOf(admissions(attempt.events)[0]!);
       expect(policy?.allowed).toEqual([
-        {
-          name: "Json",
-          identity: capability("@executablemd/core", "Json", "2"),
-          forms: ["self-closing"],
-        },
-        {
-          name: "File",
-          identity: capability("@executablemd/core", "File:write", "2"),
-          forms: ["paired"],
-        },
-        {
-          name: "Dir",
-          identity: capability("tier-wgac", "Dir", "1"),
-          forms: ["paired"],
-        },
-        {
-          name: "File.Delete",
-          identity: capability("@executablemd/core", "File.Delete", "2"),
-          forms: ["self-closing"],
-        },
+        row("Json", "self-closing", "https://executable.md/components/json", "composition"),
+        row("File", "paired", "https://executable.md/components/file/write", "write"),
+        row("Dir", "paired", "https://executable.md/components/dir/ensure", "write"),
+        row("File.Delete", "self-closing", "https://executable.md/components/file/delete", "write"),
       ]);
     });
   });
@@ -1208,7 +1179,7 @@ describe("Tier WGAC — the standard write table", () => {
       // own keeps core's write and delete and this package's directory entry,
       // and its own entry follows them.
       const attempt = yield* runDocument(database, evaluates(WRITES, ["write"]), {
-        writes: [directoryEntry({ origin: "tier-wgac", key: "Nested", revision: "1" }, "Nested")],
+        writes: [directoryEntry("Nested")],
       });
 
       expect(attempt.failure).toBe(undefined);
@@ -1216,33 +1187,13 @@ describe("Tier WGAC — the standard write table", () => {
 
       const policy = policyOf(admissions(attempt.events)[0]!);
       expect(policy?.allowed).toEqual([
-        {
-          name: "Json",
-          identity: capability("@executablemd/core", "Json", "2"),
-          forms: ["self-closing"],
-        },
-        {
-          name: "File",
-          identity: capability("@executablemd/core", "File:write", "2"),
-          forms: ["paired"],
-        },
+        row("Json", "self-closing", "https://executable.md/components/json", "composition"),
+        row("File", "paired", "https://executable.md/components/file/write", "write"),
         // The released entry, still in its own position and unmoved by the
         // addition beside it.
-        {
-          name: "Dir",
-          identity: capability("@executablemd/workflow/composition", "Dir", "3"),
-          forms: ["paired"],
-        },
-        {
-          name: "File.Delete",
-          identity: capability("@executablemd/core", "File.Delete", "2"),
-          forms: ["self-closing"],
-        },
-        {
-          name: "Nested",
-          identity: capability("tier-wgac", "Nested", "1"),
-          forms: ["paired"],
-        },
+        row("Dir", "paired", "https://executable.md/components/dir/ensure", "write"),
+        row("File.Delete", "self-closing", "https://executable.md/components/file/delete", "write"),
+        row("Nested", "paired", "https://executable.md/components/dir/ensure", "write"),
       ]);
     });
   });
@@ -1289,15 +1240,13 @@ describe("Tier WGAC — the standard write table", () => {
       // Admitted as the exact self-closing identity, and named by the fragment
       // as the element was written.
       const admission = admissions(attempt.events)[0]!;
-      expect(policyOf(admission)?.allowed).toContainEqual({
-        name: "File.Delete",
-        identity: capability("@executablemd/core", "File.Delete", "2"),
-        forms: ["self-closing"],
-      });
+      expect(policyOf(admission)?.allowed).toContainEqual(
+        row("File.Delete", "self-closing", "https://executable.md/components/file/delete", "write"),
+      );
       expect(recordedNames(admission)).toEqual([
         {
           name: "File.Delete",
-          identity: capability("@executablemd/core", "File.Delete", "2"),
+          identity: "https://executable.md/components/file/delete",
           form: "self-closing",
         },
       ]);

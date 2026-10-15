@@ -1,27 +1,26 @@
 /**
- * Tier CIV — what a stated identity is bound to, and when it stops meaning
+ * Tier CIV — what a published answer is bound to, and when it stops meaning
  * anything.
  *
  * A generated fragment's admission is a decision about which implementation may
  * run. A function carries no identity a run can retain — comparing one compares
- * how somebody wrote their code — so a provider states one. Everything here is
- * about the ways a stated identity could be weaker than it looks: outliving the
- * execution that minted it, outliving the *invocation* that made it, surviving
- * the answer being replaced or edited, or being overwritten by a second
- * provider.
+ * how somebody wrote their code — so a provider publishes the definition, and
+ * what each of its forms runs as is declared on it. Everything here is about
+ * the ways a publication could be weaker than it looks: outliving the execution
+ * that minted it, outliving the *invocation* that made it, surviving the answer
+ * being replaced or edited, or being overwritten by a second provider.
  *
  * The shape under test is the split between two separate rights. A provider
  * installation is the right to be asked, and it is deliberately reusable: one
  * installation answers several admitted names and the same name resolved more
  * than once. A request is the right to answer one asking, and it is closed the
- * moment that handler invocation ends. Only a request records an identity,
- * which is what makes a statement provable — an installation handle can prove
- * "some provider this host installed" and nothing about which invocation is
- * speaking.
+ * moment that handler invocation ends. Only a request publishes, which is what
+ * makes a publication provable — an installation handle can prove "some
+ * provider this host installed" and nothing about which invocation is speaking.
  *
- * The rows read what `identify()` answers rather than what a refusal says: an
- * identity statement that reported correctly while still identifying a
- * substituted object would satisfy an error-shape assertion and none of these.
+ * The rows read what `identify()` answers rather than what a refusal says: a
+ * publication that reported correctly while still vouching for a substituted
+ * object would satisfy an error-shape assertion and none of these.
  *
  * The owner is `CanonicalImports`, which already holds issuance and retention.
  * One owner asks one question about one table; a second registry would be a
@@ -33,24 +32,21 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
-import {
-  AnswerIdentityError,
-  CanonicalImports,
-  identityRecord,
-} from "../src/components/component-resolution.ts";
+import { AnswerIdentityError, CanonicalImports } from "../src/components/component-resolution.ts";
 import type {
-  AnswerIdentity,
   ComponentAnswerRequest,
   ImportedDefinition,
   ProviderInstallation,
   ResolutionWindow,
 } from "../src/components/component-resolution.ts";
-import type { Json } from "../src/types.ts";
+import type { GeneratedForms } from "../src/components/generated-metadata.ts";
+import type { FunctionComponentDefinition, Json } from "../src/types.ts";
 
 const ORIGIN = "test://provider";
-const IDENTITY: AnswerIdentity = { origin: ORIGIN, key: "Open", revision: "1" };
-const OPEN = { key: "Open", revision: "1" } as const;
-const OTHER = { key: "Other", revision: "1" } as const;
+/** What this provider's definition offers its self-closing form as. */
+const OFFERED: GeneratedForms = {
+  "self-closing": { identity: "https://executable.md/components/open/read", effect: "read" },
+};
 
 /** One owner, activated the way canonical execution activates it. */
 function owner(): CanonicalImports {
@@ -99,17 +95,50 @@ function asking<T>(
   }
 }
 
-/** One answer a provider might return, fresh each time. */
+/**
+ * One answer a provider might return, fresh each time.
+ *
+ * It carries the generated metadata a provider's own declaration states, since
+ * that is what a publication is now a statement about: the identity and effect
+ * of each form travel on the definition rather than beside it.
+ */
 function answer(name = "Open"): ImportedDefinition {
+  return { ...bare(name), generated: OFFERED };
+}
+
+/** One answer offering no generated use of itself, which is the ordinary case. */
+function bare(name = "Open"): FunctionComponentDefinition {
   return {
     kind: "function",
     name,
     props: { type: "object", properties: {}, additionalProperties: false },
+    forms: ["self-closing"],
     // deno-lint-ignore require-yield
     *fn(): Operation<Json> {
       return "";
     },
   };
+}
+
+/**
+ * One answer carrying metadata this engine may not be able to read.
+ *
+ * Assembled rather than declared, because the point of each of these is that a
+ * provider's definition crossed a package boundary carrying something the
+ * declared shape does not describe.
+ */
+function answerWith(generated: unknown): ImportedDefinition {
+  return Object.assign(bare(), { generated });
+}
+
+/** The generated identity on a retained definition, whichever arm it is. */
+function offeredIdentity(definition: ImportedDefinition | undefined): unknown {
+  const generated = definition === undefined ? undefined : Reflect.get(definition, "generated");
+  if (typeof generated !== "object" || generated === null) {
+    return undefined;
+  }
+  const form = Reflect.get(generated, "self-closing");
+  return typeof form === "object" && form !== null ? Reflect.get(form, "identity") : undefined;
 }
 
 /** The implementation on a definition, whichever arm of the union it is. */
@@ -127,36 +156,42 @@ function refusalOf(attempt: () => unknown): unknown {
   }
 }
 
-describe("Tier CIV — an identity belongs to one answer of one import", () => {
-  it("CIV23: an identity is stated on the exact answer and read back", function* () {
+describe("Tier CIV — a publication belongs to one answer of one import", () => {
+  it("CIV23: a definition is published on the exact answer and read back", function* () {
     const imports = owner();
     const provider = imports.provider(ORIGIN);
 
     const { resolution, supplied } = resolving(imports, "Open", (resolution) => ({
       resolution,
-      supplied: asking(provider, "Open", (request) => request.claim(answer(), OPEN)),
+      supplied: asking(provider, "Open", (request) => request.answer(answer())),
     }));
 
-    expect(imports.identify(resolution, supplied)?.identity).toEqual(IDENTITY);
-    expect(identityRecord(IDENTITY)).toBe("test://provider#Open@1");
+    const identified = imports.identify(resolution, supplied);
+    // The publishing installation's origin, which is provenance and nothing
+    // else: what the implementation *is* comes back on the definition, as the
+    // identity its own declaration offers that form under.
+    expect(identified?.origin).toBe(ORIGIN);
+    expect(offeredIdentity(identified?.definition)).toBe(
+      "https://executable.md/components/open/read",
+    );
   });
 
-  it("CIV24: identification answers with the claim-time copy, not the answer", function* () {
+  it("CIV24: identification answers with the publication-time copy, not the answer", function* () {
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     const supplied = answer();
 
     const resolution = resolving(imports, "Open", (resolution) => {
-      asking(provider, "Open", (request) => request.claim(supplied, OPEN));
+      asking(provider, "Open", (request) => request.answer(supplied));
       return resolution;
     });
 
     // One call answers both halves. The definition is core's own copy, taken
-    // when the claim was recorded — so a caller that keeps what identification
+    // when it was published — so a caller that keeps what identification
     // gave it has kept the object the check was made about, and never has to
     // read the chain's object a second time to obtain one.
     const identified = imports.identify(resolution, supplied);
-    expect(identified?.identity).toEqual(IDENTITY);
+    expect(identified?.origin).toBe(ORIGIN);
     expect(identified?.definition).not.toBe(supplied);
     expect(identified?.definition.name).toBe("Open");
     // The implementation crosses by reference, because a function is not
@@ -170,8 +205,9 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
     const honest = answer();
     const reads: string[] = [];
     // The check/use gap, planted. Reading a member through `[[Get]]` alternates
-    // between what was claimed and a substitution; comparing descriptors, which
-    // is how the claim is checked, does not run this at all. So a caller that
+    // between what was published and a substitution; comparing descriptors,
+    // which is how a publication is checked, does not run this at all. So a
+    // caller that
     // checked the descriptors and then *read* the object again to keep a copy
     // would keep the substitution, and this row is what says nothing does.
     const alternating = new Proxy(honest, {
@@ -185,14 +221,14 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
     }) as ImportedDefinition;
 
     const resolution = resolving(imports, "Open", (resolution) => {
-      asking(provider, "Open", (request) => request.claim(alternating, OPEN));
+      asking(provider, "Open", (request) => request.answer(alternating));
       return resolution;
     });
     const identified = imports.identify(resolution, alternating);
 
-    // The claim itself was recorded from the first reading, and identification
-    // answers with that recording.
-    expect(identified?.identity).toEqual(IDENTITY);
+    // The publication itself was recorded from the first reading, and
+    // identification answers with that recording.
+    expect(identified?.origin).toBe(ORIGIN);
     expect(identified?.definition.name).toBe("Open");
     // The plant is live rather than inert: the very next read of the object the
     // chain returned says something else, which is what a second read would
@@ -201,51 +237,46 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
     expect(identified?.definition.name).toBe("Open");
   });
 
-  it("CIV23: restating exactly the same claim is idempotent", function* () {
+  it("CIV23: publishing exactly the same definition again is idempotent", function* () {
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     const supplied = answer();
 
     const resolution = resolving(imports, "Open", (resolution) => {
       asking(provider, "Open", (request) => {
-        request.claim(supplied, OPEN);
-        // A provider installed twice states the same thing twice. That is not
-        // two providers disagreeing, and it is not a conflict.
-        expect(refusalOf(() => request.claim(supplied, OPEN))).toBe(undefined);
+        request.answer(supplied);
+        // A provider installed twice publishes the same thing twice. That is
+        // not two providers disagreeing, and it is not a conflict.
+        expect(refusalOf(() => request.answer(supplied))).toBe(undefined);
       });
       return resolution;
     });
-    expect(imports.identify(resolution, supplied)?.identity).toEqual(IDENTITY);
+    expect(imports.identify(resolution, supplied)?.origin).toBe(ORIGIN);
   });
 
-  it("CIV23: a competing claim refuses and never overwrites the first", function* () {
+  it("CIV23: a competing publication refuses and never overwrites the first", function* () {
     const imports = owner();
     const first = imports.provider(ORIGIN);
     const second = imports.provider("test://other");
     const held = answer();
 
     const resolution = resolving(imports, "Open", (resolution) => {
-      asking(first, "Open", (request) => request.claim(held, OPEN));
-      // Another installation, asked in the same live resolution, cannot rename
-      // what the first stated. An overwrite would let a second provider take
+      asking(first, "Open", (request) => request.answer(held));
+      // Another installation, asked in the same live resolution, cannot take
+      // what the first published. An overwrite would let a second provider take
       // the first's implementation.
       asking(second, "Open", (request) => {
-        expect(refusalOf(() => request.claim(held, OPEN))).toBeInstanceOf(AnswerIdentityError);
+        expect(refusalOf(() => request.answer(held))).toBeInstanceOf(AnswerIdentityError);
       });
-      // And the first installation's *next* invocation cannot restate it
-      // differently either.
+      // And the first installation's *next* invocation cannot publish a
+      // different implementation for a resolution it has already answered.
       asking(first, "Open", (request) => {
-        expect(
-          refusalOf(() => request.claim(held, { key: "Other", revision: "1" })),
-        ).toBeInstanceOf(AnswerIdentityError);
-        expect(refusalOf(() => request.claim(held, { key: "Open", revision: "2" }))).toBeInstanceOf(
-          AnswerIdentityError,
-        );
+        expect(refusalOf(() => request.answer(answer()))).toBeInstanceOf(AnswerIdentityError);
       });
       return resolution;
     });
 
-    expect(imports.identify(resolution, held)?.identity).toEqual(IDENTITY);
+    expect(imports.identify(resolution, held)?.origin).toBe(ORIGIN);
   });
 
   it("CIV25: a request whose handler has returned states nothing", function* () {
@@ -263,11 +294,11 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
       asking(provider, "Open", (request) => {
         stale = request;
       });
-      expect(refusalOf(() => stale?.claim(late, OPEN))).toBeInstanceOf(AnswerIdentityError);
+      expect(refusalOf(() => stale?.answer(late))).toBeInstanceOf(AnswerIdentityError);
       // The positive control in the same still-open window: a fresh invocation
-      // of the same installation claims, so the refusal above is about the
+      // of the same installation publishes, so the refusal above is about the
       // handler lease rather than about the window or the provider.
-      asking(provider, "Open", (request) => request.claim(answer(), OPEN));
+      asking(provider, "Open", (request) => request.answer(answer()));
       return resolution;
     });
 
@@ -292,15 +323,15 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
 
     // Resolution N+1 of the same name. The stale request names the right
     // component and belongs to an import that is over.
-    const { resolution, claimed } = resolving(imports, "Open", (resolution) => {
-      expect(refusalOf(() => stale?.claim(fresh, OPEN))).toBeInstanceOf(AnswerIdentityError);
+    const { resolution, published } = resolving(imports, "Open", (resolution) => {
+      expect(refusalOf(() => stale?.answer(fresh))).toBeInstanceOf(AnswerIdentityError);
       // The same installation is asked again and answers this resolution: the
       // installation is reusable, the request is not.
       return {
         resolution,
-        claimed: asking(provider, "Open", (request) => {
+        published: asking(provider, "Open", (request) => {
           requests.push(request);
-          return request.claim(answer(), OPEN);
+          return request.answer(answer());
         }),
       };
     });
@@ -308,10 +339,10 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
     expect(requests).toHaveLength(2);
     expect(requests[0]).not.toBe(requests[1]);
     expect(imports.identify(resolution, fresh)).toBe(undefined);
-    expect(imports.identify(resolution, claimed)?.identity).toEqual(IDENTITY);
+    expect(imports.identify(resolution, published)?.origin).toBe(ORIGIN);
   });
 
-  it("CIV25: a stale request cannot retag while another name is being decided", function* () {
+  it("CIV25: a stale request cannot publish while another name is being decided", function* () {
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     const substitute = answer("Other");
@@ -323,19 +354,19 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
       });
     });
 
-    // `claim` takes no name, so the stale request cannot even ask about the
+    // `answer` takes no name, so the stale request cannot even ask about the
     // name being decided: it is fixed to `Open`, which this resolution is not.
-    const { resolution, claimed } = resolving(imports, "Other", (resolution) => {
+    const { resolution, published } = resolving(imports, "Other", (resolution) => {
       expect(stale?.name).toBe("Open");
-      expect(refusalOf(() => stale?.claim(substitute, OTHER))).toBeInstanceOf(AnswerIdentityError);
+      expect(refusalOf(() => stale?.answer(substitute))).toBeInstanceOf(AnswerIdentityError);
       return {
         resolution,
-        claimed: asking(provider, "Other", (request) => request.claim(answer("Other"), OTHER)),
+        published: asking(provider, "Other", (request) => request.answer(answer("Other"))),
       };
     });
 
     expect(imports.identify(resolution, substitute)).toBe(undefined);
-    expect(imports.identify(resolution, claimed)?.identity.key).toBe("Other");
+    expect(imports.identify(resolution, published)?.definition.name).toBe("Other");
   });
 
   it("CIV25: one installation answers two names through two distinct requests", function* () {
@@ -348,16 +379,16 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
 
     const open = resolving(imports, "Open", (resolution) => ({
       resolution,
-      claimed: asking(provider, "Open", (request) => {
+      published: asking(provider, "Open", (request) => {
         seen.push(request);
-        return request.claim(answer(), OPEN);
+        return request.answer(answer());
       }),
     }));
     const other = resolving(imports, "Other", (resolution) => ({
       resolution,
-      claimed: asking(provider, "Other", (request) => {
+      published: asking(provider, "Other", (request) => {
         seen.push(request);
-        return request.claim(answer("Other"), OTHER);
+        return request.answer(answer("Other"));
       }),
     }));
 
@@ -365,8 +396,8 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
     expect(seen).toHaveLength(2);
     expect(seen[0]).not.toBe(seen[1]);
     expect(seen.map((request) => request.name)).toEqual(["Open", "Other"]);
-    expect(imports.identify(open.resolution, open.claimed)?.identity.key).toBe("Open");
-    expect(imports.identify(other.resolution, other.claimed)?.identity.key).toBe("Other");
+    expect(imports.identify(open.resolution, open.published)?.definition.name).toBe("Open");
+    expect(imports.identify(other.resolution, other.published)?.definition.name).toBe("Other");
   });
 
   it("CIV25: identification takes the window it was asked about", function* () {
@@ -376,16 +407,16 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
 
     const first = resolving(imports, "Open", (resolution) => ({
       resolution,
-      claimed: asking(provider, "Open", (request) => {
+      published: asking(provider, "Open", (request) => {
         requests.push(request);
-        return request.claim(answer(), OPEN);
+        return request.answer(answer());
       }),
     }));
     const second = resolving(imports, "Open", (resolution) => ({
       resolution,
-      claimed: asking(provider, "Open", (request) => {
+      published: asking(provider, "Open", (request) => {
         requests.push(request);
-        return request.claim(answer(), OPEN);
+        return request.answer(answer());
       }),
     }));
 
@@ -394,10 +425,10 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
     // opened, which is why the answer does not change with when it is asked.
     expect(requests).toHaveLength(2);
     expect(requests[0]).not.toBe(requests[1]);
-    expect(imports.identify(first.resolution, first.claimed)?.identity).toEqual(IDENTITY);
-    expect(imports.identify(second.resolution, second.claimed)?.identity).toEqual(IDENTITY);
-    expect(imports.identify(first.resolution, second.claimed)).toBe(undefined);
-    expect(imports.identify(second.resolution, first.claimed)).toBe(undefined);
+    expect(imports.identify(first.resolution, first.published)?.origin).toBe(ORIGIN);
+    expect(imports.identify(second.resolution, second.published)?.origin).toBe(ORIGIN);
+    expect(imports.identify(first.resolution, second.published)).toBe(undefined);
+    expect(imports.identify(second.resolution, first.published)).toBe(undefined);
   });
 
   it("CIV25: a request shows the asked position by value", function* () {
@@ -429,38 +460,39 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
     });
   });
 
-  it("CIV23: a different object carries no claim, however alike", function* () {
+  it("CIV23: a different object carries no publication, however alike", function* () {
     const imports = owner();
     const provider = imports.provider(ORIGIN);
 
-    const { resolution, claimed } = resolving(imports, "Open", (resolution) => ({
+    const { resolution, published } = resolving(imports, "Open", (resolution) => ({
       resolution,
-      claimed: asking(provider, "Open", (request) => request.claim(answer(), OPEN)),
+      published: asking(provider, "Open", (request) => request.answer(answer())),
     }));
 
-    expect(imports.identify(resolution, claimed)?.identity).toEqual(IDENTITY);
+    expect(imports.identify(resolution, published)?.origin).toBe(ORIGIN);
     // The outer-replacement case: a handler further out returns its own object,
-    // so an intermediate claim does not travel with the name.
+    // so an intermediate publication does not travel with the name.
     expect(imports.identify(resolution, answer())).toBe(undefined);
-    // A copy of the claimed object is a different object too.
-    expect(imports.identify(resolution, { ...claimed })).toBe(undefined);
+    // A copy of the published object is a different object too, and copying the
+    // generated metadata with it changes nothing.
+    expect(imports.identify(resolution, { ...published })).toBe(undefined);
   });
 
-  it("CIV23: editing the claimed answer invalidates the claim", function* () {
+  it("CIV23: editing the published answer invalidates the publication", function* () {
     const imports = owner();
     const provider = imports.provider(ORIGIN);
 
-    const { resolution, claimed } = resolving(imports, "Open", (resolution) => ({
+    const { resolution, published } = resolving(imports, "Open", (resolution) => ({
       resolution,
-      claimed: asking(provider, "Open", (request) => request.claim(answer(), OPEN)),
+      published: asking(provider, "Open", (request) => request.answer(answer())),
     }));
-    expect(imports.identify(resolution, claimed)?.identity).toEqual(IDENTITY);
+    expect(imports.identify(resolution, published)?.origin).toBe(ORIGIN);
 
-    // The same object, edited after the claim by a handler further out. What
-    // was claimed is no longer what is there.
-    (claimed as { name: string }).name = "Substituted";
+    // The same object, edited after publication by a handler further out. What
+    // was published is no longer what is there.
+    (published as { name: string }).name = "Substituted";
 
-    expect(imports.identify(resolution, claimed)).toBe(undefined);
+    expect(imports.identify(resolution, published)).toBe(undefined);
   });
 
   it("CIV25: an installation retained past its execution opens nothing", function* () {
@@ -468,34 +500,34 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
     const provider = imports.provider(ORIGIN);
     const { resolution, before } = resolving(imports, "Open", (resolution) => ({
       resolution,
-      before: asking(provider, "Open", (request) => request.claim(answer(), OPEN)),
+      before: asking(provider, "Open", (request) => request.answer(answer())),
     }));
-    expect(imports.identify(resolution, before)?.identity).toEqual(IDENTITY);
+    expect(imports.identify(resolution, before)?.origin).toBe(ORIGIN);
 
     imports.revoke();
 
     // The installation is the object a provider kept. The window it would need
-    // cannot be opened, and a request minted from it states nothing.
+    // cannot be opened, and a request minted from it publishes nothing.
     expect(refusalOf(() => imports.beginResolution("Open"))).toBeInstanceOf(AnswerIdentityError);
     expect(
-      refusalOf(() => asking(provider, "Open", (request) => request.claim(answer(), OPEN))),
+      refusalOf(() => asking(provider, "Open", (request) => request.answer(answer()))),
     ).toBeInstanceOf(AnswerIdentityError);
-    // And what it stated while the execution was live identifies nothing now:
+    // And what it published while the execution was live identifies nothing now:
     // an admission may not be reconciled against a run that is over.
     expect(imports.identify(resolution, before)).toBe(undefined);
     expect(imports.identifying).toBe(false);
   });
 
-  it("CIV25: an owner starts inactive, so a claim before activation refuses", function* () {
+  it("CIV25: an owner starts inactive, so a publication before activation refuses", function* () {
     const imports = new CanonicalImports();
     // Canonical execution registers teardown, then activates, then installs
-    // providers. A claim that landed before activation would be a claim with no
-    // teardown behind it.
+    // providers. A publication that landed before activation would be one with
+    // no teardown behind it.
     expect(imports.identifying).toBe(false);
     expect(refusalOf(() => imports.beginResolution("Open"))).toBeInstanceOf(AnswerIdentityError);
     expect(
       refusalOf(() =>
-        asking(imports.provider(ORIGIN), "Open", (request) => request.claim(answer(), OPEN)),
+        asking(imports.provider(ORIGIN), "Open", (request) => request.answer(answer())),
       ),
     ).toBeInstanceOf(AnswerIdentityError);
   });
@@ -506,74 +538,92 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
     const shared = answer();
 
     const one = resolving(first, "Open", (resolution) => {
-      asking(first.provider(ORIGIN), "Open", (request) => request.claim(shared, OPEN));
+      asking(first.provider(ORIGIN), "Open", (request) => request.answer(shared));
       return resolution;
     });
     // Live at the same time, and each answers only for what it recorded.
     const two = resolving(second, "Open", (resolution) => {
       expect(second.identify(resolution, shared)).toBe(undefined);
-      asking(second.provider(ORIGIN), "Open", (request) =>
-        request.claim(shared, { key: "Open", revision: "2" }),
-      );
+      asking(second.provider("test://other"), "Open", (request) => request.answer(shared));
       return resolution;
     });
 
-    expect(first.identify(one, shared)?.identity).toEqual(IDENTITY);
-    expect(second.identify(two, shared)?.identity).toEqual({
-      origin: ORIGIN,
-      key: "Open",
-      revision: "2",
-    });
+    // One definition, published separately in each owner, and each owner
+    // answers with the provenance of the installation that published it there.
+    expect(first.identify(one, shared)?.origin).toBe(ORIGIN);
+    expect(second.identify(two, shared)?.origin).toBe("test://other");
 
     // The positive control: tearing one down leaves the other working.
     first.revoke();
     expect(first.identify(one, shared)).toBe(undefined);
-    expect(second.identify(two, shared)?.identity.revision).toBe("2");
+    expect(second.identify(two, shared)?.origin).toBe("test://other");
   });
 
   it("CIV23: a provider cannot state an origin canonical execution did not give it", function* () {
     const imports = owner();
-    // The installation carries the origin; the provider states only key and
-    // revision. There is no member on the claim call to put another origin in.
-    const { resolution, claimed } = resolving(imports, "Open", (resolution) => ({
+    // The installation carries the origin, and `answer` takes the definition
+    // and nothing else. There is no member on the call to put another origin
+    // in, and the provenance identification reports is the one this execution
+    // assigned.
+    const { resolution, published } = resolving(imports, "Open", (resolution) => ({
       resolution,
-      claimed: asking(imports.provider("test://assigned"), "Open", (request) =>
-        request.claim(answer(), OPEN),
+      published: asking(imports.provider("test://assigned"), "Open", (request) =>
+        request.answer(answer()),
       ),
     }));
 
-    expect(imports.identify(resolution, claimed)?.identity.origin).toBe("test://assigned");
+    expect(imports.identify(resolution, published)?.origin).toBe("test://assigned");
   });
 
-  it("CIV23: a partial identity is refused rather than recorded", function* () {
+  it("CIV23: metadata this engine cannot read is refused rather than recorded", function* () {
     const imports = owner();
     const provider = imports.provider(ORIGIN);
-    const attempts = [
-      { key: "", revision: "1" },
-      { key: "Open", revision: "" },
+    // A provider's definition never passed registration, so its generated
+    // metadata is read here or nowhere. Each of these is a form offered under
+    // something a continuation could not be compared against.
+    const attempts: unknown[] = [
+      { "self-closing": { identity: "components/open/read", effect: "read" } },
+      { "self-closing": { identity: "https://executable.md.example.com/open", effect: "read" } },
+      { "self-closing": { identity: "https://executable.md/components/open/read", effect: "ask" } },
+      { paired: { identity: "https://executable.md/components/open/write", effect: "write" } },
     ];
 
-    for (const attempt of attempts) {
-      const supplied = answer();
+    for (const generated of attempts) {
+      const supplied = answerWith(generated);
       const resolution = resolving(imports, "Open", (resolution) => {
         asking(provider, "Open", (request) => {
-          expect(refusalOf(() => request.claim(supplied, attempt))).toBeInstanceOf(
-            AnswerIdentityError,
-          );
+          expect(refusalOf(() => request.answer(supplied))).toBeInstanceOf(AnswerIdentityError);
         });
         return resolution;
       });
-      // Refused rather than partially recorded: a half identity would compare
-      // equal to a different half identity.
+      // Refused rather than partially recorded: metadata read in part would
+      // admit a form under an identity nobody declared.
       expect(imports.identify(resolution, supplied)).toBe(undefined);
     }
   });
 
-  it("CIV23: an answer nobody claimed identifies nothing", function* () {
+  it("CIV23: an answer carrying no metadata is published and read back", function* () {
     const imports = owner();
-    // The ordinary case, and the reason this is not a permission: an unidentified
-    // answer is a perfectly good answer. What it cannot be is the thing a
-    // fragment runs, because a continuation would have nothing to compare.
+    const provider = imports.provider(ORIGIN);
+    // The ordinary authored case: a provider answering an import that is not a
+    // generated admission offers no generated form, and publishing it is still
+    // a perfectly good answer. What it cannot do is satisfy an admitted entry,
+    // which refuses the missing form where the table is sealed.
+    const { resolution, supplied } = resolving(imports, "Open", (resolution) => ({
+      resolution,
+      supplied: asking(provider, "Open", (request) => request.answer(bare())),
+    }));
+
+    expect(imports.identify(resolution, supplied)?.origin).toBe(ORIGIN);
+    expect(offeredIdentity(imports.identify(resolution, supplied)?.definition)).toBe(undefined);
+  });
+
+  it("CIV23: an answer nobody published identifies nothing", function* () {
+    const imports = owner();
+    // The ordinary case, and the reason this is not a permission: an answer
+    // nobody published is a perfectly good answer. What it cannot be is the
+    // thing a fragment runs, because a continuation would have nothing to
+    // compare.
     resolving(imports, "Open", (resolution) => {
       expect(imports.identify(resolution, answer())).toBe(undefined);
       expect(imports.identify(resolution, undefined)).toBe(undefined);
@@ -611,12 +661,10 @@ describe("Tier PA10b — one serial resolution window", () => {
     first.close();
     const second = imports.beginResolution("Open");
     try {
-      expect(refusalOf(() => kept.request.claim(answer(), OPEN))).toBeInstanceOf(
-        AnswerIdentityError,
-      );
-      // And the window that is open answers for what was claimed in it.
-      const claimed = asking(provider, "Open", (request) => request.claim(answer(), OPEN));
-      expect(imports.identify(second, claimed)?.identity).toEqual(IDENTITY);
+      expect(refusalOf(() => kept.request.answer(answer()))).toBeInstanceOf(AnswerIdentityError);
+      // And the window that is open answers for what was published in it.
+      const published = asking(provider, "Open", (request) => request.answer(answer()));
+      expect(imports.identify(second, published)?.origin).toBe(ORIGIN);
     } finally {
       kept.close();
       second.close();
@@ -632,10 +680,10 @@ describe("Tier PA10b — one serial resolution window", () => {
 
     const window = imports.beginResolution("Open");
     try {
-      const claimed = yield* scoped(function* (): Operation<ImportedDefinition> {
-        return asking(provider, "Open", (request) => request.claim(answer(), OPEN));
+      const published = yield* scoped(function* (): Operation<ImportedDefinition> {
+        return asking(provider, "Open", (request) => request.answer(answer()));
       });
-      expect(imports.identify(window, claimed)?.identity).toEqual(IDENTITY);
+      expect(imports.identify(window, published)?.origin).toBe(ORIGIN);
     } finally {
       window.close();
     }
@@ -652,7 +700,7 @@ describe("Tier PA10b — one serial resolution window", () => {
     window.close();
 
     expect(
-      refusalOf(() => asking(provider, "Open", (request) => request.claim(answer(), OPEN))),
+      refusalOf(() => asking(provider, "Open", (request) => request.answer(answer()))),
     ).toBeInstanceOf(AnswerIdentityError);
     expect(imports.identify(window, answer())).toBe(undefined);
   });
@@ -667,9 +715,9 @@ describe("Tier PA10c — one definition answering more than one import", () => {
     const shared = answer();
 
     const first = resolving(imports, "Open", (resolution) => {
-      const supplied = asking(provider, "Open", (request) => request.claim(shared, OPEN));
+      const supplied = asking(provider, "Open", (request) => request.answer(shared));
       expect(supplied).toBe(shared);
-      expect(imports.identify(resolution, shared)?.identity).toEqual(IDENTITY);
+      expect(imports.identify(resolution, shared)?.origin).toBe(ORIGIN);
       return resolution;
     });
 
@@ -677,9 +725,9 @@ describe("Tier PA10c — one definition answering more than one import", () => {
     // over. The definition is the same object, and it is still this provider's
     // answer to say.
     resolvingLater(imports, provider, shared);
-    // And the closed window still reads the claim it recorded, unchanged by the
+    // And the closed window still reads the publication it recorded, unchanged by the
     // later one: each resolution keeps its own.
-    expect(imports.identify(first, shared)?.identity).toEqual(IDENTITY);
+    expect(imports.identify(first, shared)?.origin).toBe(ORIGIN);
   });
 
   it("PA10c: reuse cannot substitute between comparison and retention", function* () {
@@ -704,46 +752,46 @@ describe("Tier PA10c — one definition answering more than one import", () => {
     });
 
     const first = resolving(imports, "Open", (resolution) => {
-      asking(provider, "Open", (request) => request.claim(shared, OPEN));
+      asking(provider, "Open", (request) => request.answer(shared));
       return resolution;
     });
     expect(imports.identify(first, shared)?.definition.name).toBe("Open");
     resolving(imports, "Open", (resolution) => {
       asking(provider, "Open", (request) => {
-        expect(refusalOf(() => request.claim(shared, OPEN))).toBeInstanceOf(AnswerIdentityError);
+        expect(refusalOf(() => request.answer(shared))).toBeInstanceOf(AnswerIdentityError);
         return undefined;
       });
       expect(imports.identify(resolution, shared)).toBe(undefined);
     });
   });
 
-  it("PA10c: an edited definition cannot be claimed again, and identifies nowhere", function* () {
+  it("PA10c: an edited definition cannot be published again, and identifies nowhere", function* () {
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     const shared = answer();
 
     const first = resolving(imports, "Open", (resolution) => {
-      asking(provider, "Open", (request) => request.claim(shared, OPEN));
-      expect(imports.identify(resolution, shared)?.identity).toEqual(IDENTITY);
+      asking(provider, "Open", (request) => request.answer(shared));
+      expect(imports.identify(resolution, shared)?.origin).toBe(ORIGIN);
       return resolution;
     });
 
-    // One member of the definition, edited after it was claimed and while the
-    // stated identity says nothing changed. This is a different implementation
-    // wearing the first one's revision.
+    // One member of the definition, edited after it was published. This is a
+    // different implementation asking to answer under the first one's
+    // publication.
     shared.props = { type: "object", properties: {}, additionalProperties: true };
 
     resolving(imports, "Open", (resolution) => {
       asking(provider, "Open", (request) => {
-        // Refused before anything is recorded: the identity was stated about
-        // the definition core retained, and this object is no longer it.
-        expect(refusalOf(() => request.claim(shared, OPEN))).toBeInstanceOf(AnswerIdentityError);
+        // Refused before anything is recorded: the publication was about the
+        // definition core retained, and this object is no longer it.
+        expect(refusalOf(() => request.answer(shared))).toBeInstanceOf(AnswerIdentityError);
         return undefined;
       });
       // So the new window vouches for nothing.
       expect(imports.identify(resolution, shared)).toBe(undefined);
     });
-    // And the window that did claim it cannot identify the changed object
+    // And the window that did publish it cannot identify the changed object
     // either, which is the change detection that was already there.
     expect(imports.identify(first, shared)).toBe(undefined);
   });
@@ -758,18 +806,18 @@ describe("Tier PA10c — one definition answering more than one import", () => {
     const shared = answer();
 
     const first = imports.beginResolution("Open");
-    asking(provider, "Open", (request) => request.claim(shared, OPEN));
-    expect(imports.identify(first, shared)?.identity).toEqual(IDENTITY);
+    asking(provider, "Open", (request) => request.answer(shared));
+    expect(imports.identify(first, shared)?.origin).toBe(ORIGIN);
     first.close();
 
     const second = imports.beginResolution("Open");
     try {
-      asking(provider, "Open", (request) => request.claim(shared, OPEN));
-      expect(imports.identify(second, shared)?.identity).toEqual(IDENTITY);
+      asking(provider, "Open", (request) => request.answer(shared));
+      expect(imports.identify(second, shared)?.origin).toBe(ORIGIN);
       // And each window keeps its own copy: the first still identifies what it
-      // claimed, because provenance is a fact about that resolution rather than
+      // published, because provenance is a fact about that resolution rather than
       // about which one is open now.
-      expect(imports.identify(first, shared)?.identity).toEqual(IDENTITY);
+      expect(imports.identify(first, shared)?.origin).toBe(ORIGIN);
     } finally {
       second.close();
     }
@@ -785,11 +833,11 @@ describe("Tier PA10c — one definition answering more than one import", () => {
     // that same window is two answers to one import, and that still refuses.
     resolving(imports, "Open", (resolution) => {
       asking(provider, "Open", (request) => {
-        expect(request.claim(shared, OPEN)).toBe(shared);
-        expect(refusalOf(() => request.claim(answer(), OPEN))).toBeInstanceOf(AnswerIdentityError);
+        expect(request.answer(shared)).toBe(shared);
+        expect(refusalOf(() => request.answer(answer()))).toBeInstanceOf(AnswerIdentityError);
         return undefined;
       });
-      expect(imports.identify(resolution, shared)?.identity).toEqual(IDENTITY);
+      expect(imports.identify(resolution, shared)?.origin).toBe(ORIGIN);
     });
   });
 
@@ -800,18 +848,19 @@ describe("Tier PA10c — one definition answering more than one import", () => {
     const shared = answer();
 
     resolvingLater(imports, provider, shared);
-    // What this object is was settled by its first claim. A new resolution is a
-    // new question about which import it answered, never a chance to restate it.
+    // What this object answers for was settled by its first publication. A new
+    // resolution is a new question about which import it answered, never a
+    // chance to publish it again elsewhere.
     resolving(imports, "Other", (resolution) => {
       asking(provider, "Other", (request) => {
-        expect(refusalOf(() => request.claim(shared, OTHER))).toBeInstanceOf(AnswerIdentityError);
+        expect(refusalOf(() => request.answer(shared))).toBeInstanceOf(AnswerIdentityError);
         return undefined;
       });
       expect(imports.identify(resolution, shared)).toBe(undefined);
     });
     resolving(imports, "Open", (resolution) => {
       asking(other, "Open", (request) => {
-        expect(refusalOf(() => request.claim(shared, OPEN))).toBeInstanceOf(AnswerIdentityError);
+        expect(refusalOf(() => request.answer(shared))).toBeInstanceOf(AnswerIdentityError);
         return undefined;
       });
       expect(imports.identify(resolution, shared)).toBe(undefined);
@@ -833,8 +882,8 @@ function resolvingLater(
   shared: ImportedDefinition,
 ): void {
   resolving(imports, "Open", (resolution) => {
-    const supplied = asking(provider, "Open", (request) => request.claim(shared, OPEN));
+    const supplied = asking(provider, "Open", (request) => request.answer(shared));
     expect(supplied).toBe(shared);
-    expect(imports.identify(resolution, shared)?.identity).toEqual(IDENTITY);
+    expect(imports.identify(resolution, shared)?.origin).toBe(ORIGIN);
   });
 }

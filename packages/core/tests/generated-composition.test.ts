@@ -353,6 +353,10 @@ function unwinding(log: string[]): FunctionComponentDefinition {
     kind: "function",
     name: "Held",
     props: { type: "object", properties: {}, additionalProperties: false },
+    forms: ["self-closing"],
+    generated: {
+      "self-closing": { identity: "https://executable.md/components/held/read", effect: "read" },
+    },
     *fn() {
       // Registered before anything the invocation could fail at, so the cleanup
       // is established rather than merely queued behind a success.
@@ -369,14 +373,7 @@ function unwinding(log: string[]): FunctionComponentDefinition {
 function holding(definition: FunctionComponentDefinition): ExecutionInstallation {
   return {
     evaluation: {
-      read: [
-        {
-          kind: "component-answer",
-          name: "Held",
-          identity: { origin: "test://provider", key: "Held", revision: "1" },
-          forms: ["self-closing"],
-        },
-      ],
+      read: [{ kind: "component-answer", name: "Held", forms: ["self-closing"] }],
     },
     componentAnswers: [answerProvider("Held", definition)],
   };

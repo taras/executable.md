@@ -2,10 +2,10 @@
  * A trusted host's provider for one `component-answer` entry.
  *
  * The shape a real provider has: it composes `Component.importComponent`
- * middleware for its own name, and states an identity for the exact object it
- * returns using the request canonical execution minted for that handler
- * invocation. It holds no definition the profile could read, because the
- * profile arm it backs has nowhere to put one.
+ * middleware for its own name, and publishes the exact object it returns
+ * through the request canonical execution minted for that handler invocation.
+ * It holds no definition the profile could read, because the profile arm it
+ * backs has nowhere to put one.
  *
  * Every deviation a row needs is a member here rather than a second provider,
  * so what one case changes about the honest one is visible in the case.
@@ -18,6 +18,7 @@ import type {
   ComponentAnswerRegistrar,
   ComponentAnswerRequest,
 } from "../../host.ts";
+import type { GeneratedEffect, GeneratedForms } from "../../src/components/generated-metadata.ts";
 import type { FunctionComponentDefinition, Json, PropsSchema } from "../../src/types.ts";
 
 /** The contract an implementation states when a row does not care what it is. */
@@ -29,11 +30,20 @@ export interface Implementation {
   readonly invoked: string[];
 }
 
-/** One named implementation that records each time it is entered. */
+/**
+ * One named implementation that records each time it is entered.
+ *
+ * It offers generated use of its self-closing form, because that is what a
+ * provider's own declaration states and what an admitted entry reads: the
+ * identity and the effect are on the definition rather than beside it. A row
+ * that needs other metadata passes its own, and one that needs an
+ * implementation offering no generated use at all passes `null`.
+ */
 export function implementation(
   name: string,
   label: string,
   props: PropsSchema = NO_PROPS,
+  generated: GeneratedForms | null = offering(name, "read"),
 ): Implementation {
   const invoked: string[] = [];
   return {
@@ -42,6 +52,8 @@ export function implementation(
       kind: "function",
       name,
       props,
+      forms: ["self-closing"],
+      ...(generated === null ? {} : { generated }),
       // deno-lint-ignore require-yield
       *fn(): Operation<Json> {
         invoked.push(label);
@@ -51,22 +63,33 @@ export function implementation(
   };
 }
 
+/** What a provider's definition offers one spelling of `name` as. */
+export function offering(
+  name: string,
+  effect: GeneratedEffect,
+  form: "self-closing" | "paired" = "self-closing",
+): GeneratedForms {
+  return {
+    [form]: {
+      identity: `https://executable.md/components/${name.toLowerCase()}/${effect}`,
+      effect,
+    },
+  };
+}
+
 /** How one row wants its provider to differ from the honest one. */
 export interface ProviderOptions {
-  /** The provider's own name for itself; the origin every identity statement carries. */
+  /** The provider's own name for itself; the provenance every publication carries. */
   readonly origin?: string;
-  /** The key and revision this provider states. */
-  readonly key?: string;
-  readonly revision?: string;
   /** Every lookup this provider *answered*, in order. */
   readonly lookups?: string[];
   /** Every lookup this provider was asked at all, answered or delegated. */
   readonly asked?: string[];
-  /** Return the answer without stating an identity for it at all. */
-  readonly unclaimed?: boolean;
-  /** State the identity, then answer with a copy of the identified object. */
+  /** Return the answer without publishing it at all. */
+  readonly unpublished?: boolean;
+  /** Publish the definition, then answer with a copy of the published object. */
   readonly copied?: boolean;
-  /** State the identity, then edit the identified object. */
+  /** Publish the definition, then edit the published object. */
   readonly mutated?: boolean;
   /**
    * Keep answering after the capture, rather than settling.
@@ -77,52 +100,51 @@ export interface ProviderOptions {
    */
   readonly keepsAnswering?: boolean;
   /**
-   * Keep *stating identities* after the capture, rather than settling.
+   * Keep *publishing* after the capture, rather than settling.
    *
    * The other half of the same refusal, one step earlier: the resolution this
-   * provider answered has settled, so there is no open window to state an
-   * identity into and recording the identity refuses before the witness is
-   * ever consulted.
+   * provider answered has settled, so there is no open window to publish into,
+   * and publishing refuses before the witness is ever consulted.
    */
-  readonly reclaimsLater?: boolean;
+  readonly publishesLater?: boolean;
   /**
-   * Delegate first, and answer with this provider's own identified object.
+   * Delegate first, and answer with this provider's own published object.
    *
    * What an *outer* provider does. The one installed first composes outermost,
    * so it sees the chain's answer before deciding, and returning its own
-   * identified object is an honest substitution: the identity travels with the
-   * object the chain finally gives back.
+   * published object is an honest substitution: the publication travels with
+   * the object the chain finally gives back.
    */
   readonly delegatesFirst?: boolean;
   /**
-   * Delegate and answer with whatever came back, stating no identity.
+   * Delegate and answer with whatever came back, publishing nothing.
    *
    * What a *repeated* bootstrap does. A package entered through an inherited
    * layer and again through a local one composes twice, and the outer entry
-   * cannot state a second identity for the object the inner one already
-   * identified — one implementation states what it is once. So it observes and
-   * passes the answer through, which is what keeps the layering additive.
+   * cannot publish the object the inner one already published — one
+   * implementation is published once. So it observes and passes the answer
+   * through, which is what keeps the layering additive.
    */
   readonly observesOnly?: boolean;
   /** What delegating answered with, for a row that has to prove it happened. */
   readonly delegated?: unknown[];
   /**
-   * Run this inside the live resolution, just before stating the identity.
+   * Run this inside the live resolution, just before publishing.
    *
-   * The one place a row can reach that is *during* an open identity-recording
-   * window for this name — which is what a race between two resolutions has to
-   * be observed from, since there is no other way to be inside one.
+   * The one place a row can reach that is *during* an open publication window
+   * for this name — which is what a race between two resolutions has to be
+   * observed from, since there is no other way to be inside one.
    */
   readonly whileResolving?: (request: ComponentAnswerRequest) => void;
   /**
    * Answer with a value whose contract reads differently each time it is read.
    *
    * The check/use gap at execution scale. `[[Get]]` alternates between the
-   * identified schema and a substitution; comparing own descriptors, which is
-   * how the identity is checked, does not run the trap. So a capture that
+   * published schema and a substitution; comparing own descriptors, which is
+   * how a publication is checked, does not run the trap. So a capture that
    * checked the answer and then *read it again* to take its copy would seal
    * the substitution — and a fragment would be validated against a contract
-   * the provider never identified.
+   * the provider never published.
    */
   readonly alternating?: { readonly substitute: PropsSchema; readonly reads: string[] };
   /** Where this provider leaves each request its handler received, for a row to keep. */
@@ -130,8 +152,8 @@ export interface ProviderOptions {
 }
 
 /**
- * One answer whose `props` alternates between what was identified and
- * something else, read by read.
+ * One answer whose `props` alternates between what was published and something
+ * else, read by read.
  *
  * Only `[[Get]]` is trapped, because that is what taking a copy of a definition
  * uses and what comparing own descriptors does not. The schema is the member to
@@ -174,8 +196,6 @@ export function answerProvider(
   options: ProviderOptions = {},
 ): ComponentAnswerInstallation {
   const origin = options.origin ?? "test://provider";
-  const key = options.key ?? name;
-  const revision = options.revision ?? "1";
   let settled = false;
   return {
     origin,
@@ -191,14 +211,14 @@ export function answerProvider(
         options.retain?.push(request);
         options.asked?.push(asked);
         if (settled) {
-          if (options.reclaimsLater) {
-            // Still trying to *identify* an answer after its resolution
-            // settled. There is no window open for this name, so the claim
-            // itself is what refuses.
-            return request.claim(answer, { key, revision });
+          if (options.publishesLater) {
+            // Still trying to publish an answer after its resolution settled.
+            // There is no window open for this name, so the publication itself
+            // is what refuses.
+            return request.answer(answer);
           }
           if (options.keepsAnswering) {
-            // Still answering, without claiming. Whatever this returns is not
+            // Still answering, without publishing. Whatever this returns is not
             // the object canonical execution issued for the import that asked,
             // so the witness is what refuses.
             return answer;
@@ -215,30 +235,31 @@ export function answerProvider(
         if (options.delegatesFirst) {
           // An outer provider sees the chain's answer before deciding. What it
           // does with it is a row's business; recording it is what lets a row
-          // say the inner half genuinely answered — and claiming *after*
+          // say the inner half genuinely answered — and publishing *after*
           // delegating is what an outer replacement has to be able to do.
           options.delegated?.push(yield* next());
         }
         options.whileResolving?.(request);
-        if (options.unclaimed) {
+        if (options.unpublished) {
           return answer;
         }
         const supplied =
           options.alternating === undefined
             ? answer
             : alternatingAnswer(answer, options.alternating.substitute, options.alternating.reads);
-        const claimed = request.claim(supplied, { key, revision });
+        const published = request.answer(supplied);
         if (options.copied) {
           // The outer-replacement case: a handler further out returns its own
-          // object, so the claim does not travel with the name.
-          return { ...claimed };
+          // object, so the publication does not travel with the name — and
+          // copying the generated metadata with it changes nothing.
+          return { ...published };
         }
         if (options.mutated) {
-          // The same object, edited after the claim. What was claimed is no
+          // The same object, edited after publication. What was published is no
           // longer what is there.
-          Object.assign(claimed, { name: `${name}Substituted` });
+          Object.assign(published, { name: `${name}Substituted` });
         }
-        return claimed;
+        return published;
       });
     },
   };

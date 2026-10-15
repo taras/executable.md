@@ -1014,18 +1014,9 @@ describe("Tier SYN — the named form", () => {
    */
   const PROBE_LABEL = "probe ran";
 
-  /** The provider-backed entry a layered host admits, at the identity it admits. */
-  function layeredEntry(revision = "1"): FragmentEvaluationInput {
-    return {
-      read: [
-        {
-          kind: "component-answer",
-          name: "Open",
-          identity: { origin: "test://layer", key: "Open", revision },
-          forms: ["self-closing"],
-        },
-      ],
-    };
+  /** The provider-backed entry a layered host admits. */
+  function layeredEntry(): FragmentEvaluationInput {
+    return { read: [{ kind: "component-answer", name: "Open", forms: ["self-closing"] }] };
   }
 
   /** The registration the inner layer adds beside the bootstrap's own. */
@@ -1121,7 +1112,7 @@ describe("Tier SYN — the named form", () => {
     }
     let refused: unknown;
     try {
-      held.claim(implementation("Open", "late").definition, { key: "Open", revision: "1" });
+      held.answer(implementation("Open", "late").definition);
     } catch (error) {
       refused = error;
     }
@@ -1164,14 +1155,16 @@ describe("Tier SYN — the named form", () => {
     expect(answer.invoked).toEqual([]);
   });
 
-  it("FE30: a provider identity the layered host did not admit refuses", function* () {
+  it("FE30: a provider answer offering no admitted spelling refuses", function* () {
     // The other refusal the provider half adds. The layering is honest and the
-    // bootstrap's documentation and registrations are intact; what moved is the
-    // revision the local provider claims. An admitted identity is the exact
-    // implementation, so this refuses at capture — before the root import, and
-    // therefore before any registration resolves or any fragment work happens.
+    // bootstrap's documentation and registrations are intact; what the local
+    // provider answers with is a definition whose own declaration offers no
+    // generated use of the spelling this host admitted. There is no identity
+    // for a continuation to be compared against, so this refuses at capture —
+    // before the root import, and therefore before any registration resolves or
+    // any fragment work happens.
     const probed: string[] = [];
-    const answer = implementation("Open", "the layered answer ran");
+    const answer = implementation("Open", "the layered answer ran", undefined, null);
 
     const failed = yield* refusal(
       scoped(function* () {
@@ -1183,12 +1176,9 @@ describe("Tier SYN — the named form", () => {
           return yield* run(`<Outer />\n\n<Evaluate text={'<Open />\\n'} allow={["read"]} />\n`, [
             stating(symbolsOf("Marker")).installation,
             {
-              evaluation: layeredEntry("1"),
+              evaluation: layeredEntry(),
               componentAnswers: [
-                answerProvider("Open", answer.definition, {
-                  origin: "test://layer",
-                  revision: "2",
-                }),
+                answerProvider("Open", answer.definition, { origin: "test://layer" }),
               ],
             },
           ]);
@@ -1196,7 +1186,7 @@ describe("Tier SYN — the named form", () => {
       }),
     );
 
-    expect(failed).toContain("the exact implementation");
+    expect(failed).toContain("offers no generated use of it");
     expect(answer.invoked).toEqual([]);
     expect(probed).toEqual([]);
   });

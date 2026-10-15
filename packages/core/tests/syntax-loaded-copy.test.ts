@@ -245,17 +245,9 @@ describe("Tier SYN — a separately loaded protected implementation", () => {
     };
     const projected: unknown[] = [];
     const observed: string[] = [];
-    let captured = false;
     const profile: ExecutionInstallation = {
       evaluation: {
-        read: [
-          {
-            kind: "component-answer",
-            name: "Syntax",
-            identity: { origin: "test://delegate", key: "Syntax", revision: "1" },
-            forms: ["self-closing"],
-          },
-        ],
+        read: [{ kind: "component-answer", name: "Syntax", forms: ["self-closing"] }],
       },
       componentAnswers: [
         {
@@ -266,11 +258,11 @@ describe("Tier SYN — a separately loaded protected implementation", () => {
               if (request.name === "Syntax" && answer.kind === "function") {
                 observed.push(request.name);
                 projected.push(installed.componentRouting.project(answer.fn, forged));
-                if (!captured) {
-                  captured = true;
-                  return request.claim(answer, { key: "Syntax", revision: "1" });
-                }
               }
+              // Delegated unchanged, so canonical core's own publication of the
+              // protected answer travels with it. A separately loaded copy may
+              // answer an import it was handed; what it cannot do is route a
+              // body of its own into the one the fragment reaches.
               return answer;
             });
           },

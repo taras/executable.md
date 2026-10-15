@@ -19,6 +19,8 @@ import { updateOwn } from "../scope-local.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
 import { PROTECTED_COMPONENT_NAMES, protectedNameRefusal } from "./protected.ts";
 import { formsRefusal } from "../invocation-identity.ts";
+import { captureGenerated, generatedRefusal } from "./generated-metadata.ts";
+import type { GeneratedForms } from "./generated-metadata.ts";
 import { documentationOf } from "./documentation.ts";
 import type { ComponentDocumentation } from "./documentation.ts";
 import { compilePropsSchema, compileReturnsSchema } from "../validate.ts";
@@ -81,6 +83,14 @@ export interface ComponentRegistration extends ComponentDocumentation {
    * decision.
    */
   forms?: readonly InvocationForm[];
+  /**
+   * The generated use each authored form is offered for.
+   *
+   * Stated here because this registration owns the implementation: which URL a
+   * continuation compares and whether a spelling observes or mutates are facts
+   * about the component rather than about the host table that admits it.
+   */
+  generated?: GeneratedForms;
   fn: FunctionComponent | TestHarnessComponentDefinition;
 }
 
@@ -244,7 +254,7 @@ function assertUsableCaptures(
  * implementation, so it is usable where there is no implementation yet.
  */
 export function* admitDeclaration(declaration: ComponentDeclaration): Operation<void> {
-  const { name, origin, props, returns, captures, forms } = declaration;
+  const { name, origin, props, returns, captures, forms, generated } = declaration;
   assertUsableName(name);
   if (origin.length === 0) {
     throw new ComponentRegistrationError(
@@ -260,6 +270,10 @@ export function* admitDeclaration(declaration: ComponentDeclaration): Operation<
   if (badForms !== undefined) {
     throw new ComponentRegistrationError(`the declaration for "${name}" ${badForms}`);
   }
+  const badGenerated = generatedRefusal(generated, forms);
+  if (badGenerated !== undefined) {
+    throw new ComponentRegistrationError(`the declaration for "${name}" ${badGenerated}`);
+  }
 }
 
 /** Everything a declaration says about itself, apart from what implements it. */
@@ -270,6 +284,7 @@ export interface ComponentDeclaration extends ComponentDocumentation {
   readonly returns?: ReturnsSchema;
   readonly captures?: readonly string[];
   readonly forms?: readonly InvocationForm[];
+  readonly generated?: GeneratedForms;
 }
 
 export function* registerComponents(
@@ -283,7 +298,7 @@ export function* registerComponents(
   const additions = new Map<string, Partial<Record<Kind, string>>>();
 
   for (const registration of registrations) {
-    const { name, origin, fn, props, returns, captures, forms } = registration;
+    const { name, origin, fn, props, returns, captures, forms, generated } = registration;
     yield* admitDeclaration(registration);
 
     const kind = kindOf(registration);
@@ -300,6 +315,7 @@ export function* registerComponents(
       ...(returns ? { returns } : {}),
       ...(captures && captures.length > 0 ? { captures } : {}),
       ...(forms ? { forms } : {}),
+      ...(generated === undefined ? {} : { generated: captureGenerated(generated) }),
       ...documentationOf(registration),
     };
     batch.set(name, { ...batch.get(name), [kind]: { definition, origin } });

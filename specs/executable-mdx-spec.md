@@ -1961,9 +1961,10 @@ run but are absent from the diagnostic trace.
 | `src/fetch-request.ts` | `prepareFetchRequest()`, `FetchRequest`, `FetchRequestError` — what `<Fetch>` admits before transport (§6.18) |
 | `src/fetch-response.ts` | `detachHeaders()`, `detachStatus()`, `FetchResponseRecord` — the response detached from the provider's (§6.18) |
 | `src/fetch-journal.ts` | `persistFetch()` — the `fetch` durable effect (§6.18, §10.1) |
-| `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedFileWrite()`, `pinnedFileDelete()`, `pinnedComponent()`, `pinnedMutation()`, `GeneratedEffectClass`, `GeneratedComponentForm`, `GeneratedMutation`, `GeneratedObservation`, `GeneratedRequest`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam under the always-on trusted composition table and a caller-selected subset of the closed effect classes `read` and `write`, resolving each name and authored form to one exact pinned identity — core Json, the self-closing `<File>` read, the paired `<File>` write and the self-closing `<File.Delete>` among them — and preserving every component's ordinary binding and output behavior. `evaluateGeneratedXmd()` returns `Operation<string>` containing the fragment's rendered text. Its admission and every generated effect use occurrence-owned identities in the existing ordinary durable sequence, with no `ephemeral()` bridge, staging or result envelope |
+| `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedFileWrite()`, `pinnedFileDelete()`, `pinnedComponent()`, `pinnedMutation()`, `GeneratedEffectClass`, `GeneratedComponentForm`, `GeneratedImplementation`, `GeneratedMutation`, `GeneratedObservation`, `GeneratedRequest`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam under the always-on trusted composition table and a caller-selected subset of the closed effect classes `read` and `write`, resolving each name and authored spelling to the identity its owning declaration offers that spelling under — core Json, the self-closing `<File>` read, the paired `<File>` write and the self-closing `<File.Delete>` among them — and preserving every component's ordinary binding and output behavior. `evaluateGeneratedXmd()` returns `Operation<string>` containing the fragment's rendered text. Its admission and every generated effect use occurrence-owned identities in the existing ordinary durable sequence, with no `ephemeral()` bridge, staging or result envelope |
 | `src/glob-source.ts` | `GLOB_PROPS`, `GLOB_RETURNS`, `globPatterns()`, `globFailure()` — the props, return contract, source rules and sanitized failure sentence one search is held to, shared by the ordinary `<Glob>` component and the Glob capability an evaluation profile admits, so one dialect answers both (§6.14) |
-| `src/components/component-resolution.ts` | `CanonicalImports`, `ComponentResolution` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
+| `src/components/component-resolution.ts` | `CanonicalImports`, `ComponentResolution` — the witness a closed execution issues for the definition it produced and verifies where it is invoked, and the per-invocation request a provider publishes its definition through |
+| `src/components/generated-metadata.ts` | `GeneratedForm`, `GeneratedForms`, `generatedRefusal()`, `captureGenerated()`, `offeredForm()` — what a declaration says about the generated use of each of its authored spellings: the absolute `https://executable.md/` identity a continuation is compared against, and whether that spelling observes or mutates (§5.3) |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
 | `src/invocation-identity.ts` | `ComponentInvocation`, `IdentityComponent`, `IdentityClaimant`, `ImportSelection`, `installIdentities()`, `issueInvocation()`, `ComponentInvocationError` — what a trusted host declares to an execution, the domains that execution mints for it, and the one-use issuance a claimant answers for (§5.6) |
@@ -3295,7 +3296,7 @@ are installed, so a malformed registration is an error in the host rather than a
 printed error that appears the first time a document writes the name.
 
 **What a registration declares.** Beyond its name, origin, function and props
-schema, a registration may declare two things the schema cannot describe.
+schema, a registration may declare three things the schema cannot describe.
 
 `captures` names props the engine does not resolve. They are stripped before
 expression resolution and excluded from validation, and the component evaluates
@@ -3318,6 +3319,23 @@ compared without being normalized first and a reader never has to wonder whether
 a different order meant something else. The identity components a host declares
 to an execution (§5.6) are held to the same rule, whether they are registered by
 a run or read by inspection.
+
+`generated` names the generated use each authored spelling is offered for: an
+absolute identity in the `https://executable.md/` namespace, and whether that
+spelling observes or mutates. It belongs here because it is a fact about the
+component rather than about a host table that admits it — `<File />` reads and
+`<File>…</File>` writes, so one declaration offers two spellings under two
+identities, and a continuation is compared against the one the element actually
+wrote. Omitting it offers no generated use at all, which is what an ordinary
+component offers and takes nothing away from authored use; an empty map and an
+omitted spelling say the same thing for that spelling.
+
+It is validated where the declaration is made, as external data: exactly the two
+members, an identity whose origin is that namespace rather than a string
+beginning with it, one of the two effects, and a spelling the declaration itself
+accepts. Carrying it grants nothing — a table still admits the name, canonical
+resolution still decides which definition answers for it, and an attempted
+generated use of a spelling with no metadata refuses.
 
 A registration may also carry `description`, `as` and `context` — the same three
 descriptive fields Markdown frontmatter carries, with the same meaning and the
@@ -4371,9 +4389,10 @@ and `<Fetch>` remains absent rather than admitted with an empty ceiling.
 `<Elicit>` is in the write table because asking is not reading. A fragment that
 may change something may also ask the person first — which is what makes
 "preview this, then confirm it" a program an Agent can write — while a `read`
-selection promises nobody will be interrupted. It is admitted at canonical core's
-own origin, key and revision, in its paired spelling only: the question is the
-content, so a self-closing one would be a request with nothing in it.
+selection promises nobody will be interrupted. It is admitted in its paired
+spelling only, under the identity core's own declaration offers that spelling as
+a write: the question is the content, so a self-closing one would be a request
+with nothing in it.
 
 It is a *pinned capability*, not a name the fragment resolves. Preflight selects
 it where it finds an `<Elicit>` occurrence under a `write` selection, and the body
@@ -4394,8 +4413,8 @@ the host, an enclosing `<Answers>` region or the established missing-provider
 refusal owns how a person is asked — exactly as for an authored `<Elicit>`. Its
 validated answer is retained by the ordinary `elicit` durable operation, may drive
 a following write through ordinary bindings, and is restored on replay without
-contacting a provider. The `generated_xmd` record keeps the component identity and
-the admitted form and nothing about the answer.
+contacting a provider. The `generated_xmd` record keeps the identity the
+admitted spelling runs under, the spelling itself, and nothing about the answer.
 
 An admitted `<Glob />` is the same element an author writes. Its props, return
 contract, source rules and sanitized failure sentence are one shared definition
@@ -4406,23 +4425,23 @@ normalized to a sentence naming no path. It performs that search through context
 element does, and the provider still owns matching, ordering, deduplication,
 POSIX-relative results and traversal.
 
-`<Syntax />` is admitted as a component answer at canonical core's own origin,
-key and revision, never as a capability: a protected name is one canonical core
-already owns, and a second body for it would be a second answer to what the
-name means. Canonical capture resolves it once through the ordinary import
-chain before any document code, states core's identity for the exact answer
-canonical resolution produced, reconciles that identity whole, and seals it
-through the execution's own protected-body route. Middleware may observe,
-delegate or refuse that import; an answer it replaces carries no identity and is
-refused. Admitting it grants no other permission — named documentation may
-describe a component the selection does not admit, and describing one is not
-permission to run it.
+`<Syntax />` is admitted as a component answer, never as a capability: a
+protected name is one canonical core already owns, and a second body for it
+would be a second answer to what the name means. Canonical capture resolves it
+once through the ordinary import chain before any document code, where canonical
+core publishes the exact answer canonical resolution produced, and seals it
+through the execution's own protected-body route. The identity it is admitted
+under is the one core's own declaration offers its self-closing spelling as.
+Middleware may observe, delegate or refuse that import; an answer it replaces is
+one nobody published and is refused. Admitting it grants no other permission —
+named documentation may describe a component the selection does not admit, and
+describing one is not permission to run it.
 
-Canonical core states what is behind `<Syntax />` and no other protected name.
-Stating an identity is what makes a protected name admissible, so an entry
-hand-written at `<Evaluate>`'s own canonical identity resolves to an answer
-nothing identified and is refused: being shown what a fragment may write is a
-different grant from evaluation inside evaluation.
+Canonical core publishes an answer for `<Syntax />` and no other protected name.
+That publication is what makes a protected name admissible, so an entry
+hand-written for `<Evaluate>` resolves to an answer nobody published and is
+refused: being shown what a fragment may write is a different grant from
+evaluation inside evaluation.
 
 **What it renders** is the generated fragment's ordinary output. Evaluate does
 not inspect component results and does not synthesize an observation or result
@@ -4472,7 +4491,8 @@ terminal and unclassified. Records written for a successful result are unchanged
 **One occurrence is one durable decision.** A continuation restores the
 admission rather than making it again, and refuses before any effect if the run
 now offers different text, or states ceilings — effect classes, Workspace roots,
-pinned identities, forms or requests — the admission was not granted under.
+admitted spellings with their identities and effects, or requests — the admission
+was not granted under.
 
 #### 5.3.3 Ordinary generated composition
 
@@ -5414,8 +5434,10 @@ the two are separate dispatches.
 Neither this operation nor the method on the invocation selects an effect. A
 component whose forms do different things declares them, and canonical
 invocation-form dispatch (§5.6) enters the one the scan recorded — `<File>`
-(§6.13) is dual-form, `<File.Delete>` (§6.13.1) is self-closing only, and the
-core's protected `<Dir>` is paired only. A component that reads this
+(§6.13) is dual-form, `<File.Delete>` (§6.13.1) is self-closing only, and
+`<Dir>` (§6.13.2) is paired only. A declaration that offers a spelling for
+generated use states its identity and effect there too, per spelling, so what
+one form of a dual-form component grants is never what the other grants. A component that reads this
 contextual operation has no authored-form guarantee at all: what it receives is
 whatever the chain answered for that call.
 
@@ -8351,6 +8373,12 @@ member or import-handler answer supplies it. It takes one required prop,
 <File path="request.md" />
 ```
 
+The two spellings are two grants where a generated fragment is concerned, and
+this component's own declaration states them: the self-closing one is offered as
+a read under `https://executable.md/components/file/read`, and the paired one as
+a write under `https://executable.md/components/file/write` (§5.3). A host admits
+a spelling; what admitting it means is settled here.
+
 Both forms perform their work through the installed `API.Files` provider, which
 asks `Permissions` whether the scope reading or writing may do so before its
 first I/O (§1.2): a refused read or write is an ordinary `permission-denied`
@@ -8906,17 +8934,18 @@ outright. Classifying the target before removing it is what makes those
 differences invisible.
 
 Generated XMD receives `<File.Delete>` through the standard Deno workflow
-profile's write table, as the exact self-closing identity
-`@executablemd/core#File.Delete` (workflow-workspace-spec §8.4). A write-enabled
-fragment therefore removes one file by writing this component, and it is this
-component that runs: an admitted deletion crosses `API.Files` into the run's
+profile's write table (workflow-workspace-spec §8.4). This component's own
+declaration says what admitting it grants: its self-closing spelling is offered
+as a write, under `https://executable.md/components/file/delete`, and that is
+the identity a continuation is compared against. A write-enabled fragment
+therefore removes one file by writing this component, and it is this component
+that runs: an admitted deletion crosses `API.Files` into the run's
 transaction-bound provider and is retained by the ordinary `workspace_file`
 effect described above. The evaluator collects nothing from it and invents no
 receipt, so a fragment that only deletes renders nothing unless it authors
 output around the deletion.
 The paired spelling is refused in whole-fragment preflight, before the
-fragment's first effect, because the identity is admitted for the self-closing
-form alone.
+fragment's first effect, because it is offered no generated use at all.
 
 ---
 
@@ -8931,6 +8960,11 @@ A document that writes several files in one place names that place once.
 <File path="message.md">first</File>
 </Dir>
 ```
+
+Its paired spelling is offered to a generated fragment as a write, under
+`https://executable.md/components/dir/ensure` (§5.3). Whether a run admits the
+name at all is the host's — a workflow run has a `<Dir>` and an ordinary run has
+none — and what admitting it grants is this component's.
 
 It does two things, in this order. First the directory named by `path` is made
 to exist: created recursively when it is missing, used as it stands when it is
@@ -12285,11 +12319,11 @@ through the captured capability because there is no other way to reach it.
 | FE11 | Completed Plan work and completed fragment effects replay without repetition. |
 | FE12 | Hostile or malformed durable records fail closed before effects. |
 | FE13 | Declared-component private closures and producer-private capabilities remain unavailable. |
-| FE14 | Middleware answer A is retained by stable provider identity; continuation with B refuses before A or B runs; unchanged A resumes. |
-| FE15 | Provider registrations disappear at teardown; losing or cancelled resolution claims cannot later execute. |
+| FE14 | Middleware answer A is retained by the publication its provider made on that exact object; continuation with B, offered under another identity by its own declaration, refuses before A or B runs; unchanged A resumes. |
+| FE15 | Provider registrations disappear at teardown; a losing or cancelled resolution's publication cannot later execute. |
 | FE16 | Repeated Evaluate occurrences cannot consume one another's records. |
 | FE17 | Actual cancellation stops active work, waits for cleanup, and records no false success. |
-| FE18 | Existing untagged #369 records remain readable; new records use the closed version-2 shape. |
+| FE18 | One closed current record shape, marked as itself; a record an earlier build wrote is refused as unreadable history before the admission it would have restored performs anything. |
 | FE19 | Canonical `text` produces identical output across fresh workflow executions without warnings; `source` and `program` refuse before fragment effects under every profile. |
 | FE20 | Exact trusted Fetch limits are retained and narrowed; missing or changed limits refuse before requests. |
 | FE21 | Ordinary and workflow hosts exercise the same fragment evaluator rather than separate semantic implementations. |
@@ -13073,10 +13107,11 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §§8.4 and 9.
 | GX18c–GX18d | Controls | An empty and a rendered-only fragment preserve output across partial replay and invent no nested durable effect |
 | GX22, GX22b | Progression | The run's own root addition with the added root current, and standing on another root it already retained, each resume and reach the generated component |
 | GX22c–GX22d | Root loss | Losing a non-selected admission root and losing the admission's selected root each refuse with the fixed diagnostic before the component runs, the live component count unchanged |
-| GX14b–GX14c | One ceiling per identity | Two admitted identities whose four terms differ only in where a space falls each perform exactly their own admitted request, and neither entry's limit admits the other's: the run's ceiling table is keyed by the terms encoded rather than joined, because nothing makes a separator illegal in an origin or a key |
-| FE18/GX21z | Version-1 reconciliation is stated, not inferred | The standard core admission a released build wrote — `@executablemd/core#File:read` under the untagged policy shape, with no revision in it — resumes because `pinnedFileRead()` states that exact string as the version-1 identity it succeeds; an arbitrary host string a released build retained verbatim resumes the same way against its entry's stated alias. An entry that states no alias refuses the record that named it, with the admitted read never reaching the provider; a string no entry lists refuses; and a string never reconciles to a component answer, whose arm did not exist when version-1 records were written |
-| FE18/GX21x, FE18/GX21y | The closed version-2 shape | A literal version-1 refusal replays as the refusal it recorded. A version-2 identity written as a string, with no kind, an unknown kind, a missing or extra member, a non-string member, as an array or as null each refuse, as do a tagged result holding an untagged policy, a mixed or unknown version, a duplicate or empty class or form list, and a malformed request field. Each version has a positive control resuming on the unmodified record, so no row passes because a forged record never resumes at all |
-| EP18–EP20 | One name, one implementation | A provider-backed name held by two entries across disjoint forms and both tables is resolved by one lookup and sealed as one shared definition and schema; a second identity for that name — within one table, across the two, or under another origin — refuses at capture naming both spellings rather than letting assembly order decide; and one name held as both a capability and a component answer refuses, because core supplying the body and the chain answering for it are different grants. In `evaluation-profile.test.ts` |
+| GX14b–GX14c | One ceiling per entry | Two admitted reads each perform exactly their own admitted request, and neither entry's limit admits the other's: the run keys its ceiling table by the entry itself rather than by anything describing one |
+| FE18/GX21z | The current record restores | The record this build writes resumes against the entry it was admitted under and performs the work it authorized once; the same URL behind an updated implementation resumes, because between executions that is a newer build of the component the admission named rather than a changed grant; and a recorded refusal replays as the refusal it recorded |
+| FE18/GX21y | One closed record shape | The untagged #369 record and the tagged structural-identity record are each refused as unreadable history. So are a marker this build does not have, legacy top-level roots, an unknown policy, row, result or named member, a row with no form, an unknown form, effect or kind, and an identity that is relative, a look-alike origin, a structural record, an array or null — each with the admitted read never reaching the provider, against the current record as the positive control |
+| EP18–EP20 | One name, one implementation | A provider-backed name held by two entries across disjoint forms and both tables is resolved by one lookup and sealed as one shared definition and schema, each spelling reading its own identity and effect off that definition; an answer offering no generated use of an admitted spelling, or offering it as the other effect, refuses at sealing rather than letting a table describe a grant the implementation lacks; and one name held as both a capability and a component answer refuses, because core supplying the body and the chain answering for it are different grants. In `evaluation-profile.test.ts` |
+| GOM1–GOM3 | The owner states what its spellings are offered as | A registration's generated map survives registration copied and frozen; an omitted or empty map registers and offers no spelling; a relative, look-alike or non-URL identity, an unknown effect, a key that is not an authored form, a malformed value, a non-map and a spelling the declaration does not accept each refuse, and a refused batch installs nothing. The shipped owners state exactly the owner table, `<File>`'s two spellings differ on one definition, `<Json>` stays composition and `<Evaluate>` offers nothing. A shared fixed definition is frozen through its nested metadata, so a fresh read sees the original contract. In `generated-owner-metadata.test.ts` |
 
 ### Tier WGAC — Generated `<File>` effects and the `<Evaluate>` boundary
 
@@ -13084,8 +13119,8 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 
 | # | Test | Verify |
 |---|------|--------|
-| WGAC1 | The read identity | A self-closing `<File>` reads through the ordinary Files provider, and its pinned identity is not the unconstrained one |
-| WGAC13 | The deletion identity | The pinned `<File.Delete>` entry is `@executablemd/core#File.Delete`, admitted for the self-closing form alone, and carries the exact definition object core's registry holds rather than one shaped like it |
+| WGAC1 | The read entry | A self-closing `<File>` reads through the ordinary Files provider, and the entry admits the reading spelling alone — the writing one is a different grant under a different identity on the same definition |
+| WGAC13 | The deletion entry | The pinned `<File.Delete>` entry is admitted for the self-closing form alone, under `https://executable.md/components/file/delete` as a write, and carries the exact definition object core holds rather than one shaped like it |
 | WGAC2 | Preflight | A paired `<File>` — empty or not — and an unadmitted component anywhere in a mixed fragment each perform zero reads and zero writes, and nothing of the source reaches the record |
 | WGAC3 | Closed schema | `<Evaluate>` refuses content, refuses every prop but `source` and `allow`, and refuses a missing `source` |
 | WGAC4 | Host-owned roots | The stated ceiling is the run's retained roots and the root it is on, following the run as it moves, in a deterministic order; generated source cannot reach the component even while it is live |
@@ -13711,12 +13746,12 @@ Defined in §5.6, with the selection rule in §5.3.
 | CIV20 | Reading costs nothing | Reading the form, twice, leaves the durable identity unspent — the claim after it still succeeds |
 | CIV21 | Owner-kept | A repository component that imports nothing reads the canonical form from the object it received, for both authored forms; the fact appears on no definition a handler holding one can read |
 | CIV22 | Only the engine's own invocation enters a body | The dispatcher enters a form-specific body for a genuine, live, selected invocation of the form it answers, and refuses every other call before the body: a structural look-alike implementing `hasContent()`, a descriptor-for-descriptor clone, an object built on the prototype, an issuance canonical resolution selected nothing for, one selected for another dispatcher, and a closed one. Each look-alike's own `hasContent()` answers plausibly, which is why none of them is asked |
-| CIV23 | The identity a provider states for its answer | A request states a claim on the exact object its handler returns, under the name and provider origin canonical execution fixed when it minted that request. A different object, a copy, an object edited after the claim, a competing provider installation, another key and another revision each identify nothing, and the first statement stands after every one of them. The provider states only key and revision, and a partial identity is refused rather than half-recorded. Backs FE14 |
-| CIV24 | Identification is one atomic answer | The claim and core's own claim-time copy of what was claimed come back from one call, so nothing downstream reads the chain's object again: an answer whose member alternates between the claimed value and a substitution is sealed as the claimed one, with the plant proven live by the next read. At execution scale, an answer whose props schema alternates validates the fragment against the claimed contract. Backs FE14 |
-| CIV25 | A request belongs to one resolution occurrence | Provider installation and the right to answer one occurrence are separate. An installation receives a registrar and installs import middleware once; every middleware invocation receives a fresh request with readonly name and position, plus `next`. The request captures the exact resolution-window object, provider-installation token, origin and name, and `claim` accepts only the answer plus key and revision. Its handler closes the request synchronously in `finally` on return, failure or cancellation, while an outer request stays live across `yield* next()` and may claim its replacement after the delegated handler returns. The enclosing resolution closes in its existing `finally`. A claim succeeds only during active execution, through an open request whose captured window is the exact current object and whose fixed name matches it, with no different statement by that provider in the window. Identification takes the expected window explicitly and accepts only that exact window and name. Thus a stale request from resolution N refuses during N+1 of the same name, a stale `Open` request cannot retag while `Other` is live, and a losing inner request refuses after its handler returns while the still-live outer request may claim after delegation. One installation answers several names and repeated same-name resolutions through distinct requests; unidentified replacements remain ordinary valid middleware answers outside fragment evaluation. Two owners live at once each answer only for what they recorded, and tearing one down leaves the other working. No Context, shared symbol, public brand or module-global registry participates. Backs FE15 |
+| CIV23 | What a provider publishes for its answer | A request publishes the exact object its handler returns, under the name and provider origin canonical execution fixed when it minted that request. A different object, a copy, an object edited after publication, a competing provider installation and a second publication of a different implementation each identify nothing, and the first publication stands after every one of them. The provider publishes the definition and nothing else: which identity and effect each of its spellings runs as is on that definition, and metadata this engine cannot read — a relative or look-alike identity, an unknown effect, an unoffered spelling — is refused rather than half-recorded. An answer offering no generated use at all is published and read back as the ordinary answer it is. Backs FE14 |
+| CIV24 | Identification is one atomic answer | Core's own publication-time copy and the publishing installation's origin come back from one call, so nothing downstream reads the chain's object again: an answer whose member alternates between the published value and a substitution is sealed as the published one, with the plant proven live by the next read. At execution scale, an answer whose props schema alternates validates the fragment against the published contract. Backs FE14 |
+| CIV25 | A request belongs to one resolution occurrence | Provider installation and the right to answer one occurrence are separate. An installation receives a registrar and installs import middleware once; every middleware invocation receives a fresh request with readonly name and position, plus `next`. The request captures the exact resolution-window object, provider-installation token, origin and name, and `answer` accepts the definition alone. Its handler closes the request synchronously in `finally` on return, failure or cancellation, while an outer request stays live across `yield* next()` and may claim its replacement after the delegated handler returns. The enclosing resolution closes in its existing `finally`. A publication succeeds only during active execution, through an open request whose captured window is the exact current object and whose fixed name matches it, with no different implementation published by that provider in the window. Identification takes the expected window explicitly and accepts only that exact window and name. Thus a stale request from resolution N refuses during N+1 of the same name, a stale `Open` request cannot publish while `Other` is live, and a losing inner request refuses after its handler returns while the still-live outer request may publish after delegation. One installation answers several names and repeated same-name resolutions through distinct requests; unpublished replacements remain ordinary valid middleware answers outside fragment evaluation. Two owners live at once each answer only for what they recorded, and tearing one down leaves the other working. No Context, shared symbol, public brand or module-global registry participates. Backs FE15 |
 | CIV26 | The terminal is the association | Import middleware that delegates the same name once from inside `scoped()` keeps the invocation's identity, and names the same one an undelegated import does. Two nested authored imports each own their terminal, so both are identified without a stack. Delegating twice, or delegating another name, reaches this import's own terminal and settles it to nothing |
 | CIV27 | Two imports live at once | Two `<Spawn>` children are each suspended inside their own import before either resolves. Each dispatch selects into the frame its terminal carries, so both invocations are identified exactly once, their identities differ, and they are the identities the same two sites name when nothing holds their imports — in either release order |
-| CIV28 | A cancelled import closes only its own frame | With two imports live, one is released and claims while the other is still suspended and is cancelled by a failing sibling. The survivor is refused nothing and names exactly what that site names when nothing is torn down beside it; the cancelled branch claims nothing, and nothing it left behind lends or withholds an identity afterwards |
+| CIV28 | A cancelled import closes only its own frame | With two imports live, one is released and publishes while the other is still suspended and is cancelled by a failing sibling. The survivor is refused nothing and names exactly what that site names when nothing is torn down beside it; the cancelled branch publishes nothing, and nothing it left behind lends or withholds an identity afterwards |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 

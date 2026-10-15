@@ -79,10 +79,10 @@ import type { CapturedEntry, EvaluationProfile } from "../evaluation-profile.ts"
 import { evaluateProtectedGeneratedXmd } from "../generated-xmd.ts";
 import type {
   GeneratedEffectClass,
+  GeneratedImplementation,
   GeneratedMutation,
   GeneratedObservation,
   GeneratedXmdRequest,
-  RetainedFragmentIdentity,
 } from "../generated-xmd.ts";
 import { ComponentInvocationError, invocationForm } from "../invocation-identity.ts";
 import type {
@@ -322,13 +322,13 @@ interface SelectedTables {
 }
 
 /**
- * The host's captured tables, as the pinned identities the evaluator admits.
+ * The host's captured tables, as the pinned entries the evaluator admits.
  *
  * A class the host installed nothing for is refused here — before the durable
  * name is assigned and before a program exists — rather than reaching the
- * evaluator as an empty table. The identity a run retains is built from the
- * three structural parts the host stated, so a reader comparing two admissions
- * can say which part moved.
+ * evaluator as an empty table. The identity a run retains for each admitted
+ * spelling comes from the definition that spelling runs, where the declaration
+ * that owns the implementation states it.
  *
  * The definition carries the *captured* schema rather than its own, so a host
  * that edits the schema on the definition it handed over after installation
@@ -352,18 +352,14 @@ function selectedTables(
     for (const entry of profile.read) {
       observations.push({
         name: entry.name,
-        identity: pinned(entry),
         definition: entry.definition,
+        kind: implementation(entry),
         ...(entry.dispatch === undefined ? {} : { dispatch: entry.dispatch }),
         // An entry admitted for one spelling admits that one; an entry admitted
         // for both is the form-insensitive component it has always been.
         ...(entry.forms.length === 1 && entry.forms[0] === "self-closing"
           ? { selfClosing: true }
           : {}),
-        // The version-1 strings this entry stated it succeeds, carried through
-        // so a continuation admitted under one of them reconciles against this
-        // entry. Nothing this run writes holds them.
-        ...(entry.legacy === undefined ? {} : { legacy: entry.legacy }),
         ...(entry.requests === undefined ? {} : { requests: entry.requests.map(asRequest) }),
       });
       admitted.push(entry);
@@ -376,10 +372,9 @@ function selectedTables(
     for (const entry of profile.write) {
       mutations.push({
         name: entry.name,
-        identity: pinned(entry),
         definition: entry.definition,
+        kind: implementation(entry),
         ...(entry.dispatch === undefined ? {} : { dispatch: entry.dispatch }),
-        ...(entry.legacy === undefined ? {} : { legacy: entry.legacy }),
         form: entry.forms.length === 2 ? "either" : (entry.forms[0] ?? "self-closing"),
       });
       admitted.push(entry);
@@ -389,20 +384,16 @@ function selectedTables(
 }
 
 /**
- * The identity a run retains for one captured entry.
+ * What kind of thing is behind one captured entry's name.
  *
- * Structural rather than assembled: the four terms travel as themselves, so a
- * continuation compares them one at a time and a reader looking at two
- * admissions can say which of them moved. Nothing here is derived from the
- * implementation — an implementation is not an identity — and the kind travels
- * with the rest because an operation core supplies the body for and an answer
- * the import chain resolved are different grants under the same three names.
+ * It travels with the entry because an operation core supplies the body for and
+ * an answer the import chain resolved are different grants even under one
+ * identity: the first cannot be composed around and the second was resolved
+ * through middleware. The identity itself is not restated here — it is on the
+ * definition the entry already carries, where its owner declared it.
  */
-function pinned(entry: CapturedEntry): RetainedFragmentIdentity {
-  const { origin, key, revision } = entry.identity;
-  return entry.kind === "component-answer"
-    ? { kind: "component-answer", origin, key, revision }
-    : { kind: "capability", origin, key, revision };
+function implementation(entry: CapturedEntry): GeneratedImplementation {
+  return entry.kind === "component-answer" ? "component-answer" : "capability";
 }
 
 /** One captured ceiling, as the request record the evaluator compares against. */

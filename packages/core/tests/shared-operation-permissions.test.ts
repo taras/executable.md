@@ -104,11 +104,7 @@ function ceiling(): ExecutionInstallation {
   return {
     evaluation: {
       read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()],
-      write: [
-        fileWriteEntry(),
-        directoryEntry({ origin: "test://host", key: "Dir", revision: "1" }, "Dir"),
-        fileDeleteEntry(),
-      ],
+      write: [fileWriteEntry(), directoryEntry("Dir"), fileDeleteEntry()],
     },
   };
 }

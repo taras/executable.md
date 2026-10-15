@@ -28,7 +28,7 @@ import {
   syntaxReadEntry,
 } from "../src/evaluation-profile.ts";
 import { CORE_ORIGIN } from "../src/components/registry.ts";
-import { CORE_REVISION } from "../src/generated-xmd.ts";
+import { SYNTAX_PROTECTED } from "../src/components/Syntax.ts";
 import { props as globProps } from "../src/components/Glob.ts";
 import { props as elicitProps } from "../src/components/Elicit.ts";
 import { capabilityReturns } from "../src/fragment-capabilities.ts";
@@ -38,9 +38,11 @@ import type {
   EvaluationProfile,
   ComponentAnswerEntry,
   FragmentEvaluationInput,
+  FragmentForm,
   ResolvedAnswer,
   ResolvedAnswers,
 } from "../src/evaluation-profile.ts";
+import type { GeneratedForms } from "../src/components/generated-metadata.ts";
 import type { Json } from "../src/types.ts";
 
 describe("protected route projection", () => {
@@ -52,6 +54,13 @@ describe("protected route projection", () => {
         name,
         origin: "test://protected",
         props: { type: "object" },
+        forms: ["self-closing" as const],
+        generated: {
+          "self-closing": {
+            identity: `https://executable.md/components/${name.toLowerCase()}/read`,
+            effect: "read" as const,
+          },
+        },
         build: (claim) =>
           function* (_props, invocation): Operation<string> {
             return `${name}:${yield* claim(invocation)}`;
@@ -92,17 +101,10 @@ describe("protected route projection", () => {
         throw new Error("missing protected definition");
       }
       const prepared = yield* prepareEvaluationProfile({
-        read: [
-          {
-            kind: "component-answer",
-            name: "Admitted",
-            identity: { origin: "test://provider", key: "Admitted", revision: "1" },
-            forms: ["self-closing"],
-          },
-        ],
+        read: [{ kind: "component-answer", name: "Admitted", forms: ["self-closing"] }],
       });
       const captured = yield* prepared.seal(
-        new Map([["Admitted", { definition: original }]]),
+        new Map([["Admitted", { definition: original, origin: "test://protected" }]]),
         owner.componentRouting.project,
       );
       const sealed = captured.read[0]?.definition.fn;
@@ -197,7 +199,6 @@ function entry(overrides: Partial<CapabilityEntry> = {}): CapabilityEntry {
   return {
     kind: "capability",
     name,
-    identity: { origin: "test://host", key: "File:read", revision: "1" },
     forms: ["self-closing"],
     props: { type: "object", properties: {}, additionalProperties: false },
     // The capability follows the name unless a row states otherwise: what these
@@ -246,7 +247,7 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
     const read: CapabilityEntry[] = [entry()];
     const captured = yield* capture({ read });
 
-    read.push(entry({ name: "Added", identity: { origin: "t", key: "Added", revision: "1" } }));
+    read.push(entry({ name: "Added" }));
     read.length = 0;
 
     expect(captured.read).toHaveLength(1);
@@ -274,13 +275,16 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
     expect(names).toEqual(["path"]);
   });
 
-  it("EP3: an identity the host edits after capture does not change what is compared", function* () {
-    const identity = { origin: "test://host", key: "Probe", revision: "1" };
-    const captured = yield* capture({ read: [entry({ identity })] });
+  it("EP3: forms the host edits after capture do not widen what is admitted", function* () {
+    const forms: FragmentForm[] = ["self-closing"];
+    const captured = yield* capture({ read: [entry({ forms })] });
 
-    identity.revision = "2";
+    // The host's own array, pushed to after installation. Capture read it once
+    // and kept its own ordered copy, so a spelling added afterwards is added to
+    // an object nothing is looking at.
+    forms.push("paired");
 
-    expect(captured.read[0]?.identity.revision).toBe("1");
+    expect(captured.read[0]?.forms).toEqual(["self-closing"]);
   });
 
   it("EP4: request headers and lists the host mutates do not widen the ceiling", function* () {
@@ -372,17 +376,13 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
     const captured = yield* capture({
       read: [
         entry({ name: "First", requests: [{ url: "https://api.example.test/first" }] }),
-        entry({
-          name: "Second",
-          identity: { origin: "test://host", key: "Second", revision: "1" },
-          requests: [{ url: "https://api.example.test/second" }],
-        }),
+        entry({ name: "Second", requests: [{ url: "https://api.example.test/second" }] }),
       ],
       fetchTimeout: 1000,
     });
 
     // Flattening them would let the first entry's limit admit the second's
-    // request: a ceiling belongs to the identity it bounds.
+    // request: a ceiling belongs to the entry that states it.
     expect(captured.read[0]?.requests?.map((request) => request.url)).toEqual([
       "https://api.example.test/first",
     ]);
@@ -429,15 +429,21 @@ describe("Tier EP — a captured profile stops reading the host's objects", () =
 });
 
 describe("Tier EP — a profile a host cannot state", () => {
-  it("EP12: an entry with no complete identity refuses", function* () {
-    const attempts: Partial<CapabilityEntry>[] = [
-      { identity: { origin: "", key: "Probe", revision: "1" } },
-      { identity: { origin: "test://host", key: "", revision: "1" } },
-      { identity: { origin: "test://host", key: "Probe", revision: "" } },
-    ];
-    for (const attempt of attempts) {
-      expect(yield* refusal({ read: [entry(attempt)] })).toContain("complete identity");
-    }
+  it("EP12: an entry admitted in the table its owner does not offer refuses", function* () {
+    // What a spelling does belongs to the component. `<File>` offers its paired
+    // form as a write, so admitting that spelling in the read table would hand
+    // a read selection a mutation — and `<File.Delete>` offers no paired form
+    // at all, so admitting one would admit a spelling with no identity for a
+    // continuation to be compared against.
+    const wrongTable = yield* refusal({
+      read: [entry({ name: "File", capability: "file:write", forms: ["paired"] })],
+    });
+    expect(wrongTable).toContain("its owner offers that form as a write");
+
+    const unoffered = yield* refusal({
+      read: [entry({ name: "File.Delete", capability: "file:delete", forms: ["paired"] })],
+    });
+    expect(unoffered).toContain("offers no generated use of it");
   });
 
   it("EP13: an entry admitted for no form refuses", function* () {
@@ -479,32 +485,45 @@ describe("Tier EP — a profile a host cannot state", () => {
     const captured = yield* capture({ read: [fileReadEntry(), globReadEntry()] });
     const [file, glob] = captured.read;
 
-    expect(file?.identity).toEqual({ origin: CORE_ORIGIN, key: "File:read", revision: "2" });
+    // The identity each spelling runs under is on the definition, where core's
+    // own declaration states it: the reading form observes and the writing form
+    // mutates, and one admitted entry carries both because one component does.
+    expect(file?.definition.generated).toEqual({
+      "self-closing": { identity: "https://executable.md/components/file/read", effect: "read" },
+      paired: { identity: "https://executable.md/components/file/write", effect: "write" },
+    });
+    expect(file?.origin).toBe(CORE_ORIGIN);
     expect(file?.forms).toEqual(["self-closing"]);
     expect(file?.definition.returns).toBe(undefined);
 
     // The search is the same component an author writes: the ordinary props,
     // the one spelling, and a declared return — which is what makes `as`
     // mandatory before the host's provider is asked to traverse anything.
-    expect(glob?.identity).toEqual({ origin: CORE_ORIGIN, key: "Glob", revision: "2" });
+    expect(glob?.definition.generated).toEqual({
+      "self-closing": { identity: "https://executable.md/components/glob/read", effect: "read" },
+    });
     expect(glob?.forms).toEqual(["self-closing"]);
     expect(glob?.props).toEqual(globProps);
     expect(glob?.definition.returns).toEqual({ type: "array", items: { type: "string" } });
-    // A search is not an older grant renamed: nothing was ever retained under
-    // a version-1 identity for it, so it answers for none.
-    expect(glob?.legacy).toBe(undefined);
+    // One spelling, so one offered form: nothing admits a paired `<Glob>`.
+    expect(Object.keys(glob?.definition.generated ?? {})).toEqual(["self-closing"]);
   });
 
-  it("EP22: canonical Syntax is admitted as an answer at core's own identity", function* () {
+  it("EP22: canonical Syntax is admitted as an answer, and states no identity", function* () {
     const stated = syntaxReadEntry();
 
     expect(stated.kind).toBe("component-answer");
     expect(stated.name).toBe("Syntax");
-    expect(stated.identity).toEqual({ origin: CORE_ORIGIN, key: "Syntax", revision: "2" });
     expect(stated.forms).toEqual(["self-closing"]);
-    // The arm carries no implementation at all: what is behind a protected name
-    // is canonical resolution's to answer, not a host's to hand over.
+    // The arm carries no implementation and no identity at all: what is behind
+    // a protected name, and what admitting its one spelling grants, are
+    // canonical resolution's to answer rather than a host's to hand over.
     expect(Object.keys(stated)).not.toContain("capability");
+    expect(Object.keys(stated)).not.toContain("identity");
+    // Core's own declaration is where that spelling's identity and effect are.
+    expect(SYNTAX_PROTECTED.generated).toEqual({
+      "self-closing": { identity: "https://executable.md/components/syntax/read", effect: "read" },
+    });
   });
 
   it("EP23: one name admitted for two different components refuses", function* () {
@@ -525,12 +544,41 @@ describe("Tier EP — a profile a host cannot state", () => {
   });
 
   it("EP16: forms are canonically ordered, so two statements of one pair match", function* () {
-    const one = yield* capture({
-      read: [entry({ forms: ["paired", "self-closing"] })],
-    });
-    const other = yield* capture({
-      read: [entry({ forms: ["self-closing", "paired"] })],
-    });
+    // A provider whose component observes in both spellings, which is what a
+    // form-insensitive read is: both are offered as reads, so both may be
+    // admitted in the read table and the order the host wrote them in is not
+    // part of what it stated.
+    const both: GeneratedForms = {
+      "self-closing": { identity: "https://executable.md/components/pair/read", effect: "read" },
+      paired: { identity: "https://executable.md/components/pair/also", effect: "read" },
+    };
+    const answers: ResolvedAnswers = new Map([
+      [
+        "Pair",
+        {
+          origin: "test://provider",
+          definition: {
+            kind: "function" as const,
+            name: "Pair",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            generated: both,
+            // deno-lint-ignore require-yield
+            *fn(): Operation<Json> {
+              return "paired";
+            },
+          },
+        },
+      ],
+    ]);
+    const admitting = function* (forms: readonly FragmentForm[]): Operation<EvaluationProfile> {
+      const prepared = yield* prepareEvaluationProfile({
+        read: [{ kind: "component-answer", name: "Pair", forms }],
+      });
+      return yield* prepared.seal(answers);
+    };
+
+    const one = yield* admitting(["paired", "self-closing"]);
+    const other = yield* admitting(["self-closing", "paired"]);
 
     expect(one.read[0]?.forms).toEqual(other.read[0]?.forms);
     expect(one.read[0]?.forms).toEqual(["self-closing", "paired"]);
@@ -543,27 +591,34 @@ describe("Tier EP — a profile a host cannot state", () => {
  * A provider-backed name is resolved once through the ordinary import chain and
  * sealed. So what a profile may say about a name is settled here rather than at
  * the lookup: two entries under one name are the two spellings of one
- * component, and a second identity for the second spelling would make which
- * implementation a fragment reached depend on which table admitted it.
+ * component, each reading its own identity and effect off the one definition
+ * the chain answered with.
  */
-describe("Tier EP — a provider-backed name states one identity", () => {
+describe("Tier EP — a provider-backed name resolves once to one definition", () => {
   const OPEN: ComponentAnswerEntry = {
     kind: "component-answer",
     name: "Open",
-    identity: { origin: "test://provider", key: "Open", revision: "1" },
     forms: ["self-closing"],
   };
 
-  /** One implementation, as canonical execution hands sealing its answer. */
-  function answered(): ResolvedAnswers {
+  /**
+   * One implementation, as canonical execution hands sealing its answer.
+   *
+   * It offers both spellings, each under its own identity and effect, because
+   * that is what a provider whose component reads one way and writes the other
+   * declares — and it is one definition doing it.
+   */
+  function answered(generated: GeneratedForms = BOTH_FORMS): ResolvedAnswers {
     return new Map<string, ResolvedAnswer>([
       [
         "Open",
         {
+          origin: "test://provider",
           definition: {
             kind: "function",
             name: "Open",
             props: { type: "object", properties: {}, additionalProperties: false },
+            generated,
             // deno-lint-ignore require-yield
             *fn(): Operation<Json> {
               return "opened";
@@ -574,9 +629,28 @@ describe("Tier EP — a provider-backed name states one identity", () => {
     ]);
   }
 
+  /** What that provider's declaration offers each of its two spellings as. */
+  const BOTH_FORMS: GeneratedForms = {
+    "self-closing": { identity: "https://executable.md/components/open/read", effect: "read" },
+    paired: { identity: "https://executable.md/components/open/write", effect: "write" },
+  };
+
   /** Prepare a profile holding these entries, without sealing it. */
   function prepare(input: Partial<FragmentEvaluationInput>) {
     return prepareEvaluationProfile({ read: [entry()], ...input });
+  }
+
+  /** What sealing this prepared profile refused with. */
+  function* sealing(
+    prepared: { seal: (answers: ResolvedAnswers) => Operation<EvaluationProfile> },
+    answers: ResolvedAnswers,
+  ): Operation<string> {
+    try {
+      yield* prepared.seal(answers);
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    throw new Error("expected sealing to be refused");
   }
 
   /** What preparing this profile refused with. */
@@ -592,8 +666,7 @@ describe("Tier EP — a provider-backed name states one identity", () => {
   it("EP18: one name across disjoint forms and tables is one lookup and one implementation", function* () {
     // The self-closing spelling admitted to observe and the paired one to
     // mutate: two entries, two forms, two tables, one component. The host says
-    // the same identity for both, because there is only one thing behind the
-    // name.
+    // the name, and the definition says what each spelling runs as.
     const prepared = yield* prepare({
       read: [OPEN],
       write: [{ ...OPEN, forms: ["paired"] }],
@@ -601,15 +674,18 @@ describe("Tier EP — a provider-backed name states one identity", () => {
 
     // Asked for once, however many entries hold it: a second lookup would be a
     // second chance for the chain to answer differently.
-    expect(prepared.answered).toEqual([
-      { name: "Open", identity: { origin: "test://provider", key: "Open", revision: "1" } },
-    ]);
+    expect(prepared.answered).toEqual(["Open"]);
 
     const profile = yield* prepared.seal(answered());
     const observing = profile.read[0];
     const mutating = profile.write[0];
     expect(observing?.forms).toEqual(["self-closing"]);
     expect(mutating?.forms).toEqual(["paired"]);
+    // Two URLs and two effects, read off the one definition: the reading
+    // spelling and the writing one are different grants, and the implementation
+    // behind them is the same object.
+    expect(observing?.definition.generated).toEqual(BOTH_FORMS);
+    expect(observing?.origin).toBe("test://provider");
     // One sealed implementation, shared. Two guards over one answer would be
     // two lifetimes for one implementation, and which of them a fragment
     // reached would depend on which table admitted it.
@@ -617,33 +693,25 @@ describe("Tier EP — a provider-backed name states one identity", () => {
     expect(observing?.props).toBe(mutating?.props);
   });
 
-  it("EP19: a second identity for one name refuses, naming both", function* () {
-    const cases: readonly (readonly [string, Partial<FragmentEvaluationInput>])[] = [
-      [
-        "within one table",
-        { read: [OPEN, { ...OPEN, identity: { ...OPEN.identity, revision: "2" } }] },
-      ],
-      [
-        "across the two tables",
-        {
-          read: [OPEN],
-          write: [{ ...OPEN, forms: ["paired"], identity: { ...OPEN.identity, key: "Other" } }],
-        },
-      ],
-      [
-        "under another origin",
-        { read: [OPEN, { ...OPEN, identity: { ...OPEN.identity, origin: "test://other" } }] },
-      ],
-    ];
+  it("EP19: an answer that does not offer the admitted spelling refuses at sealing", function* () {
+    // The implementation is resolved once and then held to what its own
+    // declaration offers. A host cannot describe a spelling the provider never
+    // offered, and cannot move one into the other effect table: either would be
+    // a grant the implementation does not have, and both refuse before an
+    // execution holds a profile.
+    const prepared = yield* prepare({ read: [OPEN], write: [{ ...OPEN, forms: ["paired"] }] });
+    const readOnly: GeneratedForms = {
+      "self-closing": { identity: "https://executable.md/components/open/read", effect: "read" },
+    };
+    expect(yield* sealing(prepared, answered(readOnly))).toContain("offers no generated use of it");
 
-    for (const [where, input] of cases) {
-      const failed = yield* refused(input);
-      // Refused rather than resolved by position: a last-stated identity
-      // winning would be a ceiling decided by the order a host assembled its
-      // tables in.
-      expect([where, failed.includes("One name states one identity")]).toEqual([where, true]);
-      expect([where, failed.includes("test://provider#Open@1")]).toEqual([where, true]);
-    }
+    const bothRead: GeneratedForms = {
+      "self-closing": { identity: "https://executable.md/components/open/read", effect: "read" },
+      paired: { identity: "https://executable.md/components/open/also", effect: "read" },
+    };
+    expect(yield* sealing(prepared, answered(bothRead))).toContain(
+      "its owner offers that form as a read",
+    );
   });
 
   it("EP20: one name held as both a capability and an answer refuses", function* () {
@@ -659,7 +727,7 @@ describe("Tier EP — a provider-backed name states one identity", () => {
 });
 
 describe("Tier EP — the entry that admits canonical `<Elicit>`", () => {
-  it("EL1: the factory pins core's own body under core's identity, paired only", function* () {
+  it("EL1: the factory pins core's own body, paired only", function* () {
     const entry = elicitWriteEntry();
 
     // A capability rather than a component answer: what core owns here is the
@@ -671,11 +739,7 @@ describe("Tier EP — the entry that admits canonical `<Elicit>`", () => {
     expect(entry.kind).toBe("capability");
     expect(entry.capability).toBe("elicit:ask");
     expect(entry.name).toBe("Elicit");
-    expect(entry.identity).toEqual({
-      origin: CORE_ORIGIN,
-      key: "Elicit",
-      revision: CORE_REVISION,
-    });
+    expect(Object.keys(entry)).not.toContain("identity");
     // Paired only. The question is the content, so a self-closing spelling
     // would be a request with nothing in it.
     expect(entry.forms).toEqual(["paired"]);
@@ -689,9 +753,6 @@ describe("Tier EP — the entry that admits canonical `<Elicit>`", () => {
     // execution resolves eagerly, which is what stops an execution that never
     // asks anything from depending on what `Elicit` resolves to.
     expect(CANONICAL_PROFILE_ANSWERS.has("Elicit")).toBe(false);
-    // A new grant: no version-1 record ever admitted a generated question, so
-    // there is no older string this says it authorizes no more than.
-    expect(entry.legacy).toBe(undefined);
 
     // Two factories state the same entry and share nothing: a host that edited
     // what it was given would be editing its own copy.

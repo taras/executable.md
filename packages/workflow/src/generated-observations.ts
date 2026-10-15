@@ -4,7 +4,7 @@
  *
  * Core owns the mechanics: parsing the candidate fragment, preflighting all of
  * it before the first effect, resolving each name and authored form to exactly
- * one pinned identity, invoking only those, and recording one durable admission
+ * one pinned entry, invoking only those, and recording one durable admission
  * before the first generated effect. What core does *not* own is which ceilings
  * a workflow run is willing to state, and that is this module.
  *
@@ -19,10 +19,10 @@
  *   have retained further roots and advanced the current one, while every
  *   non-root term is held exactly;
  * - the exact HTTP reads a fragment may perform. An empty ceiling admits no
- *   `<Fetch>` whatsoever: the pinned identity simply is not on the allowlist,
+ *   `<Fetch>` whatsoever: the pinned entry simply is not on the allowlist,
  *   which is a different thing from admitting it and refusing every request;
- * - the read identities this run adds beyond core's own; and
- * - the mutation identities this run is willing to expose at all. They are
+ * - the read entries this run adds beyond core's own; and
+ * - the mutation entries this run is willing to expose at all. They are
  *   stated whether or not a caller asks for them, because what selects them is
  *   the caller's `allow`, and a class a run has no table for is refused before
  *   the candidate is parsed.
@@ -55,15 +55,15 @@ export interface GeneratedEvaluationPolicy {
   readonly selectedRoot: string;
   /** The exact HTTP reads a fragment may perform. Empty admits `<Fetch>` not at all. */
   readonly requests: readonly GeneratedRequest[];
-  /** The read identities this run states, beside the bounded `<Fetch>` below. */
+  /** The read entries this run states, beside the bounded `<Fetch>` below. */
   readonly reads: readonly GeneratedObservation[];
-  /** The mutation identities this run states. Absent admits `write` not at all. */
+  /** The mutation entries this run states. Absent admits `write` not at all. */
   readonly writes?: readonly GeneratedMutation[];
   /** The classes the caller selected. Omitted means `read`, as core's own default does. */
   readonly allow?: readonly GeneratedEffectClass[];
 }
 
-/** The read identities one policy resolves to, in the order a run states them. */
+/** The read entries one policy resolves to, in the order a run states them. */
 function reads(policy: GeneratedEvaluationPolicy): GeneratedObservation[] {
   const admitted: GeneratedObservation[] = [...policy.reads];
   if (policy.requests.length > 0) {

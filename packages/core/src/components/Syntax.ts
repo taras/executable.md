@@ -118,6 +118,13 @@ export const SYNTAX_PROTECTED: ExecutionBuiltComponent = {
   origin: CORE_ORIGIN,
   props,
   forms: ["self-closing"],
+  // Offered to a generated fragment as a read, in the one spelling it has. The
+  // metadata travels to the definition each execution builds from this
+  // declaration, so an admitted `<Syntax />` is compared against the identity
+  // its owner states rather than one a host wrote beside the entry.
+  generated: {
+    "self-closing": { identity: "https://executable.md/components/syntax/read", effect: "read" },
+  },
   ...documented({
     description:
       "Inspect available components and control-flow constructs. `<Syntax />` lists the " +
