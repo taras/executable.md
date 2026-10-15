@@ -135,6 +135,7 @@ import type {
 } from "./execution-declarations.ts";
 import { documentationOf } from "./components/documentation.ts";
 import { registerComponents } from "./components/registration.ts";
+import { admitGeneratedForms } from "./components/generated-metadata.ts";
 import {
   admittedGenerated,
   declaredForms,
@@ -714,13 +715,25 @@ function* materializeImport(
         : parseJsonObject(propsExport);
     yield* compilePropsSchema(props);
 
+    const forms = declaration === undefined ? undefined : declaredForms(declaration);
+    // What this component is offered generated use for, declared where it is
+    // implemented. A module that states none is a component no selection can
+    // admit, which is what a host's selection of the name then refuses on; one
+    // that states something unusable refuses here, where it is read, rather
+    // than at the first table that would admit the name.
+    const offered = "generated" in mod ? admitGeneratedForms(mod.generated, forms) : undefined;
+    if (offered !== undefined && !offered.ok) {
+      throw new Error(`Function component "${name}" at ${path} ${offered.error.message}`);
+    }
+
     const definition: FunctionComponentDefinition = {
       kind: "function",
       name,
       props,
       // Read off the same declaration the dispatcher is built from, so what the
       // component accepts and what it says it accepts come from one value.
-      ...(declaration === undefined ? {} : { forms: declaredForms(declaration) }),
+      ...(forms === undefined ? {} : { forms }),
+      ...(offered === undefined ? {} : { generated: offered.value }),
       fn: declaration === undefined ? defaultExport : formDispatcher(declaration),
     };
 

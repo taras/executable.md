@@ -2414,6 +2414,19 @@ export interface FunctionComponentDefinition {
 }
 ```
 
+**Generated use.** A function component may export `generated`, the same
+per-form map a registration declares (§5.3.2): each authored form it offers an
+untrusted fragment, with the absolute `https://executable.md/` identity that
+form runs under and whether it reads or writes. It is read where the file is
+loaded and held to the forms the component accepts, so a component is one
+declaration whichever way an execution reached it — core's own `Glob.ts` states
+it here, and the registration reads the same value. A component that exports
+none is offered for no generated use at all, and a host that selects its name is
+refused rather than given a form nobody declared. Exporting it is not
+permission: a fragment still needs the host's selection, the authored form, the
+`allow` class and whole-fragment admission, and every effect still crosses the
+installed providers and the effective `Permissions`.
+
 **Resources.** A component acquires resources with ordinary operations —
 `yield* useTempDir()` — and needs no wrapper of its own. They belong to the
 invocation and are released when it completes, after the content it projected

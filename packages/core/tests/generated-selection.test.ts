@@ -145,6 +145,51 @@ function useProducer(produced: string[]): Operation<void> {
   ]);
 }
 
+/**
+ * A directory holding two repository components, reachable only by search path.
+ *
+ * Written as JavaScript generators rather than through a registration, because
+ * the point is the other way a component declaration reaches an execution: a
+ * file on the search path, imported by the loader, with whatever it exports.
+ */
+function useRepositoryComponents(): Operation<string> {
+  return resource<string>(function* (provide) {
+    const dir = yield* until(mkdtemp(join(tmpdir(), "xmd-u5-repository-")));
+    yield* ensure(function* () {
+      yield* rm(dir, { recursive: true, force: true });
+    });
+    // Offers its self-closing form, where it is implemented.
+    yield* writeTextFile(
+      join(dir, "Offered.ts"),
+      [
+        'export const props = { type: "object", properties: {}, additionalProperties: false };',
+        "export const generated = {",
+        '  "self-closing": {',
+        '    identity: "https://executable.md/components/offered/read",',
+        '    effect: "read",',
+        "  },",
+        "};",
+        "export default function* Offered() {",
+        '  return "THE REPOSITORY COPY RAN";',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    // The same component, stating nothing about generated use.
+    yield* writeTextFile(
+      join(dir, "Silent.ts"),
+      [
+        'export const props = { type: "object", properties: {}, additionalProperties: false };',
+        "export default function* Silent() {",
+        '  return "THE SILENT COPY RAN";',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    yield* provide(dir);
+  });
+}
+
 /** A directory holding one Markdown component, reachable only by search path. */
 function useComponentDirectory(): Operation<string> {
   return resource<string>(function* (provide) {
@@ -543,6 +588,44 @@ describe("Tier GS — what a selected name resolves to", () => {
     expect(ran).toEqual(["local ran"]);
     expect(attempt.output).toContain("the local registration ran");
     expect(attempt.output).toContain("the provider's answer ran");
+  });
+
+  it("U5-3: a repository component is offered for what it declares, and no more", function* () {
+    const dir = yield* useRepositoryComponents();
+
+    // A file on the search path is a declaration like any other: what its
+    // self-closing form is offered for is on it, so a host that selects the
+    // name is offered exactly that and the fragment runs that body.
+    const offered = yield* run(evaluating(`<Offered />\n`), {
+      includes: [dir],
+      installations: [
+        {
+          *install(): Operation<void> {
+            yield* useSelection({ Offered: ["self-closing"] });
+          },
+        },
+      ],
+    });
+
+    expect(offered.failure).toBe(undefined);
+    expect(offered.output).toContain("THE REPOSITORY COPY RAN");
+
+    // The same shape, stating nothing: a component that declares no generated
+    // use is one no selection admits, and the host's statement cannot supply
+    // what the owner withheld.
+    const silent = yield* run(evaluating(`<Silent />\n`), {
+      includes: [dir],
+      installations: [
+        {
+          *install(): Operation<void> {
+            yield* useSelection({ Silent: ["self-closing"] });
+          },
+        },
+      ],
+    });
+
+    expect(silent.failure).toContain("offers no generated use");
+    expect(silent.output).toBe(undefined);
   });
 
   it("U5-3: an unpublished replacement refuses", function* () {

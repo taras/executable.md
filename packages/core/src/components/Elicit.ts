@@ -70,6 +70,19 @@ export const props = {
  * object's properties (§5.1.1), so a bare `{}` would declare an object with no
  * properties — the opposite of any value.
  */
+/**
+ * The generated use this component is offered for, where it is implemented.
+ *
+ * Stated here rather than only at the registration, because a component is one
+ * declaration wherever it is loaded from: core's registry reads this, and so
+ * does a repository `Elicit.ts` on a search path, which is the same
+ * implementation reached the other way. A host that selects the name is then
+ * offered the same thing by whichever copy answers.
+ */
+export const generated = {
+  paired: { identity: "https://executable.md/components/elicit/ask", effect: "write" },
+} as const;
+
 export const returns = {
   $schema: "http://json-schema.org/draft-07/schema#",
 } satisfies ReturnsSchema;
