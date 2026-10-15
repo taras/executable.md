@@ -5,8 +5,8 @@
  * An Agent proposes work by returning a fragment of Executable Markdown. That
  * fragment is untrusted input: it carries data, never authorization. So a
  * trusted host — never a document, a component, or a middleware package — hands
- * this evaluator the candidate source together with the ceilings it may run
- * under, and the ceilings are values captured before the fragment exists.
+ * this evaluator the candidate source together with the selection it may run
+ * under, and that selection is captured before the fragment exists.
  *
  * ## Nothing happens before the whole fragment has been read
  *
@@ -17,12 +17,10 @@
  * does.
  *
  * What is refused is a construct *class*: executable code blocks, expression
- * props, interpolation that reads a binding, a result binding, a component the
- * host did not admit, and a request that is malformed or outside the admitted
- * set. The record and the diagnostic name the class and nothing else. Generated
- * source is exactly the text a refusal must not echo — which is why a candidate
- * request is normalized behind a converting boundary rather than allowed to
- * report itself, and why a refusal is *returned* by the admission rather than
+ * props, interpolation that reads a binding, a result binding, and a component
+ * or form the host did not select. The record and the diagnostic name the class
+ * and nothing else. Generated source is exactly the text a refusal must not
+ * echo, which is why a refusal is *returned* by the admission rather than
  * thrown out of it: a thrown one is serialized into the journal with its
  * message and its stack.
  *
@@ -64,22 +62,24 @@
  * reading `<File />` cannot be turned into a write, or an admitted writing
  * `<File>…</File>` into a read, however many times something is asked.
  *
- * ## A resumed run is held to the ceilings it was admitted under
+ * ## A resumed run is held to the selection it was admitted under
  *
  * Durable replay matches an effect by its type and name; what a description
  * carries is stored, never compared. So the retained admission carries the
  * normalized policy in its **result** as well as in the event input, and a
  * continuation checks that retained policy against the one this run states
  * before a single generated component is invoked or a single effect is
- * performed. The Workspace roots are as-of-admission provenance and are asked
- * for by membership: the run's own progress legitimately retains further
- * roots and advances the authoritative current root, while a run that no
- * longer retains an admission root — or its selected root — is refused. Every
- * other term compares whole and exactly: a changed class selection, a changed
- * pinned identity behind the same name, a changed admitted form, and a
- * widened request ceiling are each refused there. Only the tables the
- * selection reached take part, so a write table a read-only admission never
- * drew on may move without invalidating it.
+ * performed. Every term compares whole and exactly: a changed class selection,
+ * a changed identity behind the same name, and a changed admitted form are
+ * each refused there. Only the tables the selection reached take part, so a
+ * write table a read-only admission never drew on may move without
+ * invalidating it.
+ *
+ * What is deliberately absent is everything live. Which destination an admitted
+ * `<Fetch />` may reach, and what timeout it resolves, are decided where the
+ * request is performed — by the effective `Permissions` and `Config` of the
+ * scope that performs it — so a continuation held to a retained copy of either
+ * would refuse a run whose configuration legitimately moved.
  *
  * That is also why the walk lives inside the admission's live executor. A
  * continuation restores what was admitted without consulting the current source
@@ -124,9 +124,6 @@ import type { GeneratedForms } from "./components/generated-metadata.ts";
 import { acceptedForms, formsRefusal } from "./invocation-forms.ts";
 import { createBlockCounter, expandSegmentsWithin } from "./expand.ts";
 import { extendPath } from "./expansion.ts";
-import { prepareFetchRequest, requestRecord } from "./fetch-request.ts";
-import { timeoutFetch } from "@executablemd/runtime";
-import type { FetchRequest } from "./fetch-request.ts";
 import { isJsonObject, parseJson } from "./json.ts";
 import { markGeneratedRequestRefusal } from "./generated-request-refusal.ts";
 import { GeneratedDataExpressions, validateDataExpression } from "./generated-expressions.ts";
@@ -185,8 +182,7 @@ type Construct =
   | "content"
   | "form"
   | "construct"
-  | "structure"
-  | "request";
+  | "structure";
 
 /**
  * The fixed diagnostics.
@@ -218,20 +214,19 @@ const CONSTRUCT: Record<Construct, string> = {
   structure:
     "a generated fragment writes a structural construct the language does not allow where it " +
     "was written.",
-  request: "a generated fragment asks for a request this host did not admit.",
 };
 
 /**
- * What a resumed run is refused with when its ceilings moved.
+ * What a resumed run is refused with when its selection moved.
  *
  * Fixed, like every other diagnostic here, and deliberately naming nothing it
- * compared: which root, identity or request changed is exactly the material a
+ * compared: which name, identity or form changed is exactly the material a
  * refusal must not publish.
  */
 const CEILING =
-  "a generated fragment was admitted under ceilings this run no longer states. A retained " +
-  "admission resumes only under the exact effect classes, Workspace roots, pinned identities, " +
-  "forms and requests it was admitted with.";
+  "a generated fragment was admitted under a selection this run no longer states. A retained " +
+  "admission resumes only under the exact effect classes, identities and forms it was admitted " +
+  "with.";
 
 const UNREADABLE = "the retained generated-XMD admission record cannot be read as one.";
 
@@ -294,16 +289,6 @@ class Refusal extends Error {
     this.construct = construct;
   }
 }
-
-/**
- * One request a generated fragment may perform, written the way an element
- * writes it.
- *
- * The host states the ceiling in the same vocabulary the candidate uses, and
- * both sides go through `prepareFetchRequest()`, so "the same request" is one
- * normalization rather than two readings that could disagree.
- */
-export type GeneratedRequest = Record<string, Json>;
 
 /**
  * The effect classes a host table is divided into.
@@ -396,11 +381,6 @@ export interface GeneratedObservation {
    */
   readonly dispatch?: unknown;
   /**
-   * The exact requests this observation may perform, when it performs HTTP
-   * reads at all. Present only on the pinned `<Fetch>` entry.
-   */
-  readonly requests?: readonly GeneratedRequest[];
-  /**
    * Whether only the self-closing form of this name is admitted.
    *
    * A component whose two forms do different things offers each of them its own
@@ -424,25 +404,22 @@ export interface GeneratedObservation {
 export const JSON_COMPOSITION_IDENTITY = "https://executable.md/components/json";
 
 /**
- * The pinned core `<Fetch>` identity, bounded to exactly these requests.
+ * Core's own `<Fetch>`, as the evaluator admits it.
  *
- * Core's own default definition, taken from the registry every execution and
- * every inspection resolves through — not the name `Fetch`, which a repository
- * file may also take. The ceiling is not optional: an unbounded network read is
- * a different decision from an admitted one, and this constructor does not make
- * it.
+ * Core's default definition, taken from the registry every execution and every
+ * inspection resolves through — not the name `Fetch`, which a repository file
+ * may also take. There is no request inventory beside it: which destination,
+ * method and headers an admitted read may actually reach is a live question,
+ * asked of the transformed request immediately before transport by whichever
+ * `Permissions` restriction the host installed in the owner that performs the
+ * work.
  */
-export function pinnedFetch(requests: readonly GeneratedRequest[]): GeneratedObservation {
+export function pinnedFetch(): GeneratedObservation {
   const definition = CORE_REGISTRY.get("Fetch")?.default?.definition;
   if (definition === undefined || definition.kind !== "function") {
     throw new GeneratedXmdError("core supplies no Fetch component to admit.");
   }
-  if (requests.length === 0) {
-    throw new GeneratedXmdError(
-      "admitting <Fetch> to a generated fragment requires the exact requests it may perform.",
-    );
-  }
-  return { name: "Fetch", definition, requests: [...requests] };
+  return { name: "Fetch", definition };
 }
 
 /**
@@ -623,18 +600,6 @@ export interface GeneratedXmdRequest {
   readonly id: string;
   /** The candidate source, exactly as it was generated. */
   readonly source: string;
-  /**
-   * The retained Workspace roots the host is willing to expose.
-   *
-   * Absent for a host that evaluates against no Workspace. An ordinary run is
-   * one: its admitted effects address the Files provider its own execution
-   * installed, and there is no immutable root history for a continuation to be
-   * held to. A workflow run states both, and a continuation is then held to
-   * that basis by membership.
-   */
-  readonly workspaceRoots?: readonly string[];
-  /** The one root admitted effects address, for a host that has one. */
-  readonly selectedRoot?: string;
   /** The pinned observation entries the `read` class resolves to. */
   readonly observations: readonly GeneratedObservation[];
   /** The pinned mutation entries the `write` class resolves to. */
@@ -684,7 +649,6 @@ interface Entry {
    * select between.
    */
   readonly effect: GeneratedEffectClass | "composition";
-  readonly requests?: readonly GeneratedRequest[];
 }
 
 /**
@@ -711,31 +675,22 @@ interface RetainedInvocation {
 }
 
 /**
- * The ceilings one fragment ran under, normalized.
+ * The selection one fragment ran under, as the run retains it.
  *
- * Normalized because this is what a continuation is compared against: a request
- * the host spelled differently but meant identically must compare equal, and
- * one it meant differently must not. The selection is here too — only the
- * tables `allow` chose take part, so a host that changed a table this admission
- * never drew on has changed nothing this admission was granted under.
+ * Only the tables `allow` chose take part, so a host that changed a table this
+ * admission never drew on has changed nothing this admission was granted under.
+ * Nothing live is here: which destination an admitted request may reach and
+ * what timeout it resolves are decided where the request is performed, and a
+ * continuation compared against them would refuse a run whose configuration
+ * legitimately moved.
  */
 interface Policy {
   readonly allow: readonly GeneratedEffectClass[];
-  /**
-   * The Workspace basis, or nothing for a host that evaluates against none.
-   *
-   * The distinction is itself a ceiling. A run admitted with no Workspace and
-   * one admitted against a Workspace were granted different things, so a
-   * continuation that acquired or lost one is asking for a different grant
-   * rather than restating the same one.
-   */
-  readonly workspace?: { readonly roots: readonly string[]; readonly selectedRoot: string };
   /**
    * Every admitted spelling, in the order the selection resolved them:
    * composition first, then the read table, then the write table.
    */
   readonly allowed: readonly RetainedEntry[];
-  readonly requests: readonly FetchRequest[];
 }
 
 /** The decision this run recorded, restored from its own durable record. */
@@ -1036,7 +991,6 @@ function selectedEntries(
         forms,
         kind: observation.kind ?? "capability",
         effect: "read",
-        ...(observation.requests === undefined ? {} : { requests: observation.requests }),
       });
     }
   }
@@ -1271,53 +1225,13 @@ function reads(content: string): boolean {
   return FRONTMATTER_REFERENCE.test(protectedEscapes) || BINDING_REFERENCE.test(protectedEscapes);
 }
 
-/** Two normalized requests describing the same read. */
-function sameRequest(one: FetchRequest, other: FetchRequest): boolean {
-  return JSON.stringify(requestRecord(one)) === JSON.stringify(requestRecord(other));
-}
-
 /** Two lists of the same strings, in the same order. */
 function sameStrings(one: readonly string[], other: readonly string[]): boolean {
   return one.length === other.length && one.every((value, index) => value === other[index]);
 }
 
-/**
- * The requests each admitted observation may perform, normalized.
- *
- * Deliberately computed *outside* the durable admission. These are the host's
- * own values, so a malformed one is a host mistake rather than a statement
- * about the candidate — it should fail as itself, before anything is appended,
- * rather than be serialized into the journal as a refusal of the fragment.
- */
-function* normalizedCeilings(entries: readonly Entry[]): Operation<Ceilings> {
-  const ceilings = new Map<Entry, FetchRequest[]>();
-  for (const entry of entries) {
-    if (entry.requests === undefined) {
-      continue;
-    }
-    const normalized: FetchRequest[] = [];
-    for (const props of entry.requests) {
-      normalized.push(yield* prepareFetchRequest(props));
-    }
-    // Keyed by the entry itself rather than by anything describing it: a name
-    // can hold two entries and only one of the two may perform a request, and
-    // an encoded key is only ever as unique as its own escaping.
-    ceilings.set(entry, normalized);
-  }
-  return ceilings;
-}
-
-/** Each entry's own normalized ceiling, for the entries that perform requests. */
-type Ceilings = ReadonlyMap<Entry, readonly FetchRequest[]>;
-
-/** The ceilings this run states, in the order the host stated them. */
-function currentPolicy(
-  request: GeneratedXmdRequest,
-  allow: readonly GeneratedEffectClass[],
-  entries: readonly Entry[],
-  ceilings: Ceilings,
-): Policy {
-  const requests: FetchRequest[] = [];
+/** The selected rows this run states, in the order the selection resolved them. */
+function currentPolicy(allow: readonly GeneratedEffectClass[], entries: readonly Entry[]): Policy {
   const allowed: RetainedEntry[] = [];
   for (const entry of entries) {
     // One row per admitted spelling, in canonical form order within the entry,
@@ -1339,78 +1253,23 @@ function currentPolicy(
         effect: entry.effect,
       });
     }
-    requests.push(...(ceilings.get(entry) ?? []));
   }
-  const workspace = workspaceBasis(request);
-  return {
-    allow: [...allow],
-    ...(workspace === undefined ? {} : { workspace }),
-    allowed,
-    requests,
-  };
-}
-
-/**
- * The Workspace basis this request states, or nothing.
- *
- * Both terms or neither: a host stating roots without the root its effects
- * address, or the reverse, has stated half a basis, and half a ceiling is not
- * one to admit a fragment under.
- */
-function workspaceBasis(
-  request: GeneratedXmdRequest,
-): { roots: readonly string[]; selectedRoot: string } | undefined {
-  const { workspaceRoots, selectedRoot } = request;
-  if (workspaceRoots === undefined && selectedRoot === undefined) {
-    return undefined;
-  }
-  if (workspaceRoots === undefined || selectedRoot === undefined) {
-    throw new GeneratedXmdError(
-      "a generated-XMD host stated half a Workspace basis. A host evaluates against a Workspace " +
-        "or against none, and the roots and the selected root are one statement.",
-    );
-  }
-  // Validated here, as the host's own error, rather than compared later against
-  // a live basis and appearing to hold: a basis with no roots, a repeated root,
-  // or a selected root nothing retains is not a stricter grant than a coherent
-  // one — there is nothing for a continuation to be held to at all.
-  const roots = [...workspaceRoots];
-  if (roots.length === 0 || roots.some((root) => root.length === 0)) {
-    throw new GeneratedXmdError("a generated-XMD host stated a Workspace basis retaining no root.");
-  }
-  if (new Set(roots).size !== roots.length) {
-    throw new GeneratedXmdError("a generated-XMD host stated one retained Workspace root twice.");
-  }
-  if (!roots.includes(selectedRoot)) {
-    throw new GeneratedXmdError(
-      "a generated-XMD host selected a Workspace root it does not retain.",
-    );
-  }
-  return { roots, selectedRoot };
+  return { allow: [...allow], allowed };
 }
 
 /**
  * The policy as journal data, in the one closed shape this build has.
  *
  * It tags itself, which is what lets a record written by any other build be
- * recognized as a shape this one does not have rather than guessed at, and it
- * carries the Workspace basis as one optional member because an ordinary host
- * has none — a reader that treated a missing basis as an empty one would
- * compare a Workspace-less admission equal to a Workspace admission that had
- * lost every root.
+ * recognized as a shape this one does not have rather than guessed at. What it
+ * holds is the selection and nothing live: a destination policy and an
+ * effective timeout are decided where the request is performed, so retaining
+ * them would compare a continuation against values that legitimately move.
  */
 function policyRecord(policy: Policy): JsonObject {
   return {
     version: RECORD_VERSION,
     allow: [...policy.allow],
-    ...(policy.workspace === undefined
-      ? {}
-      : {
-          workspace: {
-            roots: [...policy.workspace.roots],
-            selectedRoot: policy.workspace.selectedRoot,
-          },
-        }),
     allowed: policy.allowed.map((entry) => ({
       name: entry.name,
       form: entry.form,
@@ -1418,7 +1277,6 @@ function policyRecord(policy: Policy): JsonObject {
       kind: entry.kind,
       effect: entry.effect,
     })),
-    requests: policy.requests.map(requestRecord),
   };
 }
 
@@ -1467,106 +1325,15 @@ function readPolicy(value: Json): Policy | undefined {
   if (value.version !== RECORD_VERSION) {
     return undefined;
   }
-  if (!exactly(value, ["version", "allow", "allowed", "requests"], ["workspace"])) {
-    return undefined;
-  }
-  const workspace = Object.hasOwn(value, "workspace") ? readWorkspace(value.workspace) : undefined;
-  if (workspace === MALFORMED) {
+  if (!exactly(value, ["version", "allow", "allowed"])) {
     return undefined;
   }
   const classes = readClasses(value.allow);
   const allowed = readAllowed(value.allowed);
-  const requests = readRequests(value.requests);
-  if (classes === undefined || allowed === undefined || requests === undefined) {
+  if (classes === undefined || allowed === undefined) {
     return undefined;
   }
-  return {
-    allow: classes,
-    ...(workspace === undefined ? {} : { workspace }),
-    allowed,
-    requests,
-  };
-}
-
-/** A record this version cannot read, told apart from one that holds nothing. */
-const MALFORMED = Symbol("malformed");
-
-/**
- * One Workspace basis, validated rather than merely well-typed.
- *
- * A basis with no roots, a repeated root, or a selected root the run does not
- * retain is not a stricter grant than one without those faults — it is not a
- * grant at all, because there is nothing coherent for a continuation to be held
- * to. So it is refused here, before the admission, rather than compared later
- * against a live basis and appearing to hold.
- */
-function readWorkspace(
-  value: Json | undefined,
-): { roots: readonly string[]; selectedRoot: string } | undefined | typeof MALFORMED {
-  if (!isJsonObject(value) || !exactly(value, ["roots", "selectedRoot"])) {
-    return MALFORMED;
-  }
-  const roots = readRoots(value.roots);
-  const { selectedRoot } = value;
-  if (roots === undefined || typeof selectedRoot !== "string") {
-    return MALFORMED;
-  }
-  return roots.includes(selectedRoot) ? { roots, selectedRoot } : MALFORMED;
-}
-
-/** The retained roots, which are a non-empty set rather than a list. */
-function readRoots(value: Json | undefined): readonly string[] | undefined {
-  if (!Array.isArray(value) || value.length === 0) {
-    return undefined;
-  }
-  const roots: string[] = [];
-  for (const root of value) {
-    if (typeof root !== "string" || root.length === 0 || roots.includes(root)) {
-      return undefined;
-    }
-    roots.push(root);
-  }
-  return roots;
-}
-
-/**
- * The retained requests, read closed.
- *
- * A reader that ignored members it does not know, or treated a malformed
- * `timeout` as an absent one, would let a retained ceiling compare equal to a
- * live one it does not describe, so this admits exactly the declared members.
- */
-function readRequests(value: Json): FetchRequest[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const requests: FetchRequest[] = [];
-  for (const entry of value) {
-    if (!isJsonObject(entry) || !exactly(entry, ["url", "method", "headers"], ["timeout"])) {
-      return undefined;
-    }
-    const { url, method, headers, timeout } = entry;
-    if (typeof url !== "string" || typeof method !== "string" || !isJsonObject(headers)) {
-      return undefined;
-    }
-    if (Object.hasOwn(entry, "timeout") && typeof timeout !== "number") {
-      return undefined;
-    }
-    const named: Record<string, string> = {};
-    for (const [header, value] of Object.entries(headers)) {
-      if (typeof value !== "string") {
-        return undefined;
-      }
-      named[header] = value;
-    }
-    requests.push({
-      url,
-      method,
-      headers: named,
-      ...(typeof timeout === "number" ? { timeout } : {}),
-    });
-  }
-  return requests;
+  return { allow: classes, allowed };
 }
 
 /** The selected classes, which are a non-empty set in canonical order. */
@@ -1662,76 +1429,24 @@ function readNamed(value: Json): RetainedInvocation[] | undefined {
  * Whether a resumed run still holds the grant the retained admission was made
  * under.
  *
- * Two kinds of term, compared differently on purpose.
- *
- * The Workspace roots are as-of-admission provenance over a set the run's own
- * progress legitimately grows: every committed mutation retains another
- * immutable root and advances the authoritative current root. So the retained
- * basis is asked for by membership — every admission root and the admission's
- * selected root must still be retained, and the root the run now stands on
- * must be a retained one — while additional roots and an advanced current
- * root change nothing this admission was granted under. A run that lost an
- * admission root no longer holds the history the grant was made over, and is
- * refused before any generated work.
- *
- * Every other term is a host-stated ceiling and compares whole and exactly,
- * in order: a widened class selection, one identity behind a spelling replaced,
- * a form added, a spelling moved into the other effect table, or one request
- * added to the allowed set each make this false. Widening is the case that
- * matters most — a ceiling that still contains the original request is
+ * Every term compares whole and exactly, in order: a widened class selection,
+ * one identity behind a spelling replaced, a form added, or a spelling moved
+ * into the other effect table each make this false. Widening is the case that
+ * matters most — a selection that still holds the original spelling is
  * precisely the one that comparing the *fragment* against the *current* policy
  * would wave through.
  */
 function policyHolds(retained: Policy, current: Policy): boolean {
-  if (!workspaceHolds(retained.workspace, current.workspace)) {
-    return false;
-  }
   if (!sameStrings(retained.allow, current.allow)) {
     return false;
   }
   if (retained.allowed.length !== current.allowed.length) {
     return false;
   }
-  const replaced = retained.allowed.some((entry, index) => {
+  return retained.allowed.every((entry, index) => {
     const here = current.allowed[index];
-    return here === undefined || !sameRow(entry, here);
+    return here !== undefined && sameRow(entry, here);
   });
-  if (replaced) {
-    return false;
-  }
-  if (retained.requests.length !== current.requests.length) {
-    return false;
-  }
-  return retained.requests.every((request, index) => {
-    const here = current.requests[index];
-    return here !== undefined && sameRequest(request, here);
-  });
-}
-
-/**
- * Whether a resumed run still holds the Workspace basis it was admitted over.
- *
- * Absent on both sides is a host that evaluates against no Workspace, and two
- * of those hold each other. Present on one side only is a run that acquired or
- * lost a Workspace between the admission and the resume, which is a different
- * grant rather than the same one restated.
- *
- * Present on both compares by membership, because the set legitimately grows:
- * every committed mutation retains another immutable root and advances the
- * authoritative current one. So each admission root and the admission's
- * selected root must still be retained, and the root the run now stands on must
- * be a retained one — while additional roots change nothing this admission was
- * granted under.
- */
-function workspaceHolds(retained: Policy["workspace"], current: Policy["workspace"]): boolean {
-  if (retained === undefined || current === undefined) {
-    return retained === current;
-  }
-  const held = new Set(current.roots);
-  if (!retained.roots.every((root) => held.has(root))) {
-    return false;
-  }
-  return held.has(retained.selectedRoot) && held.has(current.selectedRoot);
 }
 
 /** One element the fragment named, and the entry preflight selected for it. */
@@ -1748,23 +1463,20 @@ interface Preflight {
 /**
  * Walk the complete fragment, admitting it or refusing it whole.
  *
- * Nothing here performs an effect. The requests are normalized — the candidate's
- * and the host's alike — because deciding whether two requests are the same one
- * is what `prepareFetchRequest()` is for, and a second reading of the same props
- * could disagree with the one `<Fetch>` will make.
+ * Nothing here performs an effect, and nothing here decides a destination. What
+ * the fragment may *name* is settled from its own language — the constructs,
+ * the names, the forms, the props and the effect classes — while what an
+ * admitted `<Fetch />` may actually reach is the live terminal's question,
+ * asked of the transformed request immediately before transport. So a dynamic
+ * destination the fragment's data expressions produce is an ordinary input
+ * here rather than something preflight has to resolve.
  */
+// deno-lint-ignore require-yield
 function* preflight(
   id: string,
   source: string,
   table: ReadonlyMap<string, Entry[]>,
-  ceilings: Ceilings,
 ): Operation<Preflight> {
-  // Read once, here, so a contextual default that refuses fails as itself
-  // rather than as a statement about the fragment. Every candidate request
-  // below reads the same value, and what it can fail on afterwards is the
-  // props it was handed.
-  yield* timeoutFetch;
-
   const named: Planned[] = [];
   // Scanned as the fragment it is: generated text has no path, so every
   // executable position in it names this admission instead. That is what lets a
@@ -1774,26 +1486,8 @@ function* preflight(
   const segments = scanSegments(source, { generatedSource: id, baseOffset: 0, baseLine: 1 });
   // A generated fragment starts with no bindings: it imports none from the
   // document that admitted it, and exports none back to it.
-  yield* walk(segments, table, ceilings, named, new Set<string>());
+  yield* walk(segments, table, named, new Set<string>());
   return { segments, named };
-}
-
-/**
- * The candidate's request, normalized — or the fixed refusal.
- *
- * `prepareFetchRequest()` reports what is wrong with a request by quoting it:
- * the URL that is not a URL, the header name written twice, the timeout that is
- * not a duration. Every one of those is generated text, and a refusal of
- * generated text may not carry it — not into the run's failure, and not into
- * the journal, where a thrown executor error is serialized with its message and
- * its stack. So the diagnostic is dropped here and the class is kept.
- */
-function* admitCandidateRequest(props: Record<string, Json>): Operation<FetchRequest> {
-  try {
-    return yield* prepareFetchRequest(props);
-  } catch {
-    throw new Refusal("request");
-  }
 }
 
 /**
@@ -1811,7 +1505,6 @@ function* admitCandidateRequest(props: Record<string, Json>): Operation<FetchReq
 function* walk(
   segments: readonly Segment[],
   table: ReadonlyMap<string, Entry[]>,
-  ceilings: Ceilings,
   named: Planned[],
   scope: Set<string>,
   lexical: Lexical = ROOT_LEXICAL,
@@ -1834,7 +1527,7 @@ function* walk(
         // table lookup would be refused as a component the host withheld, which
         // is a different and misleading thing to tell a candidate.
         if (RESERVED_STRUCTURAL.has(segment.name)) {
-          yield* structural(segment, table, ceilings, named, scope, lexical);
+          yield* structural(segment, table, named, scope, lexical);
           break;
         }
         const entries = table.get(segment.name);
@@ -1873,13 +1566,6 @@ function* walk(
         if (entry === undefined) {
           throw new Refusal(form === "paired" ? "content" : "form");
         }
-        if (entry.requests !== undefined) {
-          const ceiling = ceilings.get(entry) ?? [];
-          const candidate = yield* admitCandidateRequest(segment.props);
-          if (!ceiling.some((allowed) => sameRequest(allowed, candidate))) {
-            throw new Refusal("request");
-          }
-        }
         // The identity this spelling runs under, from the entry's own
         // definition. The form was decided from the scan just above, which is
         // what separates `<File />` from `<File>…</File>`.
@@ -1893,7 +1579,7 @@ function* walk(
         // body rather than a transparent region, so the lexical facts reset:
         // a `<Break>` written in a component's own body cannot break a loop
         // that encloses the invocation.
-        yield* walk(segment.children, table, ceilings, named, new Set(scope), ROOT_LEXICAL);
+        yield* walk(segment.children, table, named, new Set(scope), ROOT_LEXICAL);
         // After the element, because a component's result does not exist until
         // it has run: `<File as="x" />` beside `<Json value={x} />` is ordered,
         // and `<Json value={x} as="x" />` names nothing.
@@ -1991,7 +1677,6 @@ const NO_GENERATED_CONTEXT: ReadonlySet<string> = new Set(["Content", "Output", 
 function* structural(
   segment: ComponentElement,
   table: ReadonlyMap<string, Entry[]>,
-  ceilings: Ceilings,
   named: Planned[],
   scope: Set<string>,
   lexical: Lexical,
@@ -2025,7 +1710,6 @@ function* structural(
     yield* alternatives(
       [{ body: structure.whenTrue }, { body: structure.whenFalse }],
       table,
-      ceilings,
       named,
       scope,
       lexical,
@@ -2044,7 +1728,6 @@ function* structural(
     yield* alternatives(
       branches.map((branch) => ({ matcher: branch.element, body: branch.element.children })),
       table,
-      ceilings,
       named,
       scope,
       lexical,
@@ -2056,7 +1739,7 @@ function* structural(
     refuseStructure(loopViolations(segment));
     // Inside for the body alone: a `<Break>` after the loop is as stray as one
     // written where no loop ever was.
-    yield* transparent(segment.children, table, ceilings, named, scope, {
+    yield* transparent(segment.children, table, named, scope, {
       ...lexical,
       insideLoop: true,
     });
@@ -2074,14 +1757,14 @@ function* structural(
     // above already refused a `<Break>` or `<Return>` that would cross it.
     const incoming: ReadonlySet<string> = new Set(scope);
     for (const spawn of structure.spawns) {
-      yield* walk(spawn.element.children, table, ceilings, named, new Set(incoming), ROOT_LEXICAL);
+      yield* walk(spawn.element.children, table, named, new Set(incoming), ROOT_LEXICAL);
     }
     return;
   }
 
   if (name === "PrintErrors") {
     refuseStructure(printErrorsViolations(segment));
-    yield* transparent(segment.children, table, ceilings, named, scope, lexical);
+    yield* transparent(segment.children, table, named, scope, lexical);
     return;
   }
 
@@ -2096,20 +1779,20 @@ function* structural(
       if (child.type === "component" && child.name === "Answer") {
         refuseStructure(answerViolations(child));
         stated(child, scope);
-        yield* transparent(child.children, table, ceilings, named, scope, lexical);
+        yield* transparent(child.children, table, named, scope, lexical);
         continue;
       }
       if (!isBlankText(child)) {
         body.push(child);
       }
     }
-    yield* transparent(body, table, ceilings, named, scope, lexical);
+    yield* transparent(body, table, named, scope, lexical);
     return;
   }
 
   if (name === "Let") {
     refuseStructure(letViolations(segment));
-    yield* transparent(segment.children, table, ceilings, named, scope, lexical);
+    yield* transparent(segment.children, table, named, scope, lexical);
     // After its own body, like a component's `as`: a `<Let>` cannot name the
     // binding it is producing.
     const bound = letBindingName(segment);
@@ -2133,7 +1816,7 @@ function* structural(
     // caller is the one capture it was asked for.
     const body = new Set(scope);
     body.add(item);
-    yield* walk(segment.children, table, ceilings, named, body, lexical);
+    yield* walk(segment.children, table, named, body, lexical);
     const capture = eachCaptureBinding(segment);
     if (capture !== undefined) {
       scope.add(capture);
@@ -2173,7 +1856,6 @@ interface Alternative {
 function* alternatives(
   branches: readonly Alternative[],
   table: ReadonlyMap<string, Entry[]>,
-  ceilings: Ceilings,
   named: Planned[],
   scope: Set<string>,
   lexical: Lexical,
@@ -2185,7 +1867,7 @@ function* alternatives(
       stated(branch.matcher, incoming);
     }
     const region = new Set(incoming);
-    yield* walk(branch.body, table, ceilings, named, region, lexical);
+    yield* walk(branch.body, table, named, region, lexical);
     for (const bound of region) {
       if (!incoming.has(bound)) {
         outgoing.add(bound);
@@ -2210,13 +1892,12 @@ function* alternatives(
 function* transparent(
   segments: readonly Segment[],
   table: ReadonlyMap<string, Entry[]>,
-  ceilings: Ceilings,
   named: Planned[],
   scope: Set<string>,
   lexical: Lexical,
 ): Operation<void> {
   const region = new Set(scope);
-  yield* walk(segments, table, ceilings, named, region, lexical);
+  yield* walk(segments, table, named, region, lexical);
   for (const bound of region) {
     scope.add(bound);
   }
@@ -2240,13 +1921,14 @@ const GENERATED_XMD = "generated_xmd";
  * The one record shape this build writes and reads.
  *
  * A fixed marker rather than a version to negotiate: every record carries it,
- * and a record carrying anything else — the untagged #369 shape, or the tagged
- * one whose identities were structural records of an origin, a key and a
- * revision — is a shape whose rules this build does not know. Such a record is
- * refused as unreadable history, before the admission it would have restored
- * performs anything, rather than being migrated or read in part.
+ * and a record carrying anything else — the untagged #369 shape, the tagged one
+ * whose identities were structural records of an origin, a key and a revision,
+ * or the marker-3 one carrying a Workspace basis and a request inventory — is a
+ * shape whose rules this build does not know. Such a record is refused as
+ * unreadable history, before the admission it would have restored performs
+ * anything, rather than being migrated or read in part.
  */
-const RECORD_VERSION = 3;
+const RECORD_VERSION = 4;
 
 /**
  * What the durable admission records for this source.
@@ -2260,11 +1942,10 @@ function* admitSource(
   id: string,
   source: string,
   table: ReadonlyMap<string, Entry[]>,
-  ceilings: Ceilings,
   policy: Policy,
 ): Operation<DurableJson> {
   try {
-    const { named } = yield* preflight(id, source, table, ceilings);
+    const { named } = yield* preflight(id, source, table);
     return parseJson({
       version: RECORD_VERSION,
       decision: "admitted",
@@ -2298,7 +1979,6 @@ function* persistAdmission(
   id: string,
   source: string,
   table: ReadonlyMap<string, Entry[]>,
-  ceilings: Ceilings,
   policy: Policy,
   position: Readonly<SourcePosition> | undefined,
 ): Operation<Json> {
@@ -2309,7 +1989,7 @@ function* persistAdmission(
       input: policyRecord(policy),
       ...sourceDescription(position),
     },
-    () => admitSource(id, source, table, ceilings, policy),
+    () => admitSource(id, source, table, policy),
   );
   return parseJson(stored);
 }
@@ -2470,14 +2150,12 @@ export function* evaluateProtectedGeneratedXmd(
   const allow = selection(request.allow);
   const entries = selectedEntries(request, allow);
   const table = admitted(entries);
-  const ceilings = yield* normalizedCeilings(entries);
-  const policy = currentPolicy(request, allow, entries, ceilings);
+  const policy = currentPolicy(allow, entries);
 
   const stored = yield* persistAdmission(
     request.id,
     request.source,
     table,
-    ceilings,
     policy,
     request.position,
   );
@@ -2496,16 +2174,14 @@ export function* evaluateProtectedGeneratedXmd(
       CONSTRUCT[decided.construct],
     );
   }
-  // Before a single component is invoked or a single request is performed: a
-  // retained admission is a grant whose non-root ceilings must be stated
-  // exactly again, and whose Workspace basis must still be retained. The run's
-  // own progress may have retained further roots and advanced the current one;
-  // a run that lost an admission root, or moved any exact term, is asking for
-  // a different grant.
+  // Before a single component is invoked or a single effect is performed: a
+  // retained admission is a grant whose selected spellings, identities,
+  // effects and classes must be stated exactly again. A run that moved any of
+  // them is asking for a different grant.
   if (!policyHolds(decided.policy, policy)) {
     throw new GeneratedXmdError(CEILING);
   }
-  // And for the exact text, on the same terms as the ceilings. An admission is
+  // And for the exact text, on the same terms as the selection. An admission is
   // a decision about one fragment; a caller now holding a different one is
   // asking for a decision that was never made, so it refuses here rather than
   // quietly expanding the retained copy in its place.
@@ -2515,6 +2191,6 @@ export function* evaluateProtectedGeneratedXmd(
 
   // The retained source is what expands, so a continuation runs exactly the
   // bytes this run admitted rather than a caller's copy of them.
-  const restored = yield* preflight(request.id, decided.source, table, ceilings);
+  const restored = yield* preflight(request.id, decided.source, table);
   return yield* expand(request.id, restored.segments, restored.named, componentRouting, syntax);
 }

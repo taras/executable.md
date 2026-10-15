@@ -45,6 +45,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
+import { useSelection } from "./support/generated-selection.ts";
 import { rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { API, Files, useHostFiles } from "@executablemd/runtime";
@@ -345,8 +346,8 @@ describe("Tier SYN — a separately loaded protected implementation", () => {
     const projected: unknown[] = [];
     const observed: string[] = [];
     const profile: ExecutionInstallation = {
-      evaluation: {
-        read: [{ kind: "component-answer", name: "Syntax", forms: ["self-closing"] }],
+      *install(): Operation<void> {
+        yield* useSelection({ Syntax: ["self-closing"] });
       },
       componentAnswers: [
         {
@@ -385,11 +386,11 @@ describe("Tier FE14 — a separately loaded provider publishes its own answer", 
     const loaded = yield* useLoadedProvider();
     const stream = new InMemoryStream();
 
-    // The admitted entry states the name and the spelling; what admitting it
-    // grants comes from the loaded module's own declaration.
+    // The selection states the name and the spelling; what offering it grants
+    // comes from the loaded module's own declaration.
     const profile: ExecutionInstallation = {
-      evaluation: {
-        read: [{ kind: "component-answer", name: "Loaded", forms: ["self-closing"] }],
+      *install(): Operation<void> {
+        yield* useSelection({ Loaded: ["self-closing"] });
       },
       componentAnswers: [loaded.installation("test://loaded")],
     };

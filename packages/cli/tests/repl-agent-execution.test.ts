@@ -57,7 +57,7 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
 
 import { API } from "@executablemd/runtime";
 
-import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
+import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
@@ -471,7 +471,7 @@ function refusingExecution(): ReplExecution {
 }
 
 function installations(): readonly ExecutionInstallation[] {
-  return [{ evaluation: ordinaryEvaluationProfile() }, { components: agentIdentityComponents() }];
+  return [{ components: agentIdentityComponents() }];
 }
 
 function opened(result: Result<ReplSession>): ReplSession {
@@ -508,6 +508,7 @@ function start(
   return submitReplEntry({
     execution: holder,
     installations: installations(),
+    generated: ordinaryGeneratedSelection(),
     permissionMode,
     source,
     ...(includes === undefined ? {} : { includes }),
@@ -891,6 +892,7 @@ describe("L2 — exact atomic live-to-durable replacement", () => {
         yield* openReplSession({
           execution: execution(yield* golden.stream.readAll()),
           installations: installations(),
+          generated: ordinaryGeneratedSelection(),
         }),
       );
       yield* replayed.join();
@@ -978,6 +980,7 @@ describe("L3 — execution owns live work, presentation does not", () => {
         yield* openReplSession({
           execution: execution(doctored),
           installations: installations(),
+          generated: ordinaryGeneratedSelection(),
         }),
       );
       expect(refused).toBeInstanceOf(Error);
@@ -1340,6 +1343,7 @@ describe("P2 — one live request, one direct settlement", () => {
           execution: cold,
           includes: [REFERENCE_DIRECTORY],
           installations: installations(),
+          generated: ordinaryGeneratedSelection(),
         }),
       );
       yield* reopened.join();

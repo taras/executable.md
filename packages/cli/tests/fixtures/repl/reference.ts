@@ -31,7 +31,7 @@ import { inlineSource } from "@executablemd/core";
 import type { Operation, Stream } from "effection";
 import { scoped } from "effection";
 
-import { ordinaryEvaluationProfile } from "../../../src/evaluation-profile.ts";
+import { useOrdinaryGeneratedSelection } from "../../../src/evaluation-profile.ts";
 
 /** Where the entry and its nested component live. */
 export const REFERENCE_DIRECTORY = fileURLToPath(new URL("./", import.meta.url));
@@ -72,10 +72,11 @@ export function runReference(
       { at: "min" },
     );
     const source = yield* referenceSource();
+    yield* useOrdinaryGeneratedSelection();
     try {
       const execution = yield* executeInstalled(
         { ...inlineSource(source), stream, includes: [REFERENCE_DIRECTORY] },
-        [{ evaluation: ordinaryEvaluationProfile() }],
+        [],
       );
       const output = yield* collect(execution);
       return { output: String(output), events: yield* stream.readAll(), asked, failure: undefined };

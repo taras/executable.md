@@ -100,24 +100,23 @@ invoked them, with whatever the fragment rendered kept beside them under
 
 ### `allow` narrows; it never grants
 
-Writing `<Evaluate>` grants nothing. Every ceiling was stated by the host that
-assembled this run, before any document existed — which components a fragment
-may name, which spelling of each, and the exact requests any of them may
-perform. `allow` names an effect *class* and selects among the tables that
-already exist: `read` observes, `write` mutates. Omitting it asks for `read`. A
-class the host installed nothing for is refused before the program is read.
+Writing `<Evaluate>` grants nothing. What a fragment may name — which
+components, in which spelling — was chosen by the host that assembled this run,
+before any document existed. `allow` names an effect *class* and narrows to the
+spellings that reach it: `read` observes, `write` mutates. Omitting it asks for
+`read`. A class no chosen spelling reaches is refused before the program is
+read.
 
-An execution whose host stated no evaluation profile has no evaluation at all,
-and says so when the element is written rather than at startup.
+An execution whose host chose nothing has no evaluation at all, and says so when
+the element is written rather than at startup.
 
 ### What a fragment may contain
 
-Much less than a document. The evaluator admits the host's pinned components and
+Much less than a document. The evaluator admits the components the host chose and
 plain text, and refuses the whole fragment — before its first effect — for an
 executable code block, an expression prop, an interpolated binding, an `as`
-binding, any structural construct, a component the host did not admit, a
-spelling the host did not admit that component for, or a request outside the
-stated ceiling.
+binding, any structural construct, a component the host did not choose, or a
+spelling the host did not choose that component for.
 
 A producer written as content is told exactly this: it renders under the
 narrowed symbols, so `<Syntax />` inside it lists what a fragment may write
@@ -127,7 +126,7 @@ rather than what the surrounding document may write.
 
 One occurrence is one durable admission. A continuation restores the decision
 that was made rather than making it again, and refuses if the run now offers
-different text, or states ceilings the admission was not granted under.
+different text, or chooses components the admission was not granted under.
 
 ## Elicit
 

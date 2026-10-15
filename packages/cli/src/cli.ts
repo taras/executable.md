@@ -134,7 +134,7 @@ import {
   scanPlanArgs,
 } from "./plan-args.ts";
 import type { PlanScan } from "./plan-args.ts";
-import { ordinaryEvaluationProfile, statesEvaluation } from "./evaluation-profile.ts";
+import { useOrdinaryGeneratedSelection } from "./evaluation-profile.ts";
 import { runPlan } from "./plan.ts";
 import { runUpgrade } from "./upgrade.ts";
 import type { UpgradeAssembly } from "./upgrade.ts";
@@ -1406,6 +1406,12 @@ function* runDocument(
     planDeclaration,
   });
 
+  // What a generated fragment may write here, offered in the scope this
+  // execution runs in. It delegates first, so a host that attached its own
+  // selection — a workflow attachment states its own — keeps it, and this
+  // command's ordinary selection answers only where nothing else did.
+  yield* useOrdinaryGeneratedSelection();
+
   // One authoritative execution, and only one. What a host attaches travels as
   // values canonical core captures before anything else exists — never as a
   // second call, and never as middleware that could be reordered around this
@@ -1440,13 +1446,6 @@ function* runDocument(
         // and does not gain `<Plan>` at its root — but the production run child
         // it can launch is the run profile, and gets it below.
         ...(mode.testing ? {} : { declarations: [plan] }),
-        // The ceiling a generated fragment runs under, stated only where the
-        // host that attached this execution stated none: a workflow attachment
-        // states its own Workspace-bound profile, and one execution offers one
-        // maximum permission.
-        ...(statesEvaluation(mode.installations)
-          ? {}
-          : { evaluation: ordinaryEvaluationProfile() }),
       },
       // The declarations a nested execution may configure a child with, named
       // by the exact definitions this command installed. Recognizing one is

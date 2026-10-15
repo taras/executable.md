@@ -30,12 +30,15 @@ import type {
   ComponentAnswerRegistrar,
   ComponentAnswerRequest,
   ExecutionInstallation,
-  FragmentEvaluationInput,
 } from "../host.ts";
 import { registerComponents } from "../src/components/registration.ts";
-import { prepareEvaluationProfile } from "../src/evaluation-profile.ts";
-import type { ComponentAnswerEntry, ResolvedAnswer } from "../src/evaluation-profile.ts";
-import { REVOKED_CAPABILITY } from "../src/fragment-capabilities.ts";
+import {
+  captureEvaluationProfile,
+  evaluationLifetime,
+  REVOKED,
+} from "../src/evaluation-profile.ts";
+import type { ResolvedAnswer } from "../src/evaluation-profile.ts";
+import { useSelection } from "./support/generated-selection.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { answerProvider, implementation, offering } from "./support/answer-provider.ts";
 import type { Implementation } from "./support/answer-provider.ts";
@@ -44,14 +47,9 @@ import type { ComponentInvocation } from "../src/invocation-identity.ts";
 const ROOT_PATH = "evaluate.md";
 const OPEN = `<Evaluate text={'<Open />\\n'} as="answer" />\n\n<Json value={answer} />\n`;
 
-/** One provider-backed entry, in the one spelling this suite's providers offer. */
-function answerEntry(name: string): ComponentAnswerEntry {
-  return { kind: "component-answer", name, forms: ["self-closing"] };
-}
-
-/** The entry a host states for a provider-backed name. */
-function admits(): FragmentEvaluationInput {
-  return { read: [answerEntry("Open")] };
+/** The one name, in the one spelling, this suite's providers answer for. */
+function admits(): Operation<void> {
+  return useSelection({ Open: ["self-closing"] });
 }
 
 /**
@@ -137,7 +135,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
           OPEN,
           [
             {
-              evaluation: admits(),
+              install: admits,
               componentAnswers: [
                 {
                   origin: "test://provider",
@@ -192,7 +190,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     // The provider keeps the request its handler received.
     const output = yield* run(OPEN, [
       {
-        evaluation: admits(),
+        install: admits,
         componentAnswers: [answerProvider("Open", A.definition, { retain: retained })],
       },
     ]);
@@ -213,7 +211,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     const failed = yield* refusal(
       run(`<Evaluate text={'<Elsewhere />\\n'} />\n`, [
         {
-          evaluation: admits(),
+          install: admits,
           componentAnswers: [answerProvider("Open", A.definition, { retain: retained })],
         },
       ]),
@@ -267,7 +265,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
         `<Meddle />\n\n<Evaluate text={'<Open />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
         [
           {
-            evaluation: admits(),
+            install: admits,
             componentAnswers: [
               {
                 origin: "test://losing",
@@ -313,7 +311,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     // over.
     const output = yield* run(OPEN, [
       {
-        evaluation: admits(),
+        install: admits,
         componentAnswers: [
           {
             // The origin the profile admits: this is the provider whose answer
@@ -384,8 +382,8 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
       `<Evaluate text={'<Open />\\n<Other />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
       [
         {
-          evaluation: {
-            read: [answerEntry("Open"), answerEntry("Other")],
+          *install(): Operation<void> {
+            yield* useSelection({ Open: ["self-closing"], Other: ["self-closing"] });
           },
           componentAnswers: [
             answerProvider("Open", A.definition, { retain: stale }),
@@ -438,8 +436,8 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
       `<Evaluate text={'<Open />\\n<Other />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
       [
         {
-          evaluation: {
-            read: [answerEntry("Open"), answerEntry("Other")],
+          *install(): Operation<void> {
+            yield* useSelection({ Open: ["self-closing"], Other: ["self-closing"] });
           },
           componentAnswers: [
             {
@@ -501,13 +499,13 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
 
     yield* scoped(function* () {
       const running = yield* spawn(() =>
-        run(OPEN, [{ evaluation: admits(), componentAnswers: [answerProvider("Open", held)] }]),
+        run(OPEN, [{ install: admits, componentAnswers: [answerProvider("Open", held)] }]),
       );
       yield* entered.operation;
 
       // Started and finished while the first is suspended inside its fragment.
       const second = yield* run(OPEN, [
-        { evaluation: admits(), componentAnswers: [answerProvider("Open", B.definition)] },
+        { install: admits, componentAnswers: [answerProvider("Open", B.definition)] },
       ]);
       expect(String(second)).toContain("B ran");
       // The overlapping run did not reach into the first: its answer ran once,
@@ -527,17 +525,19 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
   it("FE15: a captured provider body cannot run after the execution ends", function* () {
     const A = implementation("Open", "A ran");
 
-    // The internal seam: this is the two-stage capture canonical execution
-    // performs, driven directly, because there is no public way to reach a
-    // sealed profile — which is itself the point. A row that had to add a
-    // getter to observe this would be proving something about the getter.
-    const prepared = yield* prepareEvaluationProfile(admits());
-    expect(prepared.answered).toEqual(["Open"]);
-
+    // The internal seam: this is the capture canonical execution performs,
+    // driven directly, because there is no public way to reach a captured
+    // profile — which is itself the point. A row that had to add a getter to
+    // observe this would be proving something about the getter.
+    const lifetime = evaluationLifetime();
     const answers = new Map<string, ResolvedAnswer>([
       ["Open", { definition: A.definition, origin: "test://provider" }],
     ]);
-    const profile = yield* prepared.seal(answers);
+    const profile = captureEvaluationProfile(
+      new Map([["Open", ["self-closing"] as const]]),
+      answers,
+      lifetime,
+    );
     const sealed = profile.read[0]?.definition.fn;
     if (typeof sealed !== "function") {
       throw new Error("the profile sealed no invocable entry");
@@ -558,7 +558,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     } catch (error) {
       refused = error;
     }
-    expect(String(refused)).toContain(REVOKED_CAPABILITY);
+    expect(String(refused)).toContain(REVOKED);
     // The body itself never entered a second time.
     expect(A.invoked).toEqual(["A ran"]);
   });
@@ -566,15 +566,15 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
   it("FE15: a later execution without the provider sees nothing the first left", function* () {
     const A = implementation("Open", "A ran");
     const first = yield* run(OPEN, [
-      { evaluation: admits(), componentAnswers: [answerProvider("Open", A.definition)] },
+      { install: admits, componentAnswers: [answerProvider("Open", A.definition)] },
     ]);
     expect(String(first)).toContain("A ran");
 
-    // The same document and the same profile, with no provider installed. The
+    // The same document and the same selection, with no provider installed. The
     // first run's answer is not somewhere the second can find it: a publication leaves
     // no registry, no context and no module-level table behind it, so the name
     // resolves to nothing at all rather than to what the first run admitted.
-    const failed = yield* refusal(run(OPEN, [{ evaluation: admits() }]));
+    const failed = yield* refusal(run(OPEN, [{ install: admits }]));
     expect(failed).toContain("Cannot resolve component: Open");
     expect(A.invoked).toEqual(["A ran"]);
   });
@@ -604,11 +604,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
 
     yield* scoped(function* () {
       const running = yield* spawn(() =>
-        run(
-          OPEN,
-          [{ evaluation: admits(), componentAnswers: [answerProvider("Open", slow)] }],
-          stream,
-        ),
+        run(OPEN, [{ install: admits, componentAnswers: [answerProvider("Open", slow)] }], stream),
       );
       yield* reached.operation;
       yield* running.halt();

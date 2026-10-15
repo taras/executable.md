@@ -1111,7 +1111,7 @@ children for, or refuse a paired one that has them (executable-mdx-spec §5.6).
 A Prompt sent to an already-established Agent does not acquire a new cwd merely
 because its invocation appears inside a later Dir.
 
-Its paired form is also what the standard generated-XMD write table admits
+Its paired form is also what the standard generated-XMD selection offers
 (§8.4), built from this same implementation and schema, and offered for that use
 by canonical core's own declaration: `https://executable.md/components/dir/ensure`,
 as a write (`specs/executable-mdx-spec.md` §6.13.2). Selecting
@@ -1836,37 +1836,46 @@ current sandbox.
 
 A Prompt may return an XMD fragment rather than an ad hoc file-operation schema.
 The fragment is untrusted input: it carries data, never authorization. Only the
-trusted workflow host installs the admission, and it does so by handing the
-evaluator values it holds — never through a context, a registration, a document
-prop or a component name.
+trusted workflow host offers the vocabulary, and it does so through the ordinary
+`Component.generated` property — never through a context value a document could
+replace, a registration, a document prop or a component name.
 
-#### The host states two tables, and the caller selects between them
+#### The host offers names and forms, and the caller selects a class
 
-Host policy holds a **read** table and a **write** table. Each entry is an exact
-pinned definition together with the authored forms it is admitted for and, for a
-read that performs one, the exact requests it may make. Both are values the
-trusted host captured before any document existed.
+The host's whole contribution is a selection: a map from component name to the
+authored forms that name is offered in. The generic workflow selection is core's
+`<File>` in both spellings and its self-closing `<File.Delete />`. A host that
+wants more offers the names it registered or its providers answer for; the CLI
+workflow adds paired `<Dir>` from the bundled Git Plugin, and self-closing
+`<Fetch>` only where it also bounds what a request may reach. A generic host
+that chose neither has neither.
+
+Canonical execution reads that selection once — after initialization and the
+captured installation callbacks, before public `Execution.execute` policy —
+validates all of it, resolves each selected name once through the ordinary
+import chain, and retains the implementation together with its declaration's
+metadata. What each selected spelling runs as, and which class it reaches,
+is that declaration's (`specs/executable-mdx-spec.md` §5.3).
 
 An authored `allow` selects a non-empty, duplicate-free subset of the closed
 classes `read` and `write`, and the selection normalizes to canonical order —
 `read` before `write` — because two documents asking for the same classes are
 asking for one grant. Omitting `allow` selects exactly `read`, so a document
 that states no class asks for observation alone. An empty, repeated or unknown
-selection, and a selected class the host supplied no table for, each fail before
+selection, and a selected class no selected spelling reaches, each fail before
 the candidate is parsed and before any `generated_xmd` record exists.
 
-`allow` narrows; it never grants. It cannot admit a name or a spelling, add a
-root, authorize a destination, attach a credential or widen a request. A host
-that installed no write table refuses `allow={["write"]}` outright.
+`allow` narrows; it never grants. It cannot admit a name or a spelling,
+authorize a destination, attach a credential or widen a request. A run whose
+selected spellings all read refuses `allow={["write"]}` outright.
 
 #### Admission
 
-The host supplies the exact candidate source, the retained Workspace roots the
-run has and which one is selected, the immutable read and write tables of
-admitted components, the exact requests each admitted read may perform, and the
-classes this fragment draws on. What each admitted spelling runs as — its
-identity and its effect — comes from the declaration that owns its
-implementation rather than from the table (`specs/executable-mdx-spec.md` §5.3). Before the first effect, the evaluator:
+The evaluator is given the exact candidate source, the retained implementations
+each selected name resolved to with the forms it was selected for, and the
+classes this fragment draws on. It is given no Workspace basis and no request
+inventory: what the run stands on and what a request may reach are both live
+state. Before the first effect, the evaluator:
 
 - parses the complete source;
 - walks every element and every element's content;
@@ -1876,9 +1885,24 @@ implementation rather than from the table (`specs/executable-mdx-spec.md` §5.3)
 - permits ordinary structural constructs, fragment-local `as`/`Let` bindings
   and declarative data-expression props, while refusing executable code blocks,
   arbitrary JavaScript, prose interpolation that reads a binding, unadmitted
-  components and forms outside the selected tables; and
-- refuses a request that is malformed, or that does not normalize to one the
-  host stated exactly.
+  components and forms outside the selected classes.
+
+Whether an admitted `<Fetch />` may reach the destination it names is **not**
+asked here. A host that bounds its requests states that bound as a
+`Permissions` restriction in the owner that performs the work, where it is asked
+of the request as it would go out — after every `API.Fetch` transformation and
+immediately before transport. So a dynamic destination the fragment's own data
+expressions produce is an ordinary input, and a forbidden destination, method or
+header reaches no transport at all.
+
+The bound is the complete request: the destination, the method, and the headers
+whole, with nothing missing and nothing extra. Header names are compared
+case-insensitively, and a request that names one header twice is refused rather
+than normalized — a transport joins differently cased occurrences into a single
+sent header, so neither occurrence is what goes out and no reading of such a
+request describes it. The same rule holds where the host states the bound: a
+bound that names one header twice is refused where it is installed, and offers
+no selection under it.
 
 Data expressions compose JSON literals, finite numbers, local binding
 identifiers, arrays, objects and object shorthand; they do not execute
@@ -1890,12 +1914,11 @@ binding escapes it.
 
 A refusal ends the whole fragment. Its diagnostic names the construct class, and
 so does what the run retains of it, so a rejected fragment publishes nothing —
-including a credential a rejected element carried. A malformed request is
-refused on the same terms as an unadmitted one: the ordinary component reports a
-bad URL, header or timeout by quoting it, and a generated request may not be
-quoted anywhere. The host's own ceilings are a different kind of value —
-normalized before the admission, and reported as themselves when the host
-states one it cannot mean.
+including a credential a rejected element carried. A request the fragment
+malformed is the component's own refusal, reported where the request is made:
+that is after the admission, which is the line past which the exact source is
+retained on purpose, so there is no pre-admission diagnostic for it to escape
+through.
 
 Admission is the line. Before it nothing of the candidate is retained; after it
 the exact source is retained deliberately, so an ordinary expansion diagnostic
@@ -1903,11 +1926,13 @@ naming part of the fragment discloses nothing the journal does not already
 hold.
 
 One ordinary durable `generated_xmd` event records the decision. An admission
-carries the exact source, the canonical class selection, the retained roots and
-the selected one, every entry of the selected tables as a name, identity and
-admitted forms, the identity and form of each element the fragment named, and
-the normalized request policy it ran under; a refusal carries the construct
-class and nothing else. The whole event crosses the journal's secret filter like
+carries the exact source, the canonical class selection, one row per selected
+spelling — its name, the authored form, the identity that form runs under, what
+kind of thing answered for the name and which class admitted it — and the
+identity and form of each element the fragment named; a refusal carries the
+construct class and nothing else. It carries no Workspace basis and no request
+inventory: both are live, and a grant compared against a copy of either would
+refuse a run for its own progress. The whole event crosses the journal's secret filter like
 any other, and it commits before the first generated effect. The effects
 themselves are retained by their ordinary records — `fetch` for `<Fetch>`,
 `workspace_file` for `<File>` (§10.1) — and the admission and every nested
@@ -1924,22 +1949,24 @@ An interruption before an observation's own record commits retains no partial
 observation; a later continuation may perform that read once more under the same
 retained admission.
 
-#### A continuation is held to the ceilings it was admitted under
+#### A continuation is held to the selection it was admitted under
 
 A continuation uses the exact source and selected policy retained by the
 admission, not a newly supplied candidate. It checks them before invoking a
 generated component or performing a request.
 
-Root checks preserve the run's own progress: every admission root, including
-its selected root, must remain retained, and the current root must be retained.
-Additional roots and an advanced current root pass. Losing an admission root
-refuses without revealing compared values.
+Every term must match exactly in canonical order: the selected classes, and the
+admitted spellings with the identity each runs under and the class that admitted
+it. Only the classes the selection reached participate, so changing a writing
+spelling a read-only admission never drew on does not invalidate it.
+[Generated admission and continuation](../architecture.md#agent-permissions-and-generated-xmd)
+owns the retained policy's shape.
 
-Non-root terms must match exactly in canonical order: selected classes, the
-admitted spellings with the identity each runs under, and normalized request
-ceilings. Only selected tables participate, so changing an unused write table
-does not invalidate a read-only admission. [Generated admission and continuation](../architecture.md#agent-permissions-and-generated-xmd)
-owns the retained-basis comparison and the retained policy's shape.
+The run's own progress is deliberately not a term. A committed mutation retains
+another immutable root and advances the frontier, and a continuation compared
+against a retained copy of that frontier would refuse a run for exactly the work
+it was admitted to do. So is a destination policy: it is asked live, where the
+request is performed.
 
 `File` is admitted as two spellings, never as one. Its own declaration offers
 the self-closing form as a **read** and the paired form — including the empty
@@ -1951,10 +1978,10 @@ body. A paired `<File>` under a `read`-only selection, and a self-closing
 fragment performs no read and no write at all. A repository component named
 `File` is admitted as neither spelling.
 
-A name resolves to one implementation. Two entries under one name must therefore
-carry the same definition and disjoint forms; overlapping forms or two
-definitions are a malformed host table, refused before anything is retained
-rather than settled by whichever entry the host listed first.
+A name resolves to one implementation, however many spellings it was selected
+for: both carry the same captured definition, and which class each reaches is
+its owner's answer. A spelling the owner offers no generated use of refuses at
+capture rather than acquiring a grant from the selection that named it.
 
 **The admitted form also holds at invocation.** Preflight selects the exact
 name and spelling before the first effect; canonical dispatch then holds the
@@ -2054,10 +2081,10 @@ working directory, which is the Workspace root as narrowed by the run's own
 invoked `xmd` from.
 
 What keeps a fragment's permission bounded is therefore not which object
-answered. It is the entry tables — which names, in which spelling, under which
-identity a continuation is compared against — the ceiling an admitted `<Fetch />`
-carries, the policy in force where the element runs, and the run's own logical
-filesystem, which contains no host path to name.
+answered. It is the selection — which names, in which spelling, under which
+identity a continuation is compared against — the live `Permissions` in force
+where the element runs, and the run's own logical filesystem, which contains no
+host path to name.
 
 **Each occurrence owns its durable operation.** Canonical execution
 authenticates the Evaluate invocation; a Context, contextual Api answer,
@@ -2071,12 +2098,11 @@ observation stops the authored loop unless the document places a recovery
 boundary around it, because returning a refusal as observation text would leave
 the Agent reasoning from a read that never happened.
 
-The host captures one immutable evaluation profile before installation;
-Evaluate reads retained roots and the authoritative current root from the owning
-run at invocation. No prop, binding, Context, contextual API answer,
-registration, generated name or middleware result supplies or widens the
-ceiling. Protection fixes the component, while contextual Files and Permissions
-still govern its operations.
+The host offers one selection, which canonical execution reads once before
+public execution policy and resolves there. No prop, binding, registration,
+generated name or later middleware result supplies or widens it. Protection
+fixes the component, while contextual Files and Permissions still govern its
+operations.
 
 The [canonical protected tier](../architecture.md#the-canonical-protected-tier)
 owns import enforcement: middleware may observe, delegate or refuse the import,
@@ -2086,18 +2112,20 @@ admission tables; naming `Evaluate` there is an unadmitted-component refusal.
 #### Mutation-proposal admission
 
 Mutation admission is the same boundary asked for the other class. The standard
-Deno workflow profile's write table admits exactly three spellings, in the order
-it states them: core's paired `<File>`, the paired `<Dir>` the Git Plugin asks
-for — a host deciding that a workflow run has one at all, while core supplies
-both the body and the identity it runs under — and core's self-closing
-`<File.Delete>`. A host's own extensions come after them, and the profile
-supplies no external-write and no execution table.
+Deno workflow run selects exactly three writing spellings: core's paired
+`<File>`, the paired `<Dir>` the Git Plugin asks for — a host deciding that a
+workflow run has one at all, while core supplies both the body and the identity
+it runs under — and core's self-closing `<File.Delete>`. A host's own extensions
+are names it answers for, and the selection offers no external-write and no
+execution class at all.
 
-That order is retained identity. A continuation compares the entries position by
-position ([§8.4, continuation ceilings](#a-continuation-is-held-to-the-ceilings-it-was-admitted-under)), so a run admitted under
-a table with fewer entries is refused before any generated effect rather than
-resumed under the wider one. A read-only admission never selected the write table
-and is unaffected by a change to it.
+The retained rows are the identity, in the canonical order the selection is
+admitted in rather than in whatever order a host's object happened to enumerate.
+A continuation compares them row by row
+([§8.4, continuation](#a-continuation-is-held-to-the-selection-it-was-admitted-under)), so a run admitted
+under a narrower selection is refused before any generated effect rather than
+resumed under the wider one. A read-only admission never reached the writing
+spellings and is unaffected by a change to them.
 
 An admitted mutation runs as the ordinary component it is. A paired `<File>` and
 a paired `<Dir>` and a self-closing `<File.Delete>` each cross `API.Files`, which
@@ -2112,16 +2140,16 @@ owns atomicity, failure and cancellation.
 
 Selecting `allow={["write"]}` therefore intentionally authorizes persistent,
 recursive directory creation by the admitted `<Dir>`. A continuation whose
-retained table holds another identity, spelling or effect behind that name
-refuses before any generated component executes; the write ceiling is not
-silently broadened.
+retained rows hold another identity, spelling or effect behind that name refuses
+before any generated component executes; the write ceiling is not silently
+broadened.
 
 Because the whole fragment is decided inside the admission before its first
 effect, a fragment mixing an admitted write with anything unadmitted — a later
 sibling, a nested child, or the same name in the other form — performs no write
 at all.
 
-The write table is permission, not prompting guidance. Generated source cannot
+The writing spellings are permission, not prompting guidance. Generated source cannot
 grant itself Push, PullRequest, an issue upsert, a repository, a process, an
 eval or exec block, a native command, a credential or an arbitrary network write
 merely by naming a component; the table excludes local Git even though those
@@ -2345,7 +2373,7 @@ capturing the root the run already had.
 | File read | restore historical content |
 | File write/delete | restore completion without mutating again; a deletion whose effect was never published is performed once by the continuation, against the retained frontier |
 | Glob | restore historical path set |
-| generated XMD | restore the retained admission — every admission root and its selected root still retained, every non-root ceiling exact — then offer each nested generated effect inline in authored order: a completed read or mutation restores without another live execution or root publication, an uncommitted one is performed once by the continuation, and the sequence continues to later parent effects and any durable wait |
+| generated XMD | restore the retained admission — every selected row exact, and nothing about the run's own frontier compared — then offer each nested generated effect inline in authored order: a completed read or mutation restores without another live execution or root publication, an uncommitted one is performed once by the continuation, and the sequence continues to later parent effects and any durable wait |
 | Prompt/Sample | restore response |
 | suspension request | restore its filtered request; with no input, settle the new execution `suspended` and release the executor lock again |
 | suspension answer | restore the delivered value without reaching the live controller and without consuming retained delivery state again |
@@ -2499,7 +2527,7 @@ otherwise remove. It renders nothing and returns nothing.
 Each deletion is one `workspace_file` effect, named by the expansion, the
 operation and the resolved logical target, and its retained outcome is exactly
 `{ kind: "deleted" }` — including the no-op. A deletion an admitted generated
-fragment performs is that same effect: the standard write table admits the
+fragment performs is that same effect: the standard selection offers the
 ordinary component (§8.4), so there is one account of the removal and the
 evaluator adds nothing beside it. That is provider-facing protocol
 data rather than a value a document can read. A refusal retains the same

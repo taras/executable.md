@@ -28,6 +28,8 @@ import {
 } from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import { WorkflowLifecycle, WorkflowRunStorage } from "@executablemd/workflow";
+import { Component } from "@executablemd/core/api";
+import type { GeneratedSelection } from "@executablemd/core/api";
 import { GitQuery } from "@executablemd/git/api";
 import type { WorkflowRunDatabase, WorkflowRunStatus } from "@executablemd/workflow";
 import { runWorkflow } from "../src/workflow.ts";
@@ -258,6 +260,7 @@ describe("Tier WFI — what a run hands to canonical core", () => {
     const attached: string[] = [];
     const seen: WorkflowExecution[] = [];
     let executions = 0;
+    let offered: GeneratedSelection | undefined;
 
     yield* scoped(function* () {
       const root = yield* useRunStore();
@@ -270,6 +273,10 @@ describe("Tier WFI — what a run hands to canonical core", () => {
         function* (execution): Operation<Result<void>> {
           executions += 1;
           seen.push(execution);
+          // Read inside the attachment, which is the scope the document runs
+          // in: the selection reaches core as the contextual answer there
+          // rather than as an installation member.
+          offered = yield* execution.around(Component.operations.generated);
           return Ok(undefined);
         },
       );
@@ -290,23 +297,6 @@ describe("Tier WFI — what a run hands to canonical core", () => {
     );
     expect(preparing.length).toEqual(1);
     expect(preparing[0]?.admissions?.length).toEqual(1);
-    // Every installation this run was given is one of three things, and none of
-    // them is a second execution: one `executeInstalled()`, not one per phase.
-    // A run-contract installation carries its admission; a bundle carries its
-    // own admission and no preparation; and the fragment-evaluation profile
-    // carries a
-    // ceiling and no admission at all, because stating what a generated
-    // fragment may do is not a claim about this run's history.
-    const profiles = (execution?.installations ?? []).filter(
-      (candidate) => candidate.evaluation !== undefined,
-    );
-    for (const candidate of execution?.installations ?? []) {
-      if (candidate.evaluation !== undefined) {
-        expect(candidate.admissions).toBe(undefined);
-        expect(candidate.prepare).toBe(undefined);
-        expect(candidate.components).toBe(undefined);
-      }
-    }
     // The exact contribution, rather than a rule each one satisfies: this run
     // installs no bundle, so what the *workflow command* hands core is the run
     // contract's one admission and nothing else.
@@ -319,7 +309,6 @@ describe("Tier WFI — what a run hands to canonical core", () => {
     // what it sees is the run's own contribution alone.
     expect(
       (execution?.installations ?? [])
-        .filter((candidate) => candidate.evaluation === undefined)
         .map((candidate) => candidate.admissions?.length ?? 0)
         // `sort`, not `toSorted`: the Node typecheck's lib is ES2022 and
         // `toSorted` is ES2023. `map` already returned a fresh array, so
@@ -327,12 +316,17 @@ describe("Tier WFI — what a run hands to canonical core", () => {
         .sort((left, right) => left - right),
     ).toEqual([1]);
 
-    // The ceiling is stated exactly once, and it is a real one: a run that
-    // installed no profile, or an empty one, would leave `<Evaluate>` with
-    // nothing to narrow and is the regression this asserts against rather than
-    // merely tolerating a third shape.
-    expect(profiles).toHaveLength(1);
-    expect((profiles[0]?.evaluation?.read ?? []).length).toBeGreaterThan(0);
+    // The selection is offered exactly once, inside the attachment, and it is a
+    // real one: a run that offered none, or an empty one, would leave
+    // `<Evaluate>` with nothing to narrow and is the regression this asserts
+    // against rather than merely tolerating a third shape. It is not an
+    // installation at all — a host composes one contextual answer, and
+    // `ExecutionInstallation` carries no member for it.
+    expect(offered).toEqual({
+      File: ["self-closing", "paired"],
+      "File.Delete": ["self-closing"],
+      Dir: ["paired"],
+    });
 
     // And nothing declares `<Evaluate>`. It is canonical core's own protected
     // component, so a run states the profile it narrows from and never the

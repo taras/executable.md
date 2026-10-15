@@ -32,13 +32,9 @@ import { useHostFiles } from "@executablemd/runtime";
 import { useEchoExec, useStubFs } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { executeInstalled } from "../host.ts";
-import { evaluateGeneratedXmd, pinnedComponent } from "../host.ts";
-import type {
-  DurablePreparation,
-  ExecutionInstallation,
-  GeneratedObservation,
-  GeneratedXmdRequest,
-} from "../host.ts";
+import { evaluateGeneratedXmd, pinnedComponent } from "../src/generated-xmd.ts";
+import type { GeneratedObservation, GeneratedXmdRequest } from "../src/generated-xmd.ts";
+import type { DurablePreparation, ExecutionInstallation } from "../host.ts";
 import { forEach } from "@effectionx/stream-helpers";
 import { collect } from "../src/collect.ts";
 import { Component, retain } from "../src/component-api.ts";
@@ -1257,13 +1253,7 @@ function generatedProbe(): GeneratedObservation {
 }
 
 function generatedRequest(source: string): GeneratedXmdRequest {
-  return {
-    id: "turn-1",
-    source,
-    workspaceRoots: ["workspace://primary"],
-    selectedRoot: "workspace://primary",
-    observations: [generatedProbe()],
-  };
+  return { id: "turn-1", source, observations: [generatedProbe()] };
 }
 
 interface Attempt {

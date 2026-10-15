@@ -1,87 +1,108 @@
 /**
- * What `xmd run` lets a generated fragment do.
+ * What `xmd run` offers a generated fragment, as ordinary Component middleware.
  *
  * `<Evaluate>` is public and canonical core owns what it means, so this file
- * does not decide the component — it decides the *ceiling*, which is the only
+ * does not decide the component — it decides the *selection*, which is the only
  * part a host owns. It is stated here, at the assembly this command already
- * does, before any document exists to ask for it.
+ * does, in the scope that will execute the document.
  *
- * ## The two tables
+ * ## What is selected
  *
- * `read` is core's self-closing `<File />`, its self-closing `<Glob />` and
- * canonical `<Syntax />`. `write` is core's paired `<File>…</File>`, its
- * self-closing `<File.Delete />` and paired canonical `<Elicit>`: a fragment
- * that may change something may also ask the person first, which is what makes
- * "preview this, then confirm it" a program an Agent can write. A `read`
- * selection admits no question — it promises nobody will be interrupted.
+ * Names and authored forms, and nothing else:
  *
- * A fragment run by `xmd run` therefore reaches the caller's own filesystem
- * through the Files provider this command installed, and the person through the
- * Elicitation provider the run already has. It reaches nothing else at all: no
- * network read, no process, no repository, no Git, no credential and no agent.
+ * ```ts
+ * {
+ *   File: ["self-closing", "paired"],
+ *   "File.Delete": ["self-closing"],
+ *   Glob: ["self-closing"],
+ *   Syntax: ["self-closing"],
+ *   Elicit: ["paired"],
+ * }
+ * ```
+ *
+ * Core resolves each of those names once, before public execution policy, and
+ * reads the identity, the effect and the contract of every selected spelling
+ * off the declaration that owns the implementation. So reading and writing stay
+ * separate spellings of one name — `allow={["read"]}` admits `<File />` and not
+ * `<File>…</File>` — without this file saying anything about what either does.
+ *
+ * `<Elicit>` is selected paired: a fragment that may change something may also
+ * ask the person first, which is what makes "preview this, then confirm it" a
+ * program an Agent can write. Its owner offers the paired form as a write, so a
+ * `read` selection admits no question and promises nobody will be interrupted.
+ *
+ * `Dir` and `Fetch` are absent rather than present-and-bounded. An ordinary run
+ * creates no directory and reads no network on a document's behalf, and
+ * selecting a name a fragment could never usefully call would tell an agent it
+ * had something it does not.
  *
  * ## It states no filesystem of its own
  *
- * An admitted name runs canonical core's own component, which performs its
- * operation through contextual `API.Files` — the provider this command's
- * entrypoint installed, and the same one every authored `<File>` in the
- * document crosses. So a fragment's read is observed, transformed, delegated
- * and refused by exactly the middleware an author's read is, and the effective
- * `Permissions` of the scope it runs in decide it. This file hands the profile
- * no operation at all, because there is no second filesystem for it to hand.
+ * A selected name runs the implementation canonical resolution answered with,
+ * which performs its operation through contextual `API.Files` — the provider
+ * this command's entrypoint installed, and the same one every authored `<File>`
+ * in the document crosses. So a fragment's read is observed, transformed,
+ * delegated and refused by exactly the middleware an author's read is, and the
+ * effective `Permissions` of the scope it runs in decide it.
  *
- * Reading and writing stay separate spellings of one name. A selection of
- * `read` admits `<File />` and not `<File>…</File>`, so a fragment that asks to
- * search and read cannot also write, and `<Syntax />` describing a component
- * says only what the vocabulary holds — a name it renders is not a name the
- * selection admits.
+ * ## Delegate first, default only on absence
  *
- * `<Fetch>` is absent rather than present-and-bounded. An unbounded network
- * read is a decision this command does not make on a document's behalf, and
- * admitting the name with an empty ceiling would be a different thing from not
- * admitting it — the fragment would name a component it can never successfully
- * call.
+ * This is ordinary property middleware: it asks what the scope around it
+ * already offers and supplies the selection above only when that answer is
+ * `undefined`. A host that stated its own — a workflow attachment, a test
+ * harness, a plugin — keeps it, and a defined answer that is empty or malformed
+ * is preserved for core to refuse rather than quietly replaced with this one.
+ * Two handlers compose normally; there is no contributor count, no automatic
+ * union and no installation-array inspection.
  *
- * ## No Workspace
- *
- * An ordinary run evaluates against no Workspace. Its admitted effects address
- * the Files provider its own execution installed, and there is no immutable
- * root history for a continuation to be held to — which is a different
- * statement from evaluating against an empty one, and the profile says so by
- * omitting the access rather than answering it with nothing.
- *
- * It accepts `text` and refuses `source`: `xmd run` never shipped the earlier
- * spelling, so there is no document written against it to keep working.
+ * `useGeneratedFallback()` is that rule, and every ordinary host that supplies a
+ * default goes through it — this command, each REPL entry, an isolated run
+ * child. A host that answered instead would be the one place a plugin's or a
+ * captured installation callback's selection could not be read, which is the
+ * same as not composing at all.
  */
 
-import {
-  elicitWriteEntry,
-  fileDeleteEntry,
-  fileReadEntry,
-  fileWriteEntry,
-  globReadEntry,
-  syntaxReadEntry,
-} from "@executablemd/core/host";
-import type { ExecutionInstallation, FragmentEvaluationInput } from "@executablemd/core/host";
+import { Component } from "@executablemd/core/api";
+import type { GeneratedSelection } from "@executablemd/core/api";
+import type { Operation } from "effection";
 
-/** The ceiling `xmd run` and its run children state. */
-export function ordinaryEvaluationProfile(): FragmentEvaluationInput {
+/** The names and forms `xmd run` and its run children offer. */
+export function ordinaryGeneratedSelection(): GeneratedSelection {
   return {
-    read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()],
-    write: [fileWriteEntry(), fileDeleteEntry(), elicitWriteEntry()],
+    File: ["self-closing", "paired"],
+    "File.Delete": ["self-closing"],
+    Glob: ["self-closing"],
+    Syntax: ["self-closing"],
+    Elicit: ["paired"],
   };
 }
 
 /**
- * Whether the host that attached this execution already stated a ceiling.
+ * Offer this selection for this scope, unless something nearer already offers
+ * one.
  *
- * One execution offers one maximum permission, so a workflow attachment — which
- * states its own Workspace-bound profile — is not also given the run profile's.
- * Asked about the installations rather than resolved by order, because
- * "whichever came last wins" is exactly how permission stops being auditable.
+ * Installed where the document will execute. Installing it in a scope that ends
+ * before the execution would leave the middleware chain core reads composed of
+ * handlers that are no longer there.
+ *
+ * The composition rule lives here rather than at each caller, so a host that
+ * supplies a default of its own supplies it the same way.
  */
-export function statesEvaluation(
-  installations: readonly ExecutionInstallation[] | undefined,
-): boolean {
-  return (installations ?? []).some((installation) => installation.evaluation !== undefined);
+export function useGeneratedFallback(selection: GeneratedSelection): Operation<void> {
+  return Component.around({
+    // A value member, so the chain is synchronous: `next()` answers with what
+    // the scope around this already offers, and only absence defaults. An empty
+    // or malformed selection is a host statement core validates and refuses;
+    // replacing it here would answer a host's mistake with this command's
+    // permission.
+    generated: (_args, next) => {
+      const stated = next();
+      return stated === undefined ? selection : stated;
+    },
+  });
+}
+
+/** Offer the ordinary selection, unless something nearer already offers one. */
+export function useOrdinaryGeneratedSelection(): Operation<void> {
+  return useGeneratedFallback(ordinaryGeneratedSelection());
 }

@@ -143,7 +143,12 @@ import {
   installIdentities,
   parseFormDeclaration,
 } from "./invocation-identity.ts";
-import type { IdentityComponent, ImportSelection } from "./invocation-identity.ts";
+import type {
+  FormSyntax,
+  IdentityComponent,
+  IdentityInstallation,
+  ImportSelection,
+} from "./invocation-identity.ts";
 import { CanonicalImports, ExecutionImports } from "./components/component-resolution.ts";
 import type { ImportTier } from "./components/component-resolution.ts";
 import type { ExecutionEnvironment } from "./execution-environment.ts";
@@ -154,20 +159,22 @@ import {
 } from "./components/protected.ts";
 import { coreComponentDefinition, CORE_ORIGIN } from "./components/registry.ts";
 import { rootSyntaxReference } from "./syntax-reference.ts";
+import type { SyntaxReference } from "./syntax-reference.ts";
 import { useRootSyntaxReference } from "./syntax-api.ts";
 import { capturedDocumentation } from "./documentation-api.ts";
 import {
-  CANONICAL_PROFILE_ANSWERS,
+  captureEvaluationProfile,
+  evaluationLifetime,
   EvaluationProfileError,
-  prepareEvaluationProfile,
-  TWO_PROFILES,
 } from "./evaluation-profile.ts";
 import type {
-  FragmentEvaluationInput,
-  PreparedProfile,
+  EvaluationLifetime,
+  EvaluationProfile,
   ResolvedAnswer,
   ResolvedAnswers,
 } from "./evaluation-profile.ts";
+import { admitGeneratedSelection } from "./generated-selection.ts";
+import type { AdmittedSelection } from "./generated-selection.ts";
 import { componentAnswerRegistrar } from "./component-answers.ts";
 import type { ComponentAnswerInstallation } from "./component-answers.ts";
 import { packagedAssetReader } from "./component-documentation.ts";
@@ -755,32 +762,17 @@ function* resolveImportUnrecorded(
   return yield* materializeImport(name, selection, inputs, claimed);
 }
 
-/** What a provider-backed name no provider published an answer for refuses with. */
+/** What a selected name this execution could not retain an implementation for refuses with. */
 const UNPUBLISHED_ANSWER =
-  "an evaluation profile admits a component answer, and no provider published the " +
-  "implementation the import chain answered with. A fragment runs an answer its provider " +
-  "published, or it runs none.";
+  "a host selected a name for generated use, and the implementation the import chain answered " +
+  "with is neither canonical resolution's own answer nor one a provider published. A fragment " +
+  "runs the implementation its execution retained, or it runs none.";
 
 /**
- * What canonical core itself holds for this name, or nothing.
+ * Resolve every name this host selected, once, before public execution policy,
+ * before the root import and before any document code exists.
  *
- * A protected component's implementation is the one this execution built; an
- * ordinary core component's is the definition core registered. Both are core's
- * own object, and object identity is the whole check: an answer that is
- * anything else — a repository component of the same name, a registration a
- * nested scope layered over, a middleware's replacement, a look-alike carrying
- * core's own generated URLs — is not this, so core publishes nothing for it and
- * the entry refuses it.
- */
-function sealedByCore(inputs: ImportInputs, name: string): FunctionComponentDefinition | undefined {
-  return inputs.guarded.get(name) ?? coreComponentDefinition(name);
-}
-
-/**
- * Resolve every provider-backed name this profile admits, once, before the root
- * import and before any document code exists.
- *
- * Eager on purpose. A profile that resolved a name lazily would resolve it
+ * Eager on purpose. A selection that resolved a name lazily would resolve it
  * through whatever middleware the running document had arranged by then, which
  * is exactly the substitution an admitted identity exists to close. So the
  * lookup happens here, through the complete ordinary `Component.importComponent`
@@ -789,37 +781,39 @@ function sealedByCore(inputs: ImportInputs, name: string): FunctionComponentDefi
  * is not authored work, and a durable record for it would be an effect a
  * continuation then had to account for.
  *
- * What comes back is asked about once. Whether a provider published the *exact
- * final answer* is asked of that object rather than of anything the chain held
- * in between, and that one call answers with core's own copy of what was
- * published — taken when it was published, before the chain could see it again
- * — together with the publishing installation's origin. So the value this run
- * keeps is the value the check was made about: there is no second read of the
- * chain's object for an alternating proxy or a computed member to answer
- * differently.
+ * What comes back is asked about once, and there are exactly two ways it can be
+ * an implementation this execution may retain. A provider may have published
+ * it, through the request it was handed. Or canonical resolution produced it
+ * and core published it there: core's defaults, its fixed filesystem
+ * components, the protected tier, a registration a package made and a
+ * repository component are all legitimate answers for a selected name, and
+ * requiring a provider to publish them again would make a host install a
+ * provider to be given what it already resolves to.
  *
- * What each admitted form of that definition runs as is the definition's own,
- * and the profile holds every admitted form to it as it seals.
+ * Either way the publication is made where the answer was produced, not where
+ * it came back. So a handler that replaces the answer returns something nobody
+ * published, and one that edits the canonical answer in place is compared
+ * against the copy taken at publication — both refuse.
+ *
+ * Either way the one call that identifies the answer is the call that answers
+ * with core's own copy of it, taken when it was published and before the chain
+ * could see it again. So the value this run keeps is the value the check was
+ * made about: there is no second read of the chain's object for an alternating
+ * proxy or a computed member to answer differently.
+ *
+ * What each selected form of that definition runs as is the definition's own,
+ * and the capture holds every selected form to it.
  */
-function* resolveComponentAnswers(
-  prepared: PreparedProfile,
+function* resolveSelectedComponents(
+  names: readonly string[],
   imports: CanonicalImports,
   inputs: ImportInputs,
 ): Operation<ResolvedAnswers> {
   const answers = new Map<string, ResolvedAnswer>();
-  if (prepared.answered.length === 0) {
-    // A capability-only profile performs no component-chain lookup at all.
+  if (names.length === 0) {
     return answers;
   }
-  // The protected names this profile admits. A protected component is nobody's
-  // to answer for, so no provider publishes what is behind one — core does,
-  // here, and only for the one protected name it offers a host an entry for. A
-  // host that admits any other name is still the provider's to publish, exactly
-  // as it was.
-  const canonical = new Set(
-    prepared.answered.filter((name) => CANONICAL_PROFILE_ANSWERS.has(name)),
-  );
-  const canonicalProvider = canonical.size === 0 ? undefined : imports.provider(CORE_ORIGIN);
+  const canonicalProvider = imports.provider(CORE_ORIGIN);
   yield* scoped(function* () {
     yield* Component.around(
       {
@@ -828,17 +822,11 @@ function* resolveComponentAnswers(
           // Published from the innermost position, on the exact object
           // materialization produced, so a handler composed around this one
           // publishes nothing: middleware that returns this answer unchanged
-          // leaves the publication on it, and middleware that returns anything
-          // else returns something nobody published. A foreign implementation
-          // carrying core's own URLs is not this object, so copying them
-          // publishes nothing either.
-          if (
-            canonicalProvider === undefined ||
-            !canonical.has(name) ||
-            answer !== sealedByCore(inputs, name)
-          ) {
-            return answer;
-          }
+          // leaves the publication on it, middleware that edits it in place is
+          // compared against the copy taken here, and middleware that returns
+          // anything else returns something nobody published. A foreign
+          // implementation carrying core's own URLs is not this object, so
+          // copying them publishes nothing either.
           const asked = canonicalProvider.open(name, position);
           try {
             return asked.request.answer(answer);
@@ -849,16 +837,12 @@ function* resolveComponentAnswers(
       },
       { at: "min" },
     );
-    for (const name of prepared.answered) {
+    for (const name of names) {
       // One resolution, one publication window. It opens before the chain is
       // asked and closes however this iteration leaves — answered, refused, or
       // cancelled partway through — so a handler that lost this decision, or
       // one still holding its request while the *next* name resolves, publishes
       // nothing into a decision that is already made.
-      //
-      // One call, one result. The publication and core's copy of what was
-      // published come back together, and the object the chain returned is not
-      // read again — so nothing this run keeps was decided by a second read.
       const resolution = imports.beginResolution(name);
       let identified;
       try {
@@ -877,11 +861,11 @@ function* resolveComponentAnswers(
       // An answer this execution could not keep a copy of never reaches here:
       // identification refuses it above, because there would be nothing to hand
       // back. What is left is an answer that copied fine and is not something a
-      // fragment can invoke.
+      // fragment can invoke — a Markdown definition, or a structural one.
       if (own.kind !== "function" || typeof own.fn !== "function") {
         throw new EvaluationProfileError(
-          `an evaluation profile admits <${name} />, and the import chain answered with a ` +
-            "definition that has no implementation to invoke. An admitted entry runs something.",
+          `a host selected <${name} /> for generated use, and the import chain answered with a ` +
+            "definition that has no implementation to invoke. A selected name runs something.",
         );
       }
       answers.set(name, { definition: own, origin });
@@ -2376,45 +2360,241 @@ export interface DocumentExecution extends Operation<Result<Json>> {
  * }, execution.output);
  * ```
  */
+/**
+ * Everything canonical component resolution establishes, assembled before
+ * public execution policy can observe or replace any of it.
+ *
+ * It is one value rather than a set of separate results because every member
+ * of it is decided from the same reading: the registrations the execution
+ * started with, the bundle it is closed over, the declarations its host made,
+ * the protected tier, the identity domains it minted, and the implementations
+ * the host's generated selection resolved to. Authored execution reuses this
+ * assembly rather than building a second one, so what a fragment was admitted
+ * under and what a document imports through are the same decisions.
+ */
+interface ComponentAssembly {
+  readonly startingRegistry: ComponentRegistry;
+  readonly bundle: WorkflowComponentCatalog | undefined;
+  readonly catalog: ExecutionDeclarationCatalog;
+  readonly installedComponents: InstalledComponents | undefined;
+  readonly identity: IdentityInstallation;
+  readonly forms: FormSyntax;
+  readonly imports: ExecutionImports;
+  /**
+   * This execution's own description, as a function of the search paths it
+   * accepted.
+   *
+   * Every other input the description is built from was captured before policy
+   * ran and is closed over here. The search paths are not, because a policy may
+   * legitimately replace them through `request.withOptions()`, and a
+   * description built from paths an authored import no longer resolves through
+   * would describe a different execution than the one running.
+   */
+  readonly describe: (includes: readonly string[]) => SyntaxReference;
+  /**
+   * What a generated fragment may do here, when this host selected anything.
+   *
+   * Absent is a host that selected nothing, and `<Evaluate>` refuses on that
+   * rather than inventing a selection for it.
+   */
+  readonly evaluationProfile: EvaluationProfile | undefined;
+}
+
+/**
+ * Assemble canonical component resolution, read the host's generated selection
+ * once, and retain what it selected.
+ *
+ * Called by the invocation owner, after initialization and the captured
+ * installation callbacks have assembled the host and before public
+ * `Execution.execute` policy. The order inside it is the contract: the registry,
+ * the bundle, the declarations, the protected tier and the identity domains are
+ * established first, because resolving a selected name goes through all of them;
+ * then the contextual selection is read and validated whole; then each selected
+ * name is resolved once and its implementation and metadata retained together.
+ *
+ * A policy that runs afterwards may still modify or refuse its document
+ * request, and its registry, import or selection replacement cannot replace or
+ * widen what is captured here — selection resolved against the host environment
+ * this established, including the search paths the host supplied.
+ *
+ * What it does *not* decide is how the document's own authored imports resolve.
+ * Those go through the options the canonical request settled to, so a policy
+ * that replaces the search paths through `request.withOptions()` still changes
+ * them; this capture keeps the paths it resolved against to itself.
+ */
+function* assembleComponents(
+  options: ExecuteOptions,
+  bundles: readonly WorkflowComponentBundle[],
+  identityComponents: readonly IdentityComponent[],
+  installed: readonly RetainedInstallation[],
+  documentation: readonly DocumentationContribution[],
+  canonicalImports: CanonicalImports,
+  lifetime: EvaluationLifetime,
+): Operation<ComponentAssembly> {
+  // The paths *this capture* resolves against, copied: the selection below is
+  // resolved against the environment the host assembled, and a later edit to
+  // the caller's own array describes a different one. What the document's
+  // authored imports resolve against is the accepted request's, read there.
+  const includes = [...(options.includes ?? DEFAULT_INCLUDES)];
+  // The compilers the admissions below compile schemas through, owned by the
+  // invocation that performs that admission: a compiler created per call would
+  // give one schema a fresh validator for every reading of it.
+  yield* usePropsCompiler();
+  yield* useParseCompiler();
+
+  // The bundle this execution is closed over, resolved against the
+  // registrations it starts with. A name the engine, a core default, or a
+  // reserved registration already owns is refused here — before the journal
+  // is read, before the root document is imported, and before any component
+  // runs — because a bundle that could take one back would change what a
+  // document already written means.
+  const startingRegistry = yield* Component.operations.registry;
+  const bundle = installedBundle(bundles, startingRegistry);
+
+  // Everything this host declares, admitted before the journal is read,
+  // before the root document is imported, and before any component runs. A
+  // declaration that disagrees with the source it names, that claims a name
+  // a host already reserved, or that is half of a structural pair describes
+  // a document that cannot mean what it says.
+  const catalog = yield* admitInstalledDeclarations(installed, startingRegistry);
+  const admittedDeclarations = catalog.markdown();
+  const declaredMarkdown = catalog.markdownCatalog();
+
+  // What this execution gives a durable identity to, from what installation
+  // declared before anything could observe or replace it. Each factory is
+  // called here, with a claimant this execution minted for that component
+  // and nothing else — delivered as the argument of this call and published
+  // nowhere. Registration goes through the ordinary path, so a refused one
+  // throws before `activate()`, and a claimant that was never activated
+  // answers for nothing.
+  const identity = installIdentities(
+    identityComponents,
+    admittedDeclarations.flatMap((declaration) => [...declaration.privates]),
+    // Core's own, minted the same way and registered nowhere. Every
+    // execution has them, whatever its host declared, which is what makes a
+    // protected name mean one thing everywhere.
+    EXECUTION_BUILT_COMPONENTS,
+    // Core's own as well, and already built: the filesystem components are
+    // ordinary definitions this copy of core made once, so every execution
+    // answers for them with that same object.
+    FIXED_COMPONENTS.map((component) => component.definition),
+  );
+  yield* registerComponents(identity.registrations);
+  identity.activate();
+  // The domains stop answering with the execution that minted them, so an
+  // implementation kept past teardown names nothing.
+  yield* ensure(() => identity.identities.revoke());
+  // This execution's own selection frames, held here and handed to core's
+  // expansion by value. Nothing a document, a component or middleware can
+  // name reaches them.
+  const forms = installFormSyntax();
+  // The private closures, built from the minted implementations rather than
+  // from the declarations: what a private name resolves to is the function
+  // this execution built, and it names nothing once the execution is torn
+  // down above.
+  const installedComponents =
+    declaredMarkdown === undefined
+      ? undefined
+      : new InstalledComponents(
+          declaredMarkdown,
+          identity.privates,
+          new Map(
+            admittedDeclarations.map((declaration) => [
+              declaration.name,
+              privateClosure(declaration.privates),
+            ]),
+          ),
+        );
+  // The bundle first, so a bundled execution words every refusal exactly as
+  // it always did; a tier answers for the names it claims and the first one
+  // answers for the rest.
+  const tiers: ImportTier[] = [];
+  if (bundle !== undefined) {
+    tiers.push(bundle);
+  }
+  if (installedComponents !== undefined) {
+    tiers.push(installedComponents);
+  }
+  // Last, because a tier that claims a name answers for it and the earlier
+  // ones claim names of their own; a bundled execution still words every
+  // other refusal exactly as it always did. Present in every execution,
+  // because a protected name is closed in every execution.
+  tiers.push(new ProtectedImports());
+  const imports = new ExecutionImports(tiers, canonicalImports);
+
+  // Built from what this execution captured before any installation,
+  // middleware or document code ran, except the search paths — those are the
+  // accepted request's, so the caller closes over this and supplies them. Asked
+  // only when an occurrence renders: a run whose document never writes
+  // `<Syntax />` enumerates nothing.
+  const declarations = installed.flatMap((one) => [...one.declarations]);
+  const describe = (includes: readonly string[]): SyntaxReference =>
+    rootSyntaxReference(
+      {
+        includes,
+        registry: startingRegistry,
+        components: identityComponents,
+        declarations,
+        ...(bundle === undefined ? {} : { workflow: bundle }),
+      },
+      documentation,
+    );
+
+  // The host's own selection, read exactly once and validated whole before a
+  // single name is resolved. One contextual read rather than a collection: a
+  // selection is one complete value a host composed, so there is no contributor
+  // count and no automatic union, and two middleware handlers are not by
+  // themselves a setup error.
+  const selection = admitGeneratedSelection(yield* Component.operations.generated);
+  // One import per selected name, through the ordinary chain and the canonical
+  // terminal behind it, with everything above already established and the root
+  // import not yet asked for. So the chain a capture resolves through is the
+  // ordinary one, and no document code has run to arrange it.
+  const evaluationProfile =
+    selection === undefined
+      ? undefined
+      : captureEvaluationProfile(
+          selection,
+          yield* resolveSelectedComponents([...selection.keys()], canonicalImports, {
+            searchPaths: includes,
+            registry: startingRegistry,
+            bundle,
+            declared: installedComponents,
+            catalog,
+            guarded: identity.protected,
+          }),
+          lifetime,
+          identity.componentRouting.project,
+        );
+
+  return {
+    startingRegistry,
+    bundle,
+    catalog,
+    installedComponents,
+    identity,
+    forms,
+    imports,
+    describe,
+    evaluationProfile,
+  };
+}
+
 function* executeDocument(
   options: ExecuteOptions,
+  /**
+   * Canonical component resolution, already assembled by the invocation owner
+   * before public policy ran.
+   *
+   * Carried by value rather than rebuilt. What a generated fragment was
+   * admitted under and what this document imports through are the same
+   * decisions, so a second assembly here would be a second answer to which
+   * implementation a name has.
+   */
+  assembly: ComponentAssembly,
   admissions: readonly JournalAdmission[] = [],
   completions: readonly CompletionFailure[] = [],
   preparations: readonly DurablePreparation[] = [],
-  bundles: readonly WorkflowComponentBundle[] = [],
-  identityComponents: readonly IdentityComponent[] = [],
-  installed: readonly RetainedInstallation[] = [],
-  /**
-   * The documentation each bootstrapped package contributed.
-   *
-   * Carried by value from the collection boundary, so the index a document's
-   * own `<Syntax names={…}>` reads is the index the profile actually
-   * assembled.
-   */
-  documentation: readonly DocumentationContribution[] = [],
-  /** This execution's packaged-asset reader, carried by value from the caller. */
-  readAsset: DocumentationReader = packagedAssetReader,
-  /**
-   * The one owner of every answer this execution produces or a provider
-   * identifies.
-   *
-   * Built before any installation ran, so a provider could state identities
-   * during profile capture; handed here so the component resolution this
-   * execution imports through is the same table those identity statements went
-   * into.
-   */
-  canonicalImports: CanonicalImports = new CanonicalImports(),
-  /**
-   * The one evaluation profile this host stated, copied and bound, when it
-   * stated one.
-   *
-   * Carried by value from the collection boundary. It is sealed below, once
-   * the provider-backed names it admits have been resolved, and the sealed
-   * result is handed to core's own expansion on the private environment rather
-   * than through any context: it is the ceiling `<Evaluate>` narrows from, and a
-   * document that could reach it could raise it.
-   */
-  prepared?: PreparedProfile,
   /**
    * The root bindings this execution starts with, parsed and copied by the
    * invocation that captured them.
@@ -2429,11 +2609,27 @@ function* executeDocument(
   const {
     stream,
     props = {},
+    // From the options the canonical request settled to, like every other
+    // authored input here. A policy that replaced them through
+    // `request.withOptions()` replaced where this document's imports resolve
+    // from; what the pre-policy capture resolved against is its own and is not
+    // read again.
     includes = [...DEFAULT_INCLUDES],
     modifiers: customModifiers = {},
     secretDetection,
     retainProcessOutput = true,
   } = options;
+  const {
+    startingRegistry,
+    bundle,
+    catalog,
+    installedComponents,
+    identity,
+    forms,
+    imports,
+    describe,
+    evaluationProfile,
+  } = assembly;
 
   // Carried through exactly as supplied. Rewriting an identity here would let
   // the same value inspect and execute under different ones.
@@ -2503,8 +2699,6 @@ function* executeDocument(
       // failure from. All created here and reclaimed with this task, so nothing
       // a run decided outlives it.
       yield* useSegmentCauses();
-      yield* usePropsCompiler();
-      yield* useParseCompiler();
       const liveFailure: LiveFailureSlot = {};
       yield* LiveFailure.set(liveFailure);
 
@@ -2513,107 +2707,6 @@ function* executeDocument(
       // (set by durableRun) is visible to eval code that calls
       // renderChildren → importComponent → createDurableOperation.
       const rootEvalScope = yield* useEvalScope();
-
-      // The bundle this execution is closed over, resolved against the
-      // registrations it starts with. A name the engine, a core default, or a
-      // reserved registration already owns is refused here — before the journal
-      // is read, before the root document is imported, and before any component
-      // runs — because a bundle that could take one back would change what a
-      // document already written means.
-      const startingRegistry = yield* Component.operations.registry;
-      const bundle = installedBundle(bundles, startingRegistry);
-
-      // Everything this host declares, admitted before the journal is read,
-      // before the root document is imported, and before any component runs. A
-      // declaration that disagrees with the source it names, that claims a name
-      // a host already reserved, or that is half of a structural pair describes
-      // a document that cannot mean what it says.
-      const catalog = yield* admitInstalledDeclarations(installed, startingRegistry);
-      const admittedDeclarations = catalog.markdown();
-      const declaredMarkdown = catalog.markdownCatalog();
-
-      // What this execution gives a durable identity to, from what installation
-      // declared before anything could observe or replace it. Each factory is
-      // called here, with a claimant this execution minted for that component
-      // and nothing else — delivered as the argument of this call and published
-      // nowhere. Registration goes through the ordinary path, so a refused one
-      // throws before `activate()`, and a claimant that was never activated
-      // answers for nothing.
-      const identity = installIdentities(
-        identityComponents,
-        admittedDeclarations.flatMap((declaration) => [...declaration.privates]),
-        // Core's own, minted the same way and registered nowhere. Every
-        // execution has them, whatever its host declared, which is what makes a
-        // protected name mean one thing everywhere.
-        EXECUTION_BUILT_COMPONENTS,
-        // Core's own as well, and already built: the filesystem components are
-        // ordinary definitions this copy of core made once, so every execution
-        // answers for them with that same object.
-        FIXED_COMPONENTS.map((component) => component.definition),
-      );
-      yield* registerComponents(identity.registrations);
-      identity.activate();
-      // The domains stop answering with the execution that minted them, so an
-      // implementation kept past teardown names nothing.
-      yield* ensure(() => identity.identities.revoke());
-      // This execution's own selection frames, held here and handed to core's
-      // expansion by value. Nothing a document, a component or middleware can
-      // name reaches them.
-      const forms = installFormSyntax();
-      // The private closures, built from the minted implementations rather than
-      // from the declarations: what a private name resolves to is the function
-      // this execution built, and it names nothing once the execution is torn
-      // down above.
-      const installedComponents =
-        declaredMarkdown === undefined
-          ? undefined
-          : new InstalledComponents(
-              declaredMarkdown,
-              identity.privates,
-              new Map(
-                admittedDeclarations.map((declaration) => [
-                  declaration.name,
-                  privateClosure(declaration.privates),
-                ]),
-              ),
-            );
-      // The bundle first, so a bundled execution words every refusal exactly as
-      // it always did; a tier answers for the names it claims and the first one
-      // answers for the rest.
-      const tiers: ImportTier[] = [];
-      if (bundle !== undefined) {
-        tiers.push(bundle);
-      }
-      if (installedComponents !== undefined) {
-        tiers.push(installedComponents);
-      }
-      // Last, because a tier that claims a name answers for it and the earlier
-      // ones claim names of their own; a bundled execution still words every
-      // other refusal exactly as it always did. Present in every execution,
-      // because a protected name is closed in every execution.
-      tiers.push(new ProtectedImports());
-      const imports = new ExecutionImports(tiers, canonicalImports);
-
-      // The one place a provider-backed profile name is resolved, and the last
-      // thing that happens before the environment exists: the registry, the
-      // bundle, the declarations, the protected table and the identity domains
-      // are all established, and the root import has not been asked for. So the
-      // chain a capture resolves through is the ordinary one, and no document
-      // code has run to arrange it.
-      const evaluationProfile =
-        prepared === undefined
-          ? undefined
-          : yield* prepared.seal(
-              yield* resolveComponentAnswers(prepared, canonicalImports, {
-                searchPaths: includes,
-                registry: startingRegistry,
-                bundle,
-                declared: installedComponents,
-                catalog,
-                guarded: identity.protected,
-              }),
-              identity.componentRouting.project,
-            );
 
       /**
        * Resolve one component import the way this execution resolves them, and
@@ -2668,20 +2761,12 @@ function* executeDocument(
         return imports === undefined ? definition : imports.issue(name, definition);
       }
 
-      // Built from what this execution captured before any installation,
-      // middleware or document code ran, and asked only when an occurrence
-      // renders: a run whose document never writes `<Syntax />` enumerates
-      // nothing.
-      const derivedSyntax = rootSyntaxReference(
-        {
-          includes,
-          registry: startingRegistry,
-          components: identityComponents,
-          declarations: installed.flatMap((one) => [...one.declarations]),
-          ...(bundle === undefined ? {} : { workflow: bundle }),
-        },
-        documentation,
-      );
+      // What this execution describes itself with: everything the assembly
+      // captured before any installation, middleware or document code ran,
+      // against the search paths the request settled to. `xmd syntax` and an
+      // authored `<Syntax />` enumerate the components a document here can
+      // actually import, so the paths they read are the accepted ones.
+      const derivedSyntax = describe(includes);
       // Bound as the contextual Api's fallback, not installed in front of
       // anything: a host that stated its own profile with `useSyntax()` still
       // answers, and this is what answers when none did.
@@ -2979,20 +3064,6 @@ export interface ExecutionInstallation {
    * operation after its invocation.
    */
   readonly components?: readonly IdentityComponent[];
-  /**
-   * The maximum permission a generated fragment may be evaluated under here.
-   *
-   * `<Evaluate>` is public, so any author may write it; the permission ceiling
-   * comes only from the trusted host. Nothing a running document reaches names
-   * this — not a context, whose name is not a secret; not a registry, which a
-   * nested scope layers over; not a prop, which an author writes.
-   *
-   * Omitted is the ordinary case for a host that offers no evaluation at all:
-   * `<Evaluate>` then refuses before the producer runs, rather than evaluating
-   * under a ceiling nobody stated. One execution accepts one; two are refused
-   * rather than ordered.
-   */
-  readonly evaluation?: FragmentEvaluationInput;
   /**
    * The providers behind this installation's `component-answer` entries.
    *
@@ -3534,7 +3605,7 @@ function* invoke(
   // differently the second time would let a host be tested for one provider and
   // install another, and a provider installer added from inside an earlier
   // `install()` would be one nothing captured.
-  const assembly = Object.freeze(
+  const installers = Object.freeze(
     installations.map((installation) =>
       Object.freeze({
         providers: Object.freeze(
@@ -3547,35 +3618,16 @@ function* invoke(
     ),
   );
 
-  // The maximum permission a generated fragment may be evaluated under here,
-  // read on the same terms and for a stronger reason: two profiles would be two
-  // answers to what a fragment may *do*, and choosing between them by
-  // installation order would make permission depend on assembly. A host that
-  // stated none offers no evaluation at all, which `<Evaluate>` refuses with
-  // rather than inventing a ceiling for.
-  const stated = installations.flatMap((installation) => {
-    const profile = installation.evaluation;
-    return profile === undefined ? [] : [profile];
+  // The lifetime every captured generated implementation is held to, opened
+  // and armed before a single `install()` runs — so what a capture retains is
+  // revoked however the execution ends, including when it is halted partway
+  // through assembly. A fragment body, a handler or a retained callback that
+  // reaches one afterwards refuses rather than acting on a filesystem the run
+  // no longer holds a transaction for.
+  const lifetime = evaluationLifetime();
+  yield* ensure(function* () {
+    lifetime.revoke();
   });
-  if (stated.length > 1) {
-    throw new Error(TWO_PROFILES);
-  }
-  // Copied and bound here, before any `install()` runs, so a host that mutates
-  // its own tables, schemas or headers from inside one changes nothing this
-  // execution does. What it cannot settle yet is what a provider-backed name
-  // resolves to: that takes the complete ordinary import chain, and the
-  // providers have not installed.
-  const prepared = stated[0] === undefined ? undefined : yield* prepareEvaluationProfile(stated[0]);
-  if (prepared !== undefined) {
-    // Registered before the first `install()`, so the operations this profile
-    // bound are revoked however the execution ends — returning, failing, or
-    // being halted partway through assembly. A fragment body, a handler or a
-    // retained callback that reaches one afterwards refuses rather than acting
-    // on a filesystem the run no longer holds a transaction for.
-    yield* ensure(function* () {
-      prepared.revoke();
-    });
-  }
 
   // The one owner of every answer this execution produces or a provider
   // identifies. Constructed inactive, and activated only after its teardown is
@@ -3600,7 +3652,7 @@ function* invoke(
   // in the order the installations were captured. A provider registers
   // middleware through its registrar, and each invocation states what it is
   // returning through a fresh request fixed to the provider's origin.
-  for (const { providers, install } of assembly) {
+  for (const { providers, install } of installers) {
     for (const { origin, install: installProvider } of providers) {
       yield* installProvider(componentAnswerRegistrar(canonicalImports.provider(origin)));
     }
@@ -3640,21 +3692,31 @@ function* invoke(
     },
   });
 
+  // Canonical component resolution and the host's generated selection, both
+  // established here: after initialization and the captured installation
+  // callbacks have assembled the host, and before the public policy below. A
+  // policy that replaces a registration, imports a different body or supplies a
+  // broader selection afterwards changes neither the vocabulary nor the
+  // implementations this retained.
+  const assembly = yield* assembleComponents(
+    options,
+    bundles,
+    identityComponents,
+    installed,
+    documentation,
+    canonicalImports,
+    lifetime,
+  );
+
   // Whatever a handler returns is not an execution, so it is not read.
   yield* invocationExecution.operations.execute(issued.request);
 
   return yield* executeDocument(
     issued.settle(),
+    assembly,
     admissions,
     issued.completions(),
     preparations,
-    bundles,
-    identityComponents,
-    installed,
-    documentation,
-    readAsset,
-    canonicalImports,
-    prepared,
     initialBindings,
   );
 }

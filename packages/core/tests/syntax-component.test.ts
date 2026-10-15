@@ -50,11 +50,9 @@ import { Component, content } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
 import { execute } from "../src/execute.ts";
 import { executeInstalled, Markdown, sourceDigest } from "../host.ts";
-import type {
-  ComponentAnswerRequest,
-  ExecutionInstallation,
-  FragmentEvaluationInput,
-} from "../host.ts";
+import type { ComponentAnswerRequest, ExecutionInstallation } from "../host.ts";
+import type { GeneratedSelection } from "../src/component-api.ts";
+import { useSelection } from "./support/generated-selection.ts";
 import { inspectComponent, inspectSyntax } from "../src/inspect.ts";
 import { validateDocumentStructure } from "../src/document-validation.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -1014,9 +1012,9 @@ describe("Tier SYN — the named form", () => {
    */
   const PROBE_LABEL = "probe ran";
 
-  /** The provider-backed entry a layered host admits. */
-  function layeredEntry(): FragmentEvaluationInput {
-    return { read: [{ kind: "component-answer", name: "Open", forms: ["self-closing"] }] };
+  /** The provider-backed name a layered host offers. */
+  function layeredEntry(): GeneratedSelection {
+    return { Open: ["self-closing"] };
   }
 
   /** The registration the inner layer adds beside the bootstrap's own. */
@@ -1065,7 +1063,9 @@ describe("Tier SYN — the named form", () => {
           yield* useMarkerDocumentation();
           yield* registerComponents([layeredComponent("inner"), probeRegistration(probed)]);
           const local: ExecutionInstallation = {
-            evaluation: layeredEntry(),
+            *install(): Operation<void> {
+              yield* useSelection(layeredEntry());
+            },
             componentAnswers: [
               answerProvider("Open", answer.definition, {
                 origin: "test://layer",
@@ -1138,7 +1138,9 @@ describe("Tier SYN — the named form", () => {
           return yield* run(`<Evaluate text={'<Probe />\\n'} allow={["read"]} />\n`, [
             stating(symbolsOf("Marker")).installation,
             {
-              evaluation: layeredEntry(),
+              *install(): Operation<void> {
+                yield* useSelection(layeredEntry());
+              },
               componentAnswers: [
                 answerProvider("Open", answer.definition, { origin: "test://layer" }),
               ],
@@ -1176,7 +1178,9 @@ describe("Tier SYN — the named form", () => {
           return yield* run(`<Outer />\n\n<Evaluate text={'<Open />\\n'} allow={["read"]} />\n`, [
             stating(symbolsOf("Marker")).installation,
             {
-              evaluation: layeredEntry(),
+              *install(): Operation<void> {
+                yield* useSelection(layeredEntry());
+              },
               componentAnswers: [
                 answerProvider("Open", answer.definition, { origin: "test://layer" }),
               ],
@@ -1220,7 +1224,9 @@ describe("Tier SYN — the named form", () => {
                 [
                   stating(symbolsOf("Marker")).installation,
                   {
-                    evaluation: layeredEntry(),
+                    *install(): Operation<void> {
+                      yield* useSelection(layeredEntry());
+                    },
                     componentAnswers: [
                       answerProvider("Open", answer.definition, {
                         origin: "test://layer",

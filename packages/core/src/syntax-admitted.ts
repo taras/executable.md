@@ -3,8 +3,8 @@
  *
  * An agent asked to write a fragment is told what a fragment may contain. That
  * is not the vocabulary of the site the `<Evaluate>` element was written at:
- * the evaluator admits the trusted composition table and the host's pinned
- * identities for the selected classes, and nothing else — no executable code
+ * the evaluator admits the trusted composition table and the names the host
+ * selected for the selected classes, and nothing else — no executable code
  * block, no interpolation, and none of the structural constructs an ordinary
  * document has.
  *
@@ -22,7 +22,6 @@
 
 import { protectedComponent } from "./components/protected.ts";
 import type { CapturedEntry } from "./evaluation-profile.ts";
-import type { FragmentCapability } from "./fragment-capabilities.ts";
 import type { CompleteComponentSyntaxEntry, SyntaxSymbols } from "./inspect.ts";
 import type { ReturnsSchema } from "./types.ts";
 
@@ -30,53 +29,35 @@ import type { ReturnsSchema } from "./types.ts";
 const UNDECLARED: ReturnsSchema = { type: "string" };
 
 /**
- * The component canonical core owns that performs each of these operations.
- *
- * A capability is core's operation under the name the host chose, so neither
- * half alone identifies a component: a host may admit `file:write` as
- * `<Scribe>`, and nothing stops it admitting `files:glob` as `<File>`. The
- * pair does. When a host admits the operation core's own component of that name
- * performs, the component an author was shown under that name is the one they
- * may run here — and availability is exactly that comparison, so reporting this
- * entry as an ordinary registration would answer `no` for a component the
- * fragment can write.
- *
- * Only the operations core owns a component for appear here. A read and a write
- * both belong to `<File>`, because one name holds both forms.
- */
-const OWNED_CAPABILITIES: Readonly<Partial<Record<FragmentCapability, string>>> = Object.freeze({
-  "file:read": "File",
-  "file:write": "File",
-  "file:delete": "File.Delete",
-  "directory:ensure": "Dir",
-});
-
-/**
- * Core's documentation origin for this entry, when the entry is core's own
- * component however the host admitted it.
+ * Core's documentation origin for this entry, when canonical core owns the name.
  *
  * Documentation provenance only. It changes nothing a continuation compares:
  * what the grant was recorded as is the identity the owning declaration offers
  * the admitted spelling under, and that is core's wherever core supplies the
  * component behind the name.
+ *
+ * Two sources, in order. An exact routed answer carries its own canonical
+ * origin, which survives a provider delegating it. Otherwise a name in the
+ * canonical protected tier is core's by construction — nothing else can answer
+ * for it — so reporting it as an ordinary registration would answer "could I
+ * supply this name myself?" with yes about a name no host can take.
  */
 function ownedOrigin(entry: CapturedEntry): string | undefined {
   if (entry.protectedOrigin !== undefined) {
     return entry.protectedOrigin;
   }
-  const owned = entry.capability === undefined ? undefined : OWNED_CAPABILITIES[entry.capability];
-  return owned === entry.name ? protectedComponent(entry.name)?.origin : undefined;
+  return protectedComponent(entry.name)?.origin;
 }
 
 /**
  * The symbols an evaluation admitted, in the order the tables state them.
  *
  * Each entry reports the origin its implementation came from: core's own where
- * core supplies the body, and the publishing provider installation's where the
- * import chain answered. Reported as a registration for ordinary entries. An
- * exact protected answer keeps its canonical documentation origin even when a
- * different provider delegates it, and so does a capability performing an
- * operation canonical core owns a component for, under that component's name.
+ * canonical resolution answered with core's, and the publishing provider
+ * installation's where a provider answered. Reported as a registration for
+ * ordinary entries, and as protected for a name the canonical protected tier
+ * owns — including an exact protected answer a different provider delegated,
+ * which keeps its canonical documentation origin.
  */
 export function admittedSymbols(entries: readonly CapturedEntry[]): SyntaxSymbols {
   return {
@@ -110,10 +91,9 @@ function describe(entry: CapturedEntry): CompleteComponentSyntaxEntry {
     captures: definition.captures === undefined ? [] : [...definition.captures],
     returnMode: definition.returns === undefined ? "text" : "value",
     returns: definition.returns ?? UNDECLARED,
-    // The host's own prose about the admitted entry, not the capability body's.
-    // Core supplies the operation; only the host knows what admitting it under
-    // this name means here, and a catalog that named a component and said
-    // nothing about it would tell an agent a name and no more.
+    // The owning declaration's own prose. A host selects a name and says
+    // nothing about it, so what describes an admitted entry is what describes
+    // the component everywhere else.
     ...(entry.description === undefined ? {} : { description: entry.description }),
     // `as` and `context` are deliberately absent whatever the implementation
     // declares, for two different reasons. Binding is engine-owned language

@@ -1948,7 +1948,7 @@ run but are absent from the diagnostic trace.
 | File | Contents |
 |---|---|
 | `src/eval-transform.ts` | `transformBlock()`, `serializeExports()`, `isJson()`, `TransformResult` |
-| `src/component-api.ts` | `Component` Api + `ComponentApi` interface and the direct operations (`importComponent`, `applyModifiers`, `applyBoundModifiers`, `raise`, `env`, `evalScope`, `codeBlock`, `persistent`, `content`, `hasBinding`) — §5.5 |
+| `src/component-api.ts` | `Component` Api + `ComponentApi` interface and the direct operations (`importComponent`, `applyModifiers`, `applyBoundModifiers`, `raise`, `env`, `evalScope`, `generated`, `codeBlock`, `persistent`, `content`, `hasBinding`) — §5.5 |
 | `src/eval-context.ts` | `compileBlock()` — delegates to `API.Env.compile` |
 | `src/data-uri-compiler.ts` | `useDataUriCompiler()` — data: URI compiler middleware for Deno/Bun; owns `STANDARD_IMPORTS` |
 | `src/temp-file-compiler.ts` | `useTempFileCompiler()` — temp-file compiler middleware for Node/Bun; owns `STANDARD_IMPORTS` |
@@ -1962,7 +1962,7 @@ run but are absent from the diagnostic trace.
 | `src/fetch-response.ts` | `detachHeaders()`, `detachStatus()`, `FetchResponseRecord` — the response detached from the provider's (§6.18) |
 | `src/fetch-journal.ts` | `persistFetch()` — the `fetch` durable effect (§6.18, §10.1) |
 | `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedFileWrite()`, `pinnedFileDelete()`, `pinnedComponent()`, `pinnedMutation()`, `GeneratedEffectClass`, `GeneratedComponentForm`, `GeneratedImplementation`, `GeneratedMutation`, `GeneratedObservation`, `GeneratedRequest`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam under the always-on trusted composition table and a caller-selected subset of the closed effect classes `read` and `write`, resolving each name and authored spelling to the identity its owning declaration offers that spelling under — core Json, the self-closing `<File>` read, the paired `<File>` write and the self-closing `<File.Delete>` among them — and preserving every component's ordinary binding and output behavior. `evaluateGeneratedXmd()` returns `Operation<string>` containing the fragment's rendered text. Its admission and every generated effect use occurrence-owned identities in the existing ordinary durable sequence, with no `ephemeral()` bridge, staging or result envelope |
-| `src/glob-source.ts` | `GLOB_PROPS`, `GLOB_RETURNS`, `globPatterns()`, `globFailure()` — the props, return contract, source rules and sanitized failure sentence one search is held to, shared by the ordinary `<Glob>` component and the Glob capability an evaluation profile admits, so one dialect answers both (§6.14) |
+| `src/glob-source.ts` | `GLOB_PROPS`, `GLOB_RETURNS`, `globPatterns()`, `globFailure()` — the props, return contract, source rules and sanitized failure sentence one search is held to, shared by the ordinary `<Glob>` component and the generated `<Glob />` a selection offers, which is that same component (§6.14) |
 | `src/components/component-resolution.ts` | `CanonicalImports`, `ComponentResolution` — the witness a closed execution issues for the definition it produced and verifies where it is invoked, and the per-invocation request a provider publishes its definition through |
 | `src/components/generated-metadata.ts` | `GeneratedForm`, `GeneratedForms`, `admitGeneratedForms()`, `generatedRefusal()`, `definitionGeneratedRefusal()`, `offeredForm()` — what a declaration says about the generated use of each of its authored spellings: the absolute `https://executable.md/` identity a continuation is compared against, and whether that spelling observes or mutates. One pass reads each member once, validates it and answers with the copy a caller retains, and every live admission reads a definition through it (§5.3) |
 | `src/invocation-forms.ts` | `formsRefusal()`, `acceptedForms()` — the canonical authored-forms declaration both a registration and its generated metadata are held to (§5.3) |
@@ -4322,14 +4322,24 @@ terms `<Syntax />` is owned: no registration, repository file, bundle member,
 declared Markdown component, import-handler answer or second loaded copy
 replaces it, and claiming the name is refused where the claim is made.
 
-**Protection settles which implementation runs, and grants nothing.** Everything
-the component can reach was stated by a trusted host at the installation
-boundary, as one `ExecutionInstallation.evaluation` profile captured by value
-before any installation runs. An execution accepts one profile and refuses two —
-even two identical ones, because a host that stated it twice has an assembly
-nobody validated. An execution offered none has no evaluation at all, and says
-so when the element is written rather than at startup: a document that never
-writes `<Evaluate>` is not asking for a ceiling.
+**Protection settles which implementation runs, and grants nothing.** What the
+component can reach was offered by a trusted host as one `Component.generated`
+selection: a map from component name to the authored forms that name is offered
+in, read as one contextual answer before public `Execution.execute` policy. The
+default is `undefined`, which is a host that offers no generated evaluation at
+all — and says so when the element is written rather than at startup, because a
+document that never writes `<Evaluate>` is not asking for one. Normal contextual
+composition answers the property, so two handlers compose rather than conflict:
+a host assembly is responsible for composing the value it intends to offer, and
+there is no contributor count to refuse on.
+
+A defined selection is held to all of it. It names at least one component; every
+name is a component name; every value is a canonical form declaration —
+`["self-closing"]`, `["paired"]` or `["self-closing", "paired"]`. A malformed
+map, name or form list refuses setup, and nothing is repaired, filtered, merged
+or replaced with a default: no member of an invalid selection becomes an
+executable partial allowance, and no public execution policy, root import,
+paired producer, fragment body or generated admission runs after the refusal.
 
 **Two disjoint input forms.**
 
@@ -4384,75 +4394,89 @@ profile inputs and results only. Replay reconstructs callable routing from the
 current execution's verified answers, never from a retained function or route.
 
 **`allow` narrows; it never grants.** It names an effect *class* — `read` or
-`write` — and the class resolves to a table the host already installed. Omitting
-it asks for `read`. A class the host installed nothing for is refused before the
-program is read. The admitted vocabulary is the union of the profile's
-always-on trusted composition table and the selected effect tables. The ordinary
-profile places core's exact Json definition in composition. A composition entry
+`write` — and the class resolves to the selected spellings whose owners offer
+them as that effect. Omitting it asks for `read`. A class the selection reaches
+no spelling of is refused before the program is read. The admitted vocabulary is
+the union of the always-on trusted composition table and the selected effect
+classes. Core's exact Json definition is in composition. A composition entry
 contains no effect operation and is not selected through `allow`.
 
 Bindings and structural constructs are engine-owned language syntax and need no
-profile entry. Another pure component is available only when the trusted host
-captured its exact definition and stable identity in the composition table
-before execution; purity is never inferred from a name, documentation or the
-absence of an effect entry. Conflicting names or forms across composition and
-effect tables refuse at profile capture. Generated Syntax describes the same
-union preflight and execution use, and continuation reconciles every admitted
-composition identity.
+selected name. Another pure component is available only when canonical core
+holds its exact definition and stable identity in the composition table;
+purity is never inferred from a name, documentation or the absence of an effect.
+A selection naming a composition name refuses at capture. Generated Syntax
+describes the same union preflight and execution use, and continuation
+reconciles every admitted composition identity.
 
-**Entries name components, not operations.** A host states which component an
-admitted name runs, and canonical capture answers with canonical core's own
-ordinary definition for it — the same `<File>`, `<File.Delete>`, `<Dir>`,
-`<Glob>`, `<Fetch>` or `<Elicit>` an author writes. The host supplies no
-operation of its own: an admitted element performs its work through contextual
-`API.Files` and `API.Fetch` exactly as an authored element does, so a generated
-read crosses the middleware an authored read crosses, reaches the provider the
-host installed — the caller's own filesystem under `xmd run`, a workflow run's
-transaction-bound one under `xmd workflow` — and is decided by the effective
-`Permissions` of the scope it runs in. A directory an admitted fragment creates
-scopes its content through the ordinary invocation-owned working directory, and
-the invocation that installed it takes it away again.
+**A selection names components, not operations.** Canonical execution resolves
+each selected name once — through the complete ordinary
+`Component.importComponent` chain and the canonical terminal behind it, after
+initialization and the captured installation callbacks and before public
+execution policy — and retains the implementation it answered with together with
+that declaration's metadata. Core's own defaults, its fixed filesystem
+components, the protected tier, a registration a package made and a provider's
+published answer are each a legitimate answer for a selected name; a replacement
+nobody published is refused, as is an answer with no implementation to invoke.
+Selecting `<Glob>`, `<Fetch>` or `<Elicit>` therefore resolves the *actual* host
+answer, and a replacement whose declaration offers no generated use of the
+selected spelling refuses setup rather than falling back to core's default.
+`File`, `File.Delete` and `Dir` are canonically protected, so nothing can answer
+for them but core.
 
-What a host decides is admission and nothing about performance: which names a
-fragment may write, which spelling each name is admitted for, which requests an
-admitted `<Fetch />` may perform, and how long any of it lasts. An admitted
-implementation is held to the execution that captured it and refuses once that
-execution has ended.
+What a selected name runs as is the owning declaration's: the absolute
+`https://executable.md/` identity each authored form is offered under, and
+whether that form observes or mutates. A host offers a name and a spelling and
+nothing else — no schema, description, identity, dispatcher or operation — so a
+selection cannot describe a contract or an effect the implementation does not
+have. An admitted element performs its work through contextual `API.Files` and
+`API.Fetch` exactly as an authored element does, so a generated read crosses the
+middleware an authored read crosses, reaches the provider the host installed —
+the caller's own filesystem under `xmd run`, a workflow run's transaction-bound
+one under `xmd workflow` — and is decided by the effective `Permissions` of the
+scope it runs in. A directory an admitted fragment creates scopes its content
+through the ordinary invocation-owned working directory, and the invocation that
+installed it takes it away again.
 
-A capability states what it binds when the ordinary component does, because it
-*is* the ordinary component: the definition carries that return contract, so
-`as` is mandatory, the element renders nothing, and the bound value is validated
-— decided by the ordinary value-component rule, before the operation behind the
-entry runs. One name runs one component, so a name admitted for capabilities
-owned by two different components is refused at capture.
+Which destination an admitted `<Fetch />` may reach is a **live** question
+rather than part of the selection. A host that bounds its requests states that
+bound as a `Permissions` restriction in the owner that performs the work, where
+it is asked of the transformed request immediately before transport. So a
+dynamic destination the fragment's own data expressions produce is an ordinary
+input to preflight, and a forbidden one reaches zero transport calls.
 
-**The ordinary read table is File, Glob and canonical Syntax.** `xmd run` and
-every `host="run"` child state one profile: `read` holds the self-closing
-`<File />`, the self-closing `<Glob />` and canonical `<Syntax />`, and `write`
-holds the paired `<File>…</File>`, the self-closing `<File.Delete />` and paired
-canonical `<Elicit>`. A `read` selection therefore never reaches a write form,
-and `<Fetch>` remains absent rather than admitted with an empty ceiling.
+A selected name states what it binds because it *is* the ordinary component: the
+definition carries that return contract, so `as` is mandatory, the element
+renders nothing, and the bound value is validated — decided by the ordinary
+value-component rule, before the operation runs. One name runs one
+implementation, however many spellings are selected for it.
 
-`<Elicit>` is in the write table because asking is not reading. A fragment that
-may change something may also ask the person first — which is what makes
-"preview this, then confirm it" a program an Agent can write — while a `read`
-selection promises nobody will be interrupted. It is admitted in its paired
-spelling only, under the identity core's own declaration offers that spelling as
-a write: the question is the content, so a self-closing one would be a request
-with nothing in it.
+**The ordinary selection is File, File.Delete, Glob, Syntax and Elicit.**
+`xmd run` and every `host="run"` child offer the same map: `File` in both
+spellings, self-closing `File.Delete`, self-closing `Glob`, self-closing
+`Syntax` and paired `Elicit`. Which class each of those reaches is the owner's
+answer, so a `read` selection reaches the reading spellings alone. `Dir` and
+`Fetch` are absent rather than offered with nothing they could do.
 
-It is a *pinned capability*, not a name the fragment resolves. Preflight selects
-it where it finds an `<Elicit>` occurrence under a `write` selection, and the body
-it selects is canonical core's own `<Elicit>` — closed over before any document
-code runs, exactly as the body behind `<File>` is. No component name is resolved
-for it at any point: nothing is looked up before the root import, nothing is
-looked up at invocation, and middleware answering a generated import with a body
-of its own is refused, because only canonical execution answers one. A same-name
-repository, registered, declared, middleware or separately loaded `Elicit`
-therefore receives no generated permission and never runs — including the
-workflow host's own suspension replacement, which continues to answer *authored*
-`<Elicit>` in a run exactly as it did. An execution whose fragment never writes
-the element resolves nothing and is unaffected by any of them.
+`<Elicit>` reaches the `write` class because asking is not reading: core's own
+declaration offers its paired form as a write, and the selection names the
+spelling without deciding that. A fragment that may change something may also
+ask the person first — which is what makes "preview this, then confirm it" a
+program an Agent can write — while a `read` selection promises nobody will be
+interrupted. The paired spelling only: the question is the content, so a
+self-closing one would be a request with nothing in it.
+
+`Elicit` is a replaceable name, so selecting it resolves what this host actually
+answers for it — once, before public execution policy, whether or not the
+fragment goes on to write the element. A registration, repository file,
+declaration or separately loaded definition that legitimately shadows `Elicit`
+is therefore what a selected `<Elicit>` would run, and one whose declaration
+offers no generated use of the paired form refuses setup rather than silently
+reaching core's default. Middleware answering that import with a body nobody
+published is refused, because only an implementation canonical resolution
+produced or a provider published is one an execution may retain. A host that
+replaces `Elicit` for *authored* use and offers it to generated XMD therefore
+states the metadata its replacement runs under, or offers the name not at all.
 
 What stays contextual is the interaction and only the interaction. The pinned
 body reaches the Elicitation Api lexically in scope where the fragment runs, so
@@ -4472,22 +4496,18 @@ normalized to a sentence naming no path. It performs that search through context
 element does, and the provider still owns matching, ordering, deduplication,
 POSIX-relative results and traversal.
 
-`<Syntax />` is admitted as a component answer, never as a capability: a
-protected name is one canonical core already owns, and a second body for it
-would be a second answer to what the name means. Canonical capture resolves it
-once through the ordinary import chain before any document code, where canonical
-core publishes the exact answer canonical resolution produced, and seals it
-through the execution's own protected-body route. The identity it is admitted
-under is the one core's own declaration offers its self-closing spelling as.
-Middleware may observe, delegate or refuse that import; an answer it replaces is
-one nobody published and is refused. Admitting it grants no other permission —
-named documentation may describe a component the selection does not admit, and
+`<Syntax />` is a selected name like any other, resolved once through the
+ordinary import chain before any document code — where canonical core publishes
+the exact answer canonical resolution produced — and captured behind the
+execution's own protected-body route. The identity it is admitted under is the
+one core's own declaration offers its self-closing spelling as. Middleware may
+observe, delegate or refuse that import; an answer it replaces is one nobody
+published and is refused. Offering it grants no other permission — named
+documentation may describe a component the selection does not admit, and
 describing one is not permission to run it.
 
-Canonical core publishes an answer for `<Syntax />` and no other protected name.
-That publication is what makes a protected name admissible, so an entry
-hand-written for `<Evaluate>` resolves to an answer nobody published and is
-refused: being shown what a fragment may write is a different grant from
+`<Evaluate>` offers no generated form at all, so a selection naming it refuses
+at capture: being shown what a fragment may write is a different grant from
 evaluation inside evaluation.
 
 **What it renders** is the generated fragment's ordinary output. Evaluate does
@@ -5398,6 +5418,7 @@ interface, and each operation is also exported directly:
 | `evalScope` | The current eval scope (§4.4) | `undefined` |
 | `codeBlock()` | The code block executing through the modifier chain (§3.3) | throws a missing-provider error |
 | `persistent` | Whether the current block runs with persistent lifetime (§4.4) | `false` |
+| `generated` | The component forms this host offers generated XMD, by name (§5.3.2). A plain value property: a consumer yields it without parentheses, and middleware composes one complete selection rather than contributing to a collection | `undefined` — the host offers no generated evaluation at all |
 | `content(slot?)` | Render the invoking component's content, or a named slot of it; throws `ContentError` when that content fails (§5.1.2, §6.3) | throws a missing-provider error |
 | `hasContent()` | Whether the invoking element was written with content rather than self-closed | throws a missing-provider error |
 | `hasBinding()` | Whether the invocation has an engine-owned result binding — whether `as` was written (§6.10) | throws a missing-provider error |
@@ -8980,8 +9001,8 @@ and Deno and `EFAULT` under Bun, and the pinned Workspace filesystem removes one
 outright. Classifying the target before removing it is what makes those
 differences invisible.
 
-Generated XMD receives `<File.Delete>` through the standard Deno workflow
-profile's write table (workflow-workspace-spec §8.4). This component's own
+Generated XMD receives `<File.Delete>` through the standard Deno workflow run's
+generated selection (workflow-workspace-spec §8.4). This component's own
 declaration says what admitting it grants: its self-closing spelling is offered
 as a write, under `https://executable.md/components/file/delete`, and that is
 the identity a continuation is compared against. A write-enabled fragment
@@ -9792,15 +9813,17 @@ Effection scope. Cancellation aborts them and teardown completes before the
 invocation closes; no detached promise, task, timer, response body or service
 survives it.
 
-Generated XMD may use `<Fetch>` only where the trusted host admitted core's own
-pinned identity in its `read` table together with the exact requests it may
-perform
-(workflow-workspace-spec §8.4). A candidate element is normalized by these same
-rules and must equal one admitted request — scheme, host, path, method,
-normalized headers and effective timeout alike — or it is refused before
-`API.Fetch` is reached, with no request performed. Nothing in the authored
-component grants that admission, and a repository component that takes the name
-`Fetch` is not the pinned identity.
+Generated XMD may use `<Fetch>` only where the trusted host selected the name
+(workflow-workspace-spec §8.4). What an admitted read may actually reach is a
+separate, **live** question: a host that bounds its requests states that bound
+as a `Permissions` restriction in the owner that performs the work, where it is
+asked of the request as it would go out — after every `API.Fetch`
+transformation and immediately before transport. So a destination, method or
+header outside the bound reaches no transport at all, while a dynamic
+destination the fragment's own data expressions produce is an ordinary input
+rather than something preflight has to resolve. Selecting the name resolves
+whatever this host answers for `Fetch`, and a replacement whose declaration
+offers no generated use of the self-closing form refuses setup.
 
 
 ### 6.19 Showing text as a code block: `<CodeBlock>`
@@ -12378,16 +12401,16 @@ through the captured capability because there is no other way to reach it.
 | FE23 | An evaluation lacking write permission refuses the write before effects, including when the write component appears in trusted symbols. **Receives the Evaluate clause of #758's SY21**; the half that stays in #759 is that symbols text alone registers, resolves and authorizes nothing. |
 | FE24 | Repository files, workflow bundle members, declared Markdown, ordinary and reserved registrations, middleware answers or mutations, document context, and another loaded package copy each fail to replace `<Evaluate>`; honest middleware delegation reaches canonical core and a deliberate middleware refusal remains a refusal. |
 | FE25 | A replacement whose body deliberately ignores `allow={["read"]}` and writes through wider ambient permission is never invoked; canonical `<Evaluate>` refuses the write before any provider call or mutation. |
-| FE26 | Protection itself grants nothing: a profile with no write table stays unable to write, and adding `<Evaluate>` to the protected table does not add a class or component identity to `allow`. |
+| FE26 | Protection itself grants nothing: a selection whose spellings all read stays unable to write, and selecting `<Evaluate>` refuses at capture because its declaration offers no generated form. |
 | FE27 | Structural constructs remain selected by structural dispatch, while repository replacements for ordinary `<File>`, `<Fetch>`, and `<Elicit>` still win at ordinary authored sites. Their replaceability does not let them enter a generated fragment unless the trusted profile admitted that exact identity and form. |
 | FE28 | Source, npm, and compiled symbols report `<Evaluate>` with protected origin and the approved description, and no host bootstrap is needed to make the name available. |
-| FE29 | Each execution accepts one private fragment-evaluation profile containing exact composition, read and write tables; a missing or duplicate profile and conflicts across its tables refuse before paired-content production or fragment effects, and document-controlled state cannot read or widen it — it cannot add a name to the admitted vocabulary, change the identity a continuation is compared against, or give a selection a class the host installed no table for. What a document *can* do is answer the operation, because the provider is deliberately shared: a handler installed anywhere in the document's own scope is what an admitted element reaches, exactly as an authored one does. |
+| FE29 | Each execution reads one `Component.generated` selection, once, after initialization and the captured installation callbacks and before public execution policy; an absent selection refuses before paired-content production, a malformed one refuses setup whole, and a later policy cannot widen what was captured — it cannot add a name to the admitted vocabulary, change the identity a continuation is compared against, or give a selection a class no selected spelling reaches. Two handlers compose rather than conflicting. What a document *can* do is answer the operation, because the provider is deliberately shared: a handler installed anywhere in the document's own scope is what an admitted element reaches, exactly as an authored one does. |
 | FE30 | A trusted nested-run or evaluation-host layering control enters the same declarative package bootstrap through inherited and local layers. The child keeps the package registration and renders the same named documentation as the single-bootstrap control; Evaluate still admits only the identity selected by `allow`. A non-identical owner/component overlap refuses before child root or fragment effects. This receives #765's SYN25l.5 rather than creating a second collector in Evaluate. |
 | FE31 | One fragment binds File and protected Syntax results locally and explicitly renders a chosen object through Json. Nested literal arrays and objects, binding shorthand, finite JSON numbers and a directly attached leading minus such as `<Json value={-1} />` work in scalar, array and object positions. `1e999`, `-1e999`, `+1`, `-note`, `!note`, `typeof note`, an unbound identifier, call, operator, spread, computed property, template or global reference is refused before any earlier effect. |
 | FE32 | Generated admission and effect events follow ordinary persist-before-resume publication. A later refusal, failure, cancellation or interruption retains completed effects, and continuation resumes at the occurrence's first unrecorded effect; Evaluate adds no staging or rollback. |
 | FE33 | Each Evaluate occurrence retains its admission and generated effects under identities belonging to that occurrence; two occurrences cannot consume one another's retained work, and no caller-controlled context, stream, replay cursor, coroutine identifier or durable owner participates. A projected body installs observable structured cleanup, and later parent work proves that cleanup completed before it began. No distinct child cursor, child `Close`, staging, rollback, provisional publication or second settlement protocol is required. |
 | FE35 | A fragment composes admitted reads with `<Let>`, `<Each>`, `<If>`/`<Else>` and `<Switch>`/`<Case>` under ordinary rules, performing exactly the reads the taken paths name. A prohibited component in an untaken `<Else>` arm or an unreached `<Case>` refuses the whole fragment with zero reads, and the refusal names the selected permission rather than the branch. An `<Each>` item binding does not escape its body while `<Each as>` does, and a binding the body itself makes cannot be read after the construct. Neither arm of an `<If>` nor either `<Case>` of a `<Switch>` can read a binding another alternative produces; each such refusal performs no read. A `<Loop>` holding a valid `<Break>` and a `<PrintErrors>` region around an admitted read completes, proving those constructs reach their own handlers rather than a generic structural refusal. A prohibited component inside a paired `<Answer>`'s template children, and one in the ordinary `<Answers>` body, are each refused before any effect. An untaken self-closing `<File />` before a selected paired `<File>` write does not surrender its admission to that write: the write performs, the read does not, and the untaken file is unchanged. A two-item `<Each>` around one `<File />` performs the read twice with no import refusal, an empty iteration consumes no admission, and a continuation cut between the two repeated effects restores the completed one and resumes at the second. An executable fence and an interpolated caller binding stay refused inside a construct. An ill-formed construct, one the generated root gives no context for, a stray branch and a `<Break>` outside every `<Loop>` are refused as structural mistakes rather than as withheld components. |
-| FE34 | One fragment binds Glob, File and canonical Syntax and renders chosen findings through Json; an unmatched search binds `[]`. A search written without `as`, a paired search, and a paired `<File>` under a `read` selection each refuse before any operation. An unusable pattern refuses with the ordinary sentence before the search, and a provider failure becomes one safe sentence naming no path. The search reaches the installed `API.Files` provider and the contextual working directory, so one middleware around the document sees the fragment's request and a transformation it makes is what the provider performs. Bare generated Syntax reports the composition table plus the selected read vocabulary and not the unselected write table; named Syntax describes a component that stays unavailable. Canonical Syntax resolves at core's own identity, and a middleware replacement of that answer refuses. Core answers for that one protected name, so an entry hand-written at `<Evaluate>`'s canonical identity is refused as an answer nothing identified. `xmd run` and a `host="run"` child of `xmd test` state the same profile. |
+| FE34 | One fragment binds Glob, File and canonical Syntax and renders chosen findings through Json; an unmatched search binds `[]`. A search written without `as`, a paired search, and a paired `<File>` under a `read` selection each refuse before any operation. An unusable pattern refuses with the ordinary sentence before the search, and a provider failure becomes one safe sentence naming no path. The search reaches the installed `API.Files` provider and the contextual working directory, so one middleware around the document sees the fragment's request and a transformation it makes is what the provider performs. Bare generated Syntax reports the composition table plus the selected read vocabulary and not the unselected writing spellings; named Syntax describes a component that stays unavailable. Canonical Syntax resolves at core's own identity, and a middleware replacement of that answer refuses. Selecting `<Evaluate>` refuses at capture, because its declaration offers no generated form. `xmd run` and a `host="run"` child of `xmd test` offer the same selection. |
 
 Each refusal case needs a negative control proving no producer, middleware
 answer, request, file mutation, or other program effect occurred. The
@@ -13134,14 +13157,14 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 
 | # | Test | Verify |
 |---|------|--------|
-| GXC1 | The selection | The trusted composition table is present under every selection. Omitting `allow` and stating `read` produce one identical retained policy; a mixed selection is retained in canonical class order, with composition before the read and write tables and host order inside each |
+| GXC1 | The selection | The trusted composition table is present under every selection. Omitting `allow` and stating `read` produce one identical retained policy; a mixed selection is retained in canonical class order, with composition before the read and write classes and the selected names in canonical order inside each |
 | GXC2 | Unstateable policy | An empty selection, one class twice, a selected class with no table or an empty one, and composition/effect tables holding one name with overlapping forms or distinct definitions each fail before the candidate is parsed — with a deliberately unparseable candidate, no `generated_xmd` record and nothing of the candidate retained |
 | GXC3–GXC4 | Name and form | A self-closing and a paired `<File>` in one fragment resolve to the read and the write identity and are retained with their forms; the opposite form under a single-class selection is refused with no read and no write |
 | GXC5–GXC6 | Admission | No admitted name — `<File>` in either form, the versioned paired `<Dir>` or the self-closing `<File.Delete>` — is answered by a same-name repository component, the dotted one included; and Git push, pull request, issue, repository, glob and an executable block are outside the tables whatever the selection |
 | GXC7 | Ordinary composition | A write-only fragment renders nothing unless it authors output; a mixed fragment binds a read locally and renders exactly the value it explicitly selects |
 | GXC8 | Preflight | An unadmitted sibling after an admitted write, an unadmitted child under an admitted parent, and an unadmitted form after an admitted write each perform no write at all |
 | GXC10 | The form at the invocation | An admitted read still performs exactly its read and an admitted write still performs exactly its write, under a `Component.hasContent` handler outside the generated expansion that lies consistently *and* under one answering `[false, true]` / `[true, false]` — with the retained identity and form unmoved, the read's ordinary binding/output behavior intact, and the file bytes proving which effect ran. An admitted read beside each of them reports the chain's answer and consumes exactly one, so every case proves the handler installed and answering before it proves the element ignored it — an inert handler, and an element that consulted the chain and took the next answer, both fail. An invocation the evaluator did not receive is refused with no provider call, and a handler that observes and delegates leaves both forms running through their ordinary providers |
-| GXC9 | Continuation | A widened class selection, a widened admitted form, a replaced write identity and an added write identity each refuse the continuation and write nothing; the unchanged policy resumes and performs the write; and a read-only admission survives a changed write table it never selected |
+| GXC9 | Continuation | A widened class selection, a widened admitted form, a replaced write identity and an added write identity each refuse the continuation and write nothing; the unchanged policy resumes and performs the write; and a read-only admission survives a changed write selection it never reached |
 
 ### Tier GX — Generated continuation in the owning expansion
 
@@ -13157,7 +13180,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §§8.4 and 9.
 | GX14b–GX14c | One ceiling per entry | Two admitted reads each perform exactly their own admitted request, and neither entry's limit admits the other's: the run keys its ceiling table by the entry itself rather than by anything describing one |
 | FE18/GX21z | The current record restores | The record this build writes resumes against the entry it was admitted under and performs the work it authorized once; the same URL behind an updated implementation resumes, because between executions that is a newer build of the component the admission named rather than a changed grant; and a recorded refusal replays as the refusal it recorded |
 | FE18/GX21y | One closed record shape | The untagged #369 record and the tagged structural-identity record are each refused as unreadable history. So are a marker this build does not have, legacy top-level roots, an unknown policy, row, result or named member, a row with no form, an unknown form, effect or kind, and an identity that is relative, a look-alike origin, a structural record, an array or null — each with the admitted read never reaching the provider, against the current record as the positive control |
-| EP18–EP20 | One name, one implementation | A provider-backed name held by two entries across disjoint forms and both tables is resolved by one lookup and sealed as one shared definition and schema, each spelling reading its own identity and effect off that definition; an answer offering no generated use of an admitted spelling, or offering it as the other effect, refuses at sealing rather than letting a table describe a grant the implementation lacks; and one name held as both a capability and a component answer refuses, because core supplying the body and the chain answering for it are different grants. In `evaluation-profile.test.ts` |
+| EP18–EP20 | One name, one implementation | A name selected in both spellings is resolved by one lookup and captured as one shared definition and schema, each spelling reading its own identity and effect off that definition and landing in the table its owner offers it for; an answer offering no generated use of a selected spelling refuses at capture rather than letting a selection describe a grant the implementation lacks; and both spellings offered as reads land in the read table together. In `evaluation-profile.test.ts` |
 | GOM1–GOM4 | The owner states what its spellings are offered as | A registration's generated map survives registration copied and frozen; an omitted or empty map registers and offers no spelling; a relative, look-alike or non-URL identity, an unknown effect, a key that is not an authored form, a malformed value, a non-map and a spelling the declaration does not accept each refuse, and a refused batch installs nothing. The shipped owners state exactly the owner table, `<File>`'s two spellings differ on one definition, `<Json>` stays composition and `<Evaluate>` offers nothing. A shared fixed definition is frozen through its nested metadata, so a fresh read sees the original contract. A component a host declares to an execution keeps its offer through capture: the built implementation runs the spelling it offered under the URL and effect the admission retained, the offer is read exactly once so an accessor's later reading reaches neither construction nor the journal, an offer replaced from inside `install()` replaces nothing, and an unusable one refuses the execution before an implementation is built, a provider is asked or anything is written down. In `generated-owner-metadata.test.ts` |
 
 ### Tier WGAC — Generated `<File>` effects and the `<Evaluate>` boundary
@@ -13175,14 +13198,14 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 | WGAC6 | Distinct sites | Two `<Evaluate>` sites keep distinct durable names under a component that rebinds what a component can |
 | WGAC7 | The import boundary | Through public `importComponent` middleware: calling the implementation with an invocation it built, with the first site's routed at the second, with a live content-bearing parent's routed into the sites inside it, by keeping the declared implementation and running it at another element's invocation, and by keeping one attachment's implementation — with that attachment's whole registration record answered for the name inside a second, simultaneously live attachment — and running it at the second attachment's own `<Evaluate>` site, are each refused. Nothing is admitted and no request performed under an identity the author did not write at that site, and neither run's database receives a record the other's expansion named: a redirected registry answer carries behavior, never the claimant this execution delivered. Honest delegation, forwarding the genuine invocation, admits each site under its own name, nested or not; and an interrupted run resumes into each site's own record — a completed read restores and the first interrupted request runs |
 | WGAC8 | Ordinary output | Evaluate emits exactly what the generated fragment renders. Bound component results emit nothing unless the fragment explicitly renders them, and no read is copied into an implicit result collection |
-| WGAC9 | The class selection | Exact core Json remains available from the trusted composition table. An empty, repeated, unknown or non-array `allow` is refused before any admission; `read`, `write` and both in either order are admitted and retained in canonical order; omitting it retains exactly composition plus read, and the write table is not in that policy at all |
-| WGAC10 | The standard write table | An admitted paired `<File>` beneath a generated `<Dir>` first recursively creates the directory through one ordinary `workspace_file` effect, then lands the file at the nested logical path through another; the retained policy holds all three standard entries with their spellings, in the order the profile states them — core's paired `<File>` under `https://executable.md/components/file/write`, paired `<Dir>` under `.../dir/ensure`, then core's self-closing `<File.Delete>` under `.../file/delete`, each in the `write` table — and a `<Git.Push>` and a self-closing `<File />` are each refused under the same selection with no effect |
+| WGAC9 | The class selection | Exact core Json remains available from the trusted composition table. An empty, repeated, unknown or non-array `allow` is refused before any admission; `read`, `write` and both in either order are admitted and retained in canonical order; omitting it retains exactly composition plus read, and the writing spellings are not in that policy at all |
+| WGAC10 | The standard writing spellings | An admitted paired `<File>` beneath a generated `<Dir>` first recursively creates the directory through one ordinary `workspace_file` effect, then lands the file at the nested logical path through another; the retained policy holds all three standard rows with their spellings, in the canonical order the selection is admitted in — paired `<Dir>` under `https://executable.md/components/dir/ensure`, core's paired `<File>` under `.../file/write`, then core's self-closing `<File.Delete>` under `.../file/delete`, each as a `write` — and a `<Git.Push>` and a self-closing `<File />` are each refused under the same selection with no effect |
 | WGAC14 | The admitted deletion | A write-only fragment holding one self-closing `<File.Delete>` removes the file from the run's own Workspace, read back through the run's own transaction; it performs exactly one further `workspace_file` effect, whose outcome is `{ kind: "deleted" }`; it is retained under `@executablemd/core#File.Delete` in the self-closing form; and it renders no synthetic receipt |
 | WGAC15 | Preflight covers the deletion | A fragment placing an admitted `<File.Delete>` first and an executable code block second is refused for the block — the class proving the deletion was admitted, since a refusal names no name — and the file remains with no deletion effect performed or retained |
 | WGAC11 | Explicit composition | A fragment binds read results locally, composes selected values through Json, and renders no value or mutation receipt it did not explicitly render |
 | WGAC12 | Committed mutations | A completed replay of a write-enabled document journals nothing new, performs no second mutation, and leaves the retained content |
 | WGAC16 | Bundled continuation | `<Evaluate>` inside a committed bundled Markdown component, then a parent `<File>` write and the real `<Elicit>` outside it, for a generated read and a generated write alike: the real start suspends holding the exactly ordered `generated_xmd → nested workspace_file → parent workspace_file → suspension_request` subsequence; answer delivery and the completed resume leave the journal counts, that subsequence, the Workspace root-publication count and the authoritative current root unchanged; and the delivered value reaches the document after the wait. `API.Files` component calls are not evidence here — re-expansion legitimately enters that boundary before the durable effect restores |
-| WGAC18 | A generated question is the host's to admit | This host's generated write table states no question, so a fragment writing `<Elicit>` under `allow={["write"]}` is refused for a component it did not admit, with nothing asked and nothing performed; a host that states the entry admits the same fragment. The workflow's own suspension replacement for the authored element is unaffected either way — it answers an authored `<Elicit>` in a run, and a generated one never resolves a name for it to shadow |
+| WGAC18 | A generated question is the host's to offer | This host's generated selection names no question, so a fragment writing `<Elicit>` under `allow={["write"]}` is refused for a component it did not offer, with nothing asked and nothing performed; a host that offers the name admits the same fragment. A host whose own replacement answers for `Elicit` and offers no generated use of the paired form refuses setup rather than reaching core's default |
 | WGAC17 | Directory mutation permission | `allow={["write"]}` admits the paired `<Dir>` under the identity core's own declaration offers it as, and intentionally authorizes its persistent recursive creation; a continuation retaining another identity for that spelling refuses before generated execution and creates nothing, without publishing which identity moved, while an unchanged current admission replays without a second ensure |
 
 ### Tier WAL — The workflow Agent observation loop
@@ -13758,7 +13781,7 @@ subject.
 | FT18–FT20 | The binding seam | `hasBinding()` answers for the invocation that asked — siblings, a nested invocation inside its caller, and two invocations live at once |
 | FT21–FT24 | Failures | Transport, body read, timeout and cancellation bind nothing and commit no response; a halt tears the provider down in both phases with no late work |
 | FT25–FT28 | Permission | Middleware may observe and delegate but cannot widen; a synthetic answer performs no request; eval's own `fetch` and a same-name repository component cross the same ceiling |
-| GX11–GX14 | Generated admission | The pinned identity in the host's `read` table performs the exact admitted request once; a scheme, host, path, method, header or timeout mismatch performs none; admitting `<Fetch>` with no stated request is refused outright |
+| GX11 | Generated admission | A selected `<Fetch />` performs its request once through the ordinary component; which destination, method and headers it may reach is the live terminal's question, proved against a host-stated `Permissions` bound rather than against an inventory the admission retains |
 | FT29–FT31 | History | A partial replay restores the response with no second request; the event names the expansion and its source position; an interruption before the commit leaves no record and one continuation commits one |
 | FT32–FT34 | The secret gate | The scanner sees URL, request headers, status, response headers and body in one event; a canary in the request or the response refuses the append, binds nothing, and stops the document |
 | FT35 | Independence | Cancelling one invocation tears down only its own request |
@@ -14136,4 +14159,4 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 100 | `<Let>` → `<Json>` → `<Parse>` is the explicit JSON direction | A document names a value, renders it as text, and validates text back into a value at three boundaries a reader can see. `{binding}` interpolation keeps its ordinary string coercion — there is no hidden JSON conversion — and `<Json>` takes no `indent`, `pretty`, replacer, sorting, canonicalization or newline option, so nothing about the format has to be agreed on per invocation. A file that must end in a newline authors that newline at the point it is written, rather than buying an option every other caller then has to reason about |
 | 101 | A capture is delivered from the authored expression | The scanner resolves a `{…}` prop whose text reads as JSON, but it runs before a name resolves and so cannot know the prop is a capture. Keeping the authored text beside the reading lets expansion decide with the selected definition in hand: a captured prop gets what its expression produced, every other prop gets the reading it always had, and an overriding repository file is an ordinary component either way. Without it `value={undefined}` reached a capturing component as `null`, which is the projection a capture exists to avoid |
 | 102 | A successful `undefined` omits an ordinary prop | Absence is the fact an author has to be able to state: an optional identity that a preceding result will supply is not there yet, and there is no value that means "not there" — `null` is a value, and a second element written for the other case duplicates the invocation. The omission is decided in the one resolver both component kinds pass through, before validation, so the schema answers it: optional stays unset, a `default` applies, a required prop fails as missing. It stops at the root and at that boundary — nested members keep native `JSON.stringify` normalization, failures stay failures, and captures and `<Let>` keep binding the exact value — and it puts `undefined` nowhere durable, because a prop that was never there is nothing to record |
-| 103 | Protected `<Evaluate>` and an authored loop, not hidden `<Prompt>` behavior | A workflow Agent's request/result exchange is written in the document: `<Loop max>` owns the bound, `<Parse>` and `<If>` own the branch, and `<Evaluate text={…} />` is where a generated fragment is admitted and performed. `<Prompt>` stays exactly one durable turn, with no hidden retry, schema repair or observation loop inside it, and the Agent Api gains no second operation. A component rather than a new execution primitive, because the operation needs a name a trusted document can write and a schema a reader can check. Canonical core supplies [protected Evaluate](#532-evaluate-the-protected-evaluation-component); the host states its evaluation profile, captured before any document existed. Protection fixes the implementation and grants no permission; every ceiling comes from the captured profile. Exhaustion is therefore the document's own failure, stated where the bound is, with the turns that produced it retained |
+| 103 | Protected `<Evaluate>` and an authored loop, not hidden `<Prompt>` behavior | A workflow Agent's request/result exchange is written in the document: `<Loop max>` owns the bound, `<Parse>` and `<If>` own the branch, and `<Evaluate text={…} />` is where a generated fragment is admitted and performed. `<Prompt>` stays exactly one durable turn, with no hidden retry, schema repair or observation loop inside it, and the Agent Api gains no second operation. A component rather than a new execution primitive, because the operation needs a name a trusted document can write and a schema a reader can check. Canonical core supplies [protected Evaluate](#532-evaluate-the-protected-evaluation-component); the host offers its generated selection, read and resolved before public execution policy. Protection fixes the implementation and grants no permission; every ceiling comes from that captured selection and the declarations that own the implementations it named. Exhaustion is therefore the document's own failure, stated where the bound is, with the turns that produced it retained |

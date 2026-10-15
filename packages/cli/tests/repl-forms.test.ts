@@ -64,7 +64,7 @@ import type { ReplTree } from "../src/repl/reconcile.ts";
 import { submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
-import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
+import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { referenceEvents } from "./fixtures/repl/reference.ts";
 
 /** The widest accepted frame, stated here because layout keeps it private. */
@@ -1140,7 +1140,8 @@ describe("F3 — focus returns to the invocation, not to where the drawer came f
     const session = granted(
       yield* submitReplEntry({
         execution: holder,
-        installations: [{ evaluation: ordinaryEvaluationProfile() }],
+        installations: [],
+        generated: ordinaryGeneratedSelection(),
         source: THREE_QUESTIONS,
       }),
     );

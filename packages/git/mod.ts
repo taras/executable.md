@@ -74,7 +74,7 @@ export { gitPlugin } from "./src/plugin.ts";
  * Workflow's: a host assembling the generated-evaluation profile asks the
  * owner for the entry rather than either package writing the identity twice.
  */
-export { gitDirectoryEntry } from "./src/composition/definitions.ts";
+export { gitDirectorySelection } from "./src/composition/definitions.ts";
 /**
  * Whether *this* Plugin declares anything for a command.
  *

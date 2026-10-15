@@ -1,27 +1,26 @@
 /**
- * This boundary's origin, and the `<Dir>` entry a workflow run admits.
+ * This boundary's origin, and the `<Dir>` spelling a workflow run offers.
  *
  * The component is canonical core's
- * (`core/src/components/fixed-filesystem.ts`), and so is what admitting it
+ * (`core/src/components/fixed-filesystem.ts`), and so is what offering it
  * grants: core's own declaration states the identity and the effect its paired
  * form runs as (specs/workflow-workspace-spec.md §8.4). What stays here is the
- * host's decision to admit the name at all — a workflow run has a `<Dir>` and
+ * host's decision to offer the name at all — a workflow run has a `<Dir>` and
  * an ordinary run has none.
  */
 
-import { directoryEntry } from "@executablemd/core/host";
-import type { FragmentEntry } from "@executablemd/core/host";
+import type { InvocationForm } from "@executablemd/core";
 
 export const COMPOSITION_ORIGIN = "@executablemd/workflow/composition";
 
 /**
- * `<Dir>`'s entry in a workflow run's generated-XMD write table.
+ * `<Dir>` in a workflow run's generated selection.
  *
- * A host assembling the generated-evaluation profile asks for this rather than
- * writing the admission out again. Core supplies the body behind it and the
- * identity it is admitted under, so this names no definition and no grant of
- * its own: what it admits is the one `<Dir>` every authored element reaches.
+ * A host composing the selection asks for this rather than writing the name and
+ * the form out again. It is a name and a spelling: core supplies the body
+ * behind it and the identity it runs under, so this states no definition and no
+ * grant of its own.
  */
-export function gitDirectoryEntry(): FragmentEntry {
-  return directoryEntry("Dir");
+export function gitDirectorySelection(): Readonly<Record<string, readonly InvocationForm[]>> {
+  return { Dir: ["paired"] };
 }

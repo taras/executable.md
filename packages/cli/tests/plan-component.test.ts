@@ -32,14 +32,9 @@ import {
 } from "@executablemd/core";
 import type { Json, SyntaxSymbols } from "@executablemd/core";
 import { content, registerComponents, validateDocument } from "@executablemd/core";
-import {
-  executeInstalled,
-  fileReadEntry,
-  globReadEntry,
-  sourceDigest,
-  syntaxReadEntry,
-} from "@executablemd/core/host";
-import type { FragmentEvaluationInput } from "@executablemd/core/host";
+import { executeInstalled, sourceDigest } from "@executablemd/core/host";
+import { Component } from "@executablemd/core/api";
+import type { GeneratedSelection } from "@executablemd/core/api";
 import { useSyntax } from "@executablemd/core/host";
 import { API, Permissions } from "@executablemd/runtime";
 import { recordedFiles, useRecordedFiles } from "../../core/tests/support/fragment-files.ts";
@@ -125,11 +120,11 @@ function* runDocument(options: {
   session?: string;
   props?: Record<string, Json>;
   /**
-   * The ceiling a generated fragment runs under, for the rows that write
-   * `<Evaluate>` beside or around a `<Plan>`. Absent for every other row, which
-   * is what makes "this execution offers no evaluation" the default.
+   * What a generated fragment may write, for the rows that write `<Evaluate>`
+   * beside or around a `<Plan>`. Absent for every other row, which is what
+   * makes "this host selected nothing" the default.
    */
-  evaluation?: FragmentEvaluationInput;
+  generated?: GeneratedSelection;
   /**
    * The document filesystem this execution runs against.
    *
@@ -194,6 +189,13 @@ function* runDocument(options: {
     }
     try {
       yield* useSyntax(harness.symbols);
+      // What a generated fragment may write, offered in the scope this
+      // execution runs in. Absent is a host that selected nothing, which is
+      // what makes "this execution offers no evaluation" the default here.
+      if (options.generated !== undefined) {
+        const stated = options.generated;
+        yield* Component.around({ generated: () => stated });
+      }
       const execution = yield* executeInstalled(
         {
           ...retainedSource(ROOT, options.source),
@@ -205,10 +207,6 @@ function* runDocument(options: {
           {
             components: agentIdentityComponents(),
             declarations: [harness.declaration],
-            // Where the profile a document observes is settled now: the
-            // `<Syntax />` the packaged Plan writes is canonical core's public
-            // component, and what it answers with is this execution's.
-            ...(options.evaluation === undefined ? {} : { evaluation: options.evaluation }),
             ...(options.files === undefined && options.installing === undefined
               ? {}
               : {
@@ -515,8 +513,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       "\n",
     );
 
-    function reading(): FragmentEvaluationInput {
-      return { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] };
+    function reading(): GeneratedSelection {
+      return { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] };
     }
 
     /** A harness whose agent answers a request first and a Plan second. */
@@ -538,7 +536,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           harness: yield* asking(yield* planWriterRoot()),
           reviews: [],
-          evaluation: reading(),
+          generated: reading(),
           files: files,
         });
 
@@ -571,7 +569,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           harness: yield* asking(yield* planWriterRoot()),
           reviews: [],
-          evaluation: reading(),
+          generated: reading(),
           files: files,
           *installing(): Operation<void> {
             // Nearer the provider, and transforming: installed after the
@@ -625,7 +623,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           harness: yield* asking(yield* planWriterRoot()),
           reviews: [],
-          evaluation: reading(),
+          generated: reading(),
           files: files,
           *installing(): Operation<void> {
             yield* Permissions.around({
@@ -746,7 +744,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           harness: yield* reading_(yield* planWriterRoot()),
           reviews: [],
-          evaluation: reading(),
+          generated: reading(),
           files: {
             ...files,
             // deno-lint-ignore require-yield
@@ -809,7 +807,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
               source: SOURCE,
               harness,
               reviews: [],
-              evaluation: reading(),
+              generated: reading(),
               files,
             }),
           ),
@@ -879,7 +877,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           ].join("\n"),
           harness,
           reviews: [],
-          evaluation: reading(),
+          generated: reading(),
           files: files,
           *installing(): Operation<void> {
             yield* registerComponents([
@@ -917,7 +915,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           harness: yield* asking(yield* planWriterRoot()),
           reviews: [],
-          evaluation: reading(),
+          generated: reading(),
           files: files,
           // The presentation an ordinary `xmd run` installs, so a phase written
           // into the document would arrive here exactly as an operator would
@@ -966,7 +964,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           harness,
           reviews: [],
-          evaluation: reading(),
+          generated: reading(),
           files: files,
         });
 
@@ -984,7 +982,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           harness: yield* asking(yield* planWriterRoot()),
           reviews: [],
-          evaluation: reading(),
+          generated: reading(),
           files: files,
           stream: first,
         });
@@ -998,7 +996,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         const two = yield* runDocument({
           source: SOURCE,
           reviews: [],
-          evaluation: reading(),
+          generated: reading(),
           files: tripwire,
           stream: first,
         });
@@ -1019,7 +1017,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           harness: yield* asking(yield* planWriterRoot()),
           reviews: [],
-          evaluation: reading(),
+          generated: reading(),
           files: files,
           stream: first,
         });
@@ -1033,7 +1031,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         const two = yield* runDocument({
           source: SOURCE,
           reviews: [],
-          evaluation: reading(),
+          generated: reading(),
           files: resumed,
           stream: yield* continuing(first),
         });
@@ -1069,7 +1067,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           harness,
           reviews: [],
-          evaluation: reading(),
+          generated: reading(),
           files: files,
           stream: first,
         });
@@ -1085,7 +1083,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         const two = yield* runDocument({
           source: SOURCE,
           reviews: [],
-          evaluation: reading(),
+          generated: reading(),
           files: recordedFiles({ "notes.md": "the retained note\n" }),
           stream: yield* continuing(first),
           harness: yield* planDeclarationHarness({
@@ -1137,7 +1135,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           root,
           harness: yield* asking(root),
           reviews: [],
-          evaluation: reading(),
+          generated: reading(),
           files: files,
           stream: first,
         });
@@ -1153,7 +1151,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           props: { request: "Write something else." },
           root,
           reviews: [],
-          evaluation: reading(),
+          generated: reading(),
           files: changed,
           stream: yield* continuing(first),
         });
@@ -1984,9 +1982,9 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
  * type either of them shares.
  */
 describe("Tier FE — Plan produces text, Evaluate runs it", () => {
-  /** A profile admitting one read, over a recorder these rows can count. */
-  function profile(): FragmentEvaluationInput {
-    return { read: [fileReadEntry()] };
+  /** One selected read, over a recorder these rows can count. */
+  function profile(): GeneratedSelection {
+    return { File: ["self-closing"] };
   }
 
   /**
@@ -2002,7 +2000,15 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
   const READ_MARKER = "FE713_READ_MARKER";
   const WIDE_MARKER = "FE713_WIDE_MARKER";
 
-  /** The admitted read: available inside an evaluation and at the wide site. */
+  /**
+   * The selected read: available inside an evaluation and at the wide site.
+   *
+   * A registration of this suite's own rather than core's `<File>` renamed. A
+   * host selects component names, and what a selected spelling runs as comes
+   * from the declaration that owns the implementation — so a fixture that
+   * wanted its own name in the narrowed catalog registers its own component
+   * and offers the generated use of its own self-closing form.
+   */
   const READ_COMPONENT = {
     name: "FE713.Read",
     origin: "test://fe713/read",
@@ -2011,6 +2017,13 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
       properties: { path: { type: "string" } },
       required: ["path"],
       additionalProperties: false,
+    },
+    forms: ["self-closing"] as const,
+    generated: {
+      "self-closing": {
+        identity: "https://executable.md/components/fe713/read",
+        effect: "read" as const,
+      },
     },
     description: `Reads one path. ${READ_MARKER}`,
   };
@@ -2024,23 +2037,14 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
   };
 
   /**
-   * The profile these rows evaluate under: the read entry, and never the wide
-   * one.
+   * What these rows select: the fixture's own read, and never the wide one.
    *
-   * The entry's name is the fixture's own, so the catalog an agent is shown
-   * inside an evaluation names `<FE713.Read>` and the admitted capability is
-   * core's file read behind it.
+   * The name is the fixture's component, so the catalog an agent is shown
+   * inside an evaluation names `<FE713.Read>` and what runs behind it is the
+   * registration this suite made.
    */
-  function fixtureProfile(): FragmentEvaluationInput {
-    return {
-      read: [
-        {
-          ...fileReadEntry(),
-          name: READ_COMPONENT.name,
-          description: READ_COMPONENT.description,
-        },
-      ],
-    };
+  function fixtureProfile(): GeneratedSelection {
+    return { [READ_COMPONENT.name]: ["self-closing"] };
   }
 
   /** Register both fixture components at the ordinary authored site. */
@@ -2048,9 +2052,17 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
     yield* registerComponents([
       {
         ...READ_COMPONENT,
-        // deno-lint-ignore require-yield
-        *fn(): Operation<string> {
-          return "";
+        // The read these rows count, through the ordinary contextual provider:
+        // an admitted fragment reaches `API.Files` exactly where an authored
+        // element does, so a recorder entry is evidence that it crossed the
+        // same provider.
+        *fn(props: Record<string, Json>): Operation<string> {
+          const cwd = yield* API.Env.operations.cwd();
+          const read = yield* API.Files.operations.readTextFile({ path: String(props.path), cwd });
+          if (!read.ok) {
+            throw read.error;
+          }
+          return read.value;
         },
       },
       {
@@ -2099,7 +2111,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
           "",
         ].join("\n"),
         reply: PROGRAM,
-        evaluation: profile(),
+        generated: profile(),
         files: files,
       });
 
@@ -2120,7 +2132,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
       const run = yield* runDocument({
         source: ['<Plan as="approved">Write a program.</Plan>', "", "done", ""].join("\n"),
         reply: `# Read the note\n\n<File path="notes.md" />\n`,
-        evaluation: profile(),
+        generated: profile(),
         files: files,
       });
 
@@ -2150,7 +2162,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
             "",
           ].join("\n"),
           reply: `# Read the note\n\n<FE713.Read path="notes.md" />\n`,
-          evaluation: fixtureProfile(),
+          generated: fixtureProfile(),
           files: files,
         });
       });
@@ -2205,7 +2217,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
           // The agent writes the component it was *not* told about. It resolves
           // at the ordinary site and is not in the profile.
           reply: `# Use the wide component\n\n<FE713.WideOnly />\n`,
-          evaluation: fixtureProfile(),
+          generated: fixtureProfile(),
           files: files,
         });
       });
@@ -2237,7 +2249,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
           // the component only the authored site has. Titled, so it is a draft
           // the review approves rather than an information request.
           reply: `# Use the wide component\n\n<FE713.Read path="notes.md" />\n<FE713.WideOnly />\n`,
-          evaluation: fixtureProfile(),
+          generated: fixtureProfile(),
           files: files,
         });
       });
@@ -2292,7 +2304,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
         // information request — and it still carries the executable fence the
         // later, narrower `<Evaluate>` must refuse.
         reply: '# Read and run\n\n<File path="notes.md" />\n\n```bash exec\nprintf ran\n```\n',
-        evaluation: profile(),
+        generated: profile(),
         files: files,
       });
 

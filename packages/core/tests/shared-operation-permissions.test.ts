@@ -40,15 +40,7 @@ import { collect } from "../src/collect.ts";
 import { executeInstalled } from "../host.ts";
 import { retainedSource } from "../src/root-source.ts";
 import type { ExecutionInstallation } from "../host.ts";
-import {
-  directoryEntry,
-  fetchEntry,
-  fileDeleteEntry,
-  fileReadEntry,
-  fileWriteEntry,
-  globReadEntry,
-  syntaxReadEntry,
-} from "../host.ts";
+import { selecting } from "./support/generated-selection.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { content } from "../src/component-api.ts";
 import { readFileText, writeFileText } from "../src/files.ts";
@@ -93,20 +85,71 @@ function* useHost(fixture: Fixture): Operation<void> {
 }
 
 /**
- * The ordinary ceiling, with the write table admitted.
+ * The ordinary selection, with the writing spellings offered.
  *
- * The write form is admitted deliberately: a generated write that preflight
+ * The writing forms are offered deliberately: a generated write that preflight
  * refused would prove nothing about live permission, because the fragment
  * would never reach an operation. These rows are about the refusal that
  * happens at the provider, so the fragment has to be allowed to try.
  */
 function ceiling(): ExecutionInstallation {
-  return {
-    evaluation: {
-      read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()],
-      write: [fileWriteEntry(), directoryEntry("Dir"), fileDeleteEntry()],
+  return selecting({
+    File: ["self-closing", "paired"],
+    "File.Delete": ["self-closing"],
+    Dir: ["paired"],
+    Glob: ["self-closing"],
+    Syntax: ["self-closing"],
+  });
+}
+
+/** One request a host's live terminal policy admits. */
+interface Bound {
+  readonly url: string;
+  readonly method: string;
+  readonly headers: Record<string, string>;
+}
+
+/**
+ * A host that bounds what a request may reach, as the live policy it is.
+ *
+ * The selection offers the `<Fetch />` spelling; this decides what an admitted
+ * read may actually send. `Permissions.fetch` is asked by the `API.Fetch`
+ * terminal after every contextual transformation and immediately before
+ * transport, which is what makes these rows about the request that would
+ * actually go out rather than the one the element first wrote.
+ *
+ * The bound is copied here, once, so an in-place edit of an outgoing request
+ * cannot move it: the comparison reads this host's own values rather than the
+ * object the chain is still holding.
+ */
+function boundTo(allowed: readonly Bound[]): Operation<void> {
+  const bounds = allowed.map((bound) =>
+    Object.freeze({ url: bound.url, method: bound.method, headers: { ...bound.headers } }),
+  );
+  return Permissions.around({
+    fetch: ([input, init], next) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      const headers = { ...init?.headers };
+      const permitted = bounds.some(
+        (bound) =>
+          bound.url === input &&
+          bound.method === method &&
+          Object.keys(bound.headers).length === Object.keys(headers).length &&
+          Object.entries(bound.headers).every(([name, value]) => headers[name] === value),
+      );
+      return permitted ? next(input, init) : false;
     },
-  };
+  });
+}
+
+/** The ordinary selection, plus the network read these rows bound. */
+function reading(): ExecutionInstallation {
+  return selecting({
+    File: ["self-closing"],
+    Glob: ["self-closing"],
+    Syntax: ["self-closing"],
+    Fetch: ["self-closing"],
+  });
 }
 
 /** The components these documents are written with. */
@@ -512,6 +555,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
         yield* useHost(fixture);
         yield* useRegions();
         const admitted = { url: `${server.origin}/admitted`, method: "GET", headers: {} };
+        yield* boundTo([admitted]);
         const rendered = yield* collect(
           yield* executeInstalled(
             {
@@ -522,18 +566,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
               ),
               stream: new InMemoryStream(),
             },
-            [
-              {
-                evaluation: {
-                  read: [
-                    fileReadEntry(),
-                    globReadEntry(),
-                    syntaxReadEntry(),
-                    fetchEntry([admitted]),
-                  ],
-                },
-              },
-            ],
+            [reading()],
           ),
         );
         // Read inside the scope, before the server is torn down.
@@ -554,6 +587,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
       yield* useHost(fixture);
       yield* useRegions();
       const admitted = { url: `${server.origin}/admitted`, method: "GET", headers: {} };
+      yield* boundTo([admitted]);
       // A handler composed around the contextual chain while the document runs,
       // rewriting the destination to somewhere the entry never admitted.
       yield* API.Fetch.around({
@@ -573,18 +607,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
               ),
               stream: new InMemoryStream(),
             },
-            [
-              {
-                evaluation: {
-                  read: [
-                    fileReadEntry(),
-                    globReadEntry(),
-                    syntaxReadEntry(),
-                    fetchEntry([admitted]),
-                  ],
-                },
-              },
-            ],
+            [reading()],
           ),
         );
       } catch (error) {
@@ -627,14 +650,11 @@ describe("Tier PRM — authored, generated and direct operations under one restr
         method: "GET",
         headers: { "x-bound": "admitted" },
       };
+      yield* boundTo([admitted]);
       const source =
         `<Evaluate text={'<Fetch url="${admitted.url}" headers={{"x-bound":"admitted"}} ` +
         `as="answer" />\\n<Json value={answer} />\\n'} />\n`;
-      const admitting: ExecutionInstallation = {
-        evaluation: {
-          read: [fileReadEntry(), globReadEntry(), syntaxReadEntry(), fetchEntry([admitted])],
-        },
-      };
+      const admitting: ExecutionInstallation = reading();
 
       // The positive control first, in the same scope and against the same
       // server: the element, the ceiling and the header all agree, and the
@@ -708,6 +728,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
         method: "GET",
         headers: { "x-bound": "admitted" },
       };
+      yield* boundTo([admitted]);
       const element =
         `<Evaluate text={'<Fetch url="${admitted.url}" headers={{"x-bound":"admitted"}} ` +
         `as="answer" />\\n<Json value={answer} />\\n'} />`;
@@ -725,18 +746,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
               ),
               stream: new InMemoryStream(),
             },
-            [
-              {
-                evaluation: {
-                  read: [
-                    fileReadEntry(),
-                    globReadEntry(),
-                    syntaxReadEntry(),
-                    fetchEntry([admitted]),
-                  ],
-                },
-              },
-            ],
+            [reading()],
           ),
         );
       } catch (error) {
@@ -774,6 +784,12 @@ describe("Tier PRM — authored, generated and direct operations under one restr
       yield* useHost(fixture);
       yield* useRegions();
       const url = `${server.origin}/admitted`;
+      // Both spellings bounded, so the edit below is inside the policy and the
+      // row is about the host's own copy rather than about the refusal.
+      yield* boundTo([
+        { url, method: "GET", headers: { "x-bound": "admitted" } },
+        { url, method: "GET", headers: { "x-bound": "changed" } },
+      ]);
       const element =
         `<Evaluate text={'<Fetch url="${url}" headers={{"x-bound":"admitted"}} ` +
         `as="answer" />\\n<Json value={answer} />\\n'} />`;
@@ -787,24 +803,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
             ),
             stream: new InMemoryStream(),
           },
-          [
-            {
-              evaluation: {
-                read: [
-                  fileReadEntry(),
-                  globReadEntry(),
-                  syntaxReadEntry(),
-                  // Both spellings admitted, so the edit below is inside the
-                  // ceiling and the row is about the copy rather than about the
-                  // refusal.
-                  fetchEntry([
-                    { url, method: "GET", headers: { "x-bound": "admitted" } },
-                    { url, method: "GET", headers: { "x-bound": "changed" } },
-                  ]),
-                ],
-              },
-            },
-          ],
+          [reading()],
         ),
       );
       accepted = [...server.accepted];

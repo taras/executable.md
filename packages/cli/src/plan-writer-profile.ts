@@ -55,7 +55,7 @@ import { FormOpener } from "@executablemd/web";
 
 import { hostAcpDependencies } from "./agent-stack.ts";
 import type { PlanWriterStack } from "./agent-stack.ts";
-import { ordinaryEvaluationProfile } from "./evaluation-profile.ts";
+import { useOrdinaryGeneratedSelection } from "./evaluation-profile.ts";
 import { PLAN_COMMAND_DOCUMENT, readPackagedDocument } from "./packaged-document.ts";
 
 /**
@@ -450,6 +450,17 @@ export function* runPlanCommandDocument(profile: PlanWriterProfile): Operation<R
           yield* useTerminalOutput();
         }
 
+        // The ordinary run's generated selection, so an information request this
+        // authorship evaluates reads through exactly what `xmd run` offers —
+        // File, Glob and canonical Syntax, with the write spellings offered and
+        // never selected. Offered in the bounded writer scope this execution
+        // runs in, by the host rather than by `<Plan>`: a component that
+        // offered its own would be choosing its ceiling instead of being given
+        // one. The target-run description `installSyntax()` bound above stays
+        // separate — describing a component neither imports it nor grants its
+        // effects.
+        yield* useOrdinaryGeneratedSelection();
+
         // The command root is a thin adapter: it projects the request into
         // `<Plan>` and returns what comes back. Everything that used to be
         // installed around it — the directory, the provider, the Elicitation, the
@@ -478,13 +489,6 @@ export function* runPlanCommandDocument(profile: PlanWriterProfile): Operation<R
             {
               components: agentIdentityComponents(),
               declarations: [profile.declaration],
-              // The ordinary run's evaluation ceiling, so an information request
-              // this authorship evaluates reads through exactly what `xmd run`
-              // states — File, Glob and canonical Syntax, with the write table
-              // present and never selected. The host installs it, not `<Plan>`:
-              // a component that installed its own would be choosing its
-              // ceiling instead of being given one.
-              evaluation: ordinaryEvaluationProfile(),
             },
           ],
         );

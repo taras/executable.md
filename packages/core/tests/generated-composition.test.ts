@@ -26,7 +26,7 @@ import type { Operation } from "effection";
 
 import { collect } from "../src/collect.ts";
 import { executeInstalled } from "../host.ts";
-import { fileDeleteEntry, fileReadEntry, fileWriteEntry } from "../host.ts";
+import { useSelection } from "./support/generated-selection.ts";
 import type { ExecutionInstallation } from "../host.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
@@ -40,23 +40,40 @@ const NOTE = "the retained note\n";
 const OTHER = "the other note\n";
 
 function reading(files: RecordedFiles): ExecutionInstallation {
-  return { evaluation: { read: [fileReadEntry()] }, install: () => useRecordedFiles(files) };
+  return {
+    *install(): Operation<void> {
+      yield* useSelection({ File: ["self-closing"] });
+      yield* useRecordedFiles(files);
+    },
+  };
 }
 
+/**
+ * A selection whose spellings all write.
+ *
+ * Which class a spelling reaches is the owner's answer rather than the
+ * selection's, so "no read table" is now exactly "no spelling whose owner
+ * offers it as a read": `<File>` paired and `<File.Delete />` are both writes
+ * by their own declarations.
+ */
 function writing(files: RecordedFiles): ExecutionInstallation {
   return {
-    evaluation: { read: [], write: [fileWriteEntry(), fileDeleteEntry()] },
-    install: () => useRecordedFiles(files),
+    *install(): Operation<void> {
+      yield* useSelection({ File: ["paired"], "File.Delete": ["self-closing"] });
+      yield* useRecordedFiles(files);
+    },
   };
 }
 
 function both(files: RecordedFiles): ExecutionInstallation {
   return {
-    evaluation: {
-      read: [fileReadEntry()],
-      write: [fileWriteEntry(), fileDeleteEntry()],
+    *install(): Operation<void> {
+      yield* useSelection({
+        File: ["self-closing", "paired"],
+        "File.Delete": ["self-closing"],
+      });
+      yield* useRecordedFiles(files);
     },
-    install: () => useRecordedFiles(files),
   };
 }
 
@@ -325,14 +342,16 @@ describe("Tier FE31 — Json is composition, not an effect", () => {
   });
 
   it("FE31: a host cannot give an effect to a composition name", function* () {
-    // Closed-world conflict detection, at profile capture rather than at
-    // evaluation: the host never gets to shadow core's own pure component.
+    // Closed-world conflict detection, at capture rather than at evaluation:
+    // the host never gets to shadow core's own pure component.
     const files = recordedFiles();
     const message = yield* refusal(
       run(evaluating(`<Json value={1} />\n`), [
         {
-          evaluation: { read: [{ ...fileReadEntry(), name: "Json" }] },
-          install: () => useRecordedFiles(files),
+          *install(): Operation<void> {
+            yield* useSelection({ Json: ["self-closing"] });
+            yield* useRecordedFiles(files);
+          },
         },
       ]),
     );
@@ -369,11 +388,11 @@ function unwinding(log: string[]): FunctionComponentDefinition {
   };
 }
 
-/** A profile admitting that one component as a trusted component answer. */
+/** A selection offering that one name, which a provider answers for. */
 function holding(definition: FunctionComponentDefinition): ExecutionInstallation {
   return {
-    evaluation: {
-      read: [{ kind: "component-answer", name: "Held", forms: ["self-closing"] }],
+    *install(): Operation<void> {
+      yield* useSelection({ Held: ["self-closing"] });
     },
     componentAnswers: [answerProvider("Held", definition)],
   };

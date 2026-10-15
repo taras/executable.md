@@ -18,15 +18,19 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
+import { scoped, useScope } from "effection";
 import type { Operation } from "effection";
 import { collect, inlineSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { Json } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
-import { evaluationProfile, withWorkflowWorkspace } from "@executablemd/workflow/deno";
-import { gitDirectoryEntry } from "@executablemd/git";
+import {
+  useWorkflowGenerated,
+  withWorkflowWorkspace,
+  workflowGeneratedSelection,
+} from "@executablemd/workflow/deno";
+import { gitDirectorySelection } from "@executablemd/git";
 import { createRun, useStorageRoot, withStorage } from "./support/workflow-run.ts";
 
 /**
@@ -56,15 +60,11 @@ function runDocument(
       const output = yield* withWorkflowWorkspace(
         database,
         scoped(function* () {
+          // The bundled XMD workflow selection: Git supplies `<Dir>`. Offered
+          // inside the attachment, in the scope that executes the document.
+          yield* useWorkflowGenerated({ components: gitDirectorySelection() });
           return yield* collect(
-            yield* executeInstalled({ ...inlineSource(source), stream: database.journal }, [
-              // The bundled XMD workflow profile: Git supplies `<Dir>`.
-              {
-                evaluation: yield* evaluationProfile(database, {
-                  directory: gitDirectoryEntry(),
-                }),
-              },
-            ]),
+            yield* executeInstalled({ ...inlineSource(source), stream: database.journal }, []),
           );
         }),
       );
@@ -78,45 +78,35 @@ function runDocument(
 const NOTE = "the retained note";
 
 describe("Tier FE — the workflow host's profile", () => {
-  it("FE22: the directory capability is the host's, and Git is what supplies it", function* () {
-    // `<Dir>` belongs to `@executablemd/git`. Workflow states no entry for it
-    // at all now, so a generic Workflow host composing this profile has no
-    // directory capability — and the XMD workflow profile has one because Git
-    // hands it over, not because Workflow kept a copy.
-    const root = yield* useStorageRoot();
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
+  it("FE22: `<Dir>` is the host's choice, and Git is what supplies it", function* () {
+    // `<Dir>` belongs to `@executablemd/git`. Workflow offers the name not at
+    // all now, so a generic Workflow host composing this selection has no
+    // directory spelling — and the XMD workflow run has one because Git hands
+    // it over, not because Workflow kept a copy.
+    const generic = workflowGeneratedSelection();
+    // Non-empty, so "no Dir" is an absence among selected names rather than an
+    // empty selection that would satisfy the claim by containing nothing.
+    expect(Object.keys(generic).length > 0).toBe(true);
+    expect(Object.keys(generic)).not.toContain("Dir");
+    // Nor any network read: `<Fetch>` joins the selection only where this host
+    // bounds what a request may reach.
+    expect(Object.keys(generic)).not.toContain("Fetch");
 
-      const generic = yield* evaluationProfile(database);
-      const names = (generic.write ?? []).map((entry) => entry.name);
-      // Non-empty, so "no Dir" is an absence among entries rather than an
-      // empty table that would satisfy the claim by containing nothing.
-      expect(names.length > 0).toBe(true);
-      expect(names).not.toContain("Dir");
-
-      // And the position is the contract: a retained continuation compares
-      // this table position by position, so the supplied entry sits exactly
-      // between the file write and the file delete.
-      const bundled = yield* evaluationProfile(database, { directory: gitDirectoryEntry() });
-      expect((bundled.write ?? []).map((entry) => entry.name)).toEqual([
-        "File",
-        "Dir",
-        "File.Delete",
-      ]);
-    });
+    const bundled = workflowGeneratedSelection({ components: gitDirectorySelection() });
+    expect(Object.keys(bundled).toSorted()).toEqual(["Dir", "File", "File.Delete"]);
+    expect(bundled.Dir).toEqual(["paired"]);
+    yield* useScope();
   });
 
-  it("FE23: Git's directory entry admits core's own Dir and states no identity", function* () {
+  it("FE23: Git offers core's own Dir by name and form, and states no identity", function* () {
     // What this host decides is that a workflow run has a `<Dir>` at all. What
-    // admitting it grants is core's: the identity and the effect its paired
+    // offering it grants is core's: the identity and the effect its paired
     // spelling runs under are on the declaration that owns the component, so
     // there is nothing here for a host to restate or to move.
-    const entry = gitDirectoryEntry();
-    expect(entry.name).toBe("Dir");
-    expect(Object.keys(entry)).not.toContain("identity");
-    expect(Object.keys(entry)).not.toContain("legacy");
-    // It is the directory capability, not some other entry wearing the name.
-    expect(Reflect.get(entry, "capability")).toBe("directory:ensure");
+    const selection = gitDirectorySelection();
+    expect(Object.keys(selection)).toEqual(["Dir"]);
+    expect(selection.Dir).toEqual(["paired"]);
+    yield* useScope();
   });
 
   it("FE19: canonical `text` repeats across fresh runs without warnings", function* () {

@@ -86,7 +86,7 @@ import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import { createFitStore } from "../src/repl/fitting.ts";
 import { commitReplFrame } from "../src/repl/program.ts";
-import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
+import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { CellStyle, Observed, Presenter, TerminalGrid } from "./fixtures/repl/presentation.ts";
@@ -1771,7 +1771,8 @@ describe("REPL presentation: a frame of a real held invocation", () => {
     scoped(function* () {
       const opened = yield* submitReplEntry({
         execution: { id: "held", stream: new InMemoryStream([]) },
-        installations: [{ evaluation: ordinaryEvaluationProfile() }],
+        installations: [],
+        generated: ordinaryGeneratedSelection(),
         source: HELD_SOURCE,
       });
       if (!opened.ok) {

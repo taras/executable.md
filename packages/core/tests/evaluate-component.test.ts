@@ -17,24 +17,16 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
-import { ensure, Err, Ok, scoped, spawn, suspend, withResolvers } from "effection";
+import { ensure, Err, Ok, scoped, spawn, suspend, useScope, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { API } from "@executablemd/runtime";
 
 import { collect } from "../src/collect.ts";
 import { Component, content } from "../src/component-api.ts";
 import { executeInstalled, generatedRequestRefusal } from "../host.ts";
-import {
-  directoryEntry,
-  fileDeleteEntry,
-  fileReadEntry,
-  fileWriteEntry,
-  globReadEntry,
-  syntaxReadEntry,
-} from "../host.ts";
-import type { ExecutionInstallation, FragmentEvaluationInput } from "../host.ts";
+import type { ExecutionInstallation } from "../host.ts";
+import { useSelection } from "./support/generated-selection.ts";
 import { registerComponents } from "../src/components/registration.ts";
-import { elicitWriteEntry } from "../host.ts";
 import { useSyntax } from "../host.ts";
 import { Elicitation } from "../src/elicitation-api.ts";
 import type { ElicitationRequest } from "../src/elicitation-api.ts";
@@ -47,7 +39,10 @@ import type { FunctionComponentDefinition } from "../src/types.ts";
 import { ActiveProjection } from "../src/projection.ts";
 import { installIdentities } from "../src/invocation-identity.ts";
 import { SYNTAX_PROTECTED } from "../src/components/Syntax.ts";
-import { prepareEvaluationProfile } from "../src/evaluation-profile.ts";
+import { captureEvaluationProfile, evaluationLifetime } from "../src/evaluation-profile.ts";
+import type { ResolvedAnswer, ResolvedAnswers } from "../src/evaluation-profile.ts";
+import { coreComponentDefinition, CORE_ORIGIN } from "../src/components/registry.ts";
+import { fixedFilesystemDefinition } from "../src/components/fixed-filesystem.ts";
 import { admittedSymbols } from "../src/syntax-admitted.ts";
 
 function independentWrapper(answer: FunctionComponentDefinition): FunctionComponentDefinition {
@@ -66,8 +61,8 @@ function syntaxProfile(
 ): ExecutionInstallation {
   let captured = false;
   return {
-    evaluation: {
-      read: [{ kind: "component-answer", name: "Syntax", forms: ["self-closing"] }],
+    *install(): Operation<void> {
+      yield* useSelection({ Syntax: ["self-closing"] });
     },
     componentAnswers: [
       {
@@ -91,23 +86,43 @@ function syntaxProfile(
   };
 }
 
+/**
+ * The answers canonical resolution gives for core's own filesystem and search
+ * names, as capture receives them.
+ *
+ * Capture resolves nothing itself: the chain has already answered by the time
+ * it runs, and what it is handed is core's own copy. These rows hand it core's
+ * definitions directly, which is the seam.
+ */
+function coreFilesystemAnswers(...names: readonly string[]): ResolvedAnswers {
+  const answers = new Map<string, ResolvedAnswer>();
+  for (const name of names) {
+    const definition = fixedFilesystemDefinition(name) ?? coreComponentDefinition(name);
+    if (definition === undefined) {
+      throw new Error(`core supplies no ${name} component`);
+    }
+    answers.set(name, { definition, origin: CORE_ORIGIN });
+  }
+  return answers;
+}
+
 describe("protected generated component answers", () => {
   it("routes delegated Syntax through both wrappers and renders its ordinary output", function* () {
     const profile = syntaxProfile();
-    if (profile.evaluation === undefined) {
-      throw new Error("expected a Syntax evaluation profile");
-    }
     // syntax_symbols retains rendered text, so sourceKind must be checked on
-    // the sealed profile's structured symbols before rendering drops that field.
+    // the captured profile's structured symbols before rendering drops that
+    // field.
     const identity = installIdentities([], [], [SYNTAX_PROTECTED]);
-    const prepared = yield* prepareEvaluationProfile(profile.evaluation);
+    const lifetime = evaluationLifetime();
     try {
       const definition = identity.protected.get("Syntax");
       if (definition === undefined) {
         throw new Error("expected canonical Syntax");
       }
-      const captured = yield* prepared.seal(
+      const captured = captureEvaluationProfile(
+        new Map([["Syntax", ["self-closing"]]]),
         new Map([["Syntax", { definition, origin: "@executablemd/core" }]]),
+        lifetime,
         identity.componentRouting.project,
       );
       const symbols = admittedSymbols(captured.read);
@@ -119,7 +134,7 @@ describe("protected generated component answers", () => {
         },
       ]);
     } finally {
-      prepared.revoke();
+      lifetime.revoke();
       identity.identities.revoke();
     }
     const stream = new InMemoryStream();
@@ -150,24 +165,27 @@ describe("protected generated component answers", () => {
   });
 
   /**
-   * An admitted capability for an operation canonical core owns a component
-   * for is that component, however the host identified its grant.
+   * A selected name canonical core protects is reported as the component it is.
    *
    * Availability compares what an author was *shown* with what this evaluation
    * may *run*, by identity rather than by spelling. The enclosing reference
-   * documents core's own `<File>`, so an admitted entry reporting an ordinary
-   * registration is a different component under the same name — and a fragment
-   * admitted to write a file would be told it could not. What the host decides
-   * is whether the name is admitted at all; the identity the grant is recorded
-   * under is core's, from the declaration that owns the component.
+   * documents core's own `<File>`, so a selected entry reporting an ordinary
+   * registration would be a different component under the same name — and a
+   * fragment admitted to write a file would be told it could not. What the host
+   * chooses is whether the name is selected at all; the identity the grant is
+   * recorded under is core's, from the declaration that owns the component.
    */
-  it("reports an admitted file operation as the component canonical core owns", function* () {
-    const prepared = yield* prepareEvaluationProfile({
-      read: [fileReadEntry()],
-      write: [directoryEntry("Dir")],
-    });
+  it("reports a selected filesystem name as the component canonical core owns", function* () {
+    const lifetime = evaluationLifetime();
     try {
-      const captured = yield* prepared.seal(new Map());
+      const captured = captureEvaluationProfile(
+        new Map([
+          ["File", ["self-closing"]],
+          ["Dir", ["paired"]],
+        ]),
+        coreFilesystemAnswers("File", "Dir"),
+        lifetime,
+      );
       expect(admittedSymbols(captured.read).categories[2].entries).toMatchObject([
         {
           name: "File",
@@ -189,40 +207,35 @@ describe("protected generated component answers", () => {
         paired: { identity: "https://executable.md/components/dir/ensure", effect: "write" },
       });
     } finally {
-      prepared.revoke();
+      lifetime.revoke();
     }
+    yield* useScope();
   });
 
   /**
-   * And the pairing is what carries it, not the name.
+   * And a replaceable name is reported as the registration it resolves to.
    *
-   * A host chooses the name a capability is admitted under, so the name alone
-   * says nothing about which component is behind it. An operation core owns no
-   * component for stays an ordinary registration even under a name core does
-   * own — otherwise this would be telling an author that the `<File>` they read
-   * about is the thing this fragment may run.
+   * A selected name is resolved through the ordinary import chain, so what is
+   * behind one is whatever that chain answered with. `<Glob>` is a core default
+   * rather than a protected name, so the catalog says `registered` — which is
+   * the honest answer to "could I supply this name myself?".
    */
-  it("reports a differently named or different operation as the registration it is", function* () {
-    const prepared = yield* prepareEvaluationProfile({
-      // The operation core owns `<File>` for, under a name it does not: a host
-      // may call its own grant whatever it likes.
-      read: [
-        { ...fileReadEntry(), name: "Scribe" },
-        // And the other half: an operation core owns no `<File>` body for,
-        // admitted under the name it does own.
-        { ...globReadEntry(), name: "File" },
-      ],
-    });
+  it("reports a replaceable selected name as the registration it is", function* () {
+    const lifetime = evaluationLifetime();
     try {
-      const captured = yield* prepared.seal(new Map());
+      const captured = captureEvaluationProfile(
+        new Map([["Glob", ["self-closing"]]]),
+        coreFilesystemAnswers("Glob"),
+        lifetime,
+      );
       const entries = admittedSymbols(captured.read).categories[2].entries;
       expect(entries.map((entry) => `${entry.name}: ${entry.sourceKind}`)).toEqual([
-        "Scribe: registered",
-        "File: registered",
+        "Glob: registered",
       ]);
     } finally {
-      prepared.revoke();
+      lifetime.revoke();
     }
+    yield* useScope();
   });
 
   it("keeps the producer's route while the generated child admits only Syntax", function* () {
@@ -275,7 +288,7 @@ describe("protected generated component answers", () => {
       {
         name: "copied",
         options: { transform: (answer) => ({ ...answer }) },
-        reason: "no provider published",
+        reason: "nor one a provider published",
       },
       {
         name: "replaced body",
@@ -288,12 +301,12 @@ describe("protected generated component answers", () => {
             },
           }),
         },
-        reason: "no provider published",
+        reason: "nor one a provider published",
       },
       {
         name: "wrapped",
         options: { transform: independentWrapper },
-        reason: "no provider published",
+        reason: "nor one a provider published",
       },
       {
         name: "mutated",
@@ -303,7 +316,7 @@ describe("protected generated component answers", () => {
             return answer;
           },
         },
-        reason: "no provider published",
+        reason: "nor one a provider published",
       },
     ];
     for (const { name, options, reason } of variants) {
@@ -390,7 +403,7 @@ describe("protected generated component answers", () => {
       yield* refusal(
         run(source, [syntaxProfile({ transform: () => held })], new InMemoryStream(partial)),
       ),
-    ).toContain("no provider published");
+    ).toContain("nor one a provider published");
     function inspect(value: unknown): void {
       expect(typeof value).not.toBe("function");
       if (typeof value === "object" && value !== null) {
@@ -413,19 +426,27 @@ const ROOT_PATH = "evaluate.md";
 
 const NOTE = "the retained note\n";
 
-/** A read-only profile over one recorder. */
+/** A read-only selection over one recorder. */
 function reading(files: RecordedFiles): ExecutionInstallation {
-  return { evaluation: { read: [fileReadEntry()] }, install: () => useRecordedFiles(files) };
+  return {
+    *install(): Operation<void> {
+      yield* useSelection({ File: ["self-closing"] });
+      yield* useRecordedFiles(files);
+    },
+  };
 }
 
-/** A profile offering both classes over one recorder. */
+/** A selection whose spellings reach both classes, over one recorder. */
 function both(files: RecordedFiles): ExecutionInstallation {
   return {
-    evaluation: {
-      read: [fileReadEntry()],
-      write: [fileWriteEntry(), directoryEntry("Dir"), fileDeleteEntry()],
+    *install(): Operation<void> {
+      yield* useSelection({
+        File: ["self-closing", "paired"],
+        "File.Delete": ["self-closing"],
+        Dir: ["paired"],
+      });
+      yield* useRecordedFiles(files);
     },
-    install: () => useRecordedFiles(files),
   };
 }
 
@@ -1002,20 +1023,33 @@ describe("Tier FE — allow selects, and never adds", () => {
   });
 });
 
-describe("Tier FE — an execution with no ceiling has no evaluation", () => {
-  it("FE5: a host that stated no profile refuses at the element, not at startup", function* () {
+describe("Tier FE — an execution with no selection has no evaluation", () => {
+  it("FE5: a host that selected nothing refuses at the element, not at startup", function* () {
     expect(String(yield* run(`nothing asked for\n`, []))).toContain("nothing asked for");
 
     expect(yield* refusal(run(`<Evaluate text="<File path='a.md' />" />\n`, []))).toContain(
-      "this host stated none",
+      "this host selected none",
     );
   });
 
-  it("FE5: two installations stating a profile is refused before anything installs", function* () {
-    const files = recordedFiles();
-    expect(yield* refusal(run(`nothing asked for\n`, [reading(files), reading(files)]))).toContain(
-      "one maximum permission",
+  /**
+   * Two handlers compose; they are not a setup error.
+   *
+   * This row used to assert the opposite, because a profile was an installation
+   * member and two of them were two answers to one question with no way to
+   * choose between them. A selection is one contextual value, so normal
+   * composition answers it: the nearer handler decides, the chain is what a
+   * host assembled, and there is no contributor count to refuse on.
+   */
+  it("FE5: two handlers offering a selection compose rather than refusing", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* run(
+      `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
+      [reading(files), reading(files)],
     );
+
+    expect(String(output)).toContain("the retained note");
+    expect(files.performed).toEqual(["read notes.md"]);
   });
 
   /**
@@ -1034,7 +1068,7 @@ describe("Tier FE — an execution with no ceiling has no evaluation", () => {
     const files = recordedFiles({ "notes.md": NOTE });
     const output = yield* run(
       `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
-      [{ evaluation: { read: [fileReadEntry()] }, install: () => useRecordedFiles(files) }],
+      [reading(files)],
     );
 
     expect(String(output)).toContain("the retained note");
@@ -1214,8 +1248,10 @@ describe("Tier FE — one occurrence, one durable decision", () => {
     // restated.
     const second = recordedFiles({ "notes.md": NOTE });
     const widened: ExecutionInstallation = {
-      evaluation: { read: [fileReadEntry(), globReadEntry()] },
-      install: () => useRecordedFiles(second),
+      *install(): Operation<void> {
+        yield* useSelection({ File: ["self-closing"], Glob: ["self-closing"] });
+        yield* useRecordedFiles(second);
+      },
     };
     const failed = yield* refusal(run(source, [widened], new InMemoryStream(partial)));
 
@@ -1652,11 +1688,15 @@ describe("Tier FE34 — the shared read profile", () => {
   /** The read table `xmd run` states, over one recorder. */
   function shared(files: RecordedFiles): ExecutionInstallation {
     return {
-      evaluation: {
-        read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()],
-        write: [fileWriteEntry(), fileDeleteEntry()],
+      *install(): Operation<void> {
+        yield* useSelection({
+          File: ["self-closing", "paired"],
+          "File.Delete": ["self-closing"],
+          Glob: ["self-closing"],
+          Syntax: ["self-closing"],
+        });
+        yield* useRecordedFiles(files);
       },
-      install: () => useRecordedFiles(files),
     };
   }
 
@@ -1787,15 +1827,16 @@ describe("Tier FE34 — the shared read profile", () => {
           `<Json value={paths} />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
         [
           {
-            evaluation: { read: [globReadEntry()] },
-            install: () =>
-              useRecordedFiles({
+            *install(): Operation<void> {
+              yield* useSelection({ Glob: ["self-closing"] });
+              yield* useRecordedFiles({
                 ...files,
                 *globFiles(input) {
                   searched.push(input.cwd);
                   return yield* files.globFiles(input);
                 },
-              }),
+              });
+            },
           },
         ],
       );
@@ -1881,7 +1922,7 @@ describe("Tier FE34 — the shared read profile", () => {
     // position, on the exact object materialization produced. A handler that
     // returns anything else returns something nobody published.
     expect(seen.length).toBeGreaterThan(0);
-    expect(failed).toContain("no provider published");
+    expect(failed).toContain("nor one a provider published");
     expect(files.performed).toEqual([]);
   });
 
@@ -2006,15 +2047,20 @@ describe("Tier FE34 — the shared read profile", () => {
     try {
       yield* run(`<Evaluate text={'<File path="missing.md" />\\n'} />\n`, [
         {
-          evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
-          install: () =>
-            useRecordedFiles({
+          *install(): Operation<void> {
+            yield* useSelection({
+              File: ["self-closing"],
+              Glob: ["self-closing"],
+              Syntax: ["self-closing"],
+            });
+            yield* useRecordedFiles({
               ...broken,
               // deno-lint-ignore require-yield
               *readTextFile(): Operation<never> {
                 throw new Error("the Files provider failed");
               },
-            }),
+            });
+          },
         },
       ]);
     } catch (error) {
@@ -2043,15 +2089,15 @@ describe("Tier FE34 — the shared read profile", () => {
       },
     };
     const profile: ExecutionInstallation = {
-      evaluation: {
-        read: [
-          fileReadEntry(),
-          globReadEntry(),
-          syntaxReadEntry(),
-          { kind: "component-answer", name: "Held", forms: ["self-closing"] },
-        ],
+      *install(): Operation<void> {
+        yield* useSelection({
+          File: ["self-closing"],
+          Glob: ["self-closing"],
+          Syntax: ["self-closing"],
+          Held: ["self-closing"],
+        });
+        yield* useRecordedFiles(files);
       },
-      install: () => useRecordedFiles(files),
       componentAnswers: [answerProvider("Held", held)],
     };
 
@@ -2092,24 +2138,24 @@ describe("Tier FE34 — the shared read profile", () => {
     expect(generatedRequestRefusal(classified)).toContain("NoSuchComponent");
   });
 
-  it("FE34: core answers for Syntax alone, so Evaluate cannot be admitted as an answer", function* () {
+  it("FE34: `<Evaluate>` offers no generated form, so it cannot admit itself", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
     const failed = yield* refusal(
       run(`<Evaluate text={'<Evaluate text={"inert"} />\\n'} />\n`, [
         {
-          evaluation: {
-            read: [{ kind: "component-answer", name: "Evaluate", forms: ["self-closing"] }],
+          *install(): Operation<void> {
+            yield* useSelection({ Evaluate: ["self-closing"] });
+            yield* useRecordedFiles(files);
           },
-          install: () => useRecordedFiles(files),
         },
       ]),
     );
 
-    // Core publishing an answer is what makes a protected name admissible, and
-    // it publishes one for the vocabulary and nothing else: evaluation inside
-    // evaluation is a different grant from being shown what a fragment may
-    // write. The hand-written entry resolves to an answer nobody published.
-    expect(failed).toContain("no provider published");
+    // Canonical resolution answers for `Evaluate` — it is a protected name —
+    // and its declaration offers no generated use of either spelling. So
+    // evaluation inside evaluation is refused where the selection is captured:
+    // being shown a vocabulary is a different grant from being able to open one.
+    expect(failed).toContain("offers no generated use of it");
     expect(files.performed).toEqual([]);
   });
 });
@@ -2134,14 +2180,14 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
   const OPEN = `<Evaluate text={'<Open />\\n'} as="answer" />\n\n<Json value={answer} />\n`;
 
   /** The entry a host states for a provider-backed name. */
-  function admits(): FragmentEvaluationInput {
-    return { read: [{ kind: "component-answer", name: "Open", forms: ["self-closing"] }] };
+  function admits(): Operation<void> {
+    return useSelection({ Open: ["self-closing"] });
   }
 
   /** One installation admitting `<Open />` and backing it with one provider. */
   function backed(answer: Implementation, options: ProviderOptions = {}): ExecutionInstallation {
     return {
-      evaluation: admits(),
+      install: admits,
       componentAnswers: [answerProvider("Open", answer.definition, options)],
     };
   }
@@ -2230,13 +2276,21 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
         });
         return yield* run(
           OPEN,
-          [{ ...backed(A), evaluation: admits(), install: () => useRecordedFiles(files) }],
+          [
+            {
+              ...backed(A),
+              *install(): Operation<void> {
+                yield* admits();
+                yield* useRecordedFiles(files);
+              },
+            },
+          ],
           stream,
         );
       }),
     );
 
-    expect(failed).toContain("no provider published");
+    expect(failed).toContain("nor one a provider published");
     // Ahead of everything: no admission, neither body, no fragment effect.
     expect(admissions(yield* stream.readAll())).toHaveLength(0);
     expect(A.invoked).toEqual([]);
@@ -2259,7 +2313,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
     // honest.
     const output = yield* run(OPEN, [
       {
-        evaluation: admits(),
+        install: admits,
         componentAnswers: [
           answerProvider("Open", B.definition, {
             delegatesFirst: true,
@@ -2299,7 +2353,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
     // and the substitution refuses it.
     const output = yield* run(`<Evaluate text={'<Open flag="one" />\\n'} as="answer" />\n`, [
       {
-        evaluation: admits(),
+        install: admits,
         componentAnswers: [
           answerProvider("Open", A.definition, {
             alternating: {
@@ -2333,7 +2387,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
         OPEN,
         [
           {
-            evaluation: admits(),
+            install: admits,
             componentAnswers: [answerProvider("Open", A.definition, { keepsAnswering: true })],
           },
         ],
@@ -2361,7 +2415,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
         OPEN,
         [
           {
-            evaluation: admits(),
+            install: admits,
             componentAnswers: [answerProvider("Open", A.definition, { publishesLater: true })],
           },
         ],
@@ -2389,8 +2443,10 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
           OPEN,
           [
             {
-              evaluation: admits(),
-              install: () => useRecordedFiles(files),
+              *install(): Operation<void> {
+                yield* admits();
+                yield* useRecordedFiles(files);
+              },
               componentAnswers: [answerProvider("Open", A.definition, options)],
             },
           ],
@@ -2398,7 +2454,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
         ),
       );
 
-      expect([what, failed.includes("no provider published")]).toEqual([what, true]);
+      expect([what, failed.includes("nor one a provider published")]).toEqual([what, true]);
       // Before the root import, so there is no admission and no body — and the
       // document's own effects never started either.
       expect([what, admissions(yield* stream.readAll()).length]).toEqual([what, 0]);
@@ -2422,8 +2478,10 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
         OPEN,
         [
           {
-            evaluation: admits(),
-            install: () => useRecordedFiles(files),
+            *install(): Operation<void> {
+              yield* admits();
+              yield* useRecordedFiles(files);
+            },
             componentAnswers: [answerProvider("Open", stating)],
           },
         ],
@@ -2451,8 +2509,10 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
         OPEN,
         [
           {
-            evaluation: admits(),
-            install: () => useRecordedFiles(files),
+            *install(): Operation<void> {
+              yield* admits();
+              yield* useRecordedFiles(files);
+            },
             componentAnswers: [answerProvider("Open", A.definition)],
           },
         ],
@@ -2491,7 +2551,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
         OPEN,
         [
           {
-            evaluation: admits(),
+            install: admits,
             componentAnswers: [
               answerProvider("Open", B.definition, { delegatesFirst: true, delegated }),
               answerProvider("Open", resumedA.definition),
@@ -2539,7 +2599,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
         `<Evaluate text={'<Open />\\n'} as="two" />\n\n<Json value={two} />\n`,
       [
         {
-          evaluation: admits(),
+          install: admits,
           componentAnswers: [answerProvider("Open", A.definition, { lookups, asked })],
         },
       ],
@@ -2569,8 +2629,10 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
       `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n<Json value={answer} />\n`,
       [
         {
-          evaluation: { read: [fileReadEntry()] },
-          install: () => useRecordedFiles(files),
+          *install(): Operation<void> {
+            yield* useSelection({ File: ["self-closing"] });
+            yield* useRecordedFiles(files);
+          },
           componentAnswers: [
             answerProvider("Open", implementation("Open", "A ran").definition, { lookups }),
           ],
@@ -2606,19 +2668,20 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
   /** A profile admitting the write table Elicit belongs to. */
   function writing(files: RecordedFiles): ExecutionInstallation {
     return {
-      evaluation: {
-        read: [fileReadEntry()],
-        write: [fileWriteEntry(), elicitWriteEntry()],
+      *install(): Operation<void> {
+        yield* useSelection({ File: ["self-closing", "paired"], Elicit: ["paired"] });
+        yield* useRecordedFiles(files);
       },
-      install: () => useRecordedFiles(files),
     };
   }
 
   /** The same tables, with the question left out of the one that holds it. */
   function withoutElicit(files: RecordedFiles): ExecutionInstallation {
     return {
-      evaluation: { read: [fileReadEntry()], write: [fileWriteEntry()] },
-      install: () => useRecordedFiles(files),
+      *install(): Operation<void> {
+        yield* useSelection({ File: ["self-closing", "paired"] });
+        yield* useRecordedFiles(files);
+      },
     };
   }
 
@@ -2699,17 +2762,16 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
     expect(kinds).toContain("elicit");
   });
 
-  it("EL7: an admitted question nothing writes resolves nothing, and breaks nothing", function* () {
+  it("EL7: a selected question is resolved at capture even when nothing writes it", function* () {
     const files = recordedFiles();
     const requests: ElicitationRequest[] = [];
     const asksFor: string[] = [];
 
-    // The entry is admitted and the fragment never writes the element. Nothing
-    // about `Elicit` is resolved for it — which is the whole reason this is a
-    // pinned capability: an admitted *component answer* is resolved once per
-    // execution before any document code, so a name a host had legitimately
-    // shadowed, or a repository file of the same name on the include path, made
-    // executions that ask nothing refuse.
+    // Every selected name is resolved once, before public execution policy,
+    // whether or not the fragment goes on to write it. That is the whole of the
+    // substitution this closes: a name resolved lazily would be resolved
+    // through whatever middleware the running document had arranged by then.
+    // So `Elicit` is asked for here — once — and nobody is asked a question.
     const output = yield* scoped(function* () {
       yield* asked(requests);
       yield* Component.around({
@@ -2722,7 +2784,9 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
       return yield* run(DOCUMENT, [writing(files)]);
     });
 
-    expect(asksFor).not.toContain("Elicit");
+    // Resolved before the root import, which is what "at capture" means here.
+    expect(asksFor.slice(0, asksFor.indexOf("__root__"))).toContain("Elicit");
+    expect(asksFor.filter((name) => name === "Elicit")).toHaveLength(1);
     expect(requests).toEqual([]);
     expect(files.entries.get("out.md")).toContain("just a write");
     expect(String(output)).not.toContain("did not admit");
@@ -2810,48 +2874,46 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
     expect(files.performed).toEqual([]);
   });
 
-  it("EL5: a same-name definition never runs, whichever tier installed it", function* () {
-    // Nothing resolves `Elicit` for a generated fragment, so a same-name
-    // component is not a competing *answer* to be refused — it is simply not
-    // what the admitted entry runs. What a person is asked, and what the
-    // fragment binds, comes from canonical core's own body either way.
-    //
-    // A registration is the tier that would win if the import chain were
-    // consulted at all: it sits in front of core's table, and the workflow's own
-    // suspension replacement reaches a run exactly this way.
+  it("EL5: a selected question resolves the actual host answer, and refuses an unoffered one", function* () {
+    // `Elicit` is a replaceable name, and selecting it resolves what this host
+    // actually answers for it. A registration that shadows core's own is
+    // therefore what a selected `<Elicit>` would run — and a registration whose
+    // declaration offers no generated use of the paired form has no identity
+    // for a continuation to be compared against, so setup refuses rather than
+    // silently falling back to core's default.
     const impostorAnswer = { decision: "Impostor" };
     const registered = recordedFiles();
     const registeredAsks: ElicitationRequest[] = [];
     let impostorRan = false;
-    yield* scoped(function* () {
-      yield* asked(registeredAsks);
-      yield* registerComponents([
-        {
-          name: "Elicit",
-          origin: "test://impostor",
-          props: { type: "object", properties: {}, additionalProperties: true },
-          // deno-lint-ignore require-yield
-          *fn(): Operation<Json> {
-            impostorRan = true;
-            return impostorAnswer;
+    const refusedRegistration = yield* refusal(
+      scoped(function* () {
+        yield* asked(registeredAsks);
+        yield* registerComponents([
+          {
+            name: "Elicit",
+            origin: "test://impostor",
+            props: { type: "object", properties: {}, additionalProperties: true },
+            // deno-lint-ignore require-yield
+            *fn(): Operation<Json> {
+              impostorRan = true;
+              return impostorAnswer;
+            },
           },
-        },
-      ]);
-      yield* producing(ASKING);
-      return yield* run(DOCUMENT, [writing(registered)]);
-    });
-    // The real provider was asked, the impostor was not run, and what reached
-    // the write is the provider's answer rather than the impostor's.
-    expect(registeredAsks).toHaveLength(1);
+        ]);
+        yield* producing(ASKING);
+        return yield* run(DOCUMENT, [writing(registered)]);
+      }),
+    );
+    expect(refusedRegistration).toContain("offers no generated use of it");
+    // Nobody was asked, nothing was written, and the shadowing body never ran:
+    // the refusal lands at setup, before the producer and before any effect.
     expect(impostorRan).toBe(false);
-    expect(registered.entries.get("out.md")).toContain("Approve");
-    expect(registered.entries.get("out.md")).not.toContain("Impostor");
+    expect(registeredAsks).toEqual([]);
+    expect(registered.performed).toEqual([]);
 
-    // And middleware that answers the name with a body of its own does not get
-    // to be what the fragment runs. This is the tier every other one reaches
-    // through — a repository file, a declaration, a separately loaded copy are
-    // all things the import chain would answer with — so a substitution refused
-    // here is refused for all of them.
+    // And middleware that answers the name with a body of its own is refused on
+    // the other terms: an implementation nobody published is not one this
+    // execution may retain, whatever metadata it carries.
     const wrapped = recordedFiles();
     const wrappedAsks: ElicitationRequest[] = [];
     let middlewareRan = false;
@@ -2867,6 +2929,12 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
               kind: "function",
               name: "Elicit",
               props: { type: "object", properties: {}, additionalProperties: true },
+              generated: {
+                paired: {
+                  identity: "https://executable.md/components/elicit/ask",
+                  effect: "write",
+                },
+              },
               // deno-lint-ignore require-yield
               *fn(): Operation<Json> {
                 middlewareRan = true;
@@ -2879,10 +2947,10 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
         return yield* run(DOCUMENT, [writing(wrapped)]);
       }),
     );
-    // Only canonical execution answers a generated import. A handler may watch
-    // one or refuse it; answering one with a body of its own is refused at the
-    // import, before anybody is asked and before the fragment writes anything.
-    expect(refused).toContain("canonical execution did not produce");
+    // Copying core's own URLs publishes nothing. A selected name runs the
+    // answer canonical resolution produced or one a provider published, and a
+    // replacement is neither — so it is refused before anybody is asked.
+    expect(refused).toContain("nor one a provider published");
     expect(middlewareRan).toBe(false);
     expect(wrappedAsks).toEqual([]);
     expect(wrapped.performed).toEqual([]);
@@ -2909,11 +2977,10 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
     // one restated.
     const second = recordedFiles();
     const moved: ExecutionInstallation = {
-      evaluation: {
-        read: [fileReadEntry()],
-        write: [fileWriteEntry()],
+      *install(): Operation<void> {
+        yield* useSelection({ File: ["self-closing", "paired"] });
+        yield* useRecordedFiles(second);
       },
-      install: () => useRecordedFiles(second),
     };
     const requests: ElicitationRequest[] = [];
     const failed = yield* refusal(
