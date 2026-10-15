@@ -3611,16 +3611,17 @@ authors output around it. Local Git, Git-host, issue,
 process, eval and exec, native-command, credential and external-write effects
 are outside the class.
 
-The versioned Dir origin is a grant boundary, not a symbol decoration. The
-former `@executablemd/workflow/composition#Dir` identity authorized lexical
-placement that created nothing; it does not authorize the persistent mutation.
-A continuation whose retained write table names that former identity is refused
-before generated execution instead of inheriting a broader grant. Read-only
-admissions never selected the write table and remain unaffected.
+The identity a spelling runs under is a grant boundary, not a symbol
+decoration. An earlier `<Dir>` grant authorized lexical placement that created
+nothing, and it does not authorize the persistent mutation this one does. A
+continuation whose retained write table names a different identity for that
+spelling is refused before generated execution instead of inheriting a broader
+grant. Read-only admissions never selected the write table and remain
+unaffected.
 
-That order is retained identity rather than presentation. A continuation is
+That order is retained grant rather than presentation. A continuation is
 compared against the entries position by position, so adding the deletion
-identity to the table refuses a continuation that was admitted under the former
+spelling to the table refuses a continuation that was admitted under the former
 two-entry one — before any generated effect, and deliberately: a run resumed
 under a wider grant than it was admitted with is the thing the comparison
 exists to refuse. A read-only admission never selected the write table and is

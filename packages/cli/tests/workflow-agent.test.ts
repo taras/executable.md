@@ -722,16 +722,21 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       });
 
       expect(attempt.failure).toBe(undefined);
-      // The standard profile admitted it: one record, naming both write
-      // identities and the classes the document selected.
+      // The standard profile admitted it: one record, naming both admitted
+      // spellings and the classes the document selected.
       const recorded = admitted(attempt.events);
       expect(recorded).toHaveLength(1);
       const policy = JSON.stringify(recorded[0]);
-      expect(policy).toContain("File:write");
-      // The identity is a structural record, so the origin, the key and the
-      // revision are read as themselves rather than as one assembled spelling.
-      expect(policy).toContain('"origin":"@executablemd/workflow/composition"');
-      expect(policy).toContain('"key":"Dir","revision":"3"');
+      // What each spelling runs as comes from the declaration that owns the
+      // implementation, so the row holds that URL and the table that admitted
+      // it rather than a spelling a host assembled.
+      expect(policy).toContain(
+        '"name":"File","form":"paired","identity":"https://executable.md/components/file/write"',
+      );
+      expect(policy).toContain(
+        '"name":"Dir","form":"paired","identity":"https://executable.md/components/dir/ensure"',
+      );
+      expect(policy).toContain('"effect":"write"');
       expect(policy).toContain('"allow":["write"]');
       // And the change is in the run's own Workspace, where an ordinary read
       // beneath the fragment's own directory finds it. Anchored on the

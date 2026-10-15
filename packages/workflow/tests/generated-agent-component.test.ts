@@ -1075,8 +1075,12 @@ describe("Tier WGAC — the classes an authored element may select", () => {
       const recorded = admissions(attempt.events);
       expect(policyOf(recorded[0]!)?.allow).toEqual(["read"]);
       // And the write table is not in the retained policy at all, so a run that
-      // changed it has not changed what this admission was granted under.
-      expect(JSON.stringify(policyOf(recorded[0]!))).not.toContain("File:write");
+      // changed it has not changed what this admission was granted under. Read
+      // as the identity the write spelling runs under, which is what a row in
+      // that table would hold.
+      expect(JSON.stringify(policyOf(recorded[0]!))).not.toContain(
+        "https://executable.md/components/file/write",
+      );
     });
   });
 });

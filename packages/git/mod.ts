@@ -59,9 +59,10 @@
  * These components were published by `@executablemd/workflow` before this
  * package existed, and every journal, database row and artifact a released
  * build wrote names that origin. Those strings identify retained history rather
- * than current source ownership, so they are preserved exactly here — including
- * the `@executablemd/workflow/composition` origin and the released
- * `@executablemd/workflow/composition/dir-v2#Dir` alias.
+ * than current source ownership, so the `@executablemd/workflow/composition`
+ * origin is preserved exactly here. What a generated `<Dir>` runs as is not
+ * among them: that is stated by core's own declaration, which owns the
+ * implementation.
  */
 
 export { default } from "./src/plugin.ts";

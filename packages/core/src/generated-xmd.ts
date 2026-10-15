@@ -61,8 +61,8 @@
  * so does this: every admitted invocation is checked against that same fact
  * before the component runs, and refused when it is not the form its identity
  * was chosen for. Nothing a handler answers reaches either read, so an admitted
- * `File:read` cannot be turned into a write, or an admitted `File:write` into a
- * read, however many times something is asked.
+ * reading `<File />` cannot be turned into a write, or an admitted writing
+ * `<File>…</File>` into a read, however many times something is asked.
  *
  * ## A resumed run is held to the ceilings it was admitted under
  *
