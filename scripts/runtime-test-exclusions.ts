@@ -476,7 +476,7 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
   {
     path: "packages/cli/tests/evaluate-workflow.test.ts",
     reason:
-      "proves the workflow evaluation profile — its Workspace-bound ceiling, its advancing basis and its released `source` spelling — against a real node:sqlite WorkflowRun database with the Deno DOFS Workspace attached. The claim is that this host's profile differs from the ordinary one and nothing else does, so a substituted store would be a substitute for the subject; Bun has no node:sqlite and Node 22 keeps it behind --experimental-sqlite",
+      "proves the workflow evaluation profile — its Workspace-bound ceiling, its advancing basis and its canonical `text` input with obsolete-prop refusal — against a real node:sqlite WorkflowRun database with the Deno DOFS Workspace attached. The claim is that this host's profile differs from the ordinary one and nothing else does, so a substituted store would be a substitute for the subject; Bun has no node:sqlite and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/713",
   },
   {

@@ -9,14 +9,11 @@
  * What only this tier can show is that the two hosts differ in their *profile*
  * and in nothing else. The component, the evaluator and the durable protocol
  * are the same ones the ordinary run uses; what the workflow adds is a
- * Workspace-bound ceiling, a basis that advances with the run, and the released
- * `source` spelling — which the ordinary profile refuses and this one accepts
- * without comment.
+ * Workspace-bound ceiling and a basis that advances with the run. Every host
+ * accepts the canonical `text` input and refuses `source` and `program`.
  *
  * It runs against the real attachment rather than the `xmd workflow` command
- * line: a run started from the command boundary needs a git repository with a
- * committed definition, and a row that silently degraded when that was
- * unavailable would assert nothing. The command boundary itself is Tier WAL's.
+ * line, whose start/resume behavior is exercised separately by Tier WAL.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -126,23 +123,30 @@ describe("Tier FE — the workflow host's profile", () => {
     expect(Reflect.get(entry, "capability")).toBe("directory:ensure");
   });
 
-  it("FE19: `source` and `text` behave identically here, and neither warns", function* () {
+  it("FE19: canonical `text` repeats across fresh runs without warnings", function* () {
+    let reads = 0;
+    yield* API.Files.around({
+      *readTextFile(args, next) {
+        reads++;
+        return yield* next(...args);
+      },
+    });
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
-      const aliased = yield* createRun();
-      const alias = yield* runDocument(
-        aliased,
+      const first = yield* createRun();
+      const initial = yield* runDocument(
+        first,
         `<File path="notes.md">${NOTE}</File>\n\n` +
           `<Evaluate text={'<File path="notes.md" />\\n'} as="answer" />\n\n` +
           `<Json value={answer} />\n`,
       );
 
-      expect(alias.failure).toBe(undefined);
-      const aliasText = String(alias.output);
-      expect(aliasText).toContain(NOTE);
+      expect(initial.failure).toBe(undefined);
+      const initialText = String(initial.output);
+      expect(initialText).toContain(NOTE);
       // Silently: no deprecation sentence anywhere in the run's output.
-      expect(aliasText).not.toContain("earlier spelling");
-      expect(aliasText).not.toContain("deprecated");
+      expect(initialText).not.toContain("earlier spelling");
+      expect(initialText).not.toContain("deprecated");
 
       const canonical = yield* createRun({ runId: "canonical" });
       const direct = yield* runDocument(
@@ -153,24 +157,35 @@ describe("Tier FE — the workflow host's profile", () => {
       );
 
       expect(direct.failure).toBe(undefined);
-      // Identical behavior: the two spellings state the same argument.
-      expect(String(direct.output)).toBe(aliasText);
+      expect(String(direct.output)).toBe(initialText);
+      expect(reads).toBe(2);
     });
   });
 
-  it("FE19: `program` is a spelling no profile has", function* () {
-    const root = yield* useStorageRoot();
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const attempt = yield* runDocument(
-        database,
-        `<Evaluate program={'<File path="notes.md" />\\n'} />\n`,
-      );
+  for (const prop of ["source", "program"]) {
+    it(`FE19: obsolete \`${prop}\` refuses before fragment effects`, function* () {
+      let reads = 0;
+      yield* API.Files.around({
+        *readTextFile(args, next) {
+          reads++;
+          return yield* next(...args);
+        },
+      });
+      const root = yield* useStorageRoot();
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        const attempt = yield* runDocument(
+          database,
+          `<File path="notes.md">${NOTE}</File>\n\n` +
+            `<Evaluate ${prop}={'<File path="notes.md" />\\n'} />\n`,
+        );
 
-      expect(attempt.failure).not.toBe(undefined);
-      expect(String(attempt.failure)).toMatch(/program|additional/i);
+        expect(attempt.failure).not.toBe(undefined);
+        expect(String(attempt.failure)).toMatch(new RegExp(`${prop}|additional`, "i"));
+        expect(reads).toBe(0);
+      });
     });
-  });
+  }
 
   it("FE21: the workflow fragment reaches the run's Workspace, not the caller's disk", function* () {
     const root = yield* useStorageRoot();

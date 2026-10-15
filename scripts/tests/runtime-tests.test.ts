@@ -137,13 +137,14 @@ describe("running a shard", () => {
     const runs = recorder();
     const failing: RunLaunch = function* (launch) {
       yield* runs.run(launch);
-      return 3;
+      return runs.files.length + 2;
     };
     const outcome = yield* TestRuns.with(failing, () =>
       runShardFiles("deno", [ONE, TWO, THREE], ROOT),
     );
 
     expect(runs.files).toEqual([ONE, TWO, THREE]);
+    expect(outcome.ran).toEqual([ONE, TWO, THREE]);
     expect(outcome.failure).toEqual({ file: ONE, status: 3 });
   });
 
