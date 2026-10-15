@@ -136,6 +136,7 @@ import type {
 import { documentationOf } from "./components/documentation.ts";
 import { registerComponents } from "./components/registration.ts";
 import {
+  admittedGenerated,
   declaredForms,
   formDispatcher,
   installFormSyntax,
@@ -3318,15 +3319,28 @@ function reconcile(document: Result<Json> | undefined, teardown: Error | undefin
  * Shared by the components a host declares to an execution and by the private
  * declarations one declared Markdown component carries, so a member added to
  * one is not silently dropped from the other.
+ *
+ * The generated use each form is offered for is read through the validator that
+ * owns that contract, because it is the one member whose copy is a grant: an
+ * identity and an effect decide which implementation a continuation admits, so
+ * a reading taken later — or a nested object left live for the factory to be
+ * handed — would be a grant this declaration never made. What the validator
+ * answers with is what is retained, and what the forms are built from.
  */
 function retainedIdentityComponent(component: IdentityComponent): IdentityComponent {
+  const name = component.name;
+  // Read before the metadata, so the forms the offer is held against are the
+  // forms this execution accepts the component in.
+  const forms = component.forms === undefined ? undefined : Object.freeze([...component.forms]);
+  const generated = admittedGenerated({ name, generated: component.generated, forms });
   return Object.freeze({
-    name: component.name,
+    name,
     origin: component.origin,
     props: detachedSchema(component.props),
     ...(component.returns === undefined ? {} : { returns: detachedSchema(component.returns) }),
     ...(component.captures === undefined ? {} : { captures: [...component.captures] }),
-    ...(component.forms === undefined ? {} : { forms: [...component.forms] }),
+    ...(forms === undefined ? {} : { forms }),
+    ...(generated === undefined ? {} : { generated }),
     ...documentationOf(component),
     factory: component.factory.bind(component),
   });

@@ -29,9 +29,15 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { InMemoryStream } from "@executablemd/durable-streams";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
+import { collect } from "../src/collect.ts";
+import { executeInstalled } from "../host.ts";
+import type { ComponentAnswerInstallation, ExecutionInstallation } from "../host.ts";
+import { retainedSource } from "../src/root-source.ts";
+import type { IdentityComponent } from "../src/invocation-identity.ts";
 import { Component } from "../src/component-api.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import type { ComponentRegistration } from "../src/components/registration.ts";
@@ -478,5 +484,236 @@ describe("Tier GOM — a shared definition's metadata cannot be edited", () => {
       identity: "https://executable.md/components/file/read",
       effect: "read",
     });
+  });
+});
+
+/**
+ * Tier GOM4 — a declared component's offer survives trusted capture.
+ *
+ * The other declaration path. A host may declare a component to the execution
+ * instead of registering one, and the execution builds the implementation from
+ * that declaration's factory — so the offer has to cross capture, which reads
+ * every member of the host's object once and holds what it read. A member read
+ * later would be read after an installation ran, and this is the member whose
+ * reading is a grant: a URL and an effect decide which implementation a
+ * continuation admits.
+ *
+ * Every row drives a real execution: the host declares the component, the
+ * execution builds it, a provider publishes that exact built object, and the
+ * fragment names it in the spelling its declaration offers. What the rows read
+ * is the admission the run retained, because a refusal assertion would pass for
+ * a run that admitted the wrong URL and happened to fail later.
+ */
+describe("Tier GOM — a declared component's offer survives capture", () => {
+  const ROOT_PATH = "owner.md";
+  /** A document naming the declared component in the spelling it offers. */
+  const NAMING_PROBE = `<Evaluate text={'<Probe />\\n'} />\n`;
+  /** What the host's object says after capture has taken its reading. */
+  const SUBSTITUTE: GeneratedForms = {
+    "self-closing": {
+      identity: "https://executable.md/components/probe/substituted",
+      effect: "read",
+    },
+  };
+
+  /** One component a host declares, whose implementation its factory builds. */
+  function declaredProbe(generated: GeneratedForms | undefined): IdentityComponent {
+    return {
+      name: "Probe",
+      origin: "test://owner",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      forms: ["self-closing"],
+      ...(generated === undefined ? {} : { generated }),
+      factory() {
+        // deno-lint-ignore require-yield
+        return function* (): Operation<Json> {
+          return "the factory body ran";
+        };
+      },
+    };
+  }
+
+  /**
+   * A provider publishing the implementation this execution built.
+   *
+   * It holds no definition of its own: what a host-declared component resolves
+   * to is the object the execution built from the factory, so the provider
+   * reads that from the registry and publishes it. A row reads the published
+   * object to say what construction kept.
+   */
+  function publishing(published: FunctionComponentDefinition[]): ComponentAnswerInstallation {
+    let settled = false;
+    return {
+      origin: "test://publisher",
+      *install(registrar) {
+        yield* registrar.around(function* (request, next) {
+          if (request.name !== "Probe" || settled) {
+            return yield* next();
+          }
+          settled = true;
+          const built = (yield* currentRegistry()).get("Probe")?.default?.definition;
+          if (built === undefined || built.kind !== "function") {
+            throw new Error("the execution built no implementation for the declared component");
+          }
+          published.push(built);
+          return request.answer(built);
+        });
+      },
+    };
+  }
+
+  /** One host: a declared component, an entry admitting it, and its provider. */
+  function host(
+    component: IdentityComponent,
+    published: FunctionComponentDefinition[],
+    install?: () => Operation<void>,
+  ): ExecutionInstallation {
+    return {
+      components: [component],
+      evaluation: { read: [{ kind: "component-answer", name: "Probe", forms: ["self-closing"] }] },
+      componentAnswers: [publishing(published)],
+      ...(install === undefined ? {} : { install }),
+    };
+  }
+
+  function run(
+    installations: readonly ExecutionInstallation[],
+    stream: InMemoryStream,
+  ): Operation<Json> {
+    return scoped(function* () {
+      return yield* collect(
+        yield* executeInstalled({ ...retainedSource(ROOT_PATH, NAMING_PROBE), stream }, [
+          ...installations,
+        ]),
+      );
+    });
+  }
+
+  function isRecord(value: Json | undefined): value is Record<string, Json> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+
+  /** The row this run's admission retained for the name it admitted. */
+  function* admittedRow(stream: InMemoryStream): Operation<Json> {
+    const events = yield* stream.readAll();
+    const event = events.find(
+      (held) => held.type === "yield" && held.description.type === "generated_xmd",
+    );
+    const result = event?.type === "yield" ? event.result : undefined;
+    if (result === undefined || result.status !== "ok" || !isRecord(result.value)) {
+      throw new Error("the run retained no admission");
+    }
+    const policy = result.value.policy;
+    if (!isRecord(policy) || !Array.isArray(policy.allowed)) {
+      throw new Error("the admission recorded no policy");
+    }
+    // Trusted composition leads every policy, so the row the selection
+    // contributed is the one after it.
+    const row = policy.allowed.find((held) => isRecord(held) && held.name === "Probe");
+    if (!isRecord(row)) {
+      throw new Error("the admission admitted nothing for the declared component");
+    }
+    return row;
+  }
+
+  /** What an admission retains for a form offered as a read. */
+  const PROBE_ROW = {
+    name: "Probe",
+    form: "self-closing",
+    identity: "https://executable.md/components/probe/read",
+    kind: "component-answer",
+    effect: "read",
+  };
+
+  it("GOM4: a host's factory declaration runs the spelling it offered", function* () {
+    const stream = new InMemoryStream();
+    const published: FunctionComponentDefinition[] = [];
+
+    const output = yield* run([host(declaredProbe(READ_PROBE), published)], stream);
+
+    // The built implementation carries its declaration's offer, the admission
+    // names that URL and effect, and the body a factory supplied is what ran.
+    expect(published[0]?.generated).toEqual(READ_PROBE);
+    expect(yield* admittedRow(stream)).toEqual(PROBE_ROW);
+    expect(String(output)).toContain("the factory body ran");
+  });
+
+  it("GOM4: capture reads the offer once, and construction uses that reading", function* () {
+    // The check/use gap at the installation boundary, where the host also gets
+    // to run code in between: the accessor answers the accepted URL the first
+    // time and a substituted one afterwards, so a construction that read the
+    // host's object again would build a component offering a URL capture never
+    // validated.
+    const reads: GeneratedForms[] = [];
+    const component: IdentityComponent = {
+      ...declaredProbe(undefined),
+      get generated(): GeneratedForms {
+        reads.push(READ_PROBE);
+        return reads.length === 1 ? READ_PROBE : SUBSTITUTE;
+      },
+    };
+    const stream = new InMemoryStream();
+    const published: FunctionComponentDefinition[] = [];
+
+    const output = yield* run([host(component, published)], stream);
+
+    // What the one reading said is what was built and what was admitted — and
+    // one reading is all there was. The plant is live rather than inert: the
+    // very next reading of the host's object offers the substituted URL.
+    expect(published[0]?.generated).toEqual(READ_PROBE);
+    expect(yield* admittedRow(stream)).toEqual(PROBE_ROW);
+    expect(reads).toHaveLength(1);
+    expect(component.generated).toEqual(SUBSTITUTE);
+    expect(String(output)).toContain("the factory body ran");
+  });
+
+  it("GOM4: an offer replaced from inside install() has replaced nothing", function* () {
+    // A host's installation callback runs before the declared components are
+    // built, so this is the window a live reference would be read through.
+    const offers: { generated: GeneratedForms } = { generated: READ_PROBE };
+    const component: IdentityComponent = {
+      ...declaredProbe(undefined),
+      get generated(): GeneratedForms {
+        return offers.generated;
+      },
+    };
+    const stream = new InMemoryStream();
+    const published: FunctionComponentDefinition[] = [];
+
+    const output = yield* run(
+      [
+        // deno-lint-ignore require-yield
+        host(component, published, function* () {
+          offers.generated = SUBSTITUTE;
+        }),
+      ],
+      stream,
+    );
+
+    expect(offers.generated).toEqual(SUBSTITUTE);
+    expect(published[0]?.generated).toEqual(READ_PROBE);
+    expect(yield* admittedRow(stream)).toEqual(PROBE_ROW);
+    expect(String(output)).toContain("the factory body ran");
+  });
+
+  it("GOM4: an unusable offer refuses the execution, having run nothing", function* () {
+    const stream = new InMemoryStream();
+    const published: FunctionComponentDefinition[] = [];
+    const unusable = { "self-closing": { identity: "not-a-url", effect: "read" as const } };
+
+    let refused = "";
+    try {
+      yield* run([host(declaredProbe(unusable), published)], stream);
+    } catch (error) {
+      refused = error instanceof Error ? error.message : String(error);
+    }
+
+    // Read where it is captured, so a declaration this engine cannot read
+    // refuses before an implementation is built, a provider is asked or
+    // anything is written down.
+    expect(refused).toContain('the identity component "Probe" offers its self-closing form');
+    expect(refused).toContain("not an absolute URL");
+    expect(published).toEqual([]);
+    expect(yield* stream.readAll()).toEqual([]);
   });
 });

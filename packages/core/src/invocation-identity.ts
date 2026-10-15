@@ -1029,8 +1029,13 @@ export interface IdentityInstallation {
  * their metadata is read, and the value it answers with is the one the built
  * definition retains. Validating the host's object and copying it again would
  * be two readings of a value the host controls.
+ *
+ * An execution captures the components it was declared before anything it
+ * installs runs, so it reads the host's metadata through this too (`execute.ts`)
+ * and hands the captured value back here. Reading core's own frozen copy a
+ * second time says what the first reading said.
  */
-function admittedGenerated(component: {
+export function admittedGenerated(component: {
   readonly name: string;
   readonly generated?: GeneratedForms;
   readonly forms?: readonly InvocationForm[];
