@@ -59,7 +59,14 @@ function* attempt(target: string, task: string, args: string[] = []): Operation<
   }).join();
   const after = yield* readTextFile(lock);
 
-  expect(after).toEqual(before);
+  try {
+    expect(after).toEqual(before);
+  } catch (error) {
+    throw new Error(
+      `lockfile changed after ${Deno.execPath()} ${["task", task, ...args].join(" ")}\nstatus: ${result.code}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+      { cause: error },
+    );
+  }
   return { code: result.code, output: `${result.stdout}${result.stderr}`, lock: after };
 }
 

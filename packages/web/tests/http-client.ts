@@ -92,6 +92,7 @@ export function useConnection(
     let version = 0;
     let waiting: ((value: void) => void) | undefined;
     const ended = withResolvers<string>();
+    let termination: string | undefined;
 
     const advance = (): void => {
       version += 1;
@@ -105,11 +106,13 @@ export function useConnection(
       advance();
     };
     const onError = (error: Error): void => {
-      ended.resolve(`error:${error.message}`);
+      termination ??= `error:${error.message}`;
+      ended.resolve(termination);
       advance();
     };
     const onClose = (): void => {
-      ended.resolve("close");
+      termination ??= "close";
+      ended.resolve(termination);
       advance();
     };
 
@@ -160,6 +163,11 @@ export function useConnection(
           if (parsed) {
             buffer = parsed.rest;
             return parsed.response;
+          }
+          if (termination !== undefined) {
+            throw new Error(
+              `incomplete HTTP response after ${termination}; buffered ${buffer.length} characters; prefix ${JSON.stringify(buffer.slice(0, 160))}`,
+            );
           }
           yield* untilAfter(seen);
         }

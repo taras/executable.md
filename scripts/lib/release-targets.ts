@@ -14,8 +14,8 @@
  * needs the same answers to upgrade itself. This module owns what only the
  * release tooling needs on top of that table: the representative target, the
  * compile entrypoint, and the exact argv preparation runs. `release.yml` keeps
- * the matrix list GitHub fans out over, and
- * `scripts/tests/publish-workflow-membership.test.ts` holds the two to exact set
+ * the matrix list GitHub fans out over. The "the release matrix and its mapping"
+ * group in `scripts/tests/release-targets.test.ts` holds the two to exact set
  * equality, so a target can never be added in one place alone.
  */
 

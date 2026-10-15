@@ -2,8 +2,10 @@
  * What a shard runs, in what order, and what it does when one file fails.
  *
  * These drive the shard through an injected runner rather than a real one, so
- * they can assert the exact argument vector and the exact ordering without
- * paying for hundreds of processes. That a real child's output survives, and
+ * they can assert command routing and exact ordering without launching the
+ * corpus. Independent literal vectors and signal handling live in the
+ * "the one-file runner commands" and "launcher exit status" groups in
+ * `runtime-exclusions.test.ts`. That a real child's output survives, and
  * that halting a shard halts its child, are behaviors an injected runner cannot
  * establish — `shard-execution.test.ts` verifies those against real processes.
  */
@@ -112,7 +114,7 @@ describe("running a shard", () => {
     );
   });
 
-  it("uses each runtime's own one-file command", function* () {
+  it("routes each runtime through its one-file command", function* () {
     for (const runtime of RUNTIMES) {
       const runs = recorder();
       yield* TestRuns.with(runs.run, () => runShardFiles(runtime, [ONE], ROOT));

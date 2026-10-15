@@ -92,19 +92,13 @@ describe("the discovered corpus against the whole repository", () => {
     expect(walked).toContain("scripts/tests/test-file-discovery.test.ts");
     expect(walked.length).toBeGreaterThan(100);
 
+    const selected = new Set(discovered);
+    const stranded = walked.filter((file) => !selected.has(file));
+    // A stranded file runs under no runtime, even when every discovered test passes.
+    expect({ strandedFilesOutsideEveryRuntime: stranded }).toEqual({
+      strandedFilesOutsideEveryRuntime: [],
+    });
     expect(walked).toEqual(discovered);
-  });
-
-  /**
-   * Named separately from the equality above, because this is the direction
-   * that matters: a file the walk found and discovery did not is a test no
-   * runtime would ever run.
-   */
-  it("leaves no test file outside discovery's result", function* () {
-    const discovered = new Set(yield* listTestFiles(ROOT));
-    const stranded = (yield* repositoryTestFiles()).filter((file) => !discovered.has(file));
-
-    expect(stranded).toEqual([]);
   });
 
   it("recognizes every spelling Deno runs", function* () {
