@@ -9,7 +9,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { sleep } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, exists, readdir, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { pathToFileURL } from "node:url";
 
@@ -283,7 +283,7 @@ describe("measuring the corpus", () => {
     expect(runs.launches.length).toEqual(2);
   });
 
-  it("replaces the file only after every measurement passed", function* () {
+  it("publishes a new file after every measurement passed", function* () {
     const root = yield* workspace();
     const target = weightsFile(root);
 
@@ -292,6 +292,27 @@ describe("measuring the corpus", () => {
     });
 
     expect(yield* exists(target)).toBe(true);
+    expect(yield* stagedNames(root)).toEqual([]);
+  });
+
+  it("replaces the older file with the exact completed measurements", function* () {
+    const root = yield* workspace();
+    const target = weightsFile(root);
+    const older = formatTestWeights(VALID);
+    yield* writeTextFile(target, older);
+    const runs = recorder();
+    const weights = yield* TestRuns.with(
+      function* (launch) {
+        expect(yield* readTextFile(target)).toBe(older);
+        return yield* runs.run(launch);
+      },
+      () => measureTestWeights(root, SOURCE),
+    );
+
+    yield* writeTestWeights(target, weights);
+
+    expect(runs.launches).toHaveLength(6);
+    expect(yield* readTextFile(target)).toBe(formatTestWeights(weights));
     expect(yield* stagedNames(root)).toEqual([]);
   });
 });

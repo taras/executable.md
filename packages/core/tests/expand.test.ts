@@ -1,6 +1,6 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, sleep, spawn, withResolvers } from "effection";
+import { ensure, scoped, sleep, spawn, withResolvers } from "effection";
 import type { Subscription } from "effection";
 import { createBlockCounter, expandSegments } from "../src/expand.ts";
 import { regionStream } from "../src/expansion-region.ts";
@@ -23,7 +23,7 @@ import { interpolate } from "../src/interpolate.ts";
 import { validateProps, PropValidationError } from "../src/validate.ts";
 import { renderSegments } from "../src/render.ts";
 import type { Operation } from "effection";
-import { DocumentationError } from "../src/errors.ts";
+import { DocumentationError, useSegmentCauses } from "../src/errors.ts";
 import type {
   ComponentElement,
   Segment,
@@ -1525,6 +1525,8 @@ describe("Tier SR — expanding installed structural syntax", () => {
 
   it("SR8: a handler's return halts and joins a blocked producer", function* () {
     const order: string[] = [];
+    const cleanupStarted = withResolvers<void>();
+    const cleanupAllowed = withResolvers<void>();
     const environment = yield* installedEnvironment(
       [structuralDeclaration(), regionDeclaration()],
       function* (request) {
@@ -1533,12 +1535,15 @@ describe("Tier SR — expanding installed structural syntax", () => {
           throw new Error("expected a region");
         }
         const subscription = yield* yield* region.expand();
-        yield* subscription.next();
+        expect(yield* readText(subscription)).toBe("step 1");
         order.push("handler returning");
       },
     );
 
     yield* scoped(function* () {
+      // A real execution already owns this table. Keeping it outside the
+      // occurrence prevents direct expansion's fallback scope masking a leak.
+      yield* useSegmentCauses();
       yield* useTestComponents({
         Step: {
           kind: "function",
@@ -1551,17 +1556,48 @@ describe("Tier SR — expanding installed structural syntax", () => {
           },
         },
       });
-      yield* expandInstalled(
-        '<Deck>\n  <Panel title="One"><Step n={1} />\n\n<Step n={2} /></Panel>\n</Deck>\n',
-        environment,
+      yield* Component.around(
+        {
+          *applyModifiers() {
+            // A modifier runs in the producer's scope, so this cleanup survives
+            // the first chunk and is joined when the handler returns.
+            yield* ensure(function* () {
+              order.push("cleanup started");
+              cleanupStarted.resolve();
+              yield* cleanupAllowed.operation;
+              order.push("cleanup finished");
+            });
+            order.push("ran:1");
+            return { output: "step 1", exitCode: 0, stderr: "" };
+          },
+        },
+        { at: "min" },
       );
-      order.push("occurrence settled");
+      try {
+        const occurrence = yield* spawn(function* () {
+          yield* expandInstalled(
+            '<Deck>\n  <Panel title="One">\n```text exec\nfirst\n```\n\n' +
+              "<Step n={2} /></Panel>\n</Deck>\n",
+            environment,
+          );
+          order.push("occurrence settled");
+        });
+        yield* cleanupStarted.operation;
+        expect(order).toEqual(["ran:1", "handler returning", "cleanup started"]);
+        cleanupAllowed.resolve();
+        yield* occurrence;
+      } finally {
+        cleanupAllowed.resolve();
+      }
     });
 
-    // The producer was blocked on demand when the handler returned. It is
-    // halted with the handler's scope, so the second segment never ran and the
-    // occurrence settled after the handler rather than racing it.
-    expect(order).toEqual(["ran:1", "handler returning", "occurrence settled"]);
+    expect(order).toEqual([
+      "ran:1",
+      "handler returning",
+      "cleanup started",
+      "cleanup finished",
+      "occurrence settled",
+    ]);
   });
 
   it("SR9: a failing body delivers its prefix, then raises the original failure", function* () {
@@ -1615,7 +1651,7 @@ describe("Tier SR — expanding installed structural syntax", () => {
     expect(raised).toBe(failure);
   });
 
-  it("SR10: each expansion and each subscription is its own", function* () {
+  it("SR10: each expansion call owns its producer and output", function* () {
     const runs: string[] = [];
     let first: string[] = [];
     let second: string[] = [];
@@ -1654,6 +1690,49 @@ describe("Tier SR — expanding installed structural syntax", () => {
     expect(runs).toHaveLength(2);
     expect(first.join("")).toContain("run 1");
     expect(second.join("")).toContain("run 2");
+  });
+
+  it("SR10: two subscriptions to one returned stream own their producers and output", function* () {
+    const runs: string[] = [];
+    let first = "";
+    let second = "";
+    const environment = yield* installedEnvironment(
+      [structuralDeclaration(), regionDeclaration()],
+      function* (request) {
+        const [region] = request.regions;
+        if (region === undefined) {
+          throw new Error("expected a region");
+        }
+        const stream = yield* region.expand();
+        const firstSubscription = yield* stream;
+        const secondSubscription = yield* stream;
+        first = yield* readText(firstSubscription);
+        second = yield* readText(secondSubscription);
+      },
+    );
+
+    yield* scoped(function* () {
+      yield* useTestComponents({
+        Count: {
+          kind: "function",
+          name: "Count",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          // deno-lint-ignore require-yield
+          *fn() {
+            runs.push("ran");
+            return `run ${String(runs.length)}`;
+          },
+        },
+      });
+      yield* expandInstalled(
+        '<Deck>\n  <Panel title="One"><Count /></Panel>\n</Deck>\n',
+        environment,
+      );
+    });
+
+    expect(runs).toHaveLength(2);
+    expect(first).toBe("run 1");
+    expect(second).toBe("run 2");
   });
 
   it("SR11: without an environment, and for the engine's own syntax, nothing changed", function* () {

@@ -12290,7 +12290,7 @@ through the captured capability because there is no other way to reach it.
 | FE16 | Repeated Evaluate occurrences cannot consume one another's records. |
 | FE17 | Actual cancellation stops active work, waits for cleanup, and records no false success. |
 | FE18 | Existing untagged #369 records remain readable; new records use the closed version-2 shape. |
-| FE19 | Workflow `source` and canonical `text` have identical behavior without a warning; the ordinary profile rejects `source`, and every profile rejects `program`. |
+| FE19 | Canonical `text` produces identical output across fresh workflow executions without warnings; `source` and `program` refuse before fragment effects under every profile. |
 | FE20 | Exact trusted Fetch limits are retained and narrowed; missing or changed limits refuse before requests. |
 | FE21 | Ordinary and workflow hosts exercise the same fragment evaluator rather than separate semantic implementations. |
 | FE22 | `xmd plan` output remains ordinary text usable at the command boundary and acquires no special complete-root type. |
@@ -13804,9 +13804,9 @@ ordering and teardown are proved with latches rather than elapsed time.
 | SR5 | Demand runs the body | A read expands the region's authored body, including a nested component; a region created, expanded and subscribed to but never read runs nothing at all |
 | SR6 | Region output is not document output | Chunks carry the region's rendered text while the construct renders nothing, and no chunk reaches `DocumentOutput` middleware |
 | SR7 | One demand, one chunk | Subscribing runs nothing; the first read delivers the first chunk while the second element's work has not begun; the next element runs only once a later read asks for it, so a delivered chunk buys no work beyond itself |
-| SR8 | The handler's scope owns the producer | A handler returning while a producer is blocked on demand halts and joins it before the occurrence settles, so the unreached segment never runs |
+| SR8 | The handler's scope owns the producer | A handler returning while a producer is blocked on demand starts its cleanup; the occurrence stays unsettled behind a controlled cleanup gate and settles only after cleanup finishes, while the unreached segment never runs |
 | SR9 | Prefix then failure | A body failing after output delivers its prefix first — including output one authored segment appended before failing partway through — then the next read raises the original failure object rather than a rebuilt one |
-| SR10 | Fresh each time | Repeated `expand()` calls are independent expansions with their own producers, and nothing refuses a second one |
+| SR10 | Fresh each time | Repeated `expand()` calls and two subscriptions to one returned stream each run independent producers and return their own output |
 | SR11 | Nothing else moved | Expansion without an execution environment resolves the name as an ordinary component; with declarations present, the engine's own constructs and their refusals are unchanged and no handler is reached |
 
 ### Tier ED — One declaration catalog, holding both arms (§5.3)

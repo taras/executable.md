@@ -717,21 +717,20 @@ describe("REPL execution: pausing expansion", () => {
   it("P1: tearing the owner down releases nothing that was held", function* () {
     const holder = execution();
     const source = yield* referenceSource();
-    let released = -1;
     let held = -1;
 
-    yield* scoped(function* () {
+    const controller = yield* scoped(function* () {
       const session = opened(yield* submitReplEntry({ ...options(holder), source }));
       controlling(session).pause();
       yield* pausedOrDone(session);
       expect(session.expansion.state).toBe("paused");
-      released = controlling(session).released;
       held = (yield* readAll(holder)).length;
+      return controlling(session);
     });
 
     // The scope is gone: every hold unwound through its own discard, so nothing
     // was resumed on the way out and the history stopped where it was held.
-    expect(released).toBe(0);
+    expect(controller.released).toBe(0);
     expect((yield* readAll(holder)).length).toBe(held);
   });
 

@@ -55,11 +55,10 @@ describe("replaceThroughStaging", () => {
   it("survives many concurrent replacements of the same file", function* () {
     const file = yield* target("before");
 
-    yield* all(
-      Array.from({ length: 32 }, (_, index) => replaceThroughStaging(file, `after ${index}`)),
-    );
+    const candidates = Array.from({ length: 32 }, (_, index) => `after ${index}`);
+    yield* all(candidates.map((contents) => replaceThroughStaging(file, contents)));
 
-    expect(yield* readTextFile(file)).toContain("after ");
+    expect(candidates).toContain(yield* readTextFile(file));
     expect(yield* directoryOf(file)).toEqual(["package.json"]);
   });
 

@@ -28,14 +28,12 @@ const ATTEST_ACTION = "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6";
  * is either a job that cannot prepare or a mapping nothing uses.
  */
 function* matrixTargets(): Operation<string[]> {
-  const workflow = yield* readTextFile(RELEASE_WORKFLOW);
-  return [...workflow.matchAll(/^\s+- target:\s*(\S+)/gm)].map((match) => match[1] ?? "");
+  return (yield* releaseWorkflow()).matrix.map((row) => row.target);
 }
 
 /** Each matrix member's `artifact:`, as `release.yml` names the file it uploads. */
 function* matrixArtifacts(): Operation<string[]> {
-  const workflow = yield* readTextFile(RELEASE_WORKFLOW);
-  return [...workflow.matchAll(/^\s+artifact:\s*(\S+)/gm)].map((match) => match[1] ?? "");
+  return (yield* releaseWorkflow()).matrix.map((row) => row.artifact);
 }
 
 /** Executable lines only: a comment naming a command runs nothing. */
@@ -58,7 +56,13 @@ interface Job {
   steps: Step[];
 }
 
+interface ReleasePair {
+  target: string;
+  artifact: string;
+}
+
 interface Workflow {
+  matrix: ReleasePair[];
   permissions: Record<string, string>;
   jobs: Record<string, Job>;
 }
@@ -129,7 +133,21 @@ function* releaseWorkflow(): Operation<Workflow> {
   const source = yield* readTextFile(RELEASE_WORKFLOW);
   const document = object(matter(`---\n${source}\n---`).data, "release.yml");
   const jobs = object(document.jobs, "release.yml.jobs");
+  const build = object(jobs.build, "release.yml.jobs.build");
+  const strategy = object(build.strategy, "release.yml.jobs.build.strategy");
+  const matrix = object(strategy.matrix, "release.yml.jobs.build.strategy.matrix");
+  const label = "release.yml.jobs.build.strategy.matrix.include";
+  if (!Array.isArray(matrix.include)) {
+    throw new Error(`${label} is not an array`);
+  }
   return {
+    matrix: matrix.include.map((entry, index) => {
+      const row = object(entry, `${label}[${index}]`);
+      return {
+        target: string(row.target, `${label}[${index}].target`),
+        artifact: string(row.artifact, `${label}[${index}].artifact`),
+      };
+    }),
     permissions: stringRecord(document.permissions, "release.yml.permissions"),
     jobs: Object.fromEntries(
       Object.entries(jobs).map(([id, value]) => [id, job(value, `release.yml.jobs.${id}`)]),
@@ -182,6 +200,13 @@ describe("the shipped release-target table", () => {
       "aarch64-unknown-linux-gnu linux/arm64",
       "x86_64-pc-windows-msvc win32/x64",
     ]);
+  });
+
+  it("pairs every target with its own uploaded artifact", function* () {
+    const byTarget = (left: ReleasePair, right: ReleasePair) =>
+      left.target.localeCompare(right.target);
+    const published = PUBLISHED_TARGETS.map(({ target, artifact }) => ({ target, artifact }));
+    expect((yield* releaseWorkflow()).matrix.sort(byTarget)).toEqual(published.sort(byTarget));
   });
 
   it("names exactly the artifacts release.yml uploads, Windows suffix included", function* () {
