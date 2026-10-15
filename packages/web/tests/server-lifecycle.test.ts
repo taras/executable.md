@@ -1,21 +1,22 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, resource, scoped, sleep, spawn, suspend, withResolvers } from "effection";
+import { ensure, resource, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { once } from "@effectionx/node/events";
 import { when } from "@effectionx/converge";
 import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
 import type { ServerResponse } from "node:http";
-import { connect } from "node:net";
+import { connect, createServer as createPeer } from "node:net";
 import type { Socket } from "node:net";
 
-import { nodeResponseChannel } from "../src/response-channel.ts";
+import { nodeResponseChannel, ResponseClosedError } from "../src/response-channel.ts";
 import type { ResponseChannel } from "../src/response-channel.ts";
 import { useFormServer } from "../src/server.ts";
 import type { FormServer } from "../src/server.ts";
 import { addressOf, formInput, portRefuses, watchSubmission } from "./server-support.ts";
 import { requestText, useConnection } from "./http-client.ts";
+import type { HttpConnection } from "./http-client.ts";
 
 /** A channel whose completion the test releases, so ordering is observable. */
 interface HeldChannel {
@@ -319,6 +320,34 @@ function useResponseUnderTest(): Operation<ServerResponse> {
 }
 
 describe("form server: a response channel belongs to its request task", () => {
+  it("rejects a production response closed before finish", function* () {
+    const res = yield* useResponseUnderTest();
+    const channel = yield* nodeResponseChannel(res);
+    res.destroy();
+
+    let failure: unknown;
+    try {
+      yield* channel.finished;
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(ResponseClosedError);
+    expect(failure instanceof Error ? failure.message : failure).toContain(
+      "closed before the response finished sending",
+    );
+  });
+
+  it("keeps a production response successful when close follows finish", function* () {
+    const res = yield* useResponseUnderTest();
+    const channel = yield* nodeResponseChannel(res);
+    channel.head(204, {});
+    channel.end();
+    yield* channel.finished;
+
+    res.emit("close");
+    yield* channel.finished;
+  });
+
   /**
    * A request abandoned before it answered is the case `finish` never comes
    * for, so the channel cannot be relying on it to let go. The counts are read
@@ -328,30 +357,55 @@ describe("form server: a response channel belongs to its request task", () => {
    */
   it("detaches from the response when the task is halted, and a later finish changes nothing", function* () {
     const res = yield* useResponseUnderTest();
-    const counts = (): number[] => [res.listenerCount("finish"), res.listenerCount("close")];
+    const counts = () => ({
+      finish: res.listenerCount("finish"),
+      close: res.listenerCount("close"),
+    });
     const before = counts();
 
+    const acquired = withResolvers<void>();
     const owner = yield* spawn(function* () {
       yield* nodeResponseChannel(res);
+      acquired.resolve();
       yield* suspend();
     });
-    yield* sleep(0);
+    yield* acquired.operation;
 
     // Anchored to what was live, not to a delta from the baseline: how many
     // handlers a runtime keeps on its own `ServerResponse`, and when it adds
     // them, is the runtime's business — Bun attaches one to `finish` that the
     // others do not. What this case owns is the pair the channel added.
     const live = counts();
-    expect(live[0]).toBeGreaterThan(before[0]);
-    expect(live[1]).toBeGreaterThan(before[1]);
+    expect({
+      event: "finish",
+      live: live.finish,
+      baseline: before.finish,
+      added: live.finish > before.finish,
+    }).toEqual({
+      event: "finish",
+      live: live.finish,
+      baseline: before.finish,
+      added: true,
+    });
+    expect({
+      event: "close",
+      live: live.close,
+      baseline: before.close,
+      added: live.close > before.close,
+    }).toEqual({
+      event: "close",
+      live: live.close,
+      baseline: before.close,
+      added: true,
+    });
 
     yield* owner.halt();
 
-    expect(counts()).toEqual([live[0] - 1, live[1] - 1]);
+    expect(counts()).toEqual({ finish: live.finish - 1, close: live.close - 1 });
 
     res.emit("finish");
 
-    expect(counts()).toEqual([live[0] - 1, live[1] - 1]);
+    expect(counts()).toEqual({ finish: live.finish - 1, close: live.close - 1 });
   });
 });
 
@@ -448,12 +502,18 @@ function useKeepAlives(): Operation<{
 }
 
 /** What a raw client's own socket is carrying. */
-function clientCounts(socket: Socket): number[] {
-  return [
-    socket.listenerCount("data"),
-    socket.listenerCount("error"),
-    socket.listenerCount("close"),
-  ];
+interface ClientCounts {
+  data: number;
+  error: number;
+  close: number;
+}
+
+function clientCounts(socket: Socket): ClientCounts {
+  return {
+    data: socket.listenerCount("data"),
+    error: socket.listenerCount("error"),
+    close: socket.listenerCount("close"),
+  };
 }
 
 describe("form server: accepted sockets and raw clients", () => {
@@ -468,11 +528,12 @@ describe("form server: accepted sockets and raw clients", () => {
   it("releases the accepted socket's close handler and the client's own on cancellation", function* () {
     const accepted: { socket: Socket; before: number }[] = [];
     let client: Socket | undefined;
-    let clientBefore: number[] = [];
+    let clientBefore: ClientCounts | undefined;
     let acceptedLive = 0;
-    let clientLive: number[] = [];
+    let clientLive: ClientCounts | undefined;
     let received: () => string = () => "";
     let callbacks: () => number = () => 0;
+    const exchanged = withResolvers<void>();
 
     const owner = yield* spawn(function* () {
       const server = yield* useFormServer(formInput(), {
@@ -490,18 +551,17 @@ describe("form server: accepted sockets and raw clients", () => {
       yield* connection.response();
 
       acceptedLive = accepted[0]?.socket.listenerCount("close") ?? 0;
-      clientLive = client ? clientCounts(client) : [];
+      clientLive = client ? clientCounts(client) : undefined;
+      exchanged.resolve();
       yield* suspend();
     });
 
     // Synchronized on the exchange having happened, so both owners are live
     // with everything attached when the halt lands.
-    yield* when(function* () {
-      expect(clientLive.length).toBeGreaterThan(0);
-    });
+    yield* exchanged.operation;
 
     const first = accepted[0];
-    if (!first || !client) {
+    if (!first || !client || !clientLive || !clientBefore) {
       throw new Error("no connection was accepted");
     }
 
@@ -510,10 +570,31 @@ describe("form server: accepted sockets and raw clients", () => {
     // runtime's business — Bun on Linux holds one the others do not. What
     // these cases own is the pair each added, so the release below is measured
     // against what was live rather than against the baseline.
-    expect(acceptedLive).toBeGreaterThanOrEqual(first.before + 1);
-    clientLive.forEach((count, index) => {
-      expect(count).toBeGreaterThanOrEqual(clientBefore[index] + 1);
+    expect({
+      event: "close",
+      live: acceptedLive,
+      baseline: first.before,
+      attached: acceptedLive >= first.before + 1,
+    }).toEqual({
+      event: "close",
+      live: acceptedLive,
+      baseline: first.before,
+      attached: true,
     });
+    const events: (keyof ClientCounts)[] = ["data", "error", "close"];
+    for (const event of events) {
+      expect({
+        event,
+        live: clientLive[event],
+        baseline: clientBefore[event],
+        attached: clientLive[event] >= clientBefore[event] + 1,
+      }).toEqual({
+        event,
+        live: clientLive[event],
+        baseline: clientBefore[event],
+        attached: true,
+      });
+    }
 
     // Empty, because the exchange above consumed it — which is what makes the
     // replayed chunk below visible if anything is still appending. The
@@ -526,18 +607,141 @@ describe("form server: accepted sockets and raw clients", () => {
 
     yield* owner.halt();
 
-    const released = clientLive.map((count) => count - 1);
+    const released = {
+      data: clientLive.data - 1,
+      error: clientLive.error - 1,
+      close: clientLive.close - 1,
+    };
 
-    expect(first.socket.listenerCount("close")).toBe(acceptedLive - 1);
+    expect({ close: first.socket.listenerCount("close") }).toEqual({ close: acceptedLive - 1 });
     expect(clientCounts(client)).toEqual(released);
 
     first.socket.emit("close");
     client.emit("data", Buffer.from("after the client was cancelled"));
     client.emit("close");
 
-    expect(first.socket.listenerCount("close")).toBe(acceptedLive - 1);
+    expect({ close: first.socket.listenerCount("close") }).toEqual({ close: acceptedLive - 1 });
     expect(clientCounts(client)).toEqual(released);
     expect(received()).toBe(seen);
     expect(callbacks()).toBe(ran);
   });
+});
+
+function useRawPeer(
+  payload: string,
+  termination: "close" | "reset",
+): Operation<{
+  port: number;
+  terminate(): Operation<void>;
+}> {
+  return resource(function* (provide) {
+    const accepted = withResolvers<Socket>();
+    const sockets = new Set<Socket>();
+    const onError = (): void => {};
+    const server = createPeer((socket) => {
+      sockets.add(socket);
+      socket.on("error", onError);
+      socket.write(payload);
+      accepted.resolve(socket);
+    });
+
+    yield* ensure(function* () {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      const closed = withResolvers<void>();
+      const onClose = (): void => closed.resolve();
+      try {
+        server.on("close", onClose);
+        server.close();
+        yield* closed.operation;
+      } finally {
+        server.off("close", onClose);
+        for (const socket of sockets) {
+          socket.off("error", onError);
+        }
+      }
+    });
+
+    const listening = withResolvers<void>();
+    const onServerError = (error: Error): void => listening.reject(error);
+    try {
+      server.on("error", onServerError);
+      server.listen(0, "127.0.0.1", () => listening.resolve());
+      yield* listening.operation;
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        throw new Error("the raw peer did not listen on a TCP port");
+      }
+      yield* provide({
+        port: address.port,
+        *terminate() {
+          const socket = yield* accepted.operation;
+          if (termination === "reset") {
+            socket.resetAndDestroy();
+          } else {
+            socket.end();
+          }
+        },
+      });
+    } finally {
+      server.off("error", onServerError);
+    }
+  });
+}
+
+function* terminatedResponse(
+  payload: string,
+  termination: "close" | "reset",
+): Operation<{ connection: HttpConnection; ending: string }> {
+  const peer = yield* useRawPeer(payload, termination);
+  const connection = yield* useConnection(peer.port);
+  yield* when(function* () {
+    expect(connection.receivedSoFar()).toBe(payload);
+  });
+  yield* peer.terminate();
+  const ending = yield* connection.ended;
+  if (ending !== "close" && !ending.startsWith("error:")) {
+    throw new Error(`the raw peer ended with an unknown termination: ${ending}`);
+  }
+  return { connection, ending };
+}
+
+describe("the raw HTTP client after connection termination", () => {
+  it("parses a complete response received before close", function* () {
+    const { connection } = yield* terminatedResponse(
+      "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ndone",
+      "close",
+    );
+    const response = yield* connection.response();
+    expect(response.status).toBe(200);
+    expect(response.body).toBe("done");
+  });
+
+  const terminations: ("close" | "reset")[] = ["close", "reset"];
+  for (const termination of terminations) {
+    for (const response of [
+      { name: "header", payload: "HTTP/1.1 200 OK\r\nContent-Length:" },
+      {
+        name: "body",
+        payload: "HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n" + "x".repeat(300),
+      },
+    ]) {
+      it(`rejects an incomplete ${response.name} after ${termination} with bounded bytes`, function* () {
+        const { connection, ending } = yield* terminatedResponse(response.payload, termination);
+        let failure: unknown;
+        try {
+          yield* connection.response();
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toBeInstanceOf(Error);
+        const message = failure instanceof Error ? failure.message : String(failure);
+        expect(message).toContain(`incomplete HTTP response after ${ending};`);
+        expect(message).toContain(JSON.stringify(response.payload.slice(0, 160)));
+        expect(message).toContain(`buffered ${response.payload.length} characters`);
+        expect(message.length).toBeLessThan(400);
+      });
+    }
+  }
 });

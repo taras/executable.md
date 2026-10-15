@@ -1,7 +1,8 @@
 /**
- * The runtime scope is derived, so nothing here asserts which files run. These
- * cover discovery drift and malformed exclusions. Whether an exclusion is still
- * necessary is not something they can determine — see the manifest.
+ * These cover discovery, exclusion structure, each runtime's literal one-file
+ * command and launcher exit status. The applicable corpus is derived from
+ * discovery and the manifest; whether an exclusion remains necessary requires
+ * a portability check of that test.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
