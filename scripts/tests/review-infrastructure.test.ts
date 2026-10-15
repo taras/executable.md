@@ -167,7 +167,7 @@ function* runDocumentResult(
   document: string,
   components: Record<string, string>,
   options: DocumentRunOptions = {},
-): Operation<{ ok: boolean; journal: string; text: string }> {
+): Operation<{ ok: boolean; error?: Error; journal: string; text: string }> {
   return yield* scoped(function* () {
     const environment = options.env;
     if (environment) {
@@ -209,6 +209,7 @@ function* runDocumentResult(
     const result = yield* execution;
     return {
       ok: result.ok,
+      error: result.ok ? undefined : result.error,
       journal: JSON.stringify(stream.snapshot()),
       text: result.ok && typeof result.value === "string" ? result.value.trim() : "",
     };
@@ -310,7 +311,7 @@ describe("review infrastructure", () => {
     expect(result.journal).not.toContain("secret-token");
   });
 
-  it("fails on malformed and unexpected Oxlint results, but skips empty input", function* () {
+  it("accepts exit 1 Oxlint diagnostics and journals only bounded fields", function* () {
     yield* useTempFileCompiler();
 
     const valid = yield* runDocumentResult(
@@ -342,34 +343,37 @@ describe("review infrastructure", () => {
     expect(valid.journal).toContain("1:no-unused-vars");
     expect(valid.journal).not.toContain("raw source must not cross the boundary");
     expect(valid.journal).not.toContain("unbounded payload");
+  });
 
-    expect(
-      yield* runDocument(
+  for (const scenario of [
+    {
+      name: "malformed JSON",
+      process: { exitCode: 0, stdout: "not json", stderr: "" },
+      diagnostic: "Oxlint returned malformed JSON",
+    },
+    {
+      name: "invocation failure",
+      process: { exitCode: 2, stdout: "[]", stderr: "invocation failed" },
+      diagnostic: "invocation failed",
+    },
+  ]) {
+    it(`rejects Oxlint ${scenario.name} with its diagnostic`, function* () {
+      yield* useTempFileCompiler();
+      const result = yield* runDocumentResult(
         '<Output><OxlintDiagnostics files={["a.ts"]} as="diagnostics" /></Output>',
         { "packages/code-review-agent/src/components/OxlintDiagnostics.ts": "" },
         {
-          includes: [
-            "packages/code-review-agent/src/documents/components",
-            "packages/code-review-agent/src/components",
-          ],
-          process: { exitCode: 0, stdout: "not json", stderr: "" },
+          includes: OPERATIONAL_DIRS,
+          process: scenario.process,
         },
-      ),
-    ).toBe(false);
-    expect(
-      yield* runDocument(
-        '<Output><OxlintDiagnostics files={["a.ts"]} as="diagnostics" /></Output>',
-        { "packages/code-review-agent/src/components/OxlintDiagnostics.ts": "" },
-        {
-          includes: [
-            "packages/code-review-agent/src/documents/components",
-            "packages/code-review-agent/src/components",
-          ],
-          process: { exitCode: 2, stdout: "[]", stderr: "invocation failed" },
-        },
-      ),
-    ).toBe(false);
+      );
+      expect(result.ok).toBe(false);
+      expect(result.error?.message).toContain(scenario.diagnostic);
+    });
+  }
 
+  it("skips Oxlint without starting a process for empty input", function* () {
+    yield* useTempFileCompiler();
     let calls = 0;
     yield* API.Process.around({
       *exec() {
@@ -610,6 +614,7 @@ describe("review infrastructure", () => {
           : { exitCode: 0, stdout: "not json", stderr: "" },
     });
     expect(malformed.ok).toBe(false);
+    expect(malformed.error?.message).toContain("Oxlint returned malformed JSON");
 
     const failed = yield* runDocumentResult(document, component, {
       ...baseOptions,
@@ -617,6 +622,7 @@ describe("review infrastructure", () => {
       process: { exitCode: 2, stdout: "[]", stderr: "invocation failed" },
     });
     expect(failed.ok).toBe(false);
+    expect(failed.error?.message).toContain("invocation failed");
   });
 
   it("constructs ReviewContext from git and fails on git errors", function* () {

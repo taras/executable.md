@@ -577,7 +577,7 @@ describe("REPL execution: reopening one history", () => {
     }
   });
 
-  it("X2: a refused reconstruction leaves nothing of itself behind", function* () {
+  it("X2: an unprojectable history refuses atomically and leaves nothing behind", function* () {
     const settled = yield* referenceEvents();
     const holder = execution([settled[0], settled[0], ...settled.slice(1)]);
     const asked = yield* countAsked();
@@ -589,16 +589,9 @@ describe("REPL execution: reopening one history", () => {
     expect(holder.stream.onAppend).toBe(null);
     expect(asked.calls).toBe(0);
     const before = (yield* readAll(holder)).length;
+    expect(before).toBe(settled.length + 1);
     yield* holder.stream.append(settled[settled.length - 1]);
     expect((yield* readAll(holder)).length).toBe(before + 1);
-  });
-
-  it("X2: a history this version cannot project refuses before anything runs", function* () {
-    const settled = yield* referenceEvents();
-    const holder = execution([settled[0], settled[0], ...settled.slice(1)]);
-
-    expect(refusal(yield* openReplSession(options(holder))).message).toContain("a second entry");
-    expect((yield* holder.stream.readAll()).length).toBe(settled.length + 1);
   });
 });
 

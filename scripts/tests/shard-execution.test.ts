@@ -22,7 +22,8 @@ import { chmod } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { until } from "effection";
 
-import { runShardFiles } from "../lib/runtime-tests.ts";
+import { oneFileCommand, runShardFiles } from "../lib/runtime-tests.ts";
+import type { ShardOutcome } from "../lib/runtime-tests.ts";
 
 const REPOSITORY = new URL("../../", import.meta.url);
 const decoder = new TextDecoder();
@@ -153,13 +154,24 @@ describe("a shard running real children", () => {
 
   it("halts the running child's process group and starts no later file", function* () {
     const root = yield* workspace({ "a-slow.test.ts": SLOW, "b-later.test.ts": MARKS_LATER });
-    yield* watching();
+    const seen = yield* watching();
 
-    const shard = yield* spawn(() =>
-      runShardFiles("deno", ["tests/a-slow.test.ts", "tests/b-later.test.ts"], root),
-    );
+    let outcome: ShardOutcome | undefined;
+    const shard = yield* spawn(function* () {
+      outcome = yield* runShardFiles(
+        "deno",
+        ["tests/a-slow.test.ts", "tests/b-later.test.ts"],
+        root,
+      );
+    });
 
-    expect(yield* waitFor(new URL("slow.marker", root))).toBe(true);
+    const marker = new URL("slow.marker", root);
+    if (!(yield* waitFor(marker))) {
+      const launch = oneFileCommand("deno", "tests/a-slow.test.ts");
+      throw new Error(
+        `child did not write expected startup marker ${fileURLToPath(marker)}\ncommand: ${launch.command} ${launch.arguments.join(" ")}\noutcome: ${JSON.stringify(outcome)}\nstdout:\n${seen.stdout}\nstderr:\n${seen.stderr}`,
+      );
+    }
     yield* shard.halt();
 
     // The next assigned file was never started.
@@ -227,19 +239,19 @@ function* driver(
 
 describe("a shard selection nobody assigned", () => {
   /**
-   * The count `ci.yml` declares for Deno. An index beyond it, and a count beyond
-   * the corpus, both parse — they are well-formed `<index>/<count>` — so nothing
-   * before the partition can reject them.
+   * A fixture count within the applicable corpus, independent of CI's shard
+   * count. An index beyond it and a count beyond the corpus both parse as
+   * `<index>/<count>`, so only the partition can reject them.
    */
-  const DECLARED = 8;
+  const FIXTURE_COUNT = 8;
 
   it("refuses an in-range-looking index before any runner starts", function* () {
     const sentinel = yield* runnerSentinel();
 
-    const { code, stderr } = yield* driver(sentinel, `${DECLARED + 1}/${DECLARED}`);
+    const { code, stderr } = yield* driver(sentinel, `${FIXTURE_COUNT + 1}/${FIXTURE_COUNT}`);
 
     expect(code).toEqual(1);
-    expect(stderr).toContain(`shard index ${DECLARED + 1} is outside 1..${DECLARED}`);
+    expect(stderr).toContain(`shard index ${FIXTURE_COUNT + 1} is outside 1..${FIXTURE_COUNT}`);
     expect(yield* exists(sentinel.marker)).toBe(false);
   });
 
@@ -271,7 +283,7 @@ describe("a shard selection nobody assigned", () => {
   it("starts the runner for a selection the partition accepts", function* () {
     const sentinel = yield* runnerSentinel();
 
-    const { code } = yield* driver(sentinel, `1/${DECLARED}`);
+    const { code } = yield* driver(sentinel, `1/${FIXTURE_COUNT}`);
 
     expect(code).toEqual(0);
     expect(yield* exists(sentinel.marker)).toBe(true);
