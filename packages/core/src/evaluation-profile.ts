@@ -4,8 +4,8 @@
  *
  * `<Evaluate>` is a public component: any author may write it, and canonical
  * core owns what it means. That settles *which implementation runs* and nothing
- * else — protection grants no permission. Canonical `<Evaluate>` uses only
- * operations already captured in this profile, selected by `allow`. So the
+ * else — protection grants no permission. Canonical `<Evaluate>` admits only
+ * the entries already captured in this profile, selected by `allow`. So the
  * ceiling lives here, in a value the host hands canonical execution at the
  * installation boundary, before a document exists to ask for it.
  *
@@ -14,10 +14,10 @@
  * A host states {@link FragmentEvaluationInput}: entry tables, an optional
  * Workspace snapshot operation, and whether it accepts the released `source`
  * spelling. Canonical execution turns that into a captured profile of its own
- * — every value deep-copied and frozen, every live operation read and bound
- * once — and keeps the captured one. A host that mutates its own arrays,
- * headers or tables after installation changes nothing about the execution,
- * because the execution is no longer reading them.
+ * — every value deep-copied and frozen, every admitted implementation resolved
+ * once and held to this execution — and keeps the captured one. A host that
+ * mutates its own arrays, headers or tables after installation changes nothing
+ * about the execution, because the execution is no longer reading them.
  *
  * Only the input type is exported, and only from the trusted `core/host`
  * surface, because that is where `ExecutionInstallation` already is. The
@@ -74,15 +74,15 @@ export type FragmentForm = "self-closing" | "paired";
  * this implementation come from", which is exactly the question an admission
  * has to settle once.
  *
- * Neither arm carries a function. A capability names an operation canonical
- * core supplies the body for; a component answer names something the ordinary
- * import chain resolves, which canonical capture does once — before any
- * document code — and then holds by value. What is journaled is the structural
- * identity, the forms and the limits.
+ * Neither arm carries a function. A capability names a component canonical
+ * core supplies; a component answer names something the ordinary import chain
+ * resolves, which canonical capture does once — before any document code — and
+ * then holds by value. What is journaled is the admitted spellings, the
+ * identity each of them runs under, and the limits.
  */
 export type FragmentEntry = CapabilityEntry | ComponentAnswerEntry;
 
-/** An entry core supplies the body for, bound to the host's own operations. */
+/** An entry canonical core supplies the component for. */
 export interface CapabilityEntry {
   readonly kind: "capability";
   /** The name a fragment writes. */
@@ -108,14 +108,15 @@ export interface CapabilityEntry {
    */
   readonly description?: string;
   /**
-   * Which captured operation this entry runs.
+   * Which of core's own components this entry runs.
    *
-   * Not a definition, because a definition is where a provider lookup would go.
-   * A host names the capability and hands its private operations to the
-   * profile; canonical capture reads each one off exactly once and closes
-   * core's own body over the bound result. A host therefore chooses *what a
-   * fragment may do* and never *how it reaches it*
-   * (`fragment-capabilities.ts`).
+   * A name rather than a definition, because the definition is core's to
+   * supply: capture answers with the ordinary `<File>`, `<File.Delete>`,
+   * `<Dir>`, `<Glob>`, `<Fetch>` or `<Elicit>` an author writes, held to the
+   * execution that captured it. So a host chooses *what a fragment may do* and
+   * never *how it reaches it*: the operation crosses the contextual provider
+   * and the consuming scope's `Permissions` exactly as an authored element's
+   * does (`fragment-capabilities.ts`).
    */
   readonly capability: FragmentCapability;
   /**
@@ -184,9 +185,11 @@ export interface FragmentEvaluationInput {
   /**
    * The entries the `write` class resolves to, when this host offers the class.
    *
-   * For both standard profiles this is exactly paired `<File>`, paired `<Dir>`
-   * and self-closing `<File.Delete>`. It does not include the read table:
-   * `write` selects mutation and nothing else.
+   * The two standard profiles differ here: the ordinary one is paired
+   * `<File>`, self-closing `<File.Delete>` and paired `<Elicit>`, while the
+   * workflow one is paired `<File>`, paired `<Dir>` and self-closing
+   * `<File.Delete>`. Neither includes the read table: `write` selects mutation
+   * and nothing else.
    */
   readonly write?: readonly FragmentEntry[];
   /** How this host answers for its Workspace, when it evaluates against one. */
@@ -210,10 +213,12 @@ export interface FragmentEvaluationInput {
  * the two — before the first effect, rather than inside a body that has already
  * been entered.
  *
- * An admitted read reaches the `readTextFile` the host handed the profile and
- * nothing else. Under a workflow run that is the transaction-bound operation,
- * so the read still crosses the run's own transaction; what it no longer does
- * is resolve a provider through the contextual API at the moment it runs.
+ * An admitted read is core's ordinary `<File />` performing its ordinary
+ * operation: it resolves the contextual working directory and reads through
+ * `API.Files`, under the provider the host installed and the effective
+ * `Permissions` of the consuming scope. Under a workflow run that provider is
+ * the transaction-bound one, so the read crosses the run's own transaction for
+ * the same reason an authored read does.
  */
 export function fileReadEntry(): CapabilityEntry {
   return coreEntry("File", "file:read");
@@ -222,12 +227,12 @@ export function fileReadEntry(): CapabilityEntry {
 /**
  * Core's `<Glob />`, admitted to select paths and nothing else.
  *
- * A value entry: the definition core builds for it declares what it binds, so a
- * generated `<Glob />` written without `as` is refused before the host's
- * provider is asked to traverse anything. What it selects is bounded the same
- * way a read is — the captured `globFiles` operation and the captured working
- * directory — so a search never reaches `API.Files` or `Env.cwd`, and the paths
- * it answers with are the ones that provider produced.
+ * A value entry: core's own declaration states what it binds, so a generated
+ * `<Glob />` written without `as` is refused before any provider is asked to
+ * traverse anything. What it selects is bounded the same way a read is — the
+ * contextual working directory it resolves, and the `API.Files` provider the
+ * host installed — so the paths it answers with are the ones that provider
+ * produced for that directory.
  */
 export function globReadEntry(): CapabilityEntry {
   return coreEntry("Glob", "files:glob");

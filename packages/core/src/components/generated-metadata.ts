@@ -3,14 +3,13 @@
  *
  * A generated fragment names a component, and what that name is admitted as —
  * which URL a continuation is compared against, and whether the form observes
- * or mutates — belongs to the declaration that owns the implementation. It used
- * to be stated beside the definition, by whichever host assembled the table, so
- * one component's two spellings were two host-stated grants and a host could
- * describe an effect the implementation does not have.
+ * or mutates — belongs to the declaration that owns the implementation. So the
+ * metadata travels on the declaration, per authored form, and every table that
+ * admits a name reads it off the definition it already holds: a host decides
+ * which names and spellings a fragment may write, and never what writing one
+ * runs as.
  *
- * So the metadata travels on the declaration, per authored form, and every
- * table that admits a name reads it off the definition it already holds. A
- * component that offers no generated use carries none, which is the ordinary
+ * A component that offers no generated use carries none, which is the ordinary
  * case: metadata is what makes a form offerable, and offering none takes
  * nothing away from authored use.
  *

@@ -204,19 +204,19 @@ export interface IdentifiedAnswer {
  * cannot be forged into being the one the caller opened.
  *
  * A reusable provider returns one immutable definition to every import it
- * answers. Keying the identity record by the object alone made the first
- * resolution part of the object's permanent identity and refused the same
- * definition the second time, which is a provider being punished for not
- * copying itself.
+ * answers, so the record outside the window keys the object alone and holds
+ * what every resolution of it has in common. Keying the whole record by the
+ * object would make the first resolution part of that object's permanent
+ * identity, and refuse the same definition the second time.
  */
 interface Answer {
   readonly name: string;
   /**
    * The installation origin that published it.
    *
-   * Provenance and diagnostic information, which is all an origin has ever
-   * been: it says which provider installation spoke, and it is no part of what
-   * the implementation is — that is the definition's own metadata.
+   * Provenance: it says which provider installation spoke, for a reader and a
+   * documentation symbol. It is no part of what the implementation is — that is
+   * the definition's own metadata.
    */
   readonly origin: string;
   /** Which provider installation published it, so a second cannot overwrite. */

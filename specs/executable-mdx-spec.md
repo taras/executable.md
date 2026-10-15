@@ -3348,6 +3348,42 @@ declared factory offers what that one reading said. Carrying it grants nothing �
 resolution still decides which definition answers for it, and an attempted
 generated use of a spelling with no metadata refuses.
 
+A declaration that offers both of its spellings states both, keyed by the
+authored spelling:
+
+```typescript
+yield* registerComponents([
+  {
+    name: "Notes",
+    origin: "@example/notes",
+    forms: ["self-closing", "paired"],
+    props: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    generated: {
+      "self-closing": {
+        identity: "https://executable.md/components/notes/read",
+        effect: "read",
+      },
+      paired: { identity: "https://executable.md/components/notes/write", effect: "write" },
+    },
+    *fn(props, invocation) {
+      return yield* notes(props, invocation);
+    },
+  },
+]);
+```
+
+A provider publishes that same definition, and states nothing beside it — the
+identity and the effect of each spelling are already on it:
+
+```typescript
+yield* registrar.around(function* (request, next) {
+  if (request.name !== "Notes") {
+    return yield* next();
+  }
+  return request.answer(notesDefinition);
+});
+```
+
 A registration may also carry `description`, `as` and `context` — the same three
 descriptive fields Markdown frontmatter carries, with the same meaning and the
 same absence of behavior. Every component a first-party package registers

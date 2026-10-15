@@ -3707,15 +3707,16 @@ exactly; anything else is refused before `API.Fetch` is reached. A repository
 component that takes the name `Fetch` is not that identity and acquires no
 admission from it.
 
-`<File>` is admitted only in its self-closing read form. The component reads
-when it has no content and writes when it has some, so the two forms are two
-identities and the constraint travels with the pinned one, decided in the
+`<File>`'s two spellings are two grants. The component reads when it has no
+content and writes when it has some, so a read-only selection admits the
+self-closing spelling alone, and which one an element wrote is decided in the
 whole-fragment preflight rather than inside the component after earlier elements
-have run.
+have run. A repository component that takes the name `File` is admitted as
+neither spelling.
 
-Mutation-proposal admission and workflow-bundled Markdown component admission
-remain unbuilt. Directory registration is not among them: a workflow Agent is
-given no directory to register.
+Workflow-bundled Markdown component admission remains unbuilt. Directory
+registration is not among the gaps: a workflow Agent is given no directory to
+register.
 
 #### Sealed evaluation entries
 
@@ -3747,21 +3748,29 @@ admitted one rather than its props, and that ceiling is installed as an ordinary
 `Permissions` restriction for the invocation, so a contextual transformation that moves
 the request off it is refused by the terminal rather than sent.
 
-A *component answer* names an implementation the ordinary import chain resolves, and
-states only the identity a provider must have registered for it; canonical execution
-resolves that name once — before the root import and before any document code, through
-the complete ordinary `Component.importComponent` chain and a private terminal that
-writes no record — and asks the identity owner about the exact final answer in one call.
-That call answers with the registered identity *and* core's own copy of what was
-registered, taken when the identity was registered: the check and the thing kept are one
-result, so nothing downstream reads the chain's object a second time and an answer whose
-members read differently on each read cannot pass a check with one reading and be sealed
-with another. The identity is then compared whole, and the copy — not the answer — is
-sealed behind the same revocation.
+A *component answer* names an implementation the ordinary import chain resolves. The
+entry states the name and the spellings it admits, and nothing about what is behind
+them: canonical execution resolves that name once — before the root import and before
+any document code, through the complete ordinary `Component.importComponent` chain and a
+private terminal that writes no record — and asks the publication owner about the exact
+final answer in one call. That call answers with core's own copy of the definition a
+provider published, taken at publication: the check and the thing kept are one result,
+so nothing downstream reads the chain's object a second time and an answer whose members
+read differently on each read cannot pass a check with one reading and be sealed with
+another. The copy — not the answer — is sealed behind the same revocation.
 
-One name states one identity, however many forms and tables hold it: two entries under
-one name are the two spellings of one component and share one lookup and one sealed
-implementation, while a second identity for that name, or a name held as both a
+What an admitted spelling then runs as comes from that definition's own declaration: an
+absolute `https://executable.md/` identity and one of the two effects, per authored
+spelling, read where the definition is published and retained with it. So the table says
+which names and spellings a fragment may write, and the owner says what writing them
+runs — an entry whose spelling its owner offers no generated use of, or offers as the
+other effect, refuses at capture rather than acquiring a grant from the table that named
+it. The installation origin a publication carries is provenance a reader and a
+documentation symbol are shown, and decides nothing.
+
+One name resolves to one implementation, however many spellings and tables hold it: two
+entries under one name are the two spellings of one component and share one lookup and
+one sealed definition, while two definitions under one name, or a name held as both a
 capability and a component answer, refuses at capture rather than letting assembly order
 decide.
 
@@ -3769,28 +3778,27 @@ Provider installation and the right to answer one occurrence are separate: insta
 receives a registrar that installs import middleware, and every invocation of that
 middleware receives a fresh request fixed to the exact name, position, provider
 installation, origin and resolution-window object it was asked under. Only that request
-may register an identity, and it states the answer plus key and revision without
-restating the name. Canonical execution closes the request synchronously when its
+may publish, and it presents the definition it is answering with — not a name, a key or
+a revision beside it. Canonical execution closes the request synchronously when its
 handler returns, fails or is cancelled; an outer request remains live while it delegates
-and may register a replacement after the inner handler returns. Enclosing resolution
+and may publish a replacement after the inner handler returns. Enclosing resolution
 still closes in its own `finally` on success, fallback, failure or cancellation. A
-registration therefore requires the execution, request and exact current window to
+publication therefore requires the execution, request and exact current window to
 remain active, the request's fixed name to match that window, and that provider
-installation not to have stated a different answer in the window.
+installation not to have published a different answer in the window. Publishing the same
+object again is what a reusable provider does for every import it answers, so a
+publication is compared against the copy taken the first time: an object edited after it
+was published cannot be rebaselined by a later window.
 
-Identification takes the expected window explicitly and accepts only a registration
+Identification takes the expected window explicitly and accepts only a publication
 recorded for that exact object and name, so a stale request cannot answer a later
 same-name resolution or retag itself while another name is live.
 
 The installation is reusable: one provider may answer several admitted names and
 repeated resolutions through distinct requests. All of this state is held in ordinary
 private closures — no Context, shared symbol, public brand or module-global registry —
-and an unidentified middleware replacement remains a valid ordinary import answer
-outside fragment evaluation.
-
-A capability entry also states the exact version-1 identity strings it succeeds, which
-is the only thing a released untagged record reconciles against; a component answer
-states none. A capability-only profile performs no such lookup at all.
+and a middleware replacement that publishes nothing remains a valid ordinary import
+answer outside fragment evaluation.
 
 Resolution happens at capture and never again: a fragment runs the sealed snapshot, a
 continuation resolves once more in its own capture and reconciles before any effect, and
@@ -3800,7 +3808,7 @@ generated import, which only canonical execution answers.
 A trusted layering control may enter one package bootstrap through an inherited layer
 and an execution-local one — documentation, registrations and the provider together —
 and the repeat is additive: the outer entry observes and delegates rather than
-registering a second identity for an implementation that already states what it is, and
+publishing a second answer for an implementation one publication already settled, and
 a non-identical documentation overlap on one owner and component still refuses at the
 child collection boundary, before the root import and therefore before the provider is
 asked at all.
