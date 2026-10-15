@@ -2847,6 +2847,84 @@ describe("Tier GXC — a selection is not a grant", () => {
     expect(admissions(attempt.events)).toHaveLength(0);
   });
 
+  /**
+   * The probe, with an identity that answers differently on a second reading.
+   *
+   * Assembled rather than declared, because the point is a member a host
+   * controls: `[[Get]]` answers the owner's URL once and something unusable
+   * afterwards, so a table that checked the host's object and then read it
+   * again to build the admission would retain a value the check never saw.
+   */
+  function alternating(
+    form: "self-closing" | "paired",
+    effect: GeneratedEffectClass,
+    reads: string[],
+  ): FunctionComponentDefinition {
+    const offered = {
+      get identity(): string {
+        reads.push("identity");
+        return reads.length === 1
+          ? `https://executable.md/components/probe/${effect}`
+          : "not-a-url";
+      },
+      effect,
+    };
+    return Object.assign({ ...PROBE }, { forms: [form], generated: { [form]: offered } });
+  }
+
+  it("GXC2c: a directly pinned observation is read once, and the admission holds it", function* () {
+    const reads: string[] = [];
+    const attempt = yield* evaluate(
+      request("<Probe />\n", [
+        pinnedComponent("Probe", alternating("self-closing", "read", reads), "component-answer"),
+      ]),
+    );
+
+    // One reading, and the record holds exactly it. The plant is live rather
+    // than inert: the next read of the host's object says `not-a-url`, which is
+    // what a second reading would have appended — and what the reader of that
+    // fresh record would then have refused, after the admission committed.
+    expect(reads).toEqual(["identity"]);
+    expect(attempt.failure).toBe(undefined);
+    expect(attempt.output).toContain("probed");
+    expect(recordedNames(admittedFragments(attempt.events)[0])).toEqual([
+      {
+        name: "Probe",
+        identity: "https://executable.md/components/probe/read",
+        form: "self-closing",
+      },
+    ]);
+  });
+
+  it("GXC2c: a directly pinned mutation is read once, and the admission holds it", function* () {
+    const reads: string[] = [];
+    const attempt = yield* evaluate(
+      selecting("<Writer>x</Writer>\n", [probe()], {
+        allow: ["read", "write"],
+        mutations: [
+          pinnedMutation(
+            "Writer",
+            alternating("paired", "write", reads),
+            "paired",
+            "component-answer",
+          ),
+        ],
+      }),
+    );
+
+    expect(reads).toEqual(["identity"]);
+    expect(attempt.failure).toBe(undefined);
+    const policy = recordedPolicy(admittedFragments(attempt.events)[0]);
+    const rows = isRecord(policy) && Array.isArray(policy.allowed) ? policy.allowed : [];
+    expect(rows).toContainEqual({
+      name: "Writer",
+      form: "paired",
+      identity: "https://executable.md/components/probe/write",
+      kind: "component-answer",
+      effect: "write",
+    });
+  });
+
   it("GXC2c: the same table without the defect admits and runs", function* () {
     // The positive control for the rows above: everything else about that table
     // is what a host states, so each refusal is about the declaration it names.

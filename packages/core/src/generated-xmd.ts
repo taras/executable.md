@@ -119,11 +119,9 @@ import type { ComponentResolution, ImportedDefinition } from "./components/compo
 import { isComponentName } from "./components/registration.ts";
 import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
 import { fixedFilesystemDefinition } from "./components/fixed-filesystem.ts";
-import {
-  definitionGeneratedRefusal,
-  isGeneratedIdentity,
-  offeredForm,
-} from "./components/generated-metadata.ts";
+import { admitGeneratedForms, isGeneratedIdentity } from "./components/generated-metadata.ts";
+import type { GeneratedForms } from "./components/generated-metadata.ts";
+import { acceptedForms, formsRefusal } from "./invocation-forms.ts";
 import { createBlockCounter, expandSegmentsWithin } from "./expand.ts";
 import { extendPath } from "./expansion.ts";
 import { prepareFetchRequest, requestRecord } from "./fetch-request.ts";
@@ -993,6 +991,9 @@ function selectedEntries(
   allow: readonly GeneratedEffectClass[],
 ): Entry[] {
   const entries: Entry[] = [];
+  // One kept reading per definition object, so a name admitted for two
+  // spellings stays one component with one implementation.
+  const retained = new Map<FunctionComponentDefinition, AdmittedDefinition>();
   // Before either effect table and under every selection: composition is not a
   // class `allow` chooses between, so its entries are in the policy the same
   // way whatever the caller asked for, and in one canonical position.
@@ -1013,22 +1014,24 @@ function selectedEntries(
       throw new GeneratedXmdError("a generated-XMD allowlist selected `read` with no read table.");
     }
     for (const observation of request.observations) {
-      // Read before anything is derived from it. A host pins this definition
-      // directly, so nothing has validated what it offers: an identity that is
-      // not a URL in the accepted namespace, or a spelling its own declaration
-      // does not accept, is refused here — before the admission record and
-      // before any body.
-      admitOffered(observation.name, observation.definition);
+      // Read once, before anything is derived from it. A host pins this
+      // definition directly, so nothing has validated what it offers — and
+      // everything below reads what this kept rather than the host's object: an
+      // identity that is not a URL in the accepted namespace, or a spelling its
+      // own declaration does not accept, is refused before the admission record
+      // and before any body, and a member that answers differently on a second
+      // reading never gets one.
+      const admitted = admitOffered(observation.name, observation.definition, retained);
       // The spellings this component is offered to observe in, narrowed by the
       // host where it constrained the entry to the self-closing one. Derived
       // rather than assumed: a component offering one reading spelling admits
       // that one, and a host cannot widen it to a spelling its owner never
       // offered as a read.
-      const forms = observedForms(observation);
+      const forms = observedForms(observation, admitted);
       entries.push({
         name: observation.name,
-        identities: offeredIdentities(observation.name, observation.definition, forms, "read"),
-        definition: observation.definition,
+        identities: offeredIdentities(observation.name, admitted, forms, "read"),
+        definition: admitted.definition,
         ...(observation.dispatch === undefined ? {} : { dispatch: observation.dispatch }),
         forms,
         kind: observation.kind ?? "capability",
@@ -1045,12 +1048,12 @@ function selectedEntries(
       );
     }
     for (const mutation of mutations) {
-      admitOffered(mutation.name, mutation.definition);
+      const admitted = admitOffered(mutation.name, mutation.definition, retained);
       const forms = authoredForms(mutation.form);
       entries.push({
         name: mutation.name,
-        identities: offeredIdentities(mutation.name, mutation.definition, forms, "write"),
-        definition: mutation.definition,
+        identities: offeredIdentities(mutation.name, admitted, forms, "write"),
+        definition: admitted.definition,
         ...(mutation.dispatch === undefined ? {} : { dispatch: mutation.dispatch }),
         forms,
         kind: mutation.kind ?? "capability",
@@ -1062,21 +1065,77 @@ function selectedEntries(
 }
 
 /**
- * Hold one admitted definition to what its own declaration offers.
+ * One directly pinned definition, as this run keeps it.
+ *
+ * What a host pinned is read once into this, and the admission uses it for
+ * everything afterwards: which spellings are admitted, the URL each of them
+ * runs under, the rows the policy retains, and the definition a fragment's
+ * import is answered with. Checking the host's object and then reading it again
+ * would be two readings of a value the host controls — the journal would hold
+ * the second one, which is not what was validated.
+ */
+interface AdmittedDefinition {
+  /** The definition this run holds, with the metadata below on it. */
+  readonly definition: FunctionComponentDefinition;
+  /** The offered spellings, owned and frozen, or none for a definition offering none. */
+  readonly generated: GeneratedForms | undefined;
+}
+
+/**
+ * Hold one admitted definition to what its own declaration offers, and keep
+ * what it said.
  *
  * Every live generated admission reads this, because every one of them is
  * handed a definition nothing else validated: a provider's published answer was
  * read where it was published, and a directly pinned entry is read here. The
  * Json composition entry is not among them — a pure component offers no
  * spelling for an owner to declare, and its identity is core's own.
+ *
+ * Kept per definition *object*, not per entry, because a name admitted for two
+ * spellings is one component seen from two sides: `<File />` and
+ * `<File>…</File>` are one definition, and two copies of it would be one name
+ * with two implementations.
+ *
+ * The implementation crosses by reference, because a function is not copyable
+ * and is the one thing a fragment must invoke as itself.
  */
-function admitOffered(name: string, definition: FunctionComponentDefinition): void {
-  const refusal = definitionGeneratedRefusal(definition);
-  if (refusal !== undefined) {
-    throw new GeneratedXmdError(
-      `a generated-XMD allowlist admitted <${name}> whose declaration ${refusal}.`,
-    );
+function admitOffered(
+  name: string,
+  definition: FunctionComponentDefinition,
+  retained: Map<FunctionComponentDefinition, AdmittedDefinition>,
+): AdmittedDefinition {
+  const held = retained.get(definition);
+  if (held !== undefined) {
+    return held;
   }
+  const refuse = (reason: string): never => {
+    throw new GeneratedXmdError(
+      `a generated-XMD allowlist admitted <${name}> whose declaration ${reason}.`,
+    );
+  };
+  // One read of every member, into this run's own object.
+  const copy: FunctionComponentDefinition = { ...definition };
+  const badForms = formsRefusal(copy.forms);
+  if (badForms !== undefined) {
+    refuse(badForms);
+  }
+  const offered =
+    copy.generated === undefined
+      ? undefined
+      : admitGeneratedForms(copy.generated, acceptedForms(copy.forms));
+  if (offered !== undefined && !offered.ok) {
+    refuse(offered.error.message);
+  }
+  const generated = offered === undefined || !offered.ok ? undefined : offered.value;
+  const admitted: AdmittedDefinition = Object.freeze({
+    definition: Object.freeze({
+      ...copy,
+      ...(generated === undefined ? {} : { generated }),
+    }),
+    generated,
+  });
+  retained.set(definition, admitted);
+  return admitted;
 }
 
 /**
@@ -1087,10 +1146,11 @@ function admitOffered(name: string, definition: FunctionComponentDefinition): vo
  * is a table admitting a component to observe that does not observe, so it
  * refuses here rather than at the first element that writes the name.
  */
-function observedForms(observation: GeneratedObservation): readonly AuthoredForm[] {
-  const offered = AUTHORED_FORMS.filter(
-    (form) => offeredForm(observation.definition.generated, form)?.effect === "read",
-  );
+function observedForms(
+  observation: GeneratedObservation,
+  admitted: AdmittedDefinition,
+): readonly AuthoredForm[] {
+  const offered = AUTHORED_FORMS.filter((form) => admitted.generated?.[form]?.effect === "read");
   const forms =
     observation.selfClosing === true ? offered.filter((form) => form === "self-closing") : offered;
   if (forms.length === 0) {
@@ -1105,9 +1165,10 @@ function observedForms(observation: GeneratedObservation): readonly AuthoredForm
 /**
  * The identity each admitted spelling of one entry runs under.
  *
- * Read off the definition the entry already holds, because the declaration that
- * owns the implementation is what states it. Two refusals, both about the host
- * table rather than about the fragment: a spelling its owner offers no
+ * Read off the reading this run kept, because the declaration that owns the
+ * implementation is what states it and a second reading of the host's object
+ * would be a different statement. Two refusals, both about the host table
+ * rather than about the fragment: a spelling its owner offers no
  * generated use of has no identity for a continuation to be compared against,
  * and a spelling offered as a read cannot be admitted in the write table —
  * what a spelling does belongs to the component, so a table placing it
@@ -1115,13 +1176,13 @@ function observedForms(observation: GeneratedObservation): readonly AuthoredForm
  */
 function offeredIdentities(
   name: string,
-  definition: FunctionComponentDefinition,
+  admitted: AdmittedDefinition,
   forms: readonly AuthoredForm[],
   effect: GeneratedEffectClass,
 ): ReadonlyMap<AuthoredForm, string> {
   const identities = new Map<AuthoredForm, string>();
   for (const form of forms) {
-    const offered = offeredForm(definition.generated, form);
+    const offered = admitted.generated?.[form];
     if (offered === undefined) {
       throw new GeneratedXmdError(
         `a generated-XMD allowlist admitted <${name}> in its ${form} form, and the declaration ` +

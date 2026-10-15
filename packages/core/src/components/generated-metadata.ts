@@ -192,10 +192,17 @@ export function offeredForm(
 /**
  * Why a definition's own generated metadata is unusable, or nothing.
  *
- * The check every *live* admission makes, wherever a definition reaches a
- * generated table: a provider's published answer, a host's directly pinned
- * entry, and a captured profile entry are all definitions nothing validated on
- * the way in, so each is read here before anything is admitted or retained.
+ * For a definition whose data is already this engine's: a provider's published
+ * answer is core's own structured copy, and a captured profile entry holds
+ * either that copy or one of core's own owners. Reading such a value twice
+ * says the same thing twice, so a caller that only has to refuse can ask for
+ * the sentence alone.
+ *
+ * It is not enough on its own for a value a caller still controls. There,
+ * `admitGeneratedForms()` is what to use: the data it answers with is what the
+ * caller retains, so the reading that was validated is the reading that is
+ * admitted — which is why direct generated admission reads a pinned definition
+ * through it rather than through this (`generated-xmd.ts`).
  *
  * A definition offering generated use is held to its own stated forms, through
  * the same accepted-form contract a registration is. That value is read rather
