@@ -18,8 +18,8 @@ import { Component } from "../component-api.ts";
 import { updateOwn } from "../scope-local.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
 import { PROTECTED_COMPONENT_NAMES, protectedNameRefusal } from "./protected.ts";
-import { formsRefusal } from "../invocation-identity.ts";
-import { captureGenerated, generatedRefusal } from "./generated-metadata.ts";
+import { formsRefusal } from "../invocation-forms.ts";
+import { admitGeneratedForms } from "./generated-metadata.ts";
 import type { GeneratedForms } from "./generated-metadata.ts";
 import { documentationOf } from "./documentation.ts";
 import type { ComponentDocumentation } from "./documentation.ts";
@@ -238,6 +238,19 @@ function assertUsableCaptures(
   }
 }
 
+/** What this scope accepted of a declaration, as its own data. */
+export interface AdmittedDeclaration {
+  /**
+   * The generated metadata this declaration offers, read once and validated.
+   *
+   * The value a caller retains. Reading the declarer's object again to build
+   * the definition would be a second reading of a value the declarer controls,
+   * and an accessor answering one identity for the check and another for the
+   * copy would install what the check never saw.
+   */
+  readonly generated?: GeneratedForms;
+}
+
 /**
  * What a component declaration has to be for this scope to accept it, whoever
  * is declaring.
@@ -253,7 +266,9 @@ function assertUsableCaptures(
  * Every check is on the declaration alone. Nothing here calls an
  * implementation, so it is usable where there is no implementation yet.
  */
-export function* admitDeclaration(declaration: ComponentDeclaration): Operation<void> {
+export function* admitDeclaration(
+  declaration: ComponentDeclaration,
+): Operation<AdmittedDeclaration> {
   const { name, origin, props, returns, captures, forms, generated } = declaration;
   assertUsableName(name);
   if (origin.length === 0) {
@@ -270,10 +285,14 @@ export function* admitDeclaration(declaration: ComponentDeclaration): Operation<
   if (badForms !== undefined) {
     throw new ComponentRegistrationError(`the declaration for "${name}" ${badForms}`);
   }
-  const badGenerated = generatedRefusal(generated, forms);
-  if (badGenerated !== undefined) {
-    throw new ComponentRegistrationError(`the declaration for "${name}" ${badGenerated}`);
+  if (generated === undefined) {
+    return {};
   }
+  const admitted = admitGeneratedForms(generated, forms);
+  if (!admitted.ok) {
+    throw new ComponentRegistrationError(`the declaration for "${name}" ${admitted.error.message}`);
+  }
+  return { generated: admitted.value };
 }
 
 /** Everything a declaration says about itself, apart from what implements it. */
@@ -298,8 +317,8 @@ export function* registerComponents(
   const additions = new Map<string, Partial<Record<Kind, string>>>();
 
   for (const registration of registrations) {
-    const { name, origin, fn, props, returns, captures, forms, generated } = registration;
-    yield* admitDeclaration(registration);
+    const { name, origin, fn, props, returns, captures, forms } = registration;
+    const admitted = yield* admitDeclaration(registration);
 
     const kind = kindOf(registration);
     const already = additions.get(name)?.[kind];
@@ -315,7 +334,7 @@ export function* registerComponents(
       ...(returns ? { returns } : {}),
       ...(captures && captures.length > 0 ? { captures } : {}),
       ...(forms ? { forms } : {}),
-      ...(generated === undefined ? {} : { generated: captureGenerated(generated) }),
+      ...(admitted.generated === undefined ? {} : { generated: admitted.generated }),
       ...documentationOf(registration),
     };
     batch.set(name, { ...batch.get(name), [kind]: { definition, origin } });

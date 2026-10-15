@@ -119,7 +119,11 @@ import type { ComponentResolution, ImportedDefinition } from "./components/compo
 import { isComponentName } from "./components/registration.ts";
 import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
 import { fixedFilesystemDefinition } from "./components/fixed-filesystem.ts";
-import { isGeneratedIdentity, offeredForm } from "./components/generated-metadata.ts";
+import {
+  definitionGeneratedRefusal,
+  isGeneratedIdentity,
+  offeredForm,
+} from "./components/generated-metadata.ts";
 import { createBlockCounter, expandSegmentsWithin } from "./expand.ts";
 import { extendPath } from "./expansion.ts";
 import { prepareFetchRequest, requestRecord } from "./fetch-request.ts";
@@ -1009,6 +1013,12 @@ function selectedEntries(
       throw new GeneratedXmdError("a generated-XMD allowlist selected `read` with no read table.");
     }
     for (const observation of request.observations) {
+      // Read before anything is derived from it. A host pins this definition
+      // directly, so nothing has validated what it offers: an identity that is
+      // not a URL in the accepted namespace, or a spelling its own declaration
+      // does not accept, is refused here — before the admission record and
+      // before any body.
+      admitOffered(observation.name, observation.definition);
       // The spellings this component is offered to observe in, narrowed by the
       // host where it constrained the entry to the self-closing one. Derived
       // rather than assumed: a component offering one reading spelling admits
@@ -1035,6 +1045,7 @@ function selectedEntries(
       );
     }
     for (const mutation of mutations) {
+      admitOffered(mutation.name, mutation.definition);
       const forms = authoredForms(mutation.form);
       entries.push({
         name: mutation.name,
@@ -1048,6 +1059,24 @@ function selectedEntries(
     }
   }
   return entries;
+}
+
+/**
+ * Hold one admitted definition to what its own declaration offers.
+ *
+ * Every live generated admission reads this, because every one of them is
+ * handed a definition nothing else validated: a provider's published answer was
+ * read where it was published, and a directly pinned entry is read here. The
+ * Json composition entry is not among them — a pure component offers no
+ * spelling for an owner to declare, and its identity is core's own.
+ */
+function admitOffered(name: string, definition: FunctionComponentDefinition): void {
+  const refusal = definitionGeneratedRefusal(definition);
+  if (refusal !== undefined) {
+    throw new GeneratedXmdError(
+      `a generated-XMD allowlist admitted <${name}> whose declaration ${refusal}.`,
+    );
+  }
 }
 
 /**

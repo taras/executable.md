@@ -61,7 +61,7 @@ import type {
 import { admitDeclaration, isComponentName } from "./components/registration.ts";
 import { PROTECTED_COMPONENT_NAMES, protectedNameRefusal } from "./components/protected.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
-import { formsRefusal } from "./invocation-identity.ts";
+import { formsRefusal } from "./invocation-forms.ts";
 import { isBlankText } from "./structural-rules.ts";
 import type { StructuralViolation } from "./structural-rules.ts";
 import type {
@@ -330,7 +330,7 @@ export function isKnownKind(kind: unknown): kind is ExecutionDeclaration["kind"]
  * a function returning one, so it stays as lazy and as cancellable here as it
  * is anywhere else.
  */
-function* admitting(name: string, admission: Operation<void>): Operation<void> {
+function* admitting(name: string, admission: Operation<unknown>): Operation<void> {
   try {
     yield* admission;
   } catch (error) {

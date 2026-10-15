@@ -59,7 +59,7 @@ import type { FetchRequest } from "./fetch-request.ts";
 import { normalizeFetchRequest, requestRecord } from "./fetch-request.ts";
 import { JSON_COMPOSITION_IDENTITY, pinnedJson } from "./generated-xmd.ts";
 import type { GeneratedRequest } from "./generated-xmd.ts";
-import { offeredForm } from "./components/generated-metadata.ts";
+import { definitionGeneratedRefusal, offeredForm } from "./components/generated-metadata.ts";
 import type { GeneratedEffect } from "./components/generated-metadata.ts";
 import type { FunctionComponent, FunctionComponentDefinition, Json, PropsSchema } from "./types.ts";
 
@@ -1008,6 +1008,16 @@ function sealEntry(entry: PreparedEntry, sealed: ReadonlyMap<string, SealedAnswe
  * refusal rather than a second copy of the fact.
  */
 function admittedIdentities(entry: PreparedEntry, definition: FunctionComponentDefinition): void {
+  // What the definition offers at all, before which of it this entry admits. A
+  // provider's answer was read where it was published and core's own owners
+  // where they are declared, so a refusal here is a definition that reached a
+  // profile without crossing either.
+  const refusal = definitionGeneratedRefusal(definition);
+  if (refusal !== undefined) {
+    throw new EvaluationProfileError(
+      `an evaluation profile admitted "${entry.name}", whose declaration ${refusal}.`,
+    );
+  }
   for (const form of entry.forms) {
     const offered = offeredForm(definition.generated, form);
     if (offered === undefined) {

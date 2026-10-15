@@ -2755,6 +2755,107 @@ describe("Tier GXC — a selection is not a grant", () => {
     expect(attempt.failure).toContain("one name with two definitions");
     expect(admissions(attempt.events)).toHaveLength(0);
   });
+
+  /**
+   * A directly pinned definition is one nothing validated on the way in.
+   *
+   * A provider's answer is read where it is published and core's own owners
+   * where they are declared, but a host holding a definition and pinning it
+   * reaches this table with whatever its declaration says. So the declaration
+   * is read here, before the admission record exists and before any body: a
+   * host cannot admit a spelling its own definition offers no generated use of,
+   * admit one under something that is not an identity, or describe the forms it
+   * accepts in a shape this engine does not have.
+   */
+  /**
+   * The probe, stating forms a declaration cannot state.
+   *
+   * Assembled rather than declared, because the point of each of these is that
+   * a host crossed this boundary from JavaScript with a value the declared
+   * shape does not describe.
+   */
+  function stating(forms: unknown): FunctionComponentDefinition {
+    return Object.assign({ ...PROBE }, { forms });
+  }
+
+  const MALFORMED: readonly (readonly [string, FunctionComponentDefinition, string])[] = [
+    [
+      "an identity that is not an absolute URL",
+      { ...PROBE, generated: { "self-closing": { identity: "not-a-url", effect: "read" } } },
+      "not an absolute URL",
+    ],
+    [
+      "an identity naming a look-alike origin",
+      {
+        ...PROBE,
+        generated: {
+          "self-closing": {
+            identity: "https://executable.md.example.com/components/probe/read",
+            effect: "read",
+          },
+        },
+      },
+      "not an absolute URL",
+    ],
+    [
+      "a spelling its own declaration does not accept",
+      { ...PROBE, forms: ["paired"] },
+      "does not accept",
+    ],
+    [
+      "forms this engine does not have",
+      stating(["self-closing", "unknown"]),
+      "the accepted declarations are",
+    ],
+    [
+      "forms stated as something other than a declaration",
+      stating("self-closing"),
+      "the accepted declarations are",
+    ],
+  ];
+
+  for (const [what, definition, refusal] of MALFORMED) {
+    it(`GXC2c: a directly pinned observation with ${what} is refused`, function* () {
+      const attempt = yield* evaluate(
+        request("<Probe />\n", [pinnedComponent("Probe", definition, "component-answer")]),
+      );
+
+      // The host's own error, before the candidate is admitted: no record was
+      // appended, so nothing restores it and the component never ran.
+      expect([what, attempt.failure]).toEqual([what, expect.stringContaining(refusal)]);
+      expect([what, admissions(attempt.events).length]).toEqual([what, 0]);
+      expect([what, String(attempt.output ?? "")]).toEqual([what, ""]);
+    });
+  }
+
+  it("GXC2c: a directly pinned mutation is read the same way", function* () {
+    const attempt = yield* evaluate(
+      selecting("<Nest>x</Nest>\n", [probe()], {
+        allow: ["read", "write"],
+        mutations: [
+          pinnedMutation(
+            "Nest",
+            { ...NEST, generated: { paired: { identity: "components/nest", effect: "write" } } },
+            "paired",
+            "component-answer",
+          ),
+        ],
+      }),
+    );
+
+    expect(attempt.failure).toContain("not an absolute URL");
+    expect(admissions(attempt.events)).toHaveLength(0);
+  });
+
+  it("GXC2c: the same table without the defect admits and runs", function* () {
+    // The positive control for the rows above: everything else about that table
+    // is what a host states, so each refusal is about the declaration it names.
+    const attempt = yield* evaluate(request("<Probe />\n", [probe()]));
+
+    expect(attempt.failure).toBe(undefined);
+    expect(attempt.output).toContain("probed");
+    expect(admissions(attempt.events)).toHaveLength(1);
+  });
 });
 
 describe("Tier GXC — a name is not a form", () => {

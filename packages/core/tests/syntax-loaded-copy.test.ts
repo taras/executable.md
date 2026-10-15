@@ -25,6 +25,13 @@
  * answers; what is only provable here is that a *real* second copy is one of
  * those answers.
  *
+ * Tier FE14 in the middle asks the positive form of the same question about
+ * *provider* code: a module loaded with no access to canonical core at all
+ * receives the registrar and the request this execution minted, publishes its
+ * own definition through `answer(definition)`, and a generated fragment runs
+ * exactly that answer. The refusals above say what a second copy cannot do;
+ * that row says what one can.
+ *
  * Tier FX at the end of this file asks the same question of the *other* shape
  * in the protected tier. `<File>`, `<File.Delete>` and `<Dir>` are answered
  * with one ordinary definition built once per loaded copy rather than a body
@@ -38,7 +45,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
-import { rm } from "@effectionx/fs";
+import { rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { API, Files, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -51,7 +58,7 @@ import process from "node:process";
 import { Component } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
 import { executeInstalled } from "../host.ts";
-import type { ExecutionInstallation } from "../host.ts";
+import type { ComponentAnswerInstallation, ExecutionInstallation } from "../host.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { SYNTAX_COMPONENT, props as syntaxProps } from "../src/components/Syntax.ts";
 import { fixedFilesystemDefinition } from "../src/components/fixed-filesystem.ts";
@@ -125,6 +132,98 @@ function useSeparateCopy(): Operation<LoadedCopy> {
     const loaded: unknown = yield* until(import(`file://${bundle}`));
     if (!isLoadedCopy(loaded)) {
       throw new Error("the bundled copy does not expose the protection surface");
+    }
+    yield* provide(loaded);
+  });
+}
+
+/**
+ * A provider module loaded with no access to canonical core.
+ *
+ * Written out and imported from a temporary directory, so the only things it
+ * can reach are the ones this execution hands it: the registrar its
+ * installation receives, and the request minted for each of its handler's
+ * invocations. It imports nothing — not core, not Effection — because
+ * publishing is one synchronous call on the request and delegation is one
+ * `yield*` of the operation it was given.
+ *
+ * The definition is the module's own object, built where the module is
+ * evaluated, and the identity it offers its self-closing spelling under is the
+ * module's own declaration. So what a fragment runs here is a provider's answer
+ * from outside this copy of core, admitted on the terms the declaration states.
+ */
+const LOADED_PROVIDER = `
+const invoked = [];
+const definition = {
+  kind: "function",
+  name: "Loaded",
+  props: { type: "object", properties: {}, additionalProperties: false },
+  forms: ["self-closing"],
+  generated: {
+    "self-closing": { identity: "https://executable.md/components/loaded/read", effect: "read" },
+  },
+  *fn() {
+    invoked.push("loaded answer ran");
+    return "LOADED ANSWER RAN";
+  },
+};
+
+let settled = false;
+
+export function installation(origin) {
+  return {
+    origin,
+    *install(registrar) {
+      yield* registrar.around(function* (request, next) {
+        // It answers the capture and settles, which is what a provider is for:
+        // the profile resolves its name once, before any document code, and a
+        // fragment then runs the sealed snapshot.
+        if (request.name !== "Loaded" || settled) {
+          return yield* next();
+        }
+        settled = true;
+        // The handed request, used for the one thing it is for. Nothing here
+        // holds a core module, a context, a symbol or a registry.
+        return request.answer(definition);
+      });
+    },
+  };
+}
+
+export function invocations() {
+  return [...invoked];
+}
+
+export function identity() {
+  return definition.generated["self-closing"].identity;
+}
+`;
+
+/** What that module exposes once it has been loaded. */
+interface LoadedProvider {
+  installation(origin: string): ComponentAnswerInstallation;
+  invocations(): readonly string[];
+  identity(): string;
+}
+
+function isLoadedProvider(value: unknown): value is LoadedProvider {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof Reflect.get(value, "installation") === "function" &&
+    typeof Reflect.get(value, "invocations") === "function"
+  );
+}
+
+function useLoadedProvider(): Operation<LoadedProvider> {
+  return resource(function* (provide) {
+    const directory = yield* until(mkdtemp(join(tmpdir(), "sl-provider-")));
+    yield* ensure(() => rm(directory, { recursive: true, force: true }));
+    const module = join(directory, "provider.js");
+    yield* writeTextFile(module, LOADED_PROVIDER);
+    const loaded: unknown = yield* until(import(`file://${module}`));
+    if (!isLoadedProvider(loaded)) {
+      throw new Error("the loaded module does not expose a provider installation");
     }
     yield* provide(loaded);
   });
@@ -278,6 +377,53 @@ describe("Tier SYN — a separately loaded protected implementation", () => {
     expect(observed).toEqual(["Syntax", "Syntax"]);
     expect(projected).toEqual([undefined, undefined]);
     expect(installed.componentRouting.body(forged)).toBeUndefined();
+  });
+});
+
+describe("Tier FE14 — a separately loaded provider publishes its own answer", () => {
+  it("FE14/U4-7: loaded provider code publishes through the handed request, and the fragment runs it", function* () {
+    const loaded = yield* useLoadedProvider();
+    const stream = new InMemoryStream();
+
+    // The admitted entry states the name and the spelling; what admitting it
+    // grants comes from the loaded module's own declaration.
+    const profile: ExecutionInstallation = {
+      evaluation: {
+        read: [{ kind: "component-answer", name: "Loaded", forms: ["self-closing"] }],
+      },
+      componentAnswers: [loaded.installation("test://loaded")],
+    };
+
+    const output = yield* scoped(function* () {
+      return yield* collect(
+        yield* executeInstalled(
+          {
+            ...retainedSource("documents/root.md", `<Evaluate text={'<Loaded />\\n'} />\n`),
+            stream,
+            includes: [],
+          },
+          [profile],
+        ),
+      );
+    });
+
+    // The loaded module's own body ran, once, and what it rendered is the
+    // fragment's output: the publication travelled with the object the chain
+    // returned, and canonical capture sealed that exact definition.
+    expect(String(output)).toContain("LOADED ANSWER RAN");
+    expect(loaded.invocations()).toEqual(["loaded answer ran"]);
+
+    // And the admission retains the identity that module declared for the
+    // spelling the fragment wrote — not a host-stated one, and not core's.
+    const admission = (yield* stream.readAll()).find(
+      (event) => event.type === "yield" && event.description.type === "generated_xmd",
+    );
+    const retained =
+      admission?.type === "yield" && admission.result.status === "ok"
+        ? admission.result.value
+        : undefined;
+    expect(JSON.stringify(retained)).toContain(loaded.identity());
+    expect(loaded.identity()).toBe("https://executable.md/components/loaded/read");
   });
 });
 

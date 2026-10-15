@@ -39,7 +39,7 @@ import { form as dirForm, props as dirProps } from "./Dir.ts";
 import { form as fileForm, props as fileProps } from "./File.ts";
 import { form as fileDeleteForm, props as fileDeleteProps } from "./FileDelete.ts";
 import { declaredForms, formDispatcher } from "../invocation-identity.ts";
-import { captureGenerated } from "./generated-metadata.ts";
+import { admitGeneratedForms } from "./generated-metadata.ts";
 import type { GeneratedForms } from "./generated-metadata.ts";
 import { parseJsonObject } from "../json.ts";
 import { documented } from "./documentation.ts";
@@ -79,12 +79,20 @@ function fixed(
   documentation: FirstPartyDocumentation,
   generated: GeneratedForms,
 ): FunctionComponentDefinition {
+  const forms = Object.freeze(declaredForms(declaration));
+  // Core's own table, read through the same validator a host's declaration is:
+  // these three definitions are shared by every execution in the process, so
+  // what they offer is checked and frozen where it is declared.
+  const admitted = admitGeneratedForms(generated, forms);
+  if (!admitted.ok) {
+    throw new Error(`canonical core's <${name}> ${admitted.error.message}`);
+  }
   return Object.freeze({
     kind: "function",
     name,
     props: freezeThrough(props),
-    forms: Object.freeze(declaredForms(declaration)),
-    generated: captureGenerated(generated),
+    forms,
+    generated: admitted.value,
     ...documented(documentation),
     fn: formDispatcher(declaration),
   });

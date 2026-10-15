@@ -35,7 +35,7 @@ import Test, { props as testProps } from "./Test.ts";
 import { parseJsonObject } from "../json.ts";
 import { declaredForms, formDispatcher } from "../invocation-identity.ts";
 import { documented } from "./documentation.ts";
-import { captureGenerated } from "./generated-metadata.ts";
+import { admitGeneratedForms } from "./generated-metadata.ts";
 import type { GeneratedForms } from "./generated-metadata.ts";
 import type { FirstPartyDocumentation } from "./documentation.ts";
 import type {
@@ -105,6 +105,14 @@ function core(
   const fn = typeof implementation === "function" ? implementation : formDispatcher(implementation);
   const { returns, captures, generated } = options;
   const forms = declaration === undefined ? options.forms : declaredForms(declaration);
+  // Read through the same validator a host's registration is, where it is
+  // declared: a core default's offered spellings are part of what every
+  // execution resolves, so a malformed one refuses here rather than at the
+  // first table that admits the name.
+  const offered = generated === undefined ? undefined : admitGeneratedForms(generated, forms);
+  if (offered !== undefined && !offered.ok) {
+    throw new Error(`canonical core's <${name}> ${offered.error.message}`);
+  }
   return [
     name,
     {
@@ -116,7 +124,7 @@ function core(
           ...(returns === undefined ? {} : { returns }),
           ...(captures === undefined ? {} : { captures }),
           ...(forms === undefined ? {} : { forms }),
-          ...(generated === undefined ? {} : { generated: captureGenerated(generated) }),
+          ...(offered === undefined || !offered.ok ? {} : { generated: offered.value }),
           ...documented(documentation),
           fn,
         },

@@ -14,19 +14,31 @@
  * case: metadata is what makes a form offerable, and offering none takes
  * nothing away from authored use.
  *
- * ## Validated, not trusted
+ * ## Read once, validated and retained as one value
  *
- * A declaration crosses a package boundary, so this reads it the way durable
- * input is read: exactly the two members, an identity in the accepted HTTPS
- * namespace, one of the two effects, and a form the declaration itself accepts.
- * The identity is stored and compared as the supplied string — nothing fetches
- * it, normalizes it into an alias, or infers it from the implementation.
+ * A declaration crosses a package boundary, so the metadata is read the way
+ * durable input is read: exactly the two members, an identity in the accepted
+ * HTTPS namespace, one of the two effects, and a spelling the declaration
+ * itself accepts. The identity is stored and compared as the supplied string —
+ * nothing fetches it, normalizes it into an alias, or infers it from the
+ * implementation.
+ *
+ * One pass does all of it, and what it answers with is the copy. Validating the
+ * declarer's object and then copying it again would be two readings of a value
+ * the declarer controls: an accessor answering a valid URL for the check and
+ * another for the copy would have installed what the check never saw. So
+ * `admitGeneratedForms()` reads each member exactly once, into data of its own,
+ * and the caller retains that same data.
  *
  * It imports no registry and no protected table. Validating plain metadata
  * through the component graph would reopen the initialization cycle that graph
  * already exposes, and nothing here needs to know which components exist.
  */
 
+import { Err, Ok } from "effection";
+import type { Result } from "effection";
+
+import { acceptedForms, formsRefusal } from "../invocation-forms.ts";
 import type { InvocationForm } from "../invocation-identity.ts";
 
 /** Whether a generated form observes or mutates. */
@@ -59,16 +71,83 @@ function generatedEffect(value: unknown): GeneratedEffect | undefined {
 }
 
 /**
+ * This declaration's generated metadata, read once into owned frozen data — or
+ * the reason it is unusable.
+ *
+ * `accepted` is the forms the declaration itself accepts, `undefined` keeping
+ * its ordinary meaning of both, because offering generated use of a form the
+ * component refuses to be written in is offering nothing that can run.
+ *
+ * Frozen through, because a shared definition is read by every execution in the
+ * process: a nested record left mutable would be what the next execution took
+ * its own first copy of, with the change already in it.
+ */
+export function admitGeneratedForms(
+  generated: unknown,
+  accepted: readonly InvocationForm[] | undefined,
+): Result<GeneratedForms> {
+  if (typeof generated !== "object" || generated === null || Array.isArray(generated)) {
+    return Err(new Error("states generated forms that are not a map of authored forms"));
+  }
+  const offerable = accepted === undefined ? FORMS : accepted;
+  const captured: Partial<Record<InvocationForm, GeneratedForm>> = {};
+  for (const key of Reflect.ownKeys(generated)) {
+    const form = authoredForm(key);
+    if (form === undefined) {
+      return Err(
+        new Error(`states generated metadata for "${String(key)}", which is not an authored form`),
+      );
+    }
+    if (!offerable.includes(form)) {
+      return Err(new Error(`offers generated use of its ${form} form, which it does not accept`));
+    }
+    // One read of each member, into data this module owns. Everything below —
+    // the checks and the retained copy alike — reads that data and never the
+    // declarer's object again.
+    const offered = read(Reflect.get(generated, form), form);
+    if (!offered.ok) {
+      return offered;
+    }
+    captured[form] = offered.value;
+  }
+  return Ok(Object.freeze(captured));
+}
+
+/** One offered form, read once and checked. */
+function read(value: unknown, form: InvocationForm): Result<GeneratedForm> {
+  const malformed = Err<GeneratedForm>(
+    new Error(`states a ${form} generated form that is not an identity and an effect`),
+  );
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return malformed;
+  }
+  const members = Reflect.ownKeys(value);
+  if (members.length !== 2 || !members.includes("identity") || !members.includes("effect")) {
+    return malformed;
+  }
+  const identity = Reflect.get(value, "identity");
+  const effect = generatedEffect(Reflect.get(value, "effect"));
+  if (effect === undefined) {
+    return Err(new Error(`offers its ${form} form under an effect this engine does not have`));
+  }
+  if (typeof identity !== "string" || !isGeneratedIdentity(identity)) {
+    return Err(
+      new Error(
+        `offers its ${form} form under "${String(identity)}", which is not an absolute URL in ` +
+          GENERATED_IDENTITY_ORIGIN,
+      ),
+    );
+  }
+  return Ok(Object.freeze({ identity, effect }));
+}
+
+/**
  * Why this metadata is unusable, or nothing when it is usable.
  *
- * A sentence rather than a thrown error, like `formsRefusal()`: a registration,
- * a factory declaration and a resolved provider definition each refuse in their
- * own error family and with their own diagnostic context, and a shared throw
- * here would take that context away from all three.
- *
- * `accepted` is the forms the declaration itself accepts — `undefined` keeping
- * its ordinary meaning of both — because offering generated use of a form the
- * component refuses to be written in is offering nothing that can run.
+ * The sentence alone, for a caller that refuses rather than retains: a
+ * registration, a factory declaration and a resolved provider definition each
+ * raise their own kind of failure with their own diagnostic context, and a
+ * shared throw here would take that context away from all three.
  */
 export function generatedRefusal(
   generated: unknown,
@@ -77,46 +156,8 @@ export function generatedRefusal(
   if (generated === undefined) {
     return undefined;
   }
-  if (typeof generated !== "object" || generated === null || Array.isArray(generated)) {
-    return "states generated forms that are not a map of authored forms";
-  }
-  const offerable = accepted === undefined ? FORMS : accepted;
-  for (const key of Reflect.ownKeys(generated)) {
-    const form = authoredForm(key);
-    if (form === undefined) {
-      return `states generated metadata for "${String(key)}", which is not an authored form`;
-    }
-    if (!offerable.includes(form)) {
-      return `offers generated use of its ${form} form, which it does not accept`;
-    }
-    const refusal = formRefusal(Reflect.get(generated, form), form);
-    if (refusal !== undefined) {
-      return refusal;
-    }
-  }
-  return undefined;
-}
-
-function formRefusal(value: unknown, form: InvocationForm): string | undefined {
-  const malformed = `states a ${form} generated form that is not an identity and an effect`;
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return malformed;
-  }
-  const members = Reflect.ownKeys(value);
-  if (members.length !== 2 || !members.includes("identity") || !members.includes("effect")) {
-    return malformed;
-  }
-  if (generatedEffect(Reflect.get(value, "effect")) === undefined) {
-    return `offers its ${form} form under an effect this engine does not have`;
-  }
-  const identity = Reflect.get(value, "identity");
-  if (typeof identity !== "string" || !isGeneratedIdentity(identity)) {
-    return (
-      `offers its ${form} form under "${String(identity)}", which is not an absolute URL in ` +
-      `${GENERATED_IDENTITY_ORIGIN}`
-    );
-  }
-  return undefined;
+  const admitted = admitGeneratedForms(generated, accepted);
+  return admitted.ok ? undefined : admitted.error.message;
 }
 
 /**
@@ -136,25 +177,6 @@ export function isGeneratedIdentity(identity: string): boolean {
 }
 
 /**
- * This metadata as the engine keeps it: a frozen copy, down to each form.
- *
- * Copied because the declaration's object is the declarer's, and frozen through
- * because a shared definition is read by every execution in the process — a
- * nested record left mutable would be what the next execution took its own
- * first copy of, with the change already in it.
- */
-export function captureGenerated(generated: GeneratedForms): GeneratedForms {
-  const captured: Partial<Record<InvocationForm, GeneratedForm>> = {};
-  for (const form of FORMS) {
-    const offered = generated[form];
-    if (offered !== undefined) {
-      captured[form] = Object.freeze({ identity: offered.identity, effect: offered.effect });
-    }
-  }
-  return Object.freeze(captured);
-}
-
-/**
  * The identity and effect one authored form is offered under, when it is.
  *
  * The one read every admitting table performs, so a selected form that carries
@@ -170,34 +192,27 @@ export function offeredForm(
 /**
  * Why a definition's own generated metadata is unusable, or nothing.
  *
- * For a definition that never passed registration — a provider's published
- * answer — where both members have to be read off the object defensively
- * rather than destructured from a declared shape. The accepted forms are read
- * the same way, because a definition stating forms this engine does not have
- * accepts none of them.
+ * The check every *live* admission makes, wherever a definition reaches a
+ * generated table: a provider's published answer, a host's directly pinned
+ * entry, and a captured profile entry are all definitions nothing validated on
+ * the way in, so each is read here before anything is admitted or retained.
+ *
+ * A definition offering generated use is held to its own stated forms, through
+ * the same accepted-form contract a registration is. That value is read rather
+ * than trusted too: only genuine omission means both forms, so a malformed
+ * `forms` is refused instead of being filtered into a declaration that looks
+ * canonical. A definition offering no generated use is left alone, because it
+ * is asking for nothing that identity or effect decides.
  */
 export function definitionGeneratedRefusal(definition: object): string | undefined {
   const generated = Reflect.get(definition, "generated");
   if (generated === undefined) {
     return undefined;
   }
-  return generatedRefusal(generated, acceptedForms(Reflect.get(definition, "forms")));
-}
-
-/**
- * The authored forms this value states, or `undefined` for a value that states
- * none — which is every form, exactly as an omitted declaration means both.
- */
-function acceptedForms(value: unknown): readonly InvocationForm[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
+  const stated = Reflect.get(definition, "forms");
+  const badForms = formsRefusal(stated);
+  if (badForms !== undefined) {
+    return badForms;
   }
-  const accepted: InvocationForm[] = [];
-  for (const member of value) {
-    const form = authoredForm(member);
-    if (form !== undefined) {
-      accepted.push(form);
-    }
-  }
-  return accepted;
+  return generatedRefusal(generated, acceptedForms(stated));
 }

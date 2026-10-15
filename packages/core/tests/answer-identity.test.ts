@@ -602,6 +602,25 @@ describe("Tier CIV — a publication belongs to one answer of one import", () =>
     }
   });
 
+  it("CIV23: a definition whose stated forms are not a declaration refuses", function* () {
+    const imports = owner();
+    const provider = imports.provider(ORIGIN);
+    // The forms a definition states are read the way its metadata is, and only
+    // genuine omission means both: a value that is not a canonical declaration
+    // cannot be read as one by dropping what it says, because the offered
+    // spelling is checked against it.
+    for (const forms of ["paired", ["self-closing", "unknown"], []]) {
+      const supplied = Object.assign(bare(), { generated: OFFERED, forms });
+      const resolution = resolving(imports, "Open", (resolution) => {
+        asking(provider, "Open", (request) => {
+          expect(refusalOf(() => request.answer(supplied))).toBeInstanceOf(AnswerIdentityError);
+        });
+        return resolution;
+      });
+      expect([forms, imports.identify(resolution, supplied)]).toEqual([forms, undefined]);
+    }
+  });
+
   it("CIV23: an answer carrying no metadata is published and read back", function* () {
     const imports = owner();
     const provider = imports.provider(ORIGIN);

@@ -36,7 +36,7 @@ import { Component } from "../src/component-api.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import type { ComponentRegistration } from "../src/components/registration.ts";
 import {
-  captureGenerated,
+  admitGeneratedForms,
   definitionGeneratedRefusal,
   generatedRefusal,
   isGeneratedIdentity,
@@ -256,6 +256,92 @@ describe("Tier GOM — a declaration states what its spellings are offered as", 
   });
 
   // deno-lint-ignore require-yield
+  it("GOM1: an accessor is read once, and what was validated is what is retained", function* () {
+    // The check/use gap at the declaration boundary. The identity answers the
+    // accepted URL the first time it is read and `not-a-url` afterwards, so a
+    // registration that validated the declarer's object and then copied it
+    // again would install a value the check never saw.
+    const reads: string[] = [];
+    const alternating = {
+      "self-closing": {
+        get identity(): string {
+          reads.push("identity");
+          return reads.length === 1 ? "https://executable.md/components/probe/read" : "not-a-url";
+        },
+        effect: "read" as const,
+      },
+    };
+
+    yield* scoped(function* () {
+      expect(yield* refusal([registration({ generated: alternating })])).toBe(undefined);
+
+      // One read, and the registry holds exactly it. The plant is live rather
+      // than inert: the very next read of the declarer's object says something
+      // else, which is what a second reading would have installed.
+      expect(reads).toEqual(["identity"]);
+      expect(yield* registered("Probe")).toEqual({
+        "self-closing": { identity: "https://executable.md/components/probe/read", effect: "read" },
+      });
+      expect(alternating["self-closing"].identity).toBe("not-a-url");
+    });
+  });
+
+  it("GOM1: an accessor answering an unusable value first refuses the batch", function* () {
+    // The other side of the same read. What the one reading says is what the
+    // declaration states, so an accessor whose first answer is unusable refuses
+    // — and the batch installs nothing, however plausible a later reading is.
+    const reads: string[] = [];
+    const alternating = {
+      "self-closing": {
+        get identity(): string {
+          reads.push("identity");
+          return reads.length === 1 ? "not-a-url" : "https://executable.md/components/probe/read";
+        },
+        effect: "read" as const,
+      },
+    };
+
+    yield* scoped(function* () {
+      const failed = yield* refusal([
+        registration({ name: "Fine", generated: READ_PROBE }),
+        registration({ generated: alternating }),
+      ]);
+      expect(failed).toContain("not an absolute URL");
+      expect(reads).toEqual(["identity"]);
+      expect(yield* registered("Probe")).toBe(undefined);
+      expect(yield* registered("Fine")).toBe(undefined);
+    });
+  });
+
+  it("GOM1: malformed stated forms are refused rather than filtered", function* () {
+    // Only genuine omission means both forms. A value that is not a canonical
+    // declaration cannot be read as one by dropping what it says: a string, an
+    // unknown member, an empty list and a reversed pair each describe a
+    // declaration this engine does not have, so a definition offering generated
+    // use of itself alongside one of them offers nothing it can be held to.
+    const offered = {
+      kind: "function",
+      name: "Probe",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      generated: READ_PROBE,
+    };
+    for (const forms of ["paired", ["self-closing", "unknown"], [], ["paired", "self-closing"]]) {
+      expect([forms, definitionGeneratedRefusal({ ...offered, forms })]).toEqual([
+        forms,
+        expect.stringContaining("the accepted declarations are"),
+      ]);
+    }
+    // Omission is the one reading that widens anything, and a canonical
+    // declaration holding the offered spelling is accepted.
+    expect(definitionGeneratedRefusal(offered)).toBe(undefined);
+    expect(definitionGeneratedRefusal({ ...offered, forms: ["self-closing"] })).toBe(undefined);
+    // And a definition offering nothing is not held to its forms at all, because
+    // it is asking for nothing identity or effect decides.
+    expect(definitionGeneratedRefusal({ kind: "function", name: "Probe", forms: "paired" })).toBe(
+      undefined,
+    );
+  });
+
   it("GOM1: the refusal is a sentence a caller words for itself", function* () {
     // A sentence rather than a thrown error, because a registration, a factory
     // declaration and a provider's published answer each refuse in their own
@@ -263,7 +349,14 @@ describe("Tier GOM — a declaration states what its spellings are offered as", 
     expect(generatedRefusal(undefined, undefined)).toBe(undefined);
     expect(generatedRefusal(READ_PROBE, undefined)).toBe(undefined);
     expect(generatedRefusal(READ_PROBE, ["paired"])).toContain("does not accept");
-    expect(captureGenerated(READ_PROBE)).toEqual(READ_PROBE);
+    // The copy and the verdict are one answer, so a caller retains exactly what
+    // was validated — frozen through, because a shared definition is read by
+    // every execution in the process.
+    const admitted = admitGeneratedForms(READ_PROBE, undefined);
+    expect(admitted.ok).toBe(true);
+    expect(admitted.ok ? admitted.value : undefined).toEqual(READ_PROBE);
+    expect(Object.isFrozen(admitted.ok ? admitted.value : undefined)).toBe(true);
+    expect(admitGeneratedForms("read", undefined).ok).toBe(false);
   });
 });
 

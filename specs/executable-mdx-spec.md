@@ -1964,7 +1964,8 @@ run but are absent from the diagnostic trace.
 | `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedFileWrite()`, `pinnedFileDelete()`, `pinnedComponent()`, `pinnedMutation()`, `GeneratedEffectClass`, `GeneratedComponentForm`, `GeneratedImplementation`, `GeneratedMutation`, `GeneratedObservation`, `GeneratedRequest`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam under the always-on trusted composition table and a caller-selected subset of the closed effect classes `read` and `write`, resolving each name and authored spelling to the identity its owning declaration offers that spelling under — core Json, the self-closing `<File>` read, the paired `<File>` write and the self-closing `<File.Delete>` among them — and preserving every component's ordinary binding and output behavior. `evaluateGeneratedXmd()` returns `Operation<string>` containing the fragment's rendered text. Its admission and every generated effect use occurrence-owned identities in the existing ordinary durable sequence, with no `ephemeral()` bridge, staging or result envelope |
 | `src/glob-source.ts` | `GLOB_PROPS`, `GLOB_RETURNS`, `globPatterns()`, `globFailure()` — the props, return contract, source rules and sanitized failure sentence one search is held to, shared by the ordinary `<Glob>` component and the Glob capability an evaluation profile admits, so one dialect answers both (§6.14) |
 | `src/components/component-resolution.ts` | `CanonicalImports`, `ComponentResolution` — the witness a closed execution issues for the definition it produced and verifies where it is invoked, and the per-invocation request a provider publishes its definition through |
-| `src/components/generated-metadata.ts` | `GeneratedForm`, `GeneratedForms`, `generatedRefusal()`, `captureGenerated()`, `offeredForm()` — what a declaration says about the generated use of each of its authored spellings: the absolute `https://executable.md/` identity a continuation is compared against, and whether that spelling observes or mutates (§5.3) |
+| `src/components/generated-metadata.ts` | `GeneratedForm`, `GeneratedForms`, `admitGeneratedForms()`, `generatedRefusal()`, `definitionGeneratedRefusal()`, `offeredForm()` — what a declaration says about the generated use of each of its authored spellings: the absolute `https://executable.md/` identity a continuation is compared against, and whether that spelling observes or mutates. One pass reads each member once, validates it and answers with the copy a caller retains, and every live admission reads a definition through it (§5.3) |
+| `src/invocation-forms.ts` | `formsRefusal()`, `acceptedForms()` — the canonical authored-forms declaration both a registration and its generated metadata are held to (§5.3) |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
 | `src/invocation-identity.ts` | `ComponentInvocation`, `IdentityComponent`, `IdentityClaimant`, `ImportSelection`, `installIdentities()`, `issueInvocation()`, `ComponentInvocationError` — what a trusted host declares to an execution, the domains that execution mints for it, and the one-use issuance a claimant answers for (§5.6) |
@@ -3333,7 +3334,13 @@ omitted spelling say the same thing for that spelling.
 It is validated where the declaration is made, as external data: exactly the two
 members, an identity whose origin is that namespace rather than a string
 beginning with it, one of the two effects, and a spelling the declaration itself
-accepts. Carrying it grants nothing — a table still admits the name, canonical
+accepts — read through the same canonical-forms contract `forms` is, so only a
+genuinely omitted declaration means both spellings. One pass reads each member
+once and answers with the copy, and that copy is what construction retains: a
+member that answered one identity for the check and another for the copy would
+otherwise install what the check never saw. Every live admission reads the
+definition it was handed the same way, because a provider's published answer and
+a host's directly pinned entry are both definitions nothing else validated. Carrying it grants nothing — a table still admits the name, canonical
 resolution still decides which definition answers for it, and an attempted
 generated use of a spelling with no metadata refuses.
 

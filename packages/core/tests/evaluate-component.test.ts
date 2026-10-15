@@ -2407,6 +2407,36 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
     }
   });
 
+  it("FE14: an answer stating forms this engine does not have refuses", function* () {
+    const files = recordedFiles();
+    const stream = new InMemoryStream();
+    // The same reading as the unit row, at the live boundary: the provider
+    // answers honestly with a definition whose stated forms are not a
+    // declaration this engine has, so the spelling it offers cannot be held to
+    // them and the publication refuses before the root import.
+    const A = implementation("Open", "A ran");
+    const stating = Object.assign({ ...A.definition }, { forms: "paired" });
+
+    const failed = yield* refusal(
+      run(
+        OPEN,
+        [
+          {
+            evaluation: admits(),
+            install: () => useRecordedFiles(files),
+            componentAnswers: [answerProvider("Open", stating)],
+          },
+        ],
+        stream,
+      ),
+    );
+
+    expect(failed).toContain("the accepted declarations are");
+    expect(admissions(yield* stream.readAll())).toHaveLength(0);
+    expect(A.invoked).toEqual([]);
+    expect(files.performed).toEqual([]);
+  });
+
   it("FE14: an answer offering no generated use of the admitted spelling refuses", function* () {
     const files = recordedFiles();
     const stream = new InMemoryStream();
