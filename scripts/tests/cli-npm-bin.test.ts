@@ -14,28 +14,21 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { runShell, shellQuote } from "@executablemd/test-support/launch";
-import { ensure, scoped, until } from "effection";
+import { scoped, until } from "effection";
 import { createApi } from "@effectionx/context-api";
 import * as sourceGitApi from "@executablemd/git/api";
-import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { createHash } from "node:crypto";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import type { Operation } from "effection";
 import { exec, Stdio } from "@effectionx/process";
 import type { ProcessResult } from "@effectionx/process";
 import { timebox } from "@effectionx/timebox";
-import { removeNpmOutput } from "./npm-output.ts";
+import { useNpmWorkspace } from "./npm-output.ts";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
-const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const PKG_DIR = "packages/cli";
-const OUT_DIR = path.join(ROOT, PKG_DIR, "npm");
-const BIN = path.join(OUT_DIR, "esm/src/node.js");
-const DOC = path.join(ROOT, "smoke-test/test-agent/README.md");
-/** The scripted request-to-approved-Plan journey every installation runs. */
-const SMOKE = path.join(ROOT, "smoke-test/plan-information/README.md");
 
 /** npm install and a full dnt type-check dominate this; the run itself is quick. */
 const TIMEOUT = 600_000;
@@ -138,11 +131,11 @@ interface Manifest {
   dependencies?: Record<string, string>;
 }
 
-function* readManifest(...segments: string[]): Operation<Manifest> {
-  return JSON.parse(yield* readTextFile(path.join(ROOT, ...segments)));
+function* readManifest(root: string, ...segments: string[]): Operation<Manifest> {
+  return JSON.parse(yield* readTextFile(path.join(root, ...segments)));
 }
 
-function* buildCliPackage(version: string): Operation<ProcessResult> {
+function* buildCliPackage(root: string, version: string): Operation<ProcessResult> {
   // The builder narrates every file it emits; only its exit code matters here.
   yield* Stdio.around({
     *stdout() {},
@@ -150,8 +143,17 @@ function* buildCliPackage(version: string): Operation<ProcessResult> {
   });
 
   return yield* exec(Deno.execPath(), {
-    arguments: ["run", "-A", "scripts/build-npm.ts", PKG_DIR, version],
-    cwd: ROOT,
+    arguments: [
+      "run",
+      "-A",
+      "--node-modules-dir=manual",
+      "--cached-only",
+      "--frozen",
+      "scripts/build-npm.ts",
+      PKG_DIR,
+      version,
+    ],
+    cwd: root,
     env: {
       ...Deno.env.toObject(),
       // @effectionx/* peer-depend on effection `^3 || ^4`, which npm will not
@@ -163,20 +165,20 @@ function* buildCliPackage(version: string): Operation<ProcessResult> {
 }
 
 /** The manifest dnt emitted for the published package. */
-function* readEmittedManifest(): Operation<Manifest> {
-  return JSON.parse(yield* readTextFile(path.join(OUT_DIR, "package.json")));
+function* readEmittedManifest(root: string): Operation<Manifest> {
+  return JSON.parse(yield* readTextFile(path.join(root, PKG_DIR, "npm/package.json")));
 }
 
 /** Run the built bin under Node, the way an `npm i -g @executablemd/cli` user would. */
-function runEmittedBin(args: string[]): Operation<ProcessResult> {
-  return runEmittedBinIn(ROOT, args);
+function runEmittedBin(root: string, args: string[]): Operation<ProcessResult> {
+  return runEmittedBinIn(root, root, args);
 }
 
 /** The same, from a working directory the caller chooses. */
-function* runEmittedBinIn(cwd: string, args: string[]): Operation<ProcessResult> {
+function* runEmittedBinIn(root: string, cwd: string, args: string[]): Operation<ProcessResult> {
   const result = yield* timebox<ProcessResult>(TIMEOUT, function* () {
     return yield* exec("node", {
-      arguments: [BIN, ...args],
+      arguments: [path.join(root, PKG_DIR, "npm/esm/src/node.js"), ...args],
       cwd,
       env: Deno.env.toObject(),
     }).join();
@@ -189,15 +191,18 @@ function* runEmittedBinIn(cwd: string, args: string[]): Operation<ProcessResult>
 
 describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("relaunches its test-agent worker under Node", function* () {
-    yield* ensure(removeNpmOutput);
-    const { version } = yield* readManifest(PKG_DIR, "deno.json");
+    const root = yield* useNpmWorkspace();
+    const { version } = yield* readManifest(root, PKG_DIR, "deno.json");
 
-    const built = yield* buildCliPackage(version ?? "0.0.0-dev");
+    const built = yield* buildCliPackage(root, version ?? "0.0.0-dev");
     if (built.code !== 0) {
       throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
     }
 
-    const run = yield* runEmittedBin(["test", DOC]);
+    const run = yield* runEmittedBin(root, [
+      "test",
+      path.join(root, "smoke-test/test-agent/README.md"),
+    ]);
     if (run.code !== 0) {
       throw new Error(`the emitted npm bin exited ${run.code}\n${run.stderr}`);
     }
@@ -219,7 +224,11 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // `<WhenPrompt>` answers only a prompt carrying the selected documentation,
     // so a package missing the documentation assets or the protected tier gets
     // no Plan written at all rather than a weaker one.
-    const planned = yield* runEmittedBin(["test", SMOKE, "--raw"]);
+    const planned = yield* runEmittedBin(root, [
+      "test",
+      path.join(root, "smoke-test/plan-information/README.md"),
+      "--raw",
+    ]);
     if (planned.code !== 0) {
       throw new Error(`the emitted npm bin exited ${planned.code}\n${planned.stderr}`);
     }
@@ -228,7 +237,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     expect(planned.stdout).not.toContain("ERROR");
     // And nothing ran it: `<Plan>` renders program text, so the file that
     // program names is still nobody's.
-    expect(yield* exists(path.join(ROOT, "planned.txt"))).toBe(false);
+    expect(yield* exists(path.join(root, "planned.txt"))).toBe(false);
 
     // The Markdown this package executes itself ships beside the module that
     // reads it. dnt emits the module graph only, so an asset nothing imports is
@@ -236,8 +245,8 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // would then find no program to run, on Node and Bun while Deno stayed
     // green.
     for (const asset of ["plan-command.md", "Plan.md"]) {
-      expect(yield* readTextFile(path.join(OUT_DIR, "esm/src/documents", asset))).toBe(
-        yield* readTextFile(path.join(ROOT, PKG_DIR, "src/documents", asset)),
+      expect(yield* readTextFile(path.join(root, PKG_DIR, "npm/esm/src/documents", asset))).toBe(
+        yield* readTextFile(path.join(root, PKG_DIR, "src/documents", asset)),
       );
     }
 
@@ -245,7 +254,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // operator selects, so its assets ship with *it* — and the emitted CLI
     // neither depends on it nor carries a byte of it. A build that quietly put
     // it back would be a distribution deciding what a run installs.
-    const manifest = yield* readEmittedManifest();
+    const manifest = yield* readEmittedManifest(root);
     expect(Object.keys(manifest.dependencies ?? {})).not.toContain(
       "@executablemd/code-review-agent",
     );
@@ -267,10 +276,10 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
    * active for every run without being named. What is proven here is the other
    * route — the one an operator drives.
    */
-  it("publishes the /api subpath and loads a Plugin named on the command line", function* () {
-    yield* ensure(removeNpmOutput);
-    const { version } = yield* readManifest(PKG_DIR, "deno.json");
-    const built = yield* buildCliPackage(version ?? "0.0.0-dev");
+  it("publishes contextual Git APIs that compose across copies and loads a named Plugin", function* () {
+    const root = yield* useNpmWorkspace();
+    const { version } = yield* readManifest(root, PKG_DIR, "deno.json");
+    const built = yield* buildCliPackage(root, version ?? "0.0.0-dev");
     if (built.code !== 0) {
       throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
     }
@@ -278,17 +287,16 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // Both halves of the subpath, for both packages a Plugin imports from.
     for (const pkg of ["packages/core", "packages/runtime"]) {
       const emitted: Manifest & { exports?: Record<string, unknown> } = JSON.parse(
-        yield* readTextFile(path.join(ROOT, pkg, "npm/package.json")),
+        yield* readTextFile(path.join(root, pkg, "npm/package.json")),
       );
       expect([pkg, emitted.exports?.["./api"] !== undefined]).toEqual([pkg, true]);
-      expect([pkg, yield* exists(path.join(ROOT, pkg, "npm/esm/api.js"))]).toEqual([pkg, true]);
+      expect([pkg, yield* exists(path.join(root, pkg, "npm/esm/api.js"))]).toEqual([pkg, true]);
     }
 
-    const elsewhere = yield* until(mkdtemp(path.join(tmpdir(), "xmd-npm-plugin-")));
-    yield* ensure(() => rm(elsewhere, { recursive: true, force: true }));
+    const elsewhere = yield* useTempDirectory("xmd-npm-plugin-");
     yield* writeTextFile(path.join(elsewhere, "doc.md"), "document body\n");
-    const fixture = path.join(ROOT, "packages/cli/tests/fixtures/plugins/external.mjs");
-    const run = yield* runEmittedBinIn(elsewhere, ["run", `--plugin=${fixture}`, "doc.md"]);
+    const fixture = path.join(root, "packages/cli/tests/fixtures/plugins/external.mjs");
+    const run = yield* runEmittedBinIn(root, elsewhere, ["run", `--plugin=${fixture}`, "doc.md"]);
     if (run.code !== 0) {
       throw new Error(`the emitted npm bin exited ${run.code}\n${run.stderr}`);
     }
@@ -299,7 +307,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // `@executablemd/git`'s contextual Apis, in the artifact an npm consumer
     // installs. The same build, because a second dnt run would cost minutes to
     // answer a question this one already has the bytes for.
-    const gitOut = path.join(ROOT, "packages/git/npm");
+    const gitOut = path.join(root, "packages/git/npm");
     const gitManifest: Manifest & { exports?: Record<string, unknown> } = JSON.parse(
       yield* readTextFile(path.join(gitOut, "package.json")),
     );
@@ -397,18 +405,17 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
    * way a caller composes it rather than through argv.
    */
   it("runs a complete program piped into the emitted bin", function* () {
-    yield* ensure(removeNpmOutput);
-    const { version } = yield* readManifest(PKG_DIR, "deno.json");
-    const built = yield* buildCliPackage(version ?? "0.0.0-dev");
+    const root = yield* useNpmWorkspace();
+    const { version } = yield* readManifest(root, PKG_DIR, "deno.json");
+    const built = yield* buildCliPackage(root, version ?? "0.0.0-dev");
     if (built.code !== 0) {
       throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
     }
 
     // Run from a directory that is not the package, so nothing the program
     // renders could have come from a file beside the bin.
-    const elsewhere = yield* until(mkdtemp(path.join(tmpdir(), "xmd-npm-stdin-")));
-    yield* ensure(() => rm(elsewhere, { recursive: true, force: true }));
-    const line = `${shellQuote("node")} ${shellQuote(BIN)} run - --raw`;
+    const elsewhere = yield* useTempDirectory("xmd-npm-stdin-");
+    const line = `${shellQuote("node")} ${shellQuote(path.join(root, PKG_DIR, "npm/esm/src/node.js"))} run - --raw`;
 
     const run = yield* runShell(line, {
       cwd: elsewhere,
@@ -452,21 +459,21 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
    * works locally and names directories npm would reject.
    */
   it("leaves every manifest in the closure publishable", function* () {
-    yield* ensure(removeNpmOutput);
-    const { version } = yield* readManifest(PKG_DIR, "deno.json");
-    const built = yield* buildCliPackage(version ?? "0.0.0-dev");
+    const root = yield* useNpmWorkspace();
+    const { version } = yield* readManifest(root, PKG_DIR, "deno.json");
+    const built = yield* buildCliPackage(root, version ?? "0.0.0-dev");
     if (built.code !== 0) {
       throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
     }
 
-    const source = yield* readManifest(PKG_DIR, "package.json");
+    const source = yield* readManifest(root, PKG_DIR, "package.json");
     const internal = Object.keys(source.dependencies ?? {}).filter((name) =>
       name.startsWith("@executablemd/"),
     );
     // Non-vacuous: the CLI is the deepest closure in the workspace.
     expect(internal.length).toBeGreaterThan(1);
 
-    const emitted = yield* readEmittedManifest();
+    const emitted = yield* readEmittedManifest(root);
     for (const name of internal) {
       expect({ name, range: emitted.dependencies?.[name] }).toEqual({
         name,
@@ -477,7 +484,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // Every sibling the closure built, not only the root that was requested.
     for (const name of internal) {
       const dir = path.join("packages", name.slice("@executablemd/".length));
-      const sibling = yield* readManifest(dir, "npm", "package.json");
+      const sibling = yield* readManifest(root, dir, "npm", "package.json");
       for (const [dependency, range] of Object.entries(sibling.dependencies ?? {})) {
         expect({ sibling: name, dependency, local: range.startsWith("file:") }).toEqual({
           sibling: name,
@@ -489,19 +496,23 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
   });
 
   it("reports the same <Plan> Component identity the source tree ships", function* () {
-    yield* ensure(removeNpmOutput);
-    const { version } = yield* readManifest(PKG_DIR, "deno.json");
-    const built = yield* buildCliPackage(version ?? "0.0.0-dev");
+    const root = yield* useNpmWorkspace();
+    const { version } = yield* readManifest(root, PKG_DIR, "deno.json");
+    const built = yield* buildCliPackage(root, version ?? "0.0.0-dev");
     if (built.code !== 0) {
       throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
     }
 
-    const source = yield* readTextFile(path.join(ROOT, PKG_DIR, "src/documents/Plan.md"));
+    const source = yield* readTextFile(path.join(root, PKG_DIR, "src/documents/Plan.md"));
     const digest = createHash("sha256").update(source, "utf8").digest("hex");
 
-    const elsewhere = yield* until(mkdtemp(path.join(tmpdir(), "xmd-npm-plan-")));
-    yield* ensure(() => rm(elsewhere, { recursive: true, force: true }));
-    const run = yield* runEmittedBinIn(elsewhere, ["syntax", "--json", "--include", elsewhere]);
+    const elsewhere = yield* useTempDirectory("xmd-npm-plan-");
+    const run = yield* runEmittedBinIn(root, elsewhere, [
+      "syntax",
+      "--json",
+      "--include",
+      elsewhere,
+    ]);
     if (run.code !== 0) {
       throw new Error(`the emitted npm bin exited ${run.code}\n${run.stderr}`);
     }
@@ -568,7 +579,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // lives in core's *agent* boundary rather than in its own `components.md`,
     // so this exercises a second copied asset path: a build that copied only
     // the first would still answer for core's own components and fail here.
-    const documented = yield* runEmittedBinIn(elsewhere, ["syntax", "Prompt"]);
+    const documented = yield* runEmittedBinIn(root, elsewhere, ["syntax", "Prompt"]);
     expect(documented.code).toBe(0);
     expect(documented.stdout).toContain("### `<Prompt>`");
     expect(documented.stdout).toContain("Sends a prompt and renders the reply");
@@ -576,7 +587,16 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
 
     // And it is the same answer the source tree gives, whole.
     const fromSource = yield* exec(Deno.execPath(), {
-      arguments: ["run", "-A", path.join(ROOT, "packages/cli/src/deno.ts"), "syntax", "Prompt"],
+      arguments: [
+        "run",
+        "-A",
+        "--node-modules-dir=manual",
+        "--cached-only",
+        "--frozen",
+        path.join(root, "packages/cli/src/deno.ts"),
+        "syntax",
+        "Prompt",
+      ],
       cwd: elsewhere,
       env: Deno.env.toObject(),
     }).join();
@@ -587,7 +607,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // resolves here — so a build that still accepted the switch would fail on
     // the agent instead of answering with the migration, which is what makes
     // this a check on preflight rather than on the exit status.
-    const removed = yield* runEmittedBinIn(elsewhere, [
+    const removed = yield* runEmittedBinIn(root, elsewhere, [
       "plan",
       "prepare the release program",
       "--run",
@@ -603,21 +623,21 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     // The same for the upgrade command's program. The npm build discovers the
     // directory rather than listing files, so this is the check that the
     // discovery really covered the second document too.
-    expect(yield* readTextFile(path.join(OUT_DIR, "esm/src/documents/upgrade-command.md"))).toBe(
-      yield* readTextFile(path.join(ROOT, PKG_DIR, "src/documents/upgrade-command.md")),
-    );
+    expect(
+      yield* readTextFile(path.join(root, PKG_DIR, "npm/esm/src/documents/upgrade-command.md")),
+    ).toBe(yield* readTextFile(path.join(root, PKG_DIR, "src/documents/upgrade-command.md")));
 
     // `semver` is imported by the upgrade document's eval block, which nothing
     // in the emitted module graph references. A transitive copy that happens to
     // be installed alongside is not a dependency this package may resolve
     // through: it is declared, so npm installs it.
-    expect((yield* readEmittedManifest()).dependencies?.semver).toBeDefined();
+    expect((yield* readEmittedManifest(root)).dependencies?.semver).toBeDefined();
 
     // And on this host the command refuses before any of that matters. The
     // provenance refusal runs ahead of the block that imports semver, ahead of
     // any release lookup, and ahead of touching a file — which is what makes
     // the npm package safe to publish without the eval block ever resolving.
-    const refused = yield* runEmittedBin(["upgrade", "--status"]);
+    const refused = yield* runEmittedBin(root, ["upgrade", "--status"]);
     expect(refused.code).toBe(1);
     // The document is the output, so even a refused host renders its heading.
     // What matters is that the npm package answered at all: the transcript

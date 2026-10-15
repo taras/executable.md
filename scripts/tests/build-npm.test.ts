@@ -1,30 +1,19 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure } from "effection";
+import { ensure, scoped as withinScope, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { exec, Stdio } from "@effectionx/process";
-import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { buildNpmPackage } from "../build-npm.ts";
 import type { BuildEvent } from "../build-npm.ts";
+import { useNpmWorkspace } from "./npm-output.ts";
+import { digest, FileReads } from "../lib/prepared-state.ts";
 
-const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-
-/**
- * The npm output directory for `pkgDir`. It stays on disk for the rest of the
- * test, so assertions can read the artifact, and is removed once the test
- * settles — whether the builder succeeded, failed, or the assertions threw.
- */
-function* npmOutDir(pkgDir: string): Operation<string> {
-  const outDir = path.join(ROOT, pkgDir, "npm");
-  yield* ensure(() => rm(outDir, { recursive: true, force: true }));
-  return outDir;
-}
-
-function* buildNpm(pkgDir: string) {
+function* buildNpm(root: string, pkgDir: string, skipInstall = true) {
   // The builder's own output is an assertion subject, not test output.
   yield* Stdio.around({
     *stdout() {},
@@ -33,9 +22,22 @@ function* buildNpm(pkgDir: string) {
 
   // Deno.execPath() so the child builder runs the same executable as the suite.
   return yield* exec(Deno.execPath(), {
-    arguments: ["run", "-A", "scripts/build-npm.ts", pkgDir, "0.4.2"],
-    cwd: ROOT,
-    env: { ...Deno.env.toObject(), DNT_SKIP_INSTALL: "1" },
+    arguments: [
+      "run",
+      "-A",
+      "--node-modules-dir=manual",
+      "--cached-only",
+      "--frozen",
+      "scripts/build-npm.ts",
+      pkgDir,
+      "0.4.2",
+    ],
+    cwd: root,
+    env: {
+      ...Deno.env.toObject(),
+      DNT_SKIP_INSTALL: skipInstall ? "1" : "",
+      NPM_CONFIG_LEGACY_PEER_DEPS: "true",
+    },
   }).join();
 }
 
@@ -58,11 +60,28 @@ function* declaredEntries(outDir: string): Operation<string[]> {
   return found;
 }
 
+function* packedArtifact(outDir: string): Operation<Record<string, string>> {
+  const packed = yield* exec("npm", {
+    arguments: ["pack", "--dry-run", "--json"],
+    cwd: outDir,
+  }).expect();
+  const files: string[] = JSON.parse(packed.stdout)[0].files.map(
+    (file: { path: string }) => file.path,
+  );
+  const bytes: Record<string, string> = {};
+  const read = yield* FileReads.expect();
+  for (const file of files) {
+    bytes[file] = digest(yield* read(path.join(outDir, file)));
+  }
+  expect(files).toContain("package.json");
+  expect(files).toContain("esm/mod.js");
+  return bytes;
+}
+
 describe("build-npm skip-install mode", () => {
   it("refuses a package with workspace dependencies and names them", function* () {
-    yield* npmOutDir("packages/acp");
-
-    const result = yield* buildNpm("packages/acp");
+    const root = yield* useNpmWorkspace();
+    const result = yield* buildNpm(root, "packages/acp");
 
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("DNT_SKIP_INSTALL");
@@ -72,9 +91,28 @@ describe("build-npm skip-install mode", () => {
   });
 
   it("leaves no output that could be mistaken for a current build", function* () {
-    const outDir = yield* npmOutDir("packages/acp");
+    const root = yield* useNpmWorkspace();
+    const outDir = path.join(root, "packages/core/npm");
+    yield* ensureDir(path.join(outDir, "esm"));
+    yield* ensureDir(path.join(outDir, "types"));
+    yield* writeTextFile(path.join(outDir, "esm/mod.js"), "export const stale = true;\n");
+    yield* writeTextFile(
+      path.join(outDir, "types/mod.d.ts"),
+      "export declare const stale: true;\n",
+    );
+    yield* writeTextFile(
+      path.join(outDir, "package.json"),
+      JSON.stringify({
+        name: "@executablemd/core",
+        version: "0.0.0-stale",
+        main: "./esm/mod.js",
+        types: "./types/mod.d.ts",
+      }),
+    );
 
-    yield* buildNpm("packages/acp");
+    const refused = yield* buildNpm(root, "packages/core");
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain('cannot build "@executablemd/core"');
 
     for (const generated of ["esm", "types", "package.json"]) {
       expect({ generated, exists: yield* exists(path.join(outDir, generated)) }).toEqual({
@@ -85,9 +123,14 @@ describe("build-npm skip-install mode", () => {
   });
 
   it("builds a package with no workspace dependencies", function* () {
-    const outDir = yield* npmOutDir("packages/durable-streams");
-
-    expect((yield* buildNpm("packages/durable-streams")).code).toBe(0);
+    const root = yield* useNpmWorkspace();
+    const outDir = path.join(root, "packages/durable-streams/npm");
+    const built = yield* buildNpm(root, "packages/durable-streams");
+    if (built.code !== 0) {
+      throw new Error(
+        `build-npm.ts packages/durable-streams exited ${built.code}\n${built.stdout}\n${built.stderr}`,
+      );
+    }
 
     for (const entry of yield* declaredEntries(outDir)) {
       expect({ entry, exists: yield* exists(path.join(outDir, entry)) }).toEqual({
@@ -112,6 +155,74 @@ describe("build-npm skip-install mode", () => {
     for (const entry of yield* declaredEntries(outDir)) {
       expect({ entry, packed: files.includes(entry) }).toEqual({ entry, packed: true });
     }
+  });
+});
+
+describe("npm packaging fixture ownership", () => {
+  it("joins cancelled and failed cleanup while another invocation reads its own package", function* () {
+    const ready = withResolvers<string>();
+    const first = yield* spawn(function* () {
+      const root = yield* useNpmWorkspace();
+      const built = yield* buildNpm(root, "packages/durable-streams", false);
+      if (built.code !== 0) {
+        throw new Error(`first leaf build exited ${built.code}\n${built.stdout}\n${built.stderr}`);
+      }
+      ready.resolve(root);
+      yield* suspend();
+    });
+    const firstRoot = yield* ready.operation;
+    let survivorRoot = "";
+
+    yield* withinScope(function* () {
+      survivorRoot = yield* useNpmWorkspace();
+      expect(survivorRoot).not.toBe(firstRoot);
+      const outDir = path.join(survivorRoot, "packages/durable-streams/npm");
+      const built = yield* buildNpm(survivorRoot, "packages/durable-streams", false);
+      if (built.code !== 0) {
+        throw new Error(
+          `surviving leaf build exited ${built.code}\n${built.stdout}\n${built.stderr}`,
+        );
+      }
+      const before = yield* packedArtifact(outDir);
+      expect(yield* exists(path.join(firstRoot, "packages/durable-streams/npm/esm/mod.js"))).toBe(
+        true,
+      );
+
+      yield* first.halt();
+      expect(yield* exists(firstRoot)).toBe(false);
+      expect(yield* packedArtifact(outDir)).toEqual(before);
+
+      const failure = new Error("the private fixture owner failed");
+      let failedRoot = "";
+      let caught: unknown;
+      try {
+        yield* withinScope(function* () {
+          failedRoot = yield* useNpmWorkspace();
+          const failedOutput = path.join(failedRoot, "packages/durable-streams/npm");
+          yield* ensureDir(failedOutput);
+          yield* writeTextFile(path.join(failedOutput, "owned.txt"), "private failure output");
+          throw failure;
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBe(failure);
+      expect(failedRoot).not.toBe(survivorRoot);
+      expect(yield* exists(failedRoot)).toBe(false);
+      expect(yield* packedArtifact(outDir)).toEqual(before);
+
+      const consumer = yield* exec("node", {
+        arguments: [
+          "--input-type=module",
+          "--eval",
+          `import { InMemoryStream } from ${JSON.stringify(pathToFileURL(path.join(outDir, "esm/mod.js")).href)}; console.log(new InMemoryStream([]).constructor.name);`,
+        ],
+        cwd: survivorRoot,
+      }).expect();
+      expect(consumer.stdout).toContain("InMemoryStream");
+    });
+
+    expect(yield* exists(survivorRoot)).toBe(false);
   });
 });
 
