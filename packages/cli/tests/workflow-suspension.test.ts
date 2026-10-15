@@ -821,6 +821,15 @@ const PROMPT_EFFECT = "agent_prompt"; // packages/core/src/agent/journal.ts
 const EVALUATION_EFFECT = "generated_xmd"; // packages/core/src/generated-xmd.ts
 const FILE_EFFECT = WORKSPACE_FILE;
 
+/**
+ * What core's own declaration offers the paired `<Dir>` as.
+ *
+ * Spelled here rather than imported, because a case about what a retained
+ * admission holds has to name the string the journal holds: reading it from the
+ * component the resume also reads would agree with itself after a rename.
+ */
+const DIR_ENSURE = "https://executable.md/components/dir/ensure";
+
 /** Every prompt this run's agent was actually asked. */
 interface AgentCalls {
   readonly prompts: string[];
@@ -1508,10 +1517,10 @@ the retained note
     });
   }
 
-  // WGAC17: `allow={["write"]}` admits the versioned paired `<Dir>`, and that
-  // entry now authorizes persistent recursive creation. The former identity
-  // authorized placement that created nothing, so a run admitted under it must
-  // not silently receive the wider permission.
+  // WGAC17: `allow={["write"]}` admits the paired `<Dir>`, which authorizes
+  // persistent recursive creation. A run admitted under a different identity
+  // for that spelling was granted something else, so it must not silently
+  // receive this permission on resume.
   //
   // Two halves, and neither is evidence alone. The control shows the current
   // admission really does execute its generated `<Dir>` and really does resume
@@ -1541,12 +1550,14 @@ the retained note
 
     const suspended = retained(path);
     expect(suspended.status).toBe("suspended");
-    // The admission carries the versioned identity. It is a structural record
-    // rather than a spelling, and the version is the `revision` member — so
-    // that is what this reads, and what the refusal below moves.
+    // The admission carries the identity core's own declaration offers the
+    // paired spelling as, in the write table that admitted it — so that is what
+    // this reads, and what the refusal below moves.
     expect(
       readRecords(path).some(
-        (record) => record.includes(`"key":"Dir"`) && record.includes(`"revision":"3"`),
+        (record) =>
+          record.includes(`"name":"Dir","form":"paired","identity":"${DIR_ENSURE}"`) &&
+          record.includes(`"effect":"write"`),
       ),
     ).toBe(true);
 
@@ -1616,19 +1627,18 @@ the retained note
     expect(counts(path)).toEqual(atSuspension);
   });
 
-  it("WGAC17: a continuation retaining the former Dir identity refuses before generated execution and mutation", function* () {
+  it("WGAC17: a continuation retaining another Dir identity refuses before generated execution and mutation", function* () {
     const store = yield* useRunStore();
     const { runId, path, rendered, calls } = yield* wgac17(store);
 
-    // The run becomes one admitted under the former identity. Nothing else
-    // changes — same source, roots and selection — so the identity is the only
-    // thing the resume can disagree about.
-    //
-    // The version is the `revision` member, and core's own entries state `2`,
-    // so `"revision":"3"` names the Dir entry and nothing else. Moving it back
-    // is exactly "admitted under the earlier revision", which is the grant the
-    // former placement-only Dir had.
-    rewriteRecords(path, (record) => record.replaceAll(`"revision":"3"`, `"revision":"2"`));
+    // The run becomes one admitted under a different identity for the same
+    // spelling of the same name. Nothing else changes — same source, roots and
+    // selection — so the identity is the only thing the resume can disagree
+    // about, and it is still a URL this engine can read: the refusal is the
+    // grant comparison rather than an unreadable record.
+    rewriteRecords(path, (record) =>
+      record.replaceAll(DIR_ENSURE, "https://executable.md/components/dir/placement"),
+    );
     const beforeResume = counts(path);
     const rootsBeforeResume = workspaceRootState(path);
 
@@ -1646,11 +1656,10 @@ the retained note
     expect(workspaceRootState(path)).toEqual(rootsBeforeResume);
     // Nothing after the wait reached the document either.
     expect(rendered).toEqual([]);
-    // And the refusal does not publish which identity moved. The identity is
-    // four members now, so this reads the two a refusal could carry: the origin
-    // that owns the implementation, and the member the rewrite actually moved.
+    // And the refusal does not publish which identity moved: neither the one
+    // the admission holds nor the one the rewrite put there.
     const reported = resumed.written.err.join("\n");
-    expect(reported).not.toContain("@executablemd/workflow/composition");
-    expect(reported).not.toContain("revision");
+    expect(reported).not.toContain(DIR_ENSURE);
+    expect(reported).not.toContain("/components/dir/placement");
   });
 });

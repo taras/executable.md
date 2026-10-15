@@ -52,6 +52,8 @@ import { useScope } from "effection";
 import type { Operation, Scope } from "effection";
 import { printErrors, printsErrors } from "./component-failures.ts";
 import { documentationOf } from "./components/documentation.ts";
+import { admitGeneratedForms } from "./components/generated-metadata.ts";
+import type { GeneratedForms } from "./components/generated-metadata.ts";
 import type { ComponentDocumentation } from "./components/documentation.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
 import type { EvaluationProfile } from "./evaluation-profile.ts";
@@ -147,6 +149,8 @@ export interface IdentityComponent extends ComponentDocumentation {
   readonly captures?: readonly string[];
   /** The authored forms this component accepts. Omitted means both. */
   readonly forms?: readonly InvocationForm[];
+  /** The generated use each authored form is offered for, when it offers any. */
+  readonly generated?: GeneratedForms;
   readonly origin: string;
   factory(claim: IdentityClaimant): FunctionComponent;
 }
@@ -381,6 +385,8 @@ export interface ProtectedDeclaration {
   readonly returns?: ReturnsSchema;
   readonly captures?: readonly string[];
   readonly forms?: readonly InvocationForm[];
+  /** The generated use each authored form is offered for, when it offers any. */
+  readonly generated?: GeneratedForms;
   readonly origin: string;
   build(claim: IdentityClaimant): ProtectedBody;
 }
@@ -629,53 +635,6 @@ export function isFormDispatcher(fn: unknown): boolean {
  * answer, no method on the object handed in, and nothing a handler composed
  * takes part in choosing it.
  */
-/**
- * The only ways a forms declaration may be written.
- *
- * A closed list rather than a set membership test, because the *order* is part
- * of the declaration: one canonical spelling per meaning means two entries can be
- * compared without normalizing, and a reader never has to wonder whether
- * `["paired", "self-closing"]` said something different.
- */
-const CANONICAL_FORMS: readonly (readonly InvocationForm[])[] = [
-  ["self-closing"],
-  ["paired"],
-  ["self-closing", "paired"],
-];
-
-/**
- * Why `forms` is not a canonical declaration, or `undefined` when it is.
- *
- * Omission is canonical and means both forms, which is what every declaration
- * meant before forms could be written. Anything present is held to the list
- * above, so an empty array, a reversed pair, a repeated member and a form no
- * invocation has are each refused where the declaration is made rather than
- * reaching a document as documentation nothing can act on.
- *
- * A reason rather than a thrown error, because the two callers raise different
- * kinds of failure and each owns its own sentence. `unknown` rather than the
- * declared type, because a host crosses this boundary from JavaScript.
- */
-export function formsRefusal(forms: unknown): string | undefined {
-  if (forms === undefined) {
-    return undefined;
-  }
-  const canonical =
-    Array.isArray(forms) &&
-    CANONICAL_FORMS.some(
-      (accepted) =>
-        accepted.length === forms.length && accepted.every((form, index) => form === forms[index]),
-    );
-  if (canonical) {
-    return undefined;
-  }
-  return (
-    `declares forms ${JSON.stringify(forms)}: the accepted declarations are ` +
-    `["self-closing"], ["paired"] and ["self-closing", "paired"], or none at all for both. ` +
-    "A form is written once, and a pair is written self-closing first"
-  );
-}
-
 /**
  * The forms a declaration accepts, in canonical order.
  *
@@ -1027,6 +986,7 @@ export interface IdentityRegistration extends ComponentDocumentation {
   readonly returns?: ReturnsSchema;
   readonly captures?: readonly string[];
   readonly forms?: readonly InvocationForm[];
+  readonly generated?: GeneratedForms;
   readonly fn: FunctionComponent;
 }
 
@@ -1059,6 +1019,37 @@ export interface IdentityInstallation {
   readonly componentRouting: ComponentRouting;
   /** Called once the registrations have been validated and committed. */
   activate(): void;
+}
+
+/**
+ * One declaration's generated metadata, read once and validated.
+ *
+ * A declared identity component crosses the installation boundary from a host,
+ * and the private and protected arms never pass registration — so this is where
+ * their metadata is read, and the value it answers with is the one the built
+ * definition retains. Validating the host's object and copying it again would
+ * be two readings of a value the host controls.
+ *
+ * An execution captures the components it was declared before anything it
+ * installs runs, so it reads the host's metadata through this too (`execute.ts`)
+ * and hands the captured value back here. Reading core's own frozen copy a
+ * second time says what the first reading said.
+ */
+export function admittedGenerated(component: {
+  readonly name: string;
+  readonly generated?: GeneratedForms;
+  readonly forms?: readonly InvocationForm[];
+}): GeneratedForms | undefined {
+  if (component.generated === undefined) {
+    return undefined;
+  }
+  const admitted = admitGeneratedForms(component.generated, component.forms);
+  if (!admitted.ok) {
+    throw new ComponentInvocationError(
+      `the identity component "${component.name}" ${admitted.error.message}`,
+    );
+  }
+  return admitted.value;
 }
 
 /**
@@ -1105,6 +1096,7 @@ export function installIdentities(
     guarded.set(definition.name, definition);
   }
   for (const component of protectedComponents) {
+    const admitted = admittedGenerated(component);
     const domain = mintDomain(component.name);
     minted.set(component.name, domain);
     const implementation = componentRouting.implementation(
@@ -1131,11 +1123,13 @@ export function installIdentities(
       ...(component.returns === undefined ? {} : { returns: component.returns }),
       ...(component.captures === undefined ? {} : { captures: component.captures }),
       ...(component.forms === undefined ? {} : { forms: component.forms }),
+      ...(admitted === undefined ? {} : { generated: admitted }),
       ...documentationOf(component),
       fn: implementation,
     });
   }
   for (const component of privateComponents) {
+    const admitted = admittedGenerated(component);
     const domain = mintDomain(component.name);
     minted.set(component.name, domain);
     const implementation = component.factory(domain.claim);
@@ -1151,11 +1145,13 @@ export function installIdentities(
       ...(component.returns === undefined ? {} : { returns: component.returns }),
       ...(component.captures === undefined ? {} : { captures: component.captures }),
       ...(component.forms === undefined ? {} : { forms: component.forms }),
+      ...(admitted === undefined ? {} : { generated: admitted }),
       ...documentationOf(component),
       fn: implementation,
     });
   }
   for (const component of components) {
+    const admitted = admittedGenerated(component);
     const domain = mintDomain(component.name);
     minted.set(component.name, domain);
     // Built here, and held by identity: this exact function is what canonical
@@ -1169,6 +1165,7 @@ export function installIdentities(
       ...(component.returns === undefined ? {} : { returns: component.returns }),
       ...(component.captures === undefined ? {} : { captures: component.captures }),
       ...(component.forms === undefined ? {} : { forms: component.forms }),
+      ...(admitted === undefined ? {} : { generated: admitted }),
       ...documentationOf(component),
       fn: implementation,
     });

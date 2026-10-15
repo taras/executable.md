@@ -43,7 +43,7 @@ import type { Operation } from "effection";
 
 import { canonicalFingerprint } from "../canonical.ts";
 import { parseMarkdownDefinition } from "../definition.ts";
-import { formsRefusal } from "../invocation-identity.ts";
+import { formsRefusal } from "../invocation-forms.ts";
 import type { IdentityComponent } from "../invocation-identity.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
 import { PROTECTED_COMPONENT_NAMES, protectedNameRefusal } from "./protected.ts";

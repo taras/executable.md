@@ -38,7 +38,6 @@ import type {
   ExecutionInstallation,
   GeneratedObservation,
   GeneratedXmdRequest,
-  RetainedFragmentIdentity,
 } from "../host.ts";
 import { forEach } from "@effectionx/stream-helpers";
 import { collect } from "../src/collect.ts";
@@ -1239,14 +1238,14 @@ describe("Tier ALL — PA8: <Return> and <Break> cannot cross a spawn", () => {
 const GENERATED_ROOT = "workflows/agent.md";
 const GENERATED_SOURCE = "The host ran a generated fragment.\n";
 
-function hostIdentity(origin: string, key: string): RetainedFragmentIdentity {
-  return { kind: "component-answer", origin, key, revision: "1" };
-}
-
 const GENERATED_PROBE: FunctionComponentDefinition = {
   kind: "function",
   name: "Probe",
   props: NO_PROPS,
+  forms: ["self-closing"],
+  generated: {
+    "self-closing": { identity: "https://executable.md/components/probe/read", effect: "read" },
+  },
   // deno-lint-ignore require-yield
   *fn() {
     return "probed";
@@ -1254,7 +1253,7 @@ const GENERATED_PROBE: FunctionComponentDefinition = {
 };
 
 function generatedProbe(): GeneratedObservation {
-  return pinnedComponent("Probe", hostIdentity("test://probe", "Probe"), GENERATED_PROBE);
+  return pinnedComponent("Probe", GENERATED_PROBE, "component-answer");
 }
 
 function generatedRequest(source: string): GeneratedXmdRequest {

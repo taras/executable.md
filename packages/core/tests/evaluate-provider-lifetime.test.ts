@@ -1,7 +1,7 @@
 /**
  * Tier FE15 — what a provider's answer is bound to, at execution scale.
  *
- * `answer-identity.test.ts` holds the unit half: an identity belongs to one
+ * `answer-identity.test.ts` holds the unit half: a publication belongs to one
  * object in one execution, and a request that outlived its invocation states
  * nothing. These rows are the other half — the same guarantees driven through
  * a real execution, where the provider is installed by a trusted host, the
@@ -37,24 +37,16 @@ import { prepareEvaluationProfile } from "../src/evaluation-profile.ts";
 import type { ComponentAnswerEntry, ResolvedAnswer } from "../src/evaluation-profile.ts";
 import { REVOKED_CAPABILITY } from "../src/fragment-capabilities.ts";
 import { retainedSource } from "../src/root-source.ts";
-import { answerProvider, implementation } from "./support/answer-provider.ts";
+import { answerProvider, implementation, offering } from "./support/answer-provider.ts";
 import type { Implementation } from "./support/answer-provider.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
 
 const ROOT_PATH = "evaluate.md";
 const OPEN = `<Evaluate text={'<Open />\\n'} as="answer" />\n\n<Json value={answer} />\n`;
 
-/** What a provider states for the one name these rows admit. */
-const IDENTITY = { key: "Open", revision: "1" } as const;
-
-/** One provider-backed entry, under the identity this suite's providers state. */
+/** One provider-backed entry, in the one spelling this suite's providers offer. */
 function answerEntry(name: string): ComponentAnswerEntry {
-  return {
-    kind: "component-answer",
-    name,
-    identity: { origin: "test://provider", key: name, revision: "1" },
-    forms: ["self-closing"],
-  };
+  return { kind: "component-answer", name, forms: ["self-closing"] };
 }
 
 /** The entry a host states for a provider-backed name. */
@@ -76,7 +68,7 @@ function refused(attempt: () => unknown): string {
     const message = error instanceof Error ? error.message : String(error);
     return message.split(",")[0]?.trim() ?? message;
   }
-  throw new Error("expected the claim to be refused");
+  throw new Error("expected the publication to be refused");
 }
 
 function run(
@@ -97,7 +89,7 @@ function refusalFrom(request: ComponentAnswerRequest | undefined): string {
     throw new Error("the provider was never asked");
   }
   try {
-    request.claim(implementation("Open", "late").definition, { key: "Open", revision: "1" });
+    request.answer(implementation("Open", "late").definition);
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
@@ -163,7 +155,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
                       });
                       reached.resolve();
                       yield* suspend();
-                      return request.claim(A.definition, { key: "Open", revision: "1" });
+                      return request.answer(A.definition);
                     });
                   },
                 },
@@ -240,8 +232,8 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
 
     // Two providers under one name. The first is installed outermost, is
     // genuinely asked, keeps the request it was handed and delegates without
-    // claiming — which is what losing looks like. The second answers, and the
-    // capture seals what it claimed.
+    // publishing — which is what losing looks like. The second answers, and
+    // the capture seals what it published.
     //
     // `<Meddle />` runs from the document, *after* the capture and while this
     // execution is still live — the window a post-run row cannot reach. So what
@@ -263,10 +255,10 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
             // import, and this handler returned before that. The execution is
             // still very much alive — so what refuses is the invocation, not
             // the teardown.
-            attempted.push(refused(() => held.claim(A.definition, IDENTITY)));
+            attempted.push(refused(() => held.answer(A.definition)));
             // The same for the winner's own implementation: there is no live
             // request to retag it through either.
-            attempted.push(refused(() => held.claim(B.definition, IDENTITY)));
+            attempted.push(refused(() => held.answer(B.definition)));
             return "meddled";
           },
         },
@@ -304,7 +296,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     expect(A.invoked).toEqual([]);
   });
 
-  it("FE15: a losing handler cannot claim once it has returned, mid-resolution", function* () {
+  it("FE15: a losing handler cannot publish once it has returned, mid-resolution", function* () {
     const A = implementation("Open", "A ran");
     const B = implementation("Open", "B ran");
     const inner: ComponentAnswerRequest[] = [];
@@ -314,7 +306,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     let innerSettled = false;
 
     // The frozen mid-resolution race. The inner provider is asked, keeps its
-    // request and returns without claiming; the outer provider is *still
+    // request and returns without publishing; the outer provider is *still
     // running* the same resolution, and invokes the inner one's request from
     // inside its own handler. The window is open, the name is right, the
     // execution is live — and the invocation that would have been speaking is
@@ -324,7 +316,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
         evaluation: admits(),
         componentAnswers: [
           {
-            // The origin the profile admits: this is the provider whose claim
+            // The origin the profile admits: this is the provider whose answer
             // has to be the one the capture reconciles.
             origin: "test://provider",
             *install(registrar: ComponentAnswerRegistrar): Operation<void> {
@@ -342,10 +334,10 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
                 if (held === undefined) {
                   throw new Error("the inner provider was never asked");
                 }
-                attempted.push(refused(() => held.claim(A.definition, IDENTITY)));
+                attempted.push(refused(() => held.answer(A.definition)));
                 // And the outer handler's own request is still live, so it may
-                // claim its replacement before returning.
-                return request.claim(B.definition, { key: "Open", revision: "1" });
+                // publish its replacement before returning.
+                return request.answer(B.definition);
               });
             },
           },
@@ -357,7 +349,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
                   return yield* next();
                 }
                 innerSettled = true;
-                // Answers, keeps its request, and claims nothing — so it loses
+                // Answers, keeps its request, and publishes nothing — so it loses
                 // the decision the outer handler goes on to make.
                 inner.push(request);
                 return A.definition;
@@ -370,8 +362,8 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
 
     expect(delegated).toHaveLength(1);
     expect(attempted).toEqual(["this resolution has settled"]);
-    // The outer replacement is what ran, which is the positive half: claiming
-    // after delegating has to keep working.
+    // The outer replacement is what ran, which is the positive half:
+    // publishing after delegating has to keep working.
     expect(String(output)).toContain("B ran");
     expect(B.invoked).toEqual(["B ran"]);
     expect(A.invoked).toEqual([]);
@@ -398,7 +390,6 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
           componentAnswers: [
             answerProvider("Open", A.definition, { retain: stale }),
             answerProvider("Other", B.definition, {
-              key: "Other",
               whileResolving: () => {
                 const held = stale[0];
                 if (held === undefined) {
@@ -408,7 +399,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
                 // even address the name being decided — and its own invocation
                 // is over.
                 expect(held.name).toBe("Open");
-                attempted.push(refused(() => held.claim(late.definition, IDENTITY)));
+                attempted.push(refused(() => held.answer(late.definition)));
                 carried.push(A.definition);
               },
             }),
@@ -420,7 +411,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     expect(attempted).toEqual(["this resolution has settled"]);
     expect(carried).toEqual([A.definition]);
     // Both names ran what their own resolution sealed — which is also the
-    // positive control that the second provider's own claim, made in the same
+    // positive control that the second provider's own publication, made in the same
     // window as the refusal, was admitted.
     expect(String(output)).toContain("A ran");
     expect(String(output)).toContain("B ran");
@@ -463,10 +454,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
                   }
                   answered.push(request.name);
                   requests.push(request);
-                  return request.claim(held.definition, {
-                    key: request.name,
-                    revision: "1",
-                  });
+                  return request.answer(held.definition);
                 });
               },
             },
@@ -501,6 +489,8 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
       kind: "function" as const,
       name: "Open",
       props: { type: "object", properties: {}, additionalProperties: false },
+      forms: ["self-closing" as const],
+      generated: offering("Open", "read"),
       *fn(): Operation<Json> {
         first.push("A ran");
         entered.resolve();
@@ -542,11 +532,11 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     // sealed profile — which is itself the point. A row that had to add a
     // getter to observe this would be proving something about the getter.
     const prepared = yield* prepareEvaluationProfile(admits());
-    expect(prepared.answered).toEqual([
-      { name: "Open", identity: { origin: "test://provider", key: "Open", revision: "1" } },
-    ]);
+    expect(prepared.answered).toEqual(["Open"]);
 
-    const answers = new Map<string, ResolvedAnswer>([["Open", { definition: A.definition }]]);
+    const answers = new Map<string, ResolvedAnswer>([
+      ["Open", { definition: A.definition, origin: "test://provider" }],
+    ]);
     const profile = yield* prepared.seal(answers);
     const sealed = profile.read[0]?.definition.fn;
     if (typeof sealed !== "function") {
@@ -581,7 +571,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     expect(String(first)).toContain("A ran");
 
     // The same document and the same profile, with no provider installed. The
-    // first run's answer is not somewhere the second can find it: a claim leaves
+    // first run's answer is not somewhere the second can find it: a publication leaves
     // no registry, no context and no module-level table behind it, so the name
     // resolves to nothing at all rather than to what the first run admitted.
     const failed = yield* refusal(run(OPEN, [{ evaluation: admits() }]));
@@ -599,6 +589,8 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
       kind: "function" as const,
       name: "Open",
       props: { type: "object", properties: {}, additionalProperties: false },
+      forms: ["self-closing" as const],
+      generated: offering("Open", "read"),
       *fn(): Operation<Json> {
         yield* ensure(function* () {
           cleanup.push("body cleanup");

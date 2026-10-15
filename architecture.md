@@ -3433,12 +3433,12 @@ filesystem for it to hand. What a fragment may *do* is then the ordinary
 question asked of any caller: the provider that is installed, and the policy of
 the scope the element runs in.
 
-The narrowing these revisions record is the one that still stands — an entry
-authorizes one component under one spelling — so core's entries state revision 2
-and the bundled Git Plugin's `<Dir>` states revision 3. **A run suspended under
-the earlier revisions refuses to resume rather than silently receiving the
-narrower grant**, which is what a revision is for: a continuation resumes only
-under the exact identities it was admitted with.
+The narrowing these changes record is the one that still stands — an entry
+authorizes one component under one spelling, and what that spelling runs as is
+the owning declaration's to state. **A run suspended under an earlier record
+shape refuses to resume rather than silently receiving a grant nobody compared**:
+a continuation resumes only under the exact identities and spellings it was
+admitted with.
 
 `<Prompt>` is one Agent turn. The host hides no Agent loop inside it. Ordinary
 authored Markdown owns iteration with `<Loop max>`, branches on whether a reply
@@ -3590,20 +3590,17 @@ reached when the two disagree. That check reads the engine's own account of the
 element — not `Component.hasContent()`, not the method on the object the
 component was handed, and not the trusted wrapper the evaluator answers the
 import with, which collects what a read returned and is not the form dispatcher. So
-an admitted `File:read` does not become a write and an admitted `File:write`
-does not become a read, however many times something is asked.
+an admitted reading `<File />` does not become a write and an admitted writing
+`<File>…</File>` does not become a read, however many times something is asked.
 
 The standard Deno workflow profile's write table is three entries, in the order
-it states them: core's paired `File:write`, the bundled Git Plugin's paired
-`Dir` under the versioned origin
-`@executablemd/workflow/composition/dir-v2#Dir` — built from the same
-implementation canonical core owns so the grant and the authored component
-cannot drift — and core's self-closing `@executablemd/core#File.Delete`. That origin
-names where released history recorded the entry, not what owns it today:
-canonical core owns `<Dir>`, the Git Plugin states the identity its released
-runs retained, and the string stays unchanged so those runs still replay. A
-host's own
-extensions come after them. Selecting `write` intentionally authorizes Dir's
+it states them: core's paired `<File>`, the paired `<Dir>` the bundled Git
+Plugin asks for — the same implementation canonical core owns, under the
+identity core's own declaration offers that spelling as a write, so the grant
+and the authored component cannot drift — and core's self-closing
+`<File.Delete>`. What the Git Plugin decides is that a workflow run admits the
+name at all; an ordinary run admits none. A host's own extensions come after
+them. Selecting `write` intentionally authorizes Dir's
 persistent recursive directory creation as well as the mutations File and
 File.Delete perform. Each is the ordinary component and crosses `API.Files`
 into the run's transaction-bound provider, so an ensured directory is retained
@@ -3614,16 +3611,17 @@ authors output around it. Local Git, Git-host, issue,
 process, eval and exec, native-command, credential and external-write effects
 are outside the class.
 
-The versioned Dir origin is a grant boundary, not a symbol decoration. The
-former `@executablemd/workflow/composition#Dir` identity authorized lexical
-placement that created nothing; it does not authorize the persistent mutation.
-A continuation whose retained write table names that former identity is refused
-before generated execution instead of inheriting a broader grant. Read-only
-admissions never selected the write table and remain unaffected.
+The identity a spelling runs under is a grant boundary, not a symbol
+decoration. An earlier `<Dir>` grant authorized lexical placement that created
+nothing, and it does not authorize the persistent mutation this one does. A
+continuation whose retained write table names a different identity for that
+spelling is refused before generated execution instead of inheriting a broader
+grant. Read-only admissions never selected the write table and remain
+unaffected.
 
-That order is retained identity rather than presentation. A continuation is
+That order is retained grant rather than presentation. A continuation is
 compared against the entries position by position, so adding the deletion
-identity to the table refuses a continuation that was admitted under the former
+spelling to the table refuses a continuation that was admitted under the former
 two-entry one — before any generated effect, and deliberately: a run resumed
 under a wider grant than it was admitted with is the thing the comparison
 exists to refuse. A read-only admission never selected the write table and is
@@ -3656,31 +3654,29 @@ root must still be retained, and the root the run now stands on must be a
 retained one, while additional roots and an advanced current root change
 nothing the admission was granted under. A run that no longer retains an
 admission root has lost the history the grant was made over and is refused
-before generated work. Every non-root term — the class selection, the selected
-pinned identities with their admitted forms, and the normalized request
-ceilings — compares whole and exactly, in canonical order. A pinned identity is
-one closed tagged record — whether canonical core supplies the body or the
-ordinary import chain answered for it, the origin, the component key and the
-revision — rather than an assembled spelling, so a reader comparing two
-admissions can say which term moved and no two hosts have to agree on a
-separator. The untagged version-1 record holds one opaque string instead —
-whatever the party that built the pinned entry chose, which for core was
-`@executablemd/core#File:read` and for the workflow host was
-`@executablemd/workflow/composition/dir-v2#Dir`, with no revision in either and
-no convention to read back out. Nothing recovers four structural terms from one
-of those, so nothing tries: a *capability* entry states the exact version-1
-strings it succeeds, and a retained string reconciles against that stated list
-and against nothing else. Stating one is an assertion by whoever owns the entry
-that the current grant is no wider than the old one; an entry that states none
-refuses every version-1 record naming it. A component answer states no alias and
-has nowhere to put one, because that arm did not exist when version-1 records
-were written. New records always state the structural identity. The run's own
-ceiling table is keyed by those terms encoded rather than joined, because a
-joined key is only as unique as the separator is illegal and nothing makes a
-space illegal in an origin or a component key: two entries whose terms differ
-only in where a space falls each keep their own admitted requests. Only the
-tables the selection reached take part, so changing a write table a read-only
-admission never drew on changes nothing it was granted under. Deciding the
+before generated work. Every non-root term — the class selection, the
+admitted spellings, and the normalized request ceilings — compares whole and
+exactly, in canonical order. The retained policy holds one row per admitted
+spelling: the name, the authored spelling, the absolute
+`https://executable.md/` identity that spelling runs under, whether canonical
+core supplies the body or the ordinary import chain answered for it, and which
+effect table admitted it. So a reader comparing two admissions can say which
+spelling of which name moved, and no host has to agree with another about how
+to spell anything — the identity is stated by the declaration that owns the
+implementation, where `<File />` reads under
+`https://executable.md/components/file/read` and `<File>…</File>` writes under
+`.../file/write`. There is one such record shape, marked as itself: a record
+an earlier build wrote — the untagged #369 one, or the tagged one whose
+identities were an origin, a component key and a revision — is refused as
+unreadable history before the admission it would have restored performs
+anything, rather than being migrated or read in part. An updated implementation
+offered under the same identity is not a changed grant, because between
+executions that is a newer build of the component the admission named. The run's
+own ceiling table is keyed by the entry itself rather than by anything
+describing one, so two entries that look alike each keep their own admitted
+requests. Only the tables the selection reached take part, so changing a write
+table a read-only admission never drew on changes nothing it was granted
+under. Deciding the
 fragment inside that durable effect is what makes this hold: a continuation
 restores what was admitted without consulting the current candidate at all, so
 what expands is the source this run admitted rather than whatever a later caller
@@ -3712,15 +3708,16 @@ exactly; anything else is refused before `API.Fetch` is reached. A repository
 component that takes the name `Fetch` is not that identity and acquires no
 admission from it.
 
-`<File>` is admitted only in its self-closing read form. The component reads
-when it has no content and writes when it has some, so the two forms are two
-identities and the constraint travels with the pinned one, decided in the
+`<File>`'s two spellings are two grants. The component reads when it has no
+content and writes when it has some, so a read-only selection admits the
+self-closing spelling alone, and which one an element wrote is decided in the
 whole-fragment preflight rather than inside the component after earlier elements
-have run.
+have run. A repository component that takes the name `File` is admitted as
+neither spelling.
 
-Mutation-proposal admission and workflow-bundled Markdown component admission
-remain unbuilt. Directory registration is not among them: a workflow Agent is
-given no directory to register.
+Workflow-bundled Markdown component admission remains unbuilt. Directory
+registration is not among the gaps: a workflow Agent is given no directory to
+register.
 
 #### Sealed evaluation entries
 
@@ -3752,21 +3749,29 @@ admitted one rather than its props, and that ceiling is installed as an ordinary
 `Permissions` restriction for the invocation, so a contextual transformation that moves
 the request off it is refused by the terminal rather than sent.
 
-A *component answer* names an implementation the ordinary import chain resolves, and
-states only the identity a provider must have registered for it; canonical execution
-resolves that name once — before the root import and before any document code, through
-the complete ordinary `Component.importComponent` chain and a private terminal that
-writes no record — and asks the identity owner about the exact final answer in one call.
-That call answers with the registered identity *and* core's own copy of what was
-registered, taken when the identity was registered: the check and the thing kept are one
-result, so nothing downstream reads the chain's object a second time and an answer whose
-members read differently on each read cannot pass a check with one reading and be sealed
-with another. The identity is then compared whole, and the copy — not the answer — is
-sealed behind the same revocation.
+A *component answer* names an implementation the ordinary import chain resolves. The
+entry states the name and the spellings it admits, and nothing about what is behind
+them: canonical execution resolves that name once — before the root import and before
+any document code, through the complete ordinary `Component.importComponent` chain and a
+private terminal that writes no record — and asks the publication owner about the exact
+final answer in one call. That call answers with core's own copy of the definition a
+provider published, taken at publication: the check and the thing kept are one result,
+so nothing downstream reads the chain's object a second time and an answer whose members
+read differently on each read cannot pass a check with one reading and be sealed with
+another. The copy — not the answer — is sealed behind the same revocation.
 
-One name states one identity, however many forms and tables hold it: two entries under
-one name are the two spellings of one component and share one lookup and one sealed
-implementation, while a second identity for that name, or a name held as both a
+What an admitted spelling then runs as comes from that definition's own declaration: an
+absolute `https://executable.md/` identity and one of the two effects, per authored
+spelling, read where the definition is published and retained with it. So the table says
+which names and spellings a fragment may write, and the owner says what writing them
+runs — an entry whose spelling its owner offers no generated use of, or offers as the
+other effect, refuses at capture rather than acquiring a grant from the table that named
+it. The installation origin a publication carries is provenance a reader and a
+documentation symbol are shown, and decides nothing.
+
+One name resolves to one implementation, however many spellings and tables hold it: two
+entries under one name are the two spellings of one component and share one lookup and
+one sealed definition, while two definitions under one name, or a name held as both a
 capability and a component answer, refuses at capture rather than letting assembly order
 decide.
 
@@ -3774,28 +3779,27 @@ Provider installation and the right to answer one occurrence are separate: insta
 receives a registrar that installs import middleware, and every invocation of that
 middleware receives a fresh request fixed to the exact name, position, provider
 installation, origin and resolution-window object it was asked under. Only that request
-may register an identity, and it states the answer plus key and revision without
-restating the name. Canonical execution closes the request synchronously when its
+may publish, and it presents the definition it is answering with — not a name, a key or
+a revision beside it. Canonical execution closes the request synchronously when its
 handler returns, fails or is cancelled; an outer request remains live while it delegates
-and may register a replacement after the inner handler returns. Enclosing resolution
+and may publish a replacement after the inner handler returns. Enclosing resolution
 still closes in its own `finally` on success, fallback, failure or cancellation. A
-registration therefore requires the execution, request and exact current window to
+publication therefore requires the execution, request and exact current window to
 remain active, the request's fixed name to match that window, and that provider
-installation not to have stated a different answer in the window.
+installation not to have published a different answer in the window. Publishing the same
+object again is what a reusable provider does for every import it answers, so a
+publication is compared against the copy taken the first time: an object edited after it
+was published cannot be rebaselined by a later window.
 
-Identification takes the expected window explicitly and accepts only a registration
+Identification takes the expected window explicitly and accepts only a publication
 recorded for that exact object and name, so a stale request cannot answer a later
 same-name resolution or retag itself while another name is live.
 
 The installation is reusable: one provider may answer several admitted names and
 repeated resolutions through distinct requests. All of this state is held in ordinary
 private closures — no Context, shared symbol, public brand or module-global registry —
-and an unidentified middleware replacement remains a valid ordinary import answer
-outside fragment evaluation.
-
-A capability entry also states the exact version-1 identity strings it succeeds, which
-is the only thing a released untagged record reconciles against; a component answer
-states none. A capability-only profile performs no such lookup at all.
+and a middleware replacement that publishes nothing remains a valid ordinary import
+answer outside fragment evaluation.
 
 Resolution happens at capture and never again: a fragment runs the sealed snapshot, a
 continuation resolves once more in its own capture and reconciles before any effect, and
@@ -3805,7 +3809,7 @@ generated import, which only canonical execution answers.
 A trusted layering control may enter one package bootstrap through an inherited layer
 and an execution-local one — documentation, registrations and the provider together —
 and the repeat is additive: the outer entry observes and delegates rather than
-registering a second identity for an implementation that already states what it is, and
+publishing a second answer for an implementation one publication already settled, and
 a non-identical documentation overlap on one owner and component still refuses at the
 child collection boundary, before the root import and therefore before the provider is
 asked at all.
@@ -4670,13 +4674,16 @@ Canonical answer windows are owned the same way and by the same kind of value �
 an explicit object rather than a scope — but serially: component answers are
 resolved in one capture phase before any document expands, so one window is open
 at a time. Each provider request captures that window object before its handler
-runs, a registration states it back explicitly, and a handler delegating through a
-descendant scope answers the resolution it was opened in. One installation may
+runs, a publication presents it back explicitly, and a handler delegating through
+a descendant scope answers the resolution it was opened in. A provider publishes
+the definition and nothing else: which identity and effect each of its spellings
+runs as is on that definition, declared by whoever owns the implementation, so
+there is nothing beside it for a reader to reconcile. One installation may
 answer more than one import with the same definition — a reusable provider owns
-one object and a registration is per window — and a second, *different* answer in
+one object and a publication is per window — and a second, *different* answer in
 either still refuses. Concurrent document imports happen after capture, with no
 window open at all: such an import may be answered as ordinary middleware, and
-acquires no profile identity.
+acquires no admitted identity.
 
 The engine then mints one issuance per invocation, carrying that domain — or
 none — the authored name for what a refusal says, and the frame the body is
@@ -5568,9 +5575,9 @@ imports still require their own settled selection frame; a routed function
 cannot repair a missing or multiply selected domain. Paired producers retain
 their lexical site route and operational permission.
 
-A trusted provider may therefore delegate and register canonical self-closing
-`<Syntax>` as a component answer. Its default bare form reports the admitted
-vocabulary; its named form renders the enclosing authoring documentation with
+A trusted provider may therefore delegate canonical self-closing `<Syntax>`,
+which canonical core publishes for itself, and have it admitted as a component
+answer. Its default bare form reports the admitted vocabulary; its named form renders the enclosing authoring documentation with
 narrowed availability. Verified protected documentation provenance survives
 sealing even when the delegating provider has a different origin. That
 provenance is descriptive data and never a callable lookup key.

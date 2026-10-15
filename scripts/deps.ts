@@ -46,6 +46,12 @@ const ENTRYPOINTS = [
   "packages/cli/src/compiled.ts",
   "scripts/compile.ts",
   "scripts/verify-clean.ts",
+  // The npm build, which `scripts/tests/cli-npm-bin.test.ts` runs
+  // `--cached-only`. A typecheck of this graph is not enough: it reads dnt's
+  // types and leaves `@ts-morph/bootstrap`'s module bodies unfetched, so the
+  // build found them only when a test that fetches them happened to run first
+  // in the same shard.
+  "scripts/build-npm.ts",
 ];
 
 function* deno(args: string[]): Operation<void> {

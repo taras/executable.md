@@ -4,8 +4,8 @@
  *
  * `<Evaluate>` is a public component: any author may write it, and canonical
  * core owns what it means. That settles *which implementation runs* and nothing
- * else — protection grants no permission. Canonical `<Evaluate>` uses only
- * operations already captured in this profile, selected by `allow`. So the
+ * else — protection grants no permission. Canonical `<Evaluate>` admits only
+ * the entries already captured in this profile, selected by `allow`. So the
  * ceiling lives here, in a value the host hands canonical execution at the
  * installation boundary, before a document exists to ask for it.
  *
@@ -14,10 +14,10 @@
  * A host states {@link FragmentEvaluationInput}: entry tables, an optional
  * Workspace snapshot operation, and whether it accepts the released `source`
  * spelling. Canonical execution turns that into a captured profile of its own
- * — every value deep-copied and frozen, every live operation read and bound
- * once — and keeps the captured one. A host that mutates its own arrays,
- * headers or tables after installation changes nothing about the execution,
- * because the execution is no longer reading them.
+ * — every value deep-copied and frozen, every admitted implementation resolved
+ * once and held to this execution — and keeps the captured one. A host that
+ * mutates its own arrays, headers or tables after installation changes nothing
+ * about the execution, because the execution is no longer reading them.
  *
  * Only the input type is exported, and only from the trusted `core/host`
  * surface, because that is where `ExecutionInstallation` already is. The
@@ -57,30 +57,14 @@ import { isFormDispatcher } from "./invocation-identity.ts";
 import type { ComponentInvocation, ComponentRouting } from "./invocation-identity.ts";
 import type { FetchRequest } from "./fetch-request.ts";
 import { normalizeFetchRequest, requestRecord } from "./fetch-request.ts";
-import { CORE_REVISION, pinnedJson } from "./generated-xmd.ts";
+import { JSON_COMPOSITION_IDENTITY, pinnedJson } from "./generated-xmd.ts";
 import type { GeneratedRequest } from "./generated-xmd.ts";
+import { definitionGeneratedRefusal, offeredForm } from "./components/generated-metadata.ts";
+import type { GeneratedEffect } from "./components/generated-metadata.ts";
 import type { FunctionComponent, FunctionComponentDefinition, Json, PropsSchema } from "./types.ts";
 
 /** The two forms an element is actually written in. */
 export type FragmentForm = "self-closing" | "paired";
-
-/**
- * What a run retains about which implementation an entry runs.
- *
- * Three structural parts rather than one opaque string, because a continuation
- * compares them and a reader has to be able to say which one moved. Never
- * derived from a function: an implementation is not an identity, and
- * serializing or inspecting one would make the retained policy depend on how a
- * host happened to write its code.
- */
-export interface FragmentIdentity {
-  /** The package or host that owns this implementation. */
-  readonly origin: string;
-  /** Which component of that origin, including the form when forms differ. */
-  readonly key: string;
-  /** Which version of it. A changed revision is a changed grant. */
-  readonly revision: string;
-}
 
 /**
  * One component a generated fragment may name, as the host states it.
@@ -90,26 +74,26 @@ export interface FragmentIdentity {
  * this implementation come from", which is exactly the question an admission
  * has to settle once.
  *
- * Neither arm carries a function. A capability names an operation canonical
- * core supplies the body for; a component answer names something the ordinary
- * import chain resolves, which canonical capture does once — before any
- * document code — and then holds by value. What is journaled is the structural
- * identity, the forms and the limits.
+ * Neither arm carries a function. A capability names a component canonical
+ * core supplies; a component answer names something the ordinary import chain
+ * resolves, which canonical capture does once — before any document code — and
+ * then holds by value. What is journaled is the admitted spellings, the
+ * identity each of them runs under, and the limits.
  */
 export type FragmentEntry = CapabilityEntry | ComponentAnswerEntry;
 
-/** An entry core supplies the body for, bound to the host's own operations. */
+/** An entry canonical core supplies the component for. */
 export interface CapabilityEntry {
   readonly kind: "capability";
   /** The name a fragment writes. */
   readonly name: string;
-  readonly identity: FragmentIdentity;
   /**
    * The exact spellings this entry is admitted for.
    *
    * A component whose two spellings do different things is two entries under
-   * one name — `<File />` reads and `<File>…</File>` writes — so the form
-   * travels with the identity and preflight chooses between them.
+   * one name — `<File />` reads and `<File>…</File>` writes — and each spelling
+   * carries its own identity and effect on the declaration that owns the
+   * implementation, so preflight chooses between them before the first effect.
    */
   readonly forms: readonly FragmentForm[];
   /** The contract this entry's props are validated against. */
@@ -124,36 +108,17 @@ export interface CapabilityEntry {
    */
   readonly description?: string;
   /**
-   * Which captured operation this entry runs.
+   * Which of core's own components this entry runs.
    *
-   * Not a definition, because a definition is where a provider lookup would go.
-   * A host names the capability and hands its private operations to the
-   * profile; canonical capture reads each one off exactly once and closes
-   * core's own body over the bound result. A host therefore chooses *what a
-   * fragment may do* and never *how it reaches it*
-   * (`fragment-capabilities.ts`).
+   * A name rather than a definition, because the definition is core's to
+   * supply: capture answers with the ordinary `<File>`, `<File.Delete>`,
+   * `<Dir>`, `<Glob>`, `<Fetch>` or `<Elicit>` an author writes, held to the
+   * execution that captured it. So a host chooses *what a fragment may do* and
+   * never *how it reaches it*: the operation crosses the contextual provider
+   * and the consuming scope's `Permissions` exactly as an authored element's
+   * does (`fragment-capabilities.ts`).
    */
   readonly capability: FragmentCapability;
-  /**
-   * The exact version-1 identity strings this entry is the successor of.
-   *
-   * Version-1 records retained one opaque string, chosen by whoever built the
-   * pinned entry: core wrote `@executablemd/core#File:read`, the workflow host
-   * wrote `@executablemd/workflow/composition/dir-v2#Dir`, and a host passing
-   * its own observation wrote whatever it liked. There is no rule that recovers
-   * four structural terms from one of those, and inferring one would be this
-   * module deciding on a host's behalf that two grants are the same.
-   *
-   * So it is stated rather than derived, by the party that owns the entry.
-   * Listing a string here is an assertion that this entry authorizes no more
-   * than the entry that string named — a continuation admitted under it resumes
-   * against this one. An entry that lists none is a new grant, and every
-   * version-1 record naming it refuses.
-   *
-   * Only a capability arm has this. The component-answer arm did not exist when
-   * version-1 records were written, so no such string ever described one.
-   */
-  readonly legacy?: readonly string[];
   /**
    * The exact requests this entry may perform, for an entry that performs any.
    *
@@ -167,33 +132,26 @@ export interface CapabilityEntry {
 /**
  * An entry whose implementation the ordinary import chain answers for.
  *
- * The host states *what it expects* — the name, the structural identity a
- * provider must state, and the forms — and states no implementation at all.
- * There is no definition, function, resolver, provider operation or context
- * handle on this arm to hold one.
+ * The host states *what it expects* — the name and the forms — and states no
+ * implementation at all. There is no definition, function, resolver, provider
+ * operation, identity or context handle on this arm to hold one.
  *
  * Canonical capture resolves the name once, before the root import and before
  * any document code, through the complete ordinary `Component.importComponent`
- * chain; reads the identity the provider stated on that exact final answer;
- * compares it with what this entry expects; retains the answer defensively;
- * and seals the result. Props and the callable definition are derived from
- * that answer rather than restated here, so a host cannot describe a contract
- * the implementation does not have.
+ * chain; takes the definition the provider published on that exact final
+ * answer; retains it defensively; and seals the result. Props, the callable
+ * definition and the identity each admitted form runs under are all derived
+ * from that answer rather than restated here, so a host cannot describe a
+ * contract or an effect the implementation does not have.
  *
  * Resolution happens at capture and never again. A fragment invokes the sealed
  * snapshot, and a continuation resolves once more in its own capture and
  * reconciles before any effect. Calling a retained resolver later would see
  * document-time middleware, which is the whole thing this avoids.
- *
- * This arm states no version-1 alias, and has nowhere to put one: version-1
- * records predate it, so no string an older run committed ever described an
- * implementation the import chain answered for.
  */
 export interface ComponentAnswerEntry {
   readonly kind: "component-answer";
   readonly name: string;
-  /** What a provider must have stated for this name, exactly. */
-  readonly identity: FragmentIdentity;
   readonly forms: readonly FragmentForm[];
   readonly description?: string;
 }
@@ -227,9 +185,11 @@ export interface FragmentEvaluationInput {
   /**
    * The entries the `write` class resolves to, when this host offers the class.
    *
-   * For both standard profiles this is exactly paired `<File>`, paired `<Dir>`
-   * and self-closing `<File.Delete>`. It does not include the read table:
-   * `write` selects mutation and nothing else.
+   * The two standard profiles differ here: the ordinary one is paired
+   * `<File>`, self-closing `<File.Delete>` and paired `<Elicit>`, while the
+   * workflow one is paired `<File>`, paired `<Dir>` and self-closing
+   * `<File.Delete>`. Neither includes the read table: `write` selects mutation
+   * and nothing else.
    */
   readonly write?: readonly FragmentEntry[];
   /** How this host answers for its Workspace, when it evaluates against one. */
@@ -248,43 +208,46 @@ export interface FragmentEvaluationInput {
  * Core's `<File />`, admitted to observe and not to write.
  *
  * `<File>` reads when it has no content and writes when it has some, so one
- * unconstrained entry would admit a write. The form travels with the identity
- * and preflight decides between the two — before the first effect, rather than
- * inside a body that has already been entered.
+ * unconstrained entry would admit a write. Each spelling carries its own
+ * identity and effect on core's own declaration, and preflight decides between
+ * the two — before the first effect, rather than inside a body that has already
+ * been entered.
  *
- * An admitted read reaches the `readTextFile` the host handed the profile and
- * nothing else. Under a workflow run that is the transaction-bound operation,
- * so the read still crosses the run's own transaction; what it no longer does
- * is resolve a provider through the contextual API at the moment it runs.
+ * An admitted read is core's ordinary `<File />` performing its ordinary
+ * operation: it resolves the contextual working directory and reads through
+ * `API.Files`, under the provider the host installed and the effective
+ * `Permissions` of the consuming scope. Under a workflow run that provider is
+ * the transaction-bound one, so the read crosses the run's own transaction for
+ * the same reason an authored read does.
  */
 export function fileReadEntry(): CapabilityEntry {
-  return coreEntry("File", "File:read", "file:read");
+  return coreEntry("File", "file:read");
 }
 
 /**
  * Core's `<Glob />`, admitted to select paths and nothing else.
  *
- * A value entry: the definition core builds for it declares what it binds, so a
- * generated `<Glob />` written without `as` is refused before the host's
- * provider is asked to traverse anything. What it selects is bounded the same
- * way a read is — the captured `globFiles` operation and the captured working
- * directory — so a search never reaches `API.Files` or `Env.cwd`, and the paths
- * it answers with are the ones that provider produced.
+ * A value entry: core's own declaration states what it binds, so a generated
+ * `<Glob />` written without `as` is refused before any provider is asked to
+ * traverse anything. What it selects is bounded the same way a read is — the
+ * contextual working directory it resolves, and the `API.Files` provider the
+ * host installed — so the paths it answers with are the ones that provider
+ * produced for that directory.
  */
 export function globReadEntry(): CapabilityEntry {
-  return coreEntry("Glob", "Glob", "files:glob");
+  return coreEntry("Glob", "files:glob");
 }
 
 /**
  * The protected names canonical execution states what is behind, for a profile.
  *
- * An allowlist rather than "every protected name", because stating an identity
- * is what makes a name admissible: a host that wrote `<Evaluate>`'s own
- * canonical identity into its read table would otherwise obtain evaluation
- * inside evaluation, which is a different grant from being shown a vocabulary.
- * Core answers for the one protected name it offers a host an entry for, and a
- * hand-written entry for any other resolves to an answer carrying no identity
- * and is refused.
+ * An allowlist rather than "every protected name", because core publishing an
+ * answer is what makes a protected name admissible: a host that wrote
+ * `<Evaluate>` into its read table would otherwise obtain evaluation inside
+ * evaluation, which is a different grant from being shown a vocabulary. Core
+ * answers for the one protected name it offers a host an entry for, and a
+ * hand-written entry for any other resolves to an answer nobody published and
+ * is refused.
  */
 export const CANONICAL_PROFILE_ANSWERS: ReadonlySet<string> = new Set([SYNTAX_COMPONENT]);
 
@@ -293,10 +256,11 @@ export const CANONICAL_PROFILE_ANSWERS: ReadonlySet<string> = new Set([SYNTAX_CO
  *
  * Not a capability: `<Syntax />` is canonical core's protected component, and a
  * capability arm would be core supplying a second body for a name it already
- * owns. So the entry states what a resolution must have answered with — core's
- * own origin, key and revision — and canonical capture resolves the name once
- * through the ordinary import chain, reconciles that identity, and seals the
- * protected answer through the execution's own protected-body route.
+ * owns. So the entry states the name and the one form it has, and canonical
+ * capture resolves it once through the ordinary import chain — where core
+ * publishes its own answer for it — and seals that answer through the
+ * execution's own protected-body route. The identity the fragment is admitted
+ * under is the one core's declaration states for that form.
  *
  * Admitting it grants no other permission. The symbols an occurrence renders
  * describe the vocabulary the fragment has; naming a component in them is not
@@ -307,7 +271,6 @@ export function syntaxReadEntry(): ComponentAnswerEntry {
   return {
     kind: "component-answer",
     name: SYNTAX_COMPONENT,
-    identity: { origin: CORE_ORIGIN, key: SYNTAX_COMPONENT, revision: CORE_REVISION },
     forms: ["self-closing"],
     description:
       "Render the components this evaluation may write, or selected documentation. " +
@@ -343,24 +306,24 @@ export function syntaxReadEntry(): ComponentAnswerEntry {
  * a request with nothing in it.
  */
 export function elicitWriteEntry(): CapabilityEntry {
-  return coreEntry(ELICIT_COMPONENT, ELICIT_COMPONENT, "elicit:ask");
+  return coreEntry(ELICIT_COMPONENT, "elicit:ask");
 }
 
 /** Core's `<File>…</File>`, admitted to write and not to read. */
 export function fileWriteEntry(): CapabilityEntry {
-  return coreEntry("File", "File:write", "file:write");
+  return coreEntry("File", "file:write");
 }
 
 /**
  * Core's `<File.Delete />`, in the one form it has.
  *
- * One name, one identity: unlike `<File>`, whose two spellings do different
- * things, this answers the self-closing form alone. Stating the form is what
- * puts the decision in preflight, before the fragment's first effect — a paired
- * spelling costs an earlier admitted element nothing.
+ * One name, one form: unlike `<File>`, whose two spellings do different things,
+ * this answers the self-closing form alone. Stating the form is what puts the
+ * decision in preflight, before the fragment's first effect — a paired spelling
+ * costs an earlier admitted element nothing.
  */
 export function fileDeleteEntry(): CapabilityEntry {
-  return coreEntry("File.Delete", "File.Delete", "file:delete");
+  return coreEntry("File.Delete", "file:delete");
 }
 
 /**
@@ -368,30 +331,18 @@ export function fileDeleteEntry(): CapabilityEntry {
  *
  * The name is the host's because the component is: the workflow calls it
  * `<Dir>`, and an ordinary run admits no such thing. What core supplies is the
- * operation — `ensureDirectory`, from the profile — so the body a fragment
- * reaches is not the ordinary registration and cannot be composed around.
+ * component — its implementation, and the identity and effect its paired form
+ * is offered under — so a host chooses whether the name is admitted here and
+ * never what admitting it grants.
  */
-export function directoryEntry(
-  identity: FragmentIdentity,
-  name: string,
-  /**
-   * The version-1 strings this host's own directory entry succeeds.
-   *
-   * The host's to state, because the identity is: core never wrote one of
-   * these, so it has nothing to assert about which older grant this entry is
-   * the same as.
-   */
-  legacy?: readonly string[],
-): CapabilityEntry {
+export function directoryEntry(name: string): CapabilityEntry {
   return {
     kind: "capability",
     name,
-    identity,
     forms: [...CAPABILITY_FORMS["directory:ensure"]],
     capability: "directory:ensure",
     props: capabilityProps("directory:ensure"),
     description: CORE_DESCRIPTIONS["directory:ensure"],
-    ...(legacy === undefined ? {} : { legacy }),
   };
 }
 
@@ -404,7 +355,7 @@ export function directoryEntry(
  * and refusing everything it asks for.
  */
 export function fetchEntry(requests: readonly GeneratedRequest[]): CapabilityEntry {
-  return { ...coreEntry("Fetch", "Fetch", "fetch"), requests };
+  return { ...coreEntry("Fetch", "fetch"), requests };
 }
 
 /** What core's own entries tell an agent they do. */
@@ -423,45 +374,14 @@ const CORE_DESCRIPTIONS: Readonly<Record<FragmentCapability, string>> = Object.f
   fetch: "Perform one admitted HTTP read. Written self-closing.",
 });
 
-/**
- * The exact strings each of core's own entries was retained as under version 1.
- *
- * Enumerated literally rather than assembled from the origin and the key.
- * There was never a rule that produced these — a released build wrote each one
- * where it built the pinned entry — so a template here would be this module
- * inventing the convention the whole design says does not exist, and a later
- * change to `CORE_ORIGIN` would silently rewrite what an old journal is
- * compared against. Core states them because core owns these entries and is the
- * party that can assert the current one authorizes no more than the old did.
- */
-const CORE_LEGACY: Readonly<Record<FragmentCapability, readonly string[]>> = Object.freeze({
-  "file:read": Object.freeze(["@executablemd/core#File:read"]),
-  // Core never pinned a search entry under version 1; there is no older grant
-  // for this one to assert it authorizes no more than.
-  "files:glob": Object.freeze([]),
-  "file:write": Object.freeze(["@executablemd/core#File:write"]),
-  "file:delete": Object.freeze(["@executablemd/core#File.Delete"]),
-  // Core never pinned a directory entry under version 1; the workflow host did,
-  // and states its own alias.
-  "directory:ensure": Object.freeze([]),
-  fetch: Object.freeze(["@executablemd/core#Fetch"]),
-  // A new grant. No version-1 record ever admitted a generated question, so
-  // there is no older string for this to assert it authorizes no more than —
-  // and a record naming one refuses rather than resuming against this.
-  "elicit:ask": Object.freeze([]),
-});
-
-function coreEntry(name: string, key: string, capability: FragmentCapability): CapabilityEntry {
-  const legacy = CORE_LEGACY[capability];
+function coreEntry(name: string, capability: FragmentCapability): CapabilityEntry {
   return {
     kind: "capability",
     name,
-    identity: { origin: CORE_ORIGIN, key, revision: CORE_REVISION },
     forms: [...CAPABILITY_FORMS[capability]],
     capability,
     props: capabilityProps(capability),
     description: CORE_DESCRIPTIONS[capability],
-    ...(legacy.length === 0 ? {} : { legacy }),
   };
 }
 
@@ -469,15 +389,16 @@ function coreEntry(name: string, key: string, capability: FragmentCapability): C
  * One provider-backed name, already resolved and reconciled.
  *
  * Produced by canonical execution's capture step before this module is asked
- * to seal anything: the chain has answered, the provider's identity statement
- * has been read off that exact final object, it has been compared with what
- * the host entry expects, and the answer has been retained defensively. What
- * arrives here is the settled result, so nothing in this module resolves,
- * looks up, or holds a resolver it could call later.
+ * to seal anything: the chain has answered, the definition the provider
+ * published has been taken off that exact final object, and it has been
+ * retained defensively. What arrives here is the settled result, so nothing in
+ * this module resolves, looks up, or holds a resolver it could call later.
  */
 export interface ResolvedAnswer {
   /** Core's own retained copy, which is what a fragment invokes. */
   readonly definition: FunctionComponentDefinition;
+  /** Which provider installation published it, as documentation provenance. */
+  readonly origin: string;
 }
 
 /** Every provider-backed name this capture resolved, by name. */
@@ -489,12 +410,26 @@ export type ResolvedAnswers = ReadonlyMap<string, ResolvedAnswer>;
  * `kind` survives capture because the retained record keeps it: a continuation
  * comparing identities has to know whether the thing behind a name was core's
  * own operation or a provider's answer, and the two are different grants.
+ *
+ * There is no identity on it. Which URL and effect each admitted form runs
+ * under is on the definition this entry already holds, declared by whoever owns
+ * the implementation, so a capture that restated them would be a second source
+ * for one fact.
  */
 export interface CapturedEntry {
   /** Documentation provenance of an exact routed answer; grants no callable permission. */
   readonly protectedOrigin?: string;
   readonly name: string;
-  readonly identity: FragmentIdentity;
+  /**
+   * Where this entry's implementation came from, for a reader and for the
+   * admitted vocabulary's symbols.
+   *
+   * Core's own origin for an operation core supplies the body for, and the
+   * publishing installation's for a provider's answer. Documentation
+   * provenance: it is no part of what the implementation is, and nothing
+   * compares a continuation against it.
+   */
+  readonly origin: string;
   readonly forms: readonly FragmentForm[];
   readonly props: PropsSchema;
   readonly kind: "capability" | "component-answer" | "composition";
@@ -524,15 +459,6 @@ export interface CapturedEntry {
    * states none.
    */
   readonly dispatch?: unknown;
-  /**
-   * The version-1 identity strings this entry succeeds, copied by value.
-   *
-   * Read off the host's array once at capture and frozen, like everything else
-   * here: a host that appends to its own list afterwards is appending to an
-   * object nothing is looking at, so it cannot widen which retained records
-   * reconcile to this entry from inside its own `install()`.
-   */
-  readonly legacy?: readonly string[];
   /** This entry's own ceiling, normalized once and canonically ordered. */
   readonly requests?: readonly FetchRequest[];
 }
@@ -590,23 +516,24 @@ export class EvaluationProfileError extends Error {
  * One entry this execution has copied, before it knows what is behind a
  * provider-backed name.
  *
- * Everything a host stated is already settled here — the identity, the forms,
- * the schema for a capability, the ceiling. What is missing is exactly the part
- * a host does not state: a component answer's implementation and the contract
- * that comes with it.
+ * Everything a host stated is already settled here — the forms, the schema for
+ * a capability, the ceiling, and the effect table this entry came from. What is
+ * missing is exactly the part a host does not state: a component answer's
+ * implementation, the contract that comes with it, and the identity its own
+ * declaration offers each admitted form under.
  */
 interface PreparedEntry {
   readonly name: string;
-  readonly identity: FragmentIdentity;
   readonly forms: readonly FragmentForm[];
   readonly kind: "capability" | "component-answer" | "composition";
+  /** Which table admitted it, so a form's offered effect is checked against it. */
+  readonly effect: GeneratedEffect;
   readonly description?: string;
   readonly props?: PropsSchema;
   readonly capability?: FragmentCapability;
   readonly definition?: FunctionComponentDefinition;
   /** The owning component's own form dispatcher, when its implementation wraps one. */
   readonly dispatch?: unknown;
-  readonly legacy?: readonly string[];
   readonly requests?: readonly FetchRequest[];
 }
 
@@ -626,12 +553,15 @@ interface PreparedEntry {
  */
 export interface PreparedProfile {
   /**
-   * The provider-backed names this profile admits, with what it expects of each.
+   * The provider-backed names this profile admits.
    *
-   * Empty for a capability-only profile, which performs no component-chain
-   * lookup at all — a host that offers no provider answer pays for none.
+   * Names alone, because what is behind one is the definition the chain
+   * answers with: a host states which names it admits and the owning
+   * declaration states what each admitted form runs as. Empty for a
+   * capability-only profile, which performs no component-chain lookup at all —
+   * a host that offers no provider answer pays for none.
    */
-  readonly answered: readonly { readonly name: string; readonly identity: FragmentIdentity }[];
+  readonly answered: readonly string[];
   /** Whether the operations this preparation bound are still usable. */
   readonly live: () => boolean;
   /** End them. Registered by canonical execution before any installation runs. */
@@ -666,8 +596,8 @@ export function* prepareEvaluationProfile(
   // so they arrive as one definition whose dispatch separates the two
   // spellings, exactly as the ordinary `<File>` does.
   const built = buildDefinitions(input, capabilities);
-  const read = yield* prepareEntries(input.read ?? [], input.fetchTimeout, built);
-  const write = yield* prepareEntries(input.write ?? [], input.fetchTimeout, built);
+  const read = yield* prepareEntries(input.read ?? [], "read", input.fetchTimeout, built);
+  const write = yield* prepareEntries(input.write ?? [], "write", input.fetchTimeout, built);
   if (read.length === 0 && write.length === 0) {
     throw new EvaluationProfileError(
       "an evaluation profile states no component at all. A host offering evaluation states what " +
@@ -693,9 +623,7 @@ export function* prepareEvaluationProfile(
   const answered = answeredNames([...read, ...write]);
   const workspace = input.workspace === undefined ? undefined : bindWorkspace(input.workspace);
   return Object.freeze({
-    answered: Object.freeze(
-      [...answered.entries()].map(([name, identity]) => Object.freeze({ name, identity })),
-    ),
+    answered: Object.freeze([...answered]),
     live: () => capabilities.live(),
     revoke: () => {
       capabilities.revoke();
@@ -740,11 +668,7 @@ function compositionEntries(): readonly CapturedEntry[] {
     [pinnedJson()].map((entry) =>
       Object.freeze({
         name: entry.name,
-        identity: Object.freeze({
-          origin: entry.identity.origin,
-          key: entry.identity.key,
-          revision: entry.identity.revision,
-        }),
+        origin: CORE_ORIGIN,
         forms: Object.freeze<FragmentForm[]>(["self-closing"]),
         props: detach(entry.definition.props),
         kind: "composition" as const,
@@ -852,18 +776,20 @@ function normalizedCeiling(
 
 function* prepareEntries(
   entries: readonly FragmentEntry[],
+  effect: GeneratedEffect,
   fetchTimeout: number | undefined,
   built: Map<string, CapabilityImplementation>,
 ): Operation<readonly PreparedEntry[]> {
   const prepared: PreparedEntry[] = [];
   for (const entry of entries) {
-    prepared.push(yield* prepareEntry(entry, fetchTimeout, built));
+    prepared.push(yield* prepareEntry(entry, effect, fetchTimeout, built));
   }
   return Object.freeze(prepared);
 }
 
 function* prepareEntry(
   entry: FragmentEntry,
+  effect: GeneratedEffect,
   fetchTimeout: number | undefined,
   built: Map<string, CapabilityImplementation>,
 ): Operation<PreparedEntry> {
@@ -873,7 +799,6 @@ function* prepareEntry(
       `an evaluation profile admitted "${entry.name}" for no authored form.`,
     );
   }
-  const identity = captureIdentity(entry.identity, entry.name);
   const described =
     typeof entry.description === "string" && entry.description.length > 0
       ? { description: entry.description }
@@ -881,14 +806,15 @@ function* prepareEntry(
 
   if (entry.kind === "component-answer") {
     // Nothing about the implementation is settled here. What this entry states
-    // is which name, and which identity a provider must have claimed for it;
-    // the chain answers later, and props come from that answer rather than from
-    // the host, so a host cannot describe a contract the implementation lacks.
+    // is which name and which forms; the chain answers later, and the props,
+    // the identity and the effect all come from that answer rather than from
+    // the host, so a host cannot describe a contract or an effect the
+    // implementation lacks.
     return Object.freeze({
       name: entry.name,
-      identity,
       forms,
       kind: "component-answer" as const,
+      effect,
       ...described,
     });
   }
@@ -908,69 +834,40 @@ function* prepareEntry(
       "an evaluation profile admitted a name with no operation behind it.",
     );
   }
-  const legacy = captureLegacy(entry.legacy, entry.name);
-  return Object.freeze({
+  const prepared: PreparedEntry = Object.freeze({
     name: entry.name,
-    identity,
     forms,
     props,
     kind: "capability" as const,
+    effect,
     capability: entry.capability,
     ...described,
     definition: implementation.definition,
     ...(implementation.dispatch === undefined ? {} : { dispatch: implementation.dispatch }),
-    ...(legacy === undefined ? {} : { legacy }),
     ...(requests === undefined ? {} : { requests }),
   });
+  // Core supplies this body, so the owning declaration is already in hand: a
+  // capability admitted in the table its owner does not offer that form to
+  // refuses here, before an execution holds a profile at all.
+  admittedIdentities(prepared, implementation.definition);
+  return prepared;
 }
 
 /**
- * The version-1 aliases this entry states, copied and checked.
+ * The provider-backed names this profile admits.
  *
- * Copied because the host's array is the host's, and checked because an alias
- * is a comparison term: an empty string would reconcile against nothing
- * usefully, and a duplicate would say one thing twice. A host stating an empty
- * list has stated no alias, which is the same as stating none.
- */
-function captureLegacy(
-  legacy: readonly string[] | undefined,
-  name: string,
-): readonly string[] | undefined {
-  if (legacy === undefined) {
-    return undefined;
-  }
-  const held = new Set<string>();
-  for (const alias of legacy) {
-    if (typeof alias !== "string" || alias.length === 0) {
-      throw new EvaluationProfileError(
-        `an evaluation profile stated an empty version-1 identity for "${name}". An alias is a ` +
-          "string an older run actually retained, and there is no such record holding nothing.",
-      );
-    }
-    held.add(alias);
-  }
-  return held.size === 0 ? undefined : Object.freeze([...held]);
-}
-
-/**
- * The provider-backed names this profile admits, with the one identity each of
- * them states.
- *
- * A name is one component, so it has one implementation and one identity. Two
+ * A name is one component, so it resolves once and runs one implementation. Two
  * entries under one name are the two spellings of that component — the
- * self-closing one admitted to observe and the paired one to mutate — and
- * stating a second identity for the second spelling would be stating that the
- * name means two things, with which of them a fragment reached decided by which
- * table admitted it. That is not a narrower grant than the host wrote down; it
- * is an ambiguous one, so it refuses at capture rather than resolving by
- * position.
+ * self-closing one admitted to observe and the paired one to mutate — and both
+ * read their own identity and effect off the one definition the chain answered
+ * with, so there is nothing for a second entry to disagree about.
  *
- * A name a host holds as both a capability and a component answer is the same
- * ambiguity with the sharper edge: canonical core would supply one body and the
- * import chain the other, which are different grants under one spelling.
+ * A name a host holds as both a capability and a component answer is a real
+ * ambiguity, and refuses: canonical core would supply one body and the import
+ * chain the other, which are different grants under one spelling.
  */
-function answeredNames(prepared: readonly PreparedEntry[]): ReadonlyMap<string, FragmentIdentity> {
-  const answered = new Map<string, FragmentIdentity>();
+function answeredNames(prepared: readonly PreparedEntry[]): ReadonlySet<string> {
+  const answered = new Set<string>();
   const kinds = new Map<string, PreparedEntry["kind"]>();
   for (const entry of prepared) {
     const held = kinds.get(entry.name);
@@ -982,37 +879,17 @@ function answeredNames(prepared: readonly PreparedEntry[]): ReadonlyMap<string, 
       );
     }
     kinds.set(entry.name, entry.kind);
-    if (entry.kind !== "component-answer") {
-      continue;
-    }
-    const stated = answered.get(entry.name);
-    if (stated === undefined) {
-      answered.set(entry.name, entry.identity);
-      continue;
-    }
-    if (
-      stated.origin !== entry.identity.origin ||
-      stated.key !== entry.identity.key ||
-      stated.revision !== entry.identity.revision
-    ) {
-      throw new EvaluationProfileError(
-        `an evaluation profile admitted "${entry.name}" as ${spelling(stated)} and as ` +
-          `${spelling(entry.identity)}. One name states one identity, however many forms and ` +
-          "tables hold it.",
-      );
+    if (entry.kind === "component-answer") {
+      answered.add(entry.name);
     }
   }
   return answered;
 }
 
-/** One identity as a reader sees it in a refusal. */
-function spelling(identity: FragmentIdentity): string {
-  return `${identity.origin}#${identity.key}@${identity.revision}`;
-}
-
 /** One provider-backed name's sealed implementation, shared by every entry. */
 interface SealedAnswer {
   readonly protectedOrigin?: string;
+  readonly origin: string;
   readonly props: PropsSchema;
   readonly definition: FunctionComponentDefinition;
   readonly dispatch?: unknown;
@@ -1027,15 +904,15 @@ interface SealedAnswer {
  * bodies whose only difference was which table asked for it.
  */
 function sealAnswers(
-  answered: ReadonlyMap<string, FragmentIdentity>,
+  answered: ReadonlySet<string>,
   answers: ResolvedAnswers,
   capabilities: CapturedCapabilities,
   project: ComponentRouting["project"] | undefined,
 ): ReadonlyMap<string, SealedAnswer> {
   const sealed = new Map<string, SealedAnswer>();
-  for (const name of answered.keys()) {
+  for (const name of answered) {
     // Resolved once, before any document code, through the complete ordinary
-    // import chain — and already reconciled against what this entry expects.
+    // import chain, and published there by the provider that supplied it.
     const resolved = answers.get(name);
     if (resolved === undefined) {
       throw new EvaluationProfileError(
@@ -1050,6 +927,7 @@ function sealAnswers(
     sealed.set(
       name,
       Object.freeze({
+        origin: resolved.origin,
         props: detach(answer.props),
         definition: Object.freeze({ ...answer, fn: guard }),
         ...(protectedOrigin === undefined ? {} : { protectedOrigin }),
@@ -1082,9 +960,14 @@ function sealEntry(entry: PreparedEntry, sealed: ReadonlyMap<string, SealedAnswe
           "execution resolved none for it.",
       );
     }
+    // The identity each admitted form runs under is on this definition, so it
+    // is checked here rather than at the first generated effect: a form the
+    // provider's own declaration never offered, or offered under the other
+    // effect, is a table this host cannot state.
+    admittedIdentities(entry, answer.definition);
     return Object.freeze({
       name: entry.name,
-      identity: entry.identity,
+      origin: answer.origin,
       forms: entry.forms,
       props: answer.props,
       kind: "component-answer" as const,
@@ -1103,7 +986,7 @@ function sealEntry(entry: PreparedEntry, sealed: ReadonlyMap<string, SealedAnswe
   }
   return Object.freeze({
     name: entry.name,
-    identity: entry.identity,
+    origin: CORE_ORIGIN,
     forms: entry.forms,
     props,
     kind: "capability" as const,
@@ -1111,9 +994,52 @@ function sealEntry(entry: PreparedEntry, sealed: ReadonlyMap<string, SealedAnswe
     ...described,
     definition,
     ...(entry.dispatch === undefined ? {} : { dispatch: entry.dispatch }),
-    ...(entry.legacy === undefined ? {} : { legacy: entry.legacy }),
     ...(entry.requests === undefined ? {} : { requests: entry.requests }),
   });
+}
+
+/**
+ * Hold each admitted form to the identity its owner offers it under.
+ *
+ * Two refusals, and both of them are about the table rather than about the
+ * fragment: a form the owning declaration offers no generated use of has no
+ * identity for a continuation to be compared against, and a form offered as a
+ * read cannot be admitted in the write table — the effect belongs to the
+ * spelling, so a host placing it elsewhere would be granting what the
+ * implementation does not do.
+ *
+ * It keeps nothing. What a run retains is derived from the same definition
+ * where the admission is recorded (`generated-xmd.ts`), so this is the early
+ * refusal rather than a second copy of the fact.
+ */
+function admittedIdentities(entry: PreparedEntry, definition: FunctionComponentDefinition): void {
+  // What the definition offers at all, before which of it this entry admits. A
+  // provider's answer was read where it was published and core's own owners
+  // where they are declared, so a refusal here is a definition that reached a
+  // profile without crossing either.
+  const refusal = definitionGeneratedRefusal(definition);
+  if (refusal !== undefined) {
+    throw new EvaluationProfileError(
+      `an evaluation profile admitted "${entry.name}", whose declaration ${refusal}.`,
+    );
+  }
+  for (const form of entry.forms) {
+    const offered = offeredForm(definition.generated, form);
+    if (offered === undefined) {
+      throw new EvaluationProfileError(
+        `an evaluation profile admitted "${entry.name}" in its ${form} form, and the ` +
+          "declaration that owns that implementation offers no generated use of it. A " +
+          "generated fragment runs a form its owner states an identity and an effect for.",
+      );
+    }
+    if (offered.effect !== entry.effect) {
+      throw new EvaluationProfileError(
+        `an evaluation profile admitted "${entry.name}" in its ${form} form as a ` +
+          `${entry.effect}, and its owner offers that form as a ${offered.effect}. What a ` +
+          "spelling does belongs to the component, not to the table that admits it.",
+      );
+    }
+  }
 }
 
 /**
@@ -1149,24 +1075,6 @@ function bounded(
     }
     return yield* implementation(props, invocation);
   };
-}
-
-function captureIdentity(identity: FragmentIdentity, name: string): FragmentIdentity {
-  const { origin, key, revision } = identity;
-  if (
-    typeof origin !== "string" ||
-    origin.length === 0 ||
-    typeof key !== "string" ||
-    key.length === 0 ||
-    typeof revision !== "string" ||
-    revision.length === 0
-  ) {
-    throw new EvaluationProfileError(
-      `an evaluation profile admitted "${name}" without a complete identity. An entry states the ` +
-        "origin, key and revision a continuation is compared against.",
-    );
-  }
-  return Object.freeze({ origin, key, revision });
 }
 
 /** The forms an entry is admitted for: a non-empty set in canonical order. */

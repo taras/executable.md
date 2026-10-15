@@ -55,10 +55,10 @@ const OWNED_CAPABILITIES: Readonly<Partial<Record<FragmentCapability, string>>> 
  * Core's documentation origin for this entry, when the entry is core's own
  * component however the host admitted it.
  *
- * Documentation provenance only. The identity stays what the host stated,
- * because that is what a continuation compares and what the grant was recorded
- * as — a host's directory entry is still the host's grant even though the
- * component behind the name is core's.
+ * Documentation provenance only. It changes nothing a continuation compares:
+ * what the grant was recorded as is the identity the owning declaration offers
+ * the admitted spelling under, and that is core's wherever core supplies the
+ * component behind the name.
  */
 function ownedOrigin(entry: CapturedEntry): string | undefined {
   if (entry.protectedOrigin !== undefined) {
@@ -71,12 +71,12 @@ function ownedOrigin(entry: CapturedEntry): string | undefined {
 /**
  * The symbols an evaluation admitted, in the order the tables state them.
  *
- * The identity's origin is what each entry reports it came from, because that
- * is what the host stated and what a continuation is compared against. Reported
- * as a registration for ordinary entries. An exact protected answer keeps its
- * canonical documentation origin even when a different provider delegates it,
- * and so does a capability performing an operation canonical core owns a
- * component for, under that component's name.
+ * Each entry reports the origin its implementation came from: core's own where
+ * core supplies the body, and the publishing provider installation's where the
+ * import chain answered. Reported as a registration for ordinary entries. An
+ * exact protected answer keeps its canonical documentation origin even when a
+ * different provider delegates it, and so does a capability performing an
+ * operation canonical core owns a component for, under that component's name.
  */
 export function admittedSymbols(entries: readonly CapturedEntry[]): SyntaxSymbols {
   return {
@@ -97,7 +97,7 @@ function describe(entry: CapturedEntry): CompleteComponentSyntaxEntry {
     name: entry.name,
     origin:
       owned === undefined
-        ? { kind: "registered", origin: entry.identity.origin, reserved: false }
+        ? { kind: "registered", origin: entry.origin, reserved: false }
         : { kind: "protected", origin: owned },
     sourceKind: owned === undefined ? "registered" : "protected",
     inspectability: "complete",

@@ -10,6 +10,7 @@ import type { Json as DurableJson } from "@executablemd/durable-streams";
 import type { TestHarnessComponentDefinition } from "./test-harness.ts";
 import type { ComponentInvocation, InvocationForm } from "./invocation-identity.ts";
 import type { ProtectedComponent } from "./components/protected.ts";
+import type { GeneratedForms } from "./components/generated-metadata.ts";
 
 export type Json = DurableJson;
 
@@ -287,6 +288,17 @@ export interface FunctionComponentDefinition {
    * declaration spelled where inspection can read it, so the two cannot drift.
    */
   forms?: readonly InvocationForm[];
+  /**
+   * The generated use this component's forms are offered for, per form.
+   *
+   * Absent offers none, which is what an ordinary component offers: a
+   * generated fragment names a component only where the declaration that owns
+   * the implementation said which identity and effect that spelling runs as
+   * (`components/generated-metadata.ts`). Carrying it is not authority — a
+   * table still admits the name, and canonical resolution still decides which
+   * definition answers for it.
+   */
+  generated?: GeneratedForms;
   /** Prose about the component, for a reader. Never read by execution. */
   description?: string;
   as?: string;

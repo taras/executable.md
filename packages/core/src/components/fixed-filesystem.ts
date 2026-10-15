@@ -39,6 +39,8 @@ import { form as dirForm, props as dirProps } from "./Dir.ts";
 import { form as fileForm, props as fileProps } from "./File.ts";
 import { form as fileDeleteForm, props as fileDeleteProps } from "./FileDelete.ts";
 import { declaredForms, formDispatcher } from "../invocation-identity.ts";
+import { admitGeneratedForms } from "./generated-metadata.ts";
+import type { GeneratedForms } from "./generated-metadata.ts";
 import { parseJsonObject } from "../json.ts";
 import { documented } from "./documentation.ts";
 import { CORE_ORIGIN } from "./registry.ts";
@@ -75,12 +77,22 @@ function fixed(
   declaration: FormDeclaration,
   props: PropsSchema,
   documentation: FirstPartyDocumentation,
+  generated: GeneratedForms,
 ): FunctionComponentDefinition {
+  const forms = Object.freeze(declaredForms(declaration));
+  // Core's own table, read through the same validator a host's declaration is:
+  // these three definitions are shared by every execution in the process, so
+  // what they offer is checked and frozen where it is declared.
+  const admitted = admitGeneratedForms(generated, forms);
+  if (!admitted.ok) {
+    throw new Error(`canonical core's <${name}> ${admitted.error.message}`);
+  }
   return Object.freeze({
     kind: "function",
     name,
     props: freezeThrough(props),
-    forms: Object.freeze(declaredForms(declaration)),
+    forms,
+    generated: admitted.value,
     ...documented(documentation),
     fn: formDispatcher(declaration),
   });
@@ -113,28 +125,56 @@ function freezeJson(value: object): void {
 
 /** The definitions themselves, in the order inspection reads them. */
 const DEFINITIONS: readonly FunctionComponentDefinition[] = Object.freeze([
-  fixed("File", fileForm, parseJsonObject(fileProps), {
-    description:
-      'Read or write a file. `<File path="notes.md" />` reads the content; ' +
-      '`<File path="notes.md">…</File>` writes the content. The path is relative to the ' +
-      "working directory.",
-    as: "Optional. Captures the file's text instead of emitting it, in the reading form.",
-    context: "The text to write, in the writing form.",
-  }),
-  fixed("File.Delete", fileDeleteForm, parseJsonObject(fileDeleteProps), {
-    description:
-      'Delete a file. `<File.Delete path="notes.md" />` removes it. It does not error if the ' +
-      "file doesn't exist, and produces no output.",
-    as: "Optional. Captures the empty string this renders, as for any text component.",
-    context: null,
-  }),
-  fixed("Dir", dirForm, parseJsonObject(dirProps), {
-    description:
-      'Create or use a directory. `<Dir path="notes">…</Dir>` changes the working directory ' +
-      "for its content.",
-    as: null,
-    context: "The Markdown expanded in that directory.",
-  }),
+  fixed(
+    "File",
+    fileForm,
+    parseJsonObject(fileProps),
+    {
+      description:
+        'Read or write a file. `<File path="notes.md" />` reads the content; ' +
+        '`<File path="notes.md">…</File>` writes the content. The path is relative to the ' +
+        "working directory.",
+      as: "Optional. Captures the file's text instead of emitting it, in the reading form.",
+      context: "The text to write, in the writing form.",
+    },
+    {
+      // The two spellings do different things, so each one is offered under its
+      // own identity and effect: a table admitting the reading form admits no
+      // write, and a continuation compares the URL the spelling actually ran as.
+      "self-closing": { identity: "https://executable.md/components/file/read", effect: "read" },
+      paired: { identity: "https://executable.md/components/file/write", effect: "write" },
+    },
+  ),
+  fixed(
+    "File.Delete",
+    fileDeleteForm,
+    parseJsonObject(fileDeleteProps),
+    {
+      description:
+        'Delete a file. `<File.Delete path="notes.md" />` removes it. It does not error if the ' +
+        "file doesn't exist, and produces no output.",
+      as: "Optional. Captures the empty string this renders, as for any text component.",
+      context: null,
+    },
+    {
+      "self-closing": { identity: "https://executable.md/components/file/delete", effect: "write" },
+    },
+  ),
+  fixed(
+    "Dir",
+    dirForm,
+    parseJsonObject(dirProps),
+    {
+      description:
+        'Create or use a directory. `<Dir path="notes">…</Dir>` changes the working directory ' +
+        "for its content.",
+      as: null,
+      context: "The Markdown expanded in that directory.",
+    },
+    {
+      paired: { identity: "https://executable.md/components/dir/ensure", effect: "write" },
+    },
+  ),
 ]);
 
 const BY_NAME: ReadonlyMap<string, FunctionComponentDefinition> = new Map(

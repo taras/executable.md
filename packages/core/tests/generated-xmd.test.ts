@@ -68,8 +68,8 @@ import type {
   GeneratedMutation,
   GeneratedObservation,
   GeneratedXmdRequest,
-  RetainedFragmentIdentity,
 } from "../host.ts";
+import type { GeneratedEffect, GeneratedForms } from "../src/components/generated-metadata.ts";
 import type { FunctionComponentDefinition, Json, JsonObject } from "../src/types.ts";
 
 const ROOT_PATH = "workflows/agent.md";
@@ -81,14 +81,18 @@ const ROOT_PATH = "workflows/agent.md";
  * asked for and before whatever the selection added. Written here once, because
  * every record below has to account for it.
  */
-const COMPOSITION = [{ name: "Json", identity: pinnedJson().identity, forms: ["self-closing"] }];
+const COMPOSITION = [
+  {
+    name: "Json",
+    form: "self-closing",
+    identity: pinnedJson().identity,
+    kind: "capability",
+    effect: "composition",
+  },
+];
 
-/** The same entry as journal data, for a record a test forges by hand. */
-const COMPOSITION_RECORD: JsonObject = {
-  name: "Json",
-  identity: { ...pinnedJson().identity },
-  forms: ["self-closing"],
-};
+/** The same row as journal data, for a record a test forges by hand. */
+const COMPOSITION_RECORD: JsonObject = { ...COMPOSITION[0] };
 const ROOT_SOURCE = "The host ran a generated fragment.\n";
 const URL_ONE = "https://api.example.test/one";
 const URL_TWO = "https://api.example.test/two";
@@ -97,21 +101,30 @@ const ROOTS = ["workspace://primary", "workspace://secondary"];
 const ADVANCED = "workspace://advanced";
 
 /**
- * One host-stated identity, in the shape a run retains.
+ * What one host component's declaration offers a spelling as.
  *
- * `component-answer`, because everything a test admits here is an
- * implementation the host holds rather than an operation core supplies the body
- * for — which is the distinction the kind exists to keep.
+ * The identity and the effect are on the definition, because that is where the
+ * declaration that owns the implementation states them: a host admits a name
+ * and a spelling, and what admitting it grants is the component's own.
  */
-function hostIdentity(origin: string, key: string, revision = "1"): RetainedFragmentIdentity {
-  return { kind: "component-answer", origin, key, revision };
+function offers(
+  key: string,
+  effect: GeneratedEffect,
+  form: "self-closing" | "paired" = "self-closing",
+): GeneratedForms {
+  return { [form]: { identity: `https://executable.md/components/${key}`, effect } };
 }
+
+/** The identity `<Probe />` is admitted under, wherever a row names it. */
+const PROBE_IDENTITY = "https://executable.md/components/probe/read";
 
 /** The one host observation component the tests admit beside `<Fetch>`. */
 const PROBE: FunctionComponentDefinition = {
   kind: "function",
   name: "Probe",
   props: { type: "object", properties: {}, additionalProperties: false },
+  forms: ["self-closing"],
+  generated: offers("probe/read", "read"),
   // deno-lint-ignore require-yield
   *fn(): Operation<Json> {
     return "probed";
@@ -119,7 +132,45 @@ const PROBE: FunctionComponentDefinition = {
 };
 
 function probe(): GeneratedObservation {
-  return pinnedComponent("Probe", hostIdentity("test://probe", "Probe"), PROBE);
+  return pinnedComponent("Probe", PROBE, "component-answer");
+}
+
+/**
+ * One host component offered to observe in both spellings, and one offered to
+ * mutate in both.
+ *
+ * `<Probe />` offers one reading spelling, which is the ordinary shape; these
+ * two are for the rows about what a table may say when a component offers both
+ * — the content of a paired read, and two entries fighting over one spelling.
+ */
+const READS: FunctionComponentDefinition = {
+  kind: "function",
+  name: "Reads",
+  props: { type: "object", properties: {}, additionalProperties: false },
+  generated: {
+    "self-closing": { identity: "https://executable.md/components/reads/read", effect: "read" },
+    paired: { identity: "https://executable.md/components/reads/also", effect: "read" },
+  },
+  *fn(): Operation<Json> {
+    return yield* content();
+  },
+};
+
+const WRITES: FunctionComponentDefinition = {
+  kind: "function",
+  name: "Writes",
+  props: { type: "object", properties: {}, additionalProperties: false },
+  generated: {
+    "self-closing": { identity: "https://executable.md/components/writes/one", effect: "write" },
+    paired: { identity: "https://executable.md/components/writes/both", effect: "write" },
+  },
+  *fn(): Operation<Json> {
+    return yield* content();
+  },
+};
+
+function reads(): GeneratedObservation {
+  return pinnedComponent("Reads", READS, "component-answer");
 }
 
 describe("generated component resolution stays internal", () => {
@@ -363,34 +414,36 @@ describe("Tier GX — the trusted-host seam", () => {
       throw new Error("the run recorded no generated-XMD admission");
     }
     expect(admission.description.name).toBe("generated:turn-1");
-    // The version-2 shape: tagged, and carrying the Workspace basis as one
-    // member rather than two top-level ones, because a host may have none.
-    // The identity is the closed structural record rather than a spelling: four
-    // members a reader can compare one at a time, so an admission that moved
-    // says which part moved.
-    const PROBE_IDENTITY = {
+    // The current shape: marked, and carrying the Workspace basis as one
+    // member rather than two top-level ones, because a host may have none. One
+    // row per admitted spelling, each holding the URL its owner offers that
+    // spelling under, what kind of thing answered for the name, and which
+    // effect table admitted it — so an admission that moved says which
+    // spelling of which name moved.
+    const PROBE_ROW = {
+      name: "Probe",
+      form: "self-closing",
+      identity: PROBE_IDENTITY,
       kind: "component-answer",
-      origin: "test://probe",
-      key: "Probe",
-      revision: "1",
+      effect: "read",
     };
     expect(admission.description.input).toMatchObject({
-      version: 2,
+      version: 3,
       workspace: { roots: ROOTS, selectedRoot: ROOTS[0] },
-      allowed: [...COMPOSITION, { name: "Probe", identity: PROBE_IDENTITY }],
+      allowed: [...COMPOSITION, PROBE_ROW],
     });
     expect(admission.result).toMatchObject({
       status: "ok",
       value: {
         decision: "admitted",
         source: "<Probe />\n",
-        named: [{ name: "Probe", identity: PROBE_IDENTITY }],
+        named: [{ name: "Probe", identity: PROBE_IDENTITY, form: "self-closing" }],
         // Retained in the result as well as the input, because durable replay
         // matches an effect by type and name and never compares a description.
         policy: {
-          version: 2,
+          version: 3,
           workspace: { roots: ROOTS, selectedRoot: ROOTS[0] },
-          allowed: [...COMPOSITION, { name: "Probe", identity: PROBE_IDENTITY }],
+          allowed: [...COMPOSITION, PROBE_ROW],
           requests: [],
         },
       },
@@ -506,7 +559,8 @@ describe("Tier GX — the complete fragment is read first", () => {
     const transport = yield* useTransport(() => ({ status: 200 }));
 
     const attempt = yield* evaluate(
-      request("<Probe>\n\n```bash exec\nprintf ran\n```\n\n</Probe>\n", [
+      request("<Reads>\n\n```bash exec\nprintf ran\n```\n\n</Reads>\n", [
+        reads(),
         pinnedFetch([ADMITTED_REQUEST]),
         probe(),
       ]),
@@ -784,43 +838,23 @@ describe("Tier GX — the request a generated fragment may perform", () => {
   });
 
   /**
-   * Two identities that differ only in where a space falls.
+   * One admitted read that states a ceiling and records what it was asked.
    *
-   * A ceiling belongs to the identity that states it, and the run keys its own
-   * ceiling table by that identity. A key built by joining the four terms with
-   * a separator is only as unique as the separator is illegal — and nothing
-   * makes a space illegal in an origin or a component key. These two are the
-   * smallest pair that collides under a space-joined key and not under the
-   * terms themselves, so a table that shared one entry's limit with another
-   * fails here rather than somewhere a host would have to notice.
+   * Two of these make the pair these rows need: each entry states its own
+   * ceiling, and the run keys its ceiling table by the entry itself rather than
+   * by anything describing it — so one entry's limit is never the other's,
+   * however alike two entries look.
    */
-  const SPACED_ONE: RetainedFragmentIdentity = {
-    kind: "capability",
-    origin: "test://host a",
-    key: "b",
-    revision: "1",
-  };
-  const SPACED_OTHER: RetainedFragmentIdentity = {
-    kind: "capability",
-    origin: "test://host",
-    key: "a b",
-    revision: "1",
-  };
-
-  /** One admitted read that states a ceiling and records what it was asked. */
-  function bounded(
-    name: string,
-    identity: RetainedFragmentIdentity,
-    url: string,
-    performed: string[],
-  ): GeneratedObservation {
+  function bounded(name: string, url: string, performed: string[]): GeneratedObservation {
     return {
       name,
-      identity,
+      kind: "component-answer",
       requests: [{ url }],
       definition: {
         kind: "function",
         name,
+        forms: ["self-closing"],
+        generated: offers(`${name.toLowerCase()}/read`, "read"),
         props: {
           type: "object",
           properties: { url: { type: "string" } },
@@ -836,18 +870,18 @@ describe("Tier GX — the request a generated fragment may perform", () => {
     };
   }
 
-  it("GX14b: two identities that collide under a joined key keep their own ceilings", function* () {
+  it("GX14b: two admitted reads keep their own ceilings", function* () {
     const performed: string[] = [];
     const attempt = yield* evaluate(
       request(`<One url="${URL_ONE}" />\n\n<Other url="${URL_TWO}" />\n`, [
-        bounded("One", SPACED_ONE, URL_ONE, performed),
-        bounded("Other", SPACED_OTHER, URL_TWO, performed),
+        bounded("One", URL_ONE, performed),
+        bounded("Other", URL_TWO, performed),
       ]),
     );
 
-    // Each element performed the request its own entry stated. A shared key
-    // would have left one of the two holding the other's limit, and one of
-    // these two admitted requests would have been refused.
+    // Each element performed the request its own entry stated. A shared
+    // ceiling would have left one of the two holding the other's limit, and one
+    // of these two admitted requests would have been refused.
     expect(attempt.failure).toBe(undefined);
     expect(performed).toEqual([`One ${URL_ONE}`, `Other ${URL_TWO}`]);
     // And the retained policy holds both limits rather than one of them twice.
@@ -862,14 +896,13 @@ describe("Tier GX — the request a generated fragment may perform", () => {
     const performed: string[] = [];
     const attempt = yield* evaluate(
       request(`<One url="${URL_TWO}" />\n`, [
-        bounded("One", SPACED_ONE, URL_ONE, performed),
-        bounded("Other", SPACED_OTHER, URL_TWO, performed),
+        bounded("One", URL_ONE, performed),
+        bounded("Other", URL_TWO, performed),
       ]),
     );
 
     // The negative half of the pair above. `<One />` may perform exactly what
-    // its own entry stated, and the other entry's limit is not its own however
-    // the two identities are spelled.
+    // its own entry stated, and the other entry's limit is not its own.
     expect(attempt.failure).toContain("did not admit");
     expect(admittedFragments(attempt.events)).toHaveLength(0);
     expect(performed).toEqual([]);
@@ -1124,11 +1157,12 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
   function durableWrite(executed: string[]): GeneratedMutation {
     return pinnedMutation(
       "Write",
-      hostIdentity("test://durable-write", "Write"),
       {
         kind: "function",
         name: "Write",
         props: { type: "object", properties: {}, additionalProperties: false },
+        forms: ["paired"],
+        generated: offers("write/ensure", "write", "paired"),
         *fn(): Operation<Json> {
           const body = yield* content();
           yield createDurableOperation<Json>(
@@ -1357,16 +1391,22 @@ describe("Tier GX — a malformed generated request reports its class, not itsel
 
   /** The probe under its admitted identity, counting live invocations. */
   function countingProbe(performed: string[]): GeneratedObservation {
-    return pinnedComponent("Probe", hostIdentity("test://probe", "Probe"), {
-      kind: "function",
-      name: "Probe",
-      props: { type: "object", properties: {}, additionalProperties: false },
-      // deno-lint-ignore require-yield
-      *fn(): Operation<Json> {
-        performed.push("probed");
-        return "probed";
+    return pinnedComponent(
+      "Probe",
+      {
+        kind: "function",
+        name: "Probe",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        forms: ["self-closing"],
+        generated: offers("probe/read", "read"),
+        // deno-lint-ignore require-yield
+        *fn(): Operation<Json> {
+          performed.push("probed");
+          return "probed";
+        },
       },
-    });
+      "component-answer",
+    );
   }
 
   for (const [what, basis] of INCOHERENT) {
@@ -1423,74 +1463,15 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
     kind: "function",
     name: "Probe",
     props: { type: "object", properties: {}, additionalProperties: false },
+    forms: ["self-closing"],
+    // A different implementation, offered under a different URL by its own
+    // declaration — which is what a changed grant behind one name looks like.
+    generated: offers("other/read", "read"),
     // deno-lint-ignore require-yield
     *fn(): Operation<Json> {
       return "the other implementation ran";
     },
   };
-
-  /**
-   * The probe under its admitted identity, counting live invocations — so a
-   * case proves whether a continuation reached the generated component rather
-   * than inferring it from rendered text alone.
-   */
-  function countedProbe(performed: string[]): GeneratedObservation {
-    return pinnedComponent("Probe", hostIdentity("test://probe", "Probe"), {
-      kind: "function",
-      name: "Probe",
-      props: { type: "object", properties: {}, additionalProperties: false },
-      // deno-lint-ignore require-yield
-      *fn(): Operation<Json> {
-        performed.push("probed");
-        return "probed";
-      },
-    });
-  }
-
-  /**
-   * The identity this run states for the host observation a version-1 record
-   * named.
-   *
-   * A capability, because that is the only arm that existed when untagged
-   * records were written: the component-answer arm came with this issue, so no
-   * version-1 string ever described one.
-   */
-  const V1_IDENTITY: RetainedFragmentIdentity = {
-    kind: "capability",
-    origin: "test://probe",
-    key: "Probe",
-    revision: "1",
-  };
-
-  /**
-   * The exact string a version-1 journal holds for it.
-   *
-   * Arbitrary, and that is the point. Under `bb2c1c49` this string was whatever
-   * the host passed to `pinnedComponent`, retained verbatim — there was no
-   * spelling rule at all, so nothing recovers `V1_IDENTITY` from it. The
-   * current entry states it as an alias, which is the only thing that connects
-   * the two.
-   */
-  const V1_SPELLING = "urn:host:probe/v1";
-
-  /** The same counting probe, stating the version-1 identity it succeeds. */
-  function versionOneProbe(performed: string[]): GeneratedObservation {
-    return pinnedComponent(
-      "Probe",
-      V1_IDENTITY,
-      {
-        kind: "function",
-        name: "Probe",
-        props: { type: "object", properties: {}, additionalProperties: false },
-        // deno-lint-ignore require-yield
-        *fn(): Operation<Json> {
-          performed.push("probed");
-          return "probed";
-        },
-      },
-      [V1_SPELLING],
-    );
-  }
 
   /**
    * A history left by a run interrupted during preparation: the admission
@@ -1556,116 +1537,32 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
   }
 
   /**
-   * The untagged #369 policy, written out rather than derived.
+   * The policy a current build writes, written out rather than derived.
    *
-   * A run suspended before this build wrote exactly this: no version member,
-   * and the Workspace basis as two mandatory top-level ones. Deriving it by
-   * rewriting a record this build produced would prove only that the rewrite
-   * and the reader agree; a literal is what an older journal actually holds.
+   * A literal, because what these rows are about is the record: deriving it by
+   * rewriting one this build produced would prove only that the rewrite and the
+   * reader agree. One row per admitted spelling, each holding the URL its owner
+   * offers that spelling under.
    */
-  const V1_POLICY: JsonObject = Object.freeze({
+  const CURRENT_POLICY: JsonObject = Object.freeze({
+    version: 3,
     allow: ["read"],
-    roots: [...ROOTS],
-    selectedRoot: ROOTS[0],
-    allowed: [{ name: "Probe", identity: V1_SPELLING, forms: ["self-closing", "paired"] }],
+    workspace: { roots: [...ROOTS], selectedRoot: ROOTS[0] },
+    allowed: [
+      { ...COMPOSITION_RECORD },
+      {
+        name: "Probe",
+        form: "self-closing",
+        identity: PROBE_IDENTITY,
+        kind: "component-answer",
+        effect: "read",
+      },
+    ],
     requests: [],
   });
 
-  /** One frozen version-1 admission, as an older build committed it. */
-  function versionOneAdmission(source: string): DurableEvent {
-    return {
-      type: "yield",
-      coroutineId: "root",
-      description: { type: "generated_xmd", name: "generated:turn-1", input: V1_POLICY },
-      result: {
-        status: "ok",
-        value: {
-          decision: "admitted",
-          source,
-          named: [{ name: "Probe", identity: V1_SPELLING, form: "self-closing" }],
-          policy: V1_POLICY,
-        },
-      },
-    };
-  }
-
-  /** One frozen version-1 refusal, in the shape that build wrote refusals. */
-  function versionOneRefusal(): DurableEvent {
-    return {
-      type: "yield",
-      coroutineId: "root",
-      description: { type: "generated_xmd", name: "generated:turn-1", input: V1_POLICY },
-      result: { status: "ok", value: { decision: "refused", construct: "block" } },
-    };
-  }
-
-  /**
-   * A history whose admission is that literal version-1 record.
-   *
-   * The events around it are a real run's, because what is under test is the
-   * record rather than the journal's framing.
-   */
-  function withVersionOne(
-    events: readonly DurableEvent[],
-    admission: DurableEvent,
-  ): DurableEvent[] {
-    return events.map((event) =>
-      event.type === "yield" && event.description.type === "generated_xmd" ? admission : event,
-    );
-  }
-
-  /**
-   * The literal version-1 admission a `bb2c1c49` workflow run committed for the
-   * standard read table.
-   *
-   * Written out from what that build actually emitted rather than derived:
-   * `pinnedFileRead()` retained `@executablemd/core#File:read` — one opaque
-   * value, no revision in it, no separator convention to read back out — beside
-   * the untagged policy shape with its two top-level Workspace members.
-   */
-  const V1_STANDARD_POLICY: JsonObject = Object.freeze({
-    allow: ["read"],
-    roots: [...ROOTS],
-    selectedRoot: ROOTS[0],
-    allowed: [{ name: "File", identity: "@executablemd/core#File:read", forms: ["self-closing"] }],
-    requests: [],
-  });
-
-  /** That admission, as the event an older journal holds. */
-  function versionOneStandard(source: string): DurableEvent {
-    return {
-      type: "yield",
-      coroutineId: "root",
-      description: { type: "generated_xmd", name: "generated:turn-1", input: V1_STANDARD_POLICY },
-      result: {
-        status: "ok",
-        value: {
-          decision: "admitted",
-          source,
-          named: [{ name: "File", identity: "@executablemd/core#File:read", form: "self-closing" }],
-          policy: V1_STANDARD_POLICY,
-        },
-      },
-    };
-  }
-
-  /**
-   * One literal version-1 admission, in the untagged shape and holding whatever
-   * a released build retained for the entry the case is about.
-   */
-  function versionOneRecord(
-    source: string,
-    allow: readonly string[],
-    allowed: readonly JsonObject[],
-    requests: readonly JsonObject[] = [],
-  ): DurableEvent {
-    const policy: JsonObject = {
-      allow: [...allow],
-      roots: [...ROOTS],
-      selectedRoot: ROOTS[0],
-      allowed: allowed.map((entry) => ({ ...entry })),
-      requests: requests.map((request) => ({ ...request })),
-    };
+  /** One admission holding that policy, as the event a journal holds. */
+  function currentAdmission(source: string, policy: JsonObject = CURRENT_POLICY): DurableEvent {
     return {
       type: "yield",
       coroutineId: "root",
@@ -1673,13 +1570,10 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
       result: {
         status: "ok",
         value: {
+          version: 3,
           decision: "admitted",
           source,
-          named: allowed.map((entry) => ({
-            name: entry.name,
-            identity: entry.identity,
-            form: Array.isArray(entry.forms) ? entry.forms[0] : "self-closing",
-          })),
+          named: [{ name: "Probe", identity: PROBE_IDENTITY, form: "self-closing" }],
           policy,
         },
       },
@@ -1687,267 +1581,170 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
   }
 
   /**
-   * The workflow host's own `<Dir>`, at the identity and alias it states.
+   * A history whose admission is one literal record.
    *
-   * Built here rather than imported, because what is under test is the seam a
-   * host reaches: `pinnedMutation` takes the structural identity and the exact
-   * version-1 string, and this is the string a released workflow run retained.
+   * The events around it are a real run's, because what is under test is the
+   * record rather than the journal's framing.
    */
-  function dirEntry(executed: string[]): GeneratedMutation {
-    return pinnedMutation(
-      "Dir",
-      {
-        kind: "capability",
-        origin: "@executablemd/workflow/composition",
-        key: "Dir",
-        revision: "3",
-      },
-      {
-        kind: "function",
-        name: "Dir",
-        props: {
-          type: "object",
-          properties: { path: { type: "string" } },
-          required: ["path"],
-          additionalProperties: false,
-        },
-        // deno-lint-ignore require-yield
-        *fn(props: Record<string, Json>): Operation<Json> {
-          executed.push(`dir:${String(props.path)}`);
-          return "";
-        },
-      },
-      "paired",
-      ["@executablemd/workflow/composition/dir-v2#Dir"],
+  function withAdmission(events: readonly DurableEvent[], admission: DurableEvent): DurableEvent[] {
+    return events.map((event) =>
+      event.type === "yield" && event.description.type === "generated_xmd" ? admission : event,
     );
   }
 
   /**
-   * Every version-1 identity a released build actually retained, and the entry
-   * that states it as the one it succeeds.
+   * The untagged #369 admission a released build committed.
    *
-   * One row per alias rather than one row for the mechanism, because each of
-   * these is a separate literal assertion: the alias is written out at the
-   * entry, and a journal holding that exact string has to reconcile to it.
-   * `<Dir>` is here too — it is the workflow host's string, not core's, and the
-   * host-supplied path has to work for the same reason core's does.
+   * Written out from what that build actually emitted: one opaque identity
+   * string per entry, no version member, and the Workspace basis as two
+   * mandatory top-level members. Nothing recovers a current row from it — there
+   * was no spelling rule to invert — so this build refuses it as unreadable
+   * history rather than reading the members it recognizes.
    */
-  const RELEASED_ALIASES: readonly (readonly [
-    string,
-    string,
-    () => GeneratedXmdRequest,
-    readonly string[],
-    readonly JsonObject[],
-    readonly JsonObject[],
-  ])[] = [
-    [
-      "core's Fetch",
-      `<Fetch url="${URL_ONE}" />\n`,
-      () => request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]),
-      ["read"],
-      [
-        {
-          name: "Fetch",
-          identity: "@executablemd/core#Fetch",
-          forms: ["self-closing", "paired"],
+  const UNTAGGED_RECORD: DurableEvent = {
+    type: "yield",
+    coroutineId: "root",
+    description: {
+      type: "generated_xmd",
+      name: "generated:turn-1",
+      input: {
+        allow: ["read"],
+        roots: [...ROOTS],
+        selectedRoot: ROOTS[0],
+        allowed: [
+          { name: "Probe", identity: "urn:host:probe/v1", forms: ["self-closing", "paired"] },
+        ],
+        requests: [],
+      },
+    },
+    result: {
+      status: "ok",
+      value: {
+        decision: "admitted",
+        source: "<Probe />\n",
+        named: [{ name: "Probe", identity: "urn:host:probe/v1", form: "self-closing" }],
+        policy: {
+          allow: ["read"],
+          roots: [...ROOTS],
+          selectedRoot: ROOTS[0],
+          allowed: [
+            { name: "Probe", identity: "urn:host:probe/v1", forms: ["self-closing", "paired"] },
+          ],
+          requests: [],
         },
-      ],
-      [{ url: URL_ONE, method: "GET", headers: {} }],
-    ],
-    [
-      "core's read-only File",
-      `<File path="notes.md" />\n`,
-      () => request(`<File path="notes.md" />\n`, [pinnedFileRead()]),
-      ["read"],
-      [{ name: "File", identity: "@executablemd/core#File:read", forms: ["self-closing"] }],
-      [],
-    ],
-    [
-      "core's paired File",
-      `<File path="written.md">from the fragment</File>\n`,
-      () =>
-        selecting(`<File path="written.md">from the fragment</File>\n`, [], {
-          allow: ["write"],
-          mutations: [pinnedFileWrite()],
-        }),
-      ["write"],
-      [{ name: "File", identity: "@executablemd/core#File:write", forms: ["paired"] }],
-      [],
-    ],
-    [
-      "core's File.Delete",
-      `<File.Delete path="notes.md" />\n`,
-      () =>
-        selecting(`<File.Delete path="notes.md" />\n`, [], {
-          allow: ["write"],
-          mutations: [pinnedFileDelete()],
-        }),
-      ["write"],
-      [
-        {
-          name: "File.Delete",
-          identity: "@executablemd/core#File.Delete",
-          forms: ["self-closing"],
+      },
+    },
+  };
+
+  /**
+   * The tagged admission the build before this one committed.
+   *
+   * Version 2 held an identity as a closed structural record — what kind of
+   * thing was behind the name, the origin that owned it, the component key and
+   * the revision — and a list of forms per entry. Every term of that shape is
+   * gone, and reading one as though a URL could be recovered from it would
+   * compare a fragment's admission equal to an admission it never had.
+   */
+  const STRUCTURAL_RECORD: DurableEvent = {
+    type: "yield",
+    coroutineId: "root",
+    description: {
+      type: "generated_xmd",
+      name: "generated:turn-1",
+      input: {
+        version: 2,
+        allow: ["read"],
+        workspace: { roots: [...ROOTS], selectedRoot: ROOTS[0] },
+        allowed: [
+          {
+            name: "Probe",
+            identity: {
+              kind: "component-answer",
+              origin: "test://probe",
+              key: "Probe",
+              revision: "1",
+            },
+            forms: ["self-closing"],
+          },
+        ],
+        requests: [],
+      },
+    },
+    result: {
+      status: "ok",
+      value: {
+        version: 2,
+        decision: "admitted",
+        source: "<Probe />\n",
+        named: [
+          {
+            name: "Probe",
+            identity: {
+              kind: "component-answer",
+              origin: "test://probe",
+              key: "Probe",
+              revision: "1",
+            },
+            form: "self-closing",
+          },
+        ],
+        policy: {
+          version: 2,
+          allow: ["read"],
+          workspace: { roots: [...ROOTS], selectedRoot: ROOTS[0] },
+          allowed: [
+            {
+              name: "Probe",
+              identity: {
+                kind: "component-answer",
+                origin: "test://probe",
+                key: "Probe",
+                revision: "1",
+              },
+              forms: ["self-closing"],
+            },
+          ],
+          requests: [],
         },
-      ],
-      [],
-    ],
-  ];
+      },
+    },
+  };
 
-  for (const [what, source, candidate, allow, allowed, requests] of RELEASED_ALIASES) {
-    it(`FE18/GX21z: a version-1 record naming ${what} resumes against its stated alias`, function* () {
-      const root = yield* useWorkspace();
-      yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
-      const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
-
-      const first = yield* scoped(function* () {
-        yield* useWorkspaceFiles(root);
-        return yield* evaluate(candidate());
-      });
-      expect([what, first.failure]).toEqual([what, undefined]);
-
-      // The same run, resumed against the record a released build wrote for
-      // this entry: the opaque string, no revision, the untagged policy shape.
-      const again = yield* scoped(function* () {
-        yield* useWorkspaceFiles(root);
-        return yield* evaluate(candidate(), {
-          stream: new InMemoryStream(
-            withVersionOne(
-              yield* partial(first.events).readAll(),
-              versionOneRecord(source, allow, allowed, requests),
-            ),
-          ),
-        });
-      });
-
-      expect([what, again.failure]).toEqual([what, undefined]);
-      // Restored rather than decided a second time.
-      expect([what, admissions(again.events).length]).toEqual([what, 1]);
-      expect(transport.performed.length).toBeGreaterThanOrEqual(0);
-    });
+  /**
+   * The probe under its admitted identity, counting live invocations — so a
+   * case proves whether a continuation reached the generated component rather
+   * than inferring it from rendered text alone.
+   */
+  function countedProbe(performed: string[]): GeneratedObservation {
+    return pinnedComponent(
+      "Probe",
+      {
+        kind: "function",
+        name: "Probe",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        forms: ["self-closing"],
+        generated: offers("probe/read", "read"),
+        // deno-lint-ignore require-yield
+        *fn(): Operation<Json> {
+          performed.push("probed");
+          return "probed";
+        },
+      },
+      "component-answer",
+    );
   }
 
-  it("FE18/GX21z: a version-1 record naming the workflow Dir resumes against its stated alias", function* () {
-    // The host-supplied half of the same contract. `@executablemd/workflow/
-    // composition/dir-v2#Dir` is the workflow run's string, stated by the
-    // workflow entry rather than by core — and a journal holding it reconciles
-    // for exactly the same reason core's do.
-    const executed: string[] = [];
-    const candidate = () =>
-      selecting(`<Dir path="generated">held</Dir>\n`, [], {
-        allow: ["write"],
-        mutations: [dirEntry(executed)],
-      });
-
-    const first = yield* evaluate(candidate());
-    expect(first.failure).toBe(undefined);
-    expect(executed).toEqual(["dir:generated"]);
-
-    const again = yield* evaluate(candidate(), {
-      stream: new InMemoryStream(
-        withVersionOne(
-          yield* partial(first.events).readAll(),
-          versionOneRecord(
-            `<Dir path="generated">held</Dir>\n`,
-            ["write"],
-            [
-              {
-                name: "Dir",
-                identity: "@executablemd/workflow/composition/dir-v2#Dir",
-                forms: ["paired"],
-              },
-            ],
-          ),
-        ),
-      ),
-    });
-
-    expect(again.failure).toBe(undefined);
-    expect(admissions(again.events)).toHaveLength(1);
-  });
-
-  it("FE18/GX21z: the standard core admission a released build wrote still resumes", function* () {
-    // The record is `bb2c1c49`'s own: core's read-only `<File>` retained as the
-    // string that build committed, under the untagged policy shape. What lets
-    // it resume is not a spelling rule — there is none to find — but that
-    // `pinnedFileRead()` states that exact string as the version-1 identity it
-    // succeeds.
-    const root = yield* useWorkspace();
-    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
-
-    const first = yield* scoped(function* () {
-      yield* useWorkspaceFiles(root);
-      return yield* evaluate(request(`<File path="notes.md" />\n`, [pinnedFileRead()]));
-    });
-    expect(first.failure).toBe(undefined);
-
-    const again = yield* scoped(function* () {
-      const reads = yield* useWorkspaceFiles(root);
-      const evaluated = yield* evaluate(request(`<File path="notes.md" />\n`, [pinnedFileRead()]), {
-        stream: new InMemoryStream(
-          withVersionOne(
-            yield* partial(first.events).readAll(),
-            versionOneStandard(`<File path="notes.md" />\n`),
-          ),
-        ),
-      });
-      return { evaluated, reads: [...reads.performed] };
-    });
-
-    expect(again.evaluated.failure).toBe(undefined);
-    // Restored rather than decided a second time: one record, carried over from
-    // the run that wrote it in the older shape.
-    expect(admissions(again.evaluated.events)).toHaveLength(1);
-  });
-
-  it("FE18/GX21z: an entry that states no alias refuses the record that named it", function* () {
-    // The same released record, against a run whose `<File>` entry does not
-    // state that string. Reconciliation is an assertion the entry makes, so an
-    // entry that makes none is a new grant — and the safe answer to "is this
-    // the thing the record was admitted under" is the one that refuses.
-    const root = yield* useWorkspace();
-    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
-    const first = yield* scoped(function* () {
-      yield* useWorkspaceFiles(root);
-      return yield* evaluate(request(`<File path="notes.md" />\n`, [pinnedFileRead()]));
-    });
-
-    const silent: GeneratedObservation = { ...pinnedFileRead(), legacy: undefined };
-    const again = yield* scoped(function* () {
-      const reads = yield* useWorkspaceFiles(root);
-      const evaluated = yield* evaluate(request(`<File path="notes.md" />\n`, [silent]), {
-        stream: new InMemoryStream(
-          withVersionOne(
-            yield* duringPreparation(first.events).readAll(),
-            versionOneStandard(`<File path="notes.md" />\n`),
-          ),
-        ),
-      });
-      return { evaluated, reads: [...reads.performed] };
-    });
-
-    expect(again.evaluated.failure).toContain("admitted under");
-    // Ahead of the first generated effect: the refusal is the ceiling's, and
-    // the admitted read never reached the provider.
-    expect(again.reads).toEqual([]);
-  });
-
-  it("FE18/GX21z: an arbitrary version-1 host identity resumes against its stated alias", function* () {
-    const first = yield* evaluate(request("<Probe />\n", [versionOneProbe([])]));
+  it("FE18/GX21z: a current record restores, and the admitted read performs once", function* () {
+    const first = yield* evaluate(request("<Probe />\n", [probe()]));
     expect(first.output).toContain("probed");
 
-    // The other half of what version 1 could hold: whatever string the host
-    // passed to `pinnedComponent`, retained verbatim. `urn:host:probe/v1`
-    // resembles no structural identity at all, which is why nothing but the
-    // entry's own stated alias could connect it to what this run admits.
-    //
-    // This is also the version-1 positive control for the `GX21y` table below:
-    // every row there is this record with one thing wrong, so without this each
-    // of them could be refusing because an untagged record never resumes at all.
+    // The positive control every refusal row below is measured against: the
+    // record this build writes, resumed against the entry it was admitted
+    // under, restores the decision and performs the work it authorized.
     const performed: string[] = [];
-    const again = yield* evaluate(request("<Probe />\n", [versionOneProbe(performed)]), {
+    const again = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]), {
       stream: new InMemoryStream(
-        withVersionOne(yield* partial(first.events).readAll(), versionOneAdmission("<Probe />\n")),
+        withAdmission(yield* partial(first.events).readAll(), currentAdmission("<Probe />\n")),
       ),
     });
 
@@ -1956,69 +1753,61 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
     expect(admissions(again.events)).toHaveLength(1);
   });
 
-  it("FE18/GX21z: a version-1 string no entry lists as its own refuses", function* () {
-    const first = yield* evaluate(request("<Probe />\n", [versionOneProbe([])]));
+  it("FE18/GX21z: the same URL with an updated implementation resumes", function* () {
+    const first = yield* evaluate(request("<Probe />\n", [probe()]));
 
-    // Reconciliation is a stated alias, not a waiver. This run's entry lists a
-    // different string, so the retained one names an entry it does not have.
-    //
-    // The probe still counts, so this says the component was not reached rather
-    // than that no counting probe was admitted.
+    // What a revision used to refuse. The implementation behind the name is a
+    // different function with different output, offered under the same URL by
+    // the same declaration — and between executions that is an updated build of
+    // the component the admission named rather than a changed grant.
     const performed: string[] = [];
-    const moved: GeneratedObservation = {
-      ...versionOneProbe(performed),
-      legacy: ["urn:host:probe/v0"],
-    };
-    const again = yield* evaluate(request("<Probe />\n", [moved]), {
+    const updated = pinnedComponent(
+      "Probe",
+      {
+        kind: "function",
+        name: "Probe",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        forms: ["self-closing"],
+        generated: offers("probe/read", "read"),
+        // deno-lint-ignore require-yield
+        *fn(): Operation<Json> {
+          performed.push("probed again");
+          return "probed again";
+        },
+      },
+      "component-answer",
+    );
+    const again = yield* evaluate(request("<Probe />\n", [updated]), {
       stream: new InMemoryStream(
-        withVersionOne(
-          yield* duringPreparation(first.events).readAll(),
-          versionOneAdmission("<Probe />\n"),
-        ),
+        withAdmission(yield* partial(first.events).readAll(), currentAdmission("<Probe />\n")),
       ),
     });
 
-    expect(again.failure).toContain("admitted under");
-    expect(performed).toEqual([]);
+    expect(again.failure).toBe(undefined);
+    expect(performed).toEqual(["probed again"]);
   });
 
-  it("FE18/GX21z: a version-1 string never describes a component answer", function* () {
-    const first = yield* evaluate(request("<Probe />\n", [versionOneProbe([])]));
-
-    // The component-answer arm did not exist when untagged records were
-    // written, so no version-1 string ever described one. Reading this string as
-    // though it might would compare a fragment's admission equal to an admission it
-    // never had — even though the origin, the key and the revision all match.
-    const performed: string[] = [];
-    const answered: GeneratedObservation = {
-      ...versionOneProbe(performed),
-      identity: hostIdentity("test://probe", "Probe"),
-    };
-    const again = yield* evaluate(request("<Probe />\n", [answered]), {
-      stream: new InMemoryStream(
-        withVersionOne(
-          yield* duringPreparation(first.events).readAll(),
-          versionOneAdmission("<Probe />\n"),
-        ),
-      ),
-    });
-
-    expect(again.failure).toContain("admitted under");
-    expect(performed).toEqual([]);
-  });
-
-  it("FE18/GX21x: a literal version-1 refusal replays as the refusal it recorded", function* () {
+  it("FE18/GX21x: a current refusal replays as the refusal it recorded", function* () {
     const first = yield* evaluate(request("<Probe />\n", [probe()]));
 
     const performed: string[] = [];
+    const refused: DurableEvent = {
+      type: "yield",
+      coroutineId: "root",
+      description: { type: "generated_xmd", name: "generated:turn-1", input: CURRENT_POLICY },
+      result: {
+        status: "ok",
+        value: { version: 3, decision: "refused", construct: "block" },
+      },
+    };
     const again = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]), {
       stream: new InMemoryStream(
-        withVersionOne(yield* duringPreparation(first.events).readAll(), versionOneRefusal()),
+        withAdmission(yield* duringPreparation(first.events).readAll(), refused),
       ),
     });
 
-    // The refusal shape had no version member either, and restoring it means
-    // refusing again rather than re-deciding a fragment an older build declined.
+    // Restoring a refusal means refusing again rather than re-deciding a
+    // fragment this run already declined.
     expect(again.failure).toContain("executable code block");
     expect(performed).toEqual([]);
   });
@@ -2026,8 +1815,8 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
   /**
    * One admission whose policy and result carry whatever members a case wants.
    *
-   * Built as a literal rather than by rewriting a real record, so a case
-   * states the exact shape this build must refuse.
+   * Built as a literal rather than by rewriting a real record, so a case states
+   * the exact shape this build must refuse.
    */
   function forgedAdmission(policy: JsonObject, extra: JsonObject = {}): DurableEvent {
     return {
@@ -2037,9 +1826,10 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
       result: {
         status: "ok",
         value: {
+          version: 3,
           decision: "admitted",
           source: "<Probe />\n",
-          named: [{ name: "Probe", identity: "test://probe", form: "self-closing" }],
+          named: [{ name: "Probe", identity: PROBE_IDENTITY, form: "self-closing" }],
           policy,
           ...extra,
         },
@@ -2047,232 +1837,152 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
     };
   }
 
-  /**
-   * One version-2 admission whose identities are whatever a case wants.
-   *
-   * Version 2 is where the identity is the closed tagged record, so these are
-   * the cases that say what "closed" means: a value that is not that record is
-   * refused rather than read as whichever shape it most resembles.
-   */
-  function forgedVersionTwo(identity: Json, namedIdentity: Json = identity): DurableEvent {
-    const policy: JsonObject = {
-      version: 2,
-      allow: ["read"],
-      workspace: { roots: [...ROOTS], selectedRoot: ROOTS[0] },
-      // A version-2 record this build wrote would hold the trusted composition
-      // table ahead of the selection, so the control forges one that does. A row
-      // below moves part of the probe's identity and nothing else.
+  /** The probe's row, with whatever one case moves about it. */
+  function forgedRow(overrides: JsonObject): JsonObject {
+    return {
       allowed: [
         { ...COMPOSITION_RECORD },
-        { name: "Probe", identity, forms: ["self-closing", "paired"] },
-      ],
-      requests: [],
-    };
-    return {
-      type: "yield",
-      coroutineId: "root",
-      description: { type: "generated_xmd", name: "generated:turn-1", input: policy },
-      result: {
-        status: "ok",
-        value: {
-          version: 2,
-          decision: "admitted",
-          source: "<Probe />\n",
-          named: [{ name: "Probe", identity: namedIdentity, form: "self-closing" }],
-          policy,
+        {
+          name: "Probe",
+          form: "self-closing",
+          identity: PROBE_IDENTITY,
+          kind: "component-answer",
+          effect: "read",
+          ...overrides,
         },
-      },
+      ],
     };
   }
 
-  /** The identity this run actually states for `<Probe />`, as journal data. */
-  const PROBE_RECORD: JsonObject = {
-    kind: "component-answer",
-    origin: "test://probe",
-    key: "Probe",
-    revision: "1",
-  };
-
   /**
-   * Every version-2 identity shape this build refuses.
+   * Every retained record this build refuses, and what is wrong with each.
    *
-   * Separate from the version-1 table below because the two need different
-   * resumes: these records name `PROBE_RECORD`, so the run has to state that
-   * same component-answer identity, or every row would refuse on the kind
-   * rather than on what it says it is about. Their positive control is
-   * `forgedVersionTwo(PROBE_RECORD)`, which resumes under exactly that probe.
+   * Their positive control is the current record above: every row here is a
+   * record that would otherwise resume with one thing wrong, so a row that
+   * refuses is refusing on the defect it names rather than because a forged
+   * admission never resumes at all.
    */
-  const HOSTILE_V2: readonly (readonly [string, DurableEvent])[] = [
-    ["a version-2 identity written as a version-1 string", forgedVersionTwo("test://probe")],
-    [
-      "a version-2 identity with no kind",
-      forgedVersionTwo({
-        origin: "test://probe",
-        key: "Probe",
-        revision: "1",
-      }),
-    ],
-    [
-      "a version-2 identity naming a kind this build does not have",
-      forgedVersionTwo({
-        ...PROBE_RECORD,
-        kind: "registration",
-      }),
-    ],
-    [
-      "a version-2 identity carrying an extra member",
-      forgedVersionTwo({
-        ...PROBE_RECORD,
-        widened: true,
-      }),
-    ],
-    [
-      "a version-2 identity whose revision is not a string",
-      forgedVersionTwo({
-        ...PROBE_RECORD,
-        revision: 1,
-      }),
-    ],
-    ["a version-2 identity that is an array", forgedVersionTwo(["test://probe", "Probe", "1"])],
-    ["a version-2 identity that is null", forgedVersionTwo(null)],
-    // A closed record is closed in both directions: an extra member is refused
-    // above, and each missing one is refused here. `kind` has its own row, so
-    // these are the three that carry what the implementation actually is.
-    [
-      "a version-2 identity with no origin",
-      forgedVersionTwo({ kind: "component-answer", key: "Probe", revision: "1" }),
-    ],
-    [
-      "a version-2 identity with no key",
-      forgedVersionTwo({ kind: "component-answer", origin: "test://probe", revision: "1" }),
-    ],
-    [
-      "a version-2 identity with no revision",
-      forgedVersionTwo({ kind: "component-answer", origin: "test://probe", key: "Probe" }),
-    ],
-    // The kind is compared, not merely parsed. Everything else about this record
-    // is what this run states, and `capability` is a kind this build has — so a
-    // row that refuses here is refusing on the kind alone, which is the whole
-    // reason the kind travels inside the identity rather than beside it.
-    [
-      "a version-2 identity whose kind is the other one",
-      forgedVersionTwo({ ...PROBE_RECORD, kind: "capability" }),
-    ],
-    // One record, two shapes. The policy and the named invocation are read by
-    // different readers, and a record that satisfied one while contradicting the
-    // other would be a grant assembled out of two different versions.
-    //
-    // The first of these is the row that carries its own weight alone. A
-    // retained `named` list is *parsed* and never compared — the policy is what
-    // a continuation is held to — so the version strictness of that parse is the
-    // only thing standing behind it. Relaxing version 2 to accept a version-1
-    // string reddens this row and neither of the others, because those are
-    // caught by the comparison as well.
-    [
-      "a version-2 policy beside a version-1 named identity",
-      forgedVersionTwo(PROBE_RECORD, V1_SPELLING),
-    ],
-    [
-      "a version-1 named identity beside a version-2 policy",
-      forgedVersionTwo(V1_SPELLING, PROBE_RECORD),
-    ],
-  ];
-
-  /** Every retained shape this build refuses, and what is wrong with each. */
   const HOSTILE: readonly (readonly [string, DurableEvent])[] = [
-    ["a version this build does not have", forgedAdmission({ ...V1_POLICY, version: 99 })],
+    // The two shapes earlier builds wrote. Neither is readable here, and
+    // neither is migrated: an old record is refused before the admission it
+    // would have restored performs anything.
+    ["the untagged #369 shape", UNTAGGED_RECORD],
+    ["the tagged structural-identity shape", STRUCTURAL_RECORD],
+    ["a marker this build does not have", forgedAdmission({ ...CURRENT_POLICY, version: 99 })],
     [
-      "a version-1 policy carrying a version-2 workspace",
-      forgedAdmission({
-        ...V1_POLICY,
-        workspace: { roots: [...ROOTS], selectedRoot: ROOTS[0] },
-      }),
-    ],
-    [
-      "a version-2 policy still carrying legacy roots",
-      forgedAdmission({
-        version: 2,
-        allow: ["read"],
-        roots: [...ROOTS],
-        selectedRoot: ROOTS[0],
-        allowed: V1_POLICY.allowed,
-        requests: [],
-      }),
+      "a policy carrying legacy top-level roots",
+      forgedAdmission({ ...CURRENT_POLICY, roots: [...ROOTS], selectedRoot: ROOTS[0] }),
     ],
     [
       "a policy carrying a member this build does not know",
-      forgedAdmission({
-        ...V1_POLICY,
-        widened: true,
-      }),
+      forgedAdmission({ ...CURRENT_POLICY, widened: true }),
     ],
-    ["an empty class selection", forgedAdmission({ ...V1_POLICY, allow: [] })],
-    ["one class selected twice", forgedAdmission({ ...V1_POLICY, allow: ["read", "read"] })],
-    ["classes out of canonical order", forgedAdmission({ ...V1_POLICY, allow: ["write", "read"] })],
+    ["an empty class selection", forgedAdmission({ ...CURRENT_POLICY, allow: [] })],
+    ["one class selected twice", forgedAdmission({ ...CURRENT_POLICY, allow: ["read", "read"] })],
     [
-      "an allowed entry carrying an extra member",
+      "classes out of canonical order",
+      forgedAdmission({ ...CURRENT_POLICY, allow: ["write", "read"] }),
+    ],
+    // The row is closed in both directions: an extra member is refused, and
+    // each missing one is refused too, because every one of them is a term a
+    // continuation is held to.
+    [
+      "a row carrying an extra member",
+      forgedAdmission({ ...CURRENT_POLICY, ...forgedRow({ widened: true }) }),
+    ],
+    [
+      "a row with no form",
       forgedAdmission({
-        ...V1_POLICY,
+        ...CURRENT_POLICY,
         allowed: [
+          { ...COMPOSITION_RECORD },
           {
             name: "Probe",
-            identity: "test://probe",
-            forms: ["self-closing"],
-            widened: true,
+            identity: PROBE_IDENTITY,
+            kind: "component-answer",
+            effect: "read",
           },
         ],
       }),
     ],
     [
-      "an allowed entry with no forms",
-      forgedAdmission({
-        ...V1_POLICY,
-        allowed: [{ name: "Probe", identity: "test://probe", forms: [] }],
-      }),
+      "a row naming a form this build does not have",
+      forgedAdmission({ ...CURRENT_POLICY, ...forgedRow({ form: "either" }) }),
     ],
-    ["a repeated retained root", forgedAdmission({ ...V1_POLICY, roots: [ROOTS[0], ROOTS[0]] })],
-    ["no retained roots at all", forgedAdmission({ ...V1_POLICY, roots: [], selectedRoot: "" })],
     [
-      "a selected root the basis does not hold",
+      "a row naming an effect this build does not have",
+      forgedAdmission({ ...CURRENT_POLICY, ...forgedRow({ effect: "ask" }) }),
+    ],
+    [
+      "a row naming a kind this build does not have",
+      forgedAdmission({ ...CURRENT_POLICY, ...forgedRow({ kind: "registration" }) }),
+    ],
+    // The identity is a URL in the accepted namespace and nothing else. A
+    // relative reference, a look-alike origin, the structural record an earlier
+    // build wrote and a value that is not a string at all are each refused
+    // rather than read as whichever shape they most resemble.
+    [
+      "a row whose identity is relative",
+      forgedAdmission({ ...CURRENT_POLICY, ...forgedRow({ identity: "components/probe/read" }) }),
+    ],
+    [
+      "a row whose identity names a look-alike origin",
       forgedAdmission({
-        ...V1_POLICY,
-        selectedRoot: "workspace://never-retained",
+        ...CURRENT_POLICY,
+        ...forgedRow({ identity: "https://executable.md.example.com/components/probe/read" }),
       }),
     ],
+    [
+      "a row whose identity is a structural record",
+      forgedAdmission({
+        ...CURRENT_POLICY,
+        ...forgedRow({
+          identity: { kind: "component-answer", origin: "test://probe", key: "Probe" },
+        }),
+      }),
+    ],
+    [
+      "a row whose identity is an array",
+      forgedAdmission({ ...CURRENT_POLICY, ...forgedRow({ identity: [PROBE_IDENTITY] }) }),
+    ],
+    [
+      "a row whose identity is null",
+      forgedAdmission({ ...CURRENT_POLICY, ...forgedRow({ identity: null }) }),
+    ],
+    ["a repeated retained root", forgedPolicyWorkspace([ROOTS[0], ROOTS[0]], ROOTS[0])],
+    ["no retained roots at all", forgedPolicyWorkspace([], "")],
+    ["a selected root the basis does not hold", forgedPolicyWorkspace(ROOTS, "workspace://never")],
     [
       "a request carrying a member this build does not know",
       forgedAdmission({
-        ...V1_POLICY,
+        ...CURRENT_POLICY,
         requests: [{ url: URL_ONE, method: "GET", headers: {}, widened: true }],
       }),
     ],
     [
       "a request whose timeout is not a number",
       forgedAdmission({
-        ...V1_POLICY,
+        ...CURRENT_POLICY,
         requests: [{ url: URL_ONE, method: "GET", headers: {}, timeout: "soon" }],
       }),
     ],
     [
       "a result carrying a member this build does not know",
-      forgedAdmission(V1_POLICY, {
-        widened: true,
-      }),
+      forgedAdmission(CURRENT_POLICY, { widened: true }),
     ],
     [
-      "a tagged result holding an untagged policy",
+      "a result with no marker at all",
       {
         type: "yield",
         coroutineId: "root",
-        description: { type: "generated_xmd", name: "generated:turn-1", input: V1_POLICY },
+        description: { type: "generated_xmd", name: "generated:turn-1", input: CURRENT_POLICY },
         result: {
           status: "ok",
           value: {
-            version: 2,
             decision: "admitted",
             source: "<Probe />\n",
-            named: [{ name: "Probe", identity: "test://probe", form: "self-closing" }],
-            policy: V1_POLICY,
+            named: [{ name: "Probe", identity: PROBE_IDENTITY, form: "self-closing" }],
+            policy: CURRENT_POLICY,
           },
         },
       },
@@ -2282,103 +1992,86 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
       {
         type: "yield",
         coroutineId: "root",
-        description: { type: "generated_xmd", name: "generated:turn-1", input: V1_POLICY },
+        description: { type: "generated_xmd", name: "generated:turn-1", input: CURRENT_POLICY },
         result: {
           status: "ok",
           value: {
+            version: 3,
             decision: "admitted",
             source: "<Probe />\n",
             named: [
               {
                 name: "Probe",
-                identity: "test://probe",
+                identity: PROBE_IDENTITY,
                 form: "self-closing",
                 widened: true,
               },
             ],
-            policy: V1_POLICY,
+            policy: CURRENT_POLICY,
+          },
+        },
+      },
+    ],
+    [
+      "a named invocation whose identity is a legacy string",
+      {
+        type: "yield",
+        coroutineId: "root",
+        description: { type: "generated_xmd", name: "generated:turn-1", input: CURRENT_POLICY },
+        result: {
+          status: "ok",
+          value: {
+            version: 3,
+            decision: "admitted",
+            source: "<Probe />\n",
+            named: [{ name: "Probe", identity: "urn:host:probe/v1", form: "self-closing" }],
+            policy: CURRENT_POLICY,
           },
         },
       },
     ],
   ];
 
-  for (const [what, admission] of HOSTILE_V2) {
-    it(`FE18/GX21y: a retained record with ${what} refuses before any effect`, function* () {
-      // Resumed under the component-answer probe these records name, so a row
-      // refuses on the defect it is about rather than on a kind that never
-      // matched. The control below resumes on the unmodified record.
-      const first = yield* evaluate(request("<Probe />\n", [probe()]));
-
-      const performed: string[] = [];
-      const again = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]), {
-        stream: new InMemoryStream(
-          withVersionOne(yield* duringPreparation(first.events).readAll(), admission),
-        ),
-      });
-
-      expect([what, again.failure !== undefined]).toEqual([what, true]);
-      expect([what, performed]).toEqual([what, []]);
+  /** One admission whose Workspace basis is whatever a case states. */
+  function forgedPolicyWorkspace(roots: readonly string[], selectedRoot: string): DurableEvent {
+    return forgedAdmission({
+      ...CURRENT_POLICY,
+      workspace: { roots: [...roots], selectedRoot },
     });
   }
 
   for (const [what, admission] of HOSTILE) {
     it(`FE18/GX21y: a retained record with ${what} refuses before any effect`, function* () {
-      // The version-1 probe, because these rows are `V1_POLICY` with one thing
-      // wrong: the base has to be a record that *would* resume, or each row
-      // passes because an untagged record never resumes rather than because of
-      // the defect it names. `GX21z` is that control.
-      const first = yield* evaluate(request("<Probe />\n", [versionOneProbe([])]));
+      const first = yield* evaluate(request("<Probe />\n", [probe()]));
 
       const performed: string[] = [];
-      const again = yield* evaluate(request("<Probe />\n", [versionOneProbe(performed)]), {
+      const again = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]), {
         stream: new InMemoryStream(
-          withVersionOne(yield* duringPreparation(first.events).readAll(), admission),
+          withAdmission(yield* duringPreparation(first.events).readAll(), admission),
         ),
       });
 
       // A record this build cannot read whole is not a grant. Reading the
-      // members it recognizes would admit one on terms it never saw.
+      // members it recognizes would admit one on terms it never saw, and the
+      // refusal lands before the admitted read reaches a provider.
       expect([what, again.failure !== undefined]).toEqual([what, true]);
       expect([what, performed]).toEqual([what, []]);
     });
   }
-
-  it("FE18/GX21y: the same forged record with the exact identity resumes", function* () {
-    const first = yield* evaluate(request("<Probe />\n", [probe()]));
-
-    // The positive control for the structural-identity rows above. Every one of
-    // them is this record with one part of the identity moved, so this is what
-    // proves each refuses for its own reason rather than because a forged
-    // version-2 admission never resumes at all.
-    const performed: string[] = [];
-    const again = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]), {
-      stream: new InMemoryStream(
-        withVersionOne(yield* partial(first.events).readAll(), forgedVersionTwo(PROBE_RECORD)),
-      ),
-    });
-
-    expect(again.failure).toBe(undefined);
-    expect(performed).toEqual(["probed"]);
-    // Restored rather than decided a second time.
-    expect(admissions(again.events)).toHaveLength(1);
-  });
 
   it("GX21: a changed identity behind the same name refuses before invoking it", function* () {
     const first = yield* evaluate(request("<Probe />\n", [probe()]));
     expect(first.output).toContain("probed");
 
     const again = yield* evaluate(
-      request("<Probe />\n", [
-        pinnedComponent("Probe", hostIdentity("test://other", "Probe"), OTHER),
-      ]),
+      request("<Probe />\n", [pinnedComponent("Probe", OTHER, "component-answer")]),
       { stream: duringPreparation(first.events) },
     );
 
     expect(again.failure).toContain("admitted under");
     // Fixed: which identity moved is exactly what a refusal must not publish.
-    expect(again.failure).not.toContain("test://other");
-    expect(again.failure).not.toContain("test://probe");
+    expect(again.failure).not.toContain("components/other/read");
+    expect(again.failure).not.toContain(PROBE_IDENTITY);
     expect(String(again.output ?? "")).not.toContain("the other implementation ran");
     expect(persisted(again.events)).not.toContain("the other implementation ran");
   });
@@ -2387,9 +2080,7 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
     const first = yield* evaluate(request("<Probe />\n", [probe()]));
 
     const again = yield* evaluate(
-      request("<Probe />\n", [
-        pinnedComponent("Probe", hostIdentity("test://other", "Probe"), OTHER),
-      ]),
+      request("<Probe />\n", [pinnedComponent("Probe", OTHER, "component-answer")]),
       { stream: partial(first.events) },
     );
 
@@ -2624,13 +2315,14 @@ describe("Tier GX — the secret gate covers what is retained", () => {
     if (admission === undefined || observation === undefined) {
       throw new Error("the gate was not given both events");
     }
-    // The identity travels as its four members, so the gate sees the origin and
-    // the key as themselves rather than as one assembled spelling.
+    // The whole retained admission reaches the gate before it persists: the
+    // candidate's own request, the Workspace basis, and the URL the admitted
+    // spelling runs under beside the effect table that admitted it.
     for (const marker of [
       "url-marker",
       "workspace://primary",
-      "@executablemd/core",
-      '"key":"Fetch"',
+      "https://executable.md/components/fetch/read",
+      '"effect":"read"',
     ]) {
       expect(admission).toContain(marker);
     }
@@ -2741,13 +2433,17 @@ describe("Tier WGAC — the pinned read-only File", () => {
     expect(admittedFragments(attempt.evaluated.events)).toHaveLength(1);
   });
 
-  it("WGAC1: the read identity is not the unconstrained File identity", function* () {
-    // A retained admission resumes only under the identity it was granted with,
-    // and the comparison is on this string.
-    // Not the unconstrained `<File>`: the read form is a key of its own, so a
-    // run that later admitted the unconstrained one states a different identity.
-    expect(pinnedFileRead().identity.key).toBe("File:read");
+  it("WGAC1: the read entry admits the reading spelling and nothing else", function* () {
+    // A retained admission resumes only under the identity the admitted
+    // spelling runs under, and `<File>`'s two spellings are offered under two
+    // URLs: the reading form observes, the writing form mutates. So this entry
+    // is the self-closing one, and a run that admitted the paired spelling
+    // would be stating a different grant.
     expect(pinnedFileRead().selfClosing).toBe(true);
+    expect(pinnedFileRead().definition.generated).toEqual({
+      "self-closing": { identity: "https://executable.md/components/file/read", effect: "read" },
+      paired: { identity: "https://executable.md/components/file/write", effect: "write" },
+    });
   });
 
   it("WGAC13: the pinned deletion is core's own definition, in its one form", function* () {
@@ -2755,17 +2451,15 @@ describe("Tier WGAC — the pinned read-only File", () => {
 
     expect(deletion.name).toBe("File.Delete");
     // What a retained admission is compared against, and what a continuation
-    // that selected the write table is held to.
-    expect(deletion.identity).toEqual({
-      kind: "capability",
-      origin: "@executablemd/core",
-      key: "File.Delete",
-      revision: "2",
+    // that selected the write table is held to: the URL core's own declaration
+    // offers this spelling under, and the effect it offers it as.
+    expect(deletion.definition.generated).toEqual({
+      "self-closing": { identity: "https://executable.md/components/file/delete", effect: "write" },
     });
-    // One name, one identity: the component answers the self-closing spelling
-    // and refuses the paired one, so this states what the identity is rather
-    // than narrowing it — and stating it is what decides a paired spelling in
-    // preflight, before the fragment's first effect.
+    // One name, one form: the component answers the self-closing spelling and
+    // refuses the paired one, so this states the whole of what core offers
+    // rather than narrowing it — and stating it is what decides a paired
+    // spelling in preflight, before the fragment's first effect.
     expect(deletion.form).toBe("self-closing");
     // The exact object core's registry holds, not one shaped like it. Expansion
     // invokes a copy of this, and a same-shaped substitute is a different
@@ -2800,10 +2494,8 @@ describe("Tier WGAC — the pinned read-only File", () => {
       admitted?.type === "yield" && admitted.result.status === "ok"
         ? admitted.result.value
         : undefined;
-    expect(JSON.stringify(named)).toContain(JSON.stringify(pinnedFileRead().identity));
-    expect(JSON.stringify(named)).toContain(
-      JSON.stringify(pinnedFetch([ADMITTED_REQUEST]).identity),
-    );
+    expect(JSON.stringify(named)).toContain("https://executable.md/components/file/read");
+    expect(JSON.stringify(named)).toContain("https://executable.md/components/fetch/read");
     // Ordinary composition: the File read renders its text, and the Fetch —
     // which returns a value rather than text — renders nothing at all. Its
     // response reached the fragment and the fragment did not ask for it, so
@@ -2897,13 +2589,17 @@ const NEST: FunctionComponentDefinition = {
   kind: "function",
   name: "Nest",
   props: { type: "object", properties: {}, additionalProperties: false },
+  generated: {
+    "self-closing": { identity: "https://executable.md/components/nest/read", effect: "read" },
+    paired: { identity: "https://executable.md/components/nest/write", effect: "write" },
+  },
   *fn(): Operation<Json> {
     return yield* content();
   },
 };
 
 function nest(form: GeneratedComponentForm = "paired"): GeneratedMutation {
-  return pinnedMutation("Nest", hostIdentity("test://nest", "Nest"), NEST, form);
+  return pinnedMutation("Nest", NEST, form, "component-answer");
 }
 
 /** One candidate, with the classes and the write table a run states for it. */
@@ -2979,10 +2675,18 @@ describe("Tier GXC — a selection is not a grant", () => {
         ...COMPOSITION,
         {
           name: "Probe",
-          identity: hostIdentity("test://probe", "Probe"),
-          forms: ["self-closing", "paired"],
+          form: "self-closing",
+          identity: PROBE_IDENTITY,
+          kind: "component-answer",
+          effect: "read",
         },
-        { name: "Nest", identity: hostIdentity("test://nest", "Nest"), forms: ["paired"] },
+        {
+          name: "Nest",
+          form: "paired",
+          identity: "https://executable.md/components/nest/write",
+          kind: "component-answer",
+          effect: "write",
+        },
       ],
     });
   });
@@ -3027,7 +2731,10 @@ describe("Tier GXC — a selection is not a grant", () => {
     const attempt = yield* evaluate(
       selecting("<Nest>x</Nest>\n", [probe()], {
         allow: ["read", "write"],
-        mutations: [nest("paired"), nest("either")],
+        mutations: [
+          pinnedMutation("Writes", WRITES, "paired", "component-answer"),
+          pinnedMutation("Writes", WRITES, "either", "component-answer"),
+        ],
       }),
     );
 
@@ -3039,9 +2746,7 @@ describe("Tier GXC — a selection is not a grant", () => {
     const attempt = yield* evaluate(
       selecting("<Probe />\n", [probe()], {
         allow: ["read", "write"],
-        mutations: [
-          pinnedMutation("Probe", hostIdentity("test://probe-write", "Probe"), NEST, "paired"),
-        ],
+        mutations: [pinnedMutation("Probe", NEST, "paired", "component-answer")],
       }),
     );
 
@@ -3049,6 +2754,185 @@ describe("Tier GXC — a selection is not a grant", () => {
     // identity it ran as is the form's decision; which code runs is not.
     expect(attempt.failure).toContain("one name with two definitions");
     expect(admissions(attempt.events)).toHaveLength(0);
+  });
+
+  /**
+   * A directly pinned definition is one nothing validated on the way in.
+   *
+   * A provider's answer is read where it is published and core's own owners
+   * where they are declared, but a host holding a definition and pinning it
+   * reaches this table with whatever its declaration says. So the declaration
+   * is read here, before the admission record exists and before any body: a
+   * host cannot admit a spelling its own definition offers no generated use of,
+   * admit one under something that is not an identity, or describe the forms it
+   * accepts in a shape this engine does not have.
+   */
+  /**
+   * The probe, stating forms a declaration cannot state.
+   *
+   * Assembled rather than declared, because the point of each of these is that
+   * a host crossed this boundary from JavaScript with a value the declared
+   * shape does not describe.
+   */
+  function stating(forms: unknown): FunctionComponentDefinition {
+    return Object.assign({ ...PROBE }, { forms });
+  }
+
+  const MALFORMED: readonly (readonly [string, FunctionComponentDefinition, string])[] = [
+    [
+      "an identity that is not an absolute URL",
+      { ...PROBE, generated: { "self-closing": { identity: "not-a-url", effect: "read" } } },
+      "not an absolute URL",
+    ],
+    [
+      "an identity naming a look-alike origin",
+      {
+        ...PROBE,
+        generated: {
+          "self-closing": {
+            identity: "https://executable.md.example.com/components/probe/read",
+            effect: "read",
+          },
+        },
+      },
+      "not an absolute URL",
+    ],
+    [
+      "a spelling its own declaration does not accept",
+      { ...PROBE, forms: ["paired"] },
+      "does not accept",
+    ],
+    [
+      "forms this engine does not have",
+      stating(["self-closing", "unknown"]),
+      "the accepted declarations are",
+    ],
+    [
+      "forms stated as something other than a declaration",
+      stating("self-closing"),
+      "the accepted declarations are",
+    ],
+  ];
+
+  for (const [what, definition, refusal] of MALFORMED) {
+    it(`GXC2c: a directly pinned observation with ${what} is refused`, function* () {
+      const attempt = yield* evaluate(
+        request("<Probe />\n", [pinnedComponent("Probe", definition, "component-answer")]),
+      );
+
+      // The host's own error, before the candidate is admitted: no record was
+      // appended, so nothing restores it and the component never ran.
+      expect([what, attempt.failure]).toEqual([what, expect.stringContaining(refusal)]);
+      expect([what, admissions(attempt.events).length]).toEqual([what, 0]);
+      expect([what, String(attempt.output ?? "")]).toEqual([what, ""]);
+    });
+  }
+
+  it("GXC2c: a directly pinned mutation is read the same way", function* () {
+    const attempt = yield* evaluate(
+      selecting("<Nest>x</Nest>\n", [probe()], {
+        allow: ["read", "write"],
+        mutations: [
+          pinnedMutation(
+            "Nest",
+            { ...NEST, generated: { paired: { identity: "components/nest", effect: "write" } } },
+            "paired",
+            "component-answer",
+          ),
+        ],
+      }),
+    );
+
+    expect(attempt.failure).toContain("not an absolute URL");
+    expect(admissions(attempt.events)).toHaveLength(0);
+  });
+
+  /**
+   * The probe, with an identity that answers differently on a second reading.
+   *
+   * Assembled rather than declared, because the point is a member a host
+   * controls: `[[Get]]` answers the owner's URL once and something unusable
+   * afterwards, so a table that checked the host's object and then read it
+   * again to build the admission would retain a value the check never saw.
+   */
+  function alternating(
+    form: "self-closing" | "paired",
+    effect: GeneratedEffectClass,
+    reads: string[],
+  ): FunctionComponentDefinition {
+    const offered = {
+      get identity(): string {
+        reads.push("identity");
+        return reads.length === 1
+          ? `https://executable.md/components/probe/${effect}`
+          : "not-a-url";
+      },
+      effect,
+    };
+    return Object.assign({ ...PROBE }, { forms: [form], generated: { [form]: offered } });
+  }
+
+  it("GXC2c: a directly pinned observation is read once, and the admission holds it", function* () {
+    const reads: string[] = [];
+    const attempt = yield* evaluate(
+      request("<Probe />\n", [
+        pinnedComponent("Probe", alternating("self-closing", "read", reads), "component-answer"),
+      ]),
+    );
+
+    // One reading, and the record holds exactly it. The plant is live rather
+    // than inert: the next read of the host's object says `not-a-url`, which is
+    // what a second reading would have appended — and what the reader of that
+    // fresh record would then have refused, after the admission committed.
+    expect(reads).toEqual(["identity"]);
+    expect(attempt.failure).toBe(undefined);
+    expect(attempt.output).toContain("probed");
+    expect(recordedNames(admittedFragments(attempt.events)[0])).toEqual([
+      {
+        name: "Probe",
+        identity: "https://executable.md/components/probe/read",
+        form: "self-closing",
+      },
+    ]);
+  });
+
+  it("GXC2c: a directly pinned mutation is read once, and the admission holds it", function* () {
+    const reads: string[] = [];
+    const attempt = yield* evaluate(
+      selecting("<Writer>x</Writer>\n", [probe()], {
+        allow: ["read", "write"],
+        mutations: [
+          pinnedMutation(
+            "Writer",
+            alternating("paired", "write", reads),
+            "paired",
+            "component-answer",
+          ),
+        ],
+      }),
+    );
+
+    expect(reads).toEqual(["identity"]);
+    expect(attempt.failure).toBe(undefined);
+    const policy = recordedPolicy(admittedFragments(attempt.events)[0]);
+    const rows = isRecord(policy) && Array.isArray(policy.allowed) ? policy.allowed : [];
+    expect(rows).toContainEqual({
+      name: "Writer",
+      form: "paired",
+      identity: "https://executable.md/components/probe/write",
+      kind: "component-answer",
+      effect: "write",
+    });
+  });
+
+  it("GXC2c: the same table without the defect admits and runs", function* () {
+    // The positive control for the rows above: everything else about that table
+    // is what a host states, so each refusal is about the declaration it names.
+    const attempt = yield* evaluate(request("<Probe />\n", [probe()]));
+
+    expect(attempt.failure).toBe(undefined);
+    expect(attempt.output).toContain("probed");
+    expect(admissions(attempt.events)).toHaveLength(1);
   });
 });
 
@@ -3074,8 +2958,16 @@ describe("Tier GXC — a name is not a form", () => {
     expect(attempt.evaluated.failure).toBe(undefined);
     // One name, two identities, chosen by how each element was written.
     expect(recordedNames(admittedFragments(attempt.evaluated.events)[0])).toEqual([
-      { name: "File", identity: pinnedFileRead().identity, form: "self-closing" },
-      { name: "File", identity: pinnedFileWrite().identity, form: "paired" },
+      {
+        name: "File",
+        identity: "https://executable.md/components/file/read",
+        form: "self-closing",
+      },
+      {
+        name: "File",
+        identity: "https://executable.md/components/file/write",
+        form: "paired",
+      },
     ]);
     expect(attempt.files).toEqual(["notes.md", "write:proposed.md"]);
     expect(yield* readTextFile(join(root, "proposed.md"))).toBe("the fragment wrote this");
@@ -3322,16 +3214,14 @@ describe("Tier GXC — a resumed run is held to its classes and forms", () => {
       "a widened admitted form",
       {
         allow: ["write"],
-        mutations: [pinnedMutation("File", pinnedFileWrite().identity, NEST, "either")],
+        mutations: [pinnedMutation("File", WRITES, "either", "component-answer")],
       },
     ],
     [
       "a replaced write identity",
       {
         allow: ["write"],
-        mutations: [
-          pinnedMutation("File", hostIdentity("test://other-write", "File"), NEST, "paired"),
-        ],
+        mutations: [pinnedMutation("File", NEST, "paired", "component-answer")],
       },
     ],
     ["an added write identity", { allow: ["write"], mutations: [pinnedFileWrite(), nest()] }],
@@ -3392,9 +3282,7 @@ describe("Tier GXC — a resumed run is held to its classes and forms", () => {
     const again = yield* evaluate(
       selecting("<Probe />\n", [probe()], {
         allow: ["read"],
-        mutations: [
-          pinnedMutation("Nest", hostIdentity("test://replaced", "Nest"), NEST, "paired"),
-        ],
+        mutations: [pinnedMutation("Nest", NEST, "paired", "component-answer")],
       }),
       { stream: duringPreparation(first.events) },
     );
@@ -3433,14 +3321,20 @@ describe("Tier GXC — the authored form survives the public content chain", () 
 
   /** A read component that reports what the chain answers, so a lie is visible. */
   function says(): GeneratedObservation {
-    return pinnedComponent("Says", hostIdentity("test://says", "Says"), {
-      kind: "function",
-      name: "Says",
-      props: { type: "object", properties: {}, additionalProperties: false },
-      *fn(): Operation<Json> {
-        return `says:${yield* hasContent()}`;
+    return pinnedComponent(
+      "Says",
+      {
+        kind: "function",
+        name: "Says",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        forms: ["self-closing"],
+        generated: offers("says/read", "read"),
+        *fn(): Operation<Json> {
+          return `says:${yield* hasContent()}`;
+        },
       },
-    });
+      "component-answer",
+    );
   }
 
   const REPORTING: Array<[string, readonly boolean[]]> = [
@@ -3481,8 +3375,16 @@ describe("Tier GXC — the authored form survives the public content chain", () 
       expect(String(attempt.evaluated.output)).toContain("the retained note");
       // And the admission still names the identity and form it was granted for.
       expect(recordedNames(admittedFragments(attempt.evaluated.events)[0])).toEqual([
-        { name: "Says", identity: hostIdentity("test://says", "Says"), form: "self-closing" },
-        { name: "File", identity: pinnedFileRead().identity, form: "self-closing" },
+        {
+          name: "Says",
+          identity: "https://executable.md/components/says/read",
+          form: "self-closing",
+        },
+        {
+          name: "File",
+          identity: "https://executable.md/components/file/read",
+          form: "self-closing",
+        },
       ]);
     });
   }
@@ -3524,8 +3426,16 @@ describe("Tier GXC — the authored form survives the public content chain", () 
       expect(attempt.files).toEqual(["write:proposed.md"]);
       expect(yield* readTextFile(join(root, "proposed.md"))).toBe("the fragment wrote this");
       expect(recordedNames(admittedFragments(attempt.evaluated.events)[0])).toEqual([
-        { name: "Says", identity: hostIdentity("test://says", "Says"), form: "self-closing" },
-        { name: "File", identity: pinnedFileWrite().identity, form: "paired" },
+        {
+          name: "Says",
+          identity: "https://executable.md/components/says/read",
+          form: "self-closing",
+        },
+        {
+          name: "File",
+          identity: "https://executable.md/components/file/write",
+          form: "paired",
+        },
       ]);
     });
   }

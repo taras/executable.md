@@ -38,11 +38,11 @@
  *
  * `<Fetch>` is absent rather than present-and-bounded. An unbounded network
  * read is a decision this command does not make on a document's behalf, and
- * admitting the identity with an empty ceiling would be a different thing from
- * not admitting it — the fragment would name a component it can never
- * successfully call.
+ * admitting the name with an empty ceiling would be a different thing from not
+ * admitting it — the fragment would name a component it can never successfully
+ * call.
  *
- * ## No Workspace, and no alias
+ * ## No Workspace
  *
  * An ordinary run evaluates against no Workspace. Its admitted effects address
  * the Files provider its own execution installed, and there is no immutable

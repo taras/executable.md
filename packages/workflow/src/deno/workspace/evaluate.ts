@@ -18,7 +18,9 @@
  * existing middleware, effective Permissions and the run's effect transaction.
  * Deletion remains a workspace_file effect. Relative paths use the run's contextual
  * cwd, including Dir/Repository/Worktree placement, never the invocation host cwd.
- * This profile supplies identities, forms and ceilings rather than operations.
+ * This profile supplies admitted names, forms and ceilings rather than
+ * operations: which identity and effect each admitted spelling runs under comes
+ * from the declaration that owns its implementation.
  */
 
 import { timeoutFetch } from "@executablemd/runtime";
@@ -49,9 +51,9 @@ export interface GeneratedEvaluationOptions {
   /**
    * The exact HTTP reads an admitted fragment may perform.
    *
-   * Empty admits `<Fetch>` not at all — the pinned identity is simply not on
-   * the allowlist, which is a different thing from admitting it and refusing
-   * every request.
+   * Empty admits `<Fetch>` not at all — the pinned entry is simply not on the
+   * allowlist, which is a different thing from admitting it and refusing every
+   * request.
    */
   readonly requests?: readonly GeneratedRequest[];
   /** Further read components this host admits beside core's pinned ones. */

@@ -97,7 +97,6 @@ export type {
   FragmentEntry,
   FragmentEvaluationInput,
   FragmentForm,
-  FragmentIdentity,
   FragmentWorkspaceAccess,
 } from "./src/evaluation-profile.ts";
 /**
@@ -329,11 +328,11 @@ export {
 export type {
   GeneratedComponentForm,
   GeneratedEffectClass,
+  GeneratedImplementation,
   GeneratedMutation,
   GeneratedObservation,
   GeneratedRequest,
   GeneratedXmdRequest,
-  RetainedFragmentIdentity,
 } from "./src/generated-xmd.ts";
 
 /**

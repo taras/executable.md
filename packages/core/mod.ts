@@ -286,6 +286,13 @@ export {
   registerComponents,
 } from "./src/components/registration.ts";
 export type { ComponentRegistration } from "./src/components/registration.ts";
+// What a registration says about the generated use of its own forms. The two
+// members a declaration states; nothing here reads or publishes a catalog of them.
+export type {
+  GeneratedEffect,
+  GeneratedForm,
+  GeneratedForms,
+} from "./src/components/generated-metadata.ts";
 export { DEFAULT_INCLUDES, selectComponent } from "./src/components/select.ts";
 export type { SelectOptions } from "./src/components/select.ts";
 export { CORE_COMPONENT_NAMES } from "./src/components/registry.ts";

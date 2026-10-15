@@ -1111,15 +1111,14 @@ children for, or refuse a paired one that has them (executable-mdx-spec §5.6).
 A Prompt sent to an already-established Agent does not acquire a new cwd merely
 because its invocation appears inside a later Dir.
 
-Its paired form is also the versioned pinned identity
-`@executablemd/workflow/composition/dir-v2#Dir` in the standard generated-XMD
-write table (§8.4), built from this same implementation and schema. Selecting
+Its paired form is also what the standard generated-XMD write table admits
+(§8.4), built from this same implementation and schema, and offered for that use
+by canonical core's own declaration: `https://executable.md/components/dir/ensure`,
+as a write (`specs/executable-mdx-spec.md` §6.13.2). Selecting
 `allow={["write"]}` intentionally authorizes its persistent recursive directory
-creation. The former `@executablemd/workflow/composition#Dir` identity never
-authorizes creation, so a continuation retaining it refuses before generated
-execution. Being registered grants the current identity nothing: a generated
-fragment reaches the pinned identity and never the registration, and a
-repository component named `Dir` satisfies neither.
+creation. Being registered grants that identity nothing: a generated fragment
+reaches the admitted entry and never the registration, and a repository
+component named `Dir` satisfies neither.
 
 Everything the lexical directory covers reads and writes through it, including
 `<File.Delete>` (§10.1), which removes one file from the Workspace the same
@@ -1856,16 +1855,18 @@ that states no class asks for observation alone. An empty, repeated or unknown
 selection, and a selected class the host supplied no table for, each fail before
 the candidate is parsed and before any `generated_xmd` record exists.
 
-`allow` narrows; it never grants. It cannot create a pinned identity, add a
+`allow` narrows; it never grants. It cannot admit a name or a spelling, add a
 root, authorize a destination, attach a credential or widen a request. A host
 that installed no write table refuses `allow={["write"]}` outright.
 
 #### Admission
 
 The host supplies the exact candidate source, the retained Workspace roots the
-run has and which one is selected, the immutable read and write tables of pinned
-component identities, the exact requests each admitted read may perform, and the
-classes this fragment draws on. Before the first effect, the evaluator:
+run has and which one is selected, the immutable read and write tables of
+admitted components, the exact requests each admitted read may perform, and the
+classes this fragment draws on. What each admitted spelling runs as — its
+identity and its effect — comes from the declaration that owns its
+implementation rather than from the table (`specs/executable-mdx-spec.md` §5.3). Before the first effect, the evaluator:
 
 - parses the complete source;
 - walks every element and every element's content;
@@ -1934,22 +1935,21 @@ its selected root, must remain retained, and the current root must be retained.
 Additional roots and an advanced current root pass. Losing an admission root
 refuses without revealing compared values.
 
-Non-root terms must match exactly in canonical order: selected classes, pinned
-identities and forms, and normalized request ceilings. Only selected tables
-participate, so changing an unused write table does not invalidate a read-only
-admission. [Generated admission and continuation](../architecture.md#agent-permissions-and-generated-xmd)
-owns the retained-basis comparison and durable policy identity.
+Non-root terms must match exactly in canonical order: selected classes, the
+admitted spellings with the identity each runs under, and normalized request
+ceilings. Only selected tables participate, so changing an unused write table
+does not invalidate a read-only admission. [Generated admission and continuation](../architecture.md#agent-permissions-and-generated-xmd)
+owns the retained-basis comparison and the retained policy's shape.
 
-`File` is admitted as two identities, never as one. Core's pinned **read**
-identity is the self-closing form and core's pinned **write** identity is the
-paired form, including the empty paired one, which truncates: `<File>` reads
-when it has no content and writes when it has some, so the two spellings are two
-identities and the constraint travels with the pinned one rather than being
-checked inside the component. A paired `<File>` under a `read`-only selection,
-and a self-closing `<File />` under a `write`-only one, are each refused in
-preflight, so the fragment performs no read and no write at all. The
-unconstrained core `File` definition is never admitted, and a repository
-component named `File` is neither pinned identity.
+`File` is admitted as two spellings, never as one. Its own declaration offers
+the self-closing form as a **read** and the paired form — including the empty
+paired one, which truncates — as a **write**: `<File>` reads when it has no
+content and writes when it has some, so the two spellings carry two identities
+and the constraint belongs to the component rather than being checked inside its
+body. A paired `<File>` under a `read`-only selection, and a self-closing
+`<File />` under a `write`-only one, are each refused in preflight, so the
+fragment performs no read and no write at all. A repository component named
+`File` is admitted as neither spelling.
 
 A name resolves to one implementation. Two entries under one name must therefore
 carry the same definition and disjoint forms; overlapping forms or two
@@ -1957,10 +1957,10 @@ definitions are a malformed host table, refused before anything is retained
 rather than settled by whichever entry the host listed first.
 
 **The admitted form also holds at invocation.** Preflight selects the exact
-name and form before the first effect; canonical dispatch then holds the body
-to that selection before any provider is reached. An admitted `File:read`
-cannot become a write, an admitted `File:write` cannot become a read, and only
-self-closing `File.Delete` is admitted. The [generated-XMD boundary](../architecture.md#agent-permissions-and-generated-xmd)
+name and spelling before the first effect; canonical dispatch then holds the
+body to that selection before any provider is reached. An admitted reading
+`<File />` cannot become a write, an admitted writing `<File>…</File>` cannot
+become a read, and only self-closing `<File.Delete />` is admitted. The [generated-XMD boundary](../architecture.md#agent-permissions-and-generated-xmd)
 owns the engine-authenticated form check; replaceable `Component.hasContent()`
 answers and caller-created invocation objects cannot decide it.
 
@@ -2086,19 +2086,12 @@ admission tables; naming `Evaluate` there is an unadmitted-component refusal.
 #### Mutation-proposal admission
 
 Mutation admission is the same boundary asked for the other class. The standard
-Deno workflow profile's write table holds exactly three identities, in the order
-it states them: core's paired `File:write`, the paired versioned
-`@executablemd/workflow/composition/dir-v2#Dir` — a host-stated identity whose
-body canonical core supplies, so the admitted grant and the authored component
-are one implementation — and core's self-closing `File.Delete`. A host's own
-extensions come after them, and the profile supplies no external-write and no
-execution table.
-
-That `<Dir>` identity names *retained history*, not the package the component
-lives in. Every journal a released build wrote holds the string above and a
-continuation compares the table position by position, so the identity stays as
-written even though canonical core now owns the component
-(`specs/executable-mdx-spec.md` §6.13.2).
+Deno workflow profile's write table admits exactly three spellings, in the order
+it states them: core's paired `<File>`, the paired `<Dir>` the Git Plugin asks
+for — a host deciding that a workflow run has one at all, while core supplies
+both the body and the identity it runs under — and core's self-closing
+`<File.Delete>`. A host's own extensions come after them, and the profile
+supplies no external-write and no execution table.
 
 That order is retained identity. A continuation compares the entries position by
 position ([§8.4, continuation ceilings](#a-continuation-is-held-to-the-ceilings-it-was-admitted-under)), so a run admitted under
@@ -2118,11 +2111,10 @@ the evaluator adds none: it owns admission, and the component's own contract
 owns atomicity, failure and cancellation.
 
 Selecting `allow={["write"]}` therefore intentionally authorizes persistent,
-recursive directory creation by the current pinned `<Dir>`. The former
-`@executablemd/workflow/composition#Dir` identity described contextual placement
-without creation and is not interchangeable with this permission. A continuation
-whose retained table contains that former identity refuses before any generated
-component executes; the write ceiling is not silently broadened.
+recursive directory creation by the admitted `<Dir>`. A continuation whose
+retained table holds another identity, spelling or effect behind that name
+refuses before any generated component executes; the write ceiling is not
+silently broadened.
 
 Because the whole fragment is decided inside the admission before its first
 effect, a fragment mixing an admitted write with anything unadmitted — a later
@@ -3504,7 +3496,7 @@ fetch operation requires its own language and durability contract.
 | workflow Agent session retention | built by #302; [§8.5](#85-agent-session-continuity) owns logical session identity, compatibility, first-turn publication and reattachment/refusal behavior |
 | generated-XMD admission | built by #369 through `@executablemd/core/host`; the workflow policy wrapper is internal. [§8.4](#84-generated-xmd) owns the workflow tables and selected classes; [architecture](../architecture.md#agent-permissions-and-generated-xmd) owns admission and continuation mechanics |
 | `<Evaluate>` and the authored loop | built by #302 and #369, canonical since #713; [§8.4](#the-authored-loop-and-where-it-is-written) owns text/paired inputs, the closed `text`/`allow` schema, rendered-string output and authored iteration/approval. The host supplies a captured ceiling; core supplies the protected component |
-| generated-XMD mutation-proposal admission | built by #369 and #567, amended by #643; [§8.4](#mutation-proposal-admission) owns the ordered write profile, retained Dir compatibility, ordinary effect transactions and authored approval. Evaluate returns rendered text, with no result envelope or mutation receipt |
+| generated-XMD mutation-proposal admission | built by #369 and #567, amended by #643; [§8.4](#mutation-proposal-admission) owns the ordered write profile, the identity each admitted spelling runs under, ordinary effect transactions and authored approval. Evaluate returns rendered text, with no result envelope or mutation receipt |
 | Deno-local DOFS persistence | POC proven by #349 / PR #350 |
 | scoped Deno Worker Shell | containment proven by #351 / PR #353 and transactions by #357 / PR #362; production integration unbuilt |
 | Worker JavaScript | deferred |

@@ -1184,12 +1184,7 @@ describe("Tier PI — read-only information requests", () => {
 
   /** The admitted entry the barrier is written as. */
   function heldEntry(): FragmentEntry {
-    return {
-      kind: "component-answer",
-      name: "Held",
-      identity: { origin: HELD_ORIGIN, key: "Held", revision: "1" },
-      forms: ["self-closing"],
-    };
+    return { kind: "component-answer", name: "Held", forms: ["self-closing"] };
   }
 
   /** One barrier: a body whose cleanup blocks until the case releases it. */
@@ -1209,6 +1204,13 @@ describe("Tier PI — read-only information requests", () => {
           kind: "function",
           name: "Held",
           props: { type: "object", properties: {}, additionalProperties: false },
+          forms: ["self-closing"],
+          generated: {
+            "self-closing": {
+              identity: "https://executable.md/components/held/read",
+              effect: "read",
+            },
+          },
           *fn(): Operation<Json> {
             // Registered before anything can fail, so the barrier is reached
             // whichever way this projection ends.
@@ -1219,7 +1221,7 @@ describe("Tier PI — read-only information requests", () => {
             return "held";
           },
         },
-        { origin: HELD_ORIGIN, key: "Held", revision: "1" },
+        { origin: HELD_ORIGIN },
       ),
     };
   }

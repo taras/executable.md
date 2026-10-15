@@ -136,6 +136,7 @@ import type {
 import { documentationOf } from "./components/documentation.ts";
 import { registerComponents } from "./components/registration.ts";
 import {
+  admittedGenerated,
   declaredForms,
   formDispatcher,
   installFormSyntax,
@@ -143,12 +144,8 @@ import {
   parseFormDeclaration,
 } from "./invocation-identity.ts";
 import type { IdentityComponent, ImportSelection } from "./invocation-identity.ts";
-import {
-  CanonicalImports,
-  ExecutionImports,
-  identityRecord,
-} from "./components/component-resolution.ts";
-import type { AnswerIdentity, ImportTier } from "./components/component-resolution.ts";
+import { CanonicalImports, ExecutionImports } from "./components/component-resolution.ts";
+import type { ImportTier } from "./components/component-resolution.ts";
 import type { ExecutionEnvironment } from "./execution-environment.ts";
 import {
   EXECUTION_BUILT_COMPONENTS,
@@ -156,7 +153,6 @@ import {
   ProtectedImports,
 } from "./components/protected.ts";
 import { coreComponentDefinition, CORE_ORIGIN } from "./components/registry.ts";
-import { CORE_REVISION } from "./generated-xmd.ts";
 import { rootSyntaxReference } from "./syntax-reference.ts";
 import { useRootSyntaxReference } from "./syntax-api.ts";
 import { capturedDocumentation } from "./documentation-api.ts";
@@ -168,7 +164,6 @@ import {
 } from "./evaluation-profile.ts";
 import type {
   FragmentEvaluationInput,
-  FragmentIdentity,
   PreparedProfile,
   ResolvedAnswer,
   ResolvedAnswers,
@@ -760,38 +755,22 @@ function* resolveImportUnrecorded(
   return yield* materializeImport(name, selection, inputs, claimed);
 }
 
-/** What a provider-backed name that nothing identified refuses with. */
-const UNIDENTIFIED_ANSWER =
-  "an evaluation profile admits a component answer, and the implementation the import chain " +
-  "answered with carries no identity from the provider that installed it. A fragment runs an " +
-  "answer a continuation can be compared against, or it runs none.";
-
-/**
- * What a provider-backed name whose answer is somebody else's refuses with.
- *
- * Both identities are spelled the one way a reader is ever shown one, so a
- * diagnostic and an identity statement describe the same thing the same way.
- * Neither is a secret: an origin, a key and a revision are what a host
- * published in order to admit the name, and naming them is what makes this
- * actionable.
- */
-function differentAnswer(name: string, expected: FragmentIdentity, stated: AnswerIdentity): string {
-  return (
-    `an evaluation profile admits <${name} /> as ${identityRecord(expected)}, and the import ` +
-    `chain answered with ${identityRecord(stated)}. An admitted identity is the exact ` +
-    "implementation a fragment may run."
-  );
-}
+/** What a provider-backed name no provider published an answer for refuses with. */
+const UNPUBLISHED_ANSWER =
+  "an evaluation profile admits a component answer, and no provider published the " +
+  "implementation the import chain answered with. A fragment runs an answer its provider " +
+  "published, or it runs none.";
 
 /**
  * What canonical core itself holds for this name, or nothing.
  *
  * A protected component's implementation is the one this execution built; an
  * ordinary core component's is the definition core registered. Both are core's
- * own object, and the identity comparison is the whole check: an answer that
- * is anything else — a repository component of the same name, a registration a
- * nested scope layered over, a middleware's replacement — is not this, so it
- * receives no canonical identity and the entry refuses it.
+ * own object, and object identity is the whole check: an answer that is
+ * anything else — a repository component of the same name, a registration a
+ * nested scope layered over, a middleware's replacement, a look-alike carrying
+ * core's own generated URLs — is not this, so core publishes nothing for it and
+ * the entry refuses it.
  */
 function sealedByCore(inputs: ImportInputs, name: string): FunctionComponentDefinition | undefined {
   return inputs.guarded.get(name) ?? coreComponentDefinition(name);
@@ -810,16 +789,17 @@ function sealedByCore(inputs: ImportInputs, name: string): FunctionComponentDefi
  * is not authored work, and a durable record for it would be an effect a
  * continuation then had to account for.
  *
- * What comes back is asked about once. The provider's identity statement is
- * read off the *exact final answer* rather than off anything the chain held in
- * between, and that one call answers with both the identity and core's own
- * copy of what was identified — taken when the identity was recorded, before
- * the chain could see it again. So the value this run keeps is the value the
- * check was made about: there is no second read of the chain's object for an
- * alternating proxy or a computed member to answer differently.
+ * What comes back is asked about once. Whether a provider published the *exact
+ * final answer* is asked of that object rather than of anything the chain held
+ * in between, and that one call answers with core's own copy of what was
+ * published — taken when it was published, before the chain could see it again
+ * — together with the publishing installation's origin. So the value this run
+ * keeps is the value the check was made about: there is no second read of the
+ * chain's object for an alternating proxy or a computed member to answer
+ * differently.
  *
- * The identity is then compared whole with what the host entry expects, and the
- * copy — not the answer — is what the profile seals.
+ * What each admitted form of that definition runs as is the definition's own,
+ * and the profile holds every admitted form to it as it seals.
  */
 function* resolveComponentAnswers(
   prepared: PreparedProfile,
@@ -831,21 +811,13 @@ function* resolveComponentAnswers(
     // A capability-only profile performs no component-chain lookup at all.
     return answers;
   }
-  // The names this profile admits under canonical core's own identity. A
-  // protected component is nobody's to answer for, so no provider states what
-  // is behind one — core does, here, and only where the entry says it expects
-  // core. A host that admits a protected name under a provider's identity is
-  // still that provider's to claim, exactly as it was.
+  // The protected names this profile admits. A protected component is nobody's
+  // to answer for, so no provider publishes what is behind one — core does,
+  // here, and only for the one protected name it offers a host an entry for. A
+  // host that admits any other name is still the provider's to publish, exactly
+  // as it was.
   const canonical = new Set(
-    prepared.answered
-      .filter(
-        ({ name, identity }) =>
-          CANONICAL_PROFILE_ANSWERS.has(name) &&
-          identity.origin === CORE_ORIGIN &&
-          identity.key === name &&
-          identity.revision === CORE_REVISION,
-      )
-      .map(({ name }) => name),
+    prepared.answered.filter((name) => CANONICAL_PROFILE_ANSWERS.has(name)),
   );
   const canonicalProvider = canonical.size === 0 ? undefined : imports.provider(CORE_ORIGIN);
   yield* scoped(function* () {
@@ -853,11 +825,13 @@ function* resolveComponentAnswers(
       {
         *importComponent([name, position], _next) {
           const answer = yield* resolveImportUnrecorded(name, inputs);
-          // Stated from the innermost position, on the exact object
+          // Published from the innermost position, on the exact object
           // materialization produced, so a handler composed around this one
-          // states nothing: middleware that returns this answer unchanged
-          // leaves the claim on it, and middleware that returns anything else
-          // returns something carrying no identity at all.
+          // publishes nothing: middleware that returns this answer unchanged
+          // leaves the publication on it, and middleware that returns anything
+          // else returns something nobody published. A foreign implementation
+          // carrying core's own URLs is not this object, so copying them
+          // publishes nothing either.
           if (
             canonicalProvider === undefined ||
             !canonical.has(name) ||
@@ -867,7 +841,7 @@ function* resolveComponentAnswers(
           }
           const asked = canonicalProvider.open(name, position);
           try {
-            return asked.request.claim(answer, { key: name, revision: CORE_REVISION });
+            return asked.request.answer(answer);
           } finally {
             asked.close();
           }
@@ -875,16 +849,16 @@ function* resolveComponentAnswers(
       },
       { at: "min" },
     );
-    for (const { name, identity } of prepared.answered) {
-      // One resolution, one claim window. It opens before the chain is asked
-      // and closes however this iteration leaves — answered, refused, or
+    for (const name of prepared.answered) {
+      // One resolution, one publication window. It opens before the chain is
+      // asked and closes however this iteration leaves — answered, refused, or
       // cancelled partway through — so a handler that lost this decision, or
-      // one still holding its request while the *next* name resolves, states
+      // one still holding its request while the *next* name resolves, publishes
       // nothing into a decision that is already made.
       //
-      // One call, one result. The claim and core's copy of what was claimed
-      // come back together, and the object the chain returned is not read
-      // again — so nothing this run keeps was decided by a second read.
+      // One call, one result. The publication and core's copy of what was
+      // published come back together, and the object the chain returned is not
+      // read again — so nothing this run keeps was decided by a second read.
       const resolution = imports.beginResolution(name);
       let identified;
       try {
@@ -897,16 +871,9 @@ function* resolveComponentAnswers(
         resolution.close();
       }
       if (identified === undefined) {
-        throw new EvaluationProfileError(UNIDENTIFIED_ANSWER);
+        throw new EvaluationProfileError(UNPUBLISHED_ANSWER);
       }
-      const { identity: stated, definition: own } = identified;
-      if (
-        stated.origin !== identity.origin ||
-        stated.key !== identity.key ||
-        stated.revision !== identity.revision
-      ) {
-        throw new EvaluationProfileError(differentAnswer(name, identity, stated));
-      }
+      const { origin, definition: own } = identified;
       // An answer this execution could not keep a copy of never reaches here:
       // identification refuses it above, because there would be nothing to hand
       // back. What is left is an answer that copied fine and is not something a
@@ -917,7 +884,7 @@ function* resolveComponentAnswers(
             "definition that has no implementation to invoke. An admitted entry runs something.",
         );
       }
-      answers.set(name, { definition: own });
+      answers.set(name, { definition: own, origin });
     }
   });
   return answers;
@@ -3352,15 +3319,28 @@ function reconcile(document: Result<Json> | undefined, teardown: Error | undefin
  * Shared by the components a host declares to an execution and by the private
  * declarations one declared Markdown component carries, so a member added to
  * one is not silently dropped from the other.
+ *
+ * The generated use each form is offered for is read through the validator that
+ * owns that contract, because it is the one member whose copy is a grant: an
+ * identity and an effect decide which implementation a continuation admits, so
+ * a reading taken later — or a nested object left live for the factory to be
+ * handed — would be a grant this declaration never made. What the validator
+ * answers with is what is retained, and what the forms are built from.
  */
 function retainedIdentityComponent(component: IdentityComponent): IdentityComponent {
+  const name = component.name;
+  // Read before the metadata, so the forms the offer is held against are the
+  // forms this execution accepts the component in.
+  const forms = component.forms === undefined ? undefined : Object.freeze([...component.forms]);
+  const generated = admittedGenerated({ name, generated: component.generated, forms });
   return Object.freeze({
-    name: component.name,
+    name,
     origin: component.origin,
     props: detachedSchema(component.props),
     ...(component.returns === undefined ? {} : { returns: detachedSchema(component.returns) }),
     ...(component.captures === undefined ? {} : { captures: [...component.captures] }),
-    ...(component.forms === undefined ? {} : { forms: [...component.forms] }),
+    ...(forms === undefined ? {} : { forms }),
+    ...(generated === undefined ? {} : { generated }),
     ...documentationOf(component),
     factory: component.factory.bind(component),
   });

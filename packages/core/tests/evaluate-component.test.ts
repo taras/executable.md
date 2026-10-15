@@ -41,7 +41,7 @@ import type { ElicitationRequest } from "../src/elicitation-api.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
 import type { RecordedFiles } from "./support/fragment-files.ts";
-import { answerProvider, implementation } from "./support/answer-provider.ts";
+import { answerProvider, implementation, offering } from "./support/answer-provider.ts";
 import type { Implementation, ProviderOptions } from "./support/answer-provider.ts";
 import type { FunctionComponentDefinition } from "../src/types.ts";
 import { ActiveProjection } from "../src/projection.ts";
@@ -62,21 +62,12 @@ function syntaxProfile(
   options: {
     transform?: (answer: FunctionComponentDefinition) => FunctionComponentDefinition;
     retained?: FunctionComponentDefinition[];
-    unclaimed?: boolean;
-    revision?: string;
   } = {},
 ): ExecutionInstallation {
   let captured = false;
   return {
     evaluation: {
-      read: [
-        {
-          kind: "component-answer",
-          name: "Syntax",
-          identity: { origin: "test://syntax-provider", key: "Syntax", revision: "1" },
-          forms: ["self-closing"],
-        },
-      ],
+      read: [{ kind: "component-answer", name: "Syntax", forms: ["self-closing"] }],
     },
     componentAnswers: [
       {
@@ -90,10 +81,6 @@ function syntaxProfile(
                 throw new Error("expected canonical Syntax");
               }
               options.retained?.push(answer);
-              if (options.unclaimed) {
-                return answer;
-              }
-              request.claim(answer, { key: "Syntax", revision: options.revision ?? "1" });
               return options.transform?.(answer) ?? answer;
             }
             return answer;
@@ -120,7 +107,7 @@ describe("protected generated component answers", () => {
         throw new Error("expected canonical Syntax");
       }
       const captured = yield* prepared.seal(
-        new Map([["Syntax", { definition }]]),
+        new Map([["Syntax", { definition, origin: "@executablemd/core" }]]),
         identity.componentRouting.project,
       );
       const symbols = admittedSymbols(captured.read);
@@ -170,16 +157,14 @@ describe("protected generated component answers", () => {
    * may *run*, by identity rather than by spelling. The enclosing reference
    * documents core's own `<File>`, so an admitted entry reporting an ordinary
    * registration is a different component under the same name — and a fragment
-   * admitted to write a file would be told it could not. The grant stays the
-   * host's: only the documentation origin is core's, which is why the host's own
-   * directory identity below is untouched.
+   * admitted to write a file would be told it could not. What the host decides
+   * is whether the name is admitted at all; the identity the grant is recorded
+   * under is core's, from the declaration that owns the component.
    */
   it("reports an admitted file operation as the component canonical core owns", function* () {
     const prepared = yield* prepareEvaluationProfile({
       read: [fileReadEntry()],
-      // Deliberately a host's own identity, and deliberately not core's: it is
-      // what a continuation compares, and nothing here may rewrite it.
-      write: [directoryEntry({ origin: "test://host", key: "Dir", revision: "1" }, "Dir")],
+      write: [directoryEntry("Dir")],
     });
     try {
       const captured = yield* prepared.seal(new Map());
@@ -197,9 +182,12 @@ describe("protected generated component answers", () => {
           sourceKind: "protected",
         },
       ]);
-      // The grant itself is unchanged. A journal holds this string, and the
-      // component moving into core did not move the host's entry with it.
-      expect(captured.write.map((entry) => entry.identity.origin)).toEqual(["test://host"]);
+      // And the grant is core's, because the component is: the paired spelling
+      // runs under the identity core's own declaration offers it as.
+      expect(captured.write.map((entry) => entry.origin)).toEqual(["@executablemd/core"]);
+      expect(captured.write[0]?.definition.generated).toMatchObject({
+        paired: { identity: "https://executable.md/components/dir/ensure", effect: "write" },
+      });
     } finally {
       prepared.revoke();
     }
@@ -276,7 +264,7 @@ describe("protected generated component answers", () => {
     }
   });
 
-  it("refuses copied, mutated, wrapped, unclaimed, misidentified and wrong-form answers", function* () {
+  it("refuses copied, mutated, wrapped and replaced answers, and a wrong form", function* () {
     const source = `<Evaluate text={'<Syntax />'} />`;
     const ran: string[] = [];
     const variants: {
@@ -287,7 +275,7 @@ describe("protected generated component answers", () => {
       {
         name: "copied",
         options: { transform: (answer) => ({ ...answer }) },
-        reason: "carries no identity",
+        reason: "no provider published",
       },
       {
         name: "replaced body",
@@ -300,12 +288,12 @@ describe("protected generated component answers", () => {
             },
           }),
         },
-        reason: "carries no identity",
+        reason: "no provider published",
       },
       {
         name: "wrapped",
         options: { transform: independentWrapper },
-        reason: "carries no identity",
+        reason: "no provider published",
       },
       {
         name: "mutated",
@@ -315,13 +303,7 @@ describe("protected generated component answers", () => {
             return answer;
           },
         },
-        reason: "carries no identity",
-      },
-      { name: "unclaimed", options: { unclaimed: true }, reason: "carries no identity" },
-      {
-        name: "misidentified",
-        options: { revision: "2" },
-        reason: "chain answered with test://syntax-provider#Syntax@2",
+        reason: "no provider published",
       },
     ];
     for (const { name, options, reason } of variants) {
@@ -408,10 +390,7 @@ describe("protected generated component answers", () => {
       yield* refusal(
         run(source, [syntaxProfile({ transform: () => held })], new InMemoryStream(partial)),
       ),
-    ).toContain("carries no identity");
-    expect(
-      yield* refusal(run(source, [syntaxProfile({ unclaimed: true })], new InMemoryStream(events))),
-    ).toContain("carries no identity");
+    ).toContain("no provider published");
     function inspect(value: unknown): void {
       expect(typeof value).not.toBe("function");
       if (typeof value === "object" && value !== null) {
@@ -444,11 +423,7 @@ function both(files: RecordedFiles): ExecutionInstallation {
   return {
     evaluation: {
       read: [fileReadEntry()],
-      write: [
-        fileWriteEntry(),
-        directoryEntry({ origin: "test://host", key: "Dir", revision: "1" }, "Dir"),
-        fileDeleteEntry(),
-      ],
+      write: [fileWriteEntry(), directoryEntry("Dir"), fileDeleteEntry()],
     },
     install: () => useRecordedFiles(files),
   };
@@ -1233,18 +1208,13 @@ describe("Tier FE — one occurrence, one durable decision", () => {
     );
     const partial = complete.slice(0, admitted + 1);
 
-    // The same fragment, admitted under a table that now states another
-    // identity. A grant is the exact set it was made under.
+    // The same fragment, admitted under a read table that now admits a second
+    // component as well. A grant is the exact set of spellings it was made
+    // under, so a widened one is a different grant rather than the same one
+    // restated.
     const second = recordedFiles({ "notes.md": NOTE });
     const widened: ExecutionInstallation = {
-      evaluation: {
-        read: [
-          {
-            ...fileReadEntry(),
-            identity: { origin: "@executablemd/core", key: "File:read", revision: "99" },
-          },
-        ],
-      },
+      evaluation: { read: [fileReadEntry(), globReadEntry()] },
       install: () => useRecordedFiles(second),
     };
     const failed = yield* refusal(run(source, [widened], new InMemoryStream(partial)));
@@ -1888,7 +1858,7 @@ describe("Tier FE34 — the shared read profile", () => {
     expect(files.entries.get("notes.md")).toBe(NOTE);
   });
 
-  it("FE34: canonical Syntax is the answer at core's identity, and a replacement loses it", function* () {
+  it("FE34: canonical core publishes the Syntax answer, and a replacement loses it", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
     const seen: FunctionComponentDefinition[] = [];
     const failed = yield* refusal(
@@ -1907,11 +1877,11 @@ describe("Tier FE34 — the shared read profile", () => {
       }),
     );
 
-    // Core states what is behind the protected name from the innermost
+    // Core publishes what is behind the protected name from the innermost
     // position, on the exact object materialization produced. A handler that
-    // returns anything else returns something carrying no identity at all.
+    // returns anything else returns something nobody published.
     expect(seen.length).toBeGreaterThan(0);
-    expect(failed).toContain("carries no identity");
+    expect(failed).toContain("no provider published");
     expect(files.performed).toEqual([]);
   });
 
@@ -2063,6 +2033,8 @@ describe("Tier FE34 — the shared read profile", () => {
       kind: "function",
       name: "Held",
       props: { type: "object", properties: {}, additionalProperties: false },
+      forms: ["self-closing"],
+      generated: offering("Held", "read"),
       *fn(): Operation<string> {
         yield* ensure(function* () {
           throw new Error("the fragment's cleanup failed");
@@ -2076,12 +2048,7 @@ describe("Tier FE34 — the shared read profile", () => {
           fileReadEntry(),
           globReadEntry(),
           syntaxReadEntry(),
-          {
-            kind: "component-answer",
-            name: "Held",
-            identity: { origin: "test://provider", key: "Held", revision: "1" },
-            forms: ["self-closing"],
-          },
+          { kind: "component-answer", name: "Held", forms: ["self-closing"] },
         ],
       },
       install: () => useRecordedFiles(files),
@@ -2125,31 +2092,24 @@ describe("Tier FE34 — the shared read profile", () => {
     expect(generatedRequestRefusal(classified)).toContain("NoSuchComponent");
   });
 
-  it("FE34: core answers for Syntax alone, so Evaluate cannot be admitted at its identity", function* () {
+  it("FE34: core answers for Syntax alone, so Evaluate cannot be admitted as an answer", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
     const failed = yield* refusal(
       run(`<Evaluate text={'<Evaluate text={"inert"} />\\n'} />\n`, [
         {
           evaluation: {
-            read: [
-              {
-                kind: "component-answer",
-                name: "Evaluate",
-                identity: { origin: "@executablemd/core", key: "Evaluate", revision: "2" },
-                forms: ["self-closing"],
-              },
-            ],
+            read: [{ kind: "component-answer", name: "Evaluate", forms: ["self-closing"] }],
           },
           install: () => useRecordedFiles(files),
         },
       ]),
     );
 
-    // Stating an identity is what makes a protected name admissible, and core
-    // states one for the vocabulary and nothing else: evaluation inside
+    // Core publishing an answer is what makes a protected name admissible, and
+    // it publishes one for the vocabulary and nothing else: evaluation inside
     // evaluation is a different grant from being shown what a fragment may
-    // write. The hand-written entry resolves to an answer nothing identified.
-    expect(failed).toContain("carries no identity");
+    // write. The hand-written entry resolves to an answer nobody published.
+    expect(failed).toContain("no provider published");
     expect(files.performed).toEqual([]);
   });
 });
@@ -2158,49 +2118,30 @@ describe("Tier FE34 — the shared read profile", () => {
  * Tier FE14 — an implementation the ordinary import chain answered for.
  *
  * A `component-answer` entry is the one arm of a profile where the host does
- * not supply the body. It states a name and the exact structural identity a
- * provider must have stated, and canonical execution resolves that name once —
- * before the root import, through the complete ordinary chain — reads the
- * identity off the exact final answer, compares it whole, and seals what it
- * retained.
+ * not supply the body. It states a name and the forms it admits, and canonical
+ * execution resolves that name once — before the root import, through the
+ * complete ordinary chain — takes the definition the provider published on the
+ * exact final answer, holds each admitted spelling to what that definition
+ * offers, and seals what it retained.
  *
  * So the rows here are about the two ways that could be weaker than it looks:
- * an answer nothing identified, and an answer that stopped being the thing that
- * was identified. Each refusal names what did *not* happen — no admission, no
+ * an answer nobody published, and an answer that stopped being the thing that
+ * was published. Each refusal names what did *not* happen — no admission, no
  * body, no fragment effect — because a refusal that arrived after A ran would
  * satisfy an error-shape assertion and none of these.
  */
-describe("Tier FE14 — the chain answers, and the answer is held to its identity", () => {
+describe("Tier FE14 — the chain answers, and the answer is held to what it offers", () => {
   const OPEN = `<Evaluate text={'<Open />\\n'} as="answer" />\n\n<Json value={answer} />\n`;
 
   /** The entry a host states for a provider-backed name. */
-  function admits(
-    identity: { origin?: string; key?: string; revision?: string } = {},
-  ): FragmentEvaluationInput {
-    return {
-      read: [
-        {
-          kind: "component-answer",
-          name: "Open",
-          identity: {
-            origin: identity.origin ?? "test://provider",
-            key: identity.key ?? "Open",
-            revision: identity.revision ?? "1",
-          },
-          forms: ["self-closing"],
-        },
-      ],
-    };
+  function admits(): FragmentEvaluationInput {
+    return { read: [{ kind: "component-answer", name: "Open", forms: ["self-closing"] }] };
   }
 
   /** One installation admitting `<Open />` and backing it with one provider. */
-  function backed(
-    answer: Implementation,
-    options: ProviderOptions = {},
-    identity: { origin?: string; key?: string; revision?: string } = {},
-  ): ExecutionInstallation {
+  function backed(answer: Implementation, options: ProviderOptions = {}): ExecutionInstallation {
     return {
-      evaluation: admits(identity),
+      evaluation: admits(),
       componentAnswers: [answerProvider("Open", answer.definition, options)],
     };
   }
@@ -2212,8 +2153,8 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
     );
   }
 
-  /** The identity one admission retained for the name it admitted. */
-  function retainedIdentity(event: DurableEvent): Json {
+  /** The row one admission retained for the name it admitted. */
+  function retainedRow(event: DurableEvent): Json {
     const result = event.type === "yield" ? event.result : undefined;
     if (result === undefined || result.status !== "ok" || !isRecord(result.value)) {
       throw new Error("the admission recorded no result");
@@ -2222,13 +2163,13 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
     if (!isRecord(policy) || !Array.isArray(policy.allowed)) {
       throw new Error("the admission recorded no policy");
     }
-    // The trusted composition table leads every policy, so the entry this row
+    // The trusted composition table leads every policy, so the row this case
     // is about is the first one the selection contributed.
     const entry = policy.allowed.find((held) => isRecord(held) && held.name !== "Json");
     if (!isRecord(entry)) {
       throw new Error("the admission admitted nothing");
     }
-    return entry.identity ?? null;
+    return entry;
   }
 
   function isRecord(value: Json | undefined): value is Record<string, Json> {
@@ -2246,7 +2187,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
     expect(A.invoked).toEqual(["A ran"]);
   });
 
-  it("FE14: a fresh admission records the exact structural identity", function* () {
+  it("FE14: a fresh admission records the URL the admitted spelling runs under", function* () {
     const A = implementation("Open", "A ran");
     const stream = new InMemoryStream();
     yield* run(OPEN, [backed(A)], stream);
@@ -2256,19 +2197,21 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
     if (admission === undefined) {
       throw new Error("the run recorded no admission");
     }
-    // The four members as themselves, and the kind among them: an answer the
+    // The spelling, the URL its owner offers it under, which effect table
+    // admitted it, and what kind of thing answered for the name: an answer the
     // chain resolved is a different grant from an operation core supplies the
-    // body for, even under the same origin, key and revision.
-    expect(retainedIdentity(admission)).toEqual({
+    // body for, even under the same URL.
+    expect(retainedRow(admission)).toEqual({
+      name: "Open",
+      form: "self-closing",
+      identity: "https://executable.md/components/open/read",
       kind: "component-answer",
-      origin: "test://provider",
-      key: "Open",
-      revision: "1",
+      effect: "read",
     });
     expect(A.invoked).toEqual(["A ran"]);
   });
 
-  it("FE14: an inner claim and an outer unclaimed answer refuse before any body", function* () {
+  it("FE14: an inner publication and an outer unpublished answer refuse before any body", function* () {
     const A = implementation("Open", "A ran");
     const B = implementation("Open", "B ran");
     const files = recordedFiles({ "notes.md": NOTE });
@@ -2276,9 +2219,9 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
 
     const failed = yield* refusal(
       scoped(function* () {
-        // A handler further out returns its own object. The inner provider's
-        // claim was about the object it returned, and this is not that object —
-        // so nothing identifies the answer the chain finally gave.
+        // A handler further out returns its own object. The inner provider
+        // published the object it returned, and this is not that object — so
+        // nobody published the answer the chain finally gave.
         yield* Component.around({
           *importComponent([name], next) {
             const definition = yield* next(name);
@@ -2287,13 +2230,13 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
         });
         return yield* run(
           OPEN,
-          [{ ...backed(A), evaluation: admits({}), install: () => useRecordedFiles(files) }],
+          [{ ...backed(A), evaluation: admits(), install: () => useRecordedFiles(files) }],
           stream,
         );
       }),
     );
 
-    expect(failed).toContain("carries no identity");
+    expect(failed).toContain("no provider published");
     // Ahead of everything: no admission, neither body, no fragment effect.
     expect(admissions(yield* stream.readAll())).toHaveLength(0);
     expect(A.invoked).toEqual([]);
@@ -2301,7 +2244,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
     expect(files.performed).toEqual([]);
   });
 
-  it("FE14: an inner claimed A and an outer claimed B compose, and only B runs", function* () {
+  it("FE14: an inner published A and an outer published B compose, and only B runs", function* () {
     const A = implementation("Open", "A ran");
     const B = implementation("Open", "B ran");
     const delegated: unknown[] = [];
@@ -2310,29 +2253,29 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
     // The positive control for the row above, and a real chain rather than one
     // provider. Two providers answer for one name: the one installed first
     // composes outermost, delegates — so the inner one genuinely answers and
-    // claims A — and then returns its own claimed B. The difference from the
-    // refusal above is only that the identity travels with the object the chain
-    // finally gives back, which is what makes the substitution honest.
+    // publishes A — and then returns its own published B. The difference from
+    // the refusal above is only that the publication travels with the object
+    // the chain finally gives back, which is what makes the substitution
+    // honest.
     const output = yield* run(OPEN, [
       {
-        evaluation: admits({ key: "Outer" }),
+        evaluation: admits(),
         componentAnswers: [
           answerProvider("Open", B.definition, {
-            key: "Outer",
             delegatesFirst: true,
             delegated,
             whileResolving(request) {
               outerRequests.push(request.name);
             },
           }),
-          answerProvider("Open", A.definition, { key: "Inner" }),
+          answerProvider("Open", A.definition, {}),
         ],
       },
     ]);
 
     // The inner half really answered: what delegation returned is the exact
-    // object the inner provider claimed. So A was resolvable, and the row below
-    // it is about which of two live answers runs rather than about one.
+    // object the inner provider published. So A was resolvable, and the row
+    // below it is about which of two live answers runs rather than about one.
     expect(delegated[0]).toBe(A.definition);
     expect(outerRequests).toEqual(["Open"]);
     expect(String(output)).toContain("B ran");
@@ -2342,7 +2285,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
 
   it("FE14: an answer whose contract reads differently each time cannot substitute", function* () {
     const reads: string[] = [];
-    // The claimed contract accepts one prop; the substitution accepts none.
+    // The published contract accepts one prop; the substitution accepts none.
     const A = implementation("Open", "A ran", {
       type: "object",
       properties: { flag: { type: "string" } },
@@ -2350,10 +2293,10 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
     });
 
     // The check/use gap, planted. Reading the answer's schema alternates, and
-    // comparing own descriptors — which is how the claim is checked — does not
-    // run the trap. So the reading the capture *keeps* decides what a fragment
-    // is validated against: the claim-time schema admits `flag`, and the
-    // substitution refuses it.
+    // comparing own descriptors — which is how a publication is checked — does
+    // not run the trap. So the reading the capture *keeps* decides what a
+    // fragment is validated against: the publication-time schema admits `flag`,
+    // and the substitution refuses it.
     const output = yield* run(`<Evaluate text={'<Open flag="one" />\\n'} as="answer" />\n`, [
       {
         evaluation: admits(),
@@ -2405,21 +2348,21 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
     expect(A.invoked).toEqual([]);
   });
 
-  it("FE14: a provider still claiming when a fragment resolves is refused earlier", function* () {
+  it("FE14: a provider still publishing when a fragment resolves is refused earlier", function* () {
     const A = implementation("Open", "A ran");
     const stream = new InMemoryStream();
 
     // The same substitution, one step earlier. The resolution this provider
-    // answered settled during the capture, so there is no window left to state
-    // an identity into — the claim refuses before the witness is consulted, and
-    // an answer nothing could identify never reaches the fragment.
+    // answered settled during the capture, so there is no window left to
+    // publish into — the publication refuses before the witness is consulted,
+    // and an answer nobody could have published never reaches the fragment.
     const failed = yield* refusal(
       run(
         OPEN,
         [
           {
             evaluation: admits(),
-            componentAnswers: [answerProvider("Open", A.definition, { reclaimsLater: true })],
+            componentAnswers: [answerProvider("Open", A.definition, { publishesLater: true })],
           },
         ],
         stream,
@@ -2430,11 +2373,11 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
     expect(A.invoked).toEqual([]);
   });
 
-  it("FE14: an unidentified, a copied and a mutated answer each refuse", function* () {
+  it("FE14: an unpublished, a copied and a mutated answer each refuse", function* () {
     const cases: readonly (readonly [string, ProviderOptions])[] = [
-      ["nothing identified it", { unclaimed: true }],
-      ["the chain returned a copy of what was claimed", { copied: true }],
-      ["the claimed object was edited afterwards", { mutated: true }],
+      ["nobody published it", { unpublished: true }],
+      ["the chain returned a copy of what was published", { copied: true }],
+      ["the published object was edited afterwards", { mutated: true }],
     ];
 
     for (const [what, options] of cases) {
@@ -2446,7 +2389,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
           OPEN,
           [
             {
-              evaluation: admits({}),
+              evaluation: admits(),
               install: () => useRecordedFiles(files),
               componentAnswers: [answerProvider("Open", A.definition, options)],
             },
@@ -2455,7 +2398,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
         ),
       );
 
-      expect([what, failed.includes("carries no identity")]).toEqual([what, true]);
+      expect([what, failed.includes("no provider published")]).toEqual([what, true]);
       // Before the root import, so there is no admission and no body — and the
       // document's own effects never started either.
       expect([what, admissions(yield* stream.readAll()).length]).toEqual([what, 0]);
@@ -2464,29 +2407,60 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
     }
   });
 
-  it("FE14: an answer under another identity refuses before any body", function* () {
-    const A = implementation("Open", "A ran");
+  it("FE14: an answer stating forms this engine does not have refuses", function* () {
     const files = recordedFiles();
     const stream = new InMemoryStream();
+    // The same reading as the unit row, at the live boundary: the provider
+    // answers honestly with a definition whose stated forms are not a
+    // declaration this engine has, so the spelling it offers cannot be held to
+    // them and the publication refuses before the root import.
+    const A = implementation("Open", "A ran");
+    const stating = Object.assign({ ...A.definition }, { forms: "paired" });
 
     const failed = yield* refusal(
       run(
         OPEN,
         [
           {
-            evaluation: admits({ revision: "1" }),
+            evaluation: admits(),
             install: () => useRecordedFiles(files),
-            // The provider claims honestly — for a revision this host did not
-            // admit. An admitted identity is the exact implementation, and a
-            // changed revision is a changed grant.
-            componentAnswers: [answerProvider("Open", A.definition, { revision: "2" })],
+            componentAnswers: [answerProvider("Open", stating)],
           },
         ],
         stream,
       ),
     );
 
-    expect(failed).toContain("the exact implementation");
+    expect(failed).toContain("the accepted declarations are");
+    expect(admissions(yield* stream.readAll())).toHaveLength(0);
+    expect(A.invoked).toEqual([]);
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE14: an answer offering no generated use of the admitted spelling refuses", function* () {
+    const files = recordedFiles();
+    const stream = new InMemoryStream();
+    // The provider answers honestly, with a definition whose own declaration
+    // offers no generated use of the spelling this host admitted. There is no
+    // identity for a continuation to be compared against, so the entry refuses
+    // before the root import rather than running something unaccountable.
+    const A = implementation("Open", "A ran", undefined, null);
+
+    const failed = yield* refusal(
+      run(
+        OPEN,
+        [
+          {
+            evaluation: admits(),
+            install: () => useRecordedFiles(files),
+            componentAnswers: [answerProvider("Open", A.definition)],
+          },
+        ],
+        stream,
+      ),
+    );
+
+    expect(failed).toContain("offers no generated use of it");
     expect(admissions(yield* stream.readAll())).toHaveLength(0);
     expect(A.invoked).toEqual([]);
   });
@@ -2503,27 +2477,24 @@ describe("Tier FE14 — the chain answers, and the answer is held to its identit
     const partial = complete.slice(0, admitted + 1);
 
     // The resumed run supplies both implementations, live. The inner provider
-    // answers the unchanged A under the identity the admission was made over;
-    // the outer one delegates to it and then answers with its own claimed B,
-    // under the identity this host now admits. So capture reconciles and seals
-    // B — and then the *retained* policy refuses, because the admission was
-    // made over `Open@1` and this run states `Other@1` behind the same name.
+    // answers the unchanged A, whose declaration offers the identity the
+    // admission was made over; the outer one delegates to it and then answers
+    // with its own published B, whose declaration offers that spelling under a
+    // different URL. So capture seals B — and then the *retained* policy
+    // refuses, because the admission was made over one URL and this run states
+    // another behind the same name.
     const resumedA = implementation("Open", "A ran");
-    const B = implementation("Open", "B ran");
+    const B = implementation("Open", "B ran", undefined, offering("Other", "read"));
     const delegated: unknown[] = [];
     const failed = yield* refusal(
       run(
         OPEN,
         [
           {
-            evaluation: admits({ key: "Other" }),
+            evaluation: admits(),
             componentAnswers: [
-              answerProvider("Open", B.definition, {
-                key: "Other",
-                delegatesFirst: true,
-                delegated,
-              }),
-              answerProvider("Open", resumedA.definition, { key: "Open" }),
+              answerProvider("Open", B.definition, { delegatesFirst: true, delegated }),
+              answerProvider("Open", resumedA.definition),
             ],
           },
         ],
@@ -2917,7 +2888,7 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
     expect(wrapped.performed).toEqual([]);
   });
 
-  it("EL5: a continuation whose retained Elicit identity moved refuses before any effect", function* () {
+  it("EL5: a continuation that no longer admits Elicit refuses before any effect", function* () {
     const files = recordedFiles();
     const stream = new InMemoryStream();
     yield* scoped(function* () {
@@ -2932,19 +2903,15 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
     expect(admitted).toBeGreaterThanOrEqual(0);
     const partial = complete.slice(0, admitted + 1);
 
-    // The same fragment and the same text, under a table that now states
-    // another revision behind the same name.
+    // The same fragment and the same text, under a table that no longer admits
+    // the question at all. A grant is the exact set of spellings it was made
+    // under, so a table missing one is a different grant rather than the same
+    // one restated.
     const second = recordedFiles();
     const moved: ExecutionInstallation = {
       evaluation: {
         read: [fileReadEntry()],
-        write: [
-          fileWriteEntry(),
-          {
-            ...elicitWriteEntry(),
-            identity: { origin: "@executablemd/core", key: "Elicit", revision: "99" },
-          },
-        ],
+        write: [fileWriteEntry()],
       },
       install: () => useRecordedFiles(second),
     };

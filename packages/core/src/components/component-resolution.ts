@@ -18,6 +18,7 @@
  * nothing a handler still holds decides what is *invoked*.
  */
 
+import { definitionGeneratedRefusal } from "./generated-metadata.ts";
 import type { ComponentDefinition, FunctionComponentDefinition, SourcePosition } from "../types.ts";
 
 /** A definition an import may answer with. */
@@ -168,44 +169,31 @@ function read<T>(inspect: () => T): T | undefined {
  * resembles one.
  */
 /**
- * A provider's stable statement about the implementation it supplied.
- *
- * `origin` is canonical execution's to fix, not the provider's: each provider
- * installation carries its origin into every request it opens, so one provider
- * cannot state an identity under another's name.
- */
-export interface AnswerIdentity {
-  readonly origin: string;
-  readonly key: string;
-  readonly revision: string;
-}
-
-/** What a provider states, minus the part it does not get to choose. */
-export interface ClaimedIdentity {
-  readonly key: string;
-  readonly revision: string;
-}
-
-/**
- * One identified answer: what a provider stated, and what core kept of it.
+ * One published answer: core's own copy, and which provider installation
+ * published it.
  *
  * The two travel together because a caller needs both and must not obtain them
- * separately. The definition is core's own copy, taken when the identity was
- * recorded; it is what the caller keeps, and it is why nothing downstream ever
- * reads the object the public chain returned a second time.
+ * separately. The definition is core's copy, taken when it was published, and
+ * the origin is the publishing installation's — provenance a reader and a
+ * documentation symbol are shown, never a statement about what the
+ * implementation is.
  */
 export interface IdentifiedAnswer {
-  readonly identity: AnswerIdentity;
+  readonly origin: string;
   readonly definition: ImportedDefinition;
 }
 
 /**
- * What one answer object was identified as, and which resolutions identified
+ * What one published answer was published as, and which resolutions published
  * it.
  *
- * One implementation says what it is once, so the name, the identity and the
- * installation belong to the object: a new resolution cannot rename it, restate
- * its origin or revision, or take it for another provider.
+ * One implementation says what it is once, so the name and the installation
+ * belong to the object: a new resolution cannot take it for another provider.
+ *
+ * What the implementation *is* is no longer stated beside it. The identity and
+ * the effect of each generated form are on the definition, declared by whoever
+ * owns the implementation, so a provider publishes the definition and states
+ * nothing a reader would have to reconcile with it.
  *
  * Which import it answered is a different question, and the answer to it is per
  * resolution — so the copies are keyed by the window *object*, not by a number
@@ -216,38 +204,44 @@ export interface IdentifiedAnswer {
  * cannot be forged into being the one the caller opened.
  *
  * A reusable provider returns one immutable definition to every import it
- * answers. Keying the identity record by the object alone made the first
- * resolution part of the object's permanent identity and refused the same
- * definition the second time, which is a provider being punished for not
- * copying itself.
+ * answers, so the record outside the window keys the object alone and holds
+ * what every resolution of it has in common. Keying the whole record by the
+ * object would make the first resolution part of that object's permanent
+ * identity, and refuse the same definition the second time.
  */
-interface Claim {
+interface Answer {
   readonly name: string;
-  readonly identity: AnswerIdentity;
-  /** Which provider installation stated it, so a second cannot overwrite. */
+  /**
+   * The installation origin that published it.
+   *
+   * Provenance: it says which provider installation spoke, for a reader and a
+   * documentation symbol. It is no part of what the implementation is — that is
+   * the definition's own metadata.
+   */
+  readonly origin: string;
+  /** Which provider installation published it, so a second cannot overwrite. */
   readonly installation: object;
   /**
-   * Core's copy of the definition the first identity statement described.
+   * Core's copy of the definition the first publication supplied.
    *
-   * The identity above is a statement about *this* definition, so a later
-   * identity statement of the same object has to be a statement about the same
-   * definition. Without this baseline, a provider could identify an object,
-   * edit it, and have the next window retain the edited version under the
-   * identity and revision that described the original — a different
-   * implementation wearing the first one's name.
+   * A publication is a statement about *this* definition, so a later
+   * publication of the same object has to supply the same definition. Without
+   * this baseline, a provider could publish an object, edit it, and have the
+   * next window retain the edited version — a different implementation, and
+   * different generated metadata, under the first one's publication.
    *
-   * Absent when the definition in the first identity statement could not be
-   * copied at all, which is not a state a later identity statement can
-   * improve: an answer core could not retain is not one it can start vouching
-   * for because the object has since changed.
+   * Absent when the definition in the first publication could not be copied at
+   * all, which is not a state a later publication can improve: an answer core
+   * could not retain is not one it can start vouching for because the object
+   * has since changed.
    */
   readonly baseline: ImportedDefinition | undefined;
   /**
-   * One retained copy per resolution this answer was identified in.
+   * One retained copy per resolution this answer was published in.
    *
    * Window keys are weak: retaining an answer does not keep its past
    * resolutions alive. The outer record is weakly keyed by the answer, too.
-   * Presence is the provenance check: a window that never identified this
+   * Presence is the provenance check: a window that never published this
    * answer has no entry, and `identify` answers nothing for it however many
    * other windows did. Neither weak association promises collection timing.
    */
@@ -256,19 +250,19 @@ interface Claim {
 
 /** A provider request used after its execution ended. */
 export const REVOKED_ANSWER_IDENTIFICATION =
-  "the execution that installed this answer provider has ended, so nothing it states identifies " +
-  "an implementation here";
+  "the execution that installed this answer provider has ended, so nothing it publishes " +
+  "identifies an implementation here";
 
-/** An identity stated outside the handler invocation it would have been an answer to. */
-export const SETTLED_CLAIM =
-  "this resolution has settled, so a claim stated now identifies nothing. An answer is " +
-  "identified by the handler invocation the import asked, while that invocation is still " +
+/** A definition published outside the handler invocation it would have answered. */
+export const SETTLED_ANSWER =
+  "this resolution has settled, so a definition published now identifies nothing. An answer is " +
+  "published by the handler invocation the import asked, while that invocation is still " +
   "deciding; a handler that has returned, or one recording after the fact, is not supplying it.";
 
 /** A second, different statement from one installation about one resolution. */
 export const SPENT_OPPORTUNITY =
-  "this provider already stated which implementation answers this import, and one import is one " +
-  "implementation. The next resolution offers a fresh request; this one is decided.";
+  "this provider already published which implementation answers this import, and one import is " +
+  "one implementation. The next resolution offers a fresh request; this one is decided.";
 
 /**
  * One open resolution, and the only way to end it.
@@ -284,32 +278,41 @@ export interface ResolutionWindow {
   readonly name: string;
   /** Which resolution this is, for a reader following two of them. */
   readonly occurrence: number;
-  /** Stop accepting identity statements for this resolution. Idempotent. */
+  /** Stop accepting publications for this resolution. Idempotent. */
   close(): void;
 }
 
 /**
- * What one handler invocation may state about the import it was asked.
+ * What one handler invocation may publish for the import it was asked.
  *
  * Minted per invocation, and closed the moment that invocation returns, throws
- * or is cancelled. This is what a provider states an identity through: the
+ * or is cancelled. This is what a provider publishes a definition through: the
  * installation gives a provider the right to *be asked*, and the request gives
  * it the right to answer this one asking. Separating them is what makes a
- * statement provable — a stable installation handle can only say "some
+ * publication provable — a stable installation handle can only say "some
  * provider", while a request says "this handler, deciding this import, right
  * now".
  *
- * There is no `name` parameter on `claim`. The name is fixed when the request
- * is minted, from what the chain asked, so a handler cannot state an answer for
- * a component it was not asked about.
+ * `answer` takes the definition and nothing else. The name is fixed when the
+ * request is minted, from what the chain asked, so a handler cannot answer for
+ * a component it was not asked about; and which identity and effect each
+ * generated form runs as is the definition's own, declared by whoever owns the
+ * implementation. A provider that had to state those separately could describe
+ * an implementation it did not supply.
  */
 export interface ComponentAnswerRequest {
   /** The component this invocation was asked to resolve. */
   readonly name: string;
   /** Where the element that asked was written, when the chain knew. */
   readonly position?: Readonly<SourcePosition>;
-  /** State which implementation answers this import, as this provider. */
-  claim(answer: ImportedDefinition, identity: ClaimedIdentity): ImportedDefinition;
+  /**
+   * Publish the definition that answers this import, as this provider.
+   *
+   * Synchronous, and it performs nothing: no component body runs, no I/O
+   * happens, and the definition's own generated metadata is read and validated
+   * off core's copy of it rather than off the object the chain still holds.
+   */
+  answer(definition: ImportedDefinition): ImportedDefinition;
 }
 
 /** One minted request, and the caller's own handle for ending it. */
@@ -330,7 +333,7 @@ export interface OpenAnswerRequest {
  * One provider installation's private right to be asked.
  *
  * Holding this is the right to be asked, fixed to one origin. It is not the
- * right to answer: every statement goes through a request this mints for one
+ * right to answer: every publication goes through a request this mints for one
  * invocation, so a retained installation handle can open a *new* request but
  * cannot revive a settled one or reach another provider's.
  */
@@ -346,27 +349,22 @@ export interface ProviderInstallation {
   open(name: string, position?: Readonly<SourcePosition>): OpenAnswerRequest;
 }
 
-/** An identity a provider stated in a shape this execution cannot record. */
+/** A definition a provider published where this execution cannot record one. */
 export class AnswerIdentityError extends Error {
   override name = "AnswerIdentityError";
-}
-
-/** The retained spelling of one identity, for a reader. */
-export function identityRecord(identity: AnswerIdentity): string {
-  return `${identity.origin}#${identity.key}@${identity.revision}`;
 }
 
 export class CanonicalImports {
   readonly #issued = new WeakMap<object, Witness>();
   /**
-   * The identities providers stated, in the same owner that holds issuance.
+   * The definitions providers published, in the same owner that holds issuance.
    *
    * One owner rather than two registries: retention, exact-object lookup, the
    * `stillDescribes` comparison and the lifecycle are one question asked about
    * one table, and a parallel WeakMap would be a second place for an answer to
    * be verified from.
    */
-  readonly #claims = new WeakMap<object, Claim>();
+  readonly #answers = new WeakMap<object, Answer>();
   /**
    * Whether this owner identifies anything yet.
    *
@@ -502,13 +500,12 @@ export class CanonicalImports {
           // would let a provider edit what a *later* reader of that element
           // sees — a diagnostic seam turned into a write.
           ...(position === undefined ? {} : { position: capturePosition(position) }),
-          claim(answer: ImportedDefinition, stated: ClaimedIdentity): ImportedDefinition {
+          answer(definition: ImportedDefinition): ImportedDefinition {
             return owner.#record(
               installation,
               origin,
               { name, window: opened, live: () => live },
-              answer,
-              stated,
+              definition,
             );
           },
         });
@@ -531,38 +528,32 @@ export class CanonicalImports {
       live: () => boolean;
     },
     answer: ImportedDefinition,
-    stated: ClaimedIdentity,
   ): ImportedDefinition {
     if (!this.#active) {
       throw new AnswerIdentityError(REVOKED_ANSWER_IDENTIFICATION);
     }
-    // Four questions, and each of them is about the invocation rather than
+    // Three questions, and each of them is about the invocation rather than
     // about the provider: is this handler still deciding; is the resolution it
     // was asked in the one still open, by identity; and is the name it was asked
     // the name that resolution is deciding. A stable installation handle answers
-    // none of them, which is why it does not claim.
+    // none of them, which is why it does not publish.
     const open = asked.window;
     if (!asked.live() || open === undefined || open !== this.#window || open.name !== asked.name) {
-      throw new AnswerIdentityError(SETTLED_CLAIM);
+      throw new AnswerIdentityError(SETTLED_ANSWER);
     }
-    const identity = complete(origin, stated);
     const held =
-      typeof answer === "object" && answer !== null ? this.#claims.get(answer) : undefined;
+      typeof answer === "object" && answer !== null ? this.#answers.get(answer) : undefined;
     if (held !== undefined) {
-      // The same installation may restate this object's identity for another
-      // import or repeat it within one resolution. A different installation
-      // cannot restate it, even identically: the first provider's statement
-      // stands, so a second cannot rename the first's implementation.
-      if (
-        held.installation !== installation ||
-        held.name !== asked.name ||
-        held.identity.origin !== identity.origin ||
-        held.identity.key !== identity.key ||
-        held.identity.revision !== identity.revision
-      ) {
+      // What this object answers for was settled by its first publication.
+      // Publishing it again is what a provider installed twice does, and what a
+      // reusable one does for every import it answers; anything else is two
+      // providers disagreeing about one object, and the first publication
+      // stands — a later one that overwrote it would let a second provider take
+      // the first's implementation.
+      if (held.installation !== installation || held.name !== asked.name) {
         throw new AnswerIdentityError(
-          "this answer already carries an identity, and a second claim does not replace it. One " +
-            "implementation states what it is once.",
+          `this answer was already published by "${held.origin}" for "${held.name}", and a ` +
+            "second publication does not replace it. One implementation is published once.",
         );
       }
       if (held.copies.has(open)) {
@@ -582,9 +573,9 @@ export class CanonicalImports {
         !stillDescribes(held.baseline, copy)
       ) {
         throw new AnswerIdentityError(
-          "this answer no longer describes the implementation its identity was stated about, so a " +
-            "further import cannot be answered with it. One implementation states what it is " +
-            "once, and stays that.",
+          "this answer no longer describes the implementation that was published, so a further " +
+            "import cannot be answered with it. One implementation is published once — its " +
+            "function, its schema and the generated metadata on it — and stays that.",
         );
       }
       // The same definition answering a different import. That is one provider
@@ -597,20 +588,33 @@ export class CanonicalImports {
       this.#spend(installation, open);
       return answer;
     }
-    // Secondary, and about the provider rather than the invocation: naming a
+    // Secondary, and about the provider rather than the invocation: publishing a
     // *different* implementation for an import this provider already answered
     // is two answers where only one could be what it resolved to.
     if (this.#spent.get(installation)?.has(open) === true) {
       throw new AnswerIdentityError(SPENT_OPPORTUNITY);
     }
-    // Copied on the way in, so a later edit of the claimed object is visible as
-    // the change it is.
+    // Copied on the way in, so a later edit of the published object is visible
+    // as the change it is.
     const baseline = retain(answer);
+    // Read off core's own copy rather than off the object the chain still
+    // holds: a definition whose metadata answers one way for a check and
+    // another way for the read would otherwise be validated as one thing and
+    // retained as another. An answer that could not be copied at all is left
+    // for the comparison below to fail closed on, because there is nothing
+    // here to validate.
+    const refusal = baseline === undefined ? undefined : definitionGeneratedRefusal(baseline);
+    if (refusal !== undefined) {
+      throw new AnswerIdentityError(
+        `this answer ${refusal}. A generated form is offered under an absolute URL and one ` +
+          "effect, by the declaration that owns the implementation.",
+      );
+    }
     const copies = new WeakMap<ResolutionWindow, ImportedDefinition | undefined>();
     copies.set(open, baseline);
-    this.#claims.set(answer, {
+    this.#answers.set(answer, {
       name: asked.name,
-      identity,
+      origin,
       installation,
       baseline,
       copies,
@@ -637,48 +641,51 @@ export class CanonicalImports {
   }
 
   /**
-   * The identity stated for this exact answer, and core's own copy of it.
+   * Core's own copy of the definition a provider published for this exact
+   * answer and the installation that published it, or nothing when none did.
    *
    * Read after the whole public chain has returned, so what is asked about is
    * the final answer rather than an intermediate one. Nothing here refuses: an
-   * unidentified answer is an ordinary answer, and whether that is enough is
-   * the caller's question.
+   * answer nobody published is an ordinary answer, and whether that is enough
+   * is the caller's question.
    *
-   * Both halves come back together, and the copy is the one taken when the
-   * identity was recorded rather than one made now. Answering with the
-   * identity alone would leave the caller holding the chain's object and
-   * needing to copy it itself — one more read of a value the chain controls,
-   * after the read this one checked. An alternating proxy or an accessor that
-   * answers twice would pass the check and hand the second answer to the copy.
-   * So the check and the thing kept are one result of one call, and the object
-   * that travelled through the chain is never read again.
+   * The copy is the one taken when the definition was published rather than one
+   * made now, and it is what comes back. Answering with anything less would
+   * leave the caller holding the chain's object and needing to copy it itself —
+   * one more read of a value the chain controls, after the read this one
+   * checked. An alternating proxy or an accessor that answers twice would pass
+   * the check and hand the second answer to the copy. So the check and the
+   * thing kept are one result of one call, and the object that travelled
+   * through the chain is never read again. Which identity and effect each of
+   * its forms is offered under is on the copy, because it is the definition's
+   * own.
    */
   identify(resolution: ResolutionWindow, answer: unknown): IdentifiedAnswer | undefined {
     if (!this.#active || typeof answer !== "object" || answer === null) {
       return undefined;
     }
-    const claim = this.#claims.get(answer);
-    if (claim === undefined) {
+    const published = this.#answers.get(answer);
+    if (published === undefined) {
       return undefined;
     }
     // The caller presents the resolution it opened, and this answer has to have
-    // been claimed in *that* one, under the name it decides. Nothing here
+    // been published in *that* one, under the name it decides. Nothing here
     // consults the owner's current window: provenance read out of mutable state
-    // would be a claim about whenever the question was asked rather than about
-    // which import the statement answered. A window that never claimed this
-    // answer holds no copy of it, whatever its siblings did.
-    if (claim.name !== resolution.name || !claim.copies.has(resolution)) {
+    // would describe whenever the question was asked rather than which import
+    // the publication answered. A window that never published this answer holds
+    // no copy of it, whatever its siblings did.
+    if (published.name !== resolution.name || !published.copies.has(resolution)) {
       return undefined;
     }
-    // This window's own copy, taken when it claimed. A claimed object the chain
-    // went on to edit is not the thing that was claimed: reading it runs
-    // whatever it is made of, and a value that refuses to be compared has
+    // This window's own copy, taken when it was published. A published object
+    // the chain went on to edit is not the thing that was published: reading it
+    // runs whatever it is made of, and a value that refuses to be compared has
     // failed the comparison.
-    const canonical = claim.copies.get(resolution);
+    const canonical = published.copies.get(resolution);
     if (canonical === undefined || !stillDescribes(canonical, answer)) {
       return undefined;
     }
-    return Object.freeze({ identity: claim.identity, definition: canonical });
+    return Object.freeze({ origin: published.origin, definition: canonical });
   }
 
   /**
@@ -757,32 +764,6 @@ function capturePosition(position: Readonly<SourcePosition>): Readonly<SourcePos
     line: position.line,
     column: position.column,
   });
-}
-
-/**
- * The identity as this owner records it, or the reason it cannot.
- *
- * Three non-empty strings, checked here rather than trusted: what a
- * continuation is compared against must be a value a reader can look at and say
- * which part moved, and a partial identity would compare equal to a different
- * partial one. `origin` is canonical execution's, so only the two the provider
- * states are read off its object.
- */
-function complete(origin: string, stated: ClaimedIdentity): AnswerIdentity {
-  const { key, revision } = stated;
-  if (
-    typeof key !== "string" ||
-    key.length === 0 ||
-    typeof revision !== "string" ||
-    revision.length === 0
-  ) {
-    throw new AnswerIdentityError(
-      "an identity states a non-empty key and revision. A continuation is compared against both " +
-        "and the origin canonical execution fixed, so a partial one would compare equal to a " +
-        "different partial one.",
-    );
-  }
-  return Object.freeze({ origin, key, revision });
 }
 
 /**

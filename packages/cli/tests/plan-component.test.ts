@@ -2027,9 +2027,9 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
    * The profile these rows evaluate under: the read entry, and never the wide
    * one.
    *
-   * The entry's identity is the fixture's own, so the catalog an agent is shown
-   * inside an evaluation names `test://fe713/read` and the admitted capability
-   * is core's file read behind it.
+   * The entry's name is the fixture's own, so the catalog an agent is shown
+   * inside an evaluation names `<FE713.Read>` and the admitted capability is
+   * core's file read behind it.
    */
   function fixtureProfile(): FragmentEvaluationInput {
     return {
@@ -2037,7 +2037,6 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
         {
           ...fileReadEntry(),
           name: READ_COMPONENT.name,
-          identity: { origin: READ_COMPONENT.origin, key: "FE713.Read", revision: "1" },
           description: READ_COMPONENT.description,
         },
       ],
@@ -2163,7 +2162,10 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
       expect(seen).toHaveLength(1);
       const catalog = seen[0] ?? "";
       expect(catalog).toContain(READ_MARKER);
-      expect(catalog).toContain(READ_COMPONENT.origin);
+      // Reported as the implementation it runs rather than as the name it was
+      // admitted under: the entry is core's own file read, which is what the
+      // host chose to admit under a name of its own.
+      expect(catalog).toContain("@executablemd/core");
       // The wide-only component exists in this scope and is not in the profile,
       // so its absence here is the narrowing rather than the fixture.
       expect(catalog).not.toContain(WIDE_MARKER);
