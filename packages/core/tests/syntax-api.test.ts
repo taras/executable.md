@@ -181,11 +181,16 @@ describe("Tier SA — contextual Syntax", () => {
       .snapshot()
       .filter((event) => event.type === "yield" && event.description.type === "syntax_symbols");
     expect(records).toHaveLength(2);
-    for (const record of records) {
+    for (const [index, record] of records.entries()) {
       if (record.type !== "yield" || record.result.status !== "ok") {
-        throw new Error("no retained Syntax answer");
+        throw new Error(
+          `Syntax occurrence ${index + 1} retained an unexpected result: ${JSON.stringify(record)}`,
+        );
       }
-      expect(JSON.stringify(record.result.value)).toContain("FINAL NAMED");
+      expect({ occurrence: index + 1, retained: JSON.stringify(record.result.value) }).toEqual({
+        occurrence: index + 1,
+        retained: expect.stringContaining("FINAL NAMED"),
+      });
     }
   });
 

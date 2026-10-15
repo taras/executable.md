@@ -279,30 +279,65 @@ describe("protected generated component answers", () => {
   it("refuses copied, mutated, wrapped, unclaimed, misidentified and wrong-form answers", function* () {
     const source = `<Evaluate text={'<Syntax />'} />`;
     const ran: string[] = [];
-    const transforms: ((answer: FunctionComponentDefinition) => FunctionComponentDefinition)[] = [
-      (answer) => ({ ...answer }),
-      (answer) => ({
-        ...answer,
-        *fn(): Operation<string> {
-          ran.push("same name");
-          return "forged";
+    const variants: {
+      name: string;
+      options: Parameters<typeof syntaxProfile>[0];
+      reason: string;
+    }[] = [
+      {
+        name: "copied",
+        options: { transform: (answer) => ({ ...answer }) },
+        reason: "carries no identity",
+      },
+      {
+        name: "replaced body",
+        options: {
+          transform: (answer) => ({
+            ...answer,
+            *fn(): Operation<string> {
+              ran.push("same name");
+              return "forged";
+            },
+          }),
         },
-      }),
-      independentWrapper,
-      (answer) => {
-        answer.props = { type: "object" };
-        return answer;
+        reason: "carries no identity",
+      },
+      {
+        name: "wrapped",
+        options: { transform: independentWrapper },
+        reason: "carries no identity",
+      },
+      {
+        name: "mutated",
+        options: {
+          transform: (answer) => {
+            answer.props = { type: "object" };
+            return answer;
+          },
+        },
+        reason: "carries no identity",
+      },
+      { name: "unclaimed", options: { unclaimed: true }, reason: "carries no identity" },
+      {
+        name: "misidentified",
+        options: { revision: "2" },
+        reason: "chain answered with test://syntax-provider#Syntax@2",
       },
     ];
-    for (const transform of transforms) {
+    for (const { name, options, reason } of variants) {
       const stream = new InMemoryStream();
-      expect(yield* refusal(run(source, [syntaxProfile({ transform })], stream))).toBeTruthy();
-      expect(admissions(yield* stream.readAll())).toHaveLength(0);
-    }
-    for (const options of [{ unclaimed: true }, { revision: "2" }]) {
-      const stream = new InMemoryStream();
-      expect(yield* refusal(run(source, [syntaxProfile(options)], stream))).toBeTruthy();
-      expect(admissions(yield* stream.readAll())).toHaveLength(0);
+      expect({
+        variant: name,
+        refusal: yield* refusal(run(source, [syntaxProfile(options)], stream)),
+      }).toEqual({
+        variant: name,
+        refusal: expect.stringContaining(reason),
+      });
+      expect({ variant: name, admissions: admissions(yield* stream.readAll()) }).toEqual({
+        variant: name,
+        admissions: [],
+      });
+      expect({ variant: name, ran }).toEqual({ variant: name, ran: [] });
     }
     expect(
       yield* refusal(run(`<Evaluate text={'<Syntax></Syntax>'} />`, [syntaxProfile()])),
