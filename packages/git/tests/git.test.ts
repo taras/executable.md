@@ -3,9 +3,9 @@
  *
  * `GitQuery.resolve()` verifies and resolves one revision expression in the
  * contextual working directory. The default invokes the Git CLI; a host or a
- * test replaces it lexically. Nothing here shells out: every test either
- * replaces `GitQuery` or stubs the process boundary beneath it, so the suite
- * runs the same wherever it is checked out.
+ * test replaces it lexically. GT1–GT5 replace `GitQuery` or stub the process
+ * boundary. GT6–GT7 exercise the shipped default against temporary directories,
+ * including a real Git checkout.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";

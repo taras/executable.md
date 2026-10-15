@@ -43,6 +43,7 @@ import {
   type WorkflowWorkspaceMutation,
   type WorkflowWorkspaceTransaction,
 } from "../src/deno/workspace/effect.ts";
+import { journalableWorkspaceCode } from "../src/deno/workspace/errors.ts";
 import { readWorkflowWorkspace } from "../src/deno/workspace/inspect.ts";
 import type { WorkflowWorkspaceSnapshot } from "../src/deno/workspace/inspect.ts";
 import type {
@@ -199,18 +200,24 @@ function retainedRepositoryNames(path: string): string[] {
   }
 }
 
+function* workspaceContent(read: Operation<string>): Operation<string | undefined> {
+  try {
+    return yield* read;
+  } catch (error) {
+    if (journalableWorkspaceCode(error) === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 function* inspectWorkspace(
   database: WorkflowRunDatabase,
   path: string,
 ): Operation<{ root: string; content: string | undefined }> {
   const inspected = yield* database.transact(function* (transaction) {
     return yield* withPrivateWorkspaceTransaction(database, transaction, function* (workspace) {
-      let content: string | undefined;
-      try {
-        content = yield* workspace.filesystem.readTextFile(path);
-      } catch {
-        content = undefined;
-      }
+      const content = yield* workspaceContent(workspace.filesystem.readTextFile(path));
       return {
         root: yield* workspace.currentRoot(),
         content,
@@ -316,6 +323,19 @@ function setSqliteAuthorizer(
 }
 
 describe("Tier WAC — atomic provider-level Workspace effects", () => {
+  it("Workspace observation preserves a read failure that is not genuine absence", function* () {
+    const failures = [
+      Object.assign(new Error("Workspace read denied"), { code: "EACCES" }),
+      Object.assign(new Error("Workspace absence impostor"), { code: "ENOENT" }),
+    ];
+    for (const failure of failures) {
+      const read = (function* (): Operation<string> {
+        throw failure;
+      })();
+      expect(yield* raised(workspaceContent(read))).toBe(failure);
+    }
+  });
+
   it("WAC1: mutation, root, filtered Yield and commit become visible together", function* () {
     const root = yield* useStorageRoot();
     const runId = "atomic-success";
@@ -1653,7 +1673,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
     });
   });
 
-  it("WAC24: a row written through the storage view commits with the effect's bytes", function* () {
+  it("WAC27: a row written through the storage view commits with the effect's bytes", function* () {
     const root = yield* useStorageRoot();
     const runId = "atomic-storage-commit";
 
@@ -1697,7 +1717,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
     });
   });
 
-  it("WAC25: a refused mutation takes its rows back with its bytes", function* () {
+  it("WAC28: a refused mutation takes its rows back with its bytes", function* () {
     const root = yield* useStorageRoot();
     const runId = "atomic-storage-rollback";
 
@@ -1753,7 +1773,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
    * its root is still open, which is exactly where "for this callback" has to
    * be a fact rather than a convention.
    */
-  it("WAC26: every capability a mutation retained answers nothing once it returned", function* () {
+  it("WAC29: every capability a mutation retained answers nothing once it returned", function* () {
     const root = yield* useStorageRoot();
     const runId = "atomic-storage-retained";
     const path = join(root, `${runId}.sqlite`);

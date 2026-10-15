@@ -11777,7 +11777,7 @@ visible warning blocks, gather into a separate error report).
 | FL27 | Colocated document | `xmd test packages/core/src/components/File.test.md` covers both forms, `as` capture, nested parents, replacement, exact content for both authoring shapes, a leading-dots name, and isolation between temporary directories — with no search path and no JavaScript |
 | FL34–FL35 | The authored form decides the effect | A self-closing `<File />` reads and never writes, and a paired `<File>` writes and never reads, under a contextual `hasContent` handler installed outside the invocation that lies consistently *and* under one that answers `[false, true]` / `[true, false]`. A sibling reporting the contextual answer proves the handler live; the provider calls and the file bytes prove the element followed how it was written (§5.6) |
 | FL36 | An honest chain | With no handler interfering, both forms reach the same providers and produce the same bytes |
-| FL37 | A look-alike is not an invocation | The definition called with an object implementing `hasContent()` — the whole public shape, reporting the answer that would select the write branch — refuses before reaching a provider, leaving the file unchanged; there is no contextual fallback either |
+| FL37 | A replaced canonical answer is refused | The import wrapper preparing a look-alike invocation returns a definition canonical execution did not produce, so verification refuses before invoking it, reaches no provider and leaves the file unchanged ([file-component.test.ts](../packages/core/tests/file-component.test.ts)); FX4 in [fixed-filesystem-components.test.ts](../packages/core/tests/fixed-filesystem-components.test.ts) reaches the fixed dispatchers directly to prove invocation authentication |
 
 ### Tier FD — `<File.Delete>`
 
@@ -12659,6 +12659,9 @@ workspaces](./workflow-workspace-spec.md) §13.
 | WAC24 | Real host crash | A `SIGKILL` while the mutation, immutable root, current-root pointer and routed journal row are written and uncommitted leaves a second connection seeing only the baseline, and a fresh process recovers the baseline filesystem, root, retained counts and journal exactly |
 | WAC25 | Committed restart | A second process reopens a run whose Workspace effects committed in a process that has ended, observes the same filesystem, current root, ordered events, event identities and event-to-root associations, and performs no recorded effect again |
 | WAC26 | Historical reconstruction | A fresh process selects an older event's root through the adapter-private materializer, invalidates the authoritative negative resolution, rebuilds its exact topology, bytes, modes, hardlinks and symbolic links from that root's retained DOFS content, and resnapshots to the selected identity |
+| WAC27 | Storage-view commit | A row written through the mutation's storage view and its filesystem bytes commit together against the root its journal event names ([workspace-effect-transaction.test.ts](../packages/workflow/tests/workspace-effect-transaction.test.ts)) |
+| WAC28 | Storage-view rollback | A refused mutation rolls back its storage-view row and filesystem bytes, retains no new root and records its failed Yield against the baseline root ([workspace-effect-transaction.test.ts](../packages/workflow/tests/workspace-effect-transaction.test.ts)) |
+| WAC29 | Mutation capability lifetime | Storage, filesystem and savepoint capabilities retained by a completed mutation refuse even while its enclosing transaction remains open before commit ([workspace-effect-transaction.test.ts](../packages/workflow/tests/workspace-effect-transaction.test.ts)) |
 
 ### Tier WTX — WorkflowRun savepoints and transaction ownership
 

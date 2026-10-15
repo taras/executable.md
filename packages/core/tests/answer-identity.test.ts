@@ -584,14 +584,11 @@ describe("Tier CIV — an identity belongs to one answer of one import", () => {
 });
 
 /**
- * Tier PA10b — two sibling spawns resolving at the same time.
+ * Tier PA10b — serial component-answer capture.
  *
- * `<All>` lets two `<Spawn>` children have an import open together, so a
- * resolution is no longer the only one in flight. What makes an answer this
- * import's is the exact window it was asked in, and windows now belong to the
- * engine scope that opened them — so these rows are written with two real
- * scopes standing for two spawns, and never with one spawn's bookkeeping
- * standing in for the other's.
+ * Each request retains the window that was open when its handler began. A
+ * descendant scope preserves that correlation, and closing the window makes
+ * the retained request unable to record an answer’s identity in a later one.
  */
 describe("Tier PA10b — one serial resolution window", () => {
   /**

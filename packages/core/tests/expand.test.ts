@@ -1,6 +1,6 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, sleep, spawn, withResolvers } from "effection";
+import { ensure, scoped, spawn, withResolvers } from "effection";
 import type { Subscription } from "effection";
 import { createBlockCounter, expandSegments } from "../src/expand.ts";
 import { regionStream } from "../src/expansion-region.ts";
@@ -1469,6 +1469,7 @@ describe("Tier SR — expanding installed structural syntax", () => {
   it("SR7: one demand permits one chunk, and later work waits for later demand", function* () {
     const order: string[] = [];
     const released = withResolvers<void>();
+    const firstDelivered = withResolvers<void>();
     const environment = yield* installedEnvironment(
       [structuralDeclaration(), regionDeclaration()],
       function* (request) {
@@ -1483,6 +1484,7 @@ describe("Tier SR — expanding installed structural syntax", () => {
         // element's text asks again — each ask is one more permission to work.
         const first = yield* readText(subscription);
         order.push(`first:${first}`);
+        firstDelivered.resolve();
         yield* released.operation;
         const second = yield* readText(subscription);
         order.push(`second:${second}`);
@@ -1505,9 +1507,7 @@ describe("Tier SR — expanding installed structural syntax", () => {
       yield* spawn(function* () {
         // Released only once the first chunk has been delivered, so the second
         // segment's authored work cannot have run before this point.
-        while (!order.some((entry) => entry.startsWith("first:"))) {
-          yield* sleep(0);
-        }
+        yield* firstDelivered.operation;
         expect(order).not.toContain("ran:2");
         released.resolve();
       });

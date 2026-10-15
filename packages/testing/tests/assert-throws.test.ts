@@ -119,7 +119,13 @@ describe("<AssertThrows>", () => {
       ),
     );
     expect(run.results[0]?.status).toBe("fail");
-    expect(run.results[0]?.error?.message ?? "").not.toContain("none was raised");
+    expect(run.results[0]?.error).toMatchObject({
+      kind: "assertion",
+      actual: "1",
+      expected: "2",
+    });
+    expect(run.output).toContain("**AssertEquals** failed");
+    expect(run.output).not.toContain("**AssertThrows** failed");
   });
 
   it("stops expanding body children after the first raised error, rendering nothing", function* () {

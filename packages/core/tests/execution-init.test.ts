@@ -4,6 +4,8 @@ import { createContext, ensure, scoped, spawn, suspend, withResolvers } from "ef
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { Execution } from "../api.ts";
+import { parseFilesFatal } from "@executablemd/runtime";
+import { fatalCause } from "../src/errors.ts";
 import { collect, execute, Execution as RootExecution, inlineSource } from "../mod.ts";
 import { executeInstalled, fileReadEntry, Markdown, sourceDigest } from "../host.ts";
 import type { JournalAdmission } from "../host.ts";
@@ -240,7 +242,10 @@ describe("Tier EI — execution-owned initialization", () => {
   });
 
   it("EI7: a no-op initializer invents no Files provider; explicit initialization supplies one", function* () {
-    expect(String(yield* failure(run('<File path="note.md" />')))).toContain("Files");
+    expect(parseFilesFatal(fatalCause(yield* failure(run('<File path="note.md" />'))))).toEqual({
+      type: "executablemd.runtime.files-fatal/v1",
+      kind: "provider-unavailable",
+    });
     const files = recordedFiles({ "note.md": "INSTALLED BY INIT" });
     const output = yield* scoped(function* () {
       yield* Execution.around({
@@ -253,6 +258,9 @@ describe("Tier EI — execution-owned initialization", () => {
     });
     expect(output).toContain("INSTALLED BY INIT");
     expect(files.performed).toEqual(["read note.md"]);
-    expect(String(yield* failure(run('<File path="note.md" />')))).toContain("Files");
+    expect(parseFilesFatal(fatalCause(yield* failure(run('<File path="note.md" />'))))).toEqual({
+      type: "executablemd.runtime.files-fatal/v1",
+      kind: "provider-unavailable",
+    });
   });
 });

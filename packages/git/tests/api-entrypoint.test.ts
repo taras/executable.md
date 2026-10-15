@@ -22,6 +22,11 @@
  * fails under Deno, one missing from `package.json` fails under Node and Bun,
  * and only running all three tells those apart.
  *
+ * Emitted Git API identity composition across physical package copies is
+ * exercised by "publishes contextual Git APIs that compose across copies and
+ * loads a named Plugin" in `scripts/tests/cli-npm-bin.test.ts`; this file holds
+ * the portable source export-map contract.
+ *
  * Read through `Reflect.get` rather than a cast: what a module exported is
  * whatever it exported, and the members below are proven present rather than
  * assumed.
