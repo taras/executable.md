@@ -93,7 +93,7 @@ describe("Tier FE — the workflow host's profile", () => {
     expect(Object.keys(generic)).not.toContain("Fetch");
 
     const bundled = workflowGeneratedSelection({ components: gitDirectorySelection() });
-    expect(Object.keys(bundled).toSorted()).toEqual(["Dir", "File", "File.Delete"]);
+    expect(Object.keys(bundled).sort()).toEqual(["Dir", "File", "File.Delete"]);
     expect(bundled.Dir).toEqual(["paired"]);
     yield* useScope();
   });

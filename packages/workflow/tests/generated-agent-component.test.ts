@@ -484,11 +484,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       const recorded = admissions(attempt.events);
       expect(recorded).toHaveLength(2);
       for (const event of recorded) {
-        expect(Object.keys(policyOf(event) ?? {}).toSorted()).toEqual([
-          "allow",
-          "allowed",
-          "version",
-        ]);
+        expect(Object.keys(policyOf(event) ?? {}).sort()).toEqual(["allow", "allowed", "version"]);
       }
 
       // And the run did move: the write between them advanced the current root.

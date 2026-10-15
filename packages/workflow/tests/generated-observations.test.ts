@@ -277,7 +277,7 @@ describe("Tier WGX — the selection a workflow run offers", () => {
     // the rows. No Workspace basis and no request inventory — what a run stands
     // on and what a request may reach are both live state, and a grant compared
     // against a copy of either would refuse a run for its own progress.
-    expect(Object.keys(policy ?? {}).toSorted()).toEqual(["allow", "allowed", "version"]);
+    expect(Object.keys(policy ?? {}).sort()).toEqual(["allow", "allowed", "version"]);
     expect(policy?.version).toBe(4);
     expect(policy?.allow).toEqual(["read"]);
     expect(policy?.allowed).toEqual([
