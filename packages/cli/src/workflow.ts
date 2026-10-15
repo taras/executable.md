@@ -95,6 +95,7 @@ import type {
 import type { SuspensionControllerOptions, SuspensionNotice } from "@executablemd/workflow/deno";
 import { SUSPENSION_REQUEST } from "@executablemd/workflow";
 import { describeError } from "./props.ts";
+import { offering, useNoGeneratedEvaluation } from "./workflow-generated.ts";
 import { preflightFork } from "./workflow-fork.ts";
 import type { EstablishedDefinition, RetainedSources } from "./workflow-definition.ts";
 import type { RetainedDefinitionSources } from "@executablemd/workflow/deno";
@@ -381,19 +382,6 @@ export interface WorkflowExecution {
   readonly discardOutput?: boolean;
   /** Wraps the whole document execution, or passes it through on completed replay. */
   around<T>(operation: Operation<T>): Operation<T>;
-}
-
-/**
- * Install one host setup operation, then run the document in that same scope.
- *
- * Ordinary mechanics rather than a capture protocol: what a selection answers
- * has to be composed in a scope that is still open when canonical execution
- * reads it, and the attachment chain is built from operations rather than from
- * scopes a caller can reach into.
- */
-function* offering<T>(operation: Operation<T>, setup: () => Operation<void>): Operation<T> {
-  yield* setup();
-  return yield* operation;
 }
 
 /** How one `start` or `resume` ended. */
@@ -1097,12 +1085,14 @@ export function runWorkflow(
         //
         // The generated selection is offered inside the attachment, in the
         // scope that executes the document: a completed replay restores its
-        // retained output and expands nothing, so it is offered nothing.
+        // retained output and expands nothing, so it is offered nothing — and
+        // states that, because this command's ordinary default encloses it and
+        // a run offered nothing is not a run that inherits a vocabulary.
         // `<Dir>`'s spelling comes from the Git Plugin, which decides that a
         // workflow run offers the name at all; the identity it runs under is
         // core's, from the declaration that owns the component.
         return completed || replay
-          ? suspension.own(operation)
+          ? suspension.own(offering(operation, useNoGeneratedEvaluation))
           : host.attach(
               database,
               suspension.own(

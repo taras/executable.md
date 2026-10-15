@@ -53,6 +53,7 @@ import type { Operation, Result } from "effection";
 import { ReplayGuard } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, ReplayOutcome } from "@executablemd/durable-streams";
 import { retainedSource } from "@executablemd/core";
+import { offering, useNoGeneratedEvaluation } from "./workflow-generated.ts";
 import {
   forkJournal,
   forkRunRecordEvent,
@@ -342,7 +343,11 @@ function execution(
     // A check, not a run: what this renders describes work another run already
     // did, and the fork's own execution is about to render it again.
     discardOutput: true,
-    around,
+    // And a check is offered no generated evaluation, which it states for
+    // itself: the command's ordinary default encloses this preflight, and a
+    // replay held to another run's history must not resolve a vocabulary that
+    // run never had.
+    around: <T>(operation: Operation<T>) => around(offering(operation, useNoGeneratedEvaluation)),
   };
 }
 
