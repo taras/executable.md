@@ -6703,8 +6703,16 @@ that.
 The performer runs in a joined boundary before its outcome exists, so every
 per-call native child has finished and closed before anything is published —
 and a cancellation while a child is running joins that child's close before the
-entry settles. Publication is once, and the ordinary refusal is raised after it,
-so a live refusal and a replayed one are the same error. Cancellation after
+entry settles. What is about to be published is read back first, against the
+request and this entry's own registrations: a payload this build cannot parse,
+one describing another request, and one naming a checkout no placement covers
+each take the fatal path *before* the append rather than becoming history
+nothing can read. The received invocation is likewise read once, before the
+first suspension, because it is the caller's own object and this operation
+suspends several times before Git runs — a value read again afterwards could
+leave the record naming one branch and the checkout standing on another.
+Publication is once, and the ordinary refusal is raised after it, so a live
+refusal and a replayed one are the same error. Cancellation after
 native completion but before the acknowledged append leaves the checkout changed
 and no completion; cancellation after it returns the saved answer next time.
 Neither cut restores checkout state. A failed append stays the engine's

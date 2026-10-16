@@ -95,6 +95,7 @@ import {
 import type {
   ReplGitAddRequest,
   ReplGitCommitRequest,
+  ReplGitRecord,
   ReplGitOperation,
   ReplGitPlace,
   ReplGitRefusalData,
@@ -225,15 +226,21 @@ function* recordedSwitch(
   entry: ReplGitEntry,
   invocation: GitSwitchInvocation,
 ): Operation<GitSwitchResult> {
+  // Read once, here, and used by both the request and the performer. The
+  // invocation is the caller's own object and this operation suspends several
+  // times before Git runs — hashing the request, routing, taking the turn and
+  // taking two holds — so reading it again later would let the record name one
+  // branch while the checkout moved to another.
+  const branch = invocation.branch;
   const base = invocation.base;
   const request: ReplGitSwitchRequest = Object.freeze({
     operation: "switch" as const,
     ...place(entry, SWITCH, invocation),
-    branch: invocation.branch,
+    branch,
     base: base ?? null,
   });
   const value = yield* recorded(entry, SWITCH, request, (checkout) =>
-    liveSwitch(checkout, invocation.branch, base),
+    liveSwitch(checkout, branch, base),
   );
   if (!("requestedBranch" in value)) {
     throw mismatch(SWITCH);
@@ -338,7 +345,14 @@ function* recorded(
             liveCheckout(yield* entry.git(), target.checkout, request.workingDirectory),
           );
         });
-        return replGitRecordJson({ fingerprint, request, outcome });
+        const payload = replGitRecordJson({ fingerprint, request, outcome });
+        // Read back before the coordinator publishes it. A payload this build
+        // cannot parse, or one describing another request or a checkout this
+        // entry holds no placement for, is not an outcome to acknowledge: it
+        // takes the fatal path here, so nothing is appended and a continuation
+        // meets today's checkout instead of a record it could never read.
+        readback(entry, element, request, fingerprint, payload);
+        return payload;
       },
       { coordinator: gitCoordinator },
     );
@@ -350,6 +364,30 @@ function* recorded(
     ? yield* once()
     : yield* live(entry, routing, once);
 
+  const parsed = readback(entry, element, request, fingerprint, stored);
+  if (!parsed.outcome.ok) {
+    throw failure(element, refusalOf(parsed.outcome.error));
+  }
+  return parsed.outcome.value;
+}
+
+/**
+ * The record this value is for this operation, or the fatal failure it is not.
+ *
+ * The same three questions on both paths, which is the point: a live outcome is
+ * held to them before it is published, and a restored one before it is
+ * returned. The payload parses, it describes this request, and the checkout a
+ * success names is one this entry registered under the repository it
+ * authenticated — with parsed facts alone, so a result path never authorizes a
+ * native call and a new call chooses its checkout independently.
+ */
+function readback(
+  entry: ReplGitEntry,
+  element: string,
+  request: ReplGitRequest,
+  fingerprint: string,
+  stored: unknown,
+): ReplGitRecord {
   const parsed = parseReplGitRecord(stored);
   if (parsed === undefined) {
     throw new ReplGitRecordError(
@@ -360,14 +398,10 @@ function* recorded(
   if (parsed.operation !== request.operation || parsed.fingerprint !== fingerprint) {
     throw mismatch(element);
   }
-  if (!parsed.outcome.ok) {
-    throw failure(element, refusalOf(parsed.outcome.error));
+  if (parsed.outcome.ok) {
+    authorized(entry, element, request, parsed.outcome.value);
   }
-  // The checkout a saved result names has to be one this entry registered under
-  // the repository it authenticated. Parsed facts only: a result path is never
-  // used to authorize a native call, and a new call chooses its own checkout.
-  authorized(entry, element, request, parsed.outcome.value);
-  return parsed.outcome.value;
+  return parsed;
 }
 
 /**

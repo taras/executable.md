@@ -940,6 +940,11 @@ commit really runs. An entry that commits nothing, and a reopened entry whose
 commit is already recorded, ask nothing about who you are. Hooks, signing,
 filesystem monitors and repository credential helpers stay disabled.
 
+What an entry writes down, it can read back. A result this build cannot parse,
+or one that does not describe the operation it stands at, ends the entry before
+anything is recorded rather than becoming a saved answer no continuation can
+use.
+
 Native completion and acknowledgement are different moments, and the gap is
 real. Interrupt an entry after the commit object exists and before its result is
 written down, and the journal holds no completion: the commit is in your

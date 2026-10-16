@@ -1101,13 +1101,17 @@ describe("an entry's hold on the checkout it is working in", () => {
 
     // One linked placement of the repository the entry was opened in, with a
     // Git operation acknowledged inside it and a second one still to run.
+    //
+    // Nothing comes between the question and that second Add. A new `<File>`
+    // there would take both holds first, and the Add's reacquisition of a hold
+    // somebody else already took for it says nothing about what Git itself
+    // acquires — so Git is the first new operation on this continuation.
     const source = [
       '<Worktree name="observed" branch="observed">',
       '<File path="probe.md">probe</File>',
       '<Git.Add paths="probe.md" />',
       QUESTION,
-      '<File path="later.md">later</File>',
-      '<Git.Add paths="later.md" />',
+      '<Git.Add paths="probe.md" />',
       "</Worktree>",
     ].join("\n");
 
@@ -1163,10 +1167,12 @@ describe("an entry's hold on the checkout it is working in", () => {
       );
 
       // The completed Git operation replayed with no native work and no hold on
-      // the shared Git directory at all; the new one refused under the holder's
-      // mutation lease, before it ran and before it appended anything.
+      // the shared Git directory at all; the new one — the first new operation
+      // of any kind on this continuation — refused under the holder's mutation
+      // lease, before it ran and before it appended anything.
       expect(refused.refusal).toContain("Another XMD entry or process holds this checkout");
       expect(subcommands(blocked)).not.toContain("add");
+      expect(blocked.writes).toEqual([]);
       expect(gitRecords(refused.events)).toBe(gitRecords(prefix));
       const opened = observed.opened();
       // The slot came back first and the shared directory second, which is the

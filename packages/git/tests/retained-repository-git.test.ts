@@ -58,6 +58,11 @@ import { Execution } from "@executablemd/core/api";
 import { executeInstalled } from "@executablemd/core/host";
 import { collect, Elicitation } from "@executablemd/core";
 import type { ElicitationRequest } from "@executablemd/core";
+import { Git } from "@executablemd/git/api";
+// From the root rather than from the source module: this result type is what the
+// package publishes, and reaching it by relative path would bypass the export
+// map the partition test holds every consumer to.
+import type { GitSwitchResult } from "@executablemd/git";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import type { GitInvocation, GitOutcome, RepositoryHost } from "../src/deno/composition/host.ts";
 import { gitSession } from "../src/deno/composition/git.ts";
@@ -550,6 +555,16 @@ function commonOf(fixture: Fixture, checkout: string): Operation<string> {
   return fixtureGit(fixture, ["rev-parse", "--path-format=absolute", "--git-common-dir"], checkout);
 }
 
+/** What admitting this history answered: nothing, or the refusal it raised. */
+function* admitted(events: readonly DurableEvent[]): Operation<string | undefined> {
+  try {
+    yield* admitReplRepositoryHistory(events);
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 /** The question an entry is left at, never answered. */
 const QUESTION = '<Elicit schema={{ type: "object" }} as="answer">Continue?</Elicit>';
 
@@ -882,6 +897,115 @@ describe("one entry's local Add, Switch and Commit", () => {
     );
     expect(again.output).toContain("cannot record who this commit is by");
     expect(replayed.identity).toEqual([]);
+    expect(replayed.commands).toEqual([]);
+  });
+
+  it("E3: switches to the branch it recorded when the caller's value changes", function* () {
+    const fixture = yield* useFixture();
+    const counted = counters();
+    // Two real branches, so whichever one is reached is a branch that exists
+    // and the difference is about which was asked for rather than about a
+    // refusal.
+    yield* fixtureGit(fixture, ["branch", "ready"], fixture.checkout);
+    yield* fixtureGit(fixture, ["branch", "changed"], fixture.checkout);
+
+    // Ordinary middleware that transforms and delegates, which is the supported
+    // route. What it delegates is a request whose branch answers differently
+    // the second time it is read — a caller-owned value this operation suspends
+    // several times across.
+    let reads = 0;
+    const changing = function* (): Operation<void> {
+      yield* Git.around({
+        *switch([invocation], next): Operation<GitSwitchResult> {
+          return yield* next({
+            ...invocation,
+            get branch(): string {
+              reads += 1;
+              return reads === 1 ? "ready" : "changed";
+            },
+          });
+        },
+      });
+    };
+
+    const source = ['<Git.Switch branch="ready" />', QUESTION].join("\n");
+    const prefix = yield* left(fixture, source, counted, { between: changing });
+
+    // Read once, so the record and the checkout cannot disagree.
+    expect(reads).toBe(1);
+    const record = gitRecords(prefix)[0];
+    expect(record?.request.operation === "switch" ? record.request.branch : undefined).toBe(
+      "ready",
+    );
+    expect(switched(record)).toBe("ready");
+    expect((yield* observed(fixture, fixture.checkout)).branch).toBe("ready");
+
+    // And the acknowledged result is one this host can read, so the entry
+    // continues from it with no native work.
+    const replayed = counters();
+    let later = 0;
+    const again = yield* run(fixture, source, new InMemoryStream([...prefix]), replayed, {
+      *between(): Operation<void> {
+        yield* Git.around({
+          *switch([invocation], next): Operation<GitSwitchResult> {
+            later += 1;
+            return yield* next(invocation);
+          },
+        });
+        yield* answered();
+      },
+    });
+    expect(again.refusal).toBe(undefined);
+    expect(replayed.commands).toEqual([]);
+    // The middleware above is still reached and still delegates; what it
+    // delegates into is the saved result rather than a native switch.
+    expect(later).toBe(1);
+  });
+
+  it("E3: retains an empty supplied base exactly, and reads it back", function* () {
+    const fixture = yield* useFixture();
+    const counted = counters();
+    yield* fixtureGit(fixture, ["branch", "ready"], fixture.checkout);
+    const before = yield* observed(fixture, fixture.checkout);
+
+    // `<Git.Switch base="">` is the absence of a base to the component, so this
+    // arrives through the public Api — where the ordinary performer ignores it
+    // for a branch that exists, exactly as it ignores any base there.
+    const supplied = function* (): Operation<void> {
+      yield* Git.around({
+        *switch([invocation], next): Operation<GitSwitchResult> {
+          return yield* next({ ...invocation, base: "" });
+        },
+      });
+    };
+
+    const source = ['<Git.Switch branch="ready" />', QUESTION].join("\n");
+    const prefix = yield* left(fixture, source, counted, { between: supplied });
+
+    // The ordinary success, retained with the bytes it was given rather than
+    // with an absence invented for it.
+    const record = gitRecords(prefix)[0];
+    expect(record?.outcome.ok).toBe(true);
+    expect(record?.request.operation === "switch" ? record.request.base : undefined).toBe("");
+    expect(
+      record?.outcome.ok === true && "requestedBase" in record.outcome.value
+        ? record.outcome.value.requestedBase
+        : undefined,
+    ).toBe("");
+    expect(switched(record)).toBe("ready");
+    expect((yield* observed(fixture, fixture.checkout)).head).toBe(before.head);
+    // Readable, and admissible as this entry's own history.
+    expect(yield* admitted(prefix)).toBe(undefined);
+
+    // So a real unfinished prefix continues from it, with no native work.
+    const replayed = counters();
+    const again = yield* run(fixture, source, new InMemoryStream([...prefix]), replayed, {
+      *between(): Operation<void> {
+        yield* supplied();
+        yield* answered();
+      },
+    });
+    expect(again.refusal).toBe(undefined);
     expect(replayed.commands).toEqual([]);
   });
 

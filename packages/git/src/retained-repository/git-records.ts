@@ -103,7 +103,16 @@ export interface ReplGitAddRequest extends ReplGitPlace {
 export interface ReplGitSwitchRequest extends ReplGitPlace {
   readonly operation: "switch";
   readonly branch: string;
-  /** The base exactly as it was supplied, or `null` when none was. */
+  /**
+   * The base exactly as it was supplied, or `null` when none was.
+   *
+   * Any string, the empty one included. `<Git.Switch base="">` is the absence
+   * of a base as far as the component is concerned, so a document cannot write
+   * one — but the public Api can be called with it, the ordinary performer
+   * consults a base only when a branch has to be created, and an operation this
+   * host acknowledged has to be one it can read back. Refusing the empty string
+   * here would leave a successful switch journaled and unreadable.
+   */
   readonly base: string | null;
 }
 
@@ -417,7 +426,7 @@ function parseRequest(value: unknown, operation: ReplGitOperation): ReplGitReque
   }
   if (operation === "switch") {
     const branch = text(read["branch"]);
-    const base = optionalText(read["base"]);
+    const base = suppliedBase(read["base"]);
     return branch === undefined || base === undefined
       ? undefined
       : Object.freeze({ operation: "switch" as const, ...place, branch, base });
@@ -545,7 +554,7 @@ function switchResult(value: unknown, request: ReplGitSwitchRequest): GitSwitchR
   const checkout = hostCheckoutIdentity(record["checkout"], request);
   const requestedBranch = text(record["requestedBranch"]);
   const resolvedBranch = text(record["resolvedBranch"]);
-  const requestedBase = optionalText(record["requestedBase"]);
+  const requestedBase = suppliedBase(record["requestedBase"]);
   const resolvedBase =
     record["resolvedBase"] === null ? null : parseGitObjectId(record["resolvedBase"], format);
   const before = parseGitCheckoutState(record["before"], format);
@@ -727,6 +736,23 @@ function pathspecs(value: unknown): readonly string[] | undefined {
 
 function samePaths(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((entry, index) => entry === right[index]);
+}
+
+/**
+ * The base a Switch was given: `null`, or any string it was given.
+ *
+ * Wider than the identity members beside it, and deliberately so. A base is a
+ * value the caller supplied rather than a fact this host derived, the ordinary
+ * performer reads it only when it has to create a branch, and the record has to
+ * carry back exactly what came in. Anything that is neither a string nor `null`
+ * — a number, an object, an absent member — is a record this version did not
+ * write and is refused as one.
+ */
+function suppliedBase(value: unknown): string | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  return typeof value === "string" ? value : undefined;
 }
 
 /** A SHA-256 digest, which is one width and one case wherever one is written. */

@@ -1000,6 +1000,62 @@ describe("what one entry's local Git records say", () => {
     );
   });
 
+  it("carries any supplied Switch base exactly, the empty string included", function* () {
+    const supplied: ReplGitRequest = Object.freeze({ ...SWITCH_REQUEST, base: "" });
+    const result: GitSwitchResult = Object.freeze({ ...SWITCH_RESULT, requestedBase: "" });
+    const { payload } = yield* gitPayload(supplied, Ok(result));
+
+    // Round trips as the bytes it was given. A base is a value the caller
+    // supplied rather than a fact this host derived, the ordinary performer
+    // consults one only to create a branch, and an acknowledged success has to
+    // be readable — so the empty string is carried rather than refused.
+    const record = parseReplGitRecord(payload);
+    expect(record?.request.operation === "switch" ? record.request.base : undefined).toBe("");
+    expect(
+      record?.outcome.ok === true && "requestedBase" in record.outcome.value
+        ? record.outcome.value.requestedBase
+        : undefined,
+    ).toBe("");
+    // And it names a different operation from the same request with no base,
+    // so the two cannot be confused for one another.
+    expect(yield* replGitFingerprint(supplied)).not.toBe(yield* replGitFingerprint(SWITCH_REQUEST));
+
+    // Request and result still have to agree about it.
+    const value = savedValue(payload);
+    expect(parseReplGitRecord(withValue(payload, { ...value, requestedBase: null }))).toBe(
+      undefined,
+    );
+
+    // Everything that is neither a string nor null is still a record this
+    // version did not write — on both sides.
+    for (const wrong of [42, {}, [], true]) {
+      expect(
+        parseReplGitRecord({
+          ...Object(payload),
+          request: { ...Object(Object(payload)["request"]), base: wrong },
+        }),
+      ).toBe(undefined);
+      expect(parseReplGitRecord(withValue(payload, { ...value, requestedBase: wrong }))).toBe(
+        undefined,
+      );
+    }
+    // An absent member is absent, not an absent base.
+    const { base: _dropped, ...missing } = Object(Object(payload)["request"]);
+    expect(parseReplGitRecord({ ...Object(payload), request: missing })).toBe(undefined);
+
+    // The branch stays a non-empty name: it is what the operation is of.
+    expect(
+      parseReplGitRecord({
+        ...Object(payload),
+        request: { ...Object(Object(payload)["request"]), branch: "" },
+      }),
+    ).toBe(undefined);
+
+    // And the commit a created branch started at is still an object id, which
+    // the empty string is not.
+    expect(parseReplGitRecord(withValue(payload, { ...value, resolvedBase: "" }))).toBe(undefined);
+  });
+
   it("reads back a refusal, and refuses a word outside the closed set", function* () {
     const { payload } = yield* gitPayload(
       ADD_REQUEST,
