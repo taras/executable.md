@@ -599,6 +599,34 @@ const REPL_HELP = [
 export type ReplHostInstaller = () => Operation<void>;
 
 /**
+ * Select what this command's entries run with, before its profile is built.
+ *
+ * Separate from installing, because the two happen at different moments and
+ * only one of them is a choice. An entry's capability is captured by the
+ * profile this command assembles once, so it has to be selected before that;
+ * everything the host *installs* belongs where it already is, beneath the
+ * middleware the profile puts in place.
+ *
+ * Selecting is inert. It names code and this deployment's configuration and
+ * reaches no provider, credential, network, repository or terminal — so a
+ * command that selects and then refuses has touched nothing.
+ */
+export type ReplEntryHostSelector = () => Operation<void>;
+
+/**
+ * How a runtime assembles the REPL: what it selects, then what it installs.
+ *
+ * One value rather than two parameters, because the two halves are one host's
+ * answer and a host that supplied only one of them would be half a REPL. A
+ * runtime that selects nothing leaves its entries with no entry capability,
+ * which is what Node and Bun do.
+ */
+export interface ReplHostAssembly {
+  readonly select?: ReplEntryHostSelector;
+  readonly install: ReplHostInstaller;
+}
+
+/**
  * What fixed grammar refuses about one `xmd repl` command line.
  *
  * Pure over argv: it reads nothing, so a malformed line is answered before this
@@ -2656,7 +2684,7 @@ function* dispatch(
   readStandardInput: StandardInputReader,
   workflowHost: WorkflowHost | undefined,
   sessions: MachineSessionAssembly | undefined,
-  installRepl: ReplHostInstaller | undefined,
+  replHost: ReplHostAssembly | undefined,
   /**
    * What this invocation's Plugins installed.
    *
@@ -2894,7 +2922,7 @@ function* dispatch(
       if (replStack === undefined) {
         break;
       }
-      if (installRepl === undefined) {
+      if (replHost === undefined) {
         console.error(
           "xmd repl: this host assembles no interactive terminal, so there is nothing to open.",
         );
@@ -2906,8 +2934,16 @@ function* dispatch(
       // vocabulary and the ceiling a generated fragment runs under. Nothing is
       // assembled again per entry, so two entries of one session cannot run
       // under different rules.
+      // The host's own selection, made here and for this command alone: an
+      // entry capability is a fact about `xmd repl`, so no other command line
+      // selects one, and a line that refuses after this has still selected
+      // nothing but code. It is made before the profile below, because that is
+      // what captures it.
+      if (replHost.select !== undefined) {
+        yield* replHost.select();
+      }
       const profile = yield* assembleReplProfile(replStack, plugins);
-      yield* installRepl();
+      yield* replHost.install();
       const ran = yield* runReplProgram({
         profile,
         ...(command.config.location === undefined ? {} : { location: command.config.location }),
@@ -3301,7 +3337,7 @@ export function* runXmd(
   // which is what keeps raw mode and a data directory off their path. A host that
   // names none has no REPL, and says so rather than opening a terminal it cannot
   // restore.
-  installRepl?: ReplHostInstaller,
+  replHost?: ReplHostAssembly,
 ): Operation<void> {
   // Before every scanner and before anything reads a path: what a command line
   // selects is read from the argv the caller wrote, and the tokens that
@@ -3334,7 +3370,7 @@ export function* runXmd(
     loadPluginModule,
     installWorkflowHost,
     sessions,
-    installRepl,
+    replHost,
   );
 }
 
@@ -3395,7 +3431,7 @@ function* runCommand(
   loadPluginModule: PluginModuleLoader,
   installWorkflowHost: HostWorkflowInstaller,
   sessions: MachineSessionAssembly | undefined,
-  installRepl: ReplHostInstaller | undefined,
+  replHost: ReplHostAssembly | undefined,
 ): Operation<void> {
   // First, so that no later scanner — help, properties, agent flags — can
   // mistake the inline document's own text for an option.
@@ -3459,7 +3495,7 @@ function* runCommand(
       readStandardInput,
       workflowHost,
       sessions,
-      installRepl,
+      replHost,
       plugins,
     );
 

@@ -609,6 +609,12 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/567",
   },
   {
+    path: "scripts/tests/repl-issues-compiled.test.ts",
+    reason:
+      "drives the compiled `dist/xmd` through a real terminal: it files an issue at a loopback tracker, leaves at a question and reopens the printed location to prove the binary carries the same entry issue host the source does. Only `deno compile` produces it and no test shard builds it, so it belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
+    issue: "https://github.com/taras/executable.md/issues/567",
+  },
+  {
     path: "scripts/tests/repl-repositories-compiled.test.ts",
     reason:
       "drives the compiled `dist/xmd` through a real terminal: it starts a REPL inside a seeded checkout, leaves at a question and reopens the printed location to prove the binary carries the same entry host the source does. Only `deno compile` produces it and no test shard builds it, so it belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
@@ -704,6 +710,12 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     path: "packages/cli/tests/repl-repositories.test.ts",
     reason:
       "drives the production entry host, which only Deno and the compiled binary register: its module graph reaches @executablemd/git/deno and so Workflow's storage adapter and node:sqlite. That Node and Bun start a REPL and perform ordinary File and Dir work without it is proven by packages/cli/tests/repl-repositories-pty.test.ts, which runs everywhere",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/cli/tests/repl-issues.test.ts",
+    reason:
+      "drives the production entry issue host, which only Deno and the compiled binary select: its module graph reaches @executablemd/git/deno and so Workflow's storage adapter and node:sqlite. The durable envelope and its record encodings are provider-neutral and are proven on every runtime by packages/git/tests/issue-owned.test.ts; that a runtime selecting no entry host reports no Issue provider is proven by packages/cli/tests/repl-issues-pty.test.ts, which runs everywhere",
     issue: DERIVED_SCOPE,
   },
 ];

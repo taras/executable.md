@@ -886,8 +886,54 @@ shares, and a new write, deletion or directory takes it too. Neither hold is
 taken to answer a completed selection or a completed file operation, and a read
 takes only the ownership of the checkout it is reading in.
 
-Local Git, publication and issues remain unavailable here; the exclusions below
-say which components those are.
+Local Git and publication remain unavailable here; the exclusions below say
+which components those are. Issues are not among them — the section below says
+what an entry may file and read.
+
+### The issue an entry filed, and the one it read
+
+An entry files and reads issues wherever you started the REPL, inside a checkout
+or not. Nothing about it needs one: no repository is discovered, no managed root
+is made and no lock is taken.
+
+```markdown
+<IssueTracker url="https://github.com/octo/project">
+  <Issue title="The REPL loses a pasted newline" as="filed">
+    Pasting two lines into the draft submits the first one.
+  </Issue>
+  <Issue url={filed.url} as="found" />
+</IssueTracker>
+
+Filed {found.url}, titled {found.title}.
+```
+
+`<Issue title=…>…</Issue>` files one issue in the enclosing `<IssueTracker>`,
+using its expanded content as the description, and binds `{ url }`.
+`<Issue url=… />` reads one and binds the fields every tracker has: the URL, the
+title, the description, the tags and the assignee. Both are the ordinary
+components the language already documents, and a REPL entry writes them exactly
+as any other document does.
+
+What is new is that both are retained. Leave the entry at a question and come
+back to the printed location: the filed issue answers with the URL it was filed
+under and the read answers with the snapshot it saw. No tracker is asked again,
+no configuration is read and no credential is opened to answer either of them —
+and the read still says what it said even if somebody has edited the issue since.
+
+An issue lives at a service rather than in your checkout, so the interrupted
+case is the one that matters. An entry whose upsert was accepted by the tracker
+and interrupted before this end could write it down retains nothing: continue it
+and the same attempt is made again, under the same key it used the first time.
+The tracker recognizes that key as its own mark and answers with the issue that
+is already there. One issue is filed, not two. A read has no key and reconciles
+nothing — an interrupted one is simply made again, which is what a second
+observation of a live object is.
+
+A refused tracker stays refused. Whether this deployment may reach a target at
+all is the operator's `XMD_WORKFLOW_GITHUB_ISSUES` ceiling, and a target outside
+it sends no request and carries no credential. A conflict, an ambiguity or an
+unavailable service keeps the provider's own vocabulary here exactly as it does
+elsewhere.
 
 ## What the head says the execution is doing
 
@@ -934,8 +980,8 @@ recorded output replaces it.
 
 ## Who owns what
 
-Repository behavior belongs to the entry that is executing, and to nothing
-wider. The command selects it; the entry's own task prepares it, once, inside
+Repository and issue behavior belong to the entry that is executing, and to
+nothing wider. The command selects it; the entry's own task prepares it, once, inside
 that task, and everything it takes — the Git session it reads through, where it
 looked for a checkout, the managed checkouts it selected, the hold on each of
 those and the hold on the repository it changes — is released when the entry is
@@ -948,7 +994,16 @@ text. No second name for the entry appears in a record: which history an entry
 may continue is the range it was given. Reading is not owning: a settled
 history, a frozen position and a refused location prepare nothing, look for no
 checkout and hold nothing. A host that registers no recording runs the same
-file work with nothing retained, which is what Node and Bun do.
+file work with nothing retained, which is what Node and Bun do; `<Issue>` there
+reports that no provider is installed, exactly as it does under any other host
+that installs none.
+
+An entry's issue work is named by the execution and the entry's own position in
+it, and by nothing else. Two entries holding identical text are two entries; an
+entry of another execution is somebody else's; and a tracker URL, a prop, a
+component answer and anything else a document can write take no part in it. That
+is what makes the interrupted upsert above answerable: the key is derived from
+facts that survive leaving and coming back.
 
 Components receive immutable view data and answer with a typed semantic action.
 They hold no events, no history, no session, no repository and no host operation,
@@ -979,11 +1034,15 @@ schedules no timer.
   different thing: it says one entry at a time may mutate one repository, and it
   says nothing about who may write this execution's history.
 - Local Git and publication are not part of this. `<Git.Add>`, `<Git.Switch>`,
-  `<Git.Commit>`, `<Git.Push>`, `<Issue>` and `<PullRequest>` refuse in a REPL
-  entry exactly as they do under any host that installs no provider for them.
-  What an entry retains is `<Repository>` and `<Worktree>` selection and the
-  file and directory work inside those checkouts and the one it was started in;
-  nothing is staged, committed, pushed or published.
+  `<Git.Commit>`, `<Git.Push>` and `<PullRequest>` refuse in a REPL entry
+  exactly as they do under any host that installs no provider for them. What an
+  entry retains is `<Repository>` and `<Worktree>` selection, the file and
+  directory work inside those checkouts and the one it was started in, and the
+  issues it filed and read; nothing is staged, committed, pushed or published.
+- `<Issue>` is an ordinary shadowable default here, as it is under every other
+  host. A repository component of that name keeps its ordinary precedence over
+  it, and what such a component does not get is the identity an entry's own
+  issue work is named by.
 - Generated selection is unchanged. An admitted generated `<File>` read, write
   or `<File.Delete />` is retained exactly as an authored one is, because both
   cross the one document filesystem. `<Glob>` stays ordinary and is retained by
@@ -995,9 +1054,13 @@ schedules no timer.
   deletes one.
 - Continuing an entry is explicit. Returning to the live head starts the one
   unfinished entry, once; a frozen position starts nothing at all.
-- A continuation does not reconcile. Nothing compares a saved result with what
-  is on disk, reports a difference or offers to repair one — if what you are
-  looking at is not what you expected, that is for you to read and act on.
+- A continuation does not reconcile what is on disk. Nothing compares a saved
+  file result with the filesystem, reports a difference or offers to repair one
+  — if what you are looking at is not what you expected, that is for you to
+  read and act on. An issue is the one exception, and it is the provider's
+  rather than this command's: an interrupted upsert presents the key it used
+  the first time, and the tracker answers with the issue it already filed under
+  that mark.
 - `xmd repl` takes one optional location and the five Agent options above. It
   renders no file and takes no document reference.
 - `<Session.Launch>` is unavailable. This command has no terminal to give away —

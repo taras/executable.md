@@ -2525,6 +2525,14 @@ mutating, adopting a compatible issue, creating once, recovering an interrupted
 creation and refusing conflict and ambiguity all belong to the middleware, and
 the key is what this side hands over so the middleware can make it true.
 
+Two profiles retain Issue work under this one effect type: a workflow run,
+named by the run and the expansion, and a REPL entry, named by that entry's own
+owner and the invocation identity canonical core minted. The envelope is the
+same in both, and what differs is what one live attempt is — a workflow run
+calls the provider surface directly, and an entry composes the profile-level
+operation over a transport-facing default of its own. Neither nests inside the
+other: two envelopes over one operation would retain it twice.
+
 An IssueTracker URL is canonicalized before use. Credentials, a query and a
 fragment are refused rather than stripped, so normalization cannot silently
 turn the authored target into another request.
@@ -6597,11 +6605,68 @@ deletion or repair. An acknowledged placement never enters that path again. A
 failed append fences later work with the first persistence failure, with no
 success result and no compensating Close.
 
-There is no local Git operation here and nothing external: `<Git.Add>`,
-`<Git.Switch>`, `<Git.Commit>`, `<Git.Push>`, `<Issue>` and `<PullRequest>` stay
-declared where they already are and refuse through their own unchanged
-missing-provider defaults. Nothing inventories the managed root, snapshots a
-checkout's contents or restores one.
+There is no local Git operation here: `<Git.Add>`, `<Git.Switch>`,
+`<Git.Commit>`, `<Git.Push>` and `<PullRequest>` stay declared where they
+already are and refuse through their own unchanged missing-provider defaults.
+Nothing inventories the managed root, snapshots a checkout's contents or
+restores one.
+
+### What one entry retains about the issue it filed
+
+One external effect is retained beside the file work, and it is the one that
+does not live in a checkout. `<Issue>` files and reads in an entry wherever the
+REPL was started: no repository is discovered for it, no managed root is made
+and no hold is taken, because an issue is at a service and the entry's checkout
+has nothing to do with it.
+
+Both operations are retained under the ordinary `issue_effect` records, named by
+the same digest of the complete request every other profile uses. A completed
+read answers with the snapshot it saw and a completed upsert with the URL it was
+filed under, neither of them resolving a provider, reading configuration or
+opening a credential. A REPL entry is not a WorkflowRun and installs no
+synthetic one: what names the work is the entry's own owner — derived by the
+session from the execution and the entry's admission-order position — together
+with the identity canonical core minted where it selected this exact
+implementation for this exact invocation. The `runId` and `expansionId` field
+spellings in the record are a compatibility encoding of those two and nothing
+more.
+
+Neither member can be supplied from outside. The owner reaches the
+implementation as a trusted closure the host built for one entry, the identity
+authenticator is delivered to that implementation by canonical execution and
+exists only as the argument of that call, and neither appears in a prop, a
+tracker, a Context, a middleware request or a journal field a document can
+write. The entry's `<Issue>` is an ordinary shadowable registration of the name
+the Plugin already declares, so a repository component of that name keeps its
+ordinary precedence — and such a replacement obtains no identity of the entry's.
+Which of the two external effects an invocation asks for is settled by canonical
+form dispatch from the form the scan recorded, because a composable answer about
+an element's shape is not something an irreversible effect may be selected by.
+
+One durable boundary encloses the operation, and the live attempt inside it is
+composed rather than hard-wired: the trusted implementation dispatches
+`IssueOperations`, where a document's own middleware answers, transforms,
+refuses and delegates as it does anywhere else, over a transport-facing default
+of the entry's own that reaches `IssueApi` and adds no second envelope. That
+default is bound in a scope of the attempt's own and closes over the attempt's
+idempotency key, so two concurrent invocations each dispatch under their own and
+neither can present the other's; its lifetime ends before the envelope publishes
+anything. A middleware answer is the composition's outcome rather than proof
+that a service was reached, and the record holds that normalized answer.
+Completed replay invokes none of it.
+
+The interrupted case is the one the key exists for. An upsert the service
+accepted and this end never acknowledged leaves no record, and the next attempt
+presents the same key — so the provider recognizes its own mark and answers with
+the issue already filed instead of filing a second one. A read has no key,
+reconciles nothing, and may simply be made again. A failed or cancelled append
+leaves no acknowledged success and fences what follows it, exactly as the file
+work's does.
+
+An entry's history is held to its own owner before any of it is replayed: a
+retained Issue record that parses, is named by the request it carries and
+carries a valid normalized result for its own operation is readable, and one
+written under another owner is refused rather than borrowed.
 
 ### What the screen teaches, and what leaving it costs
 
@@ -6979,6 +7044,7 @@ Status is measured against main.
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in [Invariant](#one-database-at-a-time-and-a-transaction-a-caller-can-hold). | built on main |
 | REPL entry retained file work | one executing REPL entry's own recording, established by core initialization in the scope the invocation owns and ending with it: it retains the `<File>` reads, `<File>` writes, `<File.Delete />` deletions and `<Dir>` ensures that land inside a checkout the entry is working in — the ambient one it was started in, or a managed one it selected — authored and admitted-generated alike, because both cross the one document filesystem. A completed operation answers from its saved result without live path canonicalization, ambient discovery, a lease, a permission lookup or a filesystem call — so only *new* work needs the environment, a continuation still binds the text its read answered with while the file says something else, and a new entry reading that path sees what is there now. A record's name is the digest of the record version, the operation kind and the complete received request, so two equal requests in one entry are one name at two ordered positions and the durable engine's positional matching tells them apart; equal work in two entries is the same name, and each entry executing against its own stream segment is what keeps those apart. Recording is ordinary ancestor-max `Files` middleware, so a provider beneath that answers directly or transforms and delegates is kept as provider behavior while the received request stays the operation's identity. A shared Git directory admits one live *mutating* entry at a time, held lazily for as long as the execution lasts and refused rather than queued; no read acquires it, so a new read proceeds while another entry holds it. There is no local Git operation and nothing external here; work outside every checkout the entry is working in stays ordinary and unrecorded, and a passive reading initializes nothing [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
 | REPL entry retained selection | one executing REPL entry's own `<Repository>` and `<Worktree>` selections, recorded beside its file work as small routing records: the canonical managed root, the checkout root, the common Git directory, the credential-free repository identity, the display name and the owner checkout, with a root-level `<Worktree>`'s ambient owner recorded as its own answer. The selector is the ordinary managed one, with its own creation, compatible-reuse, conflict and interrupted-adoption policy; what this adds is that a completed selection answers from its record, calling no selector and reaching no clone, `worktree add`, sidecar, credential or lock — so a continuation works in a checkout somebody has since changed or removed, while only new work meets today's filesystem. Parsed facts are held to the call they stand at with pure slot arithmetic against the root the record itself carries, registered in entry-private state and minted as a fresh selection, so a copied or edited Repository value can misname a target and never reach one. One entry at a time *owns* a managed slot, held until teardown and reacquired lazily by the first new operation inside a restored placement; that is a different hold from the shared Git directory's mutation lease, which only a new `<Worktree>` selector and a new mutation take. A selection is acknowledged before its path is bound, and native work that was never acknowledged runs live again under the ordinary partial-creation policy [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
+| REPL entry retained issue work | one executing REPL entry's own `<Issue>` work, retained under the ordinary `issue_effect` records beside its file work and needing no checkout at all: no repository is discovered for it, no managed root is made and no hold is taken. A completed read answers with the snapshot it saw and a completed upsert with the URL it was filed under, neither resolving a provider, reading configuration nor opening a credential. What names it is the entry's own owner — derived by the session from the execution and the entry's admission-order position — with the identity canonical execution minted where it selected this implementation for this invocation; the `runId` and `expansionId` spellings are a compatibility encoding of those two, and a REPL entry installs no synthetic WorkflowRun. Neither member is reachable from a prop, a tracker, a Context, a middleware request or a record field a document can write, and the entry's `<Issue>` is an ordinary shadowable registration a repository component still outranks. One durable boundary encloses the operation and the live attempt inside it composes `IssueOperations` over a transport-facing default of the entry's own, bound in the attempt's own scope under the attempt's own idempotency key and gone before the envelope publishes; canonical form dispatch selects which of the two effects an invocation asks for. An upsert the service accepted and this end never acknowledged retains nothing and presents the same key next time, which is what the provider adopts under; a read has no key and may be made again. The entry's retained issue records are held to its own owner before any of them are replayed [Reference](#what-one-entry-retains-about-the-issue-it-filed). | built on the #181 stack |
 | live durable-operation coordinator | explicitly coordinates structured live execution with existing Yield publication while leaving replay and callback effects unchanged [Invariant](#live-effect-coordination). | built on the #365 stack |
 | Workspace coordination API | fails closed by default; replaceable context routes only a one-use provider selection, while the selected provider directly invokes an execution-owned credentialed capability for execution, publication and failure activation [Invariant](#live-effect-coordination). | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
 | shared Git-host reconciliation | Reconciles Git push and pull-request upsert through one request-only boundary whose private terminal alone settles the retained outcome. [Invariant](#external-effects-and-git-host-mutations); [Invariant](#issue-effects). | Built on #297; Push (#370) and PullRequest (#295) consume it. Issue (#296) has its own middleware boundary. |

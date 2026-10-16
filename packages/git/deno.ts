@@ -50,3 +50,13 @@ export { useRunComposition } from "./src/deno/run-composition/provider.ts";
 export type { RunCompositionOptions } from "./src/deno/run-composition/provider.ts";
 export { useReplRepositoryRecording } from "./src/deno/retained-repository/provider.ts";
 export type { ReplRecordingOptions } from "./src/deno/retained-repository/provider.ts";
+/**
+ * One REPL entry's issue capability, as the inert value the CLI selects.
+ *
+ * The installation alone. What it builds — the entry's own `<Issue>`
+ * implementation, the identity behind it, the admission over its history and
+ * the transport-facing default inside a live attempt — stays inside it: a
+ * package that could reach one of those could file an issue under an entry it
+ * does not own.
+ */
+export { replIssueInstallation } from "./src/deno/retained-repository/issues.ts";

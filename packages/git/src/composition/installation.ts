@@ -49,7 +49,11 @@ import PullRequest, {
   props as pullRequestProps,
   returns as pullRequestReturns,
 } from "./components/PullRequest.ts";
-import Issue, { props as issueProps, returns as issueReturns } from "./components/Issue.ts";
+import Issue, {
+  documentation as issueDocumentation,
+  props as issueProps,
+  returns as issueReturns,
+} from "./components/Issue.ts";
 import {
   checksForm,
   checksReturns,
@@ -214,11 +218,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: issueProps,
     returns: issueReturns,
     fn: Issue,
-    ...documented({
-      description: `Read or file an issue. \`<Issue url={finding.issueUrl} as="found" />\` reads one. \`<Issue title="Retry the publish step">…</Issue>\` files its content in the issue tracker in scope.`,
-      as: "Required for a read, which binds url, title, description, tags and assignee. A file binds the url alone.",
-      context: "The issue's description, for the form that files one.",
-    }),
+    ...documented(issueDocumentation),
   },
 ];
 

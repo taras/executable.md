@@ -671,6 +671,8 @@ interface Invocation {
   readonly status: number;
   /** How many times the host's REPL assembly was entered. */
   readonly installed: number;
+  /** How many times this host was asked what its entries run with. */
+  readonly selected: number;
 }
 
 /**
@@ -684,6 +686,7 @@ interface Invocation {
 function* invoke(args: readonly string[]): Operation<Invocation> {
   let status = 0;
   let installed = 0;
+  let selected = 0;
   const wrote = console.log;
   const warned = console.error;
   return yield* scoped(function* (): Operation<Invocation> {
@@ -706,8 +709,13 @@ function* invoke(args: readonly string[]): Operation<Invocation> {
         refusedPluginModules,
         unsupportedWorkflowHost,
         undefined,
-        function* (): Operation<void> {
-          installed += 1;
+        {
+          select: function* (): Operation<void> {
+            selected += 1;
+          },
+          install: function* (): Operation<void> {
+            installed += 1;
+          },
         },
       );
     } catch {
@@ -716,7 +724,7 @@ function* invoke(args: readonly string[]): Operation<Invocation> {
       // whether it got that far, so the failure is an outcome rather than an end.
       status = 1;
     }
-    return { status, installed };
+    return { status, installed, selected };
   });
 }
 
@@ -735,6 +743,26 @@ describe("REPL command: what runs before the host is reached", () => {
       const ran = yield* invoke(args);
       expect(ran.status).toBe(0);
       // Describing a command is not running one.
+      expect(ran.installed).toBe(0);
+      // Nor is it choosing what its entries would run with.
+      expect(ran.selected).toBe(0);
+    }
+  });
+
+  it("S1: only a REPL command line asks this host what its entries run with", function* () {
+    // A command line that really opens the REPL asks once, before the profile
+    // it assembles captures the answer, and fails afterwards only because this
+    // host has no terminal to give it.
+    const opening = yield* invoke(["repl"]);
+    expect(opening.selected).toBe(1);
+    expect(opening.installed).toBe(1);
+
+    // Every other command line asks not at all: an entry capability is a fact
+    // about `xmd repl`, and selecting one anywhere else would be a choice no
+    // command made.
+    for (const args of [["--version"], ["run", "--help"], ["syntax", "--help"]]) {
+      const ran = yield* invoke(args);
+      expect(ran.selected).toBe(0);
       expect(ran.installed).toBe(0);
     }
   });

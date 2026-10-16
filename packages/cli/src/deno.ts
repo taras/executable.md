@@ -19,7 +19,7 @@ import { importPluginModule } from "./host-plugin-modules.ts";
 import type { UpgradeAssembly } from "./upgrade.ts";
 import { useMachineSessions } from "./session-coordinator.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
-import { denoRunRepositories } from "./deno-repositories.ts";
+import { denoRunRepositories, selectReplEntryHost } from "./deno-repositories.ts";
 import { BundledRunPlugin } from "./run-profile.ts";
 import { isCredentialHelperMode, runCredentialHelper } from "@executablemd/git/credential-helper";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
@@ -117,7 +117,10 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
       importPluginModule,
       () => useDenoWorkflowHost(HELPER),
       useMachineSessions(),
-      () => useDenoRepl(HELPER),
+      // What this host selects for a REPL command, and what it installs for
+      // one. The selection is the issue capability an entry runs with; Node
+      // and Bun supply neither half.
+      { select: selectReplEntryHost, install: () => useDenoRepl(HELPER) },
     );
   });
 }

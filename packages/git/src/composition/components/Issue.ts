@@ -17,10 +17,16 @@
  * Invalid invocation, missing tracker and non-credential-free URLs are local
  * refusals; provider conflicts, ambiguity, availability and ceiling failures keep
  * the provider's own vocabulary.
+ *
+ * The three parts below the component — which form this is, what a read asks for
+ * and what an upsert asks for — are shared with the trusted implementation a
+ * REPL entry installs, which asks the same questions of the same props and then
+ * retains the answer under its own identity. Two copies of these checks would
+ * be two vocabularies for one component.
  */
 
 import { content, hasContent } from "@executablemd/core";
-import type { PropsSchema, ReturnsSchema } from "@executablemd/core";
+import type { FirstPartyDocumentation, PropsSchema, ReturnsSchema } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { currentIssueTracker } from "../../issue/context.ts";
@@ -30,7 +36,8 @@ import {
   resolveIssueDestination,
 } from "../../issue/tracker.ts";
 import { IssueOperations } from "../../issue/operations.ts";
-import type { IssueInput } from "../../issue/api.ts";
+import type { IssueReadInvocation, IssueUpsertInvocation } from "../../issue/operations.ts";
+import type { IssueDetails, IssueInput } from "../../issue/api.ts";
 import { normalizedTags } from "../../issue/records.ts";
 import { IssueContentError, IssueProtocolError, IssueTrackerError } from "../../issue/errors.ts";
 
@@ -104,7 +111,7 @@ export const returns: ReturnsSchema = {
 };
 
 /** What the shape of this invocation asks for. */
-type Mode = "read" | "upsert";
+export type IssueMode = "read" | "upsert";
 
 /**
  * Which of the two this invocation is, or the refusal that says why neither.
@@ -112,8 +119,13 @@ type Mode = "read" | "upsert";
  * Decided from the props and the shape alone, before a tracker is read and
  * before the boundary is reached. Every branch names what to write instead,
  * because each of them is a document that meant one of the two forms.
+ *
+ * `paired` is how the element was written. The ordinary component reads it
+ * through `Component.hasContent()`; the trusted implementation is entered by
+ * canonical form dispatch and states the form the scan recorded, which is the
+ * same fact established somewhere nothing composable can answer for it.
  */
-function mode(props: Record<string, Json>, paired: boolean): Mode {
+export function issueMode(props: Record<string, Json>, paired: boolean): IssueMode {
   const url = typeof props.url === "string" && props.url !== "";
   const title = typeof props.title === "string" && props.title !== "";
 
@@ -161,15 +173,13 @@ function mode(props: Record<string, Json>, paired: boolean): Mode {
   );
 }
 
-export default function* Issue(props: Record<string, Json>): Operation<Json> {
-  // The shape first, and locally. Everything after this depends on which of the
-  // two questions is being asked, and a document that asked neither must not
-  // have one of them chosen for it.
-  const asked = mode(props, yield* hasContent());
-  return asked === "read" ? yield* read(props) : yield* upsert(props);
-}
-
-function* read(props: Record<string, Json>): Operation<Json> {
+/**
+ * What this read asks for: a canonical issue URL, and a discriminator or none.
+ *
+ * No tracker is consulted. The URL is the identity, so a tracker written
+ * around a read has nothing to add to it and changes nothing about it.
+ */
+export function issueReadRequest(props: Record<string, Json>): IssueReadInvocation {
   const url = canonicalIssueTarget(props.url);
   if (url === undefined) {
     throw new IssueTrackerError(
@@ -178,22 +188,20 @@ function* read(props: Record<string, Json>): Operation<Json> {
         "query and fragment.",
     );
   }
-  const provider = named(props.provider);
-  // No tracker is consulted. The URL is the identity, so a tracker written
-  // around a read has nothing to add to it and changes nothing about it.
-  const details = yield* IssueOperations.operations.read({ url, provider });
-  return {
-    url: details.url,
-    title: details.title,
-    description: details.description,
-    tags: [...details.tags],
-    assignee: details.assignee,
-  };
+  return { url, provider: named(props.provider) };
 }
 
-function* upsert(props: Record<string, Json>): Operation<Json> {
-  // The description before the destination, so a body that failed to render
-  // stops this element before a tracker is read.
+/**
+ * What this upsert asks for: the rendered description, the destination the
+ * enclosing tracker names, and the normalized issue.
+ *
+ * The description before the destination, so a body that failed to render stops
+ * this element before a tracker is read. Rendering it is this element's own
+ * content projection and belongs outside whatever durable boundary the caller
+ * puts around the request: a child that retains work of its own finishes in its
+ * own order, before this request exists.
+ */
+export function* issueUpsertRequest(props: Record<string, Json>): Operation<IssueUpsertInvocation> {
   const description = yield* content();
   if (description === "") {
     throw new IssueContentError(
@@ -217,11 +225,52 @@ function* upsert(props: Record<string, Json>): Operation<Json> {
     assignee: typeof props.assignee === "string" && props.assignee !== "" ? props.assignee : null,
   });
 
-  const reference = yield* IssueOperations.operations.upsert({
-    target: destination.target,
-    provider: destination.provider,
-    issue,
-  });
+  return { target: destination.target, provider: destination.provider, issue };
+}
+
+/**
+ * What the catalog says about `<Issue>`, wherever it is registered.
+ *
+ * One value, because two registrations describe one component: the bundled
+ * default every document command declares, and the trusted implementation a
+ * REPL entry installs over it. A reader asking either of them what `<Issue>`
+ * is gets this.
+ */
+export const documentation: FirstPartyDocumentation = {
+  description:
+    `Read or file an issue. \`<Issue url={finding.issueUrl} as="found" />\` reads one. ` +
+    `\`<Issue title="Retry the publish step">…</Issue>\` files its content in the issue tracker ` +
+    `in scope.`,
+  as: "Required for a read, which binds url, title, description, tags and assignee. A file binds the url alone.",
+  context: "The issue's description, for the form that files one.",
+};
+
+/** What a read binds, as a document reads it. */
+export function issueReadBinding(details: IssueDetails): Json {
+  return {
+    url: details.url,
+    title: details.title,
+    description: details.description,
+    tags: [...details.tags],
+    assignee: details.assignee,
+  };
+}
+
+export default function* Issue(props: Record<string, Json>): Operation<Json> {
+  // The shape first, and locally. Everything after this depends on which of the
+  // two questions is being asked, and a document that asked neither must not
+  // have one of them chosen for it.
+  const asked = issueMode(props, yield* hasContent());
+  return asked === "read" ? yield* read(props) : yield* upsert(props);
+}
+
+function* read(props: Record<string, Json>): Operation<Json> {
+  const details = yield* IssueOperations.operations.read(issueReadRequest(props));
+  return issueReadBinding(details);
+}
+
+function* upsert(props: Record<string, Json>): Operation<Json> {
+  const reference = yield* IssueOperations.operations.upsert(yield* issueUpsertRequest(props));
   return { url: reference.url };
 }
 

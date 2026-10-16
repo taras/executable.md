@@ -10137,11 +10137,28 @@ creation, reuse, conflict and interrupted-adoption policy, and it records what
 the selector answered: a completed selection is answered from its record without
 calling a selector, cloning, adding a worktree, reading a sidecar, opening a
 credential or taking a lock, and only genuinely new work meets the current
-filesystem. It installs nothing else the ordinary provider carries — no local
-Git, no publication, no issue tracker and no external worker — so those
-components refuse there exactly as they do under a host that installs no
-provider for them. Constructing it acquires nothing, including no managed root,
-and a passive reading of a settled history initializes nothing at all.
+filesystem. It installs one external capability beside that: the issue
+adapter, so `<Issue>` files and reads in an entry and its answers are retained
+on the same terms — a completed read answers with the snapshot it saw and a
+completed upsert with the URL it was filed under, neither of them reaching a
+tracker, a configuration or a credential. An interrupted upsert presents the key
+it used the first time, which is what lets the provider answer with the issue it
+already accepted rather than filing a second one; a read has no key. What the
+entry provider still installs nothing of is local Git, publication and the
+external worker — so `<Git.Add>`, `<Git.Switch>`, `<Git.Commit>`, `<Git.Push>`
+and `<PullRequest>` refuse there exactly as they do under a host that installs
+no provider for them. Constructing it acquires nothing, including no managed root
+and no configuration read, and a passive reading of a settled history
+initializes nothing at all.
+
+The identity an entry's issue work is named by is the entry's own: the execution
+and the entry's admission-order position, derived by the host that opened the
+session and reaching the component as a trusted closure rather than as a prop, a
+Context value, a tracker or a middleware answer. The authored site inside it is
+the identity canonical core minted where it selected that implementation. The
+`<Issue>` an entry runs is an ordinary shadowable registration of the name the
+Plugin already declares, so a repository component of that name keeps its
+ordinary precedence and obtains no identity of the entry's.
 
 Node and Bun install none of them. They register the same declarations (§5.3), and
 every repository operation there reports an absent provider before a lock, a
