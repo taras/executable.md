@@ -2369,7 +2369,10 @@ function* answeredUnder(terminal: Terminal, scope: string, text: string): Operat
   // rows are the inspector's, and the right pane now defaults to the Sidekick
   // (#883 section 5) — which is a reading rather than a route, so a row about
   // the inspector asks for it the way a person does.
-  if (shows(terminal, "Sidekick [selected]")) {
+  // Which pane is showing, read from the body it draws: both tabs are named in
+  // that column's header on every frame, so a label would answer yes whichever
+  // reading was selected and this would stop asking for Bindings at all.
+  if (panePresented(terminal) === "sidekick") {
     yield* click(terminal, "Bindings");
     yield* settled(40);
   }
@@ -2418,6 +2421,17 @@ function focusedRow(terminal: Terminal): string | undefined {
 /** Whether any row of the screen contains this text. */
 function shows(terminal: Terminal, expected: string): boolean {
   return screenOf(terminal).some((line) => line.includes(expected));
+}
+
+/**
+ * Which of the right pane's two readings this screen is showing.
+ *
+ * Read from the body the pane draws rather than from its tab: both names sit in
+ * that column's header on every wide frame, so a label answers the same either
+ * way. The Sidekick's body is the box its messages are typed into.
+ */
+function panePresented(terminal: Terminal): "sidekick" | "bindings" {
+  return shows(terminal, "Message Sidekick: ") ? "sidekick" : "bindings";
 }
 
 /** Wait until the first frame has been drawn. */

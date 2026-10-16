@@ -770,6 +770,9 @@ export function measuringContext(size: ReplTerminalSize): ReplPresentationContex
     guidance: Object.freeze([""]),
     refusal: undefined,
     rail: undefined,
+    // No settled drawer envelope: this pass has fitted no guidance for one to
+    // be clear of, so a route drawer takes the rectangle its size states.
+    drawer: undefined,
   };
 }
 

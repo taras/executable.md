@@ -135,13 +135,20 @@ import { lifecycleRefusal, openReplSession } from "./session.ts";
 import type { ReplReading, ReplSession, ReplSubmission } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
-import { committedOps, flatten, profileFor, skeletonOps } from "./layout.ts";
+import {
+  committedOps,
+  drawerRect,
+  flatten,
+  profileFor,
+  routeDrawerRect,
+  skeletonOps,
+} from "./layout.ts";
 import { createFitStore, createPlainFitStore, fitPlain, prepareReading } from "./fitting.ts";
 import type { ReplFitStore, ReplPlainFitStore } from "./fitting.ts";
 import { prepareRail } from "./history-rail.ts";
 import { readingLines } from "./source-reading.ts";
 import { sourceRuns } from "./presentation-text.ts";
-import type { ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
+import type { ReplBounds, ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
 import { capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
 import type { ReplAdmission } from "./layout-admission.ts";
 import { resolvePointer, useReplRenderer } from "./renderer.ts";
@@ -3339,6 +3346,14 @@ function measuringAt(
    * below is chosen against.
    */
   messageRows = 1,
+  /**
+   * Where a route drawer goes, once this preparation has settled it.
+   *
+   * Absent until the guidance block has been fitted and measured. The passes
+   * before that answer widths and counts and admit nothing into a drawer, so
+   * the rectangle the size states is the right one for them.
+   */
+  drawer: ReplBounds | undefined = undefined,
 ): ReplPresentationContext {
   return {
     widths,
@@ -3357,7 +3372,50 @@ function measuringAt(
     guidance: Object.freeze(Array.from({ length: Math.max(1, guidanceRows) }, () => "")),
     refusal: undefined,
     rail: undefined,
+    drawer,
   };
+}
+
+/** Whether these two rectangles are the same one, or both absent. */
+function sameBounds(one: ReplBounds | undefined, two: ReplBounds | undefined): boolean {
+  if (one === undefined || two === undefined) {
+    return one === two;
+  }
+  return one.x === two.x && one.y === two.y && one.width === two.width && one.height === two.height;
+}
+
+/**
+ * The row below the whole fitted guidance block, as the engine placed it.
+ *
+ * Read from the boxes the frame actually published rather than counted from the
+ * column's parts: the block is as many rows as its words need at this width, and
+ * a second arithmetic for where it ends is a second answer to a question the
+ * measurement has already given. Half-open, so a layer beginning here covers
+ * none of it.
+ *
+ * None where this frame drew no guidance — a refusal gives its own explanation
+ * in that position instead, and a frame below the minimum draws neither.
+ */
+function guidanceBottomOf(
+  manifest: ReplLayoutManifest,
+  measured: ReplMeasured,
+): number | undefined {
+  let bottom: number | undefined;
+  for (const box of flatten(manifest.root)) {
+    if (box.key === undefined) {
+      continue;
+    }
+    if (box.key !== "guidance" && !box.key.startsWith("guidance:row:")) {
+      continue;
+    }
+    const bounds = measured.boundsOf(box.id);
+    if (bounds === undefined) {
+      continue;
+    }
+    const edge = Math.ceil(bounds.y + bounds.height);
+    bottom = bottom === undefined ? edge : Math.max(bottom, edge);
+  }
+  return bottom;
 }
 
 /**
@@ -3474,11 +3532,34 @@ export function* prepareFrame(
     refused.value === undefined
       ? undefined
       : Object.freeze(refused.value.map((own) => `${" ".repeat(own.indent)}${own.text}`));
-  const measured = presentationFor(
+  const probed = presentationFor(
     view,
     measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1),
   );
-  const third = yield* renderer.measure(skeletonOps(measured.manifest.root), view.size);
+  const fitted = yield* renderer.measure(skeletonOps(probed.manifest.root), view.size);
+  if (!fitted.ok) {
+    return fitted;
+  }
+  // Where a route drawer goes, now that the block it must stay clear of has
+  // been fitted and placed. The guidance is as many rows as its words need, so
+  // this is read from the rows the frame published rather than counted here.
+  //
+  // One more measurement under that envelope, and only when it actually moved:
+  // the drawer's own window admits rows against this rectangle, so the pass
+  // that counts them has to be a pass that knows where it starts. Bounded, not
+  // a loop — a floating layer takes no row out of any column's flow, so the
+  // guidance it was moved clear of cannot move because it moved.
+  const envelope = routeDrawerRect(view.size, guidanceBottomOf(probed.manifest, fitted.value));
+  const settled = sameBounds(envelope, drawerRect(view.size));
+  const measured = settled
+    ? probed
+    : presentationFor(
+        view,
+        measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1, 1, envelope),
+      );
+  const third = settled
+    ? fitted
+    : yield* renderer.measure(skeletonOps(measured.manifest.root), view.size);
   if (!third.ok) {
     return third;
   }
@@ -3601,7 +3682,14 @@ export function* prepareFrame(
           skeletonOps(
             presentationFor(
               view,
-              measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1, shown.length),
+              measuringAt(
+                widths,
+                windowed,
+                entriesRows,
+                guidanceRows?.length ?? 1,
+                shown.length,
+                envelope,
+              ),
             ).manifest.root,
           ),
           view.size,
@@ -3614,7 +3702,14 @@ export function* prepareFrame(
       ? measured
       : presentationFor(
           view,
-          measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1, shown.length),
+          measuringAt(
+            widths,
+            windowed,
+            entriesRows,
+            guidanceRows?.length ?? 1,
+            shown.length,
+            envelope,
+          ),
         );
   // The History band, measured against the terminal's own width. Prepared
   // beside the reading: where a mark lands is a proportion of the rail's
@@ -3660,6 +3755,7 @@ export function* prepareFrame(
     guidance: guidanceRows,
     refusal: refusalRows,
     rail: rail.value,
+    drawer: envelope,
   };
   return Ok({ context, admission, presentation: presentationFor(view, context) });
 }

@@ -464,13 +464,25 @@ The title, both window controls and `[close]` stay outside the thing they move,
 and the footer keeps its own seven rows — `[history]` and `[exit]` stay reachable
 from inside an open drawer, where they belong to that drawer.
 
-The right pane names which of its two readings it is showing, and both tabs are
-identified in text — a reader without colour has to be able to tell which one is
-selected. When the Sidekick is the one showing, the pane holds its acknowledged
-chat, the one box its messages are typed into, and one control: `[send]` while
-it is idle, `[stop]` while it is working. The tabs stay above the reading and the
-box below it, so the way between the two readings and the place a person types do
-not scroll away with the conversation.
+A route drawer begins below the whole contextual guidance block, so the screen
+goes on saying how to close the drawer in front of it. The block is as many rows
+as its words need at that width, and all of them stay visible: the drawer starts
+at the later of its own old top and the row below the last of them. Its columns
+and its bottom edge are unchanged, so the rows it moves down are spent out of
+its own window rather than taken from the footer — a shorter window, still whole
+by scrolling. The narrow outlet keeps its existing drawer, and the Sidekick's
+pane-local question and Configure rectangles are its pane's own and unaffected.
+
+The right pane's two tabs are its heading: `Bindings` and `Sidekick` side by
+side on one row, in that order, each name said once and neither repeated by a
+title of the column's own. Which one is showing is its active styling, and
+keyboard focus is the separate mark it has always been — focus on a tab does not
+select it until it is activated. Each tab is as wide as its own name, so a
+pointer aimed at a name reaches the tab bearing it. When the Sidekick is the one
+showing, the pane holds its acknowledged chat, the one box its messages are typed
+into, and one control: `[send]` while it is idle, `[stop]` while it is working.
+The tabs stay above the reading and the box below it, so the way between the two
+readings and the place a person types do not scroll away with the conversation.
 
 Every message keeps its own rows. A message is fitted to the width the pane was
 measured at before anything counts rows, so its line breaks, blank lines and
@@ -502,6 +514,15 @@ exactly as it was. Both texts survive switching tabs, navigating History and
 resizing; the draft is in the location, and the message is this process's own and
 appears in no location. An empty box sends nothing.
 
+Each of the three columns keeps one blank row above its first heading, inside
+the column and on that column's own surface. It is layout space rather than a
+row of content: it holds no text, reaches no pointer and is no stop for Tab, and
+both passes measure it, so what a column has left for its reading is the
+engine's own remainder after it. The sidebar's lower `Entries` heading is that
+column's second reading rather than the top of another column, and takes no
+second gap. The narrow profile routes one outlet, heads no shared column and
+takes no gap at all.
+
 The three columns share the row. The sidebar keeps its width and what is left
 is split equally between the Transcript and the right pane, in whole cells, with
 the spare cell of an odd remainder going to the Transcript. The right pane holds
@@ -510,8 +531,8 @@ width under either of its two tabs.
 
 The Sidekick's body sits two cells in from its pane on each side. The chat, its
 two window controls, the composer and the controls and announcements beneath
-them are all inset together; the pane's title, its tabs and the edge under them
-span the whole column, because a column says what it is across its full width.
+them are all inset together; the tab row that heads the pane and the edge under
+it span the whole column, because a column says what it is across its full width.
 The gutter holds no text and is part of no message. Bindings keeps its own
 layout, and the question and Configure drawers keep the whole pane.
 
@@ -874,10 +895,14 @@ closes a header or opens the footer are different readings and are drawn
 differently. A header's own edge is a row of the screen, taken out of the band
 the title sits in and measured there, so a column with a title holds one row
 fewer of its reading than a column without one — and the footer keeps its seven
-rows at every size, because that edge is the header's and not the footer's. None of this is needed to operate the screen. Which
-tab is selected, where focus is, what the execution is doing and which of the two
-inputs you are typing into are each said in text as well, so a terminal that
-ignores colour loses nothing you need.
+rows at every size, because that edge is the header's and not the footer's. None of this is needed to operate the screen. Where
+focus is, what the execution is doing and which of the two inputs you are typing
+into are each said in text as well, so a terminal that ignores colour loses
+nothing you need. The two pane tabs are the one exception: which of them is
+selected is their styling, because the heading of the reading you are looking at
+should not also spell out that you are looking at it. Which reading is showing is
+legible without colour from the pane itself — the Sidekick's body is the box its
+messages are typed into, and Bindings has none.
 
 Two of these are independent and stay that way. The row you have **selected**
 keeps its own surface for its whole measured width, and keyboard **focus** marks

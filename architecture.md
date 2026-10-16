@@ -6463,6 +6463,19 @@ facts declared once; where a row lands and how many rows a region holds are
 answers the engine gives. Nothing computes a cell coordinate or a capacity
 twice, because a question asked in two places is a question answered two ways.
 
+One shared-column fact is measured rather than declared: a route drawer's top.
+Each column keeps a blank row above its first heading, and that row moved the
+contextual guidance into the rectangle the drawer's size alone used to state —
+so the preparation settles the drawer below the whole *fitted* guidance block,
+which is as many rows as its words need at that width. The extent comes from the
+rows the frame published and the engine's own bounds, never from a second
+arithmetic; the resulting rectangle is carried through the presentation context
+and read back by the layer's box, its window's admission, its cells and its
+targets alike. The columns and bottom edge are the declared ones, so the
+difference is spent on drawer-window height. One bounded measurement settles it,
+because a floating layer takes no row out of any column's flow and so cannot
+move what it was moved clear of.
+
 **Measurement comes first, and it is not a frame.** The application builds inert
 ordered candidates and a paired manifest from one semantic reading, and the
 measuring pass draws that manifest with every scrolling viewport genuinely

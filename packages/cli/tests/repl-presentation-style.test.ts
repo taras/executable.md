@@ -40,6 +40,7 @@ import type { ReplModel } from "../src/repl/model.ts";
 import { EntrySegmentStream } from "../src/repl/entries.ts";
 import {
   EMPTY_FORM,
+  guidanceSentence,
   initialState,
   NO_AGENT,
   reduceRepl,
@@ -60,7 +61,14 @@ import type {
 } from "../src/repl/application.ts";
 import type { ReplDispatched, ReplTree } from "../src/repl/reconcile.ts";
 import type { ReplDrawerRef } from "../src/repl/route.ts";
-import { FOOTER_ROWS, HISTORY_ROWS, NARROW, SIDEKICK_GUTTER } from "../src/repl/layout.ts";
+import {
+  COLUMN_TOP_GAP,
+  drawerRect,
+  FOOTER_ROWS,
+  HISTORY_ROWS,
+  NARROW,
+  SIDEKICK_GUTTER,
+} from "../src/repl/layout.ts";
 import { HISTORY_TITLE } from "../src/repl/history-rail.ts";
 import {
   ACTION_ROW,
@@ -69,6 +77,7 @@ import {
   SIDEKICK_BODY,
   SESSIONS_WINDOW,
   SIDEKICK_WINDOW,
+  TAB_ROW,
 } from "../src/repl/application.ts";
 import { navigationOf } from "../src/repl/navigation.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
@@ -105,6 +114,8 @@ import type { CellStyle, Observed, Presenter, TerminalGrid } from "./fixtures/re
 
 const WIDE: ReplTerminalSize = { columns: 160, rows: 36 };
 const MEDIUM: ReplTerminalSize = { columns: 120, rows: 30 };
+/** The large frame the History rows drive, where the drawer sits lower. */
+const LARGE: ReplTerminalSize = { columns: 200, rows: 60 };
 const EXECUTION = "style";
 
 /**
@@ -936,7 +947,14 @@ describe("REPL presentation: what an updated frame leaves behind", () => {
     if (rect === undefined) {
       throw new Error("this frame published no drawer region");
     }
-    expect({ ...rect }).toEqual({ x: 20, y: 3, width: 120, height: 23 });
+    // The columns and the bottom edge this drawer has always had, stated; its
+    // top is where the accepted envelope put it, which is below the guidance
+    // this layer must not cover and is therefore the frame's own answer rather
+    // than a number written here. The opacity claim below is unchanged: it
+    // reads whatever rectangle the engine gave.
+    expect([rect.x, rect.width, rect.y + rect.height]).toEqual([20, 120, 26]);
+    const above = placed(observed, "guidance");
+    expect(rect.y).toBeGreaterThanOrEqual(above.y + above.height);
 
     // Every cell of the rectangle carries the drawer's own surface. The ones
     // the drawer wrote nothing in are the ones that matter: those are where
@@ -1018,19 +1036,43 @@ describe("REPL presentation: the panes a reading is laid out in", () => {
       const { grid } = presenter;
 
       const transcript = placed(observed, "transcript:heading");
-      const bindings = placed(observed, "inspection:heading");
+      // The right column is named by its two tabs, which are its header: the
+      // selected one is the name of what is in the column, and the other names
+      // what the column can be turned to. Each appears once.
+      const bindings = placed(observed, "tab:bindings");
+      const sidekick = placed(observed, "tab:sidekick");
       expect(textOf(grid, transcript).trim()).toBe("Transcript");
       expect(textOf(grid, bindings).trim()).toBe("Bindings");
+      expect(textOf(grid, sidekick).trim()).toBe("Sidekick");
       expect(inkOf(grid, transcript).attrs).toContain(BOLD);
       expect(inkOf(grid, bindings).attrs).toContain(BOLD);
 
-      // Named, and not a control: a pane title is something you read.
+      // One row, in that order, and two boxes that do not overlap: a pointer
+      // aimed at a name reaches the tab bearing it.
+      expect([bindings.y, sidekick.y]).toEqual([bindings.y, bindings.y]);
+      expect(sidekick.x).toBeGreaterThanOrEqual(bindings.x + bindings.width);
+      // Said once each. The right header is these two rows and nothing above
+      // them, so neither name is repeated by a title of the column's own.
+      expect(observed.keys).not.toContain("inspection:heading");
+      for (const name of ["Bindings", "Sidekick"]) {
+        const band = observed.regionOf(TAB_ROW);
+        if (band === undefined) {
+          throw new Error("this frame published no tab row");
+        }
+        expect([name, textOf(grid, band).split(name).length - 1]).toEqual([name, 1]);
+      }
+
+      // The transcript's name is something you read; the tabs are controls, and
+      // being the column's heading does not stop them selecting it.
       expect(
         observed.targets.some((target) => target.node === observed.nodeOf("transcript:heading")),
       ).toBe(false);
-      expect(
-        observed.targets.some((target) => target.node === observed.nodeOf("inspection:heading")),
-      ).toBe(false);
+      for (const key of ["tab:bindings", "tab:sidekick"]) {
+        expect([key, observed.targets.some((one) => one.node === observed.nodeOf(key))]).toEqual([
+          key,
+          true,
+        ]);
+      }
     }
   });
 
@@ -1043,7 +1085,10 @@ describe("REPL presentation: the panes a reading is laid out in", () => {
     expect(observed.keys).toContain("sessions:heading");
     expect(observed.keys).toContain("entries:heading");
     expect(observed.keys).not.toContain("transcript:heading");
-    expect(observed.keys).not.toContain("inspection:heading");
+    // And no tab row either: the right column's header is the two tabs, and a
+    // narrow frame has no right column to head.
+    expect(observed.keys).not.toContain("tab:bindings");
+    expect(observed.keys).not.toContain("tab:sidekick");
   });
 
   it("P1: a row is built to the inside of its pane, not to the pane", function* () {
@@ -1075,6 +1120,14 @@ describe("REPL presentation: the panes a reading is laid out in", () => {
         for (const key of observed.keys) {
           const bounds = observed.boundsOf(key);
           if (bounds === undefined || !within(bounds, inside)) {
+            continue;
+          }
+          // The two tabs share one row, so each is built to its own label
+          // instead of to the column. `within` is what keeps that honest: a tab
+          // sized from the outer bound would reach past the pane, and one given
+          // the whole inside would cover the other.
+          if (key.startsWith("tab:")) {
+            expect([region, key, bounds.width < inside.width]).toEqual([region, key, true]);
             continue;
           }
           expect([region, key, bounds.width === inside.width || bounds.width === inset]).toEqual([
@@ -1166,14 +1219,16 @@ describe("REPL presentation: the panes a reading is laid out in", () => {
         expect(row).not.toContain("xmd://");
       }
       // And nothing was left blank where it used to be: the first body row is
-      // the pane's own, which only holds if no row was reserved above it.
+      // the pane's own plus the accepted gap above its heading, which only
+      // holds if no row was reserved for the location on top of that.
       const first =
         size === NARROW ? placed(observed, "guidance") : placed(observed, "transcript:heading");
       const body = regionBounds(observed, size === NARROW ? "content" : "transcript");
       if (body === undefined) {
         throw new Error("this frame published no body region");
       }
-      expect(first.y).toBe(body.y);
+      // The narrow outlet heads no shared column and takes no gap.
+      expect(first.y).toBe(body.y + (size === NARROW ? 0 : COLUMN_TOP_GAP));
     }
   });
 });
@@ -1237,9 +1292,7 @@ describe("REPL presentation: what a drawer says it is showing", () => {
     // What was asked is a label, what was answered is a value, and the two are
     // not the same reading.
     const schema = placed(observed, "drawer:schema");
-    const answered = placed(observed, "drawer:answered");
     expect(inkOf(grid, schema).attrs).toContain(BOLD);
-    expect(inkOf(grid, answered).attrs).toContain(BOLD);
     expect(inkOf(grid, placed(observed, "drawer:schema:0")).foreground).toBe(REPL_PALETTE.muted);
 
     // The answer itself is one window further on: the drawer's own top rule and
@@ -1265,6 +1318,14 @@ describe("REPL presentation: what a drawer says it is showing", () => {
     if (scrolled === undefined) {
       throw new Error("this presenter committed no frame");
     }
+    // The answer's own label, which is the second of the two readings and is
+    // reached with the value it names. Asserted from the scrolled frame rather
+    // than the first one: the accepted guidance-protected drawer envelope spends
+    // the rows it moved down out of this window, so this label is a press
+    // further on than it used to be. The claim is unchanged — what was asked is
+    // a label and what was answered is a label of its own.
+    expect(inkOf(grid, placed(scrolled, "drawer:answered")).attrs).toContain(BOLD);
+
     // Read as the JSON it is: what the answer calls its field, and the value
     // recorded under it, are two readings and neither is the muted schema.
     const recordedAnswer = placed(scrolled, "drawer:answer:1");
@@ -2057,10 +2118,21 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
       if (bounds === undefined) {
         throw new Error(`this frame published no ${region} region`);
       }
-      expect([region, grid.styleAt(bounds.x + bounds.width - 1, bounds.y).background]).toEqual([
+      // The gap above each column's heading, which takes that column's own
+      // surface: space asked for at the top of a column is part of the column
+      // rather than a band of its own.
+      for (let y = bounds.y; y < bounds.y + COLUMN_TOP_GAP; y += 1) {
+        expect([region, y, grid.styleAt(bounds.x + bounds.width - 1, y).background]).toEqual([
+          region,
+          y,
+          surface,
+        ]);
+      }
+      // And the header itself, on the first row below that gap.
+      expect([
         region,
-        header ?? surface,
-      ]);
+        grid.styleAt(bounds.x + bounds.width - 1, bounds.y + COLUMN_TOP_GAP).background,
+      ]).toEqual([region, header ?? surface]);
       // The bottom of the pane's own moving content, not the bottom of the
       // pane. Re-anchored for #881 PR 2: the transcript's last row is now the
       // reading's `[\u2193 later]` control, and a control carries the draft's
@@ -2099,7 +2171,9 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
 
     // Both shared columns still say what they are while they hold nothing.
     expect(textOf(grid, placed(observed, "sessions:heading"))).toContain("Sessions");
-    expect(inkOf(grid, placed(observed, "inspection:heading")).foreground).toBe(SEMANTIC.intro);
+    // The right column says what it is through the tab that is selected, which
+    // is the accepted default pane for an empty screen.
+    expect(inkOf(grid, placed(observed, "tab:sidekick")).foreground).toBe(SEMANTIC.intro);
   });
 
   it("P1-T3: a question drawer is bounded, named as waiting, and read in groups", function* () {
@@ -2612,8 +2686,15 @@ describe("Tier TE — the accepted columns, headers and edges in production cell
             where,
             ACCEPTED_SURFACE.transcriptHeader,
           ]);
-          for (const key of ["inspection:heading", "tab:bindings", "tab:sidekick"]) {
-            expect([where, key, fillBeyond(grid, placed(observed, key))]).toEqual([
+          // The right pane's header is the one tab row, so the fill is read
+          // across that band: the last cell of it is past both names.
+          const band = observed.regionOf(TAB_ROW);
+          if (band === undefined) {
+            throw new Error(`${where} published no tab row`);
+          }
+          expect([where, fillBeyond(grid, band)]).toEqual([where, ACCEPTED_SURFACE.rightHeader]);
+          for (const key of ["tab:bindings", "tab:sidekick"]) {
+            expect([where, key, grid.styleAt(placed(observed, key).x, band.y).background]).toEqual([
               where,
               key,
               ACCEPTED_SURFACE.rightHeader,
@@ -2624,11 +2705,8 @@ describe("Tier TE — the accepted columns, headers and edges in production cell
           // row directly under the last header row, not inferred from the
           // band's bounds — a published row is a position this frame committed.
           const transcriptHeader = placed(observed, "transcript:heading");
-          const rightHeader = [
-            placed(observed, "inspection:heading"),
-            placed(observed, "tab:bindings"),
-            placed(observed, "tab:sidekick"),
-          ].reduce((lowest, one) => (one.y > lowest.y ? one : lowest));
+          // One header row now, and the band is it: the edge closes the tabs.
+          const rightHeader = band;
           for (const [name, header] of [
             ["transcript", transcriptHeader],
             ["inspection", rightHeader],
@@ -2728,8 +2806,26 @@ describe("Tier TE — the accepted columns, headers and edges in production cell
           // The footer keeps its seven rows: no edge was bought with one.
           expect([where, footer.height]).toEqual([where, FOOTER_ROWS]);
 
-          // And which tab is selected is readable without any of this colour.
-          expect(textOf(grid, placed(observed, tab.row))).toContain("[selected]");
+          // And which tab is selected is readable in the cells this frame
+          // committed. Neither label says so any more, so the evidence is the
+          // active styling the two tabs have always differed by — measured on
+          // both of them, because one colour proves nothing on its own.
+          const other = tab.row === "tab:sidekick" ? "tab:bindings" : "tab:sidekick";
+          expect([where, inkOf(grid, placed(observed, tab.row)).foreground]).toEqual([
+            where,
+            SEMANTIC.intro,
+          ]);
+          expect([
+            where,
+            inkOf(grid, placed(observed, other)).foreground === SEMANTIC.intro,
+          ]).toEqual([where, false]);
+          for (const key of [tab.row, other]) {
+            expect([
+              where,
+              key,
+              textOf(grid, placed(observed, key)).includes("[selected]"),
+            ]).toEqual([where, key, false]);
+          }
         });
       }
     }
@@ -2802,12 +2898,7 @@ describe("Tier TE — the accepted columns, headers and edges in production cell
         // a chrome row this frame never mounted has nothing for a keystroke or a
         // pointer to reach — which is a stronger claim than its cells being
         // blank, and the reason both are asserted.
-        for (const key of [
-          "transcript:heading",
-          "inspection:heading",
-          "tab:bindings",
-          "tab:sidekick",
-        ]) {
+        for (const key of ["transcript:heading", "tab:bindings", "tab:sidekick"]) {
           expect([outlet.name, key, observed.keys.includes(key)]).toEqual([
             outlet.name,
             key,
@@ -3372,11 +3463,10 @@ describe("Tier PW — the accepted column shares, in the frame that was committe
           expect([where, right.x]).toEqual([where, transcript.x + transcript.width]);
 
           // Both header edges are still drawn, across the columns they close.
-          const rightHeader = [
-            placed(observed, "inspection:heading"),
-            placed(observed, "tab:bindings"),
-            placed(observed, "tab:sidekick"),
-          ].reduce((lowest, one) => (one.y > lowest.y ? one : lowest));
+          const rightHeader = observed.regionOf(TAB_ROW);
+          if (rightHeader === undefined) {
+            throw new Error(`${where} published no tab row`);
+          }
           for (const [name, header] of [
             ["transcript", placed(observed, "transcript:heading")],
             ["right", rightHeader],
@@ -3437,11 +3527,10 @@ describe("Tier PW — the accepted column shares, in the frame that was committe
               ]);
             }
             // The header spans the whole pane, which is the point of measuring
-            // it and the body separately.
-            expect([where, placed(observed, "inspection:heading").width]).toEqual([
-              where,
-              right.width - 1,
-            ]);
+            // it and the body separately. It is the tab band that spans it: the
+            // two tabs inside take their own labels, and the row they share is
+            // the column's full inner width.
+            expect([where, rightHeader.width]).toEqual([where, right.width - 1]);
           }
 
           // And the footer is the seven rows it has always been.
@@ -3540,5 +3629,306 @@ describe("Tier AR — a retained reading larger than one measuring render", () =
     const after = yield* presenter.commit(viewOf(closed));
     expect(after.boundsOf("drawer:open")).toBeUndefined();
     expect(closed.draft).toBe(DRAFT);
+  });
+});
+
+/**
+ * Tier UH — the right pane's one header row, and the space above three headings.
+ *
+ * The Product Owner asked for Bindings and Sidekick beside each other with each
+ * name said once, and for space between the top of the screen and the headings
+ * of all three columns. What was there said Sidekick twice while the Sidekick
+ * was the reading — once as the pane's title and once on its tab — and marked
+ * the selection with the literal word `[selected]`, which the amendment
+ * supersedes: the active styling says it, and keyboard focus stays the separate
+ * mark it has always been.
+ *
+ * Read in cells and bounds rather than in the description, because the request
+ * was about what the screen looks like. One row is the accepted gap.
+ */
+describe("Tier UH — horizontal pane tabs and the gap above each column heading", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("UH1: both tabs are one header row, named once, with selection and focus apart", function* () {
+    const model = yield* settledAndFailed();
+    for (const size of [WIDE, MEDIUM]) {
+      for (const { name, select, active } of [
+        { name: "Sidekick", select: (one: ReplState) => one, active: "tab:sidekick" },
+        { name: "Bindings", select: inspecting, active: "tab:bindings" },
+      ]) {
+        const where = `${size.columns}x${size.rows} ${name}`;
+        const presenter = yield* usePresenter(size);
+        // Focus put on the tab that is *not* selected, which is the one frame
+        // where a label-shaped indicator and a focus mark cannot be confused.
+        const observed = yield* presenter.commit(
+          reading(
+            select(stateWith({})),
+            model,
+            NOTHING_LIVE,
+            size,
+            active === "tab:sidekick" ? "tab:bindings" : "tab:sidekick",
+          ),
+        );
+        const { grid } = presenter;
+
+        const bindings = placed(observed, "tab:bindings");
+        const sidekick = placed(observed, "tab:sidekick");
+        const band = observed.regionOf(TAB_ROW);
+        const right = regionBounds(observed, "inspection");
+        const inside = observed.regionOf("box:inspection:content");
+        if (band === undefined || right === undefined || inside === undefined) {
+          throw new Error(`${where} published no tab row or right column`);
+        }
+
+        // One row, Bindings then Sidekick, in boxes that do not overlap and do
+        // not leave the column.
+        expect([where, bindings.y, sidekick.y, band.y]).toEqual([where, band.y, band.y, band.y]);
+        expect([where, bindings.x < sidekick.x]).toEqual([where, true]);
+        expect([where, sidekick.x >= bindings.x + bindings.width]).toEqual([where, true]);
+        for (const [key, box] of [
+          ["tab:bindings", bindings],
+          ["tab:sidekick", sidekick],
+        ] as const) {
+          expect([where, key, box.x >= inside.x]).toEqual([where, key, true]);
+          expect([where, key, box.x + box.width <= inside.x + inside.width]).toEqual([
+            where,
+            key,
+            true,
+          ]);
+          // Its own label and not the column's width, which is what lets two
+          // of them share one row.
+          expect([where, key, box.width < inside.width]).toEqual([where, key, true]);
+        }
+
+        // The band is the column's full inner width, closed by the one edge
+        // directly beneath it: the header is one row now, not three.
+        expect([where, band.width]).toEqual([where, inside.width]);
+        expect([where, band.x]).toEqual([where, inside.x]);
+        expect([where, grid.styleAt(band.x, band.y + 1).foreground]).toEqual([
+          where,
+          ACCEPTED_EDGE.chrome,
+        ]);
+
+        // Each name once, across the whole band, and no title repeating it.
+        const header = textOf(grid, band);
+        for (const label of ["Bindings", "Sidekick"]) {
+          expect([where, label, header.split(label).length - 1]).toEqual([where, label, 1]);
+        }
+        expect([where, header.includes("[selected]")]).toEqual([where, false]);
+        expect([where, observed.keys.includes("inspection:heading")]).toEqual([where, false]);
+
+        // Which one is selected, and separately where the next keystroke lands.
+        // Two marks, on two different tabs, so neither stands in for the other.
+        const idle = active === "tab:sidekick" ? "tab:bindings" : "tab:sidekick";
+        expect([where, inkOf(grid, placed(observed, active)).foreground]).toEqual([
+          where,
+          SEMANTIC.intro,
+        ]);
+        expect([where, inkOf(grid, placed(observed, idle)).foreground]).toEqual([
+          where,
+          REPL_PALETTE.focus,
+        ]);
+
+        // Both are still real controls, each with a target of its own.
+        for (const key of ["tab:bindings", "tab:sidekick"]) {
+          const node = observed.nodeOf(key);
+          expect([where, key, observed.targets.filter((one) => one.node === node).length]).toEqual([
+            where,
+            key,
+            1,
+          ]);
+        }
+      }
+    }
+  });
+
+  it("UH3: one row of space above all three headings, holding nothing reachable", function* () {
+    const model = yield* settledAndFailed();
+    for (const size of [WIDE, MEDIUM]) {
+      const where = `${size.columns}x${size.rows}`;
+      const presenter = yield* usePresenter(size);
+      const observed = yield* presenter.commit(
+        reading(selecting(stateWith({}), "entry-1"), model, NOTHING_LIVE, size),
+      );
+      const { grid } = presenter;
+
+      // The first row of each column's own content, and the gap above it.
+      const first: readonly { readonly region: "sidebar" | "transcript"; readonly key: string }[] =
+        [
+          { region: "sidebar", key: "sessions:heading" },
+          { region: "transcript", key: "transcript:heading" },
+        ];
+      for (const { region, key } of first) {
+        const column = regionBounds(observed, region);
+        if (column === undefined) {
+          throw new Error(`${where} published no ${region} column`);
+        }
+        expect([where, key, placed(observed, key).y]).toEqual([
+          where,
+          key,
+          column.y + COLUMN_TOP_GAP,
+        ]);
+      }
+      const band = observed.regionOf(TAB_ROW);
+      const right = regionBounds(observed, "inspection");
+      if (band === undefined || right === undefined) {
+        throw new Error(`${where} published no tab row`);
+      }
+      expect([where, band.y]).toEqual([where, right.y + COLUMN_TOP_GAP]);
+
+      // Nothing is in the gap: no mounted row of any column was drawn there and
+      // no pointer target covers it, so it is space rather than a blank control.
+      for (const region of ["sidebar", "transcript", "inspection"] as const) {
+        const column = regionBounds(observed, region);
+        if (column === undefined) {
+          throw new Error(`${where} published no ${region} column`);
+        }
+        for (let y = column.y; y < column.y + COLUMN_TOP_GAP; y += 1) {
+          for (const key of observed.keys) {
+            const bounds = observed.boundsOf(key);
+            if (bounds === undefined) {
+              continue;
+            }
+            const covers =
+              bounds.y <= y &&
+              y < bounds.y + bounds.height &&
+              bounds.x < column.x + column.width &&
+              column.x < bounds.x + bounds.width;
+            expect([where, region, y, key, covers]).toEqual([where, region, y, key, false]);
+          }
+          for (const target of observed.targets) {
+            const covers =
+              target.bounds.y <= y &&
+              y < target.bounds.y + target.bounds.height &&
+              target.bounds.x < column.x + column.width &&
+              column.x < target.bounds.x + target.bounds.width;
+            expect([where, region, y, target.node, covers]).toEqual([
+              where,
+              region,
+              y,
+              target.node,
+              false,
+            ]);
+          }
+        }
+      }
+
+      // The lower Entries heading is the column's second reading rather than
+      // the top of a fourth column, so it takes no gap of its own.
+      const sessions = placed(observed, "sessions:heading");
+      const entries = placed(observed, "entries:heading");
+      expect([where, entries.y > sessions.y]).toEqual([where, true]);
+
+      // And the room below is the engine's own remainder: the footer still has
+      // its seven rows, and the reading window ends above them.
+      const footer = regionBounds(observed, "footer");
+      const window = viewportBounds(observed, READING_WINDOW);
+      if (footer === undefined || window === undefined) {
+        throw new Error(`${where} published no footer or reading window`);
+      }
+      expect([where, footer.height]).toEqual([where, FOOTER_ROWS]);
+      expect([where, window.y + window.height <= footer.y]).toEqual([where, true]);
+      expect([where, window.height > 0]).toEqual([where, true]);
+    }
+  });
+});
+
+/**
+ * Tier UH5 — a route drawer stays clear of the guidance it must not cover.
+ *
+ * The one row of space above each column heading moved every column's content
+ * down a row, and this layer floats at a rectangle the terminal's size alone
+ * decided — so the row it gained was the guidance, which is where the screen
+ * says how to close the drawer in front of it. The accepted envelope keeps the
+ * drawer's horizontal bounds and its bottom edge and begins it below the whole
+ * fitted block, spending its own window rather than the footer's rows.
+ *
+ * Geometry here, against the committed frame and the published rectangles;
+ * actual visibility and closing are the mounted row's in the sidekick
+ * presentation file. The whole block, not its first row: the directions wrap,
+ * and a drawer clearing one row of a three-row block still hides two of them.
+ */
+describe("Tier UH5 — the guidance above a route drawer", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("UH5: the whole fitted guidance block is above the drawer, at three sizes", function* () {
+    const model = yield* settledAndFailed();
+    let wrapped = 0;
+    for (const size of [WIDE, MEDIUM, LARGE]) {
+      const where = `${size.columns}x${size.rows}`;
+      const presenter = yield* usePresenter(size);
+      const view = reading(opening(selecting(stateWith({}), "entry-1")), model, NOTHING_LIVE, size);
+      const observed = yield* presenter.commit(view);
+      const { grid } = presenter;
+
+      // Every row the directions were fitted into, by the keys that describe
+      // them, in the order they are read.
+      const keys = observed.keys.filter(
+        (key) => key === "guidance" || key.startsWith("guidance:row:"),
+      );
+      expect([where, keys.length > 0]).toEqual([where, true]);
+      if (keys.length > 1) {
+        wrapped += 1;
+      }
+
+      const layer = observed.regionOf("box:drawer:layer");
+      const base = drawerRect(size);
+      const footer = regionBounds(observed, "footer");
+      if (layer === undefined || base === undefined || footer === undefined) {
+        throw new Error(`${where} published no drawer layer, rectangle or footer`);
+      }
+
+      // Not one row of the block is inside the layer, and every one of them
+      // still holds the text it was fitted to: a covered row is drawn and then
+      // painted over, so the cells are the evidence rather than the bounds
+      // alone.
+      const said: string[] = [];
+      for (const key of keys) {
+        const bounds = placed(observed, key);
+        expect([where, key, bounds.y + bounds.height <= layer.y]).toEqual([where, key, true]);
+        said.push(textOf(grid, bounds).trim());
+      }
+      const block = said.join(" ").replace(/\s+/g, " ").trim();
+
+      // The whole of what this width composed, across however many rows it
+      // took — compared by content rather than by a sentence written here, which
+      // would be a different sentence at each of these three widths.
+      for (const word of guidanceSentence(view)
+        .split(/\s+/)
+        .filter((one) => one.length > 0)) {
+        expect([where, word, block.includes(word)]).toEqual([where, word, true]);
+      }
+      // Including the way out of the drawer that is in front of it.
+      expect([where, block.includes("Esc closes")]).toEqual([where, true]);
+
+      // The envelope: the same columns and the same bottom edge it has always
+      // had, so moving down was paid for out of this drawer's own window.
+      expect([where, layer.x, layer.width]).toEqual([where, base.x, base.width]);
+      expect([where, layer.y + layer.height]).toEqual([where, base.y + base.height]);
+      expect([where, layer.y >= base.y]).toEqual([where, true]);
+      // And still above the seven rows that are never covered.
+      expect([where, layer.y + layer.height <= footer.y]).toEqual([where, true]);
+      expect([where, footer.height]).toEqual([where, FOOTER_ROWS]);
+
+      // A window with room in it, and the three controls that move and close
+      // it, each a real target outside the thing it moves.
+      const window = viewportBounds(observed, DRAWER_WINDOW);
+      if (window === undefined) {
+        throw new Error(`${where} published no drawer window`);
+      }
+      expect([where, window.height > 0]).toEqual([where, true]);
+      for (const key of ["drawer:scroll:up", "drawer:scroll:down", "drawer:close"]) {
+        const node = observed.nodeOf(key);
+        expect([where, key, node !== undefined]).toEqual([where, key, true]);
+        expect([where, key, observed.targets.some((one) => one.node === node)]).toEqual([
+          where,
+          key,
+          true,
+        ]);
+      }
+    }
+    // At least one of the three wrapped the directions over more than one row,
+    // which is what makes the claim above stronger than protecting the first.
+    expect(wrapped).toBeGreaterThan(0);
   });
 });

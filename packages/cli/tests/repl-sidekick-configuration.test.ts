@@ -58,6 +58,7 @@ import {
   OTHER_MOUNTED_AGENT,
   replay,
   resizeTo,
+  panePresented,
   screenOf,
   sendMessage,
   settled,
@@ -888,8 +889,10 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     // else. A preference or a message would be a third.
     expect((yield* chatKinds(repl)).length).toBe(2);
     yield* activate(repl.terminal, "Bindings");
-    yield* awaiting(repl.terminal, "Bindings being selected", (one) =>
-      shows(one, "Bindings [selected]"),
+    yield* awaiting(
+      repl.terminal,
+      "Bindings being selected",
+      (one) => panePresented(one) === "bindings",
     );
     yield* resizeTo(repl.terminal, { columns: 120, rows: 30 });
     yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });

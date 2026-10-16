@@ -313,6 +313,43 @@ export function drawerRect(size: ReplTerminalSize): ReplBounds | undefined {
 }
 
 /**
+ * A route drawer's rectangle, moved clear of the guidance it must not cover.
+ *
+ * The body gained a row above each column's heading, and this layer floats at a
+ * rectangle the terminal's size alone decides — so the row the gap pushed down
+ * is a row the drawer would cover. The contextual guidance is in that position,
+ * and a screen that stopped saying how to close the drawer in front of it is a
+ * screen with no way out that it admits to.
+ *
+ * `guidanceBottom` is the row below the whole fitted block, measured by the
+ * engine rather than counted here: the block is as many rows as its words need
+ * at this width, so protecting a fixed number of them would protect the first
+ * row of a wrapped block and hide the rest. The new top is the later of the old
+ * top plus the gap and that bottom, which keeps the gap's own translation where
+ * the guidance is shorter than it.
+ *
+ * The horizontal bounds and the bottom edge are the ones this drawer has always
+ * had, so moving down spends the drawer's own window rather than reaching into
+ * the footer. Half-open: a drawer beginning exactly at the block's bottom covers
+ * none of it.
+ *
+ * None of this applies to the narrow outlet, which has no shared column and
+ * takes no gap, or to the Sidekick's pane-local rectangles, which are its own.
+ */
+export function routeDrawerRect(
+  size: ReplTerminalSize,
+  guidanceBottom: number | undefined,
+): ReplBounds | undefined {
+  const base = drawerRect(size);
+  if (base === undefined || profileFor(size) === "narrow" || guidanceBottom === undefined) {
+    return base;
+  }
+  const bottom = base.y + base.height;
+  const top = Math.min(bottom, Math.max(base.y + COLUMN_TOP_GAP, guidanceBottom));
+  return Object.freeze({ x: base.x, y: top, width: base.width, height: bottom - top });
+}
+
+/**
  * The Sidekick question form's rectangle, inside the pane that owns it.
  *
  * Pane-local rather than whole-body, because the question belongs to the
@@ -494,6 +531,51 @@ export function headerBandProps(rows: number, surface: number): ReplBoxProps {
   };
 }
 
+/** How far apart the two tabs of the right pane's header sit. */
+export const TAB_GAP = 2;
+
+/**
+ * How many blank rows each shared column keeps above its first heading.
+ *
+ * Space asked for at the top of the three columns, taken as real layout padding
+ * so the engine's own remainder is what the rows below are measured against. A
+ * gap spent as a described blank row would be a mounted node with a hit box and
+ * a Tab stop, and a reader would find a row there that selects nothing.
+ */
+export const COLUMN_TOP_GAP = 1;
+
+/**
+ * The right pane's header: both of its readings named once, side by side.
+ *
+ * One row and a gap, like the action row, because these two tabs are the same
+ * kind of thing — controls that take exactly their own label and sit beside each
+ * other. It is the pane's heading as well as the way between its readings, so it
+ * carries the header surface across the whole measured width rather than only
+ * the cells the two names reach.
+ *
+ * Clipped horizontally for the reason the action row is: a tab the column has no
+ * room for must stop at the trailing edge instead of painting into the reading
+ * beside it.
+ */
+export function tabRowProps(surface: number): ReplBoxProps {
+  return {
+    layout: { width: grow(), height: fixed(1), direction: "ltr", gap: TAB_GAP },
+    bg: terminalColour(surface),
+    clip: { horizontal: true },
+  };
+}
+
+/**
+ * One tab: as wide as its own name, on the header's surface.
+ *
+ * Self-sized rather than given a share of the row, so each tab's hit box is the
+ * label a person is aiming at. Two children holding the old full-column width
+ * would overlap, and the second would publish a box reaching out of the column.
+ */
+export function tabProps(surface: number): ReplBoxProps {
+  return { layout: { width: fit(), height: fixed(1) }, bg: terminalColour(surface) };
+}
+
 /**
  * A pane with its own surface and the edge that starts it.
  *
@@ -516,8 +598,17 @@ export function paneColumnProps(width: number | undefined, surface: number): Rep
 }
 
 /** A pane with a surface and no edge of its own, like the one at the margin. */
-export function paneProps(width: number | undefined, surface: number): ReplBoxProps {
-  return { ...columnProps(width), bg: terminalColour(surface) };
+export function paneProps(width: number | undefined, surface: number, topGap = 0): ReplBoxProps {
+  return {
+    ...columnProps(width),
+    layout: {
+      width: columnAxis(width),
+      height: grow(),
+      direction: "ttb",
+      padding: { top: topGap },
+    },
+    bg: terminalColour(surface),
+  };
 }
 
 /**
@@ -528,8 +619,10 @@ export function paneProps(width: number | undefined, surface: number): ReplBoxPr
  * count in the caller would be a second answer to a question the engine has
  * already answered.
  */
-export function paneContentProps(): ReplBoxProps {
-  return { layout: { width: grow(), height: grow(), direction: "ttb" } };
+export function paneContentProps(topGap = 0): ReplBoxProps {
+  return {
+    layout: { width: grow(), height: grow(), direction: "ttb", padding: { top: topGap } },
+  };
 }
 
 /**
@@ -543,8 +636,12 @@ export function paneContentProps(): ReplBoxProps {
  * its column, and a column takes no minimum from the text inside it.
  */
 export function columnProps(width: number | undefined): ReplBoxProps {
-  const axis: SizingAxis = width === undefined ? grow() : fixed(width);
-  return { layout: { width: axis, height: grow(), direction: "ttb" } };
+  return { layout: { width: columnAxis(width), height: grow(), direction: "ttb" } };
+}
+
+/** A column is the width the product gave it, or whatever is left over. */
+function columnAxis(width: number | undefined): SizingAxis {
+  return width === undefined ? grow() : fixed(width);
 }
 
 /**

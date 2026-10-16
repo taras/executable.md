@@ -34,6 +34,7 @@ import {
   draftText,
   DRAFT_PROMPT,
   focusDraft,
+  focusedOn,
   focusedField,
   focusFormValue,
   focusMessage,
@@ -53,6 +54,8 @@ import {
   readingAt,
   replay,
   resizeTo,
+  paneShown,
+  panePresented,
   rowsShow,
   saysAcross,
   sendMessage,
@@ -129,8 +132,10 @@ describe("Tier MP — one Sidekick per command, acquired without working", () =>
   it("M1: a fresh command shows its Sidekick, asks the agent nothing, and still runs entries", function* () {
     const repl = yield* useMountedRepl();
 
-    // The pane is the Sidekick by default, and it says so in text.
-    expect(shows(repl.terminal, "Sidekick [selected]")).toBe(true);
+    // The pane is the Sidekick by default, which is its body being the one
+    // drawn. Both tabs are named in that column's header either way, so the
+    // reading is read from the pane rather than from the label.
+    expect(panePresented(repl.terminal)).toBe("sidekick");
     expect(shows(repl.terminal, "Bindings")).toBe(true);
     // An execution nobody has said anything in.
     expect(shows(repl.terminal, "No messages yet.")).toBe(true);
@@ -620,7 +625,7 @@ describe("Tier MP — the Sidekick at every size it is drawn at", () => {
     // away, and with it every target somebody could type or send into.
     yield* activate(repl.terminal, "Bindings");
     const onBindings = yield* readingAt(repl.terminal, repl.terminal.size);
-    expect(rowsShow(onBindings(), "Bindings [selected]")).toBe(true);
+    expect(paneShown(onBindings())).toBe("bindings");
     expect(rowsShow(onBindings(), "Message Sidekick: ")).toBe(false);
     expect(rowsShow(onBindings(), "[send]")).toBe(false);
     // The draft is still the draft, because it is not in that pane.
@@ -638,7 +643,7 @@ describe("Tier MP — the Sidekick at every size it is drawn at", () => {
     const repl = yield* useMountedRepl();
     // Nothing has been activated, so the route names no view: the right pane is
     // the Sidekick by default, which is a reading rather than a route.
-    expect(shows(repl.terminal, "Sidekick [selected]")).toBe(true);
+    expect(panePresented(repl.terminal)).toBe("sidekick");
 
     // Narrow routes one outlet, and with no explicit view it is Entries.
     const narrow = yield* resizeTo(repl.terminal, { columns: 72, rows: 20 });
@@ -660,7 +665,7 @@ describe("Tier MP — the Sidekick at every size it is drawn at", () => {
 
     // And expanding gives the two panes back without losing where somebody was.
     const expanded = yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
-    expect(rowsShow(expanded(), "Sidekick [selected]")).toBe(true);
+    expect(paneShown(expanded())).toBe("sidekick");
     expect(messageTextIn(expanded()).includes("kept")).toBe(true);
   });
 
@@ -716,8 +721,10 @@ describe("Tier MP — the Sidekick at every size it is drawn at", () => {
 
     // Bindings still switches, and what it reads is still that same entry.
     yield* activate(repl.terminal, "Bindings");
-    yield* awaiting(repl.terminal, "the inspector coming back", (one) =>
-      shows(one, "Bindings [selected]"),
+    yield* awaiting(
+      repl.terminal,
+      "the inspector coming back",
+      (one) => panePresented(one) === "bindings",
     );
     expect(shows(repl.terminal, "* 1.")).toBe(true);
     expect(shows(repl.terminal, "the released step")).toBe(true);
@@ -938,8 +945,10 @@ describe("Tier MQ — a Sidekick question announces itself and takes nothing ove
     // And now somebody walks away from the Sidekick: Bindings selected, an
     // entry being read, their own text in the draft.
     yield* activate(repl.terminal, "Bindings");
-    yield* awaiting(repl.terminal, "Bindings being selected", (one) =>
-      shows(one, "Bindings [selected]"),
+    yield* awaiting(
+      repl.terminal,
+      "Bindings being selected",
+      (one) => panePresented(one) === "bindings",
     );
     yield* focusDraft(repl.terminal);
     yield* typing(repl.terminal, "mine");
@@ -956,7 +965,7 @@ describe("Tier MQ — a Sidekick question announces itself and takes nothing ove
     // It took nothing over. The tab is still Bindings, focus is still the
     // draft, both texts are still theirs, and the entry they were reading is
     // still the one selected.
-    expect(shows(repl.terminal, "Bindings [selected]")).toBe(true);
+    expect(panePresented(repl.terminal)).toBe("bindings");
     expect(focusedField(repl.terminal, DRAFT_PROMPT)).toBe(true);
     expect(draftText(repl.terminal)).toBe("mine");
     expect(shows(repl.terminal, "* 1.")).toBe(true);
@@ -1165,8 +1174,10 @@ describe("Tier MQ — the question form lives in the pane that owns it", () => {
     // Leaving the reading takes the notice and the way in with it, and coming
     // back brings them back — with the value still in the form behind them.
     yield* activate(repl.terminal, "Bindings");
-    yield* awaiting(repl.terminal, "Bindings being selected", (one) =>
-      shows(one, "Bindings [selected]"),
+    yield* awaiting(
+      repl.terminal,
+      "Bindings being selected",
+      (one) => panePresented(one) === "bindings",
     );
     const onBindings = yield* readingAt(repl.terminal, repl.terminal.size);
     expect(rowsShow(onBindings(), "[close]")).toBe(false);
@@ -2384,7 +2395,7 @@ describe("Tier SS — an older chat, from a frame that measures no chat", () => 
     // window at all: the selection below is answered by a frame that has no
     // offset to compute, so the chat's own measurement is what places the turn.
     yield* activate(repl.terminal, "Bindings");
-    yield* awaiting(repl.terminal, "the inspector", (one) => shows(one, "Bindings [selected]"));
+    yield* awaiting(repl.terminal, "the inspector", (one) => panePresented(one) === "bindings");
     expect(rowsShow(paneColumn(repl.terminal), EARLIER)).toBe(false);
     expect(rowsShow(paneColumn(repl.terminal), LATER)).toBe(false);
 
@@ -2699,7 +2710,7 @@ describe("Tier SS — a copied location reopens the chat it named", () => {
 
     // Bindings, and back. The selection is kept for returning to.
     yield* activate(repl.terminal, "Bindings");
-    yield* awaiting(repl.terminal, "the inspector", (one) => shows(one, "Bindings [selected]"));
+    yield* awaiting(repl.terminal, "the inspector", (one) => panePresented(one) === "bindings");
     yield* activate(repl.terminal, "Sidekick");
     yield* awaiting(repl.terminal, "the chat coming back", (one) =>
       rowsShow(paneColumn(one), "Only answer."),
@@ -3668,7 +3679,7 @@ describe("Tier CF — complete chat messages, and the newest ones in view", () =
     expect(rowAt(after, "two-A")).toBeLessThan(rowAt(after, "two-B"));
 
     // The pane's own chrome and both composers are untouched by any of it.
-    expect(shows(repl.terminal, "Sidekick [selected]")).toBe(true);
+    expect(panePresented(repl.terminal)).toBe("sidekick");
     expect(shows(repl.terminal, "[send]")).toBe(true);
     expect(maybeDraftRow(repl.terminal)).not.toBe(undefined);
 
@@ -4175,9 +4186,9 @@ describe("Tier MC — the message composer wraps and grows", () => {
 
     // A tab round trip keeps it, and so does a held turn it is edited behind.
     yield* activate(repl.terminal, "Bindings");
-    yield* awaiting(repl.terminal, "the inspector", (one) => shows(one, "Bindings [selected]"));
+    yield* awaiting(repl.terminal, "the inspector", (one) => panePresented(one) === "bindings");
     yield* activate(repl.terminal, "Sidekick");
-    yield* awaiting(repl.terminal, "the chat again", (one) => shows(one, "Sidekick [selected]"));
+    yield* awaiting(repl.terminal, "the chat again", (one) => panePresented(one) === "sidekick");
     expect(messageText(repl.terminal)).toContain("ROW-8");
 
     repl.fake.script({ held: true, reply: "<Output>Held answer.</Output>\n" });
@@ -4526,5 +4537,131 @@ describe("Tier HI — a submission reserves from the acknowledged history", () =
       expect(read.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2", "entry-3"]);
       expect(read.model.entries[2]?.source).toBe(THIRD);
     });
+  });
+});
+
+/**
+ * Tier UH — the two tabs as controls, through the mounted program.
+ *
+ * The arrangement changed and the controls did not: each tab keeps its key, its
+ * action, its pointer target and its place in the traversal, and neither label
+ * carries the word the amendment removed. Driven through the mounted program
+ * rather than the presenter, because what is being asked is whether a person
+ * can still reach both readings by pointer and by keyboard.
+ *
+ * The hidden Sidekick's own question notice is observed by Tier MQ, which holds
+ * a real pending question against this same harness; it is not repeated here.
+ */
+describe("Tier UH — both pane tabs still select, by pointer and by keyboard", () => {
+  it("UH2: pointer and keyboard each reach both tabs, and neither composer loses text", function* () {
+    const repl = yield* useMountedRepl();
+
+    // Text in both destinations first, so switching has something to lose.
+    yield* focusDraft(repl.terminal);
+    yield* typing(repl.terminal, "my entry");
+    yield* focusMessage(repl.terminal);
+    yield* typing(repl.terminal, "my question");
+
+    // The Sidekick is the default reading, and both names are on the screen
+    // whichever one that is.
+    expect(panePresented(repl.terminal)).toBe("sidekick");
+    for (const label of ["Bindings", "Sidekick"]) {
+      expect([label, shows(repl.terminal, label)]).toEqual([label, true]);
+    }
+    expect(shows(repl.terminal, "[selected]")).toBe(false);
+
+    // By keyboard: Tab until the tab holds focus, then Enter. Focus landing on
+    // it is what makes this the keyboard path rather than a dispatch.
+    yield* activate(repl.terminal, "Bindings");
+    yield* awaiting(
+      repl.terminal,
+      "Bindings being selected",
+      (one) => panePresented(one) === "bindings",
+    );
+    expect(focusedOn(repl.terminal, "Bindings")).toBe(true);
+    // Focus on a tab is not selection of it: the other tab can hold focus
+    // without the reading changing under it.
+    yield* focusOn(repl.terminal, "Sidekick");
+    expect(focusedOn(repl.terminal, "Sidekick")).toBe(true);
+    expect(panePresented(repl.terminal)).toBe("bindings");
+
+    // By pointer: the same control, reached at its own cell. Its box is its own
+    // label now, so a click on the name is a click on the tab bearing it.
+    yield* click(repl.terminal, "Sidekick");
+    yield* awaiting(
+      repl.terminal,
+      "the chat coming back",
+      (one) => panePresented(one) === "sidekick",
+    );
+    yield* click(repl.terminal, "Bindings");
+    yield* awaiting(repl.terminal, "Bindings again", (one) => panePresented(one) === "bindings");
+
+    // And neither composer was edited by any of it.
+    yield* click(repl.terminal, "Sidekick");
+    yield* awaiting(
+      repl.terminal,
+      "the chat once more",
+      (one) => panePresented(one) === "sidekick",
+    );
+    expect(messageText(repl.terminal)).toContain("my question");
+    expect(draftText(repl.terminal)).toBe("my entry");
+  });
+
+  it("UH5: an open History drawer still says Esc closes, and closing keeps both texts", function* () {
+    const repl = yield* useMountedRepl();
+
+    // Text in both destinations, and an entry selected, so closing has
+    // something to preserve.
+    yield* focusDraft(repl.terminal);
+    yield* typing(repl.terminal, "kept entry");
+    yield* focusMessage(repl.terminal);
+    yield* typing(repl.terminal, "kept question");
+    expect(panePresented(repl.terminal)).toBe("sidekick");
+
+    // A real route drawer, opened the way a person opens it.
+    yield* activate(repl.terminal, "[history]");
+    yield* awaiting(repl.terminal, "the History drawer", (one) => shows(one, "[close]"));
+
+    // The directions are still legible in front of it, including the way out.
+    // This is the claim the accepted envelope exists for: the drawer begins
+    // below the whole fitted block rather than on top of its first row.
+    expect(shows(repl.terminal, "Esc closes")).toBe(true);
+
+    // Closed once, by that very key.
+    repl.terminal.feed("\x1b");
+    yield* awaiting(repl.terminal, "the drawer closing", (one) => !shows(one, "[close]"));
+
+    // And nothing it was in front of was disturbed: the same reading is
+    // selected and neither composer was edited.
+    expect(panePresented(repl.terminal)).toBe("sidekick");
+    expect(messageText(repl.terminal)).toContain("kept question");
+    expect(draftText(repl.terminal)).toBe("kept entry");
+  });
+
+  it("UH4: resizing through narrow and back keeps both texts, and narrow grows no tabs", function* () {
+    const repl = yield* useMountedRepl();
+    yield* focusDraft(repl.terminal);
+    yield* typing(repl.terminal, "kept entry");
+    yield* focusMessage(repl.terminal);
+    yield* typing(repl.terminal, "kept question");
+
+    // Medium keeps the three columns and the one header row.
+    const medium = yield* resizeTo(repl.terminal, { columns: 120, rows: 30 });
+    for (const label of ["Bindings", "Sidekick"]) {
+      expect([label, rowsShow(medium(), label)]).toEqual([label, true]);
+    }
+    expect(rowsShow(medium(), "[selected]")).toBe(false);
+
+    // Narrow routes one outlet and heads no shared column, so it grows neither
+    // the tab row nor a gap: its own surface controls are its headings.
+    const narrow = yield* resizeTo(repl.terminal, NARROW);
+    expect(rowsShow(narrow(), "Entries")).toBe(true);
+    expect(rowsShow(narrow(), "[selected]")).toBe(false);
+
+    // And back, with both texts where they were left.
+    const wide = yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
+    expect(rowsShow(wide(), "Bindings")).toBe(true);
+    expect(messageTextIn(wide())).toContain("kept question");
+    expect(rowsShow(wide(), "Draft: kept entry")).toBe(true);
   });
 });

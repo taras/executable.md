@@ -29,6 +29,7 @@ import {
   headerRowProps,
   box,
   columnProps,
+  COLUMN_TOP_GAP,
   stackProps,
   CONTROL_PROPS,
   drawerLayerProps,
@@ -47,6 +48,8 @@ import {
   rowProps,
   sharedColumnRows,
   sidebarWidth,
+  tabProps,
+  tabRowProps,
   viewportProps,
 } from "./layout.ts";
 import type {
@@ -4603,33 +4606,25 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // The two surface controls are that frame's own headings.
   if (!narrow) {
     items.push(line("transcript:heading", "Transcript", styleOf("pane-heading")));
-    items.push(
-      line(
-        "inspection:heading",
-        // The pane says which of its two readings it is showing, in text. The
-        // tabs below say which one can be reached; the title says which one is
-        // here, so a reader who has not looked at the tabs still knows.
-        showSidekick ? "Sidekick" : "Bindings",
-        styleOf("pane-heading"),
-      ),
-    );
-    // Both tabs, always, and text-identified rather than coloured: a reader
-    // without colour has to be able to tell which one is selected. They are
-    // described in the wide and medium frames only — a narrow frame routes one
+    // Both tabs, always, and they are the right column's heading: the pane named
+    // itself above them until the two names together said Sidekick twice when the
+    // Sidekick was the reading. One row, each name once, and which of them is
+    // selected carried by the styling the two have always differed by.
+    // Described in the wide and medium frames only — a narrow frame routes one
     // outlet and reaches the Sidekick through its own surface control.
     for (const pane of ["bindings", "sidekick"] as const) {
       const here = pane === "sidekick" ? showSidekick : !showSidekick;
       items.push(
         row(
           `tab:${pane}`,
-          // The name first and the selection said after it, so the row reads as
-          // the thing it selects and anybody looking for that name finds it at
-          // the start of the row. Which one is selected is in the text rather
-          // than only in the colour.
+          // The name alone: it is the heading of the reading it selects, and a
+          // heading that spelled out its own selection would say in the text
+          // what the row's own styling already says. Which one is selected is
+          // the active style, and keyboard focus stays the separate mark it is.
           // And whether the Sidekick is waiting on an answer, said on the tab
           // while its pane is the hidden one: a question nobody can see
           // announced is a question nobody knows to go and answer.
-          `${pane === "sidekick" ? "Sidekick" : "Bindings"}${here ? " [selected]" : ""}${
+          `${pane === "sidekick" ? "Sidekick" : "Bindings"}${
             pane === "sidekick" && !here && live.sidekick?.question !== undefined
               ? " (question)"
               : ""
@@ -5665,10 +5660,20 @@ function modalOpen(view: ReplView): boolean {
  * One calculation for both, read back by measurement, admission, description,
  * drawing and hit testing: the entry's covers the body, and the Sidekick's
  * covers the pane that owns its question.
+ *
+ * A route drawer's is the envelope the preparation settled once it had measured
+ * the guidance this layer must stay clear of. Taken from the frame's own context
+ * rather than recomputed here, so there is one answer to where it is: a second
+ * calculation is how a drawer's cells and its targets come to disagree. Before
+ * that block has been fitted there is nothing to clear, and the rectangle the
+ * size states is what those passes measure.
+ *
+ * The Sidekick's pane-local rectangles are untouched by any of it. They are its
+ * pane's own, they begin at the top of it, and the gap is not in that pane.
  */
-function presentedRect(view: ReplView): ReplBounds | undefined {
+function presentedRect(view: ReplView, context: ReplPresentationContext): ReplBounds | undefined {
   if (view.selection.drawers.length > 0) {
-    return drawerRect(view.size);
+    return context.drawer ?? drawerRect(view.size);
   }
   return presentedAsking(view) === undefined && presentedConfiguring(view) === undefined
     ? undefined
@@ -6939,6 +6944,8 @@ export const DRAWER_WINDOW = "drawer";
 export const READING_WINDOW = "reading";
 /** The action row's own structural id, which admission measures against. */
 export const ACTION_ROW = "box:footer:actions";
+/** The right pane's tab row, which is also that column's header. */
+export const TAB_ROW = "box:inspection:tabs";
 
 /**
  * The Sidekick's inset body, by the id the frame measures it under.
@@ -7092,6 +7099,17 @@ export interface ReplPresentationContext {
    * cannot already have placed anything on it.
    */
   readonly rail: ReplPreparedRail | undefined;
+  /**
+   * Where a route drawer goes once the guidance it must clear has been measured.
+   *
+   * One rectangle, settled by the preparation that measured the fitted guidance
+   * block and then read back by everything: the layer's own box, the window its
+   * rows are admitted against, the cells it paints and the targets it publishes.
+   * Absent in the passes that run before the block has been fitted, which fall
+   * back to the rectangle the size alone states — those passes answer widths and
+   * counts, and nothing is admitted into a drawer from them.
+   */
+  readonly drawer: ReplBounds | undefined;
 }
 
 /** One reading's descriptions, paired with where the engine places them. */
@@ -7265,7 +7283,7 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key === "sessions:heading" || key === "entries:heading") {
     return "navigation";
   }
-  if (key === "transcript:heading" || key === "inspection:heading") {
+  if (key === "transcript:heading") {
     return "pane-heading";
   }
   // The empty placeholder and both window controls stay put around the window
@@ -7642,6 +7660,43 @@ export function presentationFor(
     return found.map((candidate) => rowBox(candidate, region, widthOfRegion(region), surface));
   };
   /**
+   * The right pane's two tabs, in the one row that is also its heading.
+   *
+   * Side by side rather than stacked, each as wide as its own name, so the
+   * column says what it holds in one row and a pointer aimed at a name lands on
+   * the tab that bears it. They keep the ids and keys they had when they were
+   * rows of their own: the arrangement changed and the controls did not.
+   *
+   * Nothing where there are no tabs to put in it — a narrow frame describes
+   * none, and an empty row would buy that frame a header band it has no heading
+   * for.
+   */
+  const tabRow = (region: ReplRegion, surface: number): readonly ReplBox[] => {
+    const tabs = of("inspection-above");
+    if (tabs.length === 0) {
+      return [];
+    }
+    return [
+      box({
+        id: TAB_ROW,
+        region,
+        props: tabRowProps(surface),
+        children: tabs.map((candidate) =>
+          box({
+            id: `box:${region}:${candidate.key}`,
+            key: candidate.key,
+            region,
+            props: tabProps(surface),
+            text: candidate.text,
+            control: candidate.control,
+            style: candidate.style,
+            runs: candidate.runs,
+          }),
+        ),
+      }),
+    ];
+  };
+  /**
    * The Sidekick's body, in the gutter that insets it from its pane.
    *
    * The chat, its window controls, the composer block and the controls and
@@ -7717,7 +7772,10 @@ export function presentationFor(
       id: `box:${region}`,
       region,
       props: paneColumnProps(width, surface),
-      children: [box({ id, region, props: paneContentProps(), children })],
+      // The asked-for space above this column's header, inside the edges, so
+      // what the engine leaves below it is measured with the gap taken out
+      // rather than with a row guessed back.
+      children: [box({ id, region, props: paneContentProps(COLUMN_TOP_GAP), children })],
     });
   };
 
@@ -7804,7 +7862,10 @@ export function presentationFor(
       box({
         id: "box:sidebar",
         region: "sidebar",
-        props: paneProps(sidebarWidth(size), REPL_PALETTE.sideSurface),
+        // The asked-for space above this column's first heading. The Entries
+        // group below is the column's second reading rather than the top of
+        // another column, so it takes no second gap.
+        props: paneProps(sidebarWidth(size), REPL_PALETTE.sideSurface, COLUMN_TOP_GAP),
         children: [
           // Two groups, and only one of them grows: the Sessions reading takes
           // whatever the column has left, and the catalog states its own height.
@@ -7853,26 +7914,20 @@ export function presentationFor(
         ...listColumn("transcript", "reading-fixed", "reading", READING_WINDOW),
       ]),
       edgedColumn("inspection", inspectionWidth(size), REPL_PALETTE.rightSurface, [
-        // The title and the tabs are one header band, closed by one edge. The
-        // tabs stay above whatever the pane is showing and the Sidekick's own
-        // input stays below it, so the moving part is the reading alone: the
-        // way between the two readings does not scroll away with one of them,
-        // and the box a person types into does not either.
+        // The tabs are the header band, closed by the same one edge. They stay
+        // above whatever the pane is showing and the Sidekick's own input stays
+        // below it, so the moving part is the reading alone: the way between the
+        // two readings does not scroll away with one of them, and the box a
+        // person types into does not either.
         //
-        // Both are this column's header chrome, so both carry its header
-        // surface: the title says which reading is here and the tabs say which
-        // one can be reached, and the two together are the band above the pane.
-        ...headerBand("inspection", REPL_PALETTE.inspectionHeaderSurface, [
-          ...paneTitle("inspection:heading", "inspection", REPL_PALETTE.inspectionHeaderSurface),
-          ...of("inspection-above").map((candidate) =>
-            rowBox(
-              candidate,
-              "inspection",
-              context.widths?.inspection,
-              REPL_PALETTE.inspectionHeaderSurface,
-            ),
-          ),
-        ]),
+        // This column's header chrome is that one row, so it carries the header
+        // surface across the measured width: the two names say both what is here
+        // and what can be reached, which is why there is no title above them.
+        ...headerBand(
+          "inspection",
+          REPL_PALETTE.inspectionHeaderSurface,
+          tabRow("inspection", REPL_PALETTE.inspectionHeaderSurface),
+        ),
         sidekickBody("inspection", [
           ...chatColumn("inspection"),
           ...of("inspection-below").map((candidate) =>
@@ -7887,7 +7942,7 @@ export function presentationFor(
   // entry's covers the body and the Sidekick's covers the pane that owns its
   // question. Measurement, admission, description, drawing and hit testing all
   // read it from here, so a cell and a target cannot disagree about where it is.
-  const rect = presentedRect(view);
+  const rect = presentedRect(view, context);
   const [title] = of("drawer-title");
   if (rect !== undefined && title !== undefined) {
     const id = `box:${DRAWER_WINDOW}:viewport`;

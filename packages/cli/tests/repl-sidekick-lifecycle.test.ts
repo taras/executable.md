@@ -57,6 +57,7 @@ import {
   mountedReading,
   sendMessage,
   settled,
+  panePresented,
   shows,
   typing,
   useMountedHost,
@@ -1391,8 +1392,10 @@ describe("Tier MQ — a Sidekick question, filled in and answered on the screen"
       yield* awaiting(repl.terminal, "the form closing", (one) => !shows(one, "[submit]"));
       expect(shows(repl.terminal, "[answer sidekick]")).toBe(true);
       yield* activate(repl.terminal, "Bindings");
-      yield* awaiting(repl.terminal, "Bindings being selected", (one) =>
-        shows(one, "Bindings [selected]"),
+      yield* awaiting(
+        repl.terminal,
+        "Bindings being selected",
+        (one) => panePresented(one) === "bindings",
       );
       yield* activate(repl.terminal, "Sidekick");
       yield* awaiting(repl.terminal, "the notice still in the pane", (one) =>

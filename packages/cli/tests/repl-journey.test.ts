@@ -488,6 +488,66 @@ function* click(terminal: Terminal, label: string): Operation<void> {
   yield* clickAt(terminal, at);
 }
 
+/** The transcript reading's own way down, by the label the window draws. */
+const READING_LATER = "[\u2193 later]";
+
+/**
+ * Where one label is *inside the transcript column*, if it is drawn there.
+ *
+ * By the column it lands in rather than by the label alone: the sidebar's two
+ * readings and the right-hand pane each draw a `[\u2193 later]` of their own,
+ * and the first one on a screen belongs to the sidebar. The transcript is
+ * whatever lies between the sidebar and the right pane, both of which state
+ * their own widths.
+ */
+function transcriptControl(
+  terminal: Terminal,
+  label: string,
+): { readonly column: number; readonly row: number } | undefined {
+  const left = sidebarWidth(terminal.size) ?? 0;
+  const right = terminal.size.columns - (inspectionWidth(terminal.size) ?? 0);
+  for (const [row, line] of screenOf(terminal).entries()) {
+    for (let at = line.indexOf(label); at !== -1; at = line.indexOf(label, at + 1)) {
+      if (at >= left && at < right) {
+        return { column: at, row };
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Scroll the transcript's own reading window until it is showing this text.
+ *
+ * The accepted row of space above each column heading costs every column one
+ * row, so the last row of a reading that used to fill its window is now one
+ * press away rather than drawn. This reaches it the way a person does, through
+ * the window's own control: pressing it moves the viewport and writes nothing,
+ * so what is asserted afterwards is still this screen's own reading rather than
+ * anything read out of the journal.
+ */
+function* scrollReadingTo(terminal: Terminal, text: string, limit = 60): Operation<void> {
+  for (let press = 0; press <= limit; press += 1) {
+    if (shows(terminal, text)) {
+      return;
+    }
+    const at = transcriptControl(terminal, READING_LATER);
+    if (at === undefined) {
+      throw new Error(
+        `the transcript reading drew no ${READING_LATER} to reach ${text} with. rows=` +
+          JSON.stringify(
+            screenOf(terminal)
+              .map((line) => line.trimEnd())
+              .filter((line) => line.length > 0)
+              .slice(0, 12),
+          ),
+      );
+    }
+    yield* clickAt(terminal, at);
+  }
+  throw new Error(`the transcript reading never reached ${text} in ${limit} presses`);
+}
+
 /** More than any label this REPL puts in a drawer, and less than any box. */
 const LABEL_ROOM = 48;
 
@@ -556,22 +616,38 @@ function surfaceWidthOf(size: ReplTerminalSize): number {
  * belong to the modal — but a second opinion about where they are would agree
  * with itself while the product drew the drawer somewhere else.
  */
-function drawerBox(size: ReplTerminalSize): {
+function drawerBox(terminal: Terminal): {
   top: number;
   bottom: number;
   left: number;
   right: number;
 } {
+  const size = terminal.size;
   const rect = drawerRect(size);
   if (rect === undefined) {
     throw new Error(`${size.columns}x${size.rows} draws no drawer`);
   }
-  return {
-    top: rect.y,
-    bottom: rect.y + rect.height,
-    left: rect.x,
-    right: rect.x + rect.width,
-  };
+  const left = rect.x;
+  const right = rect.x + rect.width;
+  const bottom = rect.y + rect.height;
+  // Where this frame actually put the top, which the size alone no longer says.
+  // A route drawer now begins below the whole fitted guidance block, and that
+  // block is as many rows as its words need — so the top is found by the rule
+  // the drawer draws across its own rectangle rather than recomputed here. The
+  // horizontal bounds and the bottom are the ones the size states, because the
+  // accepted envelope keeps both.
+  //
+  // Searched downward from the rectangle the size states, never upward: the new
+  // top is at or below the old one, and a pane's own header edge is a run of the
+  // same character one row higher at the medium profile.
+  const rows = screenOf(terminal);
+  for (let row = rect.y; row < bottom; row += 1) {
+    const text = (rows[row] ?? "").slice(left, right).trim();
+    if (text.length > 0 && /^\u2500+$/.test(text)) {
+      return { top: row, bottom, left, right };
+    }
+  }
+  return { top: rect.y, bottom, left, right };
 }
 
 /**
@@ -591,7 +667,7 @@ function drawerBox(size: ReplTerminalSize): {
 function drawerMarkers(terminal: Terminal): string[] {
   const found: string[] = [];
   const rows = screenOf(terminal);
-  const box = drawerBox(terminal.size);
+  const box = drawerBox(terminal);
   let title = false;
   for (let row = box.top; row < box.bottom; row += 1) {
     // Trimmed both ends, because a drawer's rows start one column in from its
@@ -1105,7 +1181,12 @@ describe("REPL journey: one entry, from raw bytes", () => {
       // edges happen to overwrite. The claim is unchanged and is now read where
       // the retained value is actually drawn.
       // The same transcript, including the answer the first process gave and the
-      // output that answer produced.
+      // output that answer produced. Reached through the reading's own window:
+      // the accepted row of space above each column heading costs this column a
+      // row, so the last row of a full reading is a press away rather than
+      // drawn. The string is the whole of what was retained either way, and
+      // scrolling moved the viewport and wrote nothing.
+      yield* scrollReadingTo(second.terminal, "Decision: approve");
       expect(shows(second.terminal, "Decision: approve")).toBe(true);
 
       second.terminal.end();
@@ -1865,7 +1946,12 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       terminal.bytes(BYTES.encode("approve"));
       yield* settled(30);
       terminal.feed("\r");
-      yield* until_(terminal, "the answer's output", (t) => shows(t, "Decision: approve"));
+      // Waited for in the model first and then reached on screen: the gap above
+      // each column heading costs the transcript a row, so this output is one
+      // press down its own window rather than drawn with the rest.
+      yield* until_(terminal, "the entry settling", (t) => shows(t, "[ok]"));
+      yield* scrollReadingTo(terminal, "Decision: approve");
+      expect(shows(terminal, "Decision: approve")).toBe(true);
       expect(shows(terminal, "[ok]")).toBe(true);
 
       // The generated fragment's source is on screen, inside the enclosure its
@@ -2035,6 +2121,11 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       // unchanged — a reopened process shows the generated region the first one
       // admitted.
       expect(shows(second.terminal, "generated generated")).toBe(true);
+      // The last of that reading, reached through its own window: the accepted
+      // row of space above each column heading costs this column a row, so the
+      // output the answer produced is a press down rather than drawn with the
+      // rest of it. The retained string is unchanged.
+      yield* scrollReadingTo(second.terminal, "Decision: approve");
       expect(shows(second.terminal, "Decision: approve")).toBe(true);
 
       // The same complete binding value, asked for the same way.
@@ -2381,7 +2472,7 @@ describe("REPL journey: the same product at every size", () => {
         // The placed rectangle, for the same reason `drawerMarkers` uses it: the
         // guidance row says "History" at a frozen position, so searching the
         // screen for that word can find the sentence rather than the drawer.
-        const box = drawerBox(terminal.size);
+        const box = drawerBox(terminal);
         const title = box.top;
         const { left, right } = box;
         // The drawer's own rows: its title, one per position it lists, and its
@@ -4338,7 +4429,7 @@ describe("REPL journey: what an open drawer covers, through the terminal", () =>
        * accumulated screen is current at whatever size it is read at.
        */
       function* covering(label: string): Operation<void> {
-        const box = drawerBox(terminal.size);
+        const box = drawerBox(terminal);
         yield* settled(30);
         const body = screenOf(terminal);
         // Pre-assert: the rectangle the drawer is about to be placed in really
@@ -4784,7 +4875,7 @@ describe("REPL journey: every recorded position, and every admitted size", () =>
       //    row drawn outside the rectangle the targets were published for is
       //    exactly the defect: visible, unfocusable, and answering a pointer
       //    with whatever is behind it.
-      const box = drawerBox(terminal.size);
+      const box = drawerBox(terminal);
       const window = drawerMarkers(terminal);
       // A walk over nothing would agree with every claim below it.
       expect(window.length).toBeGreaterThan(0);
@@ -5976,7 +6067,7 @@ describe("REPL first use: UI15 drawer geometry", () => {
       // Above the drawer's own rows — which is exactly what made the old anchor
       // read the wrong one. It shares columns with the box at this size, so the
       // row is the distinction and the column is not.
-      const box = drawerBox(terminal.size);
+      const box = drawerBox(terminal);
       expect(saying).toBeLessThan(box.top);
 
       // And the helper still answers with the drawer's own rows: every one of

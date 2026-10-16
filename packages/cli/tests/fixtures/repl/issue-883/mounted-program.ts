@@ -1296,6 +1296,27 @@ export function rowsShow(rows: readonly string[], expected: string): boolean {
 }
 
 /**
+ * Which of the right pane's two readings these rows are showing.
+ *
+ * Read from the body the pane draws rather than from its tab. Both names are in
+ * that column's header on every wide and medium frame — the two tabs *are* the
+ * header — so a label says only that the tab is there, and `shows("Bindings")`
+ * would be true of every screen either reading ever drew. The Sidekick's body is
+ * the box its messages are typed into; Bindings is the reading that has none.
+ *
+ * Only meaningful where there are two panes to choose between. A narrow frame
+ * routes one outlet and answers for whichever outlet it routed.
+ */
+export function paneShown(rows: readonly string[]): "sidekick" | "bindings" {
+  return rowsShow(rows, MESSAGE_PROMPT) ? "sidekick" : "bindings";
+}
+
+/** The same, read from a terminal's current screen. */
+export function panePresented(terminal: Terminal): "sidekick" | "bindings" {
+  return paneShown(screenOf(terminal));
+}
+
+/**
  * Resize, wait for a whole frame of the new size, and hand back its reading.
  *
  * The reading is a function rather than an array because a row goes on driving
