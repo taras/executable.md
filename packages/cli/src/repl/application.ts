@@ -1632,17 +1632,21 @@ export function reduceRepl(
     live,
     presented?.kind === "question" ? presented.question : undefined,
   );
-  // Configure's own one text destination, while its drawer is what is drawn.
-  // Before either composer, for the same reason the question form is: a field
-  // in a drawer holding focus is where the keys a person presses are going.
-  const naming = presented?.kind === "configure" && state.configuring.open;
+  // Configure, while its drawer is what is drawn. The frame's own answer rather
+  // than the held flag, exactly as the question form above: a drawer open in
+  // state behind another pane, another tab or a route drawer is state and not
+  // presentation, and it owns no keystroke. It decides both the one text
+  // destination this drawer has — before either composer, because a field in a
+  // drawer holding focus is where the keys a person presses are going — and
+  // whether Escape is addressed to this drawer.
+  const configuring = presented?.kind === "configure" && state.configuring.open;
 
   switch (action.kind) {
     // Typing is always typing the *next* entry. Which entry is selected, and
     // whether one is running, decide nothing here: an admitted entry is
     // immutable, so there is never an entry these keystrokes could be editing.
     case "type": {
-      if (naming) {
+      if (configuring) {
         return renaming(state, state.configuring.agent + action.text);
       }
       // The Sidekick's form first, while its drawer is the one holding focus.
@@ -1661,7 +1665,7 @@ export function reduceRepl(
       return drafting(state, state.draft + action.text);
     }
     case "erase": {
-      if (naming) {
+      if (configuring) {
         return renaming(state, shortened(state.configuring.agent));
       }
       if (asking !== undefined) {
@@ -1838,6 +1842,13 @@ export function reduceRepl(
     }
     case "close-drawer": {
       if (state.route.drawers.length === 0) {
+        // Escape over Configure closes Configure, by the one transition its own
+        // Close control produces. Two ways out of a modal that disagreed about
+        // what closing means would be two different closes, and the one a
+        // person reaches by habit was the one that did nothing.
+        if (configuring) {
+          return closedConfigure(state);
+        }
         // Escape with no route drawer open closes the Sidekick's form, which is
         // the only other thing that holds focus. The question stays pending and
         // the values stay typed: hiding a form is not abandoning an answer.
@@ -2365,17 +2376,7 @@ export function reduceRepl(
       if (!state.configuring.open) {
         return refuse(state, "Configure is not open.");
       }
-      // Closing saves nothing and asks the provider for nothing. What was
-      // chosen and not applied is discarded, so reopening starts from the saved
-      // preference again — which is the only thing a next turn will use.
-      // What the agent advertised stays: a list it gave for this conversation
-      // is not a selection somebody made.
-      return settled({
-        ...state,
-        configuring: closed(state.configuring),
-        restore: Object.freeze({ kind: "sidekick-configure" }),
-        refusal: undefined,
-      });
+      return closedConfigure(state);
     }
     case "choose-model": {
       if (!state.configuring.open) {
@@ -2836,6 +2837,34 @@ export function replacedAgent(
   return Object.freeze({
     ...settledState,
     route: Object.freeze({ ...settledState.route, sidekick: undefined }),
+  });
+}
+
+/**
+ * Configure, closed, by whichever of its two exits somebody reached.
+ *
+ * One transition for both, because closing a drawer is one act: the visible
+ * `[close]` control and Escape are two ways to ask for it, not two meanings of
+ * it. Written once so they cannot drift — a modal whose keyboard exit discarded
+ * something its button kept, or vice versa, would make the way out depend on
+ * how a person found it.
+ *
+ * Closing saves nothing and asks the provider for nothing. What was chosen and
+ * not applied is discarded, so reopening starts from the saved preference again
+ * — which is the only thing a next turn will use. What the agent advertised
+ * stays: a list it gave for this conversation is not a selection somebody made.
+ * An Apply already acknowledged is a saved preference and is not touched; it
+ * stopped being part of this drawer when it landed.
+ *
+ * Focus goes back to the control that opened it, which is the one thing on the
+ * screen that is about this drawer.
+ */
+function closedConfigure(state: ReplState): ReplTransition {
+  return settled({
+    ...state,
+    configuring: closed(state.configuring),
+    restore: Object.freeze({ kind: "sidekick-configure" }),
+    refusal: undefined,
   });
 }
 
@@ -5758,7 +5787,9 @@ function drawerFor(
   rows.push(
     row(
       "drawer:scroll:up",
-      padControl(EARLIER, width),
+      // Configure's window moves through a list of choices rather than through
+      // a recorded order, so it is the one drawer that does not say Earlier.
+      padControl(configuring ? SCROLL_UP : EARLIER, width),
       asking !== undefined
         ? { select: "sidekick-scroll", delta: -1 }
         : configuring
@@ -5774,7 +5805,7 @@ function drawerFor(
   rows.push(
     row(
       "drawer:scroll:down",
-      padControl(LATER, width),
+      padControl(configuring ? SCROLL_DOWN : LATER, width),
       asking !== undefined
         ? { select: "sidekick-scroll", delta: 1 }
         : configuring
@@ -6965,6 +6996,21 @@ function failedLine(message: string, width: number): string {
 export const EARLIER = "[\u2191 earlier]";
 /** The other one. */
 export const LATER = "[\u2193 later]";
+
+/**
+ * What Configure's own window controls are called instead.
+ *
+ * Earlier and Later are words about a *history*: they are right for a
+ * recorded order — Sessions, the entry reading, the catalog, a chat — and
+ * wrong for a list of settings, where moving the window reaches another
+ * choice rather than another moment. Configure's window is the only one of
+ * these that is not a reading of something that happened, so it is the only
+ * one that says this. The actions behind the controls, their order, their
+ * ownership and their scrolling are unchanged.
+ */
+export const SCROLL_UP = "[\u2191 scroll up]";
+/** The other one. */
+export const SCROLL_DOWN = "[\u2193 scroll down]";
 
 /** The Sessions reading's window. */
 export const SESSIONS_WINDOW = "sessions";

@@ -80,7 +80,15 @@ import { runReplProgram, sidekickChatRows, sidekickTurnRows } from "../src/repl/
 import type { ReplOutcome } from "../src/repl/program.ts";
 import { projectSidekick, SAVED_WITHOUT_REPLY } from "../src/repl/sidekick/model.ts";
 import { projectRepl } from "../src/repl/model.ts";
-import { EARLIER, initialState, LATER, NO_AGENT, viewFor } from "../src/repl/application.ts";
+import {
+  EARLIER,
+  initialState,
+  LATER,
+  NO_AGENT,
+  SCROLL_DOWN,
+  SCROLL_UP,
+  viewFor,
+} from "../src/repl/application.ts";
 import type {
   ReplLive,
   ReplSidekickChatRow,
@@ -1456,7 +1464,9 @@ describe("Tier CFG — Configure in the pane that owns it, at every size", () =>
         press < 60 && coordinateOf(repl.terminal, label, envelope) === undefined;
         press += 1
       ) {
-        yield* click(repl.terminal, "[\u2193 later]", envelope);
+        // Configure's own control, which says what moving this window does
+        // rather than borrowing a recorded order's words.
+        yield* click(repl.terminal, SCROLL_DOWN, envelope);
         yield* settled(20);
       }
       expect(coordinateOf(repl.terminal, label, envelope)).toBeDefined();
@@ -1620,6 +1630,131 @@ describe("Tier CFG — Configure in the pane that owns it, at every size", () =>
     const back = yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
     yield* awaiting(repl.terminal, "Configure coming back", (one) => shows(one, "[refresh]"));
     expect(rowsShow(back(), "Balanced")).toBe(true);
+  });
+
+  it("CX3: Escape closes History first, and Configure under its own rule after", function* () {
+    const repl = yield* useMountedRepl();
+    repl.fake.configuration(ADVERTISED);
+
+    yield* focusDraft(repl.terminal);
+    yield* typing(repl.terminal, "note");
+    yield* openConfigure(repl);
+    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Balanced"));
+    // A choice made and not applied, so what survives the first Escape and what
+    // the second one discards are both observable.
+    const envelope = paneEnvelope(repl.terminal.size.columns);
+    yield* click(repl.terminal, "( ) Fast", envelope);
+    yield* awaiting(repl.terminal, "the model being selected", (one) => shows(one, "(x) Fast"));
+
+    // History over it. A route drawer owns the modal while it is open, so
+    // Configure underneath is held state and not presentation — and an Escape
+    // meant for the reading in front must not reach it.
+    yield* click(repl.terminal, "[history]");
+    yield* awaiting(repl.terminal, "History's own drawer", (one) => {
+      const close = coordinateOf(one, "[close]");
+      return close !== undefined && close.column < paneEnvelope(one.size.columns);
+    });
+    repl.terminal.feed("\x1b");
+    yield* awaiting(repl.terminal, "History leaving its rectangle", (one) => {
+      const close = coordinateOf(one, "[close]");
+      return close === undefined || close.column >= paneEnvelope(one.size.columns);
+    });
+    // One drawer closed, and exactly one: Configure is still the thing in the
+    // pane and still holds the choice that was made in it.
+    expect(repl.outcome()).toBe(undefined);
+    expect(shows(repl.terminal, "[refresh]")).toBe(true);
+    expect(shows(repl.terminal, "(x) Fast")).toBe(true);
+
+    // The next Escape is Configure's, and it closes under Configure's own rule:
+    // nothing saved, and the choice goes with the drawer.
+    const from = repl.terminal.presented.length;
+    repl.terminal.feed("\x1b");
+    yield* awaited("Configure closing", () =>
+      replay(repl.terminal.presented.slice(from)).some(
+        (line) => line.includes(MESSAGE_PROMPT) || line.includes("[send]"),
+      ),
+    );
+    expect(shows(repl.terminal, "[refresh]")).toBe(false);
+    expect((yield* mountedReading(repl)).chat.some((one) => one.kind === "preferences")).toBe(
+      false,
+    );
+    // The draft was never the destination of either key.
+    expect(draftText(repl.terminal)).toBe("note");
+    yield* openConfigure(repl);
+    yield* awaiting(repl.terminal, "the models again", (one) => shows(one, "Balanced"));
+    expect(shows(repl.terminal, "(x) Fast")).toBe(false);
+  });
+
+  it("CX4: Configure says scroll, the readings around it still say earlier", function* () {
+    // More models than the drawer draws at either size, so its window is real
+    // and the controls below are the way through it.
+    const many = Array.from({ length: 24 }, (_, at) => ({
+      id: `model-${at + 1}`,
+      name: `Model ${at + 1}`,
+    }));
+    const repl = yield* useMountedRepl();
+    repl.fake.configuration({ model: { selected: "model-1", choices: many }, effort: {} });
+    // Opened without asserting its controls: with a list this long some of them
+    // are below the window, which is what makes this window real.
+    yield* click(repl.terminal, `[configure ${MOUNTED_AGENT}]`);
+    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Model 1"));
+
+    /**
+     * The same questions at whichever size the pane is being drawn at.
+     *
+     * Each size chooses a different model, because a choice made at one size is
+     * still made at the next: looking for an unselected row that an earlier
+     * pass had already marked would be looking for a row this drawer is right
+     * not to be drawing.
+     */
+    const reading = function* (columns: number, choice: number): Operation<void> {
+      const envelope = paneEnvelope(columns);
+      // Both of Configure's own controls, drawn in its pane and targetable
+      // there: a label nothing can be aimed at is not a control.
+      expect(coordinateOf(repl.terminal, SCROLL_UP, envelope)).toBeDefined();
+      expect(coordinateOf(repl.terminal, SCROLL_DOWN, envelope)).toBeDefined();
+      // And neither of the words that belong to a recorded order. Asked of the
+      // pane rather than of the screen, because the sidebar's own reading is
+      // drawn on the same rows and still says them.
+      expect(coordinateOf(repl.terminal, EARLIER_CONTROL, envelope)).toBe(undefined);
+      expect(coordinateOf(repl.terminal, LATER_CONTROL, envelope)).toBe(undefined);
+      // The scope control keeps its own vocabulary: Sessions is a reading of
+      // what happened, so Earlier and Later are the right words for it.
+      expect(columnShows(sessionsColumn(repl.terminal), EARLIER_CONTROL)).toBe(true);
+
+      // And the control really scrolls: the choice below the window is reached
+      // through it, and is a choice once it is there.
+      const below = `( ) Model ${choice}`;
+      const until_ = function* (label: string, control: string): Operation<void> {
+        for (
+          let press = 0;
+          press < 60 && coordinateOf(repl.terminal, label, envelope) === undefined;
+          press += 1
+        ) {
+          yield* click(repl.terminal, control, envelope);
+          yield* settled(20);
+        }
+        expect(coordinateOf(repl.terminal, label, envelope)).toBeDefined();
+      };
+      expect(coordinateOf(repl.terminal, below, envelope)).toBe(undefined);
+      yield* until_(below, SCROLL_DOWN);
+      yield* click(repl.terminal, below, envelope);
+      yield* awaiting(repl.terminal, "the off-window model being selected", (one) =>
+        shows(one, `(x) Model ${choice}`),
+      );
+      // Back up through the other one, to the first choice again — which also
+      // leaves the window where the next size finds it.
+      yield* until_("( ) Model 1", SCROLL_UP);
+    };
+
+    yield* reading(MOUNTED_SIZE.columns, many.length);
+    // The same pane at the medium profile, by a real resize rather than a
+    // second program: one command owns this terminal.
+    yield* resizeTo(repl.terminal, { columns: 120, rows: 30 });
+    yield* awaiting(repl.terminal, "Configure at the medium profile", (one) =>
+      shows(one, "Model 1"),
+    );
+    yield* reading(120, many.length - 1);
   });
 });
 

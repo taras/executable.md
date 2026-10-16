@@ -28,6 +28,7 @@ import { DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import { API } from "@executablemd/runtime";
 
 import { resolveAgentStack } from "../src/agent-stack.ts";
+import { SCROLL_DOWN } from "../src/repl/application.ts";
 import { assembleReplProfile } from "../src/repl-profile.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
 import { NO_PLUGINS } from "../src/plugin-host.ts";
@@ -49,6 +50,7 @@ import {
   draftText,
   focusDraft,
   focusedField,
+  focusedOn,
   focusMessage,
   focusOn,
   MESSAGE_PROMPT,
@@ -1315,6 +1317,194 @@ describe("Tier CFG — Configure in the Sidekick's pane", () => {
     expect(shows(repl.terminal, "( )")).toBe(false);
     expect(shows(repl.terminal, "Effort")).toBe(false);
     expect(repl.fake.prompts).toEqual([]);
+  });
+
+  /**
+   * CX1 — the two ways out of Configure, and they mean the same thing.
+   *
+   * Escape and the visible Close control are two ways to ask for one act, so
+   * each arm closes a drawer holding an unapplied choice and both are owed the
+   * same outcome: nothing saved, nobody asked, both composers untouched, focus
+   * back on the opener, and the choice discarded rather than remembered.
+   */
+  function* exiting(by: "escape" | "close"): Operation<void> {
+    const repl = yield* useMountedRepl();
+    repl.fake.configuration(ADVERTISED);
+
+    // Their own text in both composers, which closing a drawer may not touch.
+    yield* focusDraft(repl.terminal);
+    yield* typing(repl.terminal, "mine");
+    yield* activate(repl.terminal, "Sidekick");
+    yield* awaiting(repl.terminal, "the message box taking focus", (one) =>
+      focusedField(one, MESSAGE_PROMPT),
+    );
+    yield* typing(repl.terminal, "later");
+
+    yield* configure(repl);
+    yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Balanced"));
+    // A real choice, made and deliberately not applied: this is what the
+    // discard rule below is about, and what a close that saved would save.
+    yield* click(repl.terminal, "( ) Speed", paneEnvelope(repl.terminal.size.columns));
+    yield* awaiting(repl.terminal, "the model being selected", (one) => shows(one, "(x) Speed"));
+    const asked = repl.fake.configCalls.length;
+    const ensured = repl.fake.ensured.length;
+    const records = (yield* chatKinds(repl)).length;
+
+    const from = repl.terminal.presented.length;
+    if (by === "escape") {
+      // One Escape, through the real input path — no action dispatched here.
+      repl.terminal.feed("\x1b");
+    } else {
+      // And the visible control, reached by real traversal and activated with
+      // Enter. Read from the focus marker this screen committed rather than
+      // from a count of presses: what owns Enter is what the frame says holds
+      // focus.
+      let reached = focusedOn(repl.terminal, "[close]");
+      for (let press = 0; press < 48 && !reached; press += 1) {
+        repl.terminal.feed("\t");
+        yield* settled(20);
+        reached = focusedOn(repl.terminal, "[close]");
+      }
+      expect(reached).toBe(true);
+      repl.terminal.feed("\r");
+    }
+    yield* awaited("the drawer closing", () =>
+      replay(repl.terminal.presented.slice(from)).some(
+        (line) => line.includes(MESSAGE_PROMPT) || line.includes("[send]"),
+      ),
+    );
+    expect(shows(repl.terminal, "[refresh]")).toBe(false);
+
+    // Nothing was saved and nobody was asked: closing is not applying.
+    expect((yield* chatKinds(repl)).length).toBe(records);
+    expect((yield* chatKinds(repl)).includes("preferences")).toBe(false);
+    expect(yield* savedPreference(repl)).toBe(undefined);
+    expect(repl.fake.configCalls).toHaveLength(asked);
+    expect(repl.fake.ensured).toHaveLength(ensured);
+    expect(repl.fake.prompts).toEqual([]);
+    // Both composers hold exactly what was typed into them.
+    expect(draftText(repl.terminal)).toBe("mine");
+    expect(messageText(repl.terminal).includes("later")).toBe(true);
+    // And focus is back on the one control this drawer is about, which is where
+    // somebody who closed it is standing.
+    expect(focusedOn(repl.terminal, `[configure ${MOUNTED_AGENT}]`)).toBe(true);
+
+    // The choice went with the drawer: reopening starts from the saved
+    // preference, which is the only thing a next turn would use.
+    yield* configure(repl);
+    yield* awaiting(repl.terminal, "the advertised models again", (one) => shows(one, "Balanced"));
+    expect(shows(repl.terminal, "(x) Speed")).toBe(false);
+    expect(shows(repl.terminal, "Requested: none")).toBe(true);
+  }
+
+  it("CX1: one Escape closes Configure, saving nothing and asking nobody", function* () {
+    yield* exiting("escape");
+  });
+
+  it("CX1: the visible Close control, reached by Tab, closes it the same way", function* () {
+    yield* exiting("close");
+  });
+
+  /**
+   * CX2 — Close cannot scroll away, and closing is not stopping.
+   *
+   * The settings window moves and `[close]` does not: it lives outside that
+   * window, so a list long enough to fill the drawer at the medium profile
+   * still leaves a way out. And a drawer closed while the Sidekick is working
+   * closes the drawer only — the message in flight is not something a modal's
+   * dismissal may end.
+   */
+  it("CX2: Close stays reachable past an off-window choice, and while a turn runs", function* () {
+    const repl = yield* useMountedRepl({ size: { columns: 120, rows: 30 } });
+    // More models than this drawer draws at once, which is what puts choices
+    // and Apply below the window.
+    const many = Array.from({ length: 24 }, (_, at) => ({
+      id: `model-${at + 1}`,
+      name: `Model ${at + 1}`,
+    }));
+    repl.fake.configuration({ model: { selected: "model-1", choices: many }, effort: {} });
+    repl.fake.script({ held: true, reply: "<Output>Done at last.</Output>\n" });
+
+    const envelope = paneEnvelope(repl.terminal.size.columns);
+    const scrollTo = function* (label: string): Operation<void> {
+      for (
+        let press = 0;
+        press < 60 && coordinateOf(repl.terminal, label, envelope) === undefined;
+        press += 1
+      ) {
+        yield* click(repl.terminal, SCROLL_DOWN, envelope);
+        yield* settled(20);
+      }
+      expect(coordinateOf(repl.terminal, label, envelope)).toBeDefined();
+    };
+
+    // Opened without asserting its controls: with a list this long they are
+    // below the window too, which is the state this row is about.
+    const opening = function* (): Operation<void> {
+      yield* click(repl.terminal, `[configure ${MOUNTED_AGENT}]`);
+      yield* awaiting(repl.terminal, "the advertised models", (one) => shows(one, "Model 1"));
+    };
+    yield* opening();
+    const last = `( ) Model ${many.length}`;
+    // Genuinely below the window before it is scrolled to.
+    expect(coordinateOf(repl.terminal, last, envelope)).toBe(undefined);
+    yield* scrollTo(last);
+    yield* click(repl.terminal, last, envelope);
+    yield* awaiting(repl.terminal, "the off-window model being selected", (one) =>
+      shows(one, `(x) Model ${many.length}`),
+    );
+    // Apply is below the window too, which is the state this is about: the
+    // window has been moved a long way, and the way out is still on the screen.
+    yield* scrollTo("[apply]");
+    expect(shows(repl.terminal, "[close]")).toBe(true);
+
+    // Reached by real traversal from wherever that scrolling left focus.
+    const closing = function* (): Operation<void> {
+      const from = repl.terminal.presented.length;
+      let reached = focusedOn(repl.terminal, "[close]");
+      for (let press = 0; press < 64 && !reached; press += 1) {
+        repl.terminal.feed("\t");
+        yield* settled(20);
+        reached = focusedOn(repl.terminal, "[close]");
+      }
+      expect(reached).toBe(true);
+      repl.terminal.feed("\r");
+      yield* awaited("the drawer closing", () =>
+        replay(repl.terminal.presented.slice(from)).some(
+          (line) => line.includes(MESSAGE_PROMPT) || line.includes("[send]"),
+        ),
+      );
+    };
+    yield* closing();
+    expect(shows(repl.terminal, "[apply]")).toBe(false);
+    expect((yield* chatKinds(repl)).includes("preferences")).toBe(false);
+
+    // Again, with a real message held in flight. Both composers hold their own
+    // text across it, and the turn that is running is not what was dismissed.
+    yield* focusDraft(repl.terminal);
+    yield* typing(repl.terminal, "kept draft");
+    yield* sendMessage(repl, "work on it");
+    yield* repl.fake.holdingTurns(1);
+    yield* awaiting(repl.terminal, "the Sidekick working", (one) => shows(one, "[stop]"));
+    // Opened over a working Sidekick, which refuses to inspect while a turn is
+    // running — so what is waited for is the drawer, not its choices. That
+    // refusal is the established behaviour and is not what this row is about:
+    // the question here is whether the way out is still reachable.
+    yield* click(repl.terminal, `[configure ${MOUNTED_AGENT}]`);
+    yield* awaiting(repl.terminal, "the drawer over a working Sidekick", (one) =>
+      shows(one, "[apply]"),
+    );
+    expect(shows(repl.terminal, "already working")).toBe(true);
+    yield* closing();
+    // The drawer is gone, the turn is not: nothing stopped it, and it finishes
+    // on its own when the provider is released.
+    expect(shows(repl.terminal, "[apply]")).toBe(false);
+    expect(repl.outcome()).toBe(undefined);
+    repl.fake.releaseTurn();
+    yield* awaiting(repl.terminal, "the reply that was never stopped", (one) =>
+      shows(one, "Done at last."),
+    );
+    expect(draftText(repl.terminal)).toBe("kept draft");
   });
 });
 

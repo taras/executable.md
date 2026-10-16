@@ -1670,7 +1670,12 @@ conversation does.
 
 An agent that advertises more choices than the drawer can draw is read by
 scrolling it, with the drawer's own controls: a choice below the window is still
-a choice, and nothing is dropped from the list to make it fit.
+a choice, and nothing is dropped from the list to make it fit. Those controls
+read **scroll up** and **scroll down**, because this window moves through a list
+of settings rather than through a recorded order — every other window in this
+program is a reading of something that happened, and those keep Earlier and
+Later. `[close]` sits outside the window with them, so no length of list can
+scroll the way out of this drawer off the screen.
 
 Apply saves and closes — the selection that asked for it, and only that one. A
 drawer closed and deliberately opened again, or edited while an Apply was still
@@ -1681,7 +1686,18 @@ asked: a drawer reopened after a save is initialized from exactly what that
 save asked with. Close discards what was chosen and not applied and
 changes nothing — the list the agent gave is not a selection, so reopening
 reuses it and shows the saved preference again. A failed Apply keeps every
-choice and says why. A saved model or effort is used by the *next* turn, which
+choice and says why.
+
+Escape closes Configure, and closing it means that one thing: the visible
+`[close]` control and Escape are two ways to ask for the same act, not two
+meanings of it. Either way nothing is saved, no agent is asked, neither composer
+is touched, a pending question keeps its own values, a preference already
+acknowledged stays saved, and focus goes back to the control that opened the
+drawer. A route drawer in front of Configure owns Escape while it is there: the
+first one closes that drawer and exposes the Configure held underneath with
+every choice still in it, and the next one closes Configure. A Configure that is
+not the thing on the screen — behind another pane, another tab, or a drawer in
+front of it — consumes no Escape at all. A saved model or effort is used by the *next* turn, which
 is where an agent can actually be asked: saving asks nothing of it, stops
 nothing, and leaves a turn already running on the settings it was given. A
 setting left out asks for no change to it and resets nothing.
