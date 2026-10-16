@@ -409,6 +409,26 @@ export interface SidekickReading {
      */
     readonly turn: number | null;
   }[];
+  /**
+   * The person request each saved turn answers, where its records establish one.
+   *
+   * A request's own turn, and — for a turn a *feedback* request carried — the
+   * person request that chain began with. Derived from the same record
+   * boundaries {@link requestsFromHistory} reads, because that is the only
+   * thing that owns a turn: a message ID and a turn number mean different
+   * things, and the latest message is not proof of ownership.
+   *
+   * Detached presentation association and nothing else. Nothing durable holds
+   * it, no record is written for it, and a turn whose containing request this
+   * history cannot bound is simply absent here — which is the honest answer
+   * rather than a nearest guess.
+   */
+  readonly answers: readonly {
+    readonly conversation: string;
+    readonly turn: number;
+    /** The saved message ID of that person request. */
+    readonly message: number;
+  }[];
 }
 
 /**
@@ -784,6 +804,41 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
       // after an interrupted turn names the later message.
       held.set(request.message, request.turn);
     }
+  }
+  /**
+   * The person request each saved turn answers, by the boundaries above.
+   *
+   * A message request answers itself. A feedback request carries a previous
+   * response's results, so the request it continues is the person request its
+   * conversation was last asked by — which is what reaches an existing message
+   * for an automatic turn, rather than printing machine input as if somebody
+   * had typed it.
+   */
+  const answers: { conversation: string; turn: number; message: number }[] = [];
+  /** The person request each conversation is currently answering. */
+  const asking = new Map<string, number>();
+  for (const request of requests.value) {
+    if (request.kind === "message") {
+      if (request.message === undefined) {
+        continue;
+      }
+      asking.set(request.conversation, request.message);
+      if (request.turn !== undefined) {
+        answers.push({
+          conversation: request.conversation,
+          turn: request.turn,
+          message: request.message,
+        });
+      }
+      continue;
+    }
+    const began = asking.get(request.conversation);
+    if (began === undefined || request.turn === undefined) {
+      // Feedback with no person request established before it in this
+      // conversation. Nothing owns it, and nothing is invented to.
+      continue;
+    }
+    answers.push({ conversation: request.conversation, turn: request.turn, message: began });
   }
   const conversations = new Map<
     string,
@@ -1348,6 +1403,7 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
         [...delivered].map(([conversation, turn]) => Object.freeze({ conversation, turn })),
       ),
       unestablished: Object.freeze(unestablished.map((held) => Object.freeze(held))),
+      answers: Object.freeze(answers.map((held) => Object.freeze(held))),
     }),
   );
 }

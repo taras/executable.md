@@ -24,6 +24,7 @@ import type { Operation, Result } from "effection";
 import { previewGeneratedXmdRoot } from "@executablemd/core/host";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";
 import type { SidekickReading } from "../src/repl/sidekick/model.ts";
+import { sidekickChatLines } from "../src/repl/application.ts";
 import { sidekickChatRows, sidekickTurnRows } from "../src/repl/program.ts";
 import { rootReads } from "../src/repl/sidekick/requests.ts";
 import { useSidekickOwner } from "../src/repl/sidekick/owner.ts";
@@ -51,6 +52,7 @@ import {
   typing,
   useMountedRepl,
 } from "./fixtures/repl/issue-883/mounted-program.ts";
+import type { MountedRepl } from "./fixtures/repl/issue-883/mounted-program.ts";
 
 /**
  * The orientation an older build left on a conversation it completed a turn of.
@@ -1042,6 +1044,59 @@ function* projected(chat: readonly SidekickRecord[]): Operation<SidekickReading>
 }
 
 /**
+ * Wait until this command's own history holds this many evaluated replies.
+ *
+ * In the file, because a reply that says nothing to a person reaches no row: a
+ * screen this one is waiting on would be waiting for text nothing is going to
+ * draw.
+ */
+function* savedReplies(repl: MountedRepl, count: number): Operation<void> {
+  for (let attempt = 0; attempt < 600; attempt += 1) {
+    const read = yield* mountedReading(repl);
+    if (read.chat.filter((one) => one.kind === "response").length >= count) {
+      return;
+    }
+    yield* settled(20);
+  }
+  throw new Error(`this chat never saved ${count} replies`);
+}
+
+/**
+ * Every line of readable text this command's own chat composes into.
+ *
+ * Read from the files the mounted command wrote, through the same projection
+ * and the same composition the screen is built from. It answers the one
+ * question a screen search cannot: a sentence about an absence, a bare agent
+ * name and an empty row are all *rows*, and asking the screen whether a row is
+ * missing is asking it about the gaps between what it drew.
+ */
+function* composedChat(repl: MountedRepl): Operation<readonly string[]> {
+  const read = yield* mountedReading(repl);
+  const known = yield* projected(read.chat);
+  return sidekickChatLines(
+    Object.freeze({
+      chat: sidekickChatRows(known, undefined),
+      turns: Object.freeze([]),
+      busy: false,
+      agent: MOUNTED_AGENT,
+      refusal: undefined,
+      question: undefined,
+      conversation: known.active,
+      requested: undefined,
+      verified: undefined,
+      reading: known.active,
+      setup: undefined,
+      current: true,
+      availability: Object.freeze({
+        chats: Object.freeze([]),
+        sessions: Object.freeze([]),
+        refusal: undefined,
+      }),
+    }),
+  ).map((line) => line.text);
+}
+
+/**
  * Tier PV — what a response is saying, while it is still saying it (#883, PV1).
  *
  * The literal Output of a reply arrives on the screen as it streams, labelled
@@ -1388,10 +1443,132 @@ describe("Tier PV — a response in flight, shown as it arrives", () => {
     yield* awaiting(repl.terminal, "the turn that was told what it read", (one) =>
       shows(one, "Read it."),
     );
-    // And the reply that selected no chat said so, rather than showing its body.
-    // Said in this pane's own width, which clips the rest of the sentence.
-    expect(shows(repl.terminal, `${MOUNTED_AGENT} answered without saying`)).toBe(true);
+    // ER2 — and the follow-up that *did* say something says it, in its own row,
+    // exactly as it always has: removing the silent reply's notice removes a
+    // sentence nobody wrote and nothing else.
+    expect(shows(repl.terminal, `${MOUNTED_AGENT}: Read it.`)).toBe(true);
     expect(shows(repl.terminal, "(preview)")).toBe(false);
+    // And the reply that selected no chat contributed no utterance at all. The
+    // superseded form of this row asserted a sentence about the absence; what
+    // it asserts now is that there is none — and no bare name, no metadata
+    // substitute and no empty row standing in for one either.
+    expect(shows(repl.terminal, "answered without saying")).toBe(false);
+    const composed = yield* composedChat(repl);
+    expect(composed).toEqual(["  you: look", `  ${MOUNTED_AGENT}: Read it.`]);
+  });
+
+  /**
+   * ER1 — a successful control-only reply is work, and not an utterance.
+   *
+   * The real control path: a reply that reads Bindings and says nothing, and
+   * the automatic follow-up carrying its result, which also says nothing. Both
+   * turns really happened — the control ran, its literal result reached the
+   * next prompt, and both turns are saved — and neither of them told the person
+   * anything, so neither of them is in the chat.
+   */
+  it("ER1: a reply that only runs controls leaves the request and nothing else", function* () {
+    const repl = yield* useMountedRepl();
+    // Two controls and no Output, then a follow-up that adds nothing: source is
+    // not Output, so both turns succeeded and said nothing to anybody. Two
+    // rather than one so that what came back is a result a reader can tell
+    // apart from an empty answer.
+    repl.fake.script({ reply: "<REPL.Bindings />\n<REPL.Environment />\n" });
+    repl.fake.script({ reply: "Nothing to add.\n" });
+
+    yield* sendMessage(repl, "look");
+    // Waited for in the history rather than on the screen, because the chat is
+    // exactly where these two replies have nothing to say: there is no row for
+    // either of them to arrive in, so what settles this is the file.
+    yield* savedReplies(repl, 2);
+    yield* settled(40);
+
+    // What a person asked for is still there, and nothing of the two replies is.
+    expect(shows(repl.terminal, "you: look")).toBe(true);
+    expect(shows(repl.terminal, "answered without saying")).toBe(false);
+    expect(shows(repl.terminal, "(preview)")).toBe(false);
+    expect(shows(repl.terminal, "REPL.Bindings")).toBe(false);
+    expect(shows(repl.terminal, "Nothing to add.")).toBe(false);
+    // Asked of the composition rather than of the screen, because this is the
+    // question a screen search cannot answer: an empty row, a bare agent name
+    // or a metadata sentence would all be *rows*, and the chat has one row.
+    expect(yield* composedChat(repl)).toEqual(["  you: look"]);
+
+    // The work happened. The control ran, and its literal result is what the
+    // follow-up was asked with — so the turn that said nothing is the turn that
+    // did something.
+    expect(repl.fake.prompts).toHaveLength(2);
+    const carried = repl.fake.prompts[1] ?? "";
+    expect(carried).toContain("## REPL.Bindings");
+    expect(carried).toContain("## REPL.Environment");
+    expect(carried).toContain("a controlled mounted host");
+    expect(carried.indexOf("## REPL.Bindings")).toBeLessThan(
+      carried.indexOf("## REPL.Environment"),
+    );
+    // And every record is still there: both saved turns, the control's own
+    // intent and outcome, and the feedback that carried it.
+    const read = yield* mountedReading(repl);
+    const known = yield* projected(read.chat);
+    expect(known.turns.map((turn) => turn.turn)).toEqual([1, 2]);
+    expect(known.turns.map((turn) => turn.status)).toEqual(["completed", "completed"]);
+    expect(known.turns.map((turn) => turn.asked)).toEqual(["person", "automatic"]);
+    expect(known.turns.every((turn) => turn.reply?.hasOutput === false)).toBe(true);
+    expect(known.operations.map((one) => one.component)).toEqual([
+      "REPL.Bindings",
+      "REPL.Environment",
+    ]);
+    expect(known.operations.map((one) => one.status)).toEqual(["ok", "ok"]);
+    expect(known.delivered).toEqual([{ conversation: known.active, turn: 2 }]);
+    // Sessions keeps both turns with their own titles and status: a silent
+    // reply is absent from the chat and from nothing else.
+    expect(
+      sidekickTurnRows(known, undefined).map((row) => `${row.title} \u00b7 ${row.state}`),
+    ).toEqual(["look \u00b7 completed", "Automatic feedback \u00b7 completed"]);
+  });
+
+  /**
+   * ER3 — a reply that failed is not a reply that said nothing.
+   *
+   * The same shape as a silent success — an evaluated reply with no Output —
+   * and the opposite answer: the reason it failed is the one thing a reader can
+   * act on, so it stays whether or not the response that failed had rendered
+   * anything.
+   */
+  it("ER3: an evaluated reply that failed keeps its reason, with no Output to show", function* () {
+    const repl = yield* useMountedRepl();
+    // A name this ceiling does not admit, which refuses the whole reply before
+    // any control runs. No Output was selected, so a rule filtering every
+    // reply that rendered nothing would take this failure with it.
+    repl.fake.script({ reply: "<REPL.Delete />\n" });
+    repl.fake.script({ reply: "<Output>Fixed it.</Output>\n" });
+
+    yield* sendMessage(repl, "remove it");
+    yield* awaiting(repl.terminal, "the recorded reason", (one) =>
+      shows(one, `${MOUNTED_AGENT} (failed):`),
+    );
+    // Its own recorded reason, and not a status this screen composed: what the
+    // row says is what the history holds.
+    const read = yield* mountedReading(repl);
+    const known = yield* projected(read.chat);
+    const failed = known.chat.find((item) => item.kind === "reply");
+    if (failed === undefined || failed.kind !== "reply") {
+      throw new Error("this history recorded no evaluated reply");
+    }
+    expect(failed.hasOutput).toBe(false);
+    expect(failed.failure).not.toBe(undefined);
+    expect(shows(repl.terminal, (failed.failure ?? "").slice(0, 24))).toBe(true);
+    // The saved outcome says so too, so a fabricated sentence could not pass
+    // this row: the turn is recorded as a reply that failed.
+    expect(sidekickTurnRows(known, undefined)[0]?.state).toBe("reply failed");
+    // And the correction it was given, which answered: the failure stands in
+    // the chat beside the reply that followed it, in that order.
+    yield* awaiting(repl.terminal, "the corrected reply", (one) =>
+      shows(one, `${MOUNTED_AGENT}: Fixed it.`),
+    );
+    expect(yield* composedChat(repl)).toEqual([
+      "  you: remove it",
+      `  ${MOUNTED_AGENT} (failed): ${failed.failure}`,
+      `  ${MOUNTED_AGENT}: Fixed it.`,
+    ]);
   });
 });
 

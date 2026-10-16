@@ -214,6 +214,17 @@ export interface ReplSidekickChatRow {
    * because asking again would be guessing about a turn that really happened.
    */
   readonly retry?: { readonly conversation: string; readonly message: number };
+  /**
+   * The row holding the person request this reply answered, or none.
+   *
+   * Present only on a `reply`, and only where the history's own request
+   * boundaries establish which request this turn carried. It exists for the
+   * one case where this row is not drawn: a successful reply that said nothing
+   * to a person contributes no utterance, and a reader sent to that turn is
+   * shown the request it answered rather than a row nothing drew. Derived
+   * presentation, never an identity anything durable holds.
+   */
+  readonly request?: string;
   readonly key: string;
   /**
    * The chat this row belongs to.
@@ -3061,8 +3072,18 @@ function revealedAt(
   const items = reading.chat.filter(
     (item) => item.conversation === reveal.conversation && item.turn === reveal.turn,
   );
-  const target = items.find((item) => item.kind !== "person") ?? items[0];
-  if (target === undefined) {
+  // In the order they answer "what is this turn", and every one of them an item
+  // this reading already holds. The request is last and is the one that is not
+  // this turn's own result: it is what remains visible of a turn whose
+  // successful reply said nothing to anybody, and nothing is composed to serve
+  // as an anchor — a turn this history cannot associate reveals nothing, which
+  // is the honest answer.
+  const candidates = [
+    ...items.filter((item) => item.kind !== "person").map((item) => item.key),
+    ...items.filter((item) => item.kind === "person").map((item) => item.key),
+    ...items.flatMap((item) => (item.request === undefined ? [] : [item.request])),
+  ];
+  if (candidates.length === 0) {
     return undefined;
   }
   // Focus is not a fact about where a row is, so none is stated: the marker
@@ -3072,10 +3093,14 @@ function revealedAt(
     undefined,
     fitted,
   );
-  // The item's *first* row, which is the one its key is on: a message cut into
-  // three rows is revealed from its beginning, not from wherever it ends.
-  const at = rows.findIndex((item) => item.key === `sidekick:${target.key}`);
-  if (at < 0) {
+  // The first candidate this frame actually draws, at its *first* row, which is
+  // the one its key is on: a message cut into three rows is revealed from its
+  // beginning, not from wherever it ends. Asked of the same rows the screen
+  // paints, so a reveal cannot land on a row that does not exist.
+  const at = candidates
+    .map((key) => rows.findIndex((item) => item.key === `sidekick:${key}`))
+    .find((found) => found >= 0);
+  if (at === undefined) {
     return undefined;
   }
   return Math.min(Math.max(0, at - capacity + 1), at);
@@ -3269,19 +3294,34 @@ function sidekickComposedRows(
       }
       continue;
     }
-    // A reply that selected no person-facing chat said nothing to the person.
-    // Its body is not chat and is deliberately not shown as any: a response's
-    // source, its chapters and its feedback envelope are not what it told
-    // somebody.
-    items.push(
-      text(
-        `sidekick:${item.key}`,
-        item.hasOutput
-          ? `  ${reading.agent}: ${item.text}`
-          : `  ${reading.agent} answered without saying anything.`,
-        item.hasOutput ? styleOf("output") : styleOf("metadata"),
-      ),
-    );
+    if (item.failure !== undefined) {
+      // An evaluated reply that failed, said as the failure it is and never as
+      // an answer. The reason is what a reader can act on, so it stands whether
+      // or not the response that failed had selected any Output.
+      items.push(
+        text(
+          `sidekick:${item.key}`,
+          `  ${reading.agent} (failed): ${item.failure}`,
+          styleOf("failed-outcome"),
+        ),
+      );
+      if (item.hasOutput) {
+        // And what it had already rendered, after the reason, because the
+        // reason is why there is no more of it.
+        items.push(text(`sidekick:${item.key}:said`, `  ${item.text}`, styleOf("output")));
+      }
+      continue;
+    }
+    if (!item.hasOutput) {
+      // A reply that succeeded and selected no person-facing chat said nothing
+      // to the person, and contributes nothing to read. The work it did is in
+      // Sessions and in its own records; its body is not chat and is
+      // deliberately not shown as any — a response's source, its chapters and
+      // its feedback envelope are not what it told somebody, and a sentence
+      // about the absence is not something it said either.
+      continue;
+    }
+    items.push(text(`sidekick:${item.key}`, `  ${reading.agent}: ${item.text}`, styleOf("output")));
   }
   return items;
 }

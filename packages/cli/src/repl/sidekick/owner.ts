@@ -1924,6 +1924,7 @@ const EMPTY: SidekickReading = Object.freeze({
   submit: undefined,
   delivered: Object.freeze([]),
   unestablished: Object.freeze([]),
+  answers: Object.freeze([]),
 });
 
 /**

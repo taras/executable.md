@@ -6412,6 +6412,18 @@ first message carrying its number, and the next deliberate move of that window
 spends it. No location member, guessed rectangle or second focus store is
 involved.
 
+That offset is chosen from the same composed and fitted rows the frame will
+draw, so a reveal cannot target a row nothing paints. It is what makes a
+successful control-only reply safe to leave out of the chat: such a reply
+contributes no utterance, and the turn's visible associated context is the
+request it answered instead — read from the request boundaries the chat
+projection already establishes, which is the only thing that owns a turn, and
+reached for an automatic follow-up through the person request its chain began
+with. A turn whose containing request the history cannot bound reveals nothing,
+because composing a row to be landed on would make navigation appear to succeed
+by inventing the thing it arrived at. The association is derived presentation:
+no record, URL member or durable map holds it.
+
 A pending request is a fact on the turn that is waiting. Arrival mounts it and
 does nothing else. Activating it records that request's opaque key in
 process-local state — never in the location — and opens the Sessions-only

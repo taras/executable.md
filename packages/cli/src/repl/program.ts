@@ -2268,14 +2268,22 @@ export function sidekickChatRows(
       return Object.freeze({
         key:
           item.kind === "person"
-            ? `chat:${item.conversation}:message:${item.message}`
+            ? messageKey(item.conversation, item.message)
             : itemKey(item.conversation, item.response),
         conversation: item.conversation,
         turn: item.turn,
         kind: item.kind,
         text: item.text,
         hasOutput: item.kind === "reply" ? item.hasOutput : false,
-        failure: undefined,
+        // The reply's own retained failure, carried through rather than
+        // dropped. Whether a failure is visible is a fact about the evaluation,
+        // so it cannot depend on whether the response that failed happened to
+        // select any Output.
+        failure: item.kind === "reply" ? item.failure : undefined,
+        // And the request it answered, where this history establishes one: a
+        // reply that says nothing to a person draws no row of its own, and the
+        // request is the visible thing a reader sent to that turn can be shown.
+        ...(item.kind === "reply" ? requestOf(known, item.conversation, item.turn) : {}),
       });
     });
   // What the response in flight is saying, where the acknowledged history does
@@ -2331,6 +2339,32 @@ function attemptKey(conversation: string, turn: number): string {
  */
 function itemKey(conversation: string, response: string): string {
   return `chat:${conversation}:${response}`;
+}
+
+/** One saved message's own identity on the screen, by the ID it was written with. */
+function messageKey(conversation: string, message: number): string {
+  return `chat:${conversation}:message:${message}`;
+}
+
+/**
+ * The person request one reply answered, as the row that holds it.
+ *
+ * For the reveal a Sessions selection asks for, and for nothing else. A
+ * successful reply that said nothing to a person has no row of its own, so the
+ * visible associated context is the request it answered — its own, or, for a
+ * turn carrying a previous response's results, the person request that chain
+ * began with. Read from the projection's own request boundaries rather than
+ * matched on text or ordinal, and absent wherever the history cannot bound it.
+ */
+function requestOf(
+  known: SidekickReading,
+  conversation: string,
+  turn: number,
+): { readonly request?: string } {
+  const answered = known.answers.find(
+    (one) => one.conversation === conversation && one.turn === turn,
+  );
+  return answered === undefined ? {} : { request: messageKey(conversation, answered.message) };
 }
 
 /**

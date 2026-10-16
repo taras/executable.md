@@ -1969,9 +1969,9 @@ describe("Tier SS — Sessions shows two owners, each in its own order", () => {
     expect(shows(repl.terminal, "REPL.Bindings")).toBe(false);
 
     repl.fake.releaseTurn();
-    // It stays a turn. The reply rendered nothing for the person, so the row is
-    // the saved account of a turn that answered without saying anything — it
-    // does not disappear and it shows no source.
+    // It stays a turn. The reply rendered nothing for the person, which is work
+    // rather than silence: Sessions is where that turn's own account of itself
+    // is, so this row does not disappear and it shows no source.
     yield* awaiting(repl.terminal, "the follow-up being saved", (one) =>
       columnShows(sessionsColumn(one), "Automatic feedback \u00b7 completed"),
     );
@@ -2442,6 +2442,259 @@ describe("Tier SS — an older chat, from a frame that measures no chat", () => 
     expect(draftText(repl.terminal)).toBe("my entry");
     expect(rowsShow(paneColumn(repl.terminal), `[configure ${OTHER_MOUNTED_AGENT}]`)).toBe(true);
     expect(shows(repl.terminal, "kept-entry")).toBe(true);
+  });
+});
+
+/**
+ * Tier ER — a successful control-only reply, and what Sessions reveals (#883).
+ *
+ * The chat and Sessions answer two different questions, and this is where the
+ * two meet: a reply that ran controls and said nothing to anybody is still a
+ * saved turn somebody may select, and selecting it has to put something real on
+ * the screen. What it puts there is the request that turn answered — the one
+ * already in the chat — rather than a row composed to be landed on.
+ */
+describe("Tier ER — a turn that said nothing, selected from Sessions", () => {
+  it("ER4: a silent turn reveals the request it answered, and composes no anchor", function* () {
+    const repl = yield* useMountedRepl();
+    repl.fake.configuration({
+      model: { selected: "balanced", choices: [{ id: "balanced", name: "Balanced" }] },
+      effort: { balanced: { selected: "medium", choices: [{ id: "medium", name: "Medium" }] } },
+    });
+    // The control-only exchange first, so the request it answered is at the top
+    // of a chat that later fills past its window. One person turn that says
+    // nothing, and the automatic follow-up carrying its result, which says
+    // nothing either and runs no control of its own — so the chain ends there.
+    repl.fake.script({ reply: "<REPL.Bindings />\n" });
+    repl.fake.script({ reply: "Nothing to add.\n" });
+    // Then one that does speak, as the control for what a reveal lands on when
+    // the turn has an utterance of its own.
+    repl.fake.script({ reply: "<Output>SPOKE-ALOUD</Output>\n" });
+    // And enough ordinary turns after it to push all three past the window.
+    const TURNS = 10;
+    for (let number = 1; number <= TURNS; number += 1) {
+      repl.fake.script({ reply: `<Output>ANSWER-${number}</Output>\n` });
+    }
+    repl.fake.script({ reply: "<Output>Newer answer.</Output>\n" });
+    repl.fake.script({ reply: "ENTRY-ANSWER" });
+
+    yield* sendMessage(repl, "run it");
+    yield* repliesSaved(repl, 2);
+    yield* sendMessage(repl, "say it");
+    yield* repliesSaved(repl, 3);
+    for (let number = 1; number <= TURNS; number += 1) {
+      // Waited for in the history rather than on the screen: a chat window
+      // stays where it was put, so a reply past it is saved without being drawn.
+      yield* sendMessage(repl, `ask-${number}`);
+      yield* repliesSaved(repl, 3 + number);
+    }
+
+    // A real agent replacement, so the chat holding those turns is genuinely an
+    // older one and the reading below is of a chat this screen is not continuing.
+    yield* click(repl.terminal, `[configure ${MOUNTED_AGENT}]`);
+    yield* settled(60);
+    yield* focusOn(repl.terminal, `> Agent: `);
+    for (let press = 0; press < MOUNTED_AGENT.length; press += 1) {
+      repl.terminal.feed("\x7f");
+      yield* settled(8);
+    }
+    yield* typing(repl.terminal, OTHER_MOUNTED_AGENT);
+    yield* awaiting(repl.terminal, "the replacement control", (one) =>
+      shows(one, "[start new conversation]"),
+    );
+    yield* click(repl.terminal, "[start new conversation]", 96);
+    yield* awaiting(repl.terminal, "the new conversation starting empty", (one) =>
+      shows(one, "No messages yet."),
+    );
+    yield* sendMessage(repl, "newer ask");
+    yield* awaiting(repl.terminal, "the newer reply", (one) => shows(one, "Newer answer."));
+
+    // Both texts this screen owns, left partly typed, and a real entry selected.
+    yield* submitEntry(repl, promptEntry("kept-entry"));
+    yield* awaiting(repl.terminal, "the entry settling", (one) => shows(one, "[ok]"));
+    yield* focusDraft(repl.terminal);
+    yield* typing(repl.terminal, "my entry");
+    yield* focusMessage(repl.terminal);
+    yield* typing(repl.terminal, "half typed");
+
+    // Sessions is windowed too, so each row is reached with that section's own
+    // control rather than assumed to be drawn.
+    const reach = (label: string) =>
+      function* (): Operation<void> {
+        for (let press = 0; press < 60; press += 1) {
+          if (columnShows(sessionsColumn(repl.terminal), label)) {
+            return;
+          }
+          yield* clickAt(repl.terminal, sessionsCoordinate(repl.terminal, EARLIER));
+        }
+        throw new Error(`no Sessions row ever showed ${label}`);
+      };
+
+    // The turn whose own reply said nothing. Its Sessions row is a completed
+    // turn, which is what it is.
+    yield* reach("run it \u00b7 completed")();
+    expect(columnShows(sessionsColumn(repl.terminal), "run it \u00b7 completed")).toBe(true);
+    yield* clickAt(repl.terminal, sessionsCoordinate(repl.terminal, "run it "));
+    yield* awaiting(repl.terminal, "the request that turn answered", (one) =>
+      columnShows(paneColumn(one), "you: run it"),
+    );
+    // The window moved to it. An older chat left to itself follows its newest
+    // rows, so the newest reply being absent is what says this one was placed.
+    expect(columnLacks(paneColumn(repl.terminal), "ANSWER-10")).toBe(true);
+    // And nothing was composed to land on. The next row is the next request:
+    // no empty row, no bare agent name and no sentence about the absence stands
+    // between the two turns whose replies said nothing.
+    const pane = paneColumn(repl.terminal);
+    expect(columnRow(pane, "you: say it")).toBe(columnRow(pane, "you: run it") + 1);
+    expect(rowsShow(pane, "answered without saying")).toBe(false);
+    expect(rowsShow(pane, "Nothing to add.")).toBe(false);
+    // The chat being read is the one that holds that turn, and not the chat
+    // this screen is continuing.
+    expect(rowsShow(pane, "Newer answer.")).toBe(false);
+    expect(rowsShow(pane, "[Back to current chat]")).toBe(true);
+    expect(draftText(repl.terminal)).toBe("my entry");
+
+    // Back, and then the automatic follow-up: its own reply said nothing too,
+    // and the request its chain began with is a person's, not the machine input
+    // it carried.
+    yield* click(repl.terminal, "[Back to current chat]");
+    yield* awaiting(repl.terminal, "the current chat coming back", (one) =>
+      columnShows(paneColumn(one), "Newer answer."),
+    );
+    yield* reach("Automatic feedback")();
+    yield* clickAt(repl.terminal, sessionsCoordinate(repl.terminal, "Automatic fee"));
+    yield* awaiting(repl.terminal, "the request that chain began with", (one) =>
+      columnShows(paneColumn(one), "you: run it"),
+    );
+    expect(columnLacks(paneColumn(repl.terminal), "ANSWER-10")).toBe(true);
+    expect(rowsShow(paneColumn(repl.terminal), "answered without saying")).toBe(false);
+
+    // And the control: a turn that did say something is revealed at its own
+    // Output, which is still the first thing a reveal prefers.
+    yield* click(repl.terminal, "[Back to current chat]");
+    yield* awaiting(repl.terminal, "the current chat coming back", (one) =>
+      columnShows(paneColumn(one), "Newer answer."),
+    );
+    yield* reach("say it \u00b7 completed")();
+    yield* clickAt(repl.terminal, sessionsCoordinate(repl.terminal, "say it "));
+    yield* awaiting(repl.terminal, "that turn's own Output", (one) =>
+      columnShows(paneColumn(one), "SPOKE-ALOUD"),
+    );
+
+    // Every turn is still in Sessions with its own title and status, and both
+    // texts this screen owns are still exactly what was typed.
+    const sessions = sessionsColumn(repl.terminal);
+    expect(columnShows(sessions, "run it \u00b7 completed")).toBe(true);
+    expect(columnShows(sessions, "Automatic feedback \u00b7 completed")).toBe(true);
+    expect(columnShows(sessions, "say it \u00b7 completed")).toBe(true);
+    yield* click(repl.terminal, "[Back to current chat]");
+    yield* awaiting(repl.terminal, "the current chat coming back", (one) =>
+      columnShows(paneColumn(one), "Newer answer."),
+    );
+    expect(draftText(repl.terminal)).toBe("my entry");
+    expect(messageText(repl.terminal)).toBe("half typed");
+    expect(shows(repl.terminal, "kept-entry")).toBe(true);
+  });
+
+  it("ER5: the same chat reopened cold makes the same decisions, and costs nothing", function* () {
+    const host = yield* useMountedHost();
+    const first = yield* useMountedRepl({ host });
+    // The three exchanges this correction is about, in one history: a reply
+    // that ran a control and said nothing, with the automatic follow-up
+    // carrying its result saying nothing either; a reply that failed with no
+    // Output, and the correction it was given; and one that spoke.
+    first.fake.script({ reply: "<REPL.Bindings />\n" });
+    first.fake.script({ reply: "Nothing to add.\n" });
+    first.fake.script({ reply: "<REPL.Delete />\n" });
+    first.fake.script({ reply: "<Output>Fixed it.</Output>\n" });
+    first.fake.script({ reply: "<Output>SPOKE-ALOUD</Output>\n" });
+    // And enough ordinary turns after them to fill the chat's window, so the
+    // three above are reached cold by selecting them rather than by being
+    // drawn wherever the reopened window happened to land.
+    const TURNS = 8;
+    for (let number = 1; number <= TURNS; number += 1) {
+      first.fake.script({ reply: `<Output>ANSWER-${number}</Output>\n` });
+    }
+
+    yield* sendMessage(first, "run it");
+    yield* repliesSaved(first, 2);
+    yield* sendMessage(first, "break it");
+    yield* repliesSaved(first, 4);
+    yield* sendMessage(first, "say it");
+    yield* repliesSaved(first, 5);
+    for (let number = 1; number <= TURNS; number += 1) {
+      yield* sendMessage(first, `ask-${number}`);
+      yield* repliesSaved(first, 5 + number);
+    }
+    const execution = yield* mountedExecution(first);
+    // What this host's provider was asked for by the command that really ran.
+    // The reopen below shares the same fake, so what it must add is nothing.
+    const asked = first.fake.prompts.length;
+    const opened = first.fake.ensured.length;
+    yield* click(first.terminal, "[exit]");
+    yield* awaited("the first command returning", () => first.outcome() !== undefined);
+    const written = yield* until(readFile(pairPaths(host.root, execution).sidekick, "utf8"));
+
+    // The same history, opened cold by another command.
+    const again = yield* useMountedRepl({
+      host,
+      location: `xmd://repl/${execution}/entries`,
+    });
+    yield* awaiting(again.terminal, "the reopened chat", (one) =>
+      columnShows(paneColumn(one), "ANSWER-8"),
+    );
+
+    const reach = (label: string) =>
+      function* (): Operation<void> {
+        for (let press = 0; press < 60; press += 1) {
+          if (columnShows(sessionsColumn(again.terminal), label)) {
+            return;
+          }
+          yield* clickAt(again.terminal, sessionsCoordinate(again.terminal, EARLIER));
+        }
+        throw new Error(`no Sessions row ever showed ${label}`);
+      };
+
+    // The failure is still a failure, with the reason this history holds — read
+    // from the record rather than from anything a live process remembered.
+    yield* reach("break it ")();
+    yield* clickAt(again.terminal, sessionsCoordinate(again.terminal, "break it "));
+    yield* awaiting(again.terminal, "the recorded failure", (one) =>
+      rowsShow(paneColumn(one), `${MOUNTED_AGENT} (failed):`),
+    );
+    // Its own recorded reason, in the words the record holds, and not a status
+    // this screen composed. Read as the prefix that fits: a reveal lands its
+    // row at the foot of the window, so the rest of a wrapped reason is below
+    // it rather than missing.
+    expect(rowsShow(paneColumn(again.terminal), "(failed): a generated fragment")).toBe(true);
+    // The turn that spoke still speaks.
+    yield* reach("say it ")();
+    yield* clickAt(again.terminal, sessionsCoordinate(again.terminal, "say it "));
+    yield* awaiting(again.terminal, "that turn's own Output", (one) =>
+      columnShows(paneColumn(one), "SPOKE-ALOUD"),
+    );
+    // And the two silent replies are still absent, with the request they
+    // answered still what their selection reveals.
+    yield* reach("run it \u00b7 completed")();
+    yield* clickAt(again.terminal, sessionsCoordinate(again.terminal, "run it "));
+    yield* awaiting(again.terminal, "the request that turn answered", (one) =>
+      columnShows(paneColumn(one), "you: run it"),
+    );
+    expect(columnLacks(paneColumn(again.terminal), "ANSWER-8")).toBe(true);
+    yield* reach("Automatic feedback")();
+    yield* clickAt(again.terminal, sessionsCoordinate(again.terminal, "Automatic fee"));
+    yield* awaiting(again.terminal, "the request that chain began with", (one) =>
+      columnShows(paneColumn(one), "you: run it"),
+    );
+    expect(columnLacks(paneColumn(again.terminal), "ANSWER-8")).toBe(true);
+    expect(rowsShow(paneColumn(again.terminal), "answered without saying")).toBe(false);
+    expect(rowsShow(paneColumn(again.terminal), "Nothing to add.")).toBe(false);
+    expect(rowsShow(paneColumn(again.terminal), "REPL.Bindings")).toBe(false);
+
+    // Reading it cost nothing: no turn, no session, not one byte.
+    expect(again.fake.prompts).toHaveLength(asked);
+    expect(again.fake.ensured).toHaveLength(opened);
+    expect(yield* until(readFile(pairPaths(host.root, execution).sidekick, "utf8"))).toBe(written);
   });
 });
 

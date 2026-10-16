@@ -371,8 +371,16 @@ with no room for a chat beside the reading — or one showing Bindings — has
 measured no chat window at all, so there is no offset it could compute. The
 chat's own measurement is what puts the turn on screen, and what it lands on is
 that turn's own evaluated reply or inert anchor rather than the first message
-carrying its number. The next time somebody moves that window themselves, the
-kept request is spent.
+carrying its number.
+
+What it lands on is also always a row that chat actually draws. Where the turn's
+own reply said nothing to the person there is no such row, and the reveal is the
+request that turn answered — its own, or, for a turn carrying a previous
+response's results, the person request its chain began with, established from
+the history's own request boundaries. Nothing is composed to be landed on, and a
+turn whose containing request this history cannot establish reveals nothing
+rather than a row chosen by resemblance. The next time somebody moves that
+window themselves, the kept request is spent.
 
 A turn that has no rendered reply still has somewhere to land — automatic
 feedback, a saved turn with no evaluated reply, a turn that failed. What it says
@@ -611,8 +619,18 @@ permission to run it.
 A preview stays a preview while the response runs its controls, and only the
 evaluated reply replaces it: actual Output, including the partial Output an
 ordinary runtime failure leaves, with the effects it performed before failing
-standing. A reply that selected no `<Output>` says so rather than showing its
-own working.
+standing.
+
+A reply that succeeded and selected no `<Output>` said nothing to the person,
+and the chat shows nothing for it — no empty row, no sentence about the absence
+and no bare name. It is not a failure and not an omission: running controls is
+the work, and its account of itself is the saved turn in Sessions and its own
+records. Its request stays where it is. A reply that *failed* keeps its recorded
+reason in the chat whether or not it selected any Output, and where it had
+rendered some, that text stands after the reason; a failure is a fact about the
+evaluation, so what is shown of it never depends on what the response chose to
+say. The turn a provider finished and whose evaluated reply nobody recorded is
+neither of those, and keeps saying exactly that.
 
 Generation can also end without a reply. A provider failure leaves the attempt
 as this history saved it: the literal Output of what it had said, beside the
