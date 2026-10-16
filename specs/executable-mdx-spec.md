@@ -8858,6 +8858,26 @@ restore: the read happens again against whatever the file says now, and the
 write happens again. Inside a wrapping `<TempDir>` that repetition is what the
 directory's replay refusal depends on (§6.11).
 
+Those two paragraphs are about this component, which journals nothing. A *host*
+may journal what its filesystem provider was asked to do, and one does: the
+interactive `xmd repl` retains the reads and writes an entry performed in the
+ambient checkout it was started in, so a partial continuation of that entry
+answers a completed one from what it produced instead of reading or writing
+again (`specs/repl-spec.md`). A retained read answers with the exact text it
+read, so the binding its `as` prop produced is the recorded text rather than
+whatever the file says at continuation time; a read the entry had not reached is
+new work and reads the file as it is then.
+
+That changes nothing stated here. The component still performs no durable
+effect, still calls `checkFilePath` before its children and `writeTextFile`
+after them, still reports from the fixed vocabulary, and still treats a provider
+that is absent, that refuses or that breaks its contract as fatal. Terminal
+permission still applies to the operation the provider is asked to perform,
+after any transformation, and a completed result is answered before that
+question is reached. What differs is only what a host established for the
+execution — through `Execution.init`, before any installation callback — and
+under `xmd run` and a workflow run no host journals these calls at all.
+
 ---
 
 ### 6.13.1 Removing a file: `<File.Delete>`
@@ -9004,6 +9024,17 @@ Under a workflow run the deletion is one durable effect. A completed replay
 restores its recorded outcome and removes nothing a second time, even where the
 path exists again; a partial replay continues live from the retained Workspace
 frontier and performs the first unrecorded deletion once.
+
+Under the interactive `xmd repl` the three mutation replays differ again, and
+only where the entry is standing in a Git checkout. The host retains what its
+provider answered, so continuing an interrupted entry answers a completed
+deletion from its record and removes nothing — including where the path exists
+again, because nothing is compared with the live filesystem
+(`specs/repl-spec.md`). Outside that checkout nothing is retained and the
+`xmd run` rules above apply as written. The component is the same component in
+all three: form dispatch, failed-child behavior, containment, the atomic native
+semantics, the printed and fatal failure split, and generated admission are
+unchanged by which host is beneath it.
 
 #### Runtime portability
 

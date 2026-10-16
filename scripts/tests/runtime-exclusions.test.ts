@@ -83,6 +83,7 @@ describe("runtime exclusions", () => {
       "scripts/tests/component-form-dispatch.test.ts",
       "scripts/tests/plan-component-compiled.test.ts",
       "scripts/tests/plugin-compiled.test.ts",
+      "scripts/tests/repl-repositories-compiled.test.ts",
     ]);
   });
 

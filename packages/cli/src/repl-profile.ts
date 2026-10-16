@@ -38,8 +38,9 @@ import type { CommandPlugins } from "./plugin-host.ts";
 const REPL_INCLUDES: readonly string[] = Object.freeze(["components", "."]);
 
 /**
- * The two facts a proof states and production leaves to the host.
+ * What the caller states and this assembler cannot work out for itself.
  *
+ * The first two are facts a proof states and production leaves to the host.
  * `planAgentContext` and `installAgentProviderStack` already take the first:
  * production states none and both get the real ACPX runtime, while a journey
  * states a scriptable one so it can drive this exact assembler and this exact
@@ -47,8 +48,13 @@ const REPL_INCLUDES: readonly string[] = Object.freeze(["components", "."]);
  * keeps its conversations, which production leaves at the host default and a
  * proof points at a directory it created itself — a suite that used the default
  * would read and remove directories under the developer's own home.
+ *
+ * The third is the opposite way round: production states it and a proof usually
+ * does not. Only a runtime whose module graph can reach the Deno adapter has an
+ * entry host to offer, so the entrypoint that knows supplies it and the shared
+ * command path carries it as data.
  */
-export interface ReplProfileSeams {
+export interface ReplProfileInputs {
   readonly acp?: AcpxProviderDependencies;
   readonly planWriterRoot?: string;
 }
@@ -95,13 +101,13 @@ export interface ReplExecutionProfile {
 export function* assembleReplProfile(
   stack: AgentStack,
   plugins: CommandPlugins,
-  seams: ReplProfileSeams = {},
+  inputs: ReplProfileInputs = {},
 ): Operation<ReplExecutionProfile> {
-  yield* installAgentProviderStack(stack, seams.acp);
+  yield* installAgentProviderStack(stack, inputs.acp);
 
   const plan = yield* planComponentDeclaration({
     surface: "component",
-    ...(seams.planWriterRoot === undefined ? {} : { planWriterRoot: seams.planWriterRoot }),
+    ...(inputs.planWriterRoot === undefined ? {} : { planWriterRoot: inputs.planWriterRoot }),
     includes: REPL_INCLUDES,
     // The command's own Plugin assembly, not a second installation of it: two
     // would be two catalogs claiming the same names.
@@ -109,7 +115,7 @@ export function* assembleReplProfile(
     // The same seam `planAgentContext` already takes: production states none and
     // gets the real ACPX runtime, and a proof states a scriptable one so a
     // journey can drive this exact assembler rather than a copy of it.
-    context: planAgentContext(stack, seams.acp),
+    context: planAgentContext(stack, inputs.acp),
     ...(stack.sessions === undefined ? {} : { sessions: stack.sessions }),
     host: yield* useScope(),
     // Plan review is answered by the REPL's own Elicit provider, which the

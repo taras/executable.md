@@ -228,6 +228,15 @@ jobs:
       - name: The <Plan> Component the compiled binary carries
         run: deno test --allow-all --frozen scripts/tests/plan-component-compiled.test.ts
 
+      # The entry host a REPL entry's file work is retained by is assembled by
+      # `compiled.ts`, which is a different entrypoint from the one the source
+      # row runs. A binary built without it starts a REPL, performs the work and
+      # retains none of it, so the defect would appear at a person's first
+      # reopened location. This drives the same journey the source row drives,
+      # on a real terminal, against the binary this job just built.
+      - name: A REPL entry's files across the compiled binary
+        run: deno test --allow-all --frozen scripts/tests/repl-repositories-compiled.test.ts
+
       # Each package's `components.md` is a packaged asset on the same footing,
       # and the long-form documentation is the only thing that reports whether
       # one shipped — a binary missing them still lists every component and

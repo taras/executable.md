@@ -1,0 +1,45 @@
+/**
+ * The whole public behavior, on a real terminal, from source (#181 E1, E9).
+ *
+ * Every other row of this feature's evidence installs its own host, which is
+ * what makes those rows portable and deterministic. None of them can show the
+ * thing a person actually does: type an entry that writes files, walk away from
+ * it at a question, change those files from a shell, and reopen the printed
+ * location. So this launches the production entrypoint for the host runtime on
+ * a pty, inside a checkout it seeded, and reads the answer off the screen and
+ * off the filesystem.
+ *
+ * ## One suite, two behavior, by runtime
+ *
+ * Deno is where the entry host exists, so the Deno branch runs the journey. Node
+ * and Bun assemble no entry host at all — the Deno adapter's module graph
+ * reaches `node:sqlite`, which Bun has not — so their branch runs the other
+ * behavior that matters, which is that a REPL there still performs ordinary file
+ * and directory work. Neither branch silently skips its own behavior.
+ *
+ * The journey itself is `support/repl-files-journey.ts`, shared with the
+ * compiled row so the two cannot drift.
+ */
+
+import { describe, it } from "@executablemd/test-support/bdd";
+import { cliRuntime, cliShellCommand } from "@executablemd/test-support/launch";
+import type { Operation } from "effection";
+import { replFilesJourney, replOrdinaryFileWork } from "./support/repl-files-journey.ts";
+
+const JOURNEY = cliRuntime() === "deno";
+
+/** How this suite invokes `xmd`: the production entrypoint for this runtime. */
+function sourceCommand(args: readonly string[]): string {
+  return cliShellCommand([...args]);
+}
+
+describe("a REPL entry's files, across leaving and coming back", () => {
+  it(
+    JOURNEY
+      ? "E1: a completed prefix answers again, and the suffix executes on the answer"
+      : "E9: this runtime performs ordinary file and directory work and retains none of it",
+    function* (): Operation<void> {
+      yield* JOURNEY ? replFilesJourney(sourceCommand) : replOrdinaryFileWork(sourceCommand);
+    },
+  );
+});

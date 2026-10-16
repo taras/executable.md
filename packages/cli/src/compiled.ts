@@ -17,6 +17,7 @@ import { compiledUpgradeAssembly } from "./compiled-upgrade.ts";
 import { useMachineSessions } from "./session-coordinator.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
 import { denoRunRepositories } from "./deno-repositories.ts";
+import { BundledRunPlugin } from "./run-profile.ts";
 import { isCredentialHelperMode, runCredentialHelper } from "@executablemd/git/credential-helper";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { useCompiledService } from "./compiled-service.ts";
@@ -84,11 +85,15 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
     // The ordinary repository provider, on the same terms the Deno entrypoint
     // installs it: the binary is Deno, and the helper assembly it hands over is
     // the one that names this executable rather than a module path.
+    // The bundled Plugin this host runs with: the configured native variant,
+    // selected before any command is dispatched. The shared command path reads
+    // the value and imports no adapter, and an ordinary execution installs it
+    // in its own scope.
+    yield* BundledRunPlugin.set(denoRunRepositories(HELPER));
     yield* runXmd(
       args,
       useCompiledService,
       UPGRADE,
-      denoRunRepositories(HELPER),
       () => readInputStream(process.stdin),
       importPluginModule,
       () => useDenoWorkflowHost(HELPER),

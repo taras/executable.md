@@ -86,16 +86,30 @@ function* canonical(path: string): Operation<string | undefined> {
   }
 }
 
+/** Which checkout a directory is in, and which repository that checkout belongs to. */
+export interface AmbientCheckout {
+  /** The canonical root of the checkout the invocation started in. */
+  readonly checkoutRoot: string;
+  /** The canonical common Git directory, which identifies the repository. */
+  readonly commonDirectory: string;
+}
+
 /**
- * Discover the ambient repository from this directory, or answer `undefined`.
+ * Which checkout this directory is in, or `undefined` when it is in none.
+ *
+ * The two identities and nothing else. A caller that only needs to know where
+ * it is standing — which is what a file mutation needs — asks no question about
+ * HEAD, the origin, the branch or a publication destination, so a directory
+ * whose commit this host cannot resolve is still a checkout a file may be
+ * written in.
  *
  * Every step is a local Git question. Nothing here contacts a remote, opens a
  * credential or writes anything.
  */
-export function* discoverAmbientRepository(
+export function* discoverAmbientCheckout(
   git: GitSession,
   from: string,
-): Operation<AmbientRepository | undefined> {
+): Operation<AmbientCheckout | undefined> {
   const reportedRoot = yield* git.read(["rev-parse", "--show-toplevel"], from);
   if (reportedRoot === undefined) {
     return undefined;
@@ -118,6 +132,28 @@ export function* discoverAmbientRepository(
   if (commonDirectory === undefined) {
     return undefined;
   }
+  return Object.freeze({ checkoutRoot, commonDirectory });
+}
+
+/**
+ * Discover the ambient repository from this directory, or answer `undefined`.
+ *
+ * Everything a Repository identity needs on top of the checkout: the object
+ * format, the commit HEAD named, the admitted origin and the branch a pull
+ * request defaults its base to.
+ *
+ * Every step is a local Git question. Nothing here contacts a remote, opens a
+ * credential or writes anything.
+ */
+export function* discoverAmbientRepository(
+  git: GitSession,
+  from: string,
+): Operation<AmbientRepository | undefined> {
+  const found = yield* discoverAmbientCheckout(git, from);
+  if (found === undefined) {
+    return undefined;
+  }
+  const { checkoutRoot, commonDirectory } = found;
 
   const objectFormat = yield* readObjectFormat(git, checkoutRoot);
   const head = yield* resolveCommit(git, checkoutRoot, "HEAD");

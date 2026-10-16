@@ -27,7 +27,8 @@
  * module's business, and assembling them is all it does.
  */
 
-import type { Operation } from "effection";
+import { createContext } from "effection";
+import type { Context, Operation } from "effection";
 import { cwd } from "@executablemd/runtime";
 import { gitPlugin, gitPluginDeclaresFor } from "@executablemd/git";
 import type { Plugin } from "@executablemd/core/api";
@@ -43,8 +44,33 @@ import type { PluginSelection } from "./plugin-selection.ts";
  */
 export const BUNDLED_SELECTOR = "git";
 
-/** The Plugin every run-profile command begins with. */
+/** The Plugin every run-profile command begins with, where the host states none. */
 export const BUNDLED_PLUGIN: Plugin = gitPlugin;
+
+/**
+ * The bundled Plugin this host runs with.
+ *
+ * One selection, made by the runtime entrypoint before any command is
+ * dispatched, because only a runtime-named module may name a native adapter:
+ * Deno and the compiled binary bind a configured variant of the bundled Git
+ * Plugin, and Node and Bun leave the provider-neutral default in place. The
+ * shared command path reads the value and imports no adapter.
+ *
+ * What it selects is inert code and configuration — a Plugin value, whose
+ * `install` registers what an execution later initializes. It holds no
+ * provider, no lease, no Git session, no recorder and no identity, so nothing
+ * read from here is authority over permission, durable identity or
+ * reconciliation; those stay with core and with the providers an execution
+ * creates for itself.
+ *
+ * It is CLI-private. Nothing exports it as a package member and no selector
+ * names it: an operator chooses Plugins with `--plugin`, and this is the host
+ * saying which bundled value those are chosen beside.
+ */
+export const BundledRunPlugin: Context<Plugin> = createContext<Plugin>(
+  "executablemd.cli.bundledRunPlugin",
+  BUNDLED_PLUGIN,
+);
 
 /**
  * Whether this command line runs with the bundled profile.
@@ -77,19 +103,23 @@ export function* assembleRunProfile(
   load: PluginModuleLoader,
 ): Operation<readonly Plugin[]> {
   const bundled = carriesBundledPlugin(selection);
+  // The host's selection, not the statically imported default: a configured
+  // native variant and the neutral value are the same Plugin to everything
+  // below, and which one this is was decided by the entrypoint.
+  const value = yield* BundledRunPlugin.expect();
   // Resolved before anything is loaded: the reserved selector names a value
   // this profile holds, so it is never handed to a module loader, and a command
   // whose profile does not carry the bundled Plugin cannot conjure one by
   // writing the selector either.
   const named = selection.specifiers.filter((specifier) => specifier !== BUNDLED_SELECTOR);
   if (named.length === 0) {
-    return bundled ? Object.freeze([BUNDLED_PLUGIN]) : Object.freeze([]);
+    return bundled ? Object.freeze([value]) : Object.freeze([]);
   }
   // Captured before the first module is loaded, so a relative path and a
   // package specifier both resolve where the caller is standing.
   const directory = yield* cwd();
   const loaded = yield* loadPlugins(named, directory, load);
-  return Object.freeze(bundled ? [BUNDLED_PLUGIN, ...loaded] : [...loaded]);
+  return Object.freeze(bundled ? [value, ...loaded] : [...loaded]);
 }
 
 /**
@@ -101,13 +131,18 @@ export function* assembleRunProfile(
  * parent declined.
  *
  * The bundled value is dropped from the outer list **by identity**. What may be
- * dropped is the one object this host statically bundled — an operator who
- * wrote the reserved selector is holding exactly that value, and prefixing it
- * twice would be the host duplicating itself. A *different* Plugin that merely
- * uses the same name is not this value, is not dropped, and meets
- * `admitPlugins()`'s duplicate-name refusal like any other collision. Comparing
- * names here would have let an impostor disappear instead of collide.
+ * dropped is the one object this host selected — an operator who wrote the
+ * reserved selector is holding exactly that value, and prefixing it twice would
+ * be the host duplicating itself. A *different* Plugin that merely uses the
+ * same name is not this value, is not dropped, and meets `admitPlugins()`'s
+ * duplicate-name refusal like any other collision. Comparing names here would
+ * have let an impostor disappear instead of collide.
+ *
+ * The value is passed in rather than read here, because a child assembles in
+ * its own isolated scope: what it must install is the value the *host* selected
+ * and the parent captured before any document code ran, not whatever a
+ * document later put in the Context.
  */
-export function nestedRunProfile(outer: readonly Plugin[]): readonly Plugin[] {
-  return Object.freeze([BUNDLED_PLUGIN, ...outer.filter((plugin) => plugin !== BUNDLED_PLUGIN)]);
+export function nestedRunProfile(outer: readonly Plugin[], bundled: Plugin): readonly Plugin[] {
+  return Object.freeze([bundled, ...outer.filter((plugin) => plugin !== bundled)]);
 }

@@ -35,8 +35,8 @@ import { testingExecutionHost } from "../../src/testing-host.ts";
 import { useBunService } from "../../src/bun-service.ts";
 import { useDenoService } from "../../src/deno-service.ts";
 import { useNodeService } from "../../src/node-service.ts";
+import { BUNDLED_PLUGIN } from "../../src/run-profile.ts";
 
-import { unsupportedRepositories } from "../../src/run-repositories.ts";
 import reviewPlugin from "@executablemd/code-review-agent";
 /** The native service adapter the entrypoint for this runtime installs. */
 const SERVICES = {
@@ -115,7 +115,7 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
         }),
       // This harness runs Markdown tiers, not repository work: a child that
       // asked for a checkout is told there is no provider.
-      installRepositories: unsupportedRepositories,
+      bundledPlugin: BUNDLED_PLUGIN,
     });
     const execution = yield* executeInstalled({ path: document, stream: new InMemoryStream() }, [
       // The child declarations `xmd test` hands the harness, so a suite can

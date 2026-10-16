@@ -39,7 +39,7 @@
  * first operation that needs it.
  */
 
-import { race, suspend, useScope, withResolvers } from "effection";
+import { useScope } from "effection";
 import type { Operation, Scope } from "effection";
 
 import { randomUUID } from "node:crypto";
@@ -119,12 +119,10 @@ import {
   type RegisteredCheckout,
 } from "./operations.ts";
 import { repositorySlot, worktreeSlot } from "./placement.ts";
+import { lazily } from "./lazy.ts";
 import { realpath } from "node:fs/promises";
 import { ensureDir } from "@effectionx/fs";
 import { until } from "effection";
-
-/** What `withResolvers()` hands back, named so a capability can hold a pair. */
-type Resolvers<T> = ReturnType<typeof withResolvers<T>>;
 
 /** The canonical directory this path resolves to, or the path as written. */
 function* canonicalPath(path: string): Operation<string> {
@@ -164,57 +162,6 @@ interface SelectedRepository {
   readonly ownerCheckout: string;
   /** The canonical common Git directory this repository's worktrees key on. */
   readonly commonDirectory: string;
-}
-
-/**
- * One capability, acquired at most once, owned by the installation scope.
- *
- * Installing this provider must reach nothing: no directory, no lease, no
- * `git`, no identity read. What each capability costs is paid by the first
- * operation that actually needs it, and by nothing else — a document that
- * writes no repository component pays none of it.
- *
- * Four properties, and each one is why this is not a plain memoized function:
- *
- * - **Single-flight.** The first ask starts the acquisition; an ask that
- *   arrives while it is still running awaits the same task rather than starting
- *   a second. Two concurrent `<Repository>` elements share one managed root.
- * - **Owned by the installation scope.** The work runs in `owner`, not in
- *   whichever element happened to ask first, and then *suspends* — because a
- *   task that returns releases what it acquired. A temporary directory, a
- *   session and a lease therefore last as long as the execution does, rather
- *   than as long as the element that first needed them.
- * - **Settled answers are answers.** An absent ambient repository and a host
- *   that cannot state a commit identity are values, not failures, and are
- *   remembered as such: the second ask does not rediscover them.
- * - **Nothing half-made is observable.** A caller cancelled while waiting
- *   abandons its own wait and not the acquisition; a failed acquisition is
- *   remembered as failed, and every later ask is told the same thing rather
- *   than retrying into partially made state.
- */
-function lazily<T>(owner: Scope, acquire: () => Operation<T>): () => Operation<T> {
-  let settled: { readonly ready: Resolvers<T>; readonly failed: Resolvers<never> } | undefined;
-  return function* (): Operation<T> {
-    if (settled === undefined) {
-      const ready = withResolvers<T>();
-      const failed = withResolvers<never>();
-      settled = { ready, failed };
-      owner.run(function* () {
-        let value: T;
-        try {
-          value = yield* acquire();
-        } catch (error) {
-          failed.reject(error instanceof Error ? error : new Error(String(error)));
-          return;
-        }
-        ready.resolve(value);
-        // Held for the scope's life. Returning here would end the task, and
-        // ending a task releases everything it acquired.
-        yield* suspend();
-      });
-    }
-    return yield* race([settled.ready.operation, settled.failed.operation]);
-  };
 }
 
 /**

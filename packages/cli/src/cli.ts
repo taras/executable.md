@@ -146,7 +146,7 @@ import {
   syntaxSymbols,
   useCommandSyntax,
 } from "./syntax.ts";
-import { assembleRunProfile } from "./run-profile.ts";
+import { assembleRunProfile, BundledRunPlugin } from "./run-profile.ts";
 import type { PluginModuleLoader } from "./plugin-loader.ts";
 import { installPlugins, NO_PLUGINS } from "./plugin-host.ts";
 import type { CommandPlugins } from "./plugin-host.ts";
@@ -155,8 +155,6 @@ import type { PluginSelection } from "./plugin-selection.ts";
 import { deliverWhole } from "./stdout-delivery.ts";
 import { testingExecutionHost } from "./testing-host.ts";
 import type { ChildPlanDeclaration } from "./testing-host.ts";
-import { unsupportedRepositories } from "./run-repositories.ts";
-import type { RepositoryInstaller } from "./run-repositories.ts";
 import { EVAL_ALIAS, EVAL_OPTION, evalGrammarError, readEvalFlags } from "./eval-source.ts";
 import type { EvalFlags } from "./eval-source.ts";
 import { STANDARD_INPUT_FAILURE, STANDARD_INPUT_PATH } from "./standard-input.ts";
@@ -1236,8 +1234,6 @@ function* runDocument(
   config: DocumentConfig,
   mode: DocumentMode,
   installService: HostServiceInstaller,
-  installRepositories: RepositoryInstaller,
-  childRepositories: RepositoryInstaller,
 ): Operation<Result<void>> {
   const { root, include, verbose, journal, raw, secretDetection, retainProcessOutput } = config;
 
@@ -1368,16 +1364,6 @@ function* runDocument(
   // the provider for a service.
   yield* installService();
 
-  // Repository selection belongs to document execution too, and it is this
-  // execution's own: the provider it installs holds an invocation identity, the
-  // leases on the checkouts this document selects, and the evidence of what it
-  // published. `xmd run` supplies the live one; `xmd plan` executes no document
-  // of a caller's and reaches this line for none.
-  // `xmd test` and every runtime without an operational provider supply the one
-  // that installs nothing, and every repository operation then reports an
-  // absent provider before touching anything.
-  yield* installRepositories();
-
   // What a `<Test>` in this document runs a nested execution under. Captured
   // before document code begins, so a child is offered exactly what this
   // command assembled — and never a second description of it.
@@ -1395,13 +1381,18 @@ function* runDocument(
     pluginArgs: plugins.args,
     secretDetection,
     installService,
-    // The *entrypoint's* installer, not this command's. A `host="run"` child is
-    // an ordinary run whatever command is hosting it, so `xmd test` — which
-    // installs no repository provider for its own document — still gives one to
-    // a child that asked to be a run. Passed rather than inherited because a
-    // child runs in an isolated scope and needs a fresh instance: its own
-    // invocation identity, its own leases and its own Push evidence.
-    installRepositories: childRepositories,
+    // The *entrypoint's* bundled Plugin, not this command's active list. A
+    // `host="run"` child is an ordinary run whatever command is hosting it, so
+    // `xmd test` — which activates no bundled Plugin for its own document —
+    // still gives one to a child that asked to be a run. Read here, before any
+    // document code has run, because this is the host's own selection: a
+    // document that replaces the Context later is describing its own scope and
+    // does not get to choose what its children's repository work reaches.
+    //
+    // It is inert code and configuration. The provider itself is created by
+    // the child's own initialization, in the child's own scope, so no live
+    // selection, lease, Git session or publication evidence crosses.
+    bundledPlugin: yield* BundledRunPlugin.expect(),
     testAgentWorker: yield* readWorkerCommand(),
     planDeclaration,
   });
@@ -1528,13 +1519,9 @@ function* runScopedDocument(
   config: DocumentConfig,
   mode: DocumentMode,
   installService: HostServiceInstaller,
-  installRepositories: RepositoryInstaller,
-  childRepositories: RepositoryInstaller = installRepositories,
 ): Operation<Result<void>> {
   try {
-    return yield* scoped(() =>
-      runDocument(config, mode, installService, installRepositories, childRepositories),
-    );
+    return yield* scoped(() => runDocument(config, mode, installService));
   } catch (error) {
     return Err(error instanceof Error ? error : new Error(String(error)));
   }
@@ -1590,8 +1577,6 @@ function* test(
   config: TestConfig,
   args: string[],
   installService: HostServiceInstaller,
-  /** What a `<Execution host="run">` child installs. This command installs none. */
-  installRepositories: RepositoryInstaller,
   /** What this command's Plugins installed, and the values a child reinstalls. */
   plugins: CommandPlugins,
 ): Operation<void> {
@@ -1630,9 +1615,7 @@ function* test(
       // The outer `xmd test` command installs no operational repository
       // provider. A test that needs the production behavior exercises an
       // explicit `<Execution host="run">` child, which is an ordinary run and
-      // is handed the entrypoint's own installer below.
-      unsupportedRepositories,
-      installRepositories,
+      // assembles the entrypoint's own bundled Plugin for itself.
     );
     if (!result.ok) {
       reportFailure(result.error);
@@ -1673,8 +1656,6 @@ function* test(
       },
       { testing: true, plugins },
       installService,
-      unsupportedRepositories,
-      installRepositories,
     );
     if (!result.ok) {
       reportFailure(result.error, document.relativePath);
@@ -2672,7 +2653,6 @@ function* dispatch(
   helpRequest: { requested: boolean; args: string[] },
   installService: HostServiceInstaller,
   upgrade: UpgradeAssembly,
-  installRepositories: RepositoryInstaller,
   readStandardInput: StandardInputReader,
   workflowHost: WorkflowHost | undefined,
   sessions: MachineSessionAssembly | undefined,
@@ -2809,7 +2789,6 @@ function* dispatch(
             agent: runStack,
           },
           installService,
-          installRepositories,
         );
       });
       if (!result.ok) {
@@ -3071,7 +3050,6 @@ function* dispatch(
         { ...command.config, retainProcessOutput: keepsProcessOutput(command.config.journal) },
         evalFlags.rest,
         installService,
-        installRepositories,
         plugins,
       );
       break;
@@ -3277,9 +3255,6 @@ function* dispatch(
             // service adapter would: installed inside the execution scope,
             // before the root document is imported.
             useWorkflowServiceDenial,
-            // A workflow run's repositories are the retained ones its Workspace
-            // attachment installs, so this path installs none of its own.
-            unsupportedRepositories,
           ),
         ),
       );
@@ -3297,12 +3272,6 @@ export function* runXmd(
   // command run under any other one refuses with that installation's own remedy
   // rather than reaching for a release, a lock or a file.
   upgrade: UpgradeAssembly,
-  // What an ordinary document execution installs for `<Repository>`,
-  // `<Worktree>`, the Git operations, `<Issue>` and `<PullRequest>`. Deno and
-  // the compiled binary supply the live provider; Node and Bun supply the one
-  // that installs nothing, so those runtimes describe the same vocabulary and
-  // operate none of it.
-  installRepositories: RepositoryInstaller,
   // How this host reads a whole document from its own standard input, for the
   // one command form that asks for one. The shared CLI reaches no stdin global
   // of its own, and nothing a document can write reaches this: it is a value
@@ -3361,7 +3330,6 @@ export function* runXmd(
     selection,
     installService,
     upgrade,
-    installRepositories,
     readStandardInput,
     loadPluginModule,
     installWorkflowHost,
@@ -3423,7 +3391,6 @@ function* runCommand(
   selection: PluginSelection,
   installService: HostServiceInstaller,
   upgrade: UpgradeAssembly,
-  installRepositories: RepositoryInstaller,
   readStandardInput: StandardInputReader,
   loadPluginModule: PluginModuleLoader,
   installWorkflowHost: HostWorkflowInstaller,
@@ -3489,7 +3456,6 @@ function* runCommand(
       helpRequest,
       installService,
       upgrade,
-      installRepositories,
       readStandardInput,
       workflowHost,
       sessions,

@@ -63,7 +63,6 @@ import { nestedRunProfile } from "./run-profile.ts";
 import type { Plugin } from "@executablemd/core/api";
 import { useOrdinaryGeneratedSelection } from "./evaluation-profile.ts";
 import type { HostServiceInstaller } from "./cli.ts";
-import type { RepositoryInstaller } from "./run-repositories.ts";
 
 /** What one child asks the entrypoint to build its `<Plan>` declaration from. */
 export interface ChildPlanDeclaration {
@@ -123,12 +122,19 @@ export interface TestingHostSettings {
   /**
    * How this entrypoint installs repository operations for one execution.
    *
-   * Called again for every child, so an isolated `<Execution host="run">`
-   * constructs a provider instance of its own: its own invocation identity, its
-   * own leases and its own Push evidence. Nothing it publishes authorizes its
-   * parent or a sibling, and nothing they published authorizes it.
+   * Installed again for every child, so an isolated `<Execution host="run">`
+   * initializes a provider instance of its own: its own invocation identity,
+   * its own leases and its own Push evidence. Nothing it publishes authorizes
+   * its parent or a sibling, and nothing they published authorizes it.
+   *
+   * It is the value the *host* selected, captured by the command before any
+   * document code ran. A Plugin is inert — code and configuration — so what
+   * crosses into the child is what to install, never a live provider: the
+   * child's own initialization creates that inside the child's own scope. A
+   * test root that activates no bundled Plugin still carries this, because a
+   * `host="run"` child is an ordinary run whatever command is hosting it.
    */
-  readonly installRepositories: RepositoryInstaller;
+  readonly bundledPlugin: Plugin;
   /**
    * How this entrypoint re-invokes itself as the test-agent worker, or why it
    * cannot.
@@ -302,10 +308,10 @@ function* runProfileChild(
   // The bundled value is prefixed here rather than carried down from the root,
   // because the root never had it: `xmd test` is not a run profile, and a child
   // does not inherit what its parent declined.
-  const childPlugins = yield* installPlugins(nestedRunProfile(settings.plugins), {
-    command: "run",
-    args: settings.pluginArgs,
-  });
+  const childPlugins = yield* installPlugins(
+    nestedRunProfile(settings.plugins, settings.bundledPlugin),
+    { command: "run", args: settings.pluginArgs },
+  );
   const installations: ExecutionInstallation[] = [...childPlugins.installations];
   // What this child can establish for a `<Plan>` written inside it. A child
   // nobody configured establishes nothing, which is the refusal `<Plan>` has
@@ -379,9 +385,6 @@ function* runProfileChild(
   // Attaching a native service belongs only to document execution, here as in the
   // command that owns it.
   yield* settings.installService();
-  // And Repository selection the same way, from the same installer the command
-  // used — a fresh instance for this child alone.
-  yield* settings.installRepositories();
   // The run profile's own generated selection, offered in this child's own
   // scope. A `host="run"` child is an ordinary run whatever command is hosting
   // it, so a child of `xmd test` — whose own document is a different profile —

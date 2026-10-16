@@ -21,7 +21,6 @@ import { createContext, ensure, type Operation, scoped, until } from "effection"
 
 import { useHostFiles } from "@executablemd/runtime";
 import { runXmd } from "../src/cli.ts";
-import { unsupportedRepositories } from "../src/run-repositories.ts";
 import { unsupportedWorkflowHost } from "../src/workflow.ts";
 import type { UpgradeAssembly } from "../src/upgrade.ts";
 import { refusedStandardInput } from "./support/standard-input.ts";
@@ -703,7 +702,6 @@ function* invoke(args: readonly string[]): Operation<Invocation> {
         [...args],
         function* () {},
         UPGRADE,
-        unsupportedRepositories,
         refusedStandardInput,
         refusedPluginModules,
         unsupportedWorkflowHost,

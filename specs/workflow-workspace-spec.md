@@ -52,7 +52,7 @@ The host creates a WorkflowRun, gives it an implicit Workspace, streams the
 rendered document output and retains enough state to continue after the process
 exits.
 
-## 2. Two execution environments
+## 2. Three execution environments
 
 ### 2.1 `xmd run`
 
@@ -123,6 +123,29 @@ environment.
 
 The same declarative components work in both environments. Durability comes
 from the workflow host, not from another spelling of `<File>` or `<Git.Commit>`.
+
+### 2.3 `xmd repl`
+
+The interactive REPL is specified in `specs/repl-spec.md` rather than here. One
+distinction belongs in this document, because it is about mutation replay.
+
+A REPL entry performs ordinary file work against the caller's own filesystem,
+like `xmd run`. What differs is that the host retains the writes, deletions and
+`<Dir>` ensures the entry performed in the ambient Git checkout it was started
+in, so an interrupted entry can be continued: a completed operation answers from
+its record and touches nothing, and only an operation with no record executes.
+Nothing is compared with the live filesystem, nothing is rolled back and no
+frontier is advanced — a recorded result and what is on disk may disagree, and
+the person reading the screen is what resolves that.
+
+So the three environments retain mutation differently, and none of the other two
+changes. `xmd run` journals no filesystem mutation at all. A workflow run's
+mutations are Workspace effects inside a transaction, ordered by the frontier
+§9 and §10 describe, and the REPL has none of that: no Workspace, no
+transaction, no frontier and no logical filesystem. Repository components —
+`<Repository>`, `<Worktree>`, the local Git operations, `<Issue>` and
+`<PullRequest>` — are not available to a REPL entry and refuse there as they do
+under any host that installs no provider for them.
 
 ## 3. Workflow lifecycle
 
@@ -1102,6 +1125,16 @@ ensure persists even when later content fails or is cancelled. `<Dir>` changes
 only cwd. It neither selects nor replaces the Repository in scope, so a Git
 operation inside a directory beneath a selected checkout still addresses that
 same Repository.
+
+Under the interactive `xmd repl` the ensure is retained where the target is
+inside the checkout the entry was started in, so continuing an interrupted entry
+answers a completed ensure from its record and asks the provider for nothing
+(`specs/repl-spec.md`). Everything stated above is unchanged by that: the ensure
+still precedes the cwd installation and every child, the refusal is still fixed
+and sanitized, the cwd is still restored on success, failure and cancellation,
+and `<Dir>` still neither selects nor replaces the Repository in scope. A
+generated fragment gains no `<Dir>` there either — the REPL's write table is the
+ordinary one, which does not hold it.
 
 Self-closing `<Dir />` is invalid, and which form it was written as comes from
 the invocation the engine issued rather than from the contextual `hasContent()`

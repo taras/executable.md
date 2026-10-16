@@ -4314,6 +4314,30 @@ callbacks, documentation capture and public execution policy. Setup receives no
 installation array, request, entry identifier or receipt and creates no second
 execution owner.
 
+Which middleware a command installs on that seam is the host's own selection,
+made once by the runtime entrypoint. The bundled Plugin a run-profile command
+begins with is read from one CLI-private Context whose default is the
+provider-neutral value: Deno and the compiled binary bind a configured native
+variant before any command is dispatched, Node and Bun leave the default, and
+the shared command path reads the value and imports no adapter. What the Context
+selects is inert — code and configuration, with no provider, lease, session,
+recorder or identity in it — so nothing read from it is authority over
+permission, durable identity or reconciliation. The native variant delegates the
+neutral Plugin's whole install, declarations and admissions included, and adds
+ordinary initialization middleware for the command whose documents are ordinary
+runs.
+
+An isolated `host="run"` child is an ordinary run whatever command hosts it, so
+the command captures that selected value into the child-host settings before any
+document code runs — including for a test root, which activates no bundled
+Plugin at all and has no operational provider of its own. The child installs it
+again in its own scope, after its working directory is established, and core
+initializes it there. A document that replaces the Context afterwards is
+describing its own scope: the child's host was already chosen. The reserved
+`--plugin git` selector still names that selected value without reaching a
+loader, the value is still removed from the outer list by identity alone, and a
+different Plugin using the same name still meets the duplicate-name refusal.
+
 Initialization failure prevents policy, root import and body. Failure and
 cancellation join partially acquired teardown before the invocation settles.
 Ordinary descendants inherit initialized state; concurrent executions and REPL
@@ -6417,6 +6441,98 @@ finished, refused, failed, was cancelled or reached end of input, stops the
 reader, removes every listener, restores the modes and writes the final reset
 exactly once.
 
+### What one entry retains about the checkout it is standing in
+
+The REPL is foreground experimentation, and what that means for files is one
+sentence: a completed operation answers again, and a new one executes live. An
+entry that read a file, wrote three and stopped at a question is reopened at the
+printed location, those four answer from what they produced, and the write after
+the question happens for the first time.
+
+Four operations are retained and no others: a `<File>` text read, a `<File>`
+write, a `<File.Delete />`, and the directory a `<Dir>` ensures, each in the
+ambient checkout the entry was started in. A read is retained because a document
+binds its text and a continuation has to offer the same binding; a glob, a path
+check and a temporary directory bind nothing a continuation must answer again,
+and are left alone. A call outside that checkout is ordinary filesystem
+behavior, recorded by nothing — a record would place the call in a checkout it
+is not in — so it runs again during a partial continuation.
+
+Only live new work needs the environment. Answering a completed operation
+performs no path canonicalization, no ambient discovery, no lease acquisition,
+no permission lookup and no filesystem call, which is why a continuation works
+in a checkout somebody has since changed, moved or deleted: the question's
+prompt still shows the text the read bound, while the file says something else
+and a *new* entry reading the same path sees what is there now. Nothing is
+inventoried, predicted or compared, and the person reading the screen is what
+resolves a disagreement. Replay authenticates no checkout, and restoring where
+an entry was working is not permission to work there.
+
+What does the retaining is established by core initialization, once per
+executing entry, inside the scope the invocation already owns — registered by
+the selected REPL host rather than by the ordinary run Plugin, because an entry
+installs no managed root, credential helper or Git host. Everything it acquires
+belongs to that execution: the Git session, its isolation directory, the ambient
+discovery and the lease all end when the entry does. A passive view — a settled
+history, a frozen position, a refused route — initializes nothing, discovers no
+checkout and takes no lease.
+
+Recording is ordinary ancestor-max `Files` middleware over the one document
+filesystem, so what is kept is the result the whole composition answered with,
+and a generated fragment's admitted operations are retained exactly as an
+authored one's are: they cross the same route. A provider beneath that answers
+directly, or transforms the path or content and delegates, is provider behavior;
+the request as it arrived stays the operation's identity. Terminal permission
+applies to live work, after transformations, and a completed result is answered
+before any of it.
+
+A record's name is the digest of the record version, the operation kind and the
+complete request as the document wrote it. Nothing is canonicalized for naming,
+because a path resolved through the filesystem is a fact about the host at that
+moment and the question the document asked is not. Two equal operations in one
+entry are one name at two ordered positions, and telling them apart is the
+durable engine's own positional matching rather than a name search. Equal work
+in two entries is equally one name, and nothing in a record says which entry
+wrote it: each entry executes against its own segment of the one stream, so that
+segment — not a label inside the record — is what decides whose history an entry
+may continue.
+
+Two failures are kept apart deliberately. A valid composed success or ordinary
+refusal is appended and returned as the same semantic result. A provider that
+broke its contract, or whose answer this boundary cannot read, keeps the Files
+infrastructure classification, activates the durability fence and is re-raised
+with its identity intact — nothing is written down for it, because a provider
+that cannot describe what it did may not have done it. An append that fails
+after the work happened stays a fatal durability failure rather than an
+acknowledged success. Either side of the acknowledgement is a real outcome: work
+acknowledged before the interruption is answered from its record and an external
+edit survives, while work performed and not acknowledged is attempted again and
+may overwrite one. That window is what the REPL trades for not snapshotting
+anybody's working tree.
+
+A shared Git directory admits one live entry at a time, and one mechanism says
+so: a kernel-released exclusive lock on a hashed sidecar outside every checkout.
+`flock` and `LockFileEx` both exclude *independently opened* handles, two in one
+process included, so a second entry here is refused by the operating system
+exactly as a second process is — the native descriptor is the whole live
+resource, and there is no table of holders, no acquisition token and no state a
+caller could substitute. It is taken through the execution's own lazy
+single-flight acquisition, so one entry holds one handle however many mutations
+ask for it, with the release registered before the descriptor is opened and the
+hold lasting until the entry is torn down rather than until an element returns.
+A completed read acquires nothing: an observation is not a new exclusive writer.
+It is not exclusion against arbitrary Git tools, a person editing the checkout,
+or any process that does not participate in this sidecar. An entry that cannot
+have the repository it needs is told so in a sentence, before anything is read,
+and that refusal is never saved as a completed result: a lease is busy only
+while somebody else is working, and recording "refused" would make a temporary
+condition the permanent answer every later continuation replays.
+
+There is no managed checkout here, no `<Repository>` or `<Worktree>` selection,
+no local Git operation and nothing external: those components stay declared
+where they already are and refuse through their own unchanged missing-provider
+defaults.
+
 ### What the screen teaches, and what leaving it costs
 
 Presentation guidance, visual emphasis and the contextual status a person reads
@@ -6791,6 +6907,7 @@ Status is measured against main.
 | `GitQuery.resolve()` | verifies and resolves one Git revision expression contextually [Interface and evidence](specs/workflow-spec.md#7-the-git-capability--moved). | built on main |
 | workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry [Invariant](#workflow-run-storage); [Interface and evidence](specs/workflow-spec.md#9-retained-run-storage). | built on the #365 stack; the CLI lifecycle reaches it on the #366 stack |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in [Invariant](#one-database-at-a-time-and-a-transaction-a-caller-can-hold). | built on main |
+| REPL entry retained file work | one executing REPL entry's own recording, established by core initialization in the scope the invocation owns and ending with it: it retains the `<File>` reads, `<File>` writes, `<File.Delete />` deletions and `<Dir>` ensures that land inside the ambient checkout the entry was started in, authored and admitted-generated alike, because both cross the one document filesystem. A completed operation answers from its saved result without live path canonicalization, ambient discovery, a lease, a permission lookup or a filesystem call — so only *new* work needs the environment, a continuation still binds the text its read answered with while the file says something else, and a new entry reading that path sees what is there now. A record's name is the digest of the record version, the operation kind and the complete received request, so two equal requests in one entry are one name at two ordered positions and the durable engine's positional matching tells them apart; equal work in two entries is the same name, and each entry executing against its own stream segment is what keeps those apart. Recording is ordinary ancestor-max `Files` middleware, so a provider beneath that answers directly or transforms and delegates is kept as provider behavior while the received request stays the operation's identity. A shared Git directory admits one live entry at a time, held lazily for as long as the execution lasts and refused rather than queued; a completed read acquires nothing. There is no managed checkout, no `<Repository>` or `<Worktree>` selection, no local Git operation and nothing external here; work outside the checkout stays ordinary and unrecorded, and a passive reading initializes nothing [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
 | live durable-operation coordinator | explicitly coordinates structured live execution with existing Yield publication while leaving replay and callback effects unchanged [Invariant](#live-effect-coordination). | built on the #365 stack |
 | Workspace coordination API | fails closed by default; replaceable context routes only a one-use provider selection, while the selected provider directly invokes an execution-owned credentialed capability for execution, publication and failure activation [Invariant](#live-effect-coordination). | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
 | shared Git-host reconciliation | Reconciles Git push and pull-request upsert through one request-only boundary whose private terminal alone settles the retained outcome. [Invariant](#external-effects-and-git-host-mutations); [Invariant](#issue-effects). | Built on #297; Push (#370) and PullRequest (#295) consume it. Issue (#296) has its own middleware boundary. |
