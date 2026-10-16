@@ -81,18 +81,14 @@ import {
   REVOKED,
   selectedTables,
 } from "../evaluation-profile.ts";
-import type {
-  CapturedEntry,
-  EvaluationProfile,
-  SelectedTables,
-} from "../evaluation-profile.ts";
+import type { CapturedEntry, EvaluationProfile, SelectedTables } from "../evaluation-profile.ts";
 import { evaluateProtectedGeneratedXmd } from "../generated-xmd.ts";
 import type {
   GeneratedEffectClass,
   GeneratedImplementation,
   GeneratedMutation,
   GeneratedObservation,
-  GeneratedXmdRequest,
+  GeneratedFragmentRequest,
 } from "../generated-xmd.ts";
 import { ComponentInvocationError, invocationForm } from "../invocation-identity.ts";
 import type {
@@ -232,7 +228,7 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
     // dynamic string and carry no authored position of their own.
     const expansion = yield* getExpansion();
 
-    const request: GeneratedXmdRequest = {
+    const request: GeneratedFragmentRequest = {
       id,
       source,
       allow,

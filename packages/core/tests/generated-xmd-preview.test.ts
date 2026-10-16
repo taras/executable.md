@@ -3,7 +3,7 @@
  *
  * A host streaming a reply shows the person what the reply says while the rest
  * of it is still arriving. `previewGeneratedXmdRoot()` answers that and nothing
- * else, and these cases hold it to four claims.
+ * else, and these cases hold it to four assertions.
  *
  * **The transport's chunk boundaries do not matter.** Two identical accumulated
  * prefixes project identically, however the bytes were split — inside a tag,

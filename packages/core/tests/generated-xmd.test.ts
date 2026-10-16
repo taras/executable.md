@@ -69,7 +69,7 @@ import type {
   GeneratedEffectClass,
   GeneratedMutation,
   GeneratedObservation,
-  GeneratedXmdRequest,
+  GeneratedFragmentRequest,
 } from "../src/generated-xmd.ts";
 import { executeInstalled } from "../host.ts";
 import type { DurablePreparation, ExecutionInstallation } from "../host.ts";
@@ -278,7 +278,7 @@ const ADMITTED_REQUEST: Record<string, Json> = { url: URL_ONE };
 function request(
   source: string,
   observations: readonly GeneratedObservation[],
-): GeneratedXmdRequest {
+): GeneratedFragmentRequest {
   return { id: "turn-1", source, observations };
 }
 
@@ -316,7 +316,7 @@ function driven(work: () => Operation<void>): ExecutionInstallation {
  * provider is installed anywhere — the source is synthetic.
  */
 function evaluate(
-  candidate: GeneratedXmdRequest,
+  candidate: GeneratedFragmentRequest,
   options: {
     stream?: InMemoryStream;
     includes?: readonly string[];
@@ -1227,7 +1227,7 @@ describe("Tier GX — a resumed run is held to the selection it was admitted und
    * observation left to perform, and therefore the only one where a changed
    * ceiling could still widen a request.
    */
-  function* interrupted(candidate: GeneratedXmdRequest): Operation<DurableEvent[]> {
+  function* interrupted(candidate: GeneratedFragmentRequest): Operation<DurableEvent[]> {
     const blocked = new InMemoryStream();
     const reached = withResolvers<void>();
     const holding: DurableStream = {
@@ -2228,7 +2228,7 @@ function selecting(
     allow?: readonly GeneratedEffectClass[];
     mutations?: readonly GeneratedMutation[];
   } = {},
-): GeneratedXmdRequest {
+): GeneratedFragmentRequest {
   return {
     ...request(source, observations),
     ...(options.allow === undefined ? {} : { allow: options.allow }),
@@ -3179,7 +3179,7 @@ describe("Tier GS — generated work names its own admission", () => {
 
   it("GS2: two fragments in one run stamp their own ids on identical places", function* () {
     const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
-    const second: GeneratedXmdRequest = {
+    const second: GeneratedFragmentRequest = {
       ...request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch()]),
       id: "turn-2",
     };

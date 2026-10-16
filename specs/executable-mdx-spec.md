@@ -10436,7 +10436,11 @@ rendering comes back from the method and reaches neither the output stream nor
 the completion value, and the method works only while that execution is live —
 a completed or closed handle refuses rather than reopening it, including when
 the invocation ended before its document body, and therefore its evaluation
-runner, ever existed. The successful value is the document's
+runner, ever existed. A refusal of availability is a value the call carries,
+not a failure of the document holding the handle: an execution whose host
+selected no generated components, and an evaluation asking for an effect class
+that host installed no table for, each answer `Err` and leave the main document
+to complete on its own terms. The successful value is the document's
 return value — its rendered Markdown for a text root, its validated JSON for a
 value root (§5.4). `collect(execution)` unwraps that same value and throws on
 `Err`. Once `execute` has returned a handle, completion never throws — every

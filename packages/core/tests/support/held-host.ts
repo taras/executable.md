@@ -1,7 +1,7 @@
 /**
  * One trusted host execution, held open while its caller works with it.
  *
- * Every claim about `HostExecution.evaluateGeneratedXmdRoot()` is a claim about
+ * Everything asserted about `HostExecution.evaluateGeneratedXmdRoot()` is about
  * a *live* execution: the method reaches the documentation that execution
  * captured, the route its canonical `<Syntax />` is entered through, and the
  * runtime services its own document installed. A root source that completed
@@ -68,7 +68,7 @@ export interface HeldHostRequest {
   /** Work the holding body performs before it suspends. */
   readonly inside?: () => Operation<void>;
   /**
-   * The document this execution runs, when the case's claim is about the
+   * The document this execution runs, when the case's subject is the
    * document rather than about the root it evaluates.
    *
    * It must end in `<Held />`, because that is what keeps the execution open.

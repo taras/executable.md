@@ -146,7 +146,6 @@ import { RESERVED_STRUCTURAL } from "./structural.ts";
 import { InvocationTeardownError } from "./invocation.ts";
 import { SecretDetectedError, SecretScannerError } from "./secrets/findings.ts";
 import { admittedSymbols } from "./syntax-admitted.ts";
-import { SYNTAX_COMPONENT } from "./components/Syntax.ts";
 import type { CapturedEntry } from "./evaluation-profile.ts";
 import { bodyHasOutput, outputPropsViolation } from "./body-structure.ts";
 import {
@@ -610,8 +609,15 @@ export function pinnedMutation(
   return { name, definition, form, ...(kind === undefined ? {} : { kind }) };
 }
 
-/** What a trusted host asks this evaluator to admit. */
-export interface GeneratedXmdRequest {
+/**
+ * What canonical `<Evaluate>` asks this evaluator to admit.
+ *
+ * Core-private, and the authored site's own handoff: the tables arrive with
+ * the call because `<Evaluate>` resolves them from the captured profile at the
+ * element it was written on. A trusted host states none of this — the public
+ * root request is {@link GeneratedXmdRequest}, which carries no table at all.
+ */
+export interface GeneratedFragmentRequest {
   /** Which fragment this is. It names the durable admission record. */
   readonly id: string;
   /** The candidate source, exactly as it was generated. */
@@ -642,7 +648,7 @@ export interface GeneratedXmdRequest {
  * evaluation this is, the candidate bytes, which classes it may draw on and
  * where the asking element was written.
  */
-export interface GeneratedXmdRootRequest {
+export interface GeneratedXmdRequest {
   /** Which root this is. It names the durable admission record. */
   readonly id: string;
   /** The candidate source, exactly as it was generated. */
@@ -713,8 +719,6 @@ export interface GeneratedRootBinding {
    * execution and reaches nothing a document could read.
    */
   readonly select: (allow: readonly GeneratedEffectClass[]) => RootSelection;
-  /** The exact canonical `<Syntax />` implementation this execution minted. */
-  readonly definition: FunctionComponentDefinition;
   /** The execution's own route, narrowed here to what this root admitted. */
   readonly componentRouting: ComponentRouting;
   /** The vocabulary this execution captured, or none where it captured any. */
@@ -738,7 +742,16 @@ interface ResolvedRoot {
   readonly live: () => boolean;
 }
 
-/** One selection, as both the admitting tables and the describing entries. */
+/**
+ * One selection, as both the admitting tables and the describing entries.
+ *
+ * Complete as it arrives, canonical `<Syntax />` included. The execution that
+ * captured the selection is the one place that knows whether it captured
+ * `<Syntax />` already — a host may select it, and what it captured then is the
+ * same protected implementation behind that execution's own routed guard. So
+ * the one row is decided where that is known, rather than added again here,
+ * where a second copy would offer a root one name under two definitions.
+ */
 export interface RootSelection {
   readonly observations: readonly GeneratedObservation[];
   readonly mutations: readonly GeneratedMutation[];
@@ -1070,7 +1083,7 @@ function selection(allow: readonly GeneratedEffectClass[] | undefined): Generate
  * cannot be stated.
  */
 function selectedEntries(
-  request: GeneratedXmdRequest,
+  request: GeneratedFragmentRequest,
   allow: readonly GeneratedEffectClass[],
 ): Entry[] {
   const entries: Entry[] = [];
@@ -1842,7 +1855,7 @@ const CONSUMED_BY_PARENT: ReadonlySet<string> = new Set(["Else", "Case", "Answer
  *
  * `<Output>` is not among them any more: a root declares its own regions with
  * it. `<Content>` and `<Return>` stay unavailable to both kinds, because
- * neither has a caller to claim content from nor a value body to answer.
+ * neither has a caller to take content from nor a value body to answer.
  */
 const NO_GENERATED_CONTEXT: ReadonlySet<string> = new Set(["Content", "Return"]);
 
@@ -1967,7 +1980,13 @@ function* structural(
     // above already refused a `<Break>` or `<Return>` that would cross it.
     const incoming: ReadonlySet<string> = new Set(scope);
     for (const spawn of structure.spawns) {
-      yield* walk(spawn.element.children, table, named, new Set(incoming), rootLexical(lexical.language));
+      yield* walk(
+        spawn.element.children,
+        table,
+        named,
+        new Set(incoming),
+        rootLexical(lexical.language),
+      );
     }
     return;
   }
@@ -2433,13 +2452,13 @@ function expand(
  *
  * What it answers with is the fragment's rendered text.
  */
-export function evaluateGeneratedXmd(request: GeneratedXmdRequest): Operation<string> {
+export function evaluateGeneratedXmd(request: GeneratedFragmentRequest): Operation<string> {
   return evaluateProtectedGeneratedXmd(request, undefined, undefined);
 }
 
 /** Canonical Evaluate's internal handoff; absent from the public host surface. */
 export function* evaluateProtectedGeneratedXmd(
-  request: GeneratedXmdRequest,
+  request: GeneratedFragmentRequest,
   componentRouting: ComponentRouting | undefined,
   syntax: SyntaxReference | undefined,
 ): Operation<string> {
@@ -2463,7 +2482,7 @@ export function* evaluateProtectedGeneratedXmd(
  * here rather than handed in, because this is where its admitted table exists.
  */
 function* evaluateGenerated(
-  request: GeneratedXmdRequest,
+  request: GeneratedFragmentRequest,
   language: AdmissionLanguage,
   marker: RecordMarker,
   componentRouting: ComponentRouting | undefined,
@@ -2640,7 +2659,7 @@ function safeDiagnostic(error: unknown): string {
  * have, so a host cannot mistake one for a response worth correcting.
  */
 function* evaluateRoot(
-  request: GeneratedXmdRootRequest,
+  request: GeneratedXmdRequest,
   binding: GeneratedRootBinding,
 ): Operation<Result<GeneratedXmdRootResult>> {
   // Allocated out here, so a failure partway leaves this frame holding exactly
@@ -2649,24 +2668,23 @@ function* evaluateRoot(
   // `expand` selects regions with.
   const owner: Segment[] = [];
   let hasOutput = false;
-  // Resolved before anything is admitted, and once: the tables this root is
-  // admitted from and the entries its vocabulary is described with are two
-  // readings of one selection, and a second call could answer differently.
-  const selected = binding.select(selection(request.allow));
   try {
+    // Resolved inside the boundary, and once. Once, because the tables this
+    // root is admitted from and the entries its vocabulary is described with
+    // are two readings of one selection, and a second call could answer
+    // differently. Inside, because resolving a class the host installed
+    // nothing for refuses *this request*: the caller asked for something the
+    // captured selection does not offer, which is an answer about the request
+    // rather than a failure of the execution holding it.
+    const selected = binding.select(selection(request.allow));
     const output = yield* scoped(function* (): Operation<string> {
       return yield* evaluateGenerated(
         {
           id: request.id,
           source: request.source,
           // The selection its execution captured, resolved for the classes
-          // this root asked for, plus core's own canonical `<Syntax />` — the
-          // one protected answer a root may write, from the exact
-          // implementation this execution minted.
-          observations: [
-            ...selected.observations,
-            pinnedComponent(SYNTAX_COMPONENT, binding.definition),
-          ],
+          // this root asked for, canonical `<Syntax />` already among them.
+          observations: selected.observations,
           ...(selected.mutations.length === 0 ? {} : { mutations: selected.mutations }),
           ...(request.allow === undefined ? {} : { allow: request.allow }),
           ...(request.position === undefined ? {} : { position: request.position }),
@@ -2709,9 +2727,9 @@ function* evaluateRoot(
  * Core-private, and the whole of the handoff: canonical execution calls this
  * once, with the values it alone holds, and what comes back is one operation. A
  * trusted host handle receives that operation and nothing behind it — no
- * protected definition, no route, no domain, no claimant and no documentation
- * index — so the public method can evaluate a root and cannot describe,
- * re-register or widen what it evaluates under.
+ * protected definition, no route, no domain, no identity holder and no
+ * documentation index — so the public method can evaluate a root and cannot
+ * describe, re-register or widen what it evaluates under.
  *
  * There is no siteless form. A root that narrowed from nothing would have to
  * mint a second Syntax implementation and read core's own asset for its
@@ -2720,6 +2738,6 @@ function* evaluateRoot(
  */
 export function bindGeneratedRootEvaluator(
   binding: GeneratedRootBinding,
-): (request: GeneratedXmdRootRequest) => Operation<Result<GeneratedXmdRootResult>> {
+): (request: GeneratedXmdRequest) => Operation<Result<GeneratedXmdRootResult>> {
   return (request) => evaluateRoot(request, binding);
 }

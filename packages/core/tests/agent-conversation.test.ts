@@ -28,14 +28,11 @@ import { pinnedComponent, pinnedMutation } from "../src/generated-xmd.ts";
 import type {
   GeneratedMutation,
   GeneratedObservation,
-  GeneratedXmdRootRequest,
+  GeneratedXmdRequest,
 } from "../src/generated-xmd.ts";
 import { useAgentConversation } from "../host.ts";
-import type {
-  AgentConversation,
-  ExecutionInstallation,
-  GeneratedXmdRootResult,
-} from "../host.ts";
+import type { AgentConversation, ExecutionInstallation, GeneratedXmdRootResult } from "../host.ts";
+import type { InvocationForm } from "../src/invocation-identity.ts";
 import type { FunctionComponentDefinition } from "../src/types.ts";
 import { useSelection } from "./support/generated-selection.ts";
 import { answerProvider } from "./support/answer-provider.ts";
@@ -325,13 +322,13 @@ function definitionOf(
   };
 }
 
+/** The two spellings a declaration can offer a generated use of. */
+const FORMS: readonly InvocationForm[] = ["self-closing", "paired"];
+
 /** Which spellings one pinned entry offers, as the selection states them. */
-function formsOf(entry: GeneratedObservation | GeneratedMutation): ("self-closing" | "paired")[] {
+function formsOf(entry: GeneratedObservation | GeneratedMutation): readonly InvocationForm[] {
   const offered = entry.definition.generated ?? {};
-  return ["self-closing", "paired"].filter((form) => form in offered) as (
-    | "self-closing"
-    | "paired"
-  )[];
+  return FORMS.filter((form) => form in offered);
 }
 
 /** The installation that declares and answers for these entries. */
@@ -341,9 +338,7 @@ function selecting(
   return {
     componentAnswers: entries.map((entry) => answerProvider(entry.name, entry.definition)),
     *install(): Operation<void> {
-      yield* useSelection(
-        Object.fromEntries(entries.map((entry) => [entry.name, formsOf(entry)])),
-      );
+      yield* useSelection(Object.fromEntries(entries.map((entry) => [entry.name, formsOf(entry)])));
     },
   };
 }
@@ -361,11 +356,7 @@ function probe(invoked: string[]): GeneratedObservation {
 }
 
 /** One generated request, with the probe as its whole read table. */
-function generated(
-  source: string,
-  _invoked: string[] = [],
-  id = "reply-1",
-): GeneratedXmdRootRequest {
+function generated(source: string, _invoked: string[] = [], id = "reply-1"): GeneratedXmdRequest {
   // A root carries no tables: its execution captured the selection, which the
   // case declares with `selecting([...])` beside the provider.
   return { id, source };
@@ -1119,17 +1110,17 @@ describe("Tier CV — a conversation evaluates a reply it produced", () => {
       stream,
       stub(traffic),
       function* (chat) {
-      // Asked immediately: no generated effect precedes this call, so the
-      // conversation does not evaluate anything on the way to being ready.
-      expect(admissions(yield* stream.readAll())).toHaveLength(0);
-      const replied = yield* chat.prompt("<Output>\n<Probe />\n</Output>\n");
-      answer.reply = replied.ok ? replied.value : undefined;
-      // The prompt returned source and ran none of it.
-      expect(invoked).toEqual([]);
-      expect(admissions(yield* stream.readAll())).toHaveLength(0);
-      answer.ran = yield* chat.evaluateGeneratedXmdRoot(
-        generated("<Output>\n<Probe />\n</Output>\n", invoked),
-      );
+        // Asked immediately: no generated effect precedes this call, so the
+        // conversation does not evaluate anything on the way to being ready.
+        expect(admissions(yield* stream.readAll())).toHaveLength(0);
+        const replied = yield* chat.prompt("<Output>\n<Probe />\n</Output>\n");
+        answer.reply = replied.ok ? replied.value : undefined;
+        // The prompt returned source and ran none of it.
+        expect(invoked).toEqual([]);
+        expect(admissions(yield* stream.readAll())).toHaveLength(0);
+        answer.ran = yield* chat.evaluateGeneratedXmdRoot(
+          generated("<Output>\n<Probe />\n</Output>\n", invoked),
+        );
       },
       "chat-1",
       [],
@@ -1177,7 +1168,10 @@ describe("Tier CV — a conversation evaluates a reply it produced", () => {
         // An evaluation in flight: a prompt and an inspection are refused, and
         // neither reaches the provider.
         const running = yield* spawn(() =>
-          chat.evaluateGeneratedXmdRoot({ id: "reply-1", source: "<Output>\n<Hold />\n</Output>\n" }),
+          chat.evaluateGeneratedXmdRoot({
+            id: "reply-1",
+            source: "<Output>\n<Hold />\n</Output>\n",
+          }),
         );
         yield* reached.operation;
         const whileEvaluating = yield* chat.prompt("during");
@@ -1222,24 +1216,31 @@ describe("Tier CV — a conversation evaluates a reply it produced", () => {
     const invoked: string[] = [];
     const answers: { bare?: string; named?: string; refused?: string } = {};
 
-    const outcome = yield* withConversation(stream, stub(traffic), function* (chat) {
-      answers.bare = rendered(
-        yield* chat.evaluateGeneratedXmdRoot(
-          generated("<Output>\n<Syntax />\n</Output>\n", invoked),
-        ),
-      ).output;
-      answers.named = rendered(
-        yield* chat.evaluateGeneratedXmdRoot(
-          generated('<Output>\n<Syntax names={["Json"]} />\n</Output>\n', invoked, "reply-2"),
-        ),
-      ).output;
-      const writeOnly = yield* chat.evaluateGeneratedXmdRoot({
-        id: "reply-3",
-        source: "<Output>\n<Syntax />\n</Output>\n",
-        allow: ["write"],
-      });
-      answers.refused = writeOnly.ok ? "<admitted>" : writeOnly.error.message;
-    }, "chat-1", [], [probe(invoked), fill(invoked)]);
+    const outcome = yield* withConversation(
+      stream,
+      stub(traffic),
+      function* (chat) {
+        answers.bare = rendered(
+          yield* chat.evaluateGeneratedXmdRoot(
+            generated("<Output>\n<Syntax />\n</Output>\n", invoked),
+          ),
+        ).output;
+        answers.named = rendered(
+          yield* chat.evaluateGeneratedXmdRoot(
+            generated('<Output>\n<Syntax names={["Json"]} />\n</Output>\n', invoked, "reply-2"),
+          ),
+        ).output;
+        const writeOnly = yield* chat.evaluateGeneratedXmdRoot({
+          id: "reply-3",
+          source: "<Output>\n<Syntax />\n</Output>\n",
+          allow: ["write"],
+        });
+        answers.refused = writeOnly.ok ? "<admitted>" : writeOnly.error.message;
+      },
+      "chat-1",
+      [],
+      [probe(invoked), fill(invoked)],
+    );
 
     expect(outcome.ok).toBe(true);
     // The response's own vocabulary, Syntax included because it is admitted
@@ -1315,32 +1316,42 @@ describe("Tier CV — a conversation evaluates a reply it produced", () => {
     const refusals: string[] = [];
     const answer: { fresh?: Result<GeneratedXmdRootResult> } = {};
 
-    const outcome = yield* withConversation(stream, stub(traffic), function* (chat) {
-      const running = yield* spawn(() =>
-        chat.evaluateGeneratedXmdRoot({ id: "reply-1", source: "<Output>\n<Hold />\n</Output>\n" }),
-      );
-      yield* reached.operation;
-      expect(admissions(yield* stream.readAll())).toHaveLength(1);
+    const outcome = yield* withConversation(
+      stream,
+      stub(traffic),
+      function* (chat) {
+        const running = yield* spawn(() =>
+          chat.evaluateGeneratedXmdRoot({
+            id: "reply-1",
+            source: "<Output>\n<Hold />\n</Output>\n",
+          }),
+        );
+        yield* reached.operation;
+        expect(admissions(yield* stream.readAll())).toHaveLength(1);
 
-      const halting = yield* spawn(function* () {
-        yield* running.halt();
-        order.push("halt returned");
-      });
-      // Another job cannot slip in while a cancelled one is still unwinding.
-      const overlapping = yield* chat.evaluateGeneratedXmdRoot(
-        generated("<Output>\n<Probe />\n</Output>\n", invoked, "reply-2"),
-      );
-      refusals.push(overlapping.ok ? "<admitted>" : overlapping.error.message);
-      expect(order).toEqual([]);
-      expect(invoked).toEqual([]);
-      expect(admissions(yield* stream.readAll())).toHaveLength(1);
+        const halting = yield* spawn(function* () {
+          yield* running.halt();
+          order.push("halt returned");
+        });
+        // Another job cannot slip in while a cancelled one is still unwinding.
+        const overlapping = yield* chat.evaluateGeneratedXmdRoot(
+          generated("<Output>\n<Probe />\n</Output>\n", invoked, "reply-2"),
+        );
+        refusals.push(overlapping.ok ? "<admitted>" : overlapping.error.message);
+        expect(order).toEqual([]);
+        expect(invoked).toEqual([]);
+        expect(admissions(yield* stream.readAll())).toHaveLength(1);
 
-      release.resolve();
-      yield* halting;
-      answer.fresh = yield* chat.evaluateGeneratedXmdRoot(
-        generated("<Output>\n<Probe />\n</Output>\n", invoked, "reply-3"),
-      );
-    }, "chat-1", [], [probe(invoked), holdingControl(reached, release.operation, order)]);
+        release.resolve();
+        yield* halting;
+        answer.fresh = yield* chat.evaluateGeneratedXmdRoot(
+          generated("<Output>\n<Probe />\n</Output>\n", invoked, "reply-3"),
+        );
+      },
+      "chat-1",
+      [],
+      [probe(invoked), holdingControl(reached, release.operation, order)],
+    );
 
     expect(outcome.ok).toBe(true);
     expect(refusals[0]).toContain("one turn at a time");
@@ -1378,7 +1389,10 @@ describe("Tier CV — a conversation evaluates a reply it produced", () => {
             .hasOutput,
         ).toBe(true);
         const running = yield* spawn(() =>
-          chat.evaluateGeneratedXmdRoot({ id: "reply-2", source: "<Output>\n<Hold />\n</Output>\n" }),
+          chat.evaluateGeneratedXmdRoot({
+            id: "reply-2",
+            source: "<Output>\n<Hold />\n</Output>\n",
+          }),
         );
         yield* reached.operation;
         release.resolve();
@@ -1434,12 +1448,19 @@ describe("Tier CV — a conversation evaluates a reply it produced", () => {
     const traffic = fresh();
     const ordinary: { answer?: Result<GeneratedXmdRootResult> } = {};
 
-    const outcome = yield* withConversation(stream, stub(traffic), function* (chat) {
-      ordinary.answer = yield* chat.evaluateGeneratedXmdRoot({
-        id: "reply-1",
-        source: "<Output>\nbefore the failure\n\n<Boom />\n</Output>\n",
-      });
-    }, "chat-1", [], [boom()]);
+    const outcome = yield* withConversation(
+      stream,
+      stub(traffic),
+      function* (chat) {
+        ordinary.answer = yield* chat.evaluateGeneratedXmdRoot({
+          id: "reply-1",
+          source: "<Output>\nbefore the failure\n\n<Boom />\n</Output>\n",
+        });
+      },
+      "chat-1",
+      [],
+      [boom()],
+    );
 
     // The request's own failure, carrying what the reply had rendered, and the
     // conversation is untouched by it.

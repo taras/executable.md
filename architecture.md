@@ -4142,7 +4142,12 @@ says which.** A root is evaluated by the execution that captured the selection
 it runs under — through `HostExecution.evaluateGeneratedXmdRoot` or the same
 method on a retained conversation — so the table it may write and the
 vocabulary it may read about come from one capture, and canonical `<Syntax />`
-is admitted from the exact implementation that execution minted. There is no
+is admitted from the exact implementation that execution minted. Once, whether
+or not the host selected it: an ordinary selection may name `Syntax`, and what
+the capture holds then is that same protected implementation behind the
+execution's own routed guard, so the captured row is the one admitted and
+described. A definition the execution's route did not build is a different
+implementation under a protected name and stays the collision it is. There is no
 siteless form: a root that narrowed from nothing would have to mint a second
 Syntax implementation and read core's own asset for its chapters.
 
@@ -4155,7 +4160,10 @@ level it declares nothing in either kind, and `<Content>` and `<Return>` stay
 unavailable to both. A root's ordinary failure carries what it had already
 rendered; a fragment's propagates, and a failure of the *run* — durability,
 Files infrastructure, secret policy, teardown — keeps its own classification
-through both.
+through both. A refusal of *availability* is neither: a host that selected no
+generated components, or that asked for an effect class it installed no table
+for, is answered with a refusal the call carries, and the document it is holding
+open completes on its own terms.
 
 The two kinds are told apart by the record's marker rather than by a member
 inside it: a fragment is marker 4 with exactly the closed shape it already had,

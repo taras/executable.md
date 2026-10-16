@@ -34,10 +34,7 @@ import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, scoped, sleep, spawn, suspend, useScope, withResolvers } from "effection";
 import { pinnedComponent } from "../src/generated-xmd.ts";
-import type {
-  GeneratedObservation,
-  GeneratedXmdRootRequest,
-} from "../src/generated-xmd.ts";
+import type { GeneratedObservation } from "../src/generated-xmd.ts";
 import type { FunctionComponentDefinition } from "../src/types.ts";
 import { useSelection } from "./support/generated-selection.ts";
 import { answerProvider } from "./support/answer-provider.ts";
@@ -57,9 +54,15 @@ import { retainedSource } from "../src/root-source.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { HELD_ROOT_PATH, useHeldHost, withHeldHost } from "./support/held-host.ts";
 import * as hostModule from "../host.ts";
-import { executeInstalled, HostExecutionError,  } from "../host.ts";
+import { executeInstalled, HostExecutionError } from "../host.ts";
+// The request and the class it names are taken from the trusted host
+// entrypoint, which is where a host reads them: every row below is an ordinary
+// typed consumer of the published boundary rather than of the module the
+// evaluator lives in.
 import type {
   ExecutionInstallation,
+  GeneratedEffectClass,
+  GeneratedXmdRequest,
   GeneratedXmdRootResult,
   HostExecution,
 } from "../host.ts";
@@ -121,11 +124,7 @@ function selecting(entries: readonly GeneratedObservation[]): ExecutionInstallat
   };
 }
 
-function request(
-  source: string,
-  _invoked: string[] = [],
-  id = "turn-1",
-): GeneratedXmdRootRequest {
+function request(source: string, _invoked: string[] = [], id = "turn-1"): GeneratedXmdRequest {
   // A root carries no tables: its execution captured the selection, which the
   // row declares with `selecting([...])`.
   return { id, source };
@@ -259,9 +258,12 @@ describe("Tier E1 — only a live trusted handle evaluates a root", () => {
     const stream = new InMemoryStream();
     const invoked: string[] = [];
     const held: { execution?: HostExecution } = {};
-    const run = yield* withHeldHost({ stream, installations: [selecting([probe()])] }, function* (open) {
-      held.execution = open.execution;
-    });
+    const run = yield* withHeldHost(
+      { stream, installations: [selecting([probe()])] },
+      function* (open) {
+        held.execution = open.execution;
+      },
+    );
     expect(run.completion.ok).toBe(true);
 
     const execution = held.execution;
@@ -373,7 +375,10 @@ describe("Tier E3 — the documentation this execution captured", () => {
     const attempted: { answer?: Result<GeneratedXmdRootResult> } = {};
 
     const run = yield* withHeldHost(
-      { stream, installations: [markerPackage(MARKER_PROSE, counted, marked), selecting([probe()])] },
+      {
+        stream,
+        installations: [markerPackage(MARKER_PROSE, counted, marked), selecting([probe()])],
+      },
       function* (open) {
         lookup.answer = yield* open.execution.evaluateGeneratedXmdRoot(
           request('<Output>\n<Syntax names={["Marker"]} />\n</Output>\n', invoked),
@@ -464,10 +469,16 @@ describe("Tier E3 — the documentation this execution captured", () => {
 
     yield* scoped(function* () {
       const one = yield* useHeldHost({
-        installations: [markerPackage("## Marker\n\nFIRST OWNER'S CHAPTER.\n", mine), selecting([probe()])],
+        installations: [
+          markerPackage("## Marker\n\nFIRST OWNER'S CHAPTER.\n", mine),
+          selecting([probe()]),
+        ],
       });
       const two = yield* useHeldHost({
-        installations: [markerPackage("## Marker\n\nSECOND OWNER'S CHAPTER.\n", theirs), selecting([probe()])],
+        installations: [
+          markerPackage("## Marker\n\nSECOND OWNER'S CHAPTER.\n", theirs),
+          selecting([probe()]),
+        ],
       });
       const source = '<Output>\n<Syntax names={["Marker"]} />\n</Output>\n';
       answers.first = rendered(
@@ -664,15 +675,15 @@ function holding(
   return pinnedComponent(
     "Hold",
     definitionOf("Hold", "read", function* (): Operation<Json> {
-        // Registered before the barrier, so cancellation cannot arrive between
-        // entering the body and owning the cleanup.
-        yield* ensure(function* () {
-          yield* release;
-          order.push("evaluation cleanup");
-        });
-        reached.resolve();
-        yield* suspend();
-        return "held";
+      // Registered before the barrier, so cancellation cannot arrive between
+      // entering the body and owning the cleanup.
+      yield* ensure(function* () {
+        yield* release;
+        order.push("evaluation cleanup");
+      });
+      reached.resolve();
+      yield* suspend();
+      return "held";
     }),
     "component-answer",
   );
@@ -873,12 +884,12 @@ describe("Tier E6 — reopening without replaying a response", () => {
     const run = yield* withHeldHost(
       { stream: reopened, installations: [selecting(declared(second))] },
       function* (open) {
-      // Opening alone repeats nothing: neither the completed response's effect
-      // nor the interrupted one's suffix.
-      expect(second).toEqual([]);
-      answer.fresh = yield* open.execution.evaluateGeneratedXmdRoot(
-        request("<Output>\n<Probe />\n</Output>\n", second, "turn-3"),
-      );
+        // Opening alone repeats nothing: neither the completed response's effect
+        // nor the interrupted one's suffix.
+        expect(second).toEqual([]);
+        answer.fresh = yield* open.execution.evaluateGeneratedXmdRoot(
+          request("<Output>\n<Probe />\n</Output>\n", second, "turn-3"),
+        );
       },
     );
 
@@ -892,15 +903,156 @@ describe("Tier E6 — reopening without replaying a response", () => {
     expect(admissions(after)).toHaveLength(3);
     expect(admissions(after)[2]?.coroutineId).toBe("generated_root:3");
   });
+
+  /**
+   * IN4 — an older build's root sequences are history, not authority.
+   *
+   * The journal offered here is the shape the accepted pre-integration writer
+   * wrote (`01abab27`): explicit root evaluations on their own
+   * `generated_root:N` sequences, each admission a `version: 2` record carrying
+   * the `context: "root"` member that build used to say which kind it was. One
+   * sequence completed with an acknowledged effect and a terminal; one was
+   * interrupted and left a suffix with no terminal.
+   *
+   * Hand-built to that writer's record shape rather than produced by this
+   * build, which is what keeps it old-format evidence: a marker-5 fixture
+   * relabelled would establish nothing.
+   *
+   * Three things have to hold for such a journal to stay usable. The old
+   * sequences are partitioned out of the main continuation, so the document
+   * replays its own work and not theirs. Opening repeats neither the completed
+   * effect nor the interrupted suffix. And a new explicit root allocates past
+   * both and writes this build's marker — rather than resuming a grant whose
+   * rules this build does not have.
+   */
+  it("E6b: an older build's root sequences are skipped, and a new root allocates past them", function* () {
+    const invoked: string[] = [];
+    const stream = new InMemoryStream([...OLD_ROOT_JOURNAL]);
+    const opened: { before?: readonly string[] } = {};
+    const answer: { value?: Result<GeneratedXmdRootResult> } = {};
+
+    const run = yield* withHeldHost(
+      { stream, installations: [selecting([probe(invoked)])] },
+      function* (open) {
+        // Read inside the held document, after its own replay and before the
+        // first call: opening is the whole of what happened by here.
+        opened.before = [...invoked];
+        answer.value = yield* open.execution.evaluateGeneratedXmdRoot(
+          request("<Output>\n<Probe />\n</Output>\n", invoked, "turn-new"),
+        );
+      },
+    );
+
+    expect(run.completion.ok).toBe(true);
+    // Opening repeated nothing: neither the completed sequence's effect nor the
+    // interrupted one's suffix.
+    expect(opened.before).toEqual([]);
+    expect(rendered(answer.value ?? { ok: false, error: new Error("none") }).output).toContain(
+      "probed",
+    );
+    expect(invoked).toEqual(["probed"]);
+
+    const after = yield* stream.readAll();
+    // The old bytes are exactly the old bytes, and nothing was appended to
+    // either old sequence.
+    expect(after.slice(0, OLD_ROOT_JOURNAL.length)).toEqual([...OLD_ROOT_JOURNAL]);
+    expect(after.filter((event) => event.coroutineId.startsWith("generated_root:1"))).toHaveLength(
+      1 + 1 + 1,
+    );
+    expect(after.filter((event) => event.coroutineId.startsWith("generated_root:2"))).toHaveLength(
+      1,
+    );
+    // The main continuation never took an admission of its own, so it did not
+    // consume theirs.
+    expect(admissions(after.filter((event) => event.coroutineId === "root"))).toHaveLength(0);
+    // And the new evaluation is past both, in this build's marker.
+    const fresh = admissions(after.filter((event) => event.coroutineId === "generated_root:3"));
+    expect(fresh).toHaveLength(1);
+    expect(markerOf(fresh[0])).toBe(5);
+    // The old ones are still the old ones.
+    expect(markerOf(after[0])).toBe(2);
+    expect(markerOf(after[3])).toBe(2);
+  });
 });
+
+/** The marker one retained admission carries at the result level. */
+function markerOf(event: DurableEvent | undefined): number | undefined {
+  if (event?.type !== "yield" || event.result.status !== "ok") {
+    return undefined;
+  }
+  const value = event.result.value;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  return typeof value.version === "number" ? value.version : undefined;
+}
+
+/**
+ * One root admission in the accepted pre-integration writer's shape.
+ *
+ * `version: 2` at the result and inside the policy, the `context: "root"` member
+ * that build wrote to say which kind a record was, `requests` for the
+ * per-identity Fetch ceilings it retained, and each identity as the four-member
+ * structural record — a kind, an origin, a key and a revision.
+ */
+function oldRootAdmission(id: string): DurableEvent {
+  const identity = {
+    kind: "component-answer",
+    origin: "test://provider",
+    key: "Probe",
+    revision: "1",
+  };
+  const source = "<Output>\n<Probe />\n</Output>\n";
+  return {
+    type: "yield",
+    coroutineId: `generated_root:${id}`,
+    description: { type: "generated_xmd", name: `generated:old-${id}` },
+    result: {
+      status: "ok",
+      value: {
+        version: 2,
+        decision: "admitted",
+        source,
+        named: [{ name: "Probe", identity: { ...identity }, form: "self-closing" }],
+        policy: {
+          version: 2,
+          allow: ["read"],
+          context: "root",
+          allowed: [{ name: "Probe", identity: { ...identity }, forms: ["self-closing"] }],
+          requests: [],
+        },
+      },
+    },
+  };
+}
+
+/**
+ * A journal that older build left behind: one completed root evaluation with an
+ * acknowledged effect, and one interrupted evaluation with no terminal.
+ */
+const OLD_ROOT_JOURNAL: readonly DurableEvent[] = [
+  oldRootAdmission("1"),
+  {
+    type: "yield",
+    coroutineId: "generated_root:1",
+    description: {
+      type: "fetch",
+      name: "fetch:1",
+      input: { url: "https://old.example.test/one", method: "GET" },
+    },
+    result: { status: "ok", value: { status: 200, body: "what the old evaluation read" } },
+  },
+  { type: "close", coroutineId: "generated_root:1", result: { status: "ok" } },
+  oldRootAdmission("2"),
+];
 
 /** A control that fails on its own terms, after whatever ran before it. */
 function failing(invoked: string[]): GeneratedObservation {
   return pinnedComponent(
     "Boom",
     definitionOf("Boom", "read", function* (): Operation<Json> {
-        invoked.push("boomed");
-        throw new Error("the control refused this request");
+      invoked.push("boomed");
+      throw new Error("the control refused this request");
     }),
     "component-answer",
   );
@@ -911,11 +1063,11 @@ function failingCleanup(): GeneratedObservation {
   return pinnedComponent(
     "Leak",
     definitionOf("Leak", "read", function* (): Operation<Json> {
-        // deno-lint-ignore require-yield
-        yield* ensure(function* () {
-          throw new Error("this control's cleanup failed");
-        });
-        return "leaked";
+      // deno-lint-ignore require-yield
+      yield* ensure(function* () {
+        throw new Error("this control's cleanup failed");
+      });
+      return "leaked";
     }),
     "component-answer",
   );
@@ -943,12 +1095,15 @@ describe("Tier E7 — which failures stay the run's", () => {
     const invoked: string[] = [];
     const answer: { failed?: Result<GeneratedXmdRootResult> } = {};
 
-    const run = yield* withHeldHost({ installations: [selecting(declared(invoked))] }, function* (open) {
-      answer.failed = yield* open.execution.evaluateGeneratedXmdRoot({
-        id: "turn-1",
-        source: "<Output>\nbefore the failure\n\n<Boom />\n</Output>\n",
-      });
-    });
+    const run = yield* withHeldHost(
+      { installations: [selecting(declared(invoked))] },
+      function* (open) {
+        answer.failed = yield* open.execution.evaluateGeneratedXmdRoot({
+          id: "turn-1",
+          source: "<Output>\nbefore the failure\n\n<Boom />\n</Output>\n",
+        });
+      },
+    );
 
     // The request's own failure, so the execution is untouched by it.
     expect(run.completion.ok).toBe(true);
@@ -1096,20 +1251,25 @@ describe("Tier E7 — which failures stay the run's", () => {
     // and that read is the first thing the first evaluation does. A failure
     // there is a different path from E7b's append: it happens before the
     // sequence exists, where there is no answer and no join yet.
-    const run = yield* withHeldHost({ stream, installations: [selecting([probe()])] }, function* (open) {
-      const reads = stream.readAll.bind(stream);
-      // deno-lint-ignore require-yield
-      stream.readAll = function* () {
-        throw failure;
-      };
-      try {
-        yield* open.execution.evaluateGeneratedXmdRoot(request("<Output>\n<Probe />\n</Output>\n"));
-        caught.answered = true;
-      } catch (error) {
-        caught.raised = error;
-      }
-      stream.readAll = reads;
-    });
+    const run = yield* withHeldHost(
+      { stream, installations: [selecting([probe()])] },
+      function* (open) {
+        const reads = stream.readAll.bind(stream);
+        // deno-lint-ignore require-yield
+        stream.readAll = function* () {
+          throw failure;
+        };
+        try {
+          yield* open.execution.evaluateGeneratedXmdRoot(
+            request("<Output>\n<Probe />\n</Output>\n"),
+          );
+          caught.answered = true;
+        } catch (error) {
+          caught.raised = error;
+        }
+        stream.readAll = reads;
+      },
+    );
 
     // The failure itself, in the caller's own frame. A `Result` here would be
     // an answer about availability — the caller would read "this execution
@@ -1170,5 +1330,234 @@ describe("Tier E7 — which failures stay the run's", () => {
     expect(caught.raised).toBeInstanceOf(Error);
     expect(run.completion.ok).toBe(false);
     expect(run.completion.ok ? undefined : run.completion.error).toBe(caught.raised);
+  });
+});
+
+/**
+ * The selection a host states when it also names canonical `<Syntax />`.
+ *
+ * No answer provider for it: `Syntax` is a protected component, so canonical
+ * resolution answers for it from core's own tier and the capture retains *this
+ * execution's* minted implementation behind its routed guard. That is the whole
+ * point of the rows below — the captured row and core's own copy are the same
+ * implementation, reached two ways.
+ */
+function selectingWithSyntax(entries: readonly GeneratedObservation[]): ExecutionInstallation {
+  return {
+    componentAnswers: entries.map((entry) => answerProvider(entry.name, entry.definition)),
+    *install(): Operation<void> {
+      yield* useSelection({
+        ...Object.fromEntries(entries.map((entry) => [entry.name, ["self-closing"]])),
+        Syntax: ["self-closing"],
+      });
+    },
+  };
+}
+
+/** The rows one admission retained, read off the record it wrote. */
+function retainedRows(events: readonly DurableEvent[]): { name: string; kind?: string }[] {
+  const [admission] = admissions(events);
+  if (admission?.type !== "yield" || admission.result.status !== "ok") {
+    throw new Error("the run recorded no generated-XMD admission");
+  }
+  const record = admission.result.value;
+  const policy = isObject(record) ? record.policy : undefined;
+  const allowed = isObject(policy) ? policy.allowed : undefined;
+  if (!Array.isArray(allowed)) {
+    throw new Error("the admission record holds no allowed rows");
+  }
+  return allowed.filter(isObject).map((row) => ({
+    name: String(row.name),
+    ...(typeof row.kind === "string" ? { kind: row.kind } : {}),
+  }));
+}
+
+function isObject(value: Json | undefined): value is { [key: string]: Json } {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** How many times this exact text occurs, for a listing that must name a thing once. */
+function occurrences(text: string, needle: string): number {
+  return text.split(needle).length - 1;
+}
+
+describe("Tier E8 — the captured selection holds canonical Syntax once", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /**
+   * The regression. A host's ordinary selection may name `Syntax` — main's own
+   * does — and the capture then holds this execution's protected implementation
+   * behind its routed guard. Core adding its copy beside that one offered a
+   * root the same name under two definitions, which admission refuses, so every
+   * valid root of such a host failed. The row drives the real held host rather
+   * than the selection machinery, because the collision was between two things
+   * only a real capture produces.
+   */
+  it("E8a: a host that selected Syntax evaluates, and retains one Syntax row", function* () {
+    const stream = new InMemoryStream();
+    const invoked: string[] = [];
+    const answered: { output?: string } = {};
+    const run = yield* withHeldHost(
+      { stream, installations: [selectingWithSyntax([probe(invoked)])] },
+      function* (open) {
+        answered.output = rendered(
+          yield* open.execution.evaluateGeneratedXmdRoot(
+            request("<Output>\n<Syntax />\n<Probe />\n</Output>\n", invoked),
+          ),
+        ).output;
+      },
+    );
+
+    expect(run.completion.ok).toBe(true);
+    // Ordinary Syntax evaluation, under the selection that used to collide: the
+    // vocabulary rendered and the admitted control ran.
+    expect(invoked).toEqual(["probed"]);
+    expect(answered.output).toContain("Probe");
+
+    // Once in the recorded policy, which is the admission's own account of what
+    // this root may write.
+    const rows = retainedRows(yield* stream.readAll());
+    expect(rows.filter((row) => row.name === "Syntax")).toHaveLength(1);
+    expect(rows.map((row) => row.name)).toEqual(["Json", "Probe", "Syntax"]);
+    // And once in the descriptive vocabulary, which is the other reading of the
+    // same selection: a second entry would render a second section.
+    expect(occurrences(answered.output ?? "", "### `<Syntax>`")).toBe(1);
+  });
+
+  it("E8b: a host that selected none of it reaches core's own, also once", function* () {
+    const stream = new InMemoryStream();
+    const invoked: string[] = [];
+    const answered: { output?: string } = {};
+    const run = yield* withHeldHost(
+      { stream, installations: [selecting([probe(invoked)])] },
+      function* (open) {
+        answered.output = rendered(
+          yield* open.execution.evaluateGeneratedXmdRoot(
+            request("<Output>\n<Syntax />\n<Probe />\n</Output>\n", invoked),
+          ),
+        ).output;
+      },
+    );
+
+    // The control, and the reason E8a is about *recognizing* a captured row
+    // rather than about dropping core's: a host that named nothing of it still
+    // gets the one protected answer a root may write.
+    expect(run.completion.ok).toBe(true);
+    expect(invoked).toEqual(["probed"]);
+    const rows = retainedRows(yield* stream.readAll());
+    expect(rows.filter((row) => row.name === "Syntax")).toHaveLength(1);
+    expect(rows.map((row) => row.name)).toEqual(["Json", "Probe", "Syntax"]);
+    expect(occurrences(answered.output ?? "", "### `<Syntax>`")).toBe(1);
+  });
+});
+
+describe("Tier E9 — an availability refusal is the call's answer", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /**
+   * What the bound method distinguishes, and why it matters here.
+   *
+   * A host that asked this execution for something it does not offer has an
+   * answer to act on: it catches the refusal, releases the document it was
+   * holding, and goes on. Raising instead made the *document's* completion
+   * fail — so a host could catch the method's refusal and still be handed a
+   * failed canonical run for a question somebody asked it. The run's own
+   * failures (E7) keep their authority; these two are not among them.
+   */
+  it("E9a: a host that selected no generated components refuses, and its document completes", function* () {
+    const stream = new InMemoryStream();
+    const answer: { value?: Result<GeneratedXmdRootResult> } = {};
+    const run = yield* withHeldHost({ stream }, function* (open) {
+      answer.value = yield* open.execution.evaluateGeneratedXmdRoot(
+        request("<Output>\nReady.\n</Output>\n"),
+      );
+    });
+
+    expect(answer.value?.ok).toBe(false);
+    expect(answer.value?.ok === false && answer.value.error).toBeInstanceOf(HostExecutionError);
+    expect(answer.value?.ok === false && answer.value.error.message).toContain(
+      "selected no generated components",
+    );
+    // The document is the host's, and it finished on its own terms.
+    expect(run.completion.ok).toBe(true);
+    // Nothing was admitted, so nothing performed.
+    expect(admissions(yield* stream.readAll())).toHaveLength(0);
+  });
+
+  it("E9b: a class this host installed nothing for refuses, and its document completes", function* () {
+    const stream = new InMemoryStream();
+    const invoked: string[] = [];
+    const answer: { value?: Result<GeneratedXmdRootResult> } = {};
+    const run = yield* withHeldHost(
+      { stream, installations: [selecting([probe(invoked)])] },
+      function* (open) {
+        answer.value = yield* open.execution.evaluateGeneratedXmdRoot({
+          id: "turn-1",
+          source: "<Output>\nReady.\n</Output>\n",
+          allow: ["write"],
+        });
+      },
+    );
+
+    expect(answer.value?.ok).toBe(false);
+    expect(answer.value?.ok === false && answer.value.error.message).toContain(
+      "installed no write table",
+    );
+    expect(run.completion.ok).toBe(true);
+    expect(invoked).toEqual([]);
+    expect(admissions(yield* stream.readAll())).toHaveLength(0);
+  });
+
+  it("E9c: a class this host did install answers, and its document completes", function* () {
+    const stream = new InMemoryStream();
+    const invoked: string[] = [];
+    const answer: { value?: Result<GeneratedXmdRootResult> } = {};
+    const run = yield* withHeldHost(
+      { stream, installations: [selecting([probe(invoked)])] },
+      function* (open) {
+        answer.value = yield* open.execution.evaluateGeneratedXmdRoot({
+          id: "turn-1",
+          source: "<Output>\n<Probe />\n</Output>\n",
+          allow: ["read"],
+        });
+      },
+    );
+
+    // The control for both arms above: the same method, the same document, and
+    // an available class reaches the work and records it.
+    expect(answer.value?.ok).toBe(true);
+    expect(run.completion.ok).toBe(true);
+    expect(invoked).toEqual(["probed"]);
+    expect(admissions(yield* stream.readAll())).toHaveLength(1);
+  });
+
+  /**
+   * The accepted public request, written the way a trusted host writes it.
+   *
+   * Typed through `@executablemd/core/host` rather than through the module the
+   * evaluator lives in, so the four decided members and the class name the
+   * request uses are checked at the published boundary.
+   */
+  it("E9d: the public request is the four-member shape, typed through core/host", function* () {
+    const invoked: string[] = [];
+    const classes: readonly GeneratedEffectClass[] = ["read"];
+    const asked: GeneratedXmdRequest = {
+      id: "turn-1",
+      source: "<Output>\n<Probe />\n</Output>\n",
+      allow: classes,
+      position: { line: 1, column: 1, offset: 0 },
+    };
+    const answer: { value?: Result<GeneratedXmdRootResult> } = {};
+    const run = yield* withHeldHost(
+      { installations: [selecting([probe(invoked)])] },
+      function* (open) {
+        answer.value = yield* open.execution.evaluateGeneratedXmdRoot(asked);
+      },
+    );
+
+    expect(run.completion.ok).toBe(true);
+    expect(rendered(answer.value ?? { ok: false, error: new Error("none") }).output).toContain(
+      "probed",
+    );
   });
 });

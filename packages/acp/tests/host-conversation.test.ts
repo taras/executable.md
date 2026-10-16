@@ -313,15 +313,20 @@ describe("Tier HC — a host conversation across the provider's own commit windo
     const invoked: string[] = [];
     const settled: { reply?: string; rendered?: string } = {};
 
-    const outcome = yield* withConversation(stream, target.installation, function* (chat) {
-      const replied = yield* chat.prompt("write me a reply");
-      settled.reply = replied.ok ? replied.value : replied.error.message;
-      const evaluated = yield* chat.evaluateGeneratedXmdRoot({
-        id: "reply-1",
-        source: "<Output>\n<Probe />\n</Output>\n",
-      });
-      settled.rendered = evaluated.ok ? evaluated.value.output : evaluated.error.message;
-    }, selecting(invoked));
+    const outcome = yield* withConversation(
+      stream,
+      target.installation,
+      function* (chat) {
+        const replied = yield* chat.prompt("write me a reply");
+        settled.reply = replied.ok ? replied.value : replied.error.message;
+        const evaluated = yield* chat.evaluateGeneratedXmdRoot({
+          id: "reply-1",
+          source: "<Output>\n<Probe />\n</Output>\n",
+        });
+        settled.rendered = evaluated.ok ? evaluated.value.output : evaluated.error.message;
+      },
+      selecting(invoked),
+    );
 
     if (!outcome.ok) {
       throw new Error(`the conversation could not be opened: ${outcome.error.message}`);

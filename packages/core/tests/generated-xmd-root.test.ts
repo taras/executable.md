@@ -8,7 +8,7 @@
  * does, through the same walk, the same durable record and the same pinned
  * resolution, and differs over exactly that.
  *
- * Three claims are under test here.
+ * Three things are under test here.
  *
  * **A root selects what it renders, and says whether it selected.** `hasOutput`
  * is the root's own declaration rather than a measurement of the text, so an
@@ -30,11 +30,11 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
+import { Err, Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { API } from "@executablemd/runtime";
 import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { durableRun, InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
 import { content } from "../src/component-api.ts";
@@ -43,6 +43,7 @@ import { useSelection } from "./support/generated-selection.ts";
 import { answerProvider } from "./support/answer-provider.ts";
 import { SYNTAX_COMPONENT, SYNTAX_PROTECTED } from "../src/components/Syntax.ts";
 import { installIdentities } from "../src/invocation-identity.ts";
+import type { InvocationForm } from "../src/invocation-identity.ts";
 import { Documentation } from "../src/documentation-api.ts";
 import { Execution } from "../src/execute.ts";
 import { retainedSource } from "../src/root-source.ts";
@@ -52,28 +53,21 @@ import { HELD_ROOT_PATH, withHeldHost } from "./support/held-host.ts";
 // siteless evaluator, and these pinned factories are core-internal — the same
 // import main's own generated-xmd tier uses.
 import {
+  bindGeneratedRootEvaluator,
   evaluateGeneratedXmd,
   pinnedComponent,
   pinnedFetch,
   pinnedMutation,
 } from "../src/generated-xmd.ts";
 import { executeInstalled } from "../host.ts";
+import type { DurablePreparation, ExecutionInstallation, GeneratedXmdRootResult } from "../host.ts";
 import type {
-  DurablePreparation,
-  ExecutionInstallation,
-  GeneratedXmdRootResult,
-} from "../host.ts";
-import type {
+  GeneratedFragmentRequest,
   GeneratedMutation,
   GeneratedObservation,
   GeneratedXmdRequest,
-  GeneratedXmdRootRequest,
 } from "../src/generated-xmd.ts";
-import type {
-  FunctionComponent,
-  FunctionComponentDefinition,
-  Json,
-} from "../src/types.ts";
+import type { FunctionComponent, FunctionComponentDefinition, Json } from "../src/types.ts";
 
 const ROOT_PATH = "repl/sidekick.md";
 const ROOT_SOURCE = "The host evaluated a generated root.\n";
@@ -209,7 +203,7 @@ interface Ceilings {
  * about structure gets.
  */
 interface Candidate {
-  readonly root: GeneratedXmdRootRequest;
+  readonly root: GeneratedXmdRequest;
   /**
    * The same source as a fragment request.
    *
@@ -217,17 +211,17 @@ interface Candidate {
    * authored `<Evaluate>` handoff — so the rows that follow a root with a
    * fragment state the same selection both ways from one place.
    */
-  readonly fragment: GeneratedXmdRequest;
+  readonly fragment: GeneratedFragmentRequest;
   readonly installation: ExecutionInstallation;
 }
 
+/** The two spellings a declaration can offer a generated use of. */
+const FORMS: readonly InvocationForm[] = ["self-closing", "paired"];
+
 /** Which spellings one pinned entry offers, as the selection states them. */
-function formsOf(entry: GeneratedObservation | GeneratedMutation): ("self-closing" | "paired")[] {
+function formsOf(entry: GeneratedObservation | GeneratedMutation): readonly InvocationForm[] {
   const offered = entry.definition.generated ?? {};
-  return ["self-closing", "paired"].filter((form) => form in offered) as (
-    | "self-closing"
-    | "paired"
-  )[];
+  return FORMS.filter((form) => form in offered);
 }
 
 function request(source: string, ceilings: Ceilings = {}): Candidate {
@@ -326,7 +320,7 @@ function evaluateRoot(
   candidate: Candidate,
   options: {
     stream?: InMemoryStream;
-    /** A document for the case whose claim is about the document, not the root. */
+    /** A document for the case whose subject is the document, not the root. */
     root?: { readonly path: string; readonly source: string };
   } = {},
 ): Operation<Attempt> {
@@ -655,11 +649,7 @@ describe("Tier GR — the root context admits one construct more, and no others"
       const attempt = yield* evaluateRoot(
         request(source, {
           ...ceilings,
-          observations: [
-            pinnedFetch(),
-            failing(performed),
-            ...(ceilings.observations ?? []),
-          ],
+          observations: [pinnedFetch(), failing(performed), ...(ceilings.observations ?? [])],
         }),
       );
 
@@ -722,19 +712,16 @@ describe("Tier GR — a root's history is its own, and a document's is the docum
   it("GR12: a reopening starts new work rather than continuing an interrupted evaluation", function* () {
     const first = yield* scoped(function* () {
       yield* useTransport("fetched");
-      return yield* evaluateRoot(
-        request(WITH_EFFECT, { observations: [pinnedFetch()] }),
-      );
+      return yield* evaluateRoot(request(WITH_EFFECT, { observations: [pinnedFetch()] }));
     });
     expect(rendered(first).hasOutput).toBe(true);
     expect(observations(first.events)).toHaveLength(1);
 
     const again = yield* scoped(function* () {
       const transport = yield* useTransport("fetched again");
-      const attempt = yield* evaluateRoot(
-        request(WITH_EFFECT, { observations: [pinnedFetch()] }),
-        { stream: duringPreparation(first.events) },
-      );
+      const attempt = yield* evaluateRoot(request(WITH_EFFECT, { observations: [pinnedFetch()] }), {
+        stream: duringPreparation(first.events),
+      });
       return { attempt, performed: transport.performed.length };
     });
 
@@ -752,9 +739,7 @@ describe("Tier GR — a root's history is its own, and a document's is the docum
   it("GR13: a root's retained evaluation is not history a fragment consumes", function* () {
     const first = yield* scoped(function* () {
       yield* useTransport("fetched");
-      return yield* evaluateRoot(
-        request(WITH_EFFECT, { observations: [pinnedFetch()] }),
-      );
+      return yield* evaluateRoot(request(WITH_EFFECT, { observations: [pinnedFetch()] }));
     });
     expect(rendered(first).hasOutput).toBe(true);
 
@@ -819,9 +804,7 @@ describe("Tier GR — a root's history is its own, and a document's is the docum
   it("GR15: a released fragment admission still resumes as the fragment it was", function* () {
     const first = yield* scoped(function* () {
       yield* useTransport("fetched");
-      return yield* evaluateFragment(
-        request(FRAGMENT_EFFECT, { observations: [pinnedFetch()] }),
-      );
+      return yield* evaluateFragment(request(FRAGMENT_EFFECT, { observations: [pinnedFetch()] }));
     });
     expect(first.failure).toBe(undefined);
 
@@ -837,33 +820,297 @@ describe("Tier GR — a root's history is its own, and a document's is the docum
     expect(again.attempt.failure).toBe(undefined);
     expect(again.performed).toBe(1);
   });
+});
+
+/** The diagnostic a record whose rules this build does not have is refused with. */
+const UNREADABLE_RECORD = "the retained generated-XMD admission record cannot be read as one.";
+
+/**
+ * One root admission in the shape the accepted pre-integration writer wrote.
+ *
+ * Hand-built to `01abab27`'s own `admitSource`/`policyRecord`: `version: 2` at
+ * the result and in the policy, the `context: "root"` member that build used to
+ * say which kind a record was, `requests` for the per-identity Fetch ceilings it
+ * retained, and each identity as the four-member structural record — a kind, an
+ * origin, a key and a revision. Nothing in it is this build's output, which is
+ * the point: it is the older shape, offered to a build whose rules are the
+ * marker's.
+ */
+function oldRootAdmission(): DurableEvent {
+  const identity = {
+    kind: "component-answer",
+    origin: "test://provider",
+    key: "Probe",
+    revision: "1",
+  };
+  return {
+    type: "yield",
+    coroutineId: "shared",
+    description: { type: "generated_xmd", name: "generated:turn-1" },
+    result: {
+      status: "ok",
+      value: {
+        version: 2,
+        decision: "admitted",
+        source: "<Probe />\n",
+        named: [{ name: "Probe", identity: { ...identity }, form: "self-closing" }],
+        policy: {
+          version: 2,
+          allow: ["read"],
+          context: "root",
+          allowed: [{ name: "Probe", identity: { ...identity }, forms: ["self-closing"] }],
+          requests: [],
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Tier GRM — what a record's marker authorizes, in both directions.
+ *
+ * IN1's requirement, and the one arrangement that can establish it. A fragment and a
+ * root record hold the same ordered fields and differ by marker alone, so the
+ * case that matters is the one where *nothing else* differs: the same id, the
+ * same bytes, and byte-identical selected rows. A refusal there is the marker
+ * check and can be nothing else.
+ *
+ * Which is why these rows drive the Core-private seam rather than the public
+ * method. The public owner gives each evaluation a sequence of its own and
+ * allocates past every retained one — that is E4/E6/GR12's subject, and it is
+ * also what makes the two kinds' records unreachable from one another through
+ * it. A record one kind wrote and the other reads has to be in the coroutine
+ * the reading evaluation runs in, which is what `durableRun` decides here and
+ * what canonical execution decides in production.
+ *
+ * {@link bindGeneratedRootEvaluator} is the handoff canonical execution makes,
+ * so the admission, the record and the comparison below are the production
+ * ones. What the fixture supplies is the selection and the route, from the
+ * existing minted-identity fixture — and it states the *same* selection for
+ * both kinds, which the real owner cannot do, because a root admitted through
+ * it also carries the one protected answer a root may write.
+ */
+describe("Tier GRM — a record's marker is what authorizes the evaluation", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** Legal in both kinds: a root with no Output renders its body, as a fragment does. */
+  const COMMON = "<Probe />\n";
+  /** One admission's name, offered to both kinds. */
+  const ID = "turn-1";
+  /** The coroutine both evaluations run in, so each reads the other's record. */
+  const COROUTINE = "shared";
 
   /**
-   * IN1 — the marker is what tells the two kinds apart.
+   * One root evaluator bound the way canonical execution binds it.
    *
-   * A record carries its kind at the result and inside its policy, and an
-   * evaluation reads only its own. So a retained root admission cannot
-   * authorize a fragment — even with the same id and the same bytes, which is
-   * exactly the case that would look correct from either side. It refuses as
-   * unreadable history, before the admission it would have restored performs
-   * anything, and GR13 is the same claim about what a fragment consumes.
+   * The selection is stated rather than captured, so a row can offer a root
+   * exactly the rows a fragment is offered. The route is the existing minted
+   * identity fixture's, which is what a root narrows from; the reference is
+   * absent because no row here writes `<Syntax />`.
    */
-  it("GR15c: a retained root admission does not authorize a fragment", function* () {
-    const performed: string[] = [];
-    const admitted = yield* evaluateRoot(
-      request("<Output>\n<Probe />\n</Output>\n", { observations: [countedProbe(performed)] }),
-    );
-    expect(answered(admitted).ok).toBe(true);
-    expect(performed).toEqual(["probed"]);
+  function boundRoot(
+    observations: readonly GeneratedObservation[],
+  ): (request: GeneratedXmdRequest) => Operation<Result<GeneratedXmdRootResult>> {
+    const identity = installIdentities([], [], [SYNTAX_PROTECTED]);
+    identity.activate();
+    return bindGeneratedRootEvaluator({
+      select: () => ({ observations, mutations: [], describing: [] }),
+      componentRouting: identity.componentRouting,
+      reference: undefined,
+      live: () => true,
+    });
+  }
+
+  /** Evaluate one root in `COROUTINE`, over this journal. */
+  function asRoot(
+    stream: InMemoryStream,
+    performed: string[],
+  ): Operation<Result<GeneratedXmdRootResult>> {
+    return scoped(function* () {
+      const held: { answer?: Result<GeneratedXmdRootResult> } = {};
+      yield* durableRun(
+        function* (): Operation<void> {
+          held.answer = yield* boundRoot([countedProbe(performed)])({ id: ID, source: COMMON });
+        },
+        { stream, coroutineId: COROUTINE },
+      );
+      if (held.answer === undefined) {
+        throw new Error("the durable run recorded no root outcome");
+      }
+      return held.answer;
+    });
+  }
+
+  /** Evaluate the same source as a fragment in `COROUTINE`, over this journal. */
+  function asFragment(stream: InMemoryStream, performed: string[]): Operation<Result<string>> {
+    return scoped(function* () {
+      const held: { output?: string } = {};
+      try {
+        yield* durableRun(
+          function* (): Operation<void> {
+            held.output = yield* evaluateGeneratedXmd({
+              id: ID,
+              source: COMMON,
+              observations: [countedProbe(performed)],
+            });
+          },
+          { stream, coroutineId: COROUTINE },
+        );
+      } catch (error) {
+        return Err(error instanceof Error ? error : new Error(String(error)));
+      }
+      return Ok(held.output ?? "");
+    });
+  }
+
+  /** The admission record this journal holds, and the rows it retained. */
+  function record(events: readonly DurableEvent[]): { version: number; allowed: Json } {
+    const [admission] = admissions([...events]);
+    if (admission?.type !== "yield" || admission.result.status !== "ok") {
+      throw new Error("the run recorded no generated-XMD admission");
+    }
+    const value = admission.result.value;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Error("the admission record is not an object");
+    }
+    const { policy } = value;
+    if (typeof policy !== "object" || policy === null || Array.isArray(policy)) {
+      throw new Error("the admission record holds no policy");
+    }
+    return { version: Number(value.version), allowed: policy.allowed ?? null };
+  }
+
+  it("GRM1: a fragment's record does not authorize a root, and the root performs nothing", function* () {
+    // One real fragment admission, performed once.
+    const first: string[] = [];
+    const written = new InMemoryStream();
+    const fragment = yield* asFragment(written, first);
+    expect(fragment.ok).toBe(true);
+    expect(first).toEqual(["probed"]);
+    const retained = yield* written.readAll();
+    expect(record(retained).version).toBe(4);
+
+    // Offered to a root: the admission and nothing after it, the same id, the
+    // same bytes, in the coroutine the root reads.
+    const reused: string[] = [];
+    const held = duringPreparation(retained);
+    const answer = yield* asRoot(held, reused);
+
+    // Refused as unreadable history — the marker check, named. Not a language
+    // refusal, because this source is legal in both kinds; not a ceiling
+    // refusal, because the rows are identical.
+    expect(answer.ok).toBe(false);
+    expect(answer.ok === false && answer.error.message).toBe(UNREADABLE_RECORD);
+    // And before anything was performed.
+    expect(reused).toEqual([]);
+    // The record it refused is still the fragment's, unchanged.
+    expect(record(yield* held.readAll()).version).toBe(4);
+  });
+
+  it("GRM2: a root's record does not authorize a fragment, and the fragment performs nothing", function* () {
+    const first: string[] = [];
+    const written = new InMemoryStream();
+    const answer = yield* asRoot(written, first);
+    expect(answer.ok).toBe(true);
+    expect(first).toEqual(["probed"]);
+    const retained = yield* written.readAll();
+    expect(record(retained).version).toBe(5);
 
     const reused: string[] = [];
-    const asFragment = yield* evaluateFragment(
-      request("<Output>\n<Probe />\n</Output>\n", { observations: [countedProbe(reused)] }),
-      { stream: duringPreparation(admitted.events) },
+    const held = duringPreparation(retained);
+    const fragment = yield* asFragment(held, reused);
+
+    expect(fragment.ok).toBe(false);
+    expect(fragment.ok === false && fragment.error.message).toBe(UNREADABLE_RECORD);
+    expect(reused).toEqual([]);
+    expect(record(yield* held.readAll()).version).toBe(5);
+  });
+
+  it("GRM3: the two records differ by marker alone", function* () {
+    // What makes GRM1 and GRM2 about the marker: the same source and the same
+    // selection produce records whose retained rows are byte-identical and
+    // whose markers are the two this build writes. A row that differed would
+    // have given either direction a second reason to refuse.
+    const asFragmentStream = new InMemoryStream();
+    expect((yield* asFragment(asFragmentStream, [])).ok).toBe(true);
+    const asRootStream = new InMemoryStream();
+    expect((yield* asRoot(asRootStream, [])).ok).toBe(true);
+
+    const fragment = record(yield* asFragmentStream.readAll());
+    const root = record(yield* asRootStream.readAll());
+    expect(fragment.version).toBe(4);
+    expect(root.version).toBe(5);
+    expect(JSON.stringify(root.allowed)).toBe(JSON.stringify(fragment.allowed));
+  });
+
+  it("GRM4: a matched marker resumes, and performs the admitted work again", function* () {
+    // The control for both directions, measured on both sides: the same
+    // fixture, the same histories, read by the kind that wrote them. A
+    // refusal here would mean GRM1 and GRM2 were refusing the arrangement
+    // rather than the marker.
+    const rootWritten = new InMemoryStream();
+    expect((yield* asRoot(rootWritten, [])).ok).toBe(true);
+    const rootAgain: string[] = [];
+    const resumedRoot = yield* asRoot(duringPreparation(yield* rootWritten.readAll()), rootAgain);
+    expect(resumedRoot.ok).toBe(true);
+    expect(rootAgain).toEqual(["probed"]);
+
+    const fragmentWritten = new InMemoryStream();
+    expect((yield* asFragment(fragmentWritten, [])).ok).toBe(true);
+    const fragmentAgain: string[] = [];
+    const resumedFragment = yield* asFragment(
+      duringPreparation(yield* fragmentWritten.readAll()),
+      fragmentAgain,
+    );
+    expect(resumedFragment.ok).toBe(true);
+    expect(fragmentAgain).toEqual(["probed"]);
+  });
+
+  it("GRM5: an older build's root record authorizes neither kind", function* () {
+    // IN4's refusal arm. The marker-2 root record is the shape the accepted
+    // pre-integration writer wrote (`01abab27`): tagged `version: 2` at the
+    // result and in its policy, carrying the `context: "root"` member this
+    // build replaced with the marker, and identities as the four-member
+    // structural records that build retained. A build that read it in part, or
+    // migrated it, would be resuming a grant whose rules it does not have.
+    const asRootPerformed: string[] = [];
+    const forRoot = new InMemoryStream([oldRootAdmission()]);
+    const root = yield* asRoot(forRoot, asRootPerformed);
+    expect(root.ok).toBe(false);
+    expect(root.ok === false && root.error.message).toBe(UNREADABLE_RECORD);
+    expect(asRootPerformed).toEqual([]);
+
+    const asFragmentPerformed: string[] = [];
+    const forFragment = new InMemoryStream([oldRootAdmission()]);
+    const fragment = yield* asFragment(forFragment, asFragmentPerformed);
+    expect(fragment.ok).toBe(false);
+    expect(fragment.ok === false && fragment.error.message).toBe(UNREADABLE_RECORD);
+    expect(asFragmentPerformed).toEqual([]);
+  });
+
+  it("GRM6: one name under two definitions is still a collision", function* () {
+    // The guard the Syntax correction had to preserve. Recognizing a captured
+    // canonical row is not accepting any row that shares its name: two
+    // definitions under one name is a malformed table, refused before
+    // anything is admitted.
+    const performed: string[] = [];
+    const held: { answer?: Result<GeneratedXmdRootResult> } = {};
+    yield* durableRun(
+      function* (): Operation<void> {
+        held.answer = yield* boundRoot([
+          countedProbe(performed),
+          // A second, different implementation under the same name.
+          countedProbe([]),
+        ])({ id: ID, source: COMMON });
+      },
+      { stream: new InMemoryStream(), coroutineId: COROUTINE },
     );
 
-    expect(asFragment.failure).not.toBe(undefined);
-    expect(reused).toEqual([]);
+    expect(held.answer?.ok).toBe(false);
+    expect(held.answer?.ok === false && held.answer.error.message).toContain(
+      "one name with two definitions",
+    );
+    expect(performed).toEqual([]);
   });
 });
 

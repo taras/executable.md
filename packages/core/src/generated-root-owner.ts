@@ -53,7 +53,7 @@ import type { Operation, Queue, Result } from "effection";
 import { durableRun, preserveJournalProvenance, retainEvents } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 
-import type { GeneratedXmdRootRequest, GeneratedXmdRootResult } from "./generated-xmd.ts";
+import type { GeneratedXmdRequest, GeneratedXmdRootResult } from "./generated-xmd.ts";
 
 /** Why this execution could not take the root evaluation it was asked for. */
 export class HostExecutionError extends Error {
@@ -62,7 +62,7 @@ export class HostExecutionError extends Error {
 
 /** One execution's bound root evaluator, as the owner and the handle hold it. */
 export type BoundRootEvaluator = (
-  request: GeneratedXmdRootRequest,
+  request: GeneratedXmdRequest,
 ) => Operation<Result<GeneratedXmdRootResult>>;
 
 /** What canonical execution hands its owner once both exist. */
@@ -136,7 +136,7 @@ export interface GeneratedRootOwner {
 
 /** What one caller asked this execution to evaluate. */
 interface RootJob {
-  readonly request: GeneratedXmdRootRequest;
+  readonly request: GeneratedXmdRequest;
   readonly answer: Resolvers<Settled>;
   readonly cancelled: Resolvers<void>;
   readonly joined: Resolvers<void>;
@@ -306,7 +306,7 @@ export function createGeneratedRootOwner(): GeneratedRootOwner {
     return Ok(undefined);
   }
 
-  function evaluate(request: GeneratedXmdRootRequest): Operation<Result<GeneratedXmdRootResult>> {
+  function evaluate(request: GeneratedXmdRequest): Operation<Result<GeneratedXmdRootResult>> {
     return scoped(function* () {
       // Before readiness, so two calls that arrive while the runner is still
       // starting are one admitted call and one refusal rather than two waiters.
@@ -472,9 +472,9 @@ function perform(
 }
 
 /**
- * The next sequence this evaluation runs on, claimed when the work begins.
+ * The next sequence this evaluation runs on, taken when the work begins.
  *
- * An operation rather than a number, because claiming it reads the journal this
+ * An operation rather than a number, because taking it reads the journal this
  * execution writes, and that read can fail the way any other read of it can.
  * Performed inside the admitted job so that a failure to find the address is
  * answered and retained exactly like a failure to use it.
@@ -527,7 +527,7 @@ function* attempt(
  */
 function sequence(
   inputs: GeneratedRootInputs,
-  request: GeneratedXmdRootRequest,
+  request: GeneratedXmdRequest,
   order: number,
 ): Operation<Result<GeneratedXmdRootResult>> {
   return scoped(function* () {

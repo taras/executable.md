@@ -287,7 +287,7 @@ export { GeneratedXmdError } from "./src/generated-xmd.ts";
  * in the one context that supplies `<Output>`: a root selects what it renders,
  * and the host is told whether it selected anything so an empty region and no
  * region at all are different answers. `<Content>` and `<Return>` stay
- * unavailable in both — neither has a caller to claim content from nor a value
+ * unavailable in both — neither has a caller to take content from nor a value
  * body to answer.
  *
  * Which kind an admission was made as is carried by the record's own marker, so
@@ -298,9 +298,20 @@ export { GeneratedXmdError } from "./src/generated-xmd.ts";
  * There is no siteless form: a root is evaluated by the execution that captured
  * the selection it runs under, through `HostExecution.evaluateGeneratedXmdRoot`
  * or the same method on an `AgentConversation`.
+ *
+ * `GeneratedXmdRequest` is the whole of what a caller states: which evaluation
+ * this is, the candidate bytes, which of the captured effect classes it may
+ * draw on, and where the asking element was written. There is no table, no
+ * inventory and no Workspace basis to pass — a root is admitted from the
+ * selection its execution already captured, so a caller has nothing to say
+ * about those. `GeneratedEffectClass` is here because that request names it.
  */
 export { GeneratedXmdRootError } from "./src/generated-xmd.ts";
-export type { GeneratedXmdRootRequest, GeneratedXmdRootResult } from "./src/generated-xmd.ts";
+export type {
+  GeneratedEffectClass,
+  GeneratedXmdRequest,
+  GeneratedXmdRootResult,
+} from "./src/generated-xmd.ts";
 export type { HostExecution } from "./src/execute.ts";
 export { HostExecutionError } from "./src/generated-root-owner.ts";
 export { AgentConversationError, useAgentConversation } from "./src/agent/conversation.ts";

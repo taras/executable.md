@@ -20,7 +20,7 @@
  * session with, and no coordinator to settle the placement. The conversation is
  * therefore a host-declared identity component, written into a synthetic root
  * of core's own: canonical resolution selects it, hands its implementation this
- * execution's claimant, and the session is placed under the engine's own
+ * execution's identity holder, and the session is placed under the engine's own
  * identity for that invocation rather than under anything the host supplied.
  * The host's conversation id names the history; it names no session.
  *
@@ -85,7 +85,7 @@ import type {
 import { executeInstalled } from "../execute.ts";
 import type { ExecutionInstallation, HostExecution } from "../execute.ts";
 import type { BoundRootEvaluator } from "../generated-root-owner.ts";
-import type { GeneratedXmdRootRequest, GeneratedXmdRootResult } from "../generated-xmd.ts";
+import type { GeneratedXmdRequest, GeneratedXmdRootResult } from "../generated-xmd.ts";
 import { durabilityFailure } from "../errors.ts";
 import { isJsonObject, parseJson } from "../json.ts";
 import { retainedSource } from "../root-source.ts";
@@ -150,7 +150,7 @@ export interface AgentConversation {
    * conversation's turns and its evaluations are separate durable sequences on
    * one history.
    */
-  evaluateGeneratedXmdRoot(request: GeneratedXmdRootRequest): Operation<Result<GeneratedXmdRootResult>>;
+  evaluateGeneratedXmdRoot(request: GeneratedXmdRequest): Operation<Result<GeneratedXmdRootResult>>;
 }
 
 /**
@@ -201,7 +201,7 @@ interface OptionsJob {
 
 interface EvaluateJob {
   readonly kind: "evaluate";
-  readonly request: GeneratedXmdRootRequest;
+  readonly request: GeneratedXmdRequest;
   readonly answer: Resolvers<Evaluated>;
   readonly cancelled: Resolvers<void>;
   readonly joined: Resolvers<void>;
@@ -489,7 +489,7 @@ function handle(
       });
     },
     evaluateGeneratedXmdRoot(
-      request: GeneratedXmdRootRequest,
+      request: GeneratedXmdRequest,
     ): Operation<Result<GeneratedXmdRootResult>> {
       return scoped(function* () {
         // The same admission a turn passes, because it is the same mailbox: an
@@ -638,7 +638,7 @@ function* serve(
 /**
  * The conversation itself, inside its own invocation.
  *
- * The claimant answers for this invocation and no other, so what the session is
+ * The identity holder answers for this invocation and no other, so what the session is
  * placed under is the engine's own identity — derived from where the element is
  * written, not from anything the host supplied.
  */

@@ -159,8 +159,8 @@ import {
   ProtectedImports,
 } from "./components/protected.ts";
 import { coreComponentDefinition, CORE_ORIGIN } from "./components/registry.ts";
-import { bindGeneratedRootEvaluator } from "./generated-xmd.ts";
-import type { GeneratedXmdRootRequest, GeneratedXmdRootResult } from "./generated-xmd.ts";
+import { bindGeneratedRootEvaluator, pinnedComponent } from "./generated-xmd.ts";
+import type { GeneratedXmdRequest, GeneratedXmdRootResult } from "./generated-xmd.ts";
 import {
   createGeneratedRootOwner,
   HostExecutionError,
@@ -965,6 +965,22 @@ const DIFFERENT_PRE_ROOT_DOCUMENT =
   "different root document than this one.";
 
 const ROOT_COROUTINE = "root";
+
+/**
+ * What a root evaluation is refused with when this execution established no
+ * authority for one.
+ *
+ * Values rather than failures, in the classification a closed and a busy
+ * execution already refuse with: a host that asked an execution for something
+ * it does not offer has an answer to act on, and its document goes on.
+ */
+const NO_ROOT_SELECTION =
+  "this host selected no generated components, so nothing established what a generated root " +
+  "may do";
+
+const NO_ROOT_VOCABULARY =
+  "this execution minted no canonical Syntax implementation, so a generated root has no " +
+  "vocabulary to describe";
 
 /**
  * What a recorded event turned out to be.
@@ -2417,7 +2433,7 @@ export interface HostExecution extends DocumentExecution {
    * operation as itself, and it is this execution's outcome as well, so
    * catching it cannot leave the document looking successful.
    */
-  evaluateGeneratedXmdRoot(request: GeneratedXmdRootRequest): Operation<Result<GeneratedXmdRootResult>>;
+  evaluateGeneratedXmdRoot(request: GeneratedXmdRequest): Operation<Result<GeneratedXmdRootResult>>;
 }
 
 /**
@@ -2972,56 +2988,84 @@ function* executeDocument(
       // called rather than this execution failing to start. The same is true of
       // an execution that minted no canonical `<Syntax />`: there is then no
       // vocabulary for a root to describe itself with.
+      //
+      // And it refuses with a *result*, in the classification a closed and a
+      // busy execution already refuse with. An absent selection is an answer
+      // about what this execution offers, which a host catches, acts on and
+      // goes on holding a live document for; raising it would make the
+      // document's own completion fail for a question somebody asked it.
       const guardedSyntax = identity.protected.get(SYNTAX_COMPONENT);
       const profile = evaluationProfile;
-      const bound: BoundRootEvaluator = profile === undefined || guardedSyntax === undefined
-        // deno-lint-ignore require-await
-        ? () => {
-          throw new HostExecutionError(
-            profile === undefined
-              ? "this host selected no generated components, so nothing established what a " +
-                "generated root may do"
-              : "this execution minted no canonical Syntax implementation, so a generated root " +
-                "has no vocabulary to describe",
-          );
-        }
-        : bindGeneratedRootEvaluator({
-          // The selection this execution captured, resolved per evaluation
-          // through the one machinery the authored site also goes through.
-          //
-          // Canonical `<Syntax />` joins the entries this root is *described*
-          // with as well as the table it is admitted from, so a root asking
-          // what it may write is told about the one protected answer it may
-          // write. Its documentation provenance is core's own, which is what
-          // makes it read as protected rather than as something a host
-          // registered.
-          select: (allow) => {
-            const tables = selectedTables(profile, allow);
-            return {
-              observations: tables.observations,
-              mutations: tables.mutations,
-              describing: [
-                ...tables.admitted,
-                {
-                  name: SYNTAX_COMPONENT,
-                  origin: CORE_ORIGIN,
-                  protectedOrigin: CORE_ORIGIN,
-                  forms: SYNTAX_PROTECTED.forms ?? ["self-closing"],
-                  props: SYNTAX_PROTECTED.props,
-                  kind: "component-answer" as const,
-                  definition: guardedSyntax,
-                  ...(SYNTAX_PROTECTED.description === undefined
-                    ? {}
-                    : { description: SYNTAX_PROTECTED.description }),
-                },
-              ],
-            };
-          },
-          definition: guardedSyntax,
-          componentRouting: identity.componentRouting,
-          reference: derivedSyntax,
-          live: profile.live,
-        });
+      const bound: BoundRootEvaluator =
+        profile === undefined || guardedSyntax === undefined
+          ? // deno-lint-ignore require-yield
+            function* (): Operation<Result<GeneratedXmdRootResult>> {
+              return Err(
+                new HostExecutionError(
+                  profile === undefined ? NO_ROOT_SELECTION : NO_ROOT_VOCABULARY,
+                ),
+              );
+            }
+          : bindGeneratedRootEvaluator({
+              // The selection this execution captured, resolved per evaluation
+              // through the one machinery the authored site also goes through, and
+              // complete: canonical `<Syntax />` is in the table a root is admitted
+              // from and among the entries it is *described* with, so a root asking
+              // what it may write is told about the one protected answer it may
+              // write.
+              //
+              // Once, though. A host may select `Syntax` itself, and main's capture
+              // then holds this execution's own protected implementation behind its
+              // routed guard — adding core's copy beside it would offer a root one
+              // name under two definitions, which admission refuses. So a captured
+              // row this execution's route answered for is kept as it stands.
+              //
+              // Recognized by that provenance rather than by its name or its URL:
+              // `protectedOrigin` is set by `ComponentRouting.project`, which
+              // answers only for an implementation this execution's own route
+              // built, and core mints one protected implementation per name. A
+              // definition the route did not build is a different implementation
+              // under a protected name, and stays the collision it is.
+              select: (allow) => {
+                const tables = selectedTables(profile, allow);
+                const captured = tables.admitted.some(
+                  (entry) =>
+                    entry.name === SYNTAX_COMPONENT && entry.protectedOrigin === CORE_ORIGIN,
+                );
+                if (captured) {
+                  return {
+                    observations: tables.observations,
+                    mutations: tables.mutations,
+                    describing: tables.admitted,
+                  };
+                }
+                return {
+                  observations: [
+                    ...tables.observations,
+                    pinnedComponent(SYNTAX_COMPONENT, guardedSyntax),
+                  ],
+                  mutations: tables.mutations,
+                  describing: [
+                    ...tables.admitted,
+                    {
+                      name: SYNTAX_COMPONENT,
+                      origin: CORE_ORIGIN,
+                      protectedOrigin: CORE_ORIGIN,
+                      forms: SYNTAX_PROTECTED.forms ?? ["self-closing"],
+                      props: SYNTAX_PROTECTED.props,
+                      kind: "component-answer" as const,
+                      definition: guardedSyntax,
+                      ...(SYNTAX_PROTECTED.description === undefined
+                        ? {}
+                        : { description: SYNTAX_PROTECTED.description }),
+                    },
+                  ],
+                };
+              },
+              componentRouting: identity.componentRouting,
+              reference: derivedSyntax,
+              live: profile.live,
+            });
       roots.supply({ journal, evaluator: bound });
 
       // The journal is wrapped before it reaches `durableRun`, so the identity
