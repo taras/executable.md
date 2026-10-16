@@ -689,6 +689,12 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "packages/cli/tests/testing-execution-host-native.test.ts",
+    reason:
+      "its subject is the configured native Plugin an isolated run child initializes, which comes from @executablemd/git/deno and so from Workflow's storage adapter and node:sqlite. What a child does with the *selected* value — that a test root hands its host=\"run\" child what the host chose, reinstalled in the child's own scope after its working directory — is proven portably by packages/cli/tests/testing-execution-host.test.ts, which runs everywhere",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "packages/cli/tests/repl-repositories.test.ts",
     reason:
       "drives the production entry host, which only Deno and the compiled binary register: its module graph reaches @executablemd/git/deno and so Workflow's storage adapter and node:sqlite. That Node and Bun start a REPL and perform ordinary File and Dir work without it is proven by packages/cli/tests/repl-repositories-pty.test.ts, which runs everywhere",

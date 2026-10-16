@@ -594,8 +594,9 @@ describe("one entry's local file work", () => {
     // Both branches wrote, and nothing else did. Sorted, because which of two
     // concurrent branches reaches its write first is the scheduler's business
     // and asserting one order here would make this row fail for a reason it is
-    // not about.
-    expect(counted.writes.toSorted()).toEqual(["a.md", "b.md"]);
+    // not about. Copied before sorting: `toSorted` is ES2023 and the Node
+    // typecheck's lib is ES2022.
+    expect([...counted.writes].sort()).toEqual(["a.md", "b.md"]);
     // The condition that makes this row discriminating: two saved routings, on
     // two different coroutines. A host that remembered routing per *entry*
     // would skip one of them and the continuation below would be refused.
