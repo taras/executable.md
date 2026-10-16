@@ -10086,8 +10086,9 @@ bytes. The contracts below describe the two providers a document can reach.
 
 A document execution reaches repository operations only through the provider
 the command installed inside the execution scope, before the root document is
-imported. There are three, and they differ in lifetime and permission rather
-than in what an author writes.
+imported. There are three — the ordinary one, the retained one and the entry
+one — and they differ in lifetime and permission rather than in what an author
+writes.
 
 The **ordinary provider** is what the Deno source entrypoint and the compiled
 binary install for `xmd run`. Constructing it acquires nothing at all: no
@@ -10137,19 +10138,37 @@ creation, reuse, conflict and interrupted-adoption policy, and it records what
 the selector answered: a completed selection is answered from its record without
 calling a selector, cloning, adding a worktree, reading a sidecar, opening a
 credential or taking a lock, and only genuinely new work meets the current
-filesystem. It installs one external capability beside that: the issue
-adapter, so `<Issue>` files and reads in an entry and its answers are retained
-on the same terms — a completed read answers with the snapshot it saw and a
-completed upsert with the URL it was filed under, neither of them reaching a
-tracker, a configuration or a credential. An interrupted upsert presents the key
-it used the first time, which is what lets the provider answer with the issue it
-already accepted rather than filing a second one; a read has no key. What the
-entry provider still installs nothing of is local Git, publication and the
-external worker — so `<Git.Add>`, `<Git.Switch>`, `<Git.Commit>`, `<Git.Push>`
-and `<PullRequest>` refuse there exactly as they do under a host that installs
-no provider for them. Constructing it acquires nothing, including no managed root
-and no configuration read, and a passive reading of a settled history
-initializes nothing at all.
+filesystem.
+
+It answers three local Git operations on the same terms — `<Git.Add>`,
+`<Git.Switch>` and `<Git.Commit>` — by calling the *ordinary* performers and
+recording what they produced. A completed one is answered from its record with
+no `git` invocation of any kind, and the object id a completed `<Git.Commit>`
+bound names the commit that was made then rather than the checkout's current
+HEAD. A live `<Git.Commit>` reads the invoking user's own author and committer
+from the trusted host once per entry, lazily, exactly as the ordinary provider
+does, and a host that can name no identity refuses that one component. Routing
+is private: the received working directory is canonicalized and the entry's own
+registered checkouts are selected among under the whole authenticated Repository
+identity, so a copied or edited selection can misname a target and never reach
+one. A live operation takes the selected placement's managed slot and then the
+hold on the repository it changes, keeps both until the entry is torn down, and
+takes neither to answer a completed one.
+
+It installs one external capability beside those: the issue adapter, so
+`<Issue>` files and reads in an entry and its answers are retained on the same
+terms — a completed read answers with the snapshot it saw and a completed
+upsert with the URL it was filed under, neither of them reaching a tracker, a
+configuration or a credential. An interrupted upsert presents the key it used
+the first time, which is what lets the provider answer with the issue it
+already accepted rather than filing a second one; a read has no key.
+
+What the entry provider installs nothing of is publication and the external
+worker, so `<Git.Push>` and `<PullRequest>` refuse there exactly as they do
+under a host that installs no provider for them, and a retained local result
+authorizes neither. Constructing it acquires nothing, including no managed
+root, no commit identity and no configuration read, and a passive reading of a
+settled history initializes nothing at all.
 
 The identity an entry's issue work is named by is the entry's own: the execution
 and the entry's admission-order position, derived by the host that opened the
@@ -14117,9 +14136,11 @@ user's own `~/.xmd/repositories`.
 
 ### Tier ERC — Repository composition inside a REPL entry (§5.3, §8.1)
 
-Bounded to what one executing entry retains about the checkouts it selected.
-Everything an ordinary run proves about selection itself stays in Tier ORC: the
-rows below are about the record and the holds around it.
+Bounded to what one executing entry retains about the checkouts it selected and
+the local Git it performed in them. Everything an ordinary run proves about
+selection and about Add, Switch and Commit themselves stays in Tier ORC: the
+rows below are about the record, the holds around it and the window between
+native completion and acknowledgement.
 
 | # | Test | Verify |
 |---|------|--------|
@@ -14130,7 +14151,13 @@ rows below are about the record and the holds around it.
 | ERC5 | Interruption | A clone and a `worktree add` each interrupted while their child is genuinely running join that child and its descendant before the entry ends, leaving no placement, no body sentinel and no orphan sidecar; what a `worktree add` did write is accounted for by the ordinary interrupted-creation policy rather than recreated or deleted; a metadata open and an isolation-directory creation each cut while still pending are joined before teardown finishes, and what they deliver is closed and removed |
 | ERC6 | Acknowledgement, not completion | A native placement completed before its append is cancelled leaves no record and the continuation runs live; one acknowledged before cancellation bypasses the selector; a rejected placement append preserves the first persistence failure with no body after it |
 | ERC7 | Admission and ceiling | Malformed, unknown-version, misnamed and request-mismatched placement records refuse before native work; an admitted generated `<File>` inside a managed body is retained on the same terms as an authored one while a generated `<Repository>`, `<Worktree>` or `<Dir>` still refuses preflight |
-| ERC8 | Unsupported runtimes | A REPL on a runtime that installs no entry provider performs ordinary file and directory work and reports an absent Repository provider before any clone, creating no managed root |
+| ERC8 | Unsupported runtimes | A REPL on a runtime that installs no entry provider performs ordinary file and directory work and reports an absent Repository provider before any clone, creating no managed root; `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` there report an absent Git provider before any native operation, leaving the checkout's HEAD and index exactly as they were |
+| ERC9 | The public local-Git journey | A real-terminal source and compiled `xmd repl` each stage and commit in an ambient checkout and in a selected Worktree reached through a captured path and `<Dir>`, leave at the question, have the file, the index and HEAD moved from a shell, reopen the printed location and show the object id the commit bound while the external work stands untouched, answer and run the suffix once; a private `git` on `PATH` forwarding unchanged to the real one records that the reopened prefix ran no command at all, `write-tree` and `git var` included, and a new entry's Add and Commit commit today's staged work |
+| ERC10 | Completed local Git reaches nothing | An unfinished prefix holding acknowledged Switch, Add and Commit results replays, after the branch, index and HEAD are changed from outside and with the selected managed worktree removed, with zero `git` invocations, working-directory resolutions, identity reads, isolation-directory acquisitions and lock opens, returning the same saved results and object id and recreating nothing |
+| ERC11 | Ordinary local semantics | A live Switch to an existing branch ignores an unusable creation base and a missing branch with no base starts at live HEAD; one conflicting-local-change Switch is retained as an ordinary refusal that replays with zero native work after the checkout is repaired, while a new invocation succeeds; a live Commit stages no implicit path, commits the current index under the host's own author and committer with the operation's own clock, and binds the returned object id; a native ignored-path Add refusal keeps native Git's words, leaves what was already matched staged and claims no rollback; a missing identity refuses Commit alone and is read lazily once |
+| ERC12 | One result boundary | Two equal Adds at two positions produce and consume two results; a nested Add is an earlier journal operation than the Commit enclosing it, and the commit holds exactly the tree that child staged; two same-repository callers share one ownership acquisition and serialize their native attempts with distinct results; two spawned branches in two repositories resume in reverse order sharing no cursor or result; equal entry sources in two journals stay independent |
+| ERC13 | Local-Git acknowledgement | A live Commit gated before its append and then cancelled leaves no completion and no later sentinel, and the continuation runs live and reports ordinary `empty-index` rather than adopting the object id that was really written; one acknowledged and then cancelled replays with no native work; a rejected result append preserves the first persistence failure with no success binding, no later work and no compensating Close; an interrupted Add whose descendant holds the inherited pipes is joined before the entry settles; an unclassified performer failure is fatal and unrecorded |
+| ERC14 | Local-Git admission | Portable success and refusal codec rows refuse a wrong, extra or missing member, an unknown version, a mismatched fingerprint or name, an object id of the wrong width, a transition the operation does not make, mismatched operation arguments and a refusal word outside the closed set, and refuse a failed protocol envelope for this type; admission accepts repeated equal names and histories holding only the older record types |
 
 ---
 

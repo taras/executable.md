@@ -158,16 +158,18 @@ function snapshot(helper: HelperAssembly): HelperAssembly {
 }
 
 /**
- * What a REPL entry's execution initializes: recording and selection, and
- * nothing else.
+ * What this registration gives a REPL entry's execution: recording, selection
+ * and local Git.
  *
  * Registered by the selected REPL host rather than by the bundled Plugin,
- * because an entry is not an ordinary run: it retains the file work it does and
- * the managed checkouts it selects to do that work in, and installs no Git host,
- * publication or external worker. Each executing entry initializes its own, in
- * the scope below its Agent attachment, so a passive view — a settled history,
- * a frozen position — initializes nothing, creates no managed root and takes no
- * lease.
+ * because an entry is not an ordinary run: it retains the file work it does, the
+ * managed checkouts it selects to do that work in, and the staging, branch
+ * switches and commits it performs in them — and it installs no publication and
+ * no external worker. The issue capability an entry runs with is selected
+ * separately, above, because it belongs to no checkout. Each executing entry initializes its own, in the scope
+ * below its Agent attachment, so a passive view — a settled history, a frozen
+ * position — initializes nothing, creates no managed root, reads no commit
+ * identity and takes no lease.
  *
  * The root and the helper are copied here, at registration, rather than held as
  * the caller's object. What an entry initializes with has to be what this host

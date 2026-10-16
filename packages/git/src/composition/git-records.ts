@@ -104,7 +104,7 @@ const SWITCH_MEMBERS = [
  * object id, and treating one as an id is how a retained result that says
  * nothing passes for one that says something.
  */
-function objectId(value: unknown, format: GitObjectFormat): string | undefined {
+export function parseGitObjectId(value: unknown, format: GitObjectFormat): string | undefined {
   const candidate = text(value);
   const width = format === "sha1" ? 40 : 64;
   return candidate !== undefined && new RegExp(`^[0-9a-f]{${width}}$`).test(candidate)
@@ -135,9 +135,9 @@ export function parseGitCheckoutState(
     return undefined;
   }
   const branch = text(record.branch);
-  const commit = objectId(record.commit, format);
-  const headTree = objectId(record.headTree, format);
-  const indexTree = objectId(record.indexTree, format);
+  const commit = parseGitObjectId(record.commit, format);
+  const headTree = parseGitObjectId(record.headTree, format);
+  const indexTree = parseGitObjectId(record.indexTree, format);
   if (
     branch === undefined ||
     commit === undefined ||
@@ -221,7 +221,8 @@ export function parseGitSwitchResult(
   const requestedBranch = text(record.requestedBranch);
   const resolvedBranch = text(record.resolvedBranch);
   const requestedBase = optionalText(record.requestedBase);
-  const resolvedBase = record.resolvedBase === null ? null : objectId(record.resolvedBase, format);
+  const resolvedBase =
+    record.resolvedBase === null ? null : parseGitObjectId(record.resolvedBase, format);
   const before = parseGitCheckoutState(record.before, format);
   const after = parseGitCheckoutState(record.after, format);
   if (
@@ -556,9 +557,9 @@ export function parseGitCommitResult(
   const messageSource = parseGitCommitMessageSource(record.messageSource);
   const messageDigest = digest(record.messageDigest);
   const messageLength = count(record.messageLength);
-  const parent = objectId(record.parent, format);
-  const tree = objectId(record.tree, format);
-  const commit = objectId(record.commit, format);
+  const parent = parseGitObjectId(record.parent, format);
+  const tree = parseGitObjectId(record.tree, format);
+  const commit = parseGitObjectId(record.commit, format);
   const committedAt = count(record.committedAt);
   const before = parseGitCheckoutState(record.before, format);
   const after = parseGitCheckoutState(record.after, format);

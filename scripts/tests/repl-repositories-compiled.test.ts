@@ -24,6 +24,7 @@ import { fileURLToPath as fromFileUrl } from "node:url";
 import { join } from "node:path";
 import {
   replFilesJourney,
+  replGitJourney,
   replRepositoryJourney,
 } from "../../packages/cli/tests/support/repl-files-journey.ts";
 
@@ -59,5 +60,15 @@ describe("the compiled binary's REPL entry files", () => {
   it("E1: carries the managed selectors, so a Worktree's path routes a Dir", function* (): Operation<void> {
     yield* requireBinary();
     yield* replRepositoryJourney(compiled, "worktree");
+  });
+
+  it("E1: carries the local Git handlers, so a committed id answers again", function* (): Operation<void> {
+    yield* requireBinary();
+    yield* replGitJourney(compiled, "ambient");
+  });
+
+  it("E1: carries them inside a selected Worktree too", function* (): Operation<void> {
+    yield* requireBinary();
+    yield* replGitJourney(compiled, "worktree");
   });
 });

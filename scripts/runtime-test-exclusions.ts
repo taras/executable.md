@@ -695,6 +695,12 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "packages/git/tests/retained-repository-git.test.ts",
+    reason:
+      "the subject is a REPL entry's native local Git: it switches branches, stages pathspecs and commits the index with real `git` children in a real checkout, holds that checkout's mutation lease under a kernel-released exclusive advisory lock taken through the Deno runtime, and interrupts a command whose descendant is holding the inherited pipes. The record format and its admission are provider-neutral and are proven on every runtime by packages/git/tests/retained-repository-records.test.ts; that a runtime without the provider refuses <Git.Add>, <Git.Switch> and <Git.Commit> before any native operation is proven by packages/cli/tests/repl-repositories-pty.test.ts, which runs everywhere",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "packages/git/tests/retained-repository-lifecycle.test.ts",
     reason:
       "holds a shared Git directory under a kernel-released exclusive advisory lock taken through the Deno runtime, and spawns a second Deno process to prove the cross-process half; Node and Bun expose no equivalent",

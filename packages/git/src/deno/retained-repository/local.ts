@@ -1,10 +1,10 @@
 /**
  * One local file operation, performed once and answered from its result.
  *
- * This is the whole of the REPL's local durability: an ordinary durable
- * operation whose name is this entry's own, whose value is what the ordinary
- * Files call produced, and whose replay is the durable engine's own positional
- * matching. A completed operation answers with its saved result and touches no
+ * The file half of the REPL's local durability, and the substrate the local Git
+ * half beside it reuses: an ordinary durable operation whose name is this
+ * entry's own, whose value is what the ordinary Files call produced, and whose
+ * replay is the durable engine's own positional matching. A completed operation answers with its saved result and touches no
  * file, however the file has changed since. The first operation with no saved
  * result runs live, against whatever the environment actually holds.
  *

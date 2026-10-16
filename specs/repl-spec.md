@@ -886,9 +886,78 @@ shares, and a new write, deletion or directory takes it too. Neither hold is
 taken to answer a completed selection or a completed file operation, and a read
 takes only the ownership of the checkout it is reading in.
 
-Local Git and publication remain unavailable here; the exclusions below say
-which components those are. Issues are not among them — the section below says
-what an entry may file and read.
+Publication remains unavailable here; the exclusions below say which components
+those are. The two sections after this one say what else an entry retains: the
+Git work it did in these checkouts, and the issues it filed and read, which need
+no checkout at all.
+
+### Staging, switching and committing in an entry
+
+Inside a Git checkout with a commit in it, type this:
+
+```xmd
+<File path="note.md">first</File>
+<Git.Commit message="Record experiment" as="commit">
+  <Git.Add paths="note.md" />
+</Git.Commit>
+<Elicit schema={{ type: "string", enum: ["continue"] }} as="answer">Recorded commit: {commit}</Elicit>
+<File path="after.md">continued</File>
+```
+
+The staging child finishes before the commit starts. The commit writes the
+current index — nothing is staged for it and nothing is amended — and `commit`
+binds its full object id. Leave at the question, change the file, stage
+something else and make a commit of your own from a shell, then come back to the
+printed location. The question still shows the object id the entry recorded.
+Nothing ran again: not the write, not the staging, not the commit, and not a
+single `git` command. Your file, your index and your HEAD are exactly as you left
+them. Answering performs the write after the question for the first time.
+
+That saved id describes the earlier commit. It is not today's HEAD, and nothing
+re-resolves it. A *new* entry that stages and commits commits what the checkout
+holds now.
+
+The same body works inside a lexical `<Repository>` and inside a selected
+`<Worktree>`, including a self-closing Worktree's captured path entered through
+`<Dir>` while the enclosing Repository stays the owner. A new `<Git.Switch>`
+uses the ordinary rules: named branches only; an existing branch ignores a
+creation-only base; a missing branch starts at the base you supplied or at live
+HEAD; Git refuses a branch another checkout of the same repository holds, and
+refuses changes it would overwrite. A completed Switch restores its result
+without switching anything back.
+
+A refusal you asked for is retained as a refusal. Repair the checkout after it
+was acknowledged and that historical answer stays a refusal — a *new* invocation
+can succeed. `<Git.Add>` is not all-or-none: a pathspec naming an ignored path
+stages what Git already matched and then refuses, and nothing here undoes that.
+`<Git.Commit>` refuses an index that already matches HEAD rather than making an
+empty commit, and refuses when this host cannot say who the commit would be by —
+the message names the two commands that fix it, and no other identity is
+substituted for yours. That refusal reaches Commit alone.
+
+Who the commit is by is read from your own Git once per entry, and only when a
+commit really runs. An entry that commits nothing, and a reopened entry whose
+commit is already recorded, ask nothing about who you are. Hooks, signing,
+filesystem monitors and repository credential helpers stay disabled.
+
+What an entry writes down, it can read back. A result this build cannot parse,
+or one that does not describe the operation it stands at, ends the entry before
+anything is recorded rather than becoming a saved answer no continuation can
+use.
+
+Native completion and acknowledgement are different moments, and the gap is
+real. Interrupt an entry after the commit object exists and before its result is
+written down, and the journal holds no completion: the commit is in your
+repository, and a continuation runs that `<Git.Commit>` live. It may then refuse
+`empty-index`, because the earlier attempt already consumed the index. Nothing
+adopts the commit that was made, predicts an id or rolls anything back.
+
+The first new Git operation inside a restored placement takes that placement's
+ownership of the managed checkout and then the hold on the repository it is
+changing, in that order, and keeps both until the entry is torn down. A
+completed Git operation takes neither. A no-op Add, a same-branch Switch and a
+Commit that will refuse take them too: whether `git` will change anything is not
+predicted.
 
 ### The issue an entry filed, and the one it read
 
@@ -1033,12 +1102,15 @@ schedules no timer.
   do not open the same location twice for writing. The hold on a checkout is a
   different thing: it says one entry at a time may mutate one repository, and it
   says nothing about who may write this execution's history.
-- Local Git and publication are not part of this. `<Git.Add>`, `<Git.Switch>`,
-  `<Git.Commit>`, `<Git.Push>` and `<PullRequest>` refuse in a REPL entry
-  exactly as they do under any host that installs no provider for them. What an
-  entry retains is `<Repository>` and `<Worktree>` selection, the file and
-  directory work inside those checkouts and the one it was started in, and the
-  issues it filed and read; nothing is staged, committed, pushed or published.
+- Publication is not part of this. `<Git.Push>` and `<PullRequest>` refuse in a
+  REPL entry exactly as they do under any host that installs no provider for
+  them, and a retained local result authorizes neither. What an entry retains is
+  `<Repository>` and `<Worktree>` selection, the file and directory work inside
+  those checkouts and the one it was started in, `<Git.Add>`, `<Git.Switch>` and
+  `<Git.Commit>` in them, and the issues it filed and read; nothing is pushed or
+  published. A runtime that installs no repository provider — Node and Bun —
+  refuses the Git components before any native operation, while ordinary
+  `<File>` and `<Dir>` work keeps working there.
 - `<Issue>` is an ordinary shadowable default here, as it is under every other
   host. A repository component of that name keeps its ordinary precedence over
   it, and what such a component does not get is the identity an entry's own
