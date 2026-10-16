@@ -66,6 +66,7 @@ import {
   guidanceSentence,
   readinessOf,
   readingOf,
+  SIDEBAR_BODY,
   SIDEKICK_BODY,
   SIDEKICK_WINDOW,
   sidekickChatLines,
@@ -74,6 +75,7 @@ import {
   refusedView,
   replacedAgent,
   stateFor,
+  TRANSCRIPT_BODY,
   unavailable,
   viewFor,
   withoutAbsentEntry,
@@ -3496,13 +3498,13 @@ export function* prepareFrame(
   // below, because they are fixed content: the room the composer may grow into
   // is what is left once they have taken theirs.
   const guidance =
-    widths.surface < 1
+    widths.surfaceBody < 1
       ? Ok(undefined)
       : yield* fitPlain(
           renderer,
           view.size,
           [{ key: "guidance", text: guidanceSentence(view) }],
-          widths.surface,
+          widths.surfaceBody,
           guidanceStore,
         );
   if (!guidance.ok) {
@@ -3516,13 +3518,13 @@ export function* prepareFrame(
   // never share a frame — a refusal is the whole of what its screen says — so
   // one store holds whichever of them this frame is giving.
   const refused =
-    view.refusal === undefined || widths.surface < 1
+    view.refusal === undefined || widths.surfaceBody < 1
       ? Ok(undefined)
       : yield* fitPlain(
           renderer,
           view.size,
           [{ key: "refusal", text: view.refusal }],
-          widths.surface,
+          widths.surfaceBody,
           guidanceStore,
         );
   if (!refused.ok) {
@@ -3577,13 +3579,13 @@ export function* prepareFrame(
   // region to fit one to. That is different from a pane too narrow to hold a
   // grapheme, which is a refusal and stays one.
   const reading =
-    widths.surface < 1
+    widths.surfaceBody < 1
       ? Ok(undefined)
       : yield* prepareReading(
           renderer,
           view.size,
           readingLines(readingOf(view)),
-          widths.surface,
+          widths.surfaceBody,
           store,
         );
   if (!reading.ok) {
@@ -3768,14 +3770,15 @@ function widthsOf(manifest: ReplLayoutManifest, measured: ReplMeasured): ReplMea
   // row wider than its column widens that column and publishes a hit box
   // reaching into the one beside it. The outer bounds stay in `regions`, which
   // is what the pane geometry contract keeps asking.
-  const of = (...names: readonly ReplRegion[]): number => {
+  // The pane's own content, asked for by what it answers rather than by which
+  // box happens to come first. Every shared column publishes two: the pane the
+  // heading band spans, and the body inset inside it that the rows under that
+  // heading are built to. A lookup that took either one would build a header as
+  // narrow as the reading beneath it, or a reading as wide as its heading.
+  const paneOf = (...names: readonly ReplRegion[]): number => {
     for (const name of names) {
-      // The pane's own content, never the Sidekick's inset body. Both are
-      // published for this region and they answer different questions: the
-      // header spans the pane and the body is inset from it, so a lookup that
-      // took whichever came first would make the header as narrow as the chat.
       const inside = manifest.contents.find(
-        (content) => content.region === name && content.id !== SIDEKICK_BODY,
+        (content) => content.region === name && content.kind === "pane",
       );
       if (inside !== undefined) {
         return widthOf(measured, inside.id);
@@ -3787,24 +3790,32 @@ function widthsOf(manifest: ReplLayoutManifest, measured: ReplMeasured): ReplMea
     }
     return 0;
   };
+  /**
+   * One named body's own width, or the pane's where this frame drew no body.
+   *
+   * By its own id and not by its region, because the narrow outlet is one
+   * region for all three readings: a frame routing the Sidekick there publishes
+   * that chat's inset body under `content`, and a lookup by region would hand
+   * the Transcript's directions the chat's width. Falling back to the pane is
+   * what keeps the narrow outlet's rows exactly as wide as they have always
+   * been — it draws no Transcript or sidebar inset and is not given one.
+   */
+  const bodyOf = (id: string, ...names: readonly ReplRegion[]): number => {
+    const found = manifest.contents.find((content) => content.id === id);
+    return found === undefined ? paneOf(...names) : widthOf(measured, found.id);
+  };
   return {
     // Narrow has one routed outlet and no columns, so every row that would land
     // in a column lands there instead.
-    surface: of("transcript", "content"),
-    list: of("sidebar", "content"),
-    inspection: of("inspection", "content"),
-    // The Sidekick's body, which is its pane less the gutter on each side. It
-    // falls back to the pane itself for a frame that draws no Sidekick body,
-    // where there is nothing inset to measure.
-    body: bodyWidth(manifest, measured) ?? of("inspection", "content"),
+    surface: paneOf("transcript", "content"),
+    list: paneOf("sidebar", "content"),
+    inspection: paneOf("inspection", "content"),
+    // Each column's body, which is its pane less the gutter on each side.
+    surfaceBody: bodyOf(TRANSCRIPT_BODY, "transcript", "content"),
+    listBody: bodyOf(SIDEBAR_BODY, "sidebar", "content"),
+    body: bodyOf(SIDEKICK_BODY, "inspection", "content"),
     drawer: widthOf(measured, manifest.viewports.find((slot) => slot.region === "drawer")?.id),
   };
-}
-
-/** The inset body this frame measured, or none where it drew none. */
-function bodyWidth(manifest: ReplLayoutManifest, measured: ReplMeasured): number | undefined {
-  const found = manifest.contents.find((content) => content.id === SIDEKICK_BODY);
-  return found === undefined ? undefined : widthOf(measured, found.id);
 }
 
 function widthOf(measured: ReplMeasured, id: string | undefined): number {

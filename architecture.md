@@ -6463,6 +6463,33 @@ facts declared once; where a row lands and how many rows a region holds are
 answers the engine gives. Nothing computes a cell coordinate or a capacity
 twice, because a question asked in two places is a question answered two ways.
 
+**A column's width can be a legibility requirement rather than a share.** The
+sidebar is a fixed thirty-six columns at both shared profiles, because the rows
+in it are text whose meaning is lost when it is cut: the fitter keeps a turn's
+state whole and degrades to a hard cut only when even that does not fit, so the
+column has to be wide enough that it never does. The Transcript and the right
+pane divide what is left. A geometry change that narrows this column is a change
+to what the product can say.
+
+**A row's surface comes from its semantic role, never from its key or its
+label.** `surfaceOf()` maps roles to backgrounds, and a window's two navigation
+controls have a role of their own — they are activated like any action and read
+in the same ink, but they return no surface, so the pane they navigate shows
+through. The renderer is not asked to infer this from a key prefix or from the
+text of a label, and no background is corrected after a frame is prepared.
+
+**Each shared column publishes two widths, and they answer different
+questions.** The pane is the border-free inside, which is what a heading band
+spans; the body is the inset two cells further in on each side, which is what
+every row under that heading is built to. Both are real boxes the engine
+measures, and the manifest says which of the two each one answers for — a lookup
+that took whichever came first would build a header as narrow as the reading
+beneath it. The body is found by its own identifier rather than by its region,
+because the narrow outlet is one region for all three readings and is given no
+inset at all. Guidance, refusal, reading, label and chat fitting, the row boxes,
+the window counts and the published targets all read the body that actually
+contains them.
+
 One shared-column fact is measured rather than declared: a route drawer's top.
 Each column keeps a blank row above its first heading, and that row moved the
 contextual guidance into the rectangle the drawer's size alone used to state —

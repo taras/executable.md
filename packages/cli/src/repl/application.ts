@@ -24,9 +24,10 @@ import {
   actionRowProps,
   bandProps,
   bodyProps,
-  sidekickBodyProps,
+  insetBodyProps,
   headerBandProps,
   headerRowProps,
+  headerTitleProps,
   box,
   columnProps,
   COLUMN_TOP_GAP,
@@ -4372,7 +4373,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     // the pass still asking how wide the surface is has no width to fit to.
     // Each row is padded either way: a renderer writes what changed, so a row
     // whose text got shorter would keep the tail of what used to be there.
-    const room = context.widths?.surface ?? 0;
+    const room = context.widths?.surfaceBody ?? 0;
     const [first, ...rest] =
       context.refusal === undefined
         ? chunked(view.refusal, room)
@@ -4514,7 +4515,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       turns,
       view.focused,
       claim,
-      context.widths?.list,
+      context.widths?.listBody,
       live.sidekick,
     );
     // Outside the thing they move, like the drawer's: a control inside the
@@ -4524,7 +4525,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         "sessions:earlier",
         `  ${EARLIER}`,
         { select: "scroll-sessions", delta: -1 },
-        styleOf("action"),
+        styleOf("navigate"),
         {
           here: view.focused,
         },
@@ -4536,7 +4537,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         "sessions:later",
         `  ${LATER}`,
         { select: "scroll-sessions", delta: 1 },
-        styleOf("action"),
+        styleOf("navigate"),
         {
           here: view.focused,
         },
@@ -4557,7 +4558,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       model,
       view.focused,
       selection.entry?.key,
-      context.widths?.list,
+      context.widths?.listBody,
       claim,
     );
     if (catalog.length === 0) {
@@ -4577,7 +4578,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
           "entries:earlier",
           `  ${EARLIER}`,
           { select: "scroll-entries", delta: -1 },
-          styleOf("action"),
+          styleOf("navigate"),
           { here: view.focused },
         ),
       );
@@ -4589,7 +4590,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
           "entries:later",
           `  ${LATER}`,
           { select: "scroll-entries", delta: 1 },
-          styleOf("action"),
+          styleOf("navigate"),
           { here: view.focused },
         ),
       );
@@ -4663,7 +4664,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
           "sidekick:earlier",
           `  ${EARLIER}`,
           { select: "scroll-sidekick", delta: -1 },
-          styleOf("action"),
+          styleOf("navigate"),
           { here: view.focused },
         ),
       );
@@ -4679,7 +4680,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
           "sidekick:later",
           `  ${LATER}`,
           { select: "scroll-sidekick", delta: 1 },
-          styleOf("action"),
+          styleOf("navigate"),
           { here: view.focused },
         ),
       );
@@ -4697,7 +4698,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // it lands in, and an unbounded one makes that region wider than its share —
   // which would corrupt the very measurement that is about to answer how wide
   // it is.
-  const surface = context.widths?.surface;
+  const surface = context.widths?.surfaceBody;
   // The entry's own reading: what it produced, then the source that produced
   // it, as the rows the frame fitted to this pane. The controls that move it sit
   // outside the moving content, which is why they are described before the rows
@@ -4719,7 +4720,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         "reading:earlier",
         `  ${EARLIER}`,
         { select: "scroll-reading", delta: -1 },
-        styleOf("action"),
+        styleOf("navigate"),
         { here: view.focused },
       ),
     );
@@ -4731,7 +4732,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         "reading:later",
         `  ${LATER}`,
         { select: "scroll-reading", delta: 1 },
-        styleOf("action"),
+        styleOf("navigate"),
         { here: view.focused },
       ),
     );
@@ -6956,6 +6957,18 @@ export const TAB_ROW = "box:inspection:tabs";
 export const SIDEKICK_BODY = "box:inspection:body";
 
 /**
+ * The Transcript's inset body, by the id the frame measures it under.
+ *
+ * Named for the same reason the Sidekick's is: the box that publishes the inset
+ * and the pass that asks how wide what is inside it came out are two readers of
+ * one id.
+ */
+export const TRANSCRIPT_BODY = "box:transcript:body";
+
+/** The sidebar's inset body, which its two groups share the width of. */
+export const SIDEBAR_BODY = "box:sidebar:body";
+
+/**
  * How wide each region that text must fit is, as the engine measured it.
  *
  * Asked by whoever has to *write* something that must land in one: a row longer
@@ -6965,12 +6978,35 @@ export const SIDEKICK_BODY = "box:inspection:body";
  * calculator is a second answer to a question with one.
  */
 export interface ReplMeasuredWidths {
-  /** The surface carrying content: the transcript column, or the narrow outlet. */
+  /**
+   * The surface carrying content: the transcript column, or the narrow outlet.
+   *
+   * The pane itself, which is what its heading band spans. The rows beneath that
+   * heading are inset from it and use {@link ReplMeasuredWidths.surfaceBody}.
+   */
   readonly surface: number;
   /** The column the Sessions reading and the Entries catalog share. */
   readonly list: number;
   /** The bindings and recorded-answer column. */
   readonly inspection: number;
+  /**
+   * The Transcript's own body, inside its pane's gutter.
+   *
+   * What the guidance, a refusal's explanation, the retained reading and the
+   * controls around it are built to. Narrower than the pane, because a heading
+   * says what a column is across its whole width and what a person reads is
+   * inset from it. Falls back to the pane where a frame draws no inset body,
+   * which is the narrow outlet.
+   */
+  readonly surfaceBody: number;
+  /**
+   * The sidebar's own body, inside the same gutter.
+   *
+   * What the Sessions rows, the Entries catalog and both windows' controls are
+   * built to. The two groups are inset identically, so this is one answer for
+   * the column rather than one per reading.
+   */
+  readonly listBody: number;
   /**
    * The Sidekick's own body, inside its pane's gutter.
    *
@@ -7550,7 +7586,7 @@ export function presentationFor(
   const viewports: ReplViewportSlot[] = [];
   const regions: { region: ReplRegion; id: string }[] = [];
   /** The border-free inside of each pane that has edges. */
-  const contents: { region: ReplRegion; id: string }[] = [];
+  const contents: { region: ReplRegion; id: string; kind: "pane" | "body" }[] = [];
   /**
    * How wide one region is, as this frame measured it.
    *
@@ -7573,6 +7609,25 @@ export function presentationFor(
     // The sidebar and the narrow outlet both carry the two list readings.
     return context.widths?.list;
   };
+  /**
+   * How wide a row *under* a heading may be, which is the inset body.
+   *
+   * Two answers per column and not one: a heading band says what the column is
+   * across its whole width, and everything a person reads in it is inset two
+   * cells on each side. A row built to the pane would be four cells too wide
+   * and would publish a hit box reaching into the gutter it is meant to leave
+   * blank. The narrow outlet draws no inset body and answers with its own
+   * width, which is what leaves its rows where they have always been.
+   */
+  const bodyWidthOfRegion = (region: ReplRegion): number | undefined => {
+    if (region === "transcript") {
+      return context.widths?.surfaceBody;
+    }
+    if (region === "sidebar") {
+      return context.widths?.listBody;
+    }
+    return widthOfRegion(region);
+  };
   const of = (slot: ReplSlot): readonly ReplCandidate[] =>
     candidates.filter((candidate) => candidate.slot === slot);
 
@@ -7593,17 +7648,18 @@ export function presentationFor(
       (candidate) => !candidate.key.endsWith(":earlier") && !candidate.key.endsWith(":later"),
     );
     const id = `box:${window}:viewport`;
+    const room = bodyWidthOfRegion(region);
     viewports.push(Object.freeze({ id, region, window }));
     return [
-      ...rest.map((candidate) => rowBox(candidate, region, widthOfRegion(region))),
-      ...above.map((candidate) => rowBox(candidate, region, widthOfRegion(region))),
+      ...rest.map((candidate) => rowBox(candidate, region, room)),
+      ...above.map((candidate) => rowBox(candidate, region, room)),
       box({
         id,
         region,
         props: viewportProps(rows),
-        children: of(rowSlot).map((candidate) => rowBox(candidate, region, widthOfRegion(region))),
+        children: of(rowSlot).map((candidate) => rowBox(candidate, region, room)),
       }),
-      ...below.map((candidate) => rowBox(candidate, region, widthOfRegion(region))),
+      ...below.map((candidate) => rowBox(candidate, region, room)),
     ];
   };
 
@@ -7647,17 +7703,39 @@ export function presentationFor(
     ];
   };
 
-  const located = of("located").map((candidate) =>
-    rowBox(candidate, profile === "narrow" ? "content" : "transcript", context.widths?.surface),
-  );
+  const located = of("located").map((candidate) => {
+    const region = profile === "narrow" ? "content" : "transcript";
+    return rowBox(candidate, region, bodyWidthOfRegion(region));
+  });
   const heading = (key: string, region: ReplRegion): readonly ReplBox[] => {
     const found = of("navigation").filter((candidate) => candidate.key === key);
     return found.map((candidate) => rowBox(candidate, region, widthOfRegion(region)));
   };
-  /** One pane's own title, where there is a pane to put it in. */
+  /**
+   * One pane's own title, where there is a pane to put it in.
+   *
+   * Inset by the same gutter the body under it has, so the column's name lines
+   * up with what it names. The band around it keeps the whole inner width: it
+   * draws the header surface and the rule that closes it, and only the row
+   * holding the text moves. The row is built to the inset width because that is
+   * the box it is in — a row built to the pane would overflow the gutter it was
+   * just given.
+   */
   const paneTitle = (key: string, region: ReplRegion, surface: number): readonly ReplBox[] => {
     const found = of("pane-heading").filter((candidate) => candidate.key === key);
-    return found.map((candidate) => rowBox(candidate, region, widthOfRegion(region), surface));
+    if (found.length === 0) {
+      return [];
+    }
+    return [
+      box({
+        id: `box:${region}:title`,
+        region,
+        props: headerTitleProps(surface),
+        children: found.map((candidate) =>
+          rowBox(candidate, region, bodyWidthOfRegion(region), surface),
+        ),
+      }),
+    ];
   };
   /**
    * The right pane's two tabs, in the one row that is also its heading.
@@ -7697,37 +7775,43 @@ export function presentationFor(
     ];
   };
   /**
-   * The Sidekick's body, in the gutter that insets it from its pane.
+   * One column's body, in the gutter that insets it from the pane.
    *
-   * The chat, its window controls, the composer block and the controls and
-   * announcements under them: everything a person reads or types in, and
-   * nothing of the header above it. Published as a content box so the pass
-   * that asks how wide a row may be asks the engine about this one.
+   * Everything under a column's heading: the Sidekick's chat and composer, the
+   * Transcript's directions and retained reading, the sidebar's two lists and
+   * every window control around them. Published as a content box of its own, so
+   * the pass that asks how wide a row in it may be asks the engine about this
+   * box rather than about the pane the heading spans.
    *
-   * The inset belongs to that reading alone. Bindings shares the pane and
-   * keeps the body it has always had, so this draws the gutter only where the
-   * Sidekick is the reading being shown.
+   * The gutter outside and the room inside, as two boxes — the same division a
+   * bordered pane already makes. A measured bound is the only honest answer to
+   * how much room the padding left, and reading the padded box's own bounds
+   * would answer with the padding still in it.
+   */
+  const insetBody = (region: ReplRegion, id: string, children: readonly ReplBox[]): ReplBox => {
+    contents.push({ region, id, kind: "body" });
+    return box({
+      id: `${id}:gutter`,
+      region,
+      props: insetBodyProps(),
+      children: [box({ id, region, props: paneContentProps(), children })],
+    });
+  };
+  /**
+   * The Sidekick's body, where the Sidekick is the reading being shown.
+   *
+   * The inset belongs to that reading alone. A binding is a line of source, and
+   * indenting it to match a conversation would narrow the thing it quotes by
+   * four cells without saying so — so Bindings shares the pane and keeps the
+   * body it has always had. That frame publishes no inset body for this column
+   * at all, which is what makes the measured body width fall back to the pane
+   * the rows actually have.
    */
   const sidekickBody = (region: ReplRegion, children: readonly ReplBox[]): ReplBox => {
-    // A binding is a line of source. Indenting it to match a conversation
-    // would narrow the thing it quotes by four cells without saying so, and
-    // the accepted inset was asked for about the Sidekick's own body. This
-    // frame publishes no inset body at all, which is what makes the measured
-    // body width fall back to the pane the rows actually have.
     if (!showingSidekick(view)) {
       return box({ id: "box:inspection:reading", region, props: paneContentProps(), children });
     }
-    // The gutter outside and the room inside, as two boxes — the same division
-    // a bordered pane already makes. A measured bound is the only honest answer
-    // to how much room the padding left, and reading the padded box's own
-    // bounds would answer with the padding still in it.
-    contents.push({ region, id: SIDEKICK_BODY });
-    return box({
-      id: "box:inspection:gutter",
-      region,
-      props: sidekickBodyProps(),
-      children: [box({ id: SIDEKICK_BODY, region, props: paneContentProps(), children })],
-    });
+    return insetBody(region, SIDEKICK_BODY, children);
   };
 
   /**
@@ -7749,7 +7833,12 @@ export function presentationFor(
       box({
         id: `box:${region}:header`,
         region,
-        props: headerBandProps(rows.length, surface),
+        // The asked-for space above this column's heading, owned by the band so
+        // it is painted with the header's own surface: the gap is the top of
+        // the band rather than a strip of the reading pushed down. Every row
+        // below it keeps the position it had — the band grew by the row the
+        // column's content gave up.
+        props: headerBandProps(rows.length, surface, COLUMN_TOP_GAP),
         children: rows,
       }),
     ];
@@ -7767,15 +7856,14 @@ export function presentationFor(
     children: readonly ReplBox[],
   ): ReplBox => {
     const id = `box:${region}:content`;
-    contents.push({ region, id });
+    contents.push({ region, id, kind: "pane" });
     return box({
       id: `box:${region}`,
       region,
       props: paneColumnProps(width, surface),
-      // The asked-for space above this column's header, inside the edges, so
-      // what the engine leaves below it is measured with the gap taken out
-      // rather than with a row guessed back.
-      children: [box({ id, region, props: paneContentProps(COLUMN_TOP_GAP), children })],
+      // No gap here: a column with a header band has that band own it, so the
+      // blank row is painted with the header's surface rather than the body's.
+      children: [box({ id, region, props: paneContentProps(), children })],
     });
   };
 
@@ -7880,7 +7968,13 @@ export function presentationFor(
             props: stackProps("grow"),
             children: [
               ...heading("sessions:heading", "sidebar"),
-              ...listColumn("sidebar", "sessions-fixed", "sessions", SESSIONS_WINDOW),
+              // The heading spans the column and the list under it is inset,
+              // which is the division every other column already makes. This is
+              // the box the sidebar's body width is measured from; the Entries
+              // group below is inset identically, so one answer serves both.
+              insetBody("sidebar", SIDEBAR_BODY, [
+                ...listColumn("sidebar", "sessions-fixed", "sessions", SESSIONS_WINDOW),
+              ]),
             ],
           }),
           box({
@@ -7893,13 +7987,25 @@ export function presentationFor(
             props: stackProps(context.entriesRows === undefined ? sharedColumnRows(size) : "fit"),
             children: [
               ...heading("entries:heading", "sidebar"),
-              ...listColumn(
-                "sidebar",
-                "entries-fixed",
-                "entries",
-                ENTRIES_WINDOW,
-                context.entriesRows,
-              ),
+              box({
+                id: "box:sidebar:entries:gutter",
+                region: "sidebar",
+                props: insetBodyProps(),
+                children: [
+                  box({
+                    id: "box:sidebar:entries:body",
+                    region: "sidebar",
+                    props: paneContentProps(),
+                    children: listColumn(
+                      "sidebar",
+                      "entries-fixed",
+                      "entries",
+                      ENTRIES_WINDOW,
+                      context.entriesRows,
+                    ),
+                  }),
+                ],
+              }),
             ],
           }),
         ],
@@ -7910,8 +8016,13 @@ export function presentationFor(
           REPL_PALETTE.transcriptHeaderSurface,
           paneTitle("transcript:heading", "transcript", REPL_PALETTE.transcriptHeaderSurface),
         ),
-        ...located,
-        ...listColumn("transcript", "reading-fixed", "reading", READING_WINDOW),
+        // Everything under that heading, inset: the directions, the retained
+        // reading and the two controls that move it. The band above spans the
+        // column, because a column says what it is across its full width.
+        insetBody("transcript", TRANSCRIPT_BODY, [
+          ...located,
+          ...listColumn("transcript", "reading-fixed", "reading", READING_WINDOW),
+        ]),
       ]),
       edgedColumn("inspection", inspectionWidth(size), REPL_PALETTE.rightSurface, [
         // The tabs are the header band, closed by the same one edge. They stay

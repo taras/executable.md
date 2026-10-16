@@ -87,7 +87,7 @@ import type {
   ReplSidekickReading,
 } from "../src/repl/application.ts";
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
-import { FOOTER_ROWS, NARROW } from "../src/repl/layout.ts";
+import { FOOTER_ROWS, inspectionWidth, NARROW, sidebarWidth } from "../src/repl/layout.ts";
 import {
   ENTRIES_FILE,
   PAIRED_DIRECTORY,
@@ -1623,17 +1623,22 @@ describe("Tier CFG — Configure in the pane that owns it, at every size", () =>
   });
 });
 
-/** How wide the sidebar is at the wide profile, which is where Sessions is. */
-const SIDEBAR_COLUMNS = 32;
+/** The wide size every row in this file drives the mounted program at. */
+const MOUNTED_SIZE: ReplTerminalSize = { columns: 160, rows: 36 };
 
-/** How wide the inspection column is at the wide profile. */
+/** How wide the sidebar is at that size, which is where Sessions is. */
+const SIDEBAR_COLUMNS = sidebarWidth(MOUNTED_SIZE) ?? 0;
+
 /**
  * The column the right pane begins at, at the wide size these rows drive.
  *
- * From the accepted table: the sidebar takes 32 and the 128 left over is
- * shared, so the Transcript ends and this pane begins at 96.
+ * Asked of the layout rather than written down: these two are how the helpers
+ * below *slice* the screen into columns, and say nothing about how wide a column
+ * should be. Tier PW asserts the accepted shares independently, which is where
+ * a wrong width belongs — a slicer that disagreed with the product would quietly
+ * read the wrong pane instead of failing.
  */
-const INSPECTION_FROM = 96;
+const INSPECTION_FROM = MOUNTED_SIZE.columns - (inspectionWidth(MOUNTED_SIZE) ?? 0);
 
 /**
  * The Sessions reading, as the sidebar draws it.
@@ -4636,6 +4641,74 @@ describe("Tier UH — both pane tabs still select, by pointer and by keyboard", 
     expect(panePresented(repl.terminal)).toBe("sidekick");
     expect(messageText(repl.terminal)).toContain("kept question");
     expect(draftText(repl.terminal)).toBe("kept entry");
+  });
+
+  it("BP3: both bodies stay usable through their own controls, and narrow gains no inset", function* () {
+    const repl = yield* useMountedRepl();
+
+    // A real entry first, so the Transcript has a reading with controls around
+    // it — submitting consumes the draft, so the texts below are typed after.
+    yield* submitEntry(repl, promptEntry("read-entry"));
+    yield* awaiting(repl.terminal, "the entry settling", (one) => shows(one, "[ok]"));
+    yield* click(repl.terminal, "1.");
+    yield* awaiting(repl.terminal, "the entry being selected", (one) => shows(one, "* 1."));
+
+    // Then text in both destinations, so the round trip below has something of
+    // each to preserve.
+    yield* focusDraft(repl.terminal);
+    yield* typing(repl.terminal, "kept entry");
+    yield* focusMessage(repl.terminal);
+    yield* typing(repl.terminal, "kept question");
+
+    // The Sessions reading is reached by its own control, in the column the
+    // inset narrowed: a row built to the pane instead of the body would have
+    // published a target reaching into the gutter.
+    yield* click(repl.terminal, "All conversations");
+    yield* settled(30);
+    expect(shows(repl.terminal, "All conversations")).toBe(true);
+
+    // And the Transcript scrolls by its *own* control at both shared sizes. The
+    // reading is narrower than it was, so its later rows are reached rather than
+    // drawn — which is what these two controls are for. Found by the column it
+    // is in, because the sidebar's two readings each draw one of their own.
+    for (const size of [
+      { columns: 120, rows: 30 },
+      { columns: 160, rows: 36 },
+    ]) {
+      yield* resizeTo(repl.terminal, size);
+      const left = sidebarWidth(size) ?? 0;
+      const right = size.columns - (inspectionWidth(size) ?? 0);
+      const at = screenOf(repl.terminal).flatMap((line, row) => {
+        const column = line.indexOf(LATER);
+        return column >= left && column < right ? [{ column, row }] : [];
+      })[0];
+      if (at === undefined) {
+        throw new Error(`the ${size.columns}x${size.rows} transcript drew no ${LATER}`);
+      }
+      yield* clickAt(repl.terminal, at);
+      // Pressed, and it wrote nothing. How far a short reading moves is its own
+      // business — that a narrowed body's later rows are still *reachable* is
+      // BP2's claim, against a reading long enough to need it. What matters
+      // here is that this column's own control is where a pointer can reach it
+      // and that pressing it edits neither composer nor the selection.
+      expect([size.columns, draftText(repl.terminal)]).toEqual([size.columns, "kept entry"]);
+      expect([size.columns, messageText(repl.terminal).includes("kept question")]).toEqual([
+        size.columns,
+        true,
+      ]);
+      expect([size.columns, shows(repl.terminal, "* 1.")]).toEqual([size.columns, true]);
+    }
+
+    // Narrow routes one outlet and is given no inset of its own, so its own
+    // surface controls are still what it offers.
+    const narrow = yield* resizeTo(repl.terminal, NARROW);
+    expect(rowsShow(narrow(), "Entries")).toBe(true);
+
+    // Back, with both texts where they were left and the same reading selected.
+    const wide = yield* resizeTo(repl.terminal, { columns: 160, rows: 36 });
+    expect(paneShown(wide())).toBe("sidekick");
+    expect(messageTextIn(wide())).toContain("kept question");
+    expect(rowsShow(wide(), "Draft: kept entry")).toBe(true);
   });
 
   it("UH4: resizing through narrow and back keeps both texts, and narrow grows no tabs", function* () {

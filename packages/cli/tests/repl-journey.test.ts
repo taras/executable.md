@@ -517,6 +517,39 @@ function transcriptControl(
 }
 
 /**
+ * Whether the Transcript's column holds this text once its rows are rejoined.
+ *
+ * For a token with no spaces in it. `saysAcross` rejoins a block at its cuts and
+ * puts a space where each one was, which is right for a sentence wrapped at
+ * words — but a 35-character identifier in a column with fewer than that many
+ * columns of source room is cut at a code unit, and a space inserted there is a
+ * space the document never had. So these rows are rejoined with nothing between
+ * them, inside the Transcript's own column alone: joining across the row would
+ * splice the pane beside it into the token.
+ *
+ * Only for a distinctive unbroken string. Rejoining without a separator can in
+ * principle splice two adjacent rows into something neither says, which is why
+ * `saysAcross` is the question for anything made of words.
+ */
+function saysJoined(terminal: Terminal, expected: string): boolean {
+  const left = sidebarWidth(terminal.size) ?? 0;
+  const right = terminal.size.columns - (inspectionWidth(terminal.size) ?? 0);
+  const joined = screenOf(terminal)
+    // Past the column's own divider, its body gutter and the rails an
+    // enclosure draws beside a nested reading: those are decoration this
+    // column puts in front of a row, and a token cut across two rows has
+    // them between its halves.
+    .map((line) =>
+      line
+        .slice(left, right)
+        .replace(/^[\s\u2502]+/, "")
+        .trimEnd(),
+    )
+    .join("");
+  return joined.includes(expected);
+}
+
+/**
  * Scroll the transcript's own reading window until it is showing this text.
  *
  * The accepted row of space above each column heading costs every column one
@@ -1005,6 +1038,9 @@ describe("REPL journey: one entry, from raw bytes", () => {
       const lines = yield* records(root, files[0]);
       const recorded = lines.filter((line) => line.includes("elicit"));
       expect(recorded.length).toBeGreaterThan(0);
+      // Reached through the reading's own window, for the accepted body gutter:
+      // the same retained output pays out over more rows in an inset column.
+      yield* scrollReadingTo(terminal, "Decision: approve");
       expect(shows(terminal, "Decision: approve")).toBe(true);
       // Settled: the root closed, so the answer is in the history and the
       // entry's catalog row carries the outcome it closed with.
@@ -2009,8 +2045,19 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
 
       // The reading this state *is*, said on the screen: an entry selected, a
       // recorded position being read, and the retained answer's drawer over it.
+      //
+      // The first two are read with the layer out of the way and the third with
+      // it back. A route drawer begins an eighth of the screen in — column 20
+      // at this size — and the accepted body gutter moved the catalog's rows two
+      // cells right, so the last character of `entry-1` now lands exactly on
+      // that edge. Behind a modal this row reads `entry-`, and a claim about
+      // which entry is selected cannot be made of six of its seven characters.
+      // Closing keeps the position and the selection; only the layer moves.
+      terminal.feed("\x1b");
+      yield* settled(30);
       expect(selectedEntryOn(terminal)).toContain("entry-1");
       expect(historicalOn(terminal)).toBe(true);
+      yield* activate(terminal, "answered");
       expect(shows(terminal, "[close]")).toBe(true);
       // The whole retained schema and the whole retained answer, reached through
       // the drawer's own window.
@@ -2095,9 +2142,17 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       });
       yield* untilDrawn(second.terminal);
 
-      // The same reading, rebuilt from the URL and the file alone.
+      // The same reading, rebuilt from the URL and the file alone — read with
+      // the drawer the location restored closed, for the reason above: this
+      // layer's left edge falls on the last character of the catalog's row, so
+      // behind it the name is `entry-`. Closing moves the layer and nothing
+      // else; the drawer is reopened below for its own content.
+      second.terminal.feed("\x1b");
+      yield* settled(30);
       expect(selectedEntryOn(second.terminal)).toContain("entry-1");
       expect(historicalOn(second.terminal)).toBe(true);
+      yield* activate(second.terminal, "answered");
+      yield* until_(second.terminal, "the retained drawer again", (one) => shows(one, "[close]"));
 
       // The same retained question: the whole schema and the whole answer, not a
       // label that happens to contain the word. Reached through the drawer's own
@@ -2446,7 +2501,12 @@ describe("REPL journey: the same product at every size", () => {
         yield* settled(60);
         terminal.feed("\r");
         yield* dismissQuestion(terminal);
-        yield* until_(terminal, "the transcript", (t) => shows(t, "About to evaluate:"));
+        // Across the rows this reading was cut into, not on one of them. The
+        // source column reserves the rail, the separators and the status badge
+        // out of the body, and the accepted body gutter takes two more cells
+        // from each side — so a line of somebody's document is paid out over
+        // more rows than it used to be. The text is the whole of what it was.
+        yield* until_(terminal, "the transcript", (t) => saysAcross(t, "About to evaluate:"));
 
         // A transcript with something in it — recorded before anything covers it,
         // so what follows is a claim about coverage rather than about absence.
@@ -2459,7 +2519,14 @@ describe("REPL journey: the same product at every size", () => {
         // neither `Source` nor `Checklist` would discriminate anything.
         const underneath = ["### Ship the REPL", "2 steps remain."];
         for (const text of underneath) {
-          expect(shows(terminal, text)).toBe(true);
+          // Across the rows this column cut it into. The Transcript reserves
+          // the rail, its separators and the status badge out of its body
+          // before any source is cut, and the accepted sidebar width and body
+          // gutter leave that body narrower — so a line of somebody's document
+          // is paid out over more rows than it was. `saysAcross` rejoins a
+          // block inside its own column, so the text is the whole of what it
+          // was. The coverage claims below are positional and unaffected.
+          expect([text, saysAcross(terminal, text)]).toEqual([text, true]);
         }
 
         // And then a drawer over it.
@@ -2717,6 +2784,8 @@ describe("REPL journey: what it settles before it acts", () => {
       first.terminal.bytes(BYTES.encode("approve"));
       yield* settled(30);
       first.terminal.feed("\r");
+      // Reached through the reading's own window, for the accepted body gutter.
+      yield* scrollReadingTo(first.terminal, "Decision: approve");
       yield* until_(first.terminal, "the answer", (t) => shows(t, "Decision: approve"));
 
       first.terminal.end();
@@ -2865,6 +2934,8 @@ describe("REPL journey: what it settles before it acts", () => {
       terminal.bytes(BYTES.encode("approve"));
       yield* settled(30);
       terminal.feed("\r");
+      // Reached through the reading's own window, for the accepted body gutter.
+      yield* scrollReadingTo(terminal, "Decision: approve");
       yield* until_(terminal, "the answer", (t) => shows(t, "Decision: approve"));
 
       // The question is over, so the drawer is over: its controls are off the
@@ -3857,8 +3928,11 @@ describe("REPL journey: output nothing records still reaches the screen", () => 
       // source on the screen never proves anything is waiting.
       expect(askedRow(terminal)).toBeUndefined();
       // The text after the last record this document writes. Nothing recorded
-      // it, nothing reprojected because of it, and it is on the screen.
-      expect(shows(terminal, PRINTED)).toBe(true);
+      // it, nothing reprojected because of it, and it is on the screen — across
+      // the rows the Transcript's own body cut it into. This one has no spaces
+      // to wrap at, so the column cuts it at a code unit and the rows are
+      // rejoined with nothing between them.
+      expect(saysJoined(terminal, PRINTED)).toBe(true);
 
       gate.resolve();
       yield* until_(terminal, "the question", (t) => askedRow(t) !== undefined);

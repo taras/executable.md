@@ -178,7 +178,20 @@ export interface ReplLayoutManifest {
    * for the pane itself: where a pane landed and how much room it has inside are
    * two different questions.
    */
-  readonly contents: readonly { readonly region: ReplRegion; readonly id: string }[];
+  readonly contents: readonly {
+    readonly region: ReplRegion;
+    readonly id: string;
+    /**
+     * Which of a column's two widths this box answers for.
+     *
+     * `"pane"` is the border-free inside, which is what a heading band spans.
+     * `"body"` is the inset inside that, which is what the rows under the
+     * heading are built to. A column has both, they are four cells apart, and a
+     * lookup that took whichever came first would build a header as narrow as
+     * the reading under it.
+     */
+    readonly kind: "pane" | "body";
+  }[];
   /** The History band, which comes from the model rather than from a node. */
   readonly history: ReplHistoryBand;
 }
@@ -203,13 +216,22 @@ export { HISTORY_ROWS } from "./history-rail.ts";
 /** Five, at every size — imported for this module's own layout. */
 import { HISTORY_ROWS } from "./history-rail.ts";
 
-/** How wide a column is at each profile that has one. */
-interface ColumnWidths {
-  readonly wide: number;
-  readonly medium: number;
-}
-
-const SIDEBAR: ColumnWidths = { wide: 32, medium: 28 };
+/**
+ * How wide the sidebar is, at every profile that has one.
+ *
+ * Thirty-six at both, rather than a share of the terminal. The two readings in
+ * this column are rows of text that must be legible whole: the longest state a
+ * turn carries is `completed, not recorded yet`, and `All conversations
+ * (filtered)` is the widest control. Thirty-six leaves thirty-two inside the
+ * body's gutter and thirty past the focus marker, which is exactly the room the
+ * old full-width wide sidebar had — so a row that fitted before fits now, at the
+ * medium profile too, where it did not.
+ *
+ * This is the Product Owner's answer to a real conflict: an inset sidebar at the
+ * old widths cut a turn's state in half, and `fitLabel` says a state cut in half
+ * is a row saying something untrue. Width was chosen over shorter vocabulary.
+ */
+const SIDEBAR_COLUMNS = 36;
 
 /**
  * How far the drawer sits in from the body it covers, as a share of it.
@@ -264,10 +286,7 @@ export function bodyRows(size: ReplTerminalSize): number {
 /** How wide the sidebar is, or none at a profile that has no columns. */
 export function sidebarWidth(size: ReplTerminalSize): number | undefined {
   const profile = profileFor(size);
-  if (profile === "wide") {
-    return SIDEBAR.wide;
-  }
-  return profile === "medium" ? SIDEBAR.medium : undefined;
+  return profile === "wide" || profile === "medium" ? SIDEBAR_COLUMNS : undefined;
 }
 
 /**
@@ -280,7 +299,7 @@ export function sidebarWidth(size: ReplTerminalSize): number | undefined {
  *
  * The spare cell of an odd remainder goes to the Transcript, which takes what
  * is left of the row: one of them has to have it, and fractional geometry is
- * not an option. So 160 gives 64 and 64, and 161 gives 65 and 64.
+ * not an option. So 160 gives 62 and 62, and 161 gives 63 and 62.
  */
 export function inspectionWidth(size: ReplTerminalSize): number | undefined {
   const profile = profileFor(size);
@@ -473,28 +492,32 @@ export function bodyProps(edged: boolean): ReplBoxProps {
   return { layout, border: { color: terminalColour(REPL_PALETTE.chromeEdge), bottom: 1 } };
 }
 
-/** How far the Sidekick's body sits in from its pane, on each side. */
-export const SIDEKICK_GUTTER = 2;
+/** How far a column's body sits in from the pane that holds it, on each side. */
+export const BODY_GUTTER = 2;
 
 /**
- * The Sidekick's body, inset from the pane that holds it.
+ * One column's body, inset from the pane that holds it.
  *
  * Two cells of gutter on each side, through the engine's own padding, so the
  * width every row inside is built to is the width the engine reports for this
  * box rather than a number subtracted somewhere else. The gutter is geometry:
- * it carries the pane's surface, holds no text and is no part of any message.
+ * it carries the pane's surface, holds no text and is no part of any row.
  *
- * The header rows above are deliberately not in here. A column says what it is
- * across its whole width, and a title indented to match the chat would read as
- * one more line of it.
+ * The same inset for the Sidekick's chat, the Transcript's reading and the
+ * sidebar's two lists, because they are the same thing — the part of a column a
+ * person reads — and the Product Owner asked for them to match.
+ *
+ * The heading rows above are deliberately not in here. A column says what it is
+ * across its whole width, and a heading indented to match the reading under it
+ * would read as one more line of that reading.
  */
-export function sidekickBodyProps(): ReplBoxProps {
+export function insetBodyProps(): ReplBoxProps {
   return {
     layout: {
       width: grow(),
       height: grow(),
       direction: "ttb",
-      padding: { left: SIDEKICK_GUTTER, right: SIDEKICK_GUTTER },
+      padding: { left: BODY_GUTTER, right: BODY_GUTTER },
     },
   };
 }
@@ -511,6 +534,27 @@ export function headerRowProps(width: number | undefined, surface: number): Repl
 }
 
 /**
+ * The gutter a header's own title sits in, inside a band that stays full width.
+ *
+ * A column's name lines up with what is under it, so the title is inset by the
+ * same two cells the body is. The band keeps the whole inner width — it is what
+ * draws the header surface and the rule that closes it — and only the row
+ * holding the text moves, through the engine's padding rather than through
+ * spaces put in front of the name.
+ */
+export function headerTitleProps(surface: number): ReplBoxProps {
+  return {
+    layout: {
+      width: grow(),
+      height: fit(),
+      direction: "ttb",
+      padding: { left: BODY_GUTTER, right: BODY_GUTTER },
+    },
+    bg: terminalColour(surface),
+  };
+}
+
+/**
  * The band a pane's header rows sit in, closed by the accepted edge.
  *
  * `rows` is how many title rows it holds; the edge is one more, because a
@@ -523,9 +567,14 @@ export function headerRowProps(width: number | undefined, surface: number): Repl
  * The band carries the header surface too, so the edge row is drawn on the
  * header's own ground rather than on the reading beneath it.
  */
-export function headerBandProps(rows: number, surface: number): ReplBoxProps {
+export function headerBandProps(rows: number, surface: number, topGap = 0): ReplBoxProps {
   return {
-    layout: { width: grow(), height: fixed(rows + 1), direction: "ttb" },
+    layout: {
+      width: grow(),
+      height: fixed(rows + topGap + 1),
+      direction: "ttb",
+      padding: { top: topGap },
+    },
     bg: terminalColour(surface),
     border: { color: terminalColour(REPL_PALETTE.chromeEdge), bottom: 1 },
   };
@@ -541,6 +590,13 @@ export const TAB_GAP = 2;
  * so the engine's own remainder is what the rows below are measured against. A
  * gap spent as a described blank row would be a mounted node with a hit box and
  * a Tab stop, and a reader would find a row there that selects nothing.
+ *
+ * Where a column has a header band, the band owns this space and paints it with
+ * the header's own surface: the gap reads as the top of that band rather than as
+ * a strip of the reading pushed down. The sidebar has no band and keeps it on
+ * the pane, which is its own surface either way. Which box owns it changes no
+ * vertical coordinate — the heading, the rule and the first body row are where
+ * they were.
  */
 export const COLUMN_TOP_GAP = 1;
 

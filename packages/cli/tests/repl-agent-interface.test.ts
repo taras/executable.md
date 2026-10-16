@@ -108,6 +108,7 @@ import { sidekickAssembly } from "../src/repl/sidekick/assembly.ts";
 
 /** The widest accepted frame, stated here because layout keeps it private. */
 const WIDE = { columns: 160, rows: 36 };
+const MEDIUM = { columns: 120, rows: 30 };
 
 /** The Story's shape: three spawned children, each its own conversation. */
 const THREE_SPAWNS = [
@@ -4048,4 +4049,97 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
       });
     });
   }
+});
+
+/**
+ * Tier BP4 — the sidebar's longest rows survive its two-cell body gutter (#883).
+ *
+ * The Product Owner asked for the Transcript and Sessions to match the
+ * Sidekick's body padding. An inset sidebar at the old widths could not hold a
+ * turn's state: `fitLabel` keeps that part whole because "a state cut in half is
+ * a row saying something untrue", and beneath that guarantee is a last-resort
+ * hard cut which the inset reached — at the medium profile it was already being
+ * reached before any inset. The answer was width, not shorter words: the sidebar
+ * is 36 columns at both profiles, which leaves 32 inside the gutter and 30 past
+ * the focus marker, exactly the room the old full-width wide sidebar had.
+ *
+ * Both profiles, because wide-only evidence is what let the medium case through.
+ */
+describe("Tier BP4 — the widened sidebar holds its longest rows whole", () => {
+  /** The longest state this product writes for a turn, and the widest control. */
+  const LONGEST_STATE = "completed, not recorded yet";
+  const FILTERED = "All conversations (filtered)";
+
+  it("BP4: a turn's whole state and the filtered control are drawn at both sizes", function* () {
+    const { session, stub } = yield* asking({
+      review: { unrecorded: true },
+      build: { unrecorded: true },
+      check: { unrecorded: true },
+    });
+    yield* stub.finished(REVIEWER);
+    yield* stub.finished(BUILDER);
+    yield* stub.finished(CHECKER);
+
+    // One turn left unrecorded, which is the state that does not fit, and one
+    // recorded beside it so the two readings are both on the screen.
+    const order = [...session.agent.slots].sort((left, right) => left.order - right.order);
+    const unrecorded = promptOf(session, order[0]?.key);
+    const recordedPrompt = promptOf(session, order[order.length - 1]?.key);
+    expect(unrecorded).not.toBe(recordedPrompt);
+    stub.record(coroutineFor(recordedPrompt));
+    yield* until(session, `${recordedPrompt} being recorded`, () => recorded(session) === 1);
+
+    for (const size of [WIDE, MEDIUM]) {
+      const where = `${size.columns}x${size.rows}`;
+      const standing = initialState("agents");
+
+      // Whole, not shortened: this is the row the old widths cut, and the one
+      // the width ruling exists to keep.
+      const view = reading(standing, session, size);
+      expect([where, (yield* labelOf(view, unrecorded)).includes(LONGEST_STATE)]).toEqual([
+        where,
+        true,
+      ]);
+      expect([
+        where,
+        (yield* labelOf(view, recordedPrompt)).includes("completed, recorded"),
+      ]).toEqual([where, true]);
+      // And every row of this column ends in a *complete* state, which is the
+      // guarantee itself: the hard-cut branch stops wherever the room ran out,
+      // so a row ending mid-state is exactly the failure this width prevents.
+      // The prompt in front of it may still give way — that is the part marked
+      // elidable, and why the state is the part marked to be kept.
+      const STATES =
+        /(?:queued|streaming|(?:completed|failed|cancelled|finished), (?:not recorded yet|recorded))$/;
+      for (const row of yield* turnRows(view)) {
+        expect([where, row.key, STATES.test(row.label)]).toEqual([where, row.key, true]);
+      }
+
+      // The three turns are still three distinct rows, which is the other thing
+      // a cut takes away: two rows ending mid-key read as the same row.
+      const labels = (yield* turnRows(view)).map((one) => one.label);
+      expect([where, labels.length]).toEqual([where, 3]);
+      expect([where, new Set(labels).size]).toEqual([where, labels.length]);
+
+      // The widest control the sidebar draws, with a filter actually applied
+      // through the real action rather than a route written here.
+      const chosen = (yield* conversationRows(view))[0]?.replace("sessions:conversation:", "");
+      if (chosen === undefined) {
+        throw new Error(`${where} offered no conversation to filter by`);
+      }
+      const filteredState = reduceRepl(
+        standing,
+        { kind: "select-session", session: chosen },
+        session.model,
+        liveReading(session),
+        yield* admissionOf(standing, session, size),
+      ).state;
+      const filtered = reading(filteredState, session, size);
+      const all = (yield* describedBy(filtered)).find((one) => one.key === "sessions:all");
+      if (all === undefined) {
+        throw new Error(`${where} drew no All conversations control`);
+      }
+      expect([where, all.label.includes(FILTERED)]).toEqual([where, true]);
+    }
+  });
 });

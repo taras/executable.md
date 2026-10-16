@@ -47,7 +47,7 @@ import { installReplTerminal } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { ReplClock } from "../src/repl/frame.ts";
-import { inspectionWidth, sidebarWidth } from "../src/repl/layout.ts";
+import { BODY_GUTTER, inspectionWidth, sidebarWidth } from "../src/repl/layout.ts";
 import { runReplProgram } from "../src/repl/program.ts";
 import { assembleReplProfile } from "../src/repl-profile.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
@@ -914,10 +914,24 @@ describe("J3 — durable truth, and a cold process over it", () => {
 
       // The prefix before the turn was published holds no turn: the entry is
       // admitted and nothing has been said.
+      //
+      // Read with the drawer closed, and that matters in both directions. This
+      // layer covers the columns of the sidebar from an eighth of the screen
+      // in, and the accepted body gutter moved the Sessions rows two cells
+      // right — so the longest of them now ends under the drawer's own left
+      // edge at this size. Behind a modal, "the screen does not show this" is
+      // true of a prefix that holds the turn and one that does not, which is
+      // the one thing these two assertions must tell apart. Closing keeps the
+      // position: the drawer moved the reading to it, and the reading stays.
       yield* click(terminal, "Entry 1 admitted");
       yield* settled(40);
+      yield* click(terminal, "[close]");
+      yield* settled(20);
+      expect(historicalOn(terminal)).toBe(true);
       expect(shows(terminal, REPLY.trim())).toBe(false);
       expect(shows(terminal, "ok? ·")).toBe(false);
+      yield* click(terminal, "[history]");
+      yield* settled(40);
 
       // The drawer stays open on the position it moved to, and offers the
       // whole recorded order from there.
@@ -931,8 +945,14 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // offered, and nothing it holds is on the screen.
       expect(historicalOn(terminal)).toBe(true);
       expect(shows(terminal, "Agent turn recorded")).toBe(true);
+      // The two content claims with the layer out of the way, for the reason
+      // above; the drawer row above is the drawer's own and is read in it.
+      yield* click(terminal, "[close]");
+      yield* settled(20);
       expect(shows(terminal, REPLY.trim())).toBe(false);
       expect(shows(terminal, "completed, recorded")).toBe(false);
+      yield* click(terminal, "[history]");
+      yield* settled(40);
 
       // Back at the head: the drawer is modal, so it is closed first and then
       // the live control is reachable.
@@ -947,6 +967,9 @@ describe("J3 — durable truth, and a cold process over it", () => {
       yield* settled(40);
       yield* click(terminal, "Agent turn recorded");
       yield* settled(40);
+      // And the positive side of the same pair, also out from under the layer.
+      yield* click(terminal, "[close]");
+      yield* settled(20);
       yield* showing(terminal, REPLY.trim());
       yield* showing(terminal, "completed, recorded");
       expect(historicalOn(terminal)).toBe(true);
@@ -2278,17 +2301,24 @@ function replay(presented: readonly Uint8Array[]): string[] {
 /**
  * How many columns the Sessions sidebar owns.
  *
- * Read here so a row comparing "the entry column did not move" compares the
- * band beside the sidebar rather than a number somebody guessed.
+ * Asked of the layout rather than written down, so a row comparing "the entry
+ * column did not move" compares the band beside the sidebar rather than a
+ * number somebody guessed — and so a change to the accepted share makes these
+ * helpers read the right column instead of quietly reading the wrong one. Tier
+ * PW is where that share itself is asserted; this one only slices.
  */
-const SIDEBAR = 30;
+const SIDEBAR = sidebarWidth({ columns: 160, rows: 36 }) ?? 0;
 
 /** The conversation this screen is filtered by, as the route states it. */
 function sessionOf(terminal: Terminal): string | undefined {
   // The conversation the reading is filtered to is the one its own row marks:
   // two columns of focus cue, the list's indent, then the filter's own `>`.
+  //
+  // Read from inside the sidebar's body, past the accepted two-cell gutter: the
+  // gutter is layout that holds no text, so the row begins where the body does
+  // rather than where the column does.
   for (const line of screenOf(terminal)) {
-    const column = line.split("\u2502")[0] ?? "";
+    const column = (line.split("\u2502")[0] ?? "").slice(BODY_GUTTER);
     const match = /^[>\s]\s {2}>\s(\S.*?)\s*$/.exec(column);
     if (match !== null) {
       return match[1];

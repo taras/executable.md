@@ -66,18 +66,22 @@ import {
   drawerRect,
   FOOTER_ROWS,
   HISTORY_ROWS,
+  inspectionWidth,
   NARROW,
-  SIDEKICK_GUTTER,
+  sidebarWidth,
+  BODY_GUTTER,
 } from "../src/repl/layout.ts";
 import { HISTORY_TITLE } from "../src/repl/history-rail.ts";
 import {
   ACTION_ROW,
   DRAWER_WINDOW,
   READING_WINDOW,
+  SIDEBAR_BODY,
   SIDEKICK_BODY,
   SESSIONS_WINDOW,
   SIDEKICK_WINDOW,
   TAB_ROW,
+  TRANSCRIPT_BODY,
 } from "../src/repl/application.ts";
 import { navigationOf } from "../src/repl/navigation.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
@@ -1111,12 +1115,13 @@ describe("REPL presentation: the panes a reading is laid out in", () => {
         // And every row of that pane is built to the room the pane has — a row
         // sized from the outer bound would reach into the column beside it.
         //
-        // Re-anchored for the accepted Sidekick gutter: that pane's body is
-        // inset two cells on each side, so its rows are the inside less the
-        // gutter while its header rows span the inside. Both are measured, and
+        // Re-anchored for the accepted body gutter, which the Transcript now
+        // shares with the Sidekick: each column's body is inset two cells on
+        // each side, so the rows under a heading are the inside less the gutter
+        // while the heading band itself spans the inside. Both are measured, and
         // a row narrower than its pane begins at the gutter rather than adrift
         // somewhere inside it.
-        const inset = region === "inspection" ? inside.width - SIDEKICK_GUTTER * 2 : inside.width;
+        const inset = inside.width - BODY_GUTTER * 2;
         for (const key of observed.keys) {
           const bounds = observed.boundsOf(key);
           if (bounds === undefined || !within(bounds, inside)) {
@@ -1136,7 +1141,7 @@ describe("REPL presentation: the panes a reading is laid out in", () => {
             true,
           ]);
           if (bounds.width !== inside.width) {
-            expect([region, key, bounds.x]).toEqual([region, key, inside.x + SIDEKICK_GUTTER]);
+            expect([region, key, bounds.x]).toEqual([region, key, inside.x + BODY_GUTTER]);
           }
         }
       }
@@ -1426,10 +1431,15 @@ describe("REPL presentation: a row stays inside the pane it was measured for", (
       const observed = yield* presenter.commit(reading(stateWith({}), model, NOTHING_LIVE, size));
       const { grid } = presenter;
 
-      const inside = observed.regionOf("box:transcript:content");
-      if (inside === undefined) {
+      // The body the reading is in, not the pane the heading spans: the
+      // Transcript's rows are now inset two cells on each side, the same as the
+      // Sidekick's, and what bounds a row is the box that holds it.
+      const inside = observed.regionOf(TRANSCRIPT_BODY);
+      const pane = observed.regionOf("box:transcript:content");
+      if (inside === undefined || pane === undefined) {
         throw new Error(`the ${size.columns}x${size.rows} frame published no transcript interior`);
       }
+      expect([size.columns, inside.width]).toEqual([size.columns, pane.width - BODY_GUTTER * 2]);
 
       const lines = observed.keys.filter((key) => key.startsWith("reading:"));
 
@@ -1444,10 +1454,10 @@ describe("REPL presentation: a row stays inside the pane it was measured for", (
         expect([size.columns, key, drawn]).toEqual([size.columns, key, contributed]);
       }
 
-      // Every row of the reading, held to the pane it was measured for. Each
-      // one is as wide as the interior and ends where the interior ends, so
-      // nothing of it reaches the pane beside it — which is what the engine,
-      // left to itself, does not do.
+      // Every row of the reading, held to the body it was measured for. Each
+      // one is as wide as that body and ends where it ends, so nothing of it
+      // reaches the gutter beside it, let alone the pane beyond — which is what
+      // the engine, left to itself, does not do.
       expect(lines.length).toBeGreaterThan(0);
       for (const key of lines) {
         const bounds = placed(observed, key);
@@ -2003,10 +2013,13 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
     );
     const { grid } = presenter;
 
-    // The pane the reading is in, and its inside.
-    const inside = observed.regionOf("box:transcript:content");
+    // The body the reading is in, and its inside. The accepted gutter insets
+    // the Transcript's rows two cells on each side, so a row's right inner edge
+    // is this body's — the badge aligns to the box that holds the source, which
+    // is the frozen requirement read where the row actually ends.
+    const inside = observed.regionOf(TRANSCRIPT_BODY);
     if (inside === undefined) {
-      throw new Error("this frame published no transcript interior");
+      throw new Error("this frame published no transcript body");
     }
     // Whichever row carries the badge. Found by what it says, because which
     // row that is depends on where the window happens to be.
@@ -2118,14 +2131,16 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
       if (bounds === undefined) {
         throw new Error(`this frame published no ${region} region`);
       }
-      // The gap above each column's heading, which takes that column's own
-      // surface: space asked for at the top of a column is part of the column
-      // rather than a band of its own.
+      // The gap above each column's heading. Where the column has a header
+      // band, the band owns that space and paints it with the header's own
+      // surface — the gap reads as the top of the band rather than as a strip
+      // of the reading pushed down. The sidebar has no band, so its gap is its
+      // own surface either way.
       for (let y = bounds.y; y < bounds.y + COLUMN_TOP_GAP; y += 1) {
         expect([region, y, grid.styleAt(bounds.x + bounds.width - 1, y).background]).toEqual([
           region,
           y,
-          surface,
+          header ?? surface,
         ]);
       }
       // And the header itself, on the first row below that gap.
@@ -3377,29 +3392,29 @@ describe("Tier PW — the accepted column shares, in the frame that was committe
     {
       name: "160x36",
       size: WIDE,
-      sidebar: 32,
-      transcript: 64,
-      right: 64,
-      rightStartsAt: 96,
-      body: { bindings: { startsAt: 97, width: 63 }, sidekick: { startsAt: 99, width: 59 } },
+      sidebar: 36,
+      transcript: 62,
+      right: 62,
+      rightStartsAt: 98,
+      body: { bindings: { startsAt: 99, width: 61 }, sidekick: { startsAt: 101, width: 57 } },
     },
     {
       name: "120x30",
       size: MEDIUM,
-      sidebar: 28,
-      transcript: 46,
-      right: 46,
-      rightStartsAt: 74,
-      body: { bindings: { startsAt: 75, width: 45 }, sidekick: { startsAt: 77, width: 41 } },
+      sidebar: 36,
+      transcript: 42,
+      right: 42,
+      rightStartsAt: 78,
+      body: { bindings: { startsAt: 79, width: 41 }, sidekick: { startsAt: 81, width: 37 } },
     },
     {
       name: "161x36",
       size: { columns: 161, rows: 36 },
-      sidebar: 32,
-      transcript: 65,
-      right: 64,
-      rightStartsAt: 97,
-      body: { bindings: { startsAt: 98, width: 63 }, sidekick: { startsAt: 100, width: 59 } },
+      sidebar: 36,
+      transcript: 63,
+      right: 62,
+      rightStartsAt: 99,
+      body: { bindings: { startsAt: 100, width: 61 }, sidekick: { startsAt: 102, width: 57 } },
     },
   ]);
 
@@ -3930,5 +3945,425 @@ describe("Tier UH5 — the guidance above a route drawer", () => {
     // At least one of the three wrapped the directions over more than one row,
     // which is what makes the claim above stronger than protecting the first.
     expect(wrapped).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Tier BP — the three shared bodies, inset alike (#883).
+ *
+ * The Product Owner asked for the Transcript and Sessions to have the same
+ * padding the Sidekick's body already had. So every shared column now draws two
+ * boxes: the pane, which its heading band spans, and the body inset two cells
+ * on each side, which everything a person reads in that column is built to.
+ *
+ * Read from the committed frame's own geometry and cells. The gutters are the
+ * point: they hold nothing, reach nothing, and carry the column they belong to.
+ */
+describe("Tier BP — matching body padding in the three shared columns", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("BP1: each shared body is inset two cells, and its gutters hold nothing", function* () {
+    const model = yield* settledAndFailed();
+    for (const size of [WIDE, MEDIUM]) {
+      const where = `${size.columns}x${size.rows}`;
+      const presenter = yield* usePresenter(size);
+      // The Sidekick selected, so all three bodies are drawn in one frame and
+      // the one that was already inset is measured beside the two that are new.
+      const observed = yield* presenter.commit(
+        reading(selecting(stateWith({}), "entry-1"), model, NOTHING_LIVE, size),
+      );
+      const { grid } = presenter;
+
+      const columns: readonly {
+        readonly name: string;
+        readonly pane: string;
+        readonly body: string;
+        readonly surface: number;
+      }[] = [
+        {
+          name: "transcript",
+          pane: "box:transcript:content",
+          body: TRANSCRIPT_BODY,
+          surface: ACCEPTED_SURFACE.centre,
+        },
+        {
+          name: "sidebar",
+          pane: "box:sidebar",
+          body: SIDEBAR_BODY,
+          surface: ACCEPTED_SURFACE.side,
+        },
+        {
+          name: "inspection",
+          pane: "box:inspection:content",
+          body: SIDEKICK_BODY,
+          surface: ACCEPTED_SURFACE.right,
+        },
+      ];
+
+      for (const { name, pane, body, surface } of columns) {
+        const outer = observed.regionOf(pane);
+        const inner = observed.regionOf(body);
+        if (outer === undefined || inner === undefined) {
+          throw new Error(`${where} published no ${name} pane or body`);
+        }
+        // Two cells on each side, which is the Sidekick's accepted gutter and
+        // now every shared column's.
+        expect([where, name, inner.width]).toEqual([where, name, outer.width - BODY_GUTTER * 2]);
+        expect([where, name, inner.x]).toEqual([where, name, outer.x + BODY_GUTTER]);
+
+        // The gutters hold no text and carry the column they are part of, so
+        // the inset reads as space in that pane rather than as a seam.
+        for (const x of [inner.x - 1, inner.x - BODY_GUTTER, inner.x + inner.width]) {
+          expect([where, name, x, grid.at(x, inner.y)]).toEqual([where, name, x, " "]);
+          expect([where, name, x, grid.styleAt(x, inner.y).background]).toEqual([
+            where,
+            name,
+            x,
+            surface,
+          ]);
+        }
+
+        // Every row this column drew inside that body, and every target over
+        // it, stays within the body: a row built to the pane would publish a
+        // hit box reaching into a gutter that is meant to be untouchable.
+        for (const key of observed.keys) {
+          const bounds = observed.boundsOf(key);
+          if (bounds === undefined || !within(bounds, inner)) {
+            continue;
+          }
+          expect([where, name, key, bounds.x >= inner.x]).toEqual([where, name, key, true]);
+          expect([where, name, key, bounds.x + bounds.width <= inner.x + inner.width]).toEqual([
+            where,
+            name,
+            key,
+            true,
+          ]);
+        }
+      }
+
+      // What the inset did not touch: the heading band still spans the pane,
+      // the header edge still closes it, and the outer columns did not move.
+      const transcriptPane = observed.regionOf("box:transcript:content");
+      const heading = placed(observed, "transcript:heading");
+      const band = observed.regionOf(TAB_ROW);
+      const inspection = observed.regionOf("box:inspection:content");
+      if (transcriptPane === undefined || band === undefined || inspection === undefined) {
+        throw new Error(`${where} published no pane, tab row or inspection interior`);
+      }
+      // The band spans the whole inner column, and the title *inside* it is
+      // inset by the same gutter the body is — so the column's name lines up
+      // with what it names while the header surface and its rule still cover
+      // the full width.
+      const headerBand = observed.regionOf("box:transcript:header");
+      if (headerBand === undefined) {
+        throw new Error(`${where} published no transcript header band`);
+      }
+      expect([where, headerBand.width]).toEqual([where, transcriptPane.width]);
+      expect([where, heading.width]).toEqual([where, transcriptPane.width - BODY_GUTTER * 2]);
+      expect([where, heading.x]).toEqual([where, transcriptPane.x + BODY_GUTTER]);
+      expect([where, band.width]).toEqual([where, inspection.width]);
+      expect([where, regionBounds(observed, "sidebar")?.width]).toEqual([
+        where,
+        sidebarWidth(size),
+      ]);
+      expect([where, regionBounds(observed, "inspection")?.width]).toEqual([
+        where,
+        inspectionWidth(size),
+      ]);
+      expect([where, regionBounds(observed, "footer")?.height]).toEqual([where, FOOTER_ROWS]);
+      // And the gap above each heading is still one row.
+      const column = regionBounds(observed, "transcript");
+      if (column === undefined) {
+        throw new Error(`${where} published no transcript column`);
+      }
+      expect([where, heading.y]).toEqual([where, column.y + COLUMN_TOP_GAP]);
+    }
+  });
+
+  it("BP2: a reading that now wraps keeps its whole text, in order, with room to scroll", function* () {
+    // A source line longer than any body this frame has, so the inset is what
+    // decides how many rows it takes.
+    const model = yield* submittedWithLongSource();
+    for (const size of [WIDE, MEDIUM]) {
+      const where = `${size.columns}x${size.rows}`;
+      const presenter = yield* usePresenter(size);
+      const observed = yield* presenter.commit(
+        reading(selecting(stateWith({}), "entry-1"), model, NOTHING_LIVE, size),
+      );
+      const { grid } = presenter;
+
+      const body = observed.regionOf(TRANSCRIPT_BODY);
+      const footer = regionBounds(observed, "footer");
+      if (body === undefined || footer === undefined) {
+        throw new Error(`${where} published no transcript body or footer`);
+      }
+
+      // The line really was cut: a continuation row is what a wrapped line
+      // produces, and without one this case proves nothing about wrapping.
+      const rows = observed.keys.filter((key) => key.startsWith("reading:"));
+      expect([where, rows.some((key) => key.includes("+"))]).toEqual([where, true]);
+
+      // Its text survives the cut, across the rows it was cut into and in the
+      // order they are drawn. Read from the cells, joined inside this body
+      // alone — joining across the row would splice in the column beside it —
+      // and gathered through the window's own control, because a reading longer
+      // than its window is reached rather than drawn all at once. Scrolling
+      // moves the viewport and writes nothing.
+      const gather = (frame: Observed): string =>
+        frame.keys
+          .filter((key) => key.startsWith("reading:"))
+          .map((key) => ({ key, bounds: frame.boundsOf(key) }))
+          .filter((one) => one.bounds !== undefined && within(one.bounds, body))
+          .sort((one, two) => (one.bounds?.y ?? 0) - (two.bounds?.y ?? 0))
+          .map((one) => textOf(grid, one.bounds ?? body).trim())
+          .join(" ");
+      let state = selecting(stateWith({}), "entry-1");
+      let said = gather(observed);
+      for (let press = 0; press < 80; press += 1) {
+        const view = reading(state, model, NOTHING_LIVE, size);
+        state = reduceRepl(
+          state,
+          { kind: "scroll-reading", delta: 1 },
+          model,
+          NOTHING_LIVE,
+          yield* presenter.prepare(view),
+        ).state;
+        const next = yield* presenter.commit(reading(state, model, NOTHING_LIVE, size));
+        const shown = gather(next);
+        if (said.includes(shown)) {
+          break;
+        }
+        said = `${said} ${shown}`;
+      }
+      said = said.replace(/\s+/g, " ");
+      // The prose line of the fixture, which is the one longer than any pane
+      // and the one whose words have to survive being cut.
+      const longest = LONG_SOURCE.split("\n").filter((line) => line.includes(" "))[0] ?? "";
+      expect([where, longest.length > body.width]).toEqual([where, true]);
+      for (const word of longest.split(/\s+/).filter((one) => one.length > 2)) {
+        expect([where, word, said.includes(word)]).toEqual([where, word, true]);
+      }
+
+      // And there is room to read it in: both windows have measured height and
+      // end above the seven rows the footer keeps.
+      for (const window of [READING_WINDOW, SESSIONS_WINDOW]) {
+        const viewport = viewportBounds(observed, window);
+        if (viewport === undefined) {
+          throw new Error(`${where} published no ${window} window`);
+        }
+        expect([where, window, viewport.height > 0]).toEqual([where, window, true]);
+        expect([where, window, viewport.y + viewport.height <= footer.y]).toEqual([
+          where,
+          window,
+          true,
+        ]);
+      }
+      // The controls that reach what the window does not hold are mounted and
+      // are real targets, outside the thing they move.
+      for (const key of ["reading:earlier", "reading:later"]) {
+        const node = observed.nodeOf(key);
+        expect([where, key, node !== undefined]).toEqual([where, key, true]);
+        expect([where, key, observed.targets.some((one) => one.node === node)]).toEqual([
+          where,
+          key,
+          true,
+        ]);
+      }
+    }
+  });
+});
+
+/**
+ * Tier BP5 — the header's own space, its inset title, and pane navigation.
+ *
+ * Three Product Owner corrections to the padding increment. The Transcript's
+ * name lines up with what is under it. The blank row above a column's heading
+ * belongs to that column's header band and is painted with it, rather than
+ * reading as a strip of the reading pushed down. And the two controls that move
+ * a window take the pane they navigate: `Earlier`/`Later` inherited the generic
+ * action surface, which drew a dark bar across the top and bottom of every
+ * reading.
+ *
+ * Read from the committed cells, because all three are about what the screen
+ * looks like.
+ */
+describe("Tier BP5 — header space, the inset title and pane navigation", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** One chat with rows enough to be worth a window of its own. */
+  function chatting(): ReplSidekickReading {
+    const conversation = "chat-nav";
+    const chat: readonly ReplSidekickChatRow[] = Object.freeze(
+      ["one", "two", "three", "four", "five", "six", "seven", "eight"].map((text, at) =>
+        Object.freeze({
+          key: `${conversation}:response:${at + 1}`,
+          conversation,
+          turn: at + 1,
+          kind: "reply" as const,
+          text,
+          hasOutput: false,
+          failure: undefined,
+        }),
+      ),
+    );
+    return Object.freeze({
+      agent: "scribe",
+      busy: false,
+      refusal: undefined,
+      question: undefined,
+      requested: undefined,
+      verified: undefined,
+      conversation,
+      reading: conversation,
+      current: true,
+      turns: [],
+      availability: { chats: [conversation], sessions: [], refusal: undefined },
+      chat,
+    });
+  }
+
+  it("BP5: the title is inset, the header owns its gap, and navigation takes its pane", function* () {
+    const model = yield* settledAndFailed();
+    for (const size of [WIDE, MEDIUM]) {
+      const where = `${size.columns}x${size.rows}`;
+      const presenter = yield* usePresenter(size);
+      const live: ReplLive = { ...NOTHING_LIVE, sidekick: chatting() };
+      const state = selecting(stateWith({}), "entry-1");
+      const observed = yield* presenter.commit(reading(state, model, live, size));
+      const { grid } = presenter;
+
+      const pane = observed.regionOf("box:transcript:content");
+      const band = observed.regionOf("box:transcript:header");
+      const column = regionBounds(observed, "transcript");
+      if (pane === undefined || band === undefined || column === undefined) {
+        throw new Error(`${where} published no transcript pane, band or column`);
+      }
+
+      // 1. The title's text begins two cells inside the column, while its band
+      // and the rule under it still cover the whole inner width.
+      const title = placed(observed, "transcript:heading");
+      expect([where, title.x]).toEqual([where, pane.x + BODY_GUTTER]);
+      expect([where, textOf(grid, title).trim()]).toEqual([where, "Transcript"]);
+      expect([where, band.x, band.width]).toEqual([where, pane.x, pane.width]);
+      // Still on the accepted gap's row, and still something you only read.
+      expect([where, title.y]).toEqual([where, column.y + COLUMN_TOP_GAP]);
+      expect([
+        where,
+        observed.targets.some((one) => one.node === observed.nodeOf("transcript:heading")),
+      ]).toEqual([where, false]);
+      // The rule that closes the band, across its full width.
+      for (const x of [band.x, band.x + Math.floor(band.width / 2), band.x + band.width - 1]) {
+        expect([where, x, grid.styleAt(x, title.y + 1).foreground]).toEqual([
+          where,
+          x,
+          ACCEPTED_EDGE.chrome,
+        ]);
+      }
+
+      // 2. The blank row above each heading belongs to that column's header
+      // band, read in cells beyond where any label reaches. Under both tabs,
+      // because the right pane's header is the same band either way.
+      for (const right of [state, inspecting(state)]) {
+        const frame = yield* presenter.commit(reading(right, model, live, size));
+        const which = right === state ? "sidekick" : "bindings";
+        for (const [region, surface] of [
+          ["transcript", ACCEPTED_SURFACE.transcriptHeader],
+          ["inspection", ACCEPTED_SURFACE.rightHeader],
+        ] as const) {
+          const bounds = regionBounds(frame, region);
+          if (bounds === undefined) {
+            throw new Error(`${where} ${which} published no ${region} column`);
+          }
+          for (let y = bounds.y; y < bounds.y + COLUMN_TOP_GAP; y += 1) {
+            for (const x of [bounds.x + bounds.width - 1, bounds.x + bounds.width - 2]) {
+              expect([where, which, region, x, grid.at(x, y)]).toEqual([
+                where,
+                which,
+                region,
+                x,
+                " ",
+              ]);
+              expect([where, which, region, x, grid.styleAt(x, y).background]).toEqual([
+                where,
+                which,
+                region,
+                x,
+                surface,
+              ]);
+            }
+          }
+        }
+        // The sidebar has no band, so its own top space keeps its own surface.
+        const sidebar = regionBounds(frame, "sidebar");
+        if (sidebar === undefined) {
+          throw new Error(`${where} ${which} published no sidebar`);
+        }
+        expect([
+          where,
+          which,
+          grid.styleAt(sidebar.x + sidebar.width - 1, sidebar.y).background,
+        ]).toEqual([where, which, ACCEPTED_SURFACE.side]);
+      }
+
+      // 3. Every window's own two controls take the pane they navigate, rather
+      // than the dark surface a generic action carries.
+      const panes: readonly { readonly keys: readonly string[]; readonly surface: number }[] = [
+        {
+          keys: ["sessions:earlier", "sessions:later", "entries:earlier", "entries:later"],
+          surface: ACCEPTED_SURFACE.side,
+        },
+        { keys: ["reading:earlier", "reading:later"], surface: ACCEPTED_SURFACE.centre },
+        { keys: ["sidekick:earlier", "sidekick:later"], surface: ACCEPTED_SURFACE.right },
+      ];
+      let navigation = 0;
+      for (const { keys, surface } of panes) {
+        let covered = 0;
+        for (const key of keys) {
+          const bounds = observed.boundsOf(key);
+          if (bounds === undefined) {
+            continue;
+          }
+          navigation += 1;
+          expect([where, key, grid.styleAt(bounds.x, bounds.y).background]).toEqual([
+            where,
+            key,
+            surface,
+          ]);
+          // And the same with focus on it: these backgrounds say which pane a
+          // control belongs to, never where the next keystroke lands — so the
+          // pane shows through either way and the cue is the foreground.
+          const focused = yield* presenter.commit(reading(state, model, live, size, key));
+          const row = placed(focused, key);
+          expect([where, key, grid.styleAt(row.x, row.y).background]).toEqual([
+            where,
+            key,
+            surface,
+          ]);
+          expect([where, key, inkOf(grid, row).foreground]).toEqual([
+            where,
+            key,
+            REPL_PALETTE.focus,
+          ]);
+          covered += 1;
+        }
+        // Each of the three panes really contributed a measured control, or
+        // this row would be proving the colour of whichever one it found.
+        expect([where, keys[0], covered > 0]).toEqual([where, keys[0], true]);
+      }
+      // The Entries catalog states its own height while it fits, so it offers
+      // its two controls only once it is windowed — the other three readings
+      // offer theirs always, which is six of these in an ordinary frame.
+      expect([where, navigation >= 6]).toEqual([where, true]);
+
+      // The positive control: an ordinary action still carries the surface the
+      // draft does, so restyling every action could not have satisfied any of
+      // the above.
+      const again = yield* presenter.commit(reading(state, model, live, size));
+      const exit = placed(again, "footer:exit");
+      expect([where, grid.styleAt(exit.x, exit.y).background]).toEqual([
+        where,
+        REPL_PALETTE.draftSurface,
+      ]);
+    }
   });
 });

@@ -514,27 +514,65 @@ exactly as it was. Both texts survive switching tabs, navigating History and
 resizing; the draft is in the location, and the message is this process's own and
 appears in no location. An empty box sends nothing.
 
-Each of the three columns keeps one blank row above its first heading, inside
-the column and on that column's own surface. It is layout space rather than a
-row of content: it holds no text, reaches no pointer and is no stop for Tab, and
-both passes measure it, so what a column has left for its reading is the
-engine's own remainder after it. The sidebar's lower `Entries` heading is that
-column's second reading rather than the top of another column, and takes no
+Each of the three columns keeps one blank row above its first heading. It is
+layout space rather than a row of content: it holds no text, reaches no pointer
+and is no stop for Tab, and both passes measure it, so what a column has left
+for its reading is the engine's own remainder after it. Where a column has a
+header band — the Transcript's and the right pane's — the band owns that row and
+paints it with the header's own surface, so the space reads as the top of the
+heading rather than as a strip of the reading pushed down. The sidebar has no
+band and keeps its own surface there. The sidebar's lower `Entries` heading is
+that column's second reading rather than the top of another column, and takes no
 second gap. The narrow profile routes one outlet, heads no shared column and
 takes no gap at all.
 
-The three columns share the row. The sidebar keeps its width and what is left
-is split equally between the Transcript and the right pane, in whole cells, with
-the spare cell of an odd remainder going to the Transcript. The right pane holds
-a conversation, which is the reading that wants the room, and it is the same
-width under either of its two tabs.
+The Transcript's name is inset by the same two cells its body is, so the column's
+heading lines up with what it names. The band around it keeps the whole inner
+width: it draws the header surface and the rule that closes it, and only the row
+holding the text moves.
 
-The Sidekick's body sits two cells in from its pane on each side. The chat, its
-two window controls, the composer and the controls and announcements beneath
-them are all inset together; the tab row that heads the pane and the edge under
-it span the whole column, because a column says what it is across its full width.
-The gutter holds no text and is part of no message. Bindings keeps its own
-layout, and the question and Configure drawers keep the whole pane.
+The three columns share the row. The sidebar is thirty-six columns at both the
+wide and the medium profile, and what is left is split equally between the
+Transcript and the right pane, in whole cells, with the spare cell of an odd
+remainder going to the Transcript. The right pane holds a conversation, which is
+the reading that wants the room, and it is the same width under either of its two
+tabs.
+
+Thirty-six rather than a share of the terminal, because this column's two
+readings are rows of text that have to be legible whole: `completed, not
+recorded yet` is the longest state a turn carries and `All conversations
+(filtered)` the widest control, and a row that cut a turn's state in half would
+say something untrue. Thirty-six leaves thirty-two inside the body's gutter and
+thirty past the focus marker, which is the room the column had before it was
+inset — so the same rows fit, at the medium profile as well as the wide one.
+
+The two controls that move a window — `[↑ earlier]` and `[↓ later]`, in
+Sessions, Entries, the Transcript and the Sidekick — carry the surface of the
+pane they navigate rather than the one every other control has. They are
+activated, they are Tab stops and they read in the action's own ink; what changed
+is only that they belong to the reading they move instead of standing apart from
+it. Their background says which pane they are in and never where focus is: the
+focus cue is the marker and the foreground, and moving focus on or off one leaves
+its pane showing through. Everything else that is activated — `[send]`,
+`[stop]`, a form's `[apply]`, the footer's own actions and a drawer's choices —
+keeps the surface the draft has.
+
+Every shared column's body sits two cells in from its pane on each side: the
+Sidekick's chat with its window controls, composer and announcements; the
+Transcript's directions, retained reading and the two controls around it; and the
+sidebar's Sessions and Entries lists with theirs. Each column's heading — the
+Transcript's band, the right pane's tab row, `Sessions` and `Entries` — spans the
+whole column, because a column says what it is across its full width, and the
+edge under a band spans it too. The gutters hold no text, are part of no row and
+are no part of any pointer target; they carry the surface of the column they are
+in. Bindings keeps its own layout, and the question and Configure drawers keep
+the whole pane.
+
+Text is fitted to the body that holds it rather than to the pane above it, so a
+line too long for a narrowed body is paid out over more rows and the rows a
+window cannot hold are reached with the controls that are already there. The
+narrow profile routes one outlet, has no shared column and is given no inset of
+its own.
 
 `Message Sidekick` is drawn as a block: its name and focus marker on one row,
 and the message itself in the rows the pane's measured width cut it into

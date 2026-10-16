@@ -750,6 +750,11 @@ export function measuringContext(size: ReplTerminalSize): ReplPresentationContex
       surface: size.columns,
       list: size.columns,
       inspection: size.columns,
+      // The inset bodies, which this pass has measured no gutter for: a
+      // measuring context states the terminal's own width everywhere, and what
+      // each column's body actually came out at is what the frame answers.
+      surfaceBody: size.columns,
+      listBody: size.columns,
       body: size.columns,
       drawer: size.columns,
     },
