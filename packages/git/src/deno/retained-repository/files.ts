@@ -267,15 +267,27 @@ function covering(
 }
 
 /**
- * Where this request points, with the directory it is relative to resolved.
+ * Where this request points.
  *
- * The working directory is resolved through the filesystem rather than used as
- * written, because a host's temporary root is commonly reached through a link —
- * `/var` for `/private/var` on macOS — and a checkout discovered by its real
- * path would not appear to contain a file addressed through the link. The file
- * itself need not exist; its directory does.
+ * An absolute path names a place on its own, and the working directory is no
+ * part of where it points — which is how a captured checkout path reaches a
+ * `<Dir>`. Joining the two would have routed `/managed/…/checkout` as
+ * `/ambient/managed/…/checkout`, a place inside no placement at all, so a
+ * completed ensure was never retained and a new one took no ownership of the
+ * checkout it was making a directory in. The ordinary operation beneath has
+ * always used the absolute target by itself; this is the route agreeing with it.
+ *
+ * A relative path is resolved against the working directory, and that
+ * directory is resolved through the filesystem rather than used as written:
+ * a host's temporary root is commonly reached through a link — `/var` for
+ * `/private/var` on macOS — and a checkout discovered by its real path would
+ * not appear to contain a file addressed through the link. The file itself need
+ * not exist; its directory does.
  */
 function* targetOf(request: ReplLocalRequest): Operation<string> {
+  if (isAbsolute(request.path)) {
+    return resolve(request.path);
+  }
   return resolve(join(yield* canonical(request.cwd), request.path));
 }
 

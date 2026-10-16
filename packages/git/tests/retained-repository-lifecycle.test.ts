@@ -50,7 +50,11 @@ import {
   CommonDirectoryLeaseError,
   useCommonDirectoryLease,
 } from "../src/deno/retained-repository/leases.ts";
-import { commonDirectoryLock, repositorySlot } from "../src/deno/run-composition/placement.ts";
+import {
+  commonDirectoryLock,
+  repositorySlot,
+  worktreeSlot,
+} from "../src/deno/run-composition/placement.ts";
 import { useLeases } from "../src/deno/run-composition/leases.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { REPL_REPOSITORY_LOCAL } from "../src/retained-repository/records.ts";
@@ -829,6 +833,82 @@ describe("an entry's hold on the checkout it is working in", () => {
         join(repositorySlot(managedA, origin, "project"), "checkout", "after.md"),
       ),
     ).toBe("after");
+  });
+
+  it("E4: refuses an absolute Dir in a restored placement another owner holds", function* () {
+    const fixture = yield* useFixture();
+    const managed = join(fixture.root, "repositories");
+    const origin = yield* useOrigin(fixture.root, "absolute-dir-origin");
+    const owner = yield* until(realpath(join(origin, ".git")));
+
+    // A root Worktree of the repository the entry was opened in, and an
+    // absolute `<Dir>` beneath the checkout it bound — reached only after the
+    // question, so the prefix stops before it.
+    const source = [
+      '<Worktree name="observed" branch="observed" as="tree" />',
+      QUESTION,
+      "<Dir path={`${tree}/made`}>",
+      '<File path="inside.md">inside</File>',
+      "</Dir>",
+    ].join("\n");
+
+    const live = counters();
+    const prefix = yield* leftEntry(origin, source, live, managed);
+    expect(placementRecords(prefix)).toBe(2);
+    const slot = worktreeSlot(managed, owner, "observed");
+    const made = join(slot, "checkout", "made");
+    expect(yield* exists(made)).toBe(false);
+
+    yield* scoped(function* (): Operation<void> {
+      // An ordinary owner of that worktree's slot.
+      const held = yield* useLeases(managed);
+      yield* held.hold("worktree", slot, 'worktree "observed"');
+
+      // The positive control: a second independent acquisition of the same
+      // slot is refused, so a continuation that "succeeded" below could not be
+      // read as the lock being free.
+      let control: string | undefined;
+      try {
+        yield* scoped(function* (): Operation<void> {
+          const competing = yield* useLeases(managed);
+          yield* competing.hold("worktree", slot, 'worktree "observed"');
+        });
+      } catch (error) {
+        control = error instanceof Error ? error.message : String(error);
+      }
+      expect(control).toContain("another process is working in the managed checkout");
+
+      const blocked = counters();
+      const refused = yield* entry(
+        origin,
+        source,
+        new InMemoryStream([...prefix]),
+        blocked,
+        answeringOnce(),
+        managed,
+      );
+      // Refused before the ensure reached the filesystem, before the directory
+      // existed, before the body ran and before any result was written down.
+      expect(refused.refusal).toContain("another process is working in the managed checkout");
+      expect(yield* exists(made)).toBe(false);
+      expect(blocked.writes).toEqual([]);
+      expect(localRecords(refused.events)).toBe(localRecords(prefix));
+    });
+
+    // The holder is gone, so the same continuation makes the directory and
+    // writes in it through ordinary creation.
+    const after = counters();
+    const later = yield* entry(
+      origin,
+      source,
+      new InMemoryStream([...prefix]),
+      after,
+      answeringOnce(),
+      managed,
+    );
+    expect(later.refusal).toBe(undefined);
+    expect(after.writes).toEqual(["inside.md"]);
+    expect(yield* readTextFile(join(made, "inside.md"))).toBe("inside");
   });
 
   it("E8: opens, locks, releases and closes each descriptor exactly once", function* () {

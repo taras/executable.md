@@ -686,6 +686,48 @@ describe("one entry's managed Repository and Worktree selections", () => {
     expect(yield* readTextFile(join(repository, "suffix.md"))).toBe("new suffix");
   });
 
+  it("E2: retains an absolute captured-path Dir, and replays it over a removed checkout", function* () {
+    const fixture = yield* useFixture();
+    const live = counters();
+    // The supported spelling this row is about: a self-closing Repository binds
+    // its checkout path, and a `<Dir>` renders at exactly that absolute path.
+    // The entry is opened outside any checkout, so nothing ambient can answer
+    // for it — the placement is the only route there is.
+    const source = [
+      `<Repository name="project" url=${JSON.stringify(fixture.origin)} as="project" />`,
+      "<Dir path={project}>",
+      QUESTION,
+      "</Dir>",
+    ].join("\n");
+
+    const prefix = yield* left(fixture, source, live);
+    const checkout = checkoutOf(placements(prefix)[0]) ?? "";
+    expect(checkout).not.toBe("");
+
+    // The ensure happened, at the checkout root itself, and it was retained:
+    // an absolute path routed through the working directory would have landed
+    // inside no placement and been recorded by nothing.
+    expect(live.ensures).toEqual([checkout]);
+    expect(recordsOf(prefix, REPL_REPOSITORY_LOCAL).length).toBe(1);
+
+    // The checkout is gone, and the continuation answers the ensure from its
+    // record rather than making the directory again.
+    yield* rm(checkout, { recursive: true, force: true });
+
+    const replayed = counters();
+    const again = yield* run(fixture, source, new InMemoryStream([...prefix]), replayed, {
+      between: answered,
+    });
+
+    expect(again.refusal).toBe(undefined);
+    expect(replayed.ensures).toEqual([]);
+    expect(replayed.commands).toEqual([]);
+    expect(replayed.directories).toBe(0);
+    // And nothing recreated it. A replayed ensure that reached the filesystem
+    // would have put the checkout root back.
+    expect(yield* exists(checkout)).toBe(false);
+  });
+
   it("E2: reports an ordinary live failure for a new read of a missing file", function* () {
     const fixture = yield* useFixture();
     const live = counters();
