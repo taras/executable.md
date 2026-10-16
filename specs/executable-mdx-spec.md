@@ -10086,8 +10086,8 @@ bytes. The contracts below describe the two providers a document can reach.
 
 A document execution reaches repository operations only through the provider
 the command installed inside the execution scope, before the root document is
-imported. There are two, and they differ in lifetime and permission rather than
-in what an author writes.
+imported. There are three, and they differ in lifetime and permission rather
+than in what an author writes.
 
 The **ordinary provider** is what the Deno source entrypoint and the compiled
 binary install for `xmd run`. Constructing it acquires nothing at all: no
@@ -10128,7 +10128,22 @@ The **retained provider** is what a workflow host installs inside its Workspace
 attachment. Its operations are durable effects keyed by the WorkflowRun, so a
 completed one restores from the journal without contacting anything.
 
-Node and Bun install neither. They register the same declarations (§5.3), and
+The **entry provider** is what the Deno source entrypoint and the compiled
+binary install for one executing `xmd repl` entry, registered by the selected
+REPL host rather than by the bundled Plugin and established by core
+initialization inside the scope that entry owns. It answers `<Repository>` and
+`<Worktree>` by calling the *ordinary* selector above, with that selector's own
+creation, reuse, conflict and interrupted-adoption policy, and it records what
+the selector answered: a completed selection is answered from its record without
+calling a selector, cloning, adding a worktree, reading a sidecar, opening a
+credential or taking a lock, and only genuinely new work meets the current
+filesystem. It installs nothing else the ordinary provider carries — no local
+Git, no publication, no issue tracker and no external worker — so those
+components refuse there exactly as they do under a host that installs no
+provider for them. Constructing it acquires nothing, including no managed root,
+and a passive reading of a settled history initializes nothing at all.
+
+Node and Bun install none of them. They register the same declarations (§5.3), and
 every repository operation there reports an absent provider before a lock, a
 credential, a subprocess or a request exists.
 
@@ -14083,6 +14098,22 @@ user's own `~/.xmd/repositories`.
 | ORC20 | Retained workflow regression | Repository and Worktree replay, transactional Git, Push and pull-request history evidence, Issue effects, forks and completed replay keep their records, identities, provider call counts and native-launch refusal unchanged; directory ensure adds only its own `workspace_file` event and resulting retained root |
 | ORC21 | Compiled binary | A compiled smoke creates a root-level ambient Worktree, runs a command there, proves `.git` is a file and the checkout persists after exit; a second gated process proves lock refusal and release |
 
+### Tier ERC — Repository composition inside a REPL entry (§5.3, §8.1)
+
+Bounded to what one executing entry retains about the checkouts it selected.
+Everything an ordinary run proves about selection itself stays in Tier ORC: the
+rows below are about the record and the holds around it.
+
+| # | Test | Verify |
+|---|------|--------|
+| ERC1 | The public journey | A real-terminal source and compiled `xmd repl` each run a Repository-only and a Repository-plus-Worktree entry with `<Dir>`, write, delete and read, leave at the question, have the files changed from a shell, reopen the printed location, answer, and run the suffix once; the Worktree journey uses the self-closing captured path with a sibling `<Dir>`, and a new entry selecting the same placement reads what is there now |
+| ERC2 | Completed selection reaches nothing | An unfinished prefix holding acknowledged Repository and Worktree selections and file results replays with zero selector, clone, `worktree add`, sidecar, credential, lock and document-filesystem calls, after a managed checkout's bytes change and the selected worktree is removed; a new read of a missing file reports its ordinary live failure, and one ordinary selector refusal replays without native work |
+| ERC3 | Position, not name | Nested Repository, Worktree and another Repository restore the enclosing owner and working directory; a captured self-closing path routes a later `<Dir>`; two equal requests consume their own records; two spawned branches keep their records coroutine-local and resume in reverse order; two concurrent requests for one slot take one acquisition and serialize creation without suppressing either record |
+| ERC4 | Two holds, two jobs | A managed slot one entry holds refuses another entry's new selection until teardown; a restored placement records a new read under a held shared-Git-directory lease with zero opens of that lock, while a new mutation refuses before any result is written and succeeds after release |
+| ERC5 | Interruption | A clone interrupted at a native barrier leaves no placement, no body sentinel and no orphan sidecar; the next attempt follows the ordinary partial-creation policy; an isolation directory whose creation is cancelled leaves nothing behind |
+| ERC6 | Acknowledgement, not completion | A native placement completed before its append is cancelled leaves no record and the continuation runs live; one acknowledged before cancellation bypasses the selector; a rejected placement append preserves the first persistence failure with no body after it |
+| ERC7 | Admission and ceiling | Malformed, unknown-version, misnamed and request-mismatched placement records refuse before native work; an admitted generated `<File>` inside a managed body is retained on the same terms as an authored one while a generated `<Repository>`, `<Worktree>` or `<Dir>` still refuses preflight |
+| ERC8 | Unsupported runtimes | A REPL on a runtime that installs no entry provider performs ordinary file and directory work and reports an absent Repository provider before any clone, creating no managed root |
 
 ---
 

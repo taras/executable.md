@@ -130,22 +130,33 @@ The interactive REPL is specified in `specs/repl-spec.md` rather than here. One
 distinction belongs in this document, because it is about mutation replay.
 
 A REPL entry performs ordinary file work against the caller's own filesystem,
-like `xmd run`. What differs is that the host retains the writes, deletions and
-`<Dir>` ensures the entry performed in the ambient Git checkout it was started
-in, so an interrupted entry can be continued: a completed operation answers from
-its record and touches nothing, and only an operation with no record executes.
+like `xmd run`. What differs is that the host retains the reads, writes,
+deletions and `<Dir>` ensures the entry performed in a checkout it is working in
+— the ambient Git checkout it was started in, or a managed one it selected — so
+an interrupted entry can be continued: a completed operation answers from its
+record and touches nothing, and only an operation with no record executes.
 Nothing is compared with the live filesystem, nothing is rolled back and no
 frontier is advanced — a recorded result and what is on disk may disagree, and
 the person reading the screen is what resolves that.
+
+`<Repository>` and `<Worktree>` are available to a REPL entry and are retained
+on the same terms. The selector is the ordinary managed one §6 describes, with
+its own creation, reuse, conflict and interrupted-adoption policy; what the
+entry adds is a small routing record of what the selector answered, so a
+completed selection is restored without calling a selector, cloning, adding a
+worktree, reading a sidecar, opening a credential or taking a lock. A completed
+selection says where the entry was working and nothing about what that checkout
+now holds, so a continuation works after the checkout has been changed or
+removed, while new work meets the current filesystem. Nothing is inventoried,
+snapshotted or restored, and no managed checkout is deleted.
 
 So the three environments retain mutation differently, and none of the other two
 changes. `xmd run` journals no filesystem mutation at all. A workflow run's
 mutations are Workspace effects inside a transaction, ordered by the frontier
 §9 and §10 describe, and the REPL has none of that: no Workspace, no
-transaction, no frontier and no logical filesystem. Repository components —
-`<Repository>`, `<Worktree>`, the local Git operations, `<Issue>` and
-`<PullRequest>` — are not available to a REPL entry and refuse there as they do
-under any host that installs no provider for them.
+transaction, no frontier and no logical filesystem. The local Git operations,
+`<Issue>` and `<PullRequest>` are not available to a REPL entry and refuse there
+as they do under any host that installs no provider for them.
 
 ## 3. Workflow lifecycle
 
@@ -942,6 +953,14 @@ outside a lexical `<Repository>` belongs to the ambient Repository the command
 was run in. Nothing there is retained, replayed or forkable, and none of the
 durability this section states applies to it.
 
+A REPL entry selects through that same ordinary selector, and records the answer
+rather than the checkout (§2.3). The hold lasts for the entry rather than for
+one document execution, so a later `<Dir>` inside the same entry is still
+protected, and a completed selection takes no hold at all — the first genuinely
+new file operation inside a restored placement reacquires it. None of the
+durability this section states applies there either: there is still no
+Workspace, no transaction and no fork.
+
 What both share is the composition value a component observes: a Repository
 selection carries a provider-minted identifier, a display name, the
 credential-free repository identity and the selected checkout path, and grants
@@ -1126,10 +1145,13 @@ only cwd. It neither selects nor replaces the Repository in scope, so a Git
 operation inside a directory beneath a selected checkout still addresses that
 same Repository.
 
-Under the interactive `xmd repl` the ensure is retained where the target is
-inside the checkout the entry was started in, so continuing an interrupted entry
-answers a completed ensure from its record and asks the provider for nothing
-(`specs/repl-spec.md`). Everything stated above is unchanged by that: the ensure
+Under the interactive `xmd repl` the ensure is retained where the target is in a
+checkout the entry is working in — the one it was started in, or a managed
+placement it selected, the managed checkout root itself included — so continuing
+an interrupted entry answers a completed ensure from its record and asks the
+provider for nothing (`specs/repl-spec.md`). The root counting is what makes the
+self-closing Worktree and sibling `<Dir>` pairing above retained there: the
+`<Dir>` stands at exactly the checkout the selection named. Everything stated above is unchanged by that: the ensure
 still precedes the cwd installation and every child, the refusal is still fixed
 and sanitized, the cwd is still restored on success, failure and cancellation,
 and `<Dir>` still neither selects nor replaces the Repository in scope. A
@@ -3540,6 +3562,7 @@ fetch operation requires its own language and durability contract.
 | `<Repository>`, `<Worktree>` and `<Dir>` composition under a workflow run | Repository and Worktree built by #293, Deno provider only; `<Dir>`'s mandatory `API.Files.ensureDirectory` is specified by #643 as one transactional `workspace_file` mutation followed by lexical cwd installation |
 | the same twelve declarations under every runtime | built by #643: one shadowable array declared by the bundled Git Plugin and consumed wherever its profile is assembled — `xmd syntax`, `xmd plan`, an ordinary document execution and a workflow action that executes a document. `<Dir>` left that array when canonical core took the name, and is present under every runtime without it |
 | `<Repository>`, `<Worktree>` and the ambient Repository under an ordinary run | built by #643, Deno and compiled only: managed checkouts under `~/.xmd/repositories` with version 1 sidecars and execution-owned non-blocking locks, and the checkout the command was run in as the default Repository. Node and Bun install no operational provider |
+| `<Repository>` and `<Worktree>` inside a REPL entry | built on the #181 stack, Deno and compiled only: the ordinary managed selector above, with what it answered retained as a small routing record so a completed selection restores without a selector, a clone, a `worktree add`, a sidecar read, a credential or a lock — and only new work meets the current filesystem. One entry at a time owns a managed slot, held until the entry is torn down and reacquired lazily by the first new operation inside a restored placement; that hold is distinct from the shared Git directory's mutation lease. Nothing is inventoried, snapshotted, restored or deleted, and Node and Bun install no operational provider |
 | local Git operations and `Git.Push` evidence under an ordinary run | built by #643, Deno and compiled only: the same authored transitions with no transaction and no replay, commits recorded under the invoking user's own captured Git identity with an actionable refusal when the host can name none, and a private per-execution Push evidence entry that authorizes `<PullRequest>` and crosses no run |
 | `<Issue>` and pull-request reads under an ordinary run | built by #643, Deno and compiled only: the same transports and ceilings with no durable envelope, keyed by this execution's own invocation identity |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |

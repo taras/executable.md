@@ -6450,13 +6450,40 @@ printed location, those four answer from what they produced, and the write after
 the question happens for the first time.
 
 Four operations are retained and no others: a `<File>` text read, a `<File>`
-write, a `<File.Delete />`, and the directory a `<Dir>` ensures, each in the
-ambient checkout the entry was started in. A read is retained because a document
-binds its text and a continuation has to offer the same binding; a glob, a path
-check and a temporary directory bind nothing a continuation must answer again,
-and are left alone. A call outside that checkout is ordinary filesystem
-behavior, recorded by nothing — a record would place the call in a checkout it
-is not in — so it runs again during a partial continuation.
+write, a `<File.Delete />`, and the directory a `<Dir>` ensures, each in a
+checkout this entry is working in — the ambient one it was started in, or a
+managed one it selected. A read is retained because a document binds its text
+and a continuation has to offer the same binding; a glob, a path check and a
+temporary directory bind nothing a continuation must answer again, and are left
+alone. A call outside every such checkout is ordinary filesystem behavior,
+recorded by nothing — a record would place the call in a checkout it is not in —
+so it runs again during a partial continuation. A managed placement is looked
+for first and the most specific one wins; the ambient route answers everything no
+placement covers, so an entry that selects nothing works exactly as it did
+before.
+
+Selection is retained on the same terms. `<Repository>` and `<Worktree>` call
+the *ordinary* managed selector — the same creation, compatible-reuse, conflict
+and interrupted-adoption policy `xmd run` gets — and what the selector answered
+is recorded as a small routing record: the canonical managed root, the checkout
+root, the common Git directory, the credential-free repository identity, the
+display name and the owner checkout. A root-level `<Worktree>` records the
+Repository it belongs to as its own answer, so a continuation learns that
+without asking Git. Nothing else is retained: no origin, no publication
+evidence, no object source, no Git session, no authentication, no lock and no
+opaque selection identifier.
+
+Answering a completed selection calls no selector, clones nothing, adds no
+worktree, reads no sidecar, opens no credential and takes no lock. The parsed
+facts are held to the call they stand at with pure arithmetic — the result
+describes the request it is named by, and the checkout it names is the one this
+request's own slot would hold under the root the result itself records — and the
+root is never recanonicalized against today's disk to check a historical answer.
+The entry then registers the placement privately and mints a fresh selection for
+this execution; rebuilding that membership is passive and acquires nothing, and
+an editable Repository context cannot redirect native work because every
+operation authenticates the selection it was handed against that private state
+first.
 
 Only live new work needs the environment. Answering a completed operation
 performs no path canonicalization, no ambient discovery, no lease acquisition,
@@ -6471,11 +6498,15 @@ an entry was working is not permission to work there.
 What does the retaining is established by core initialization, once per
 executing entry, inside the scope the invocation already owns — registered by
 the selected REPL host rather than by the ordinary run Plugin, because an entry
-installs no managed root, credential helper or Git host. Everything it acquires
-belongs to that execution: the Git session, its isolation directory, the ambient
-discovery and the lease all end when the entry does. A passive view — a settled
-history, a frozen position, a refused route — initializes nothing, discovers no
-checkout and takes no lease.
+installs the Repository selection handlers and the file recorder and nothing
+else the ordinary provider would bring with it. The managed root and the
+credential-helper assembly are copied where that host is installed, before any
+entry runs, so what an entry initializes with is what the command selected
+rather than a field somebody changed afterwards. Everything it acquires belongs
+to that execution: the Git session, its isolation directory, the managed root,
+the ambient discovery and every hold all end when the entry does. A passive view
+— a settled history, a frozen position, a refused route — initializes nothing,
+discovers no checkout, creates no managed root and takes no hold.
 
 Recording is ordinary ancestor-max `Files` middleware over the one document
 filesystem, so what is kept is the result the whole composition answered with,
@@ -6533,10 +6564,37 @@ and that refusal is never saved as a completed result: a lease is busy only
 while somebody else is working, and recording "refused" would make a temporary
 condition the permanent answer every later continuation replays.
 
-There is no managed checkout here, no `<Repository>` or `<Worktree>` selection,
-no local Git operation and nothing external: those components stay declared
-where they already are and refuse through their own unchanged missing-provider
-defaults.
+A managed slot has its own hold, and the two answer different questions. The
+**placement** hold says one entry at a time owns a managed checkout: a live
+selection takes it before it inspects or creates anything, and it lasts until
+the entry is torn down so a later `<Dir>` inside the same entry is still
+protected. A completed replay takes none, and the first genuinely new file
+operation inside a restored placement — a read included — reacquires that slot
+then, without rerunning the selector or looking at what the checkout holds. A
+fresh selection of a slot another entry holds keeps the ordinary immediate
+refusal, and that refusal is never written down: contention is decided before
+the recorded selection begins. Where the reacquisition happens inside a file
+operation, the condition travels as a fatal stale-state failure rather than as
+that operation's recorded outcome. The **mutation** hold above is the other one:
+only a new `<Worktree>` selector and a new write, deletion or directory take it,
+the Worktree before its selector because a linked checkout writes administration
+every checkout of that repository shares, and when both are needed the slot
+comes first.
+
+A selection's durable append completes before its path is bound or its body
+expands. Native work may finish without being acknowledged: on cancellation
+before the append no completion is manufactured, and the continuation runs that
+selection live, where the existing partial-creation policy decides what the slot
+now holds — adoption only under the stricter proof, refusal otherwise, and never
+deletion or repair. An acknowledged placement never enters that path again. A
+failed append fences later work with the first persistence failure, with no
+success result and no compensating Close.
+
+There is no local Git operation here and nothing external: `<Git.Add>`,
+`<Git.Switch>`, `<Git.Commit>`, `<Git.Push>`, `<Issue>` and `<PullRequest>` stay
+declared where they already are and refuse through their own unchanged
+missing-provider defaults. Nothing inventories the managed root, snapshots a
+checkout's contents or restores one.
 
 ### What the screen teaches, and what leaving it costs
 
@@ -6912,7 +6970,8 @@ Status is measured against main.
 | `GitQuery.resolve()` | verifies and resolves one Git revision expression contextually [Interface and evidence](specs/workflow-spec.md#7-the-git-capability--moved). | built on main |
 | workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry [Invariant](#workflow-run-storage); [Interface and evidence](specs/workflow-spec.md#9-retained-run-storage). | built on the #365 stack; the CLI lifecycle reaches it on the #366 stack |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in [Invariant](#one-database-at-a-time-and-a-transaction-a-caller-can-hold). | built on main |
-| REPL entry retained file work | one executing REPL entry's own recording, established by core initialization in the scope the invocation owns and ending with it: it retains the `<File>` reads, `<File>` writes, `<File.Delete />` deletions and `<Dir>` ensures that land inside the ambient checkout the entry was started in, authored and admitted-generated alike, because both cross the one document filesystem. A completed operation answers from its saved result without live path canonicalization, ambient discovery, a lease, a permission lookup or a filesystem call — so only *new* work needs the environment, a continuation still binds the text its read answered with while the file says something else, and a new entry reading that path sees what is there now. A record's name is the digest of the record version, the operation kind and the complete received request, so two equal requests in one entry are one name at two ordered positions and the durable engine's positional matching tells them apart; equal work in two entries is the same name, and each entry executing against its own stream segment is what keeps those apart. Recording is ordinary ancestor-max `Files` middleware, so a provider beneath that answers directly or transforms and delegates is kept as provider behavior while the received request stays the operation's identity. A shared Git directory admits one live *mutating* entry at a time, held lazily for as long as the execution lasts and refused rather than queued; no read acquires it, so a new read proceeds while another entry holds it. There is no managed checkout, no `<Repository>` or `<Worktree>` selection, no local Git operation and nothing external here; work outside the checkout stays ordinary and unrecorded, and a passive reading initializes nothing [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
+| REPL entry retained file work | one executing REPL entry's own recording, established by core initialization in the scope the invocation owns and ending with it: it retains the `<File>` reads, `<File>` writes, `<File.Delete />` deletions and `<Dir>` ensures that land inside a checkout the entry is working in — the ambient one it was started in, or a managed one it selected — authored and admitted-generated alike, because both cross the one document filesystem. A completed operation answers from its saved result without live path canonicalization, ambient discovery, a lease, a permission lookup or a filesystem call — so only *new* work needs the environment, a continuation still binds the text its read answered with while the file says something else, and a new entry reading that path sees what is there now. A record's name is the digest of the record version, the operation kind and the complete received request, so two equal requests in one entry are one name at two ordered positions and the durable engine's positional matching tells them apart; equal work in two entries is the same name, and each entry executing against its own stream segment is what keeps those apart. Recording is ordinary ancestor-max `Files` middleware, so a provider beneath that answers directly or transforms and delegates is kept as provider behavior while the received request stays the operation's identity. A shared Git directory admits one live *mutating* entry at a time, held lazily for as long as the execution lasts and refused rather than queued; no read acquires it, so a new read proceeds while another entry holds it. There is no local Git operation and nothing external here; work outside every checkout the entry is working in stays ordinary and unrecorded, and a passive reading initializes nothing [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
+| REPL entry retained selection | one executing REPL entry's own `<Repository>` and `<Worktree>` selections, recorded beside its file work as small routing records: the canonical managed root, the checkout root, the common Git directory, the credential-free repository identity, the display name and the owner checkout, with a root-level `<Worktree>`'s ambient owner recorded as its own answer. The selector is the ordinary managed one, with its own creation, compatible-reuse, conflict and interrupted-adoption policy; what this adds is that a completed selection answers from its record, calling no selector and reaching no clone, `worktree add`, sidecar, credential or lock — so a continuation works in a checkout somebody has since changed or removed, while only new work meets today's filesystem. Parsed facts are held to the call they stand at with pure slot arithmetic against the root the record itself carries, registered in entry-private state and minted as a fresh selection, so a copied or edited Repository value can misname a target and never reach one. One entry at a time *owns* a managed slot, held until teardown and reacquired lazily by the first new operation inside a restored placement; that is a different hold from the shared Git directory's mutation lease, which only a new `<Worktree>` selector and a new mutation take. A selection is acknowledged before its path is bound, and native work that was never acknowledged runs live again under the ordinary partial-creation policy [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
 | live durable-operation coordinator | explicitly coordinates structured live execution with existing Yield publication while leaving replay and callback effects unchanged [Invariant](#live-effect-coordination). | built on the #365 stack |
 | Workspace coordination API | fails closed by default; replaceable context routes only a one-use provider selection, while the selected provider directly invokes an execution-owned credentialed capability for execution, publication and failure activation [Invariant](#live-effect-coordination). | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
 | shared Git-host reconciliation | Reconciles Git push and pull-request upsert through one request-only boundary whose private terminal alone settles the retained outcome. [Invariant](#external-effects-and-git-host-mutations); [Invariant](#issue-effects). | Built on #297; Push (#370) and PullRequest (#295) consume it. Issue (#296) has its own middleware boundary. |

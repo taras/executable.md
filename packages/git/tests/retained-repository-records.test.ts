@@ -40,8 +40,76 @@ import {
   admitReplRepositoryHistory,
   ReplRepositoryHistoryError,
 } from "../src/retained-repository/admission.ts";
+import {
+  parseReplPlacementRecord,
+  REPL_REPOSITORY_PLACEMENT,
+  ReplPlacementRefusal,
+  replPlacementFingerprint,
+  replPlacementRecordJson,
+  replPlacementRecordName,
+} from "../src/retained-repository/placement-records.ts";
+import type {
+  ReplPlacement,
+  ReplPlacementRequest,
+} from "../src/retained-repository/placement-records.ts";
+import type { RepositoryIdentity } from "../src/composition/selection.ts";
 
 const WRITE: ReplLocalRequest = { cwd: "/work", path: "note.md", content: "first" };
+
+const IDENTITY: RepositoryIdentity = Object.freeze({
+  name: "project",
+  locatorFingerprint: "a".repeat(64),
+  requestedBase: null,
+  creationCommit: "b".repeat(40),
+  primaryBranch: "main",
+  objectFormat: "sha1",
+});
+
+const REPOSITORY_REQUEST: ReplPlacementRequest = Object.freeze({
+  kind: "repository",
+  name: "project",
+  locatorFingerprint: "a".repeat(64),
+  base: null,
+});
+
+const PLACEMENT: ReplPlacement = Object.freeze({
+  kind: "repository",
+  managedRoot: "/managed",
+  checkoutRoot: "/managed/repositories/slot/checkout",
+  commonDirectory: "/managed/repositories/slot/checkout/.git",
+  identity: IDENTITY,
+  displayName: "project",
+  ownerCheckout: "/managed/repositories/slot/checkout",
+});
+
+/** The payload one journaled event carries, as an object this suite can edit. */
+function payloadOf(event: DurableEvent): Record<string, unknown> {
+  if (event.type !== "yield" || event.result.status !== "ok") {
+    throw new Error("the event carries no payload");
+  }
+  return { ...Object(event.result.value) };
+}
+
+/** One journaled placement, named the way the host names it. */
+function* placementEvent(
+  request: ReplPlacementRequest = REPOSITORY_REQUEST,
+  outcome: Result<ReplPlacement> = Ok(PLACEMENT),
+  name?: string,
+): Operation<DurableEvent> {
+  const fingerprint = yield* replPlacementFingerprint(request);
+  return {
+    type: "yield",
+    coroutineId: "root",
+    description: {
+      type: REPL_REPOSITORY_PLACEMENT,
+      name: name ?? replPlacementRecordName({ kind: request.kind, fingerprint }),
+    },
+    result: {
+      status: "ok",
+      value: replPlacementRecordJson({ fingerprint, request, outcome }),
+    },
+  };
+}
 
 /** The publication a recorded write's success names, where it is one. */
 function receipt(outcome: Result<ReplLocalValue> | undefined): string | undefined {
@@ -269,6 +337,129 @@ describe("what one entry's records say", () => {
   });
 });
 
+describe("what one entry's placement records say", () => {
+  it("names a selection by its kind and its complete normalized request", function* () {
+    const repository = yield* replPlacementFingerprint(REPOSITORY_REQUEST);
+    const renamed = yield* replPlacementFingerprint({ ...REPOSITORY_REQUEST, name: "other" });
+    const based = yield* replPlacementFingerprint({ ...REPOSITORY_REQUEST, base: "main" });
+    const worktree = yield* replPlacementFingerprint({
+      kind: "worktree",
+      name: "project",
+      branch: "main",
+      base: null,
+      owner: IDENTITY,
+      commonDirectory: "/managed/repositories/slot/checkout/.git",
+      ownerCheckout: "/managed/repositories/slot/checkout",
+    });
+    const ambient = yield* replPlacementFingerprint({ kind: "ambient-owner", cwd: "/work" });
+
+    // Every fact in the request is identity, and the kind is too.
+    expect(new Set([repository, renamed, based, worktree, ambient]).size).toBe(5);
+    // And the same request twice is the same name, which is what makes two
+    // equal selections one name at two ordered positions.
+    expect(yield* replPlacementFingerprint(REPOSITORY_REQUEST)).toBe(repository);
+    expect(
+      replPlacementRecordName({ kind: "repository", fingerprint: repository }) ===
+        replPlacementRecordName({ kind: "worktree", fingerprint: repository }),
+    ).toBe(false);
+  });
+
+  it("reads back the routing a successful selection recorded", function* () {
+    const fingerprint = yield* replPlacementFingerprint(REPOSITORY_REQUEST);
+    const payload = replPlacementRecordJson({
+      fingerprint,
+      request: REPOSITORY_REQUEST,
+      outcome: Ok(PLACEMENT),
+    });
+
+    const record = parseReplPlacementRecord(payload);
+    expect(record?.kind).toBe("repository");
+    expect(record?.outcome.ok === true ? record.outcome.value.checkoutRoot : undefined).toBe(
+      PLACEMENT.checkoutRoot,
+    );
+    expect(record?.outcome.ok === true ? record.outcome.value.identity.name : undefined).toBe(
+      "project",
+    );
+    // A payload carrying anything this version did not write describes
+    // something other than a selection this host made.
+    expect(parseReplPlacementRecord({ ...Object(payload), extra: 1 })).toBe(undefined);
+    expect(parseReplPlacementRecord({ ...Object(payload), version: 2 })).toBe(undefined);
+    expect(parseReplPlacementRecord({ ...Object(payload), kind: "elsewhere" })).toBe(undefined);
+  });
+
+  it("requires a managed root of exactly the kinds a managed root places", function* () {
+    const ambient: ReplPlacementRequest = { kind: "ambient-owner", cwd: "/work" };
+    const fingerprint = yield* replPlacementFingerprint(ambient);
+    const owner = replPlacementRecordJson({
+      fingerprint,
+      request: ambient,
+      outcome: Ok({ ...PLACEMENT, kind: "ambient-owner", managedRoot: undefined }),
+    });
+
+    // An ambient owner is the checkout the person was already in, so nothing
+    // placed it.
+    expect(parseReplPlacementRecord(owner)?.kind).toBe("ambient-owner");
+    const placed = Object(owner);
+    expect(
+      parseReplPlacementRecord({
+        ...placed,
+        placement: { ...Object(placed["placement"]), managedRoot: "/managed" },
+      }),
+    ).toBe(undefined);
+
+    // And a repository selection without one disagrees with its own kind.
+    const repository = Object(
+      replPlacementRecordJson({
+        fingerprint: yield* replPlacementFingerprint(REPOSITORY_REQUEST),
+        request: REPOSITORY_REQUEST,
+        outcome: Ok(PLACEMENT),
+      }),
+    );
+    expect(
+      parseReplPlacementRecord({
+        ...repository,
+        placement: { ...Object(repository["placement"]), managedRoot: null },
+      }),
+    ).toBe(undefined);
+  });
+
+  it("carries only a refusal word its own vocabulary names", function* () {
+    const fingerprint = yield* replPlacementFingerprint(REPOSITORY_REQUEST);
+    const refused = Object(
+      replPlacementRecordJson({
+        fingerprint,
+        request: REPOSITORY_REQUEST,
+        outcome: Err(
+          new ReplPlacementRefusal({
+            vocabulary: "managed",
+            reason: "incompatible-reuse",
+            sentence: "the managed checkout was created from a different url.",
+          }),
+        ),
+      }),
+    );
+
+    const record = parseReplPlacementRecord(refused);
+    expect(record?.outcome.ok).toBe(false);
+    expect(record?.outcome.ok === false ? record.outcome.error.message : undefined).toContain(
+      "different url",
+    );
+
+    // A word outside the closed set is not a refusal this build may rebuild,
+    // and neither is a vocabulary it does not speak. `in-use` is deliberately
+    // absent: contention is decided before the recorded selection begins.
+    for (const refusal of [
+      { vocabulary: "managed", reason: "in-use", sentence: "busy" },
+      { vocabulary: "managed", reason: "invented", sentence: "busy" },
+      { vocabulary: "elsewhere", reason: "incompatible-reuse", sentence: "busy" },
+      { vocabulary: "worktree", reason: "no-repository-context", sentence: "busy" },
+      { vocabulary: "managed", reason: "incompatible-reuse", sentence: "" },
+    ]) {
+      expect(parseReplPlacementRecord({ ...refused, refusal })).toBe(undefined);
+    }
+  });
+});
+
 describe("which histories one entry will continue", () => {
   it("admits its own records, including repeated equal names", function* () {
     const once = yield* localEvent("file-write", WRITE);
@@ -353,6 +544,54 @@ describe("which histories one entry will continue", () => {
     // A later version is told apart from a broken record, so the person is
     // told which of the two they have.
     expect(refusal?.message).toContain(`version ${REPL_REPOSITORY_VERSION + 1}`);
+  });
+
+  it("admits a placement record, including repeated equal names", function* () {
+    const first = yield* placementEvent();
+    const second = yield* placementEvent();
+    expect(first.type === "yield" && second.type === "yield").toBe(true);
+    expect(yield* refusalOf([first, second])).toBe(undefined);
+  });
+
+  it("refuses a placement record it cannot read", function* () {
+    const event = yield* placementEvent();
+    const broken: DurableEvent = {
+      ...event,
+      result: { status: "ok", value: { version: REPL_REPOSITORY_VERSION, kind: "repository" } },
+    };
+    expect((yield* refusalOf([broken]))?.reason).toBe("malformed-record");
+  });
+
+  it("refuses a placement record stating a version this host does not implement", function* () {
+    const event = yield* placementEvent();
+    const stated: DurableEvent = {
+      ...event,
+      result: {
+        status: "ok",
+        value: { ...payloadOf(event), version: 2 },
+      },
+    };
+    expect((yield* refusalOf([stated]))?.reason).toBe("unknown-version");
+  });
+
+  it("refuses a placement whose request no longer produces its fingerprint", function* () {
+    const event = yield* placementEvent();
+    const changed: DurableEvent = {
+      ...event,
+      result: {
+        status: "ok",
+        value: {
+          ...payloadOf(event),
+          request: { name: "elsewhere", locatorFingerprint: "a".repeat(64), base: null },
+        },
+      },
+    };
+    expect((yield* refusalOf([changed]))?.reason).toBe("request-fingerprint");
+  });
+
+  it("refuses a placement journaled under a name it does not produce", function* () {
+    const event = yield* placementEvent(REPOSITORY_REQUEST, Ok(PLACEMENT), "another name");
+    expect((yield* refusalOf([event]))?.reason).toBe("request-fingerprint");
   });
 
   it("admits an empty history", function* () {

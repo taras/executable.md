@@ -39,6 +39,19 @@ import {
   REPL_REPOSITORY_VERSION,
   statedReplRecordVersion,
 } from "./records.ts";
+import {
+  parseReplPlacementRecord,
+  replPlacementFingerprint,
+  replPlacementRecordName,
+  REPL_REPOSITORY_PLACEMENT,
+} from "./placement-records.ts";
+
+/** The durable types this reader owns, and the only ones it reads. */
+const OWNED: ReadonlySet<string> = new Set([
+  REPL_REPOSITORY_LOCAL,
+  REPL_REPOSITORY_SELECTION,
+  REPL_REPOSITORY_PLACEMENT,
+]);
 
 /** Why a history cannot be continued. */
 export type ReplRepositoryRefusal =
@@ -80,7 +93,7 @@ export function* admitReplRepositoryHistory(retained: readonly DurableEvent[]): 
       continue;
     }
     const type = event.description.type;
-    if (type !== REPL_REPOSITORY_LOCAL && type !== REPL_REPOSITORY_SELECTION) {
+    if (!OWNED.has(type)) {
       continue;
     }
     if (event.result.status !== "ok") {
@@ -97,6 +110,10 @@ export function* admitReplRepositoryHistory(retained: readonly DurableEvent[]): 
     }
     if (type === REPL_REPOSITORY_SELECTION) {
       yield* admitSelection(payload, event.description.name);
+      continue;
+    }
+    if (type === REPL_REPOSITORY_PLACEMENT) {
+      yield* admitPlacement(payload, event.description.name);
       continue;
     }
     yield* admitLocal(payload, event.description.name);
@@ -117,6 +134,33 @@ function* admitLocal(payload: unknown, name: string): Operation<void> {
   }
   if (name !== replLocalRecordName({ operation: record.operation, fingerprint })) {
     throw misnamed(REPL_REPOSITORY_LOCAL);
+  }
+}
+
+/**
+ * Hold one recorded selection to the request it carries.
+ *
+ * The same two questions the other two records answer, over a record whose
+ * request is larger: a placement states its kind, and a request parsed as that
+ * kind is what the fingerprint and the name are recomputed from. A record whose
+ * outcome states a managed root for a checkout nothing placed — or omits one for
+ * a checkout something did — does not parse, so it is refused here rather than
+ * binding a path on replay.
+ *
+ * It opens nothing. Whether the checkout a placement names is still there is
+ * not this reader's question and is not a question a continuation asks.
+ */
+function* admitPlacement(payload: unknown, name: string): Operation<void> {
+  const record = parseReplPlacementRecord(payload);
+  if (record === undefined) {
+    throw malformed(REPL_REPOSITORY_PLACEMENT);
+  }
+  const fingerprint = yield* replPlacementFingerprint(record.request);
+  if (record.fingerprint !== fingerprint) {
+    throw changed(REPL_REPOSITORY_PLACEMENT);
+  }
+  if (name !== replPlacementRecordName({ kind: record.kind, fingerprint })) {
+    throw misnamed(REPL_REPOSITORY_PLACEMENT);
   }
 }
 

@@ -257,10 +257,29 @@ export function denoRepositoryHost(options: RepositoryHostOptions = {}): Reposit
 
     useDirectory(): Operation<string> {
       return resource(function* (provide) {
-        const created = yield* until(mkdtemp(join(tmpdir(), "xmd-workflow-git-")));
+        // Armed before the directory is asked for, and it joins the request
+        // rather than only removing what the request returned. A halt that
+        // arrives while `mkdtemp` is still in flight would otherwise find no
+        // cleanup established, and the directory would be created into a scope
+        // that had already finished unwinding — a host path left behind by a
+        // run that was cancelled before it had anything.
+        let creating: Promise<string> | undefined;
         yield* ensure(function* () {
-          yield* until(rm(created, { recursive: true, force: true }));
+          if (creating === undefined) {
+            return;
+          }
+          const made = yield* until(
+            creating.then(
+              (made) => made,
+              () => undefined,
+            ),
+          );
+          if (made !== undefined) {
+            yield* until(rm(made, { recursive: true, force: true }));
+          }
         });
+        creating = mkdtemp(join(tmpdir(), "xmd-workflow-git-"));
+        const created = yield* until(creating);
         // The resolved path, not the one that was handed back. A temporary
         // directory reached through a symbolic link — `/var` on macOS is
         // `/private/var` — is one path to this process and another to Git, and

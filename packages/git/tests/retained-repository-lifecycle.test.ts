@@ -21,6 +21,7 @@ import {
   type Operation,
   type Result,
   ensure,
+  race,
   resource,
   scoped,
   sleep,
@@ -52,6 +53,7 @@ import {
 import { commonDirectoryLock } from "../src/deno/run-composition/placement.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { REPL_REPOSITORY_LOCAL } from "../src/retained-repository/records.ts";
+import { REPL_REPOSITORY_PLACEMENT } from "../src/retained-repository/placement-records.ts";
 
 /** Let every ready task run, so "reached its wait" is about turns. */
 function* settled(turns = 8): Operation<void> {
@@ -158,8 +160,20 @@ function entry(
    * released it. A source ending in `<Elicit>` is how a held entry is held in
    * production too — somebody left it at a question — so this is that, with the
    * answer never arriving.
+   *
+   * A callback that answers returns the answer; one that returns nothing leaves
+   * the entry where it is, which is what every row holding a checkout open
+   * needs and what a continuation past the question does not.
    */
-  holding?: () => Operation<void>,
+  holding?: () => Operation<unknown>,
+  /**
+   * Where this entry's managed checkouts live.
+   *
+   * Absent for every row about the checkout the entry was opened in: a recorder
+   * with no managed root installs no selector at all, which is the assembly
+   * those rows are already about.
+   */
+  root?: string,
 ): Operation<Run> {
   return scoped(function* (): Operation<Run> {
     const path = join(checkout, "entry.md");
@@ -189,7 +203,7 @@ function entry(
     yield* useCompositionComponents();
     yield* Execution.around({
       *init(_args, next): Operation<void> {
-        yield* useReplRepositoryRecording();
+        yield* useReplRepositoryRecording(root === undefined ? {} : { root });
         yield* next();
       },
     });
@@ -199,8 +213,11 @@ function entry(
       // the lease its initialization took — until that callback returns.
       yield* Elicitation.around({
         *elicit(): Operation<unknown> {
-          yield* holding();
-          return yield* suspend();
+          const answer = yield* holding();
+          if (answer === undefined) {
+            return yield* suspend();
+          }
+          return answer;
         },
       });
     }
@@ -221,6 +238,12 @@ function entry(
   });
 }
 
+function placementRecords(events: readonly DurableEvent[]): number {
+  return events.filter(
+    (event) => event.type === "yield" && event.description.type === REPL_REPOSITORY_PLACEMENT,
+  ).length;
+}
+
 function localRecords(events: readonly DurableEvent[]): number {
   return events.filter(
     (event) => event.type === "yield" && event.description.type === REPL_REPOSITORY_LOCAL,
@@ -229,6 +252,14 @@ function localRecords(events: readonly DurableEvent[]): number {
 
 /** The question a held entry stands at, never answered. */
 const QUESTION = '<Elicit schema={{ type: "object" }} as="answer">Holding</Elicit>';
+
+/** A question that is answered at once, for a continuation past one. */
+function answeringOnce(): () => Operation<unknown> {
+  // deno-lint-ignore require-yield
+  return function* (): Operation<unknown> {
+    return {};
+  };
+}
 
 describe("an entry's hold on the checkout it is working in", () => {
   it("E8: refuses a second live entry, preserving what the first recorded", function* () {
@@ -538,6 +569,179 @@ describe("an entry's hold on the checkout it is working in", () => {
     });
   });
 
+  it("E4: refuses another entry the managed slot one is holding, until teardown", function* () {
+    const fixture = yield* useFixture();
+    const managed = join(fixture.root, "repositories");
+    const origin = yield* useOrigin(fixture.root, "origin");
+    const source = [
+      `<Repository name="project" url=${JSON.stringify(origin)} as="project" />`,
+      QUESTION,
+    ].join("\n");
+
+    yield* scoped(function* (): Operation<void> {
+      const holding = counters();
+      const acquired = withResolvers<void>();
+      const release = withResolvers<void>();
+      yield* spawn(function* (): Operation<void> {
+        yield* entry(
+          fixture.checkout,
+          source,
+          new InMemoryStream(),
+          holding,
+          function* (): Operation<void> {
+            acquired.resolve();
+            yield* release.operation;
+          },
+          managed,
+        );
+      });
+      yield* acquired.operation;
+
+      // A second live entry of the same process, asking for the same managed
+      // Repository. It is refused by the operating system: the first entry's
+      // descriptor is a different handle on the same sidecar.
+      const blocked = counters();
+      const second = yield* entry(
+        fixture.checkout,
+        source,
+        new InMemoryStream(),
+        blocked,
+        answeringOnce(),
+        managed,
+      );
+      expect(second.refusal).toContain("another process is working in the managed checkout");
+      // Refused before the selector: nothing was written down for a selection
+      // that never reached one.
+      expect(placementRecords(second.events)).toBe(0);
+
+      release.resolve();
+    });
+
+    // The holder is gone, so the same selection now reuses the checkout it
+    // left behind.
+    const after = counters();
+    const later = yield* entry(
+      fixture.checkout,
+      source,
+      new InMemoryStream(),
+      after,
+      answeringOnce(),
+      managed,
+    );
+    expect(later.refusal).toBe(undefined);
+  });
+
+  it("E4: lets a restored placement read under a held mutation lease, and not write", function* () {
+    const fixture = yield* useFixture();
+    const managed = join(fixture.root, "repositories");
+    const origin = yield* useOrigin(fixture.root, "shared");
+    const commonLock = commonDirectoryLock(yield* until(realpath(join(origin, ".git"))));
+
+    // Two linked placements of one repository, selected from the repository the
+    // entry was opened in. `reader` and `writer` are two histories over the
+    // same second worktree: each was left at a question, with its own suffix
+    // still to run.
+    const reading = counters();
+    const readerSource = [
+      '<Worktree name="observed" branch="observed">',
+      '<File path="probe.md">probe</File>',
+      QUESTION,
+      '<File path="probe.md" as="seen" />',
+      "{seen}",
+      "</Worktree>",
+    ].join("\n");
+    const readerPrefix = yield* leftEntry(origin, readerSource, reading, managed);
+
+    const writing = counters();
+    const writerSource = [
+      '<Worktree name="observed" branch="observed">',
+      QUESTION,
+      '<File path="later.md">later</File>',
+      "</Worktree>",
+    ].join("\n");
+    const writerPrefix = yield* leftEntry(origin, writerSource, writing, managed);
+
+    yield* scoped(function* (): Operation<void> {
+      // One entry holding a *different* linked placement of the same
+      // repository, and with it the shared Git directory's mutation lease its
+      // own worktree selector took.
+      const holding = counters();
+      const acquired = withResolvers<void>();
+      const release = withResolvers<void>();
+      yield* spawn(function* (): Operation<void> {
+        yield* entry(
+          origin,
+          ['<Worktree name="held" branch="held">', QUESTION, "</Worktree>"].join("\n"),
+          new InMemoryStream(),
+          holding,
+          function* (): Operation<void> {
+            acquired.resolve();
+            yield* release.operation;
+          },
+          managed,
+        );
+      });
+      yield* acquired.operation;
+
+      // Watched from here, after the holder has its descriptors: what these two
+      // continuations do is the subject.
+      const observed = yield* useObservedDescriptors();
+
+      const readAgain = counters();
+      const read = yield* entry(
+        origin,
+        readerSource,
+        new InMemoryStream([...readerPrefix]),
+        readAgain,
+        answeringOnce(),
+        managed,
+      );
+      // The read happened, in a placement restored from its record, while
+      // somebody else holds the repository for mutation.
+      expect(read.refusal).toBe(undefined);
+      expect(readAgain.reads).toEqual(["probe.md"]);
+      expect(String(read.output)).toContain("probe");
+      // It took the placement's own slot back and never opened the shared Git
+      // directory's lock: being retained and being exclusive are different
+      // questions, and so are the two holds.
+      expect(observed.opened().filter((path) => path === commonLock)).toEqual([]);
+      expect(observed.events().includes("lock")).toBe(true);
+
+      observed.forget();
+      const writeAgain = counters();
+      const refused = yield* entry(
+        origin,
+        writerSource,
+        new InMemoryStream([...writerPrefix]),
+        writeAgain,
+        answeringOnce(),
+        managed,
+      );
+      // The mutation refused before it happened, and before any result was
+      // written down for it.
+      expect(refused.refusal).toContain("Another XMD entry or process holds this checkout");
+      expect(writeAgain.writes).toEqual([]);
+      expect(yield* exists(join(fixture.root, "later.md"))).toBe(false);
+      expect(observed.opened().includes(commonLock)).toBe(true);
+
+      release.resolve();
+    });
+
+    // The holder is gone, so the same mutation now takes the lease it always
+    // did — the positive control for the refusal above.
+    const after = counters();
+    const wrote = yield* entry(
+      origin,
+      writerSource,
+      new InMemoryStream([...writerPrefix]),
+      after,
+      answeringOnce(),
+      managed,
+    );
+    expect(wrote.refusal).toBe(undefined);
+    expect(after.writes).toEqual(["later.md"]);
+  });
+
   it("E8: opens, locks, releases and closes each descriptor exactly once", function* () {
     const fixture = yield* useFixture();
     const lock = commonDirectoryLock(yield* common(fixture.checkout));
@@ -601,9 +805,77 @@ describe("an entry's hold on the checkout it is working in", () => {
   });
 });
 
+/**
+ * A source repository with a commit in it, for the rows that select one.
+ *
+ * Made inside the row rather than in the shared fixture, so the rows about the
+ * ambient checkout keep the exact repository they have always had.
+ */
+function* useOrigin(root: string, name: string): Operation<string> {
+  const origin = join(root, name);
+  yield* until(mkdir(origin, { recursive: true }));
+  const git = gitSession(denoRepositoryHost(), root);
+  yield* git.run(["init", "-b", "main", origin], root);
+  yield* writeTextFile(join(origin, "README.md"), "origin\n");
+  yield* git.run(["add", "README.md"], origin);
+  yield* git.run(["commit", "-m", "first"], origin);
+  return origin;
+}
+
+/**
+ * The prefix an entry left behind when it was left at a question.
+ *
+ * A real unfinished history: the entry is spawned, its question is reached and
+ * never answered, the journal is read as the interruption left it, and only
+ * then is the entry halted. The continuation that follows runs the same
+ * document and reaches the work after the question.
+ */
+function leftEntry(
+  checkout: string,
+  source: string,
+  counted: Counters,
+  root: string,
+): Operation<readonly DurableEvent[]> {
+  return scoped(function* () {
+    const stream = new InMemoryStream();
+    const reached = withResolvers<void>();
+    const task = yield* spawn(() =>
+      entry(
+        checkout,
+        source,
+        stream,
+        counted,
+        function* (): Operation<void> {
+          reached.resolve();
+          yield* suspend();
+        },
+        root,
+      ),
+    );
+    yield* race([
+      reached.operation,
+      (function* (): Operation<never> {
+        yield* sleep(30_000);
+        throw new Error("the entry never reached its question");
+      })(),
+    ]);
+    const prefix = [...(yield* stream.readAll())];
+    yield* task.halt();
+    return prefix;
+  });
+}
+
 /** What this host was asked to do with each lock descriptor, in order. */
 interface ObservedDescriptors {
   events(): readonly string[];
+  /**
+   * Every path a descriptor was opened for, in order.
+   *
+   * What distinguishes the two holds: a managed slot's lock and a shared Git
+   * directory's lock are different sidecars, and a row about one of them has to
+   * be able to say the other was never opened.
+   */
+  opened(): readonly string[];
   /** Start a fresh list, so one row is not read against another's calls. */
   forget(): void;
   /** Make the next lock attempt throw, which is a partial acquisition. */
@@ -630,6 +902,7 @@ function useObservedDescriptors(): Operation<ObservedDescriptors> {
       throw new Error("this host opens no files, so there is no descriptor to observe");
     }
     let events: string[] = [];
+    let paths: string[] = [];
     let throwing = false;
 
     yield* ensure(() => {
@@ -639,6 +912,7 @@ function useObservedDescriptors(): Operation<ObservedDescriptors> {
     Reflect.set(Object(runtime), "openSync", (path: string, options: unknown) => {
       const file = Reflect.apply(original, runtime, [path, options]);
       events.push("open");
+      paths.push(path);
       return {
         tryLockSync(exclusive: boolean): boolean {
           if (throwing) {
@@ -662,8 +936,10 @@ function useObservedDescriptors(): Operation<ObservedDescriptors> {
 
     yield* provide({
       events: () => [...events],
+      opened: () => [...paths],
       forget(): void {
         events = [];
+        paths = [];
       },
       failLock(): void {
         throwing = true;

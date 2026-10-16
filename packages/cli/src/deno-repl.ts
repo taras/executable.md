@@ -14,11 +14,12 @@ import { homedir } from "node:os";
 import { sep } from "node:path";
 import process from "node:process";
 import type { Operation } from "effection";
+import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { installReplHost, platformDataRoot } from "./repl-assembly.ts";
 import { useDenoReplTerminal } from "./deno-repl-terminal.ts";
 import { useDenoReplRepositories } from "./deno-repositories.ts";
 
-export function* useDenoRepl(): Operation<void> {
+export function* useDenoRepl(helper: HelperAssembly): Operation<void> {
   yield* installReplHost({
     dataRoot: () => platformDataRoot(process.platform, homedir(), process.env, sep),
     // Sixteen random bytes as hex: URL-safe, opaque, and not derived from a
@@ -28,11 +29,12 @@ export function* useDenoRepl(): Operation<void> {
     appendRecord: (path, record) => appendFile(path, record),
   });
   // What an entry's execution initializes: the recording of the File and Dir
-  // work it does in the checkout the person opened the session in. Registered
-  // here, in the runtime scope the selected REPL host owns, because only a
-  // runtime-named module may name the native adapter — and registering it
-  // acquires nothing, so a session that only reads history discovers no
-  // checkout and takes no lease.
-  yield* useDenoReplRepositories();
+  // work it does, and of the managed Repository and Worktree selections that
+  // say where it does it. Registered here, in the runtime scope the selected
+  // REPL host owns, because only a runtime-named module may name the native
+  // adapter and this runtime's own credential-helper assembly — and registering
+  // it acquires nothing, so a session that only reads history discovers no
+  // checkout, creates no managed root and takes no lease.
+  yield* useDenoReplRepositories(helper);
   yield* useDenoReplTerminal();
 }

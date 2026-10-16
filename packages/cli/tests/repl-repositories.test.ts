@@ -36,10 +36,15 @@ import {
   REPL_REPOSITORY_LOCAL,
   REPL_REPOSITORY_SELECTION,
 } from "../../git/src/retained-repository/records.ts";
+import {
+  parseReplPlacementRecord,
+  REPL_REPOSITORY_PLACEMENT,
+} from "../../git/src/retained-repository/placement-records.ts";
 import { Execution } from "@executablemd/core/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { useDenoReplRepositories } from "../src/deno-repositories.ts";
+import type { HelperAssembly } from "../../git/src/deno/composition/credential-helper.ts";
 import { gitPlugin } from "../../git/src/plugin.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
@@ -137,14 +142,47 @@ interface Counted {
  * an entry that executes initializes once, and a view that only reads a history
  * initializes not at all.
  */
-function* useCountedRecording(counted: Counted): Operation<void> {
+function* useCountedRecording(counted: Counted, root: string): Operation<void> {
   yield* Execution.around({
     *init(_args, next): Operation<void> {
       counted.initialized += 1;
       yield* next();
     },
   });
-  yield* useDenoReplRepositories();
+  yield* useDenoReplRepositories(SUITE_HELPER, root);
+}
+
+/**
+ * The credential-helper assembly this suite's host selects.
+ *
+ * Inert, and never invoked: every locator these rows select is a local path, so
+ * the transport carries no identity and no broker is asked for one.
+ */
+const SUITE_HELPER: HelperAssembly = Object.freeze({
+  runtime: "source",
+  platform: "unix",
+  execPath: "/nonexistent/xmd",
+});
+
+/** Where this fixture's managed checkouts live. */
+function managedRoot(fixture: Fixture): string {
+  return join(fixture.root, "repositories");
+}
+
+/**
+ * A source repository with a commit in it, for the rows that select one.
+ *
+ * Made inside the row rather than in the shared fixture, so the rows about the
+ * checkout the entry was opened in keep the exact repository they have had.
+ */
+function* useOrigin(fixture: Fixture): Operation<string> {
+  const origin = join(fixture.root, "origin");
+  const git = gitSession(denoRepositoryHost(), fixture.root);
+  yield* git.run(["init", "-b", "main", origin], fixture.root);
+  yield* until(writeFile(join(origin, "README.md"), "origin\n"));
+  yield* git.run(["add", "README.md"], origin);
+  yield* git.run(["commit", "-m", "first"], origin);
+  return origin;
 }
 
 function execution(events: readonly DurableEvent[] = []): ReplExecution {
@@ -205,7 +243,7 @@ function* submit(
     // Absent for the row about a host that registers none: the entry then runs
     // on the ordinary Files provider with nothing retained.
     if (counted !== undefined) {
-      yield* useCountedRecording(counted);
+      yield* useCountedRecording(counted, managedRoot(fixture));
     }
     const session = opened(
       yield* submitReplEntry({
@@ -239,7 +277,7 @@ describe("how a REPL entry gets its repository behavior", () => {
       yield* useHostFiles();
       yield* useWorkingDirectory(fixture.checkout);
       const installations = yield* replInstallations();
-      yield* useCountedRecording(counted);
+      yield* useCountedRecording(counted, managedRoot(fixture));
       const session = opened(
         yield* submitReplEntry({
           execution: run,
@@ -293,7 +331,7 @@ describe("how a REPL entry gets its repository behavior", () => {
         // journal without delegating this far.
         { at: "min" },
       );
-      yield* useCountedRecording(again);
+      yield* useCountedRecording(again, managedRoot(fixture));
       const session = opened(
         yield* openReplSession({
           execution: { id: "execution-1", stream: new InMemoryStream([...events]) },
@@ -333,6 +371,49 @@ describe("how a REPL entry gets its repository behavior", () => {
     // And a fragment admitted for reads performs no write at all.
     expect(yield* exists(join(fixture.checkout, "refused.md"))).toBe(false);
     expect(recordsOf(events, REPL_REPOSITORY_LOCAL)).toEqual([]);
+  });
+
+  it("E7: shares the recording with a generated File inside a managed Repository", function* () {
+    const fixture = yield* useFixture();
+    const origin = yield* useOrigin(fixture);
+    const counted: Counted = { initialized: 0 };
+    const run = execution();
+
+    // An admitted generated `<File>` inside a managed Repository body, and two
+    // generated selections beside it. The fragment's write crosses the same one
+    // Files route an authored one does; the selections reach the generated
+    // ceiling before any provider is asked.
+    const source = [
+      `<Repository name="project" url=${JSON.stringify(origin)}>`,
+      `<Evaluate text={${JSON.stringify('<File path="generated.md">from a fragment</File>\n')}} allow={["write"]} />`,
+      `<Evaluate text={${JSON.stringify(`<Repository name="other" url=${JSON.stringify(origin)} />\n`)}} allow={["write"]} />`,
+      `<Evaluate text={${JSON.stringify('<Worktree name="other" branch="other" />\n')}} allow={["write"]} />`,
+      `<Evaluate text={${JSON.stringify('<Dir path="made">\n</Dir>\n')}} allow={["write"]} />`,
+      "</Repository>",
+    ].join("\n");
+
+    const events = yield* submit(fixture, source, run, counted);
+
+    // One placement: the authored Repository. The generated Repository and
+    // Worktree were never admitted, so neither reached a selector.
+    const selected = recordsOf(events, REPL_REPOSITORY_PLACEMENT);
+    expect(selected.length).toBe(1);
+    const placement = parseReplPlacementRecord(
+      selected[0]?.type === "yield" && selected[0].result.status === "ok"
+        ? selected[0].result.value
+        : undefined,
+    );
+    const checkout = placement?.outcome.ok === true ? placement.outcome.value.checkoutRoot : "";
+    expect(checkout).not.toBe("");
+
+    // The fragment's write happened in the managed checkout and is recorded
+    // there, exactly as an authored one would be.
+    expect(yield* readTextFile(join(checkout, "generated.md"))).toBe("from a fragment");
+    expect(recordsOf(events, REPL_REPOSITORY_LOCAL).length).toBe(1);
+    // And the generated `<Dir>` made nothing, in the managed checkout or
+    // anywhere else.
+    expect(yield* exists(join(checkout, "made"))).toBe(false);
+    expect(yield* exists(join(fixture.checkout, "made"))).toBe(false);
   });
 
   it("E7: keeps two entries' equal records in their own segments", function* () {
@@ -380,7 +461,7 @@ describe("how a REPL entry gets its repository behavior", () => {
       yield* useHostFiles();
       yield* useWorkingDirectory(fixture.checkout);
       const installations = yield* replInstallations();
-      yield* useCountedRecording(counted);
+      yield* useCountedRecording(counted, managedRoot(fixture));
       const session = opened(
         yield* submitReplEntry({
           execution: run,
@@ -423,7 +504,7 @@ describe("how a REPL entry gets its repository behavior", () => {
         },
         { at: "min" },
       );
-      yield* useCountedRecording(again);
+      yield* useCountedRecording(again, managedRoot(fixture));
       const session = opened(
         yield* openReplSession({
           execution: continued,
@@ -469,7 +550,7 @@ describe("how a REPL entry gets its repository behavior", () => {
       yield* useHostFiles();
       yield* useWorkingDirectory(fixture.checkout);
       const installations = yield* replInstallations();
-      yield* useCountedRecording(reading);
+      yield* useCountedRecording(reading, managedRoot(fixture));
       const session = opened(
         yield* openReplSession({
           execution: { id: "execution-1", stream: new InMemoryStream([...events]) },
@@ -498,7 +579,7 @@ describe("how a REPL entry gets its repository behavior", () => {
       yield* useHostFiles();
       yield* useWorkingDirectory(fixture.checkout);
       const installations = yield* replInstallations();
-      yield* useCountedRecording(counted);
+      yield* useCountedRecording(counted, managedRoot(fixture));
       const session = opened(
         yield* submitReplEntry({
           execution: run,
@@ -532,7 +613,7 @@ describe("how a REPL entry gets its repository behavior", () => {
       yield* useHostFiles();
       yield* useWorkingDirectory(fixture.checkout);
       const installations = yield* replInstallations();
-      yield* useCountedRecording(again);
+      yield* useCountedRecording(again, managedRoot(fixture));
       try {
         const session = opened(
           yield* openReplSession({

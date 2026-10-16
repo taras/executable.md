@@ -24,7 +24,12 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { cliRuntime, cliShellCommand } from "@executablemd/test-support/launch";
 import type { Operation } from "effection";
-import { replFilesJourney, replOrdinaryFileWork } from "./support/repl-files-journey.ts";
+import {
+  replFilesJourney,
+  replOrdinaryFileWork,
+  replRepositoryJourney,
+  replUnsupportedSelection,
+} from "./support/repl-files-journey.ts";
 
 const JOURNEY = cliRuntime() === "deno";
 
@@ -42,4 +47,21 @@ describe("a REPL entry's files, across leaving and coming back", () => {
       yield* JOURNEY ? replFilesJourney(sourceCommand) : replOrdinaryFileWork(sourceCommand);
     },
   );
+
+  it(
+    JOURNEY
+      ? "E1: a managed Repository is selected once, and answers again on reopening"
+      : "E8: this runtime refuses a managed Repository before it reaches a clone",
+    function* (): Operation<void> {
+      yield* JOURNEY
+        ? replRepositoryJourney(sourceCommand, "repository")
+        : replUnsupportedSelection(sourceCommand);
+    },
+  );
+
+  if (JOURNEY) {
+    it("E1: a managed Worktree's captured path routes a Dir, and answers again", function* (): Operation<void> {
+      yield* replRepositoryJourney(sourceCommand, "worktree");
+    });
+  }
 });

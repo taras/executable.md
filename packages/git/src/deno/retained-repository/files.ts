@@ -1,13 +1,18 @@
 /**
  * The file work one REPL entry records, and the work it simply performs.
  *
- * A document reads and writes files in two places: inside the checkout the
- * entry was started in, and everywhere else. Only the first is repository work.
- * A write beside the document, in a temporary directory or anywhere outside
- * that checkout is ordinary filesystem behavior and is journaled by nothing
- * here — giving it a record would place it in a checkout it is not in.
+ * A document reads and writes files in three places: inside a managed checkout
+ * this entry selected, inside the checkout the entry was started in, and
+ * everywhere else. Only the first two are repository work. A write beside the
+ * document, in a temporary directory or anywhere outside both is ordinary
+ * filesystem behavior and is journaled by nothing here — giving it a record
+ * would place it in a checkout it is not in.
  *
- * Inside the checkout the call goes through this entry's durable boundary: the
+ * A managed placement is looked for first, and the most specific one wins. The
+ * entry's ambient checkout answers for everything no placement covers, which is
+ * what keeps an entry that selects nothing working exactly as it did before.
+ *
+ * Inside either the call goes through this entry's durable boundary: the
  * composition beneath performs it, and what it produced is recorded once. A
  * completed read answers with the text it answered with the first time and a
  * completed write answers from its receipt, each touching no file, however the
@@ -17,6 +22,11 @@
  * Being retained and being exclusive are different questions: what the lease
  * answers is that one entry at a time changes a repository, so a read proceeds
  * while another entry holds it and never holds it itself.
+ *
+ * A managed placement adds the other hold, and it answers a different question:
+ * one entry at a time *owns* a managed slot. A restored placement took none
+ * when it replayed, so the first new operation inside it — a read included —
+ * takes the slot before it is performed.
  *
  * ## One route, one policy
  *
@@ -66,6 +76,24 @@ import type {
   ReplLocalValue,
 } from "../../retained-repository/records.ts";
 
+/**
+ * One managed checkout this entry selected, as file routing needs it.
+ *
+ * The two routing facts and the one thing a restored placement still has to do
+ * before it is written in: take the slot back. A completed selection recorded
+ * where the checkout is and took no lease, so the first genuinely new operation
+ * inside it is what takes it back — without rerunning the selector or looking at
+ * what the checkout now holds.
+ */
+export interface ReplManagedPlacement {
+  /** The canonical root of the selected checkout. */
+  readonly checkoutRoot: string;
+  /** The canonical common Git directory it belongs to. */
+  readonly commonDirectory: string;
+  /** Take ownership of its managed slot for the entry, or refuse. */
+  own(): Operation<void>;
+}
+
 /** What the entry knows about where it is working and what it may hold. */
 export interface ReplLocalRecorder {
   /**
@@ -82,6 +110,15 @@ export interface ReplLocalRecorder {
    * to the entry rather than to the element that first needed it.
    */
   hold(commonDirectory: string): Operation<void>;
+  /**
+   * The managed checkouts this entry has registered, as they stand now.
+   *
+   * Not an operation: membership is rebuilt by selections that already
+   * happened, so reading it acquires nothing. A placement stays registered for
+   * the rest of the entry, which is what lets a self-closing `<Worktree>` bind
+   * a path a later `<Dir>` sibling renders at.
+   */
+  placements(): readonly ReplManagedPlacement[];
 }
 
 /** The middleware that records this entry's authored mutations. */
@@ -160,31 +197,73 @@ function* routed(
     return yield* recordedLocalOperation({ operation, request, perform });
   }
 
-  const checkout = yield* covering(recorder, request);
-  if (checkout === undefined) {
+  const target = yield* targetOf(request);
+  const managed = covering(recorder.placements(), target);
+  if (managed !== undefined) {
+    // Placement ownership first, and for a read as much as for a write: what it
+    // answers is that one entry at a time owns this managed checkout, which an
+    // observation inside it needs as much as a change does.
+    yield* managed.own();
+    return yield* held(recorder, managed.commonDirectory, { operation, request, perform });
+  }
+  const checkout = yield* recorder.selection();
+  if (checkout === undefined || !inside(checkout.checkoutRoot, target)) {
     return yield* perform();
   }
-  // Only a mutation takes the lease. A read is retained like the rest, but the
-  // lease is about one entry at a time *changing* a checkout, and an
-  // observation is not a change: a read that took it would refuse while
-  // somebody else is working, and refuse them while it is only looking.
-  if (operation !== "file-read") {
-    yield* recorder.hold(checkout.commonDirectory);
-  }
-  return yield* recordedLocalOperation({ operation, request, perform });
+  return yield* held(recorder, checkout.commonDirectory, { operation, request, perform });
 }
 
-/** The checkout this request points inside, when it points inside one. */
-function* covering(
+/**
+ * Record this operation, holding the shared Git directory when it changes one.
+ *
+ * Only a mutation takes the lease. A read is retained like the rest, but the
+ * lease is about one entry at a time *changing* a repository, and an
+ * observation is not a change: a read that took it would refuse while somebody
+ * else is working, and refuse them while it is only looking.
+ */
+function* held(
   recorder: ReplLocalRecorder,
-  request: ReplLocalRequest,
-): Operation<ReplAmbientCheckout | undefined> {
-  const checkout = yield* recorder.selection();
-  if (checkout === undefined) {
-    return undefined;
+  commonDirectory: string,
+  operation: {
+    readonly operation: ReplLocalOperation;
+    readonly request: ReplLocalRequest;
+    perform(): Operation<Result<ReplLocalValue>>;
+  },
+): Operation<Result<ReplLocalValue>> {
+  if (operation.operation !== "file-read") {
+    yield* recorder.hold(commonDirectory);
   }
-  const target = yield* targetOf(request);
-  return inside(checkout.checkoutRoot, target) ? checkout : undefined;
+  return yield* recordedLocalOperation(operation);
+}
+
+/**
+ * The managed checkout this path belongs to, most specific first.
+ *
+ * The checkout root itself counts, which is where this differs from the ambient
+ * route below it. A self-closing `<Worktree>` binds its path and a `<Dir>`
+ * sibling then ensures exactly that directory, and an entry that recorded
+ * selecting it has recorded what `<Dir>` is standing in — so the ensure is
+ * retained rather than treated as ordinary work beside the document.
+ *
+ * A nested selection's checkout is never inside its owner's, so "most specific"
+ * is about a path addressed through a placement registered more than once and
+ * about the managed root layout, not about resolving an ambiguity between a
+ * Repository and its Worktree.
+ */
+function covering(
+  placements: readonly ReplManagedPlacement[],
+  target: string,
+): ReplManagedPlacement | undefined {
+  let found: ReplManagedPlacement | undefined;
+  for (const placement of placements) {
+    if (target !== placement.checkoutRoot && !inside(placement.checkoutRoot, target)) {
+      continue;
+    }
+    if (found === undefined || placement.checkoutRoot.length > found.checkoutRoot.length) {
+      found = placement;
+    }
+  }
+  return found;
 }
 
 /**

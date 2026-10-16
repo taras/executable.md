@@ -824,7 +824,70 @@ hold, and a completed operation of any kind takes nothing at all.
 
 Starting outside a checkout retains none of this and changes nothing else: the
 entry performs ordinary file work, exactly as it would anywhere else, and never
-looks for a repository twice.
+looks for a repository twice. Selecting a Repository is a separate matter and
+works from anywhere, which is the next section.
+
+### The repositories and worktrees an entry selected
+
+An entry may also work in a checkout it asks for rather than the one you are
+standing in:
+
+```xmd
+<Repository name="project" url="/absolute/path/to/remote.git">
+  <Worktree name="experiment" branch="experiment" as="worktree" />
+  <Dir path={worktree}>
+    <File path="note.md">first</File>
+    <File path="note.md" as="held" />
+    <Elicit schema={{ type: "string", enum: ["continue"] }}>Recorded value: {held}</Elicit>
+    <File path="after.md">continued</File>
+  </Dir>
+</Repository>
+```
+
+`<Repository name=".." url={..}>` selects a persistent checkout beneath
+`~/.xmd/repositories`, creating it the first time and reusing it afterwards.
+`<Worktree name=".." branch={..}>` selects a linked checkout of the Repository
+in scope, or — written outside one, in a directory inside a Git checkout — of
+the repository you opened the session in. Written outside one with no checkout
+around you, it refuses with the same actionable sentence it has always had: run
+from inside a checkout, or write a `<Repository>` around it. Both forms behave
+as they do anywhere else: paired, they scope their content and the working
+directory; self-closing, they render nothing and return the checkout path, which
+a sibling `<Dir>` may then render at. Who creates, reuses or refuses a managed
+checkout, and in what words, is unchanged — it is the same selection an ordinary
+`xmd run` performs.
+
+What is new is that the selection is retained. Leave the entry at the question
+above and come back to the printed location: the Repository and the Worktree
+answer from what they recorded. No checkout is cloned, no `worktree add` runs, no
+sidecar is read, no credential is opened and no lock is taken to answer them.
+The file work inside them answers from its own records exactly as the ambient
+section describes, and the write after the question happens for the first time
+when you answer.
+
+A completed selection says where the entry was working. It is not a claim that
+the checkout is still there. Remove it between leaving and coming back and the
+entry still continues — the selection answers, the completed reads and writes
+answer, and nothing is recreated or repaired to make that true. Only *new* work
+meets today's filesystem: a new read of a file that is not there fails exactly as
+it would have the first time, and a new `<Dir>` creates the directory it names,
+because `<Dir>` creates directories and is not checkout validation. A new entry
+selecting the same Repository selects it afresh, which is an ordinary reuse of
+whatever is on disk.
+
+Two holds answer two different questions, and a message tells you which one you
+met. One entry at a time *owns* a managed checkout: a second entry asking for
+the same Repository or Worktree is refused immediately, naming the checkout, and
+may have it once the first entry has been torn down. Separately, one entry at a
+time *changes* one repository, which is the shared-Git-directory hold the
+ambient section describes — a new `<Worktree>` takes it, because creating a
+linked checkout writes into administration every checkout of that repository
+shares, and a new write, deletion or directory takes it too. Neither hold is
+taken to answer a completed selection or a completed file operation, and a read
+takes only the ownership of the checkout it is reading in.
+
+Local Git, publication and issues remain unavailable here; the exclusions below
+say which components those are.
 
 ## What the head says the execution is doing
 
@@ -874,8 +937,11 @@ recorded output replaces it.
 Repository behavior belongs to the entry that is executing, and to nothing
 wider. The command selects it; the entry's own task prepares it, once, inside
 that task, and everything it takes — the Git session it reads through, where it
-looked for a checkout, the hold on that repository — is released when the entry
-is torn down. Each entry reads and writes its own range of the one history, so
+looked for a checkout, the managed checkouts it selected, the hold on each of
+those and the hold on the repository it changes — is released when the entry is
+torn down. The selections an entry made are its own: a continuation rebuilds
+which checkouts it was working in from what it recorded, and rebuilding them
+reaches nothing. Each entry reads and writes its own range of the one history, so
 the same text typed twice is two sets of records rather than one replayed, and
 the entry after an interrupted one replays nothing of it however identical its
 text. No second name for the entry appears in a record: which history an entry
@@ -912,11 +978,20 @@ schedules no timer.
   do not open the same location twice for writing. The hold on a checkout is a
   different thing: it says one entry at a time may mutate one repository, and it
   says nothing about who may write this execution's history.
-- Repository components are not part of this. `<Repository>`, `<Worktree>`, the
-  local Git operations, `<Issue>` and `<PullRequest>` refuse in a REPL entry
-  exactly as they do under any host that installs no provider for them. What an
-  entry retains is file and directory work in the checkout it was started in,
-  and nothing is managed, cloned, staged, committed or published.
+- Local Git and publication are not part of this. `<Git.Add>`, `<Git.Switch>`,
+  `<Git.Commit>`, `<Git.Push>`, `<Issue>` and `<PullRequest>` refuse in a REPL
+  entry exactly as they do under any host that installs no provider for them.
+  What an entry retains is `<Repository>` and `<Worktree>` selection and the
+  file and directory work inside those checkouts and the one it was started in;
+  nothing is staged, committed, pushed or published.
+- Generated selection is unchanged. An admitted generated `<File>`,
+  `<File.Delete />` or `<Glob>` is retained exactly as an authored one is, and a
+  generated `<Repository>`, `<Worktree>` or `<Dir>` refuses before any provider
+  is asked.
+- Nothing inventories the managed root. There is no listing of the checkouts an
+  entry or a session has selected, no snapshot of their contents, and no
+  restoration pass; a managed checkout is somebody's work and nothing here
+  deletes one.
 - Continuing an entry is explicit. Returning to the live head starts the one
   unfinished entry, once; a frozen position starts nothing at all.
 - A continuation does not reconcile. Nothing compares a saved result with what

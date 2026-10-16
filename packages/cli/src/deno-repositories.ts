@@ -124,19 +124,31 @@ function snapshot(helper: HelperAssembly): HelperAssembly {
 }
 
 /**
- * What a REPL entry's execution initializes: recording, and nothing else.
+ * What a REPL entry's execution initializes: recording and selection, and
+ * nothing else.
  *
  * Registered by the selected REPL host rather than by the bundled Plugin,
- * because an entry is not an ordinary run: it retains the file work it does in
- * the checkout the person is standing in, and installs no managed root,
- * credential helper or Git host. Each executing entry initializes its own, in
+ * because an entry is not an ordinary run: it retains the file work it does and
+ * the managed checkouts it selects to do that work in, and installs no Git host,
+ * publication or external worker. Each executing entry initializes its own, in
  * the scope below its Agent attachment, so a passive view — a settled history,
- * a frozen position — initializes nothing and takes no lease.
+ * a frozen position — initializes nothing, creates no managed root and takes no
+ * lease.
+ *
+ * The root and the helper are copied here, at registration, rather than held as
+ * the caller's object. What an entry initializes with has to be what this host
+ * selected: a caller that kept a reference and changed a field afterwards would
+ * be configuring every later entry from outside the selection the command
+ * already made.
  */
-export function* useDenoReplRepositories(): Operation<void> {
+export function* useDenoReplRepositories(
+  helper: HelperAssembly,
+  root: string = DEFAULT_REPOSITORY_ROOT,
+): Operation<void> {
+  const configured = snapshot(helper);
   yield* Execution.around({
     *init(_args, next): Operation<void> {
-      yield* useReplRepositoryRecording();
+      yield* useReplRepositoryRecording({ helper: configured, root });
       yield* next();
     },
   });

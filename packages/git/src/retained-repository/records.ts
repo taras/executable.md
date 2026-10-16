@@ -66,7 +66,13 @@ export const REPL_REPOSITORY_LOCAL = "repl_repository_local";
 /** The durable type the entry's ambient routing facts are journaled under. */
 export const REPL_REPOSITORY_SELECTION = "repl_repository_selection";
 
-const RECORD_PREFIX = "executablemd.git.repl-repository";
+/**
+ * The namespace every record name of this feature begins with.
+ *
+ * Shared with the placement records beside these, because a second prefix
+ * would be a second namespace for one feature's history.
+ */
+export const RECORD_PREFIX = "executablemd.git.repl-repository";
 
 /** Which local operation a record describes. */
 export type ReplLocalOperation = "file-read" | "file-write" | "file-delete" | "dir-ensure";
@@ -405,7 +411,13 @@ function requestJson(request: ReplLocalRequest): Json {
     : { cwd: request.cwd, path: request.path, content: request.content };
 }
 
-function* digest(value: Json): Operation<string> {
+/**
+ * The SHA-256 digest of one canonical value, as every name here is built from.
+ *
+ * Shared with the placement records beside these: two implementations of one
+ * digest would be two answers to what a record is named.
+ */
+export function* digest(value: Json): Operation<string> {
   const encoded = new TextEncoder().encode(canonicalJson(value));
   const computed = yield* until(crypto.subtle.digest("SHA-256", encoded));
   return Array.from(new Uint8Array(computed), (byte) => byte.toString(16).padStart(2, "0")).join(
