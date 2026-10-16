@@ -217,13 +217,12 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
     const narrowedSyntax = narrow(site.syntax, entries);
     const source = stated === undefined ? yield* project(site, narrowedSyntax) : stated;
 
-    // Read after the producer has rendered, and exactly once per occurrence: a
-    // producer may itself commit mutations, and the basis this admission is
-    // made under is the run's basis at the moment the program exists.
+    // Checked after the producer has rendered: a producer may itself commit
+    // mutations, and what this admission needs is that the implementations it
+    // captured still belong to a live execution.
     if (!profile.live()) {
       throw new ComponentInvocationError(REVOKED);
     }
-    const basis = profile.workspace === undefined ? undefined : yield* profile.workspace.snapshot();
 
     // Where the authored element was written, as diagnostic journal data beside
     // the admission. A generated fragment's own elements are scanned from a
@@ -236,7 +235,6 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
       allow,
       observations: entries.observations,
       ...(entries.mutations.length === 0 ? {} : { mutations: entries.mutations }),
-      ...(basis === undefined ? {} : { workspaceRoots: basis.roots, selectedRoot: basis.current }),
       ...(expansion.position === undefined ? {} : { position: expansion.position }),
     };
     // Where this fragment's relative paths resolve is the contextual working
@@ -360,7 +358,6 @@ function selectedTables(
         ...(entry.forms.length === 1 && entry.forms[0] === "self-closing"
           ? { selfClosing: true }
           : {}),
-        ...(entry.requests === undefined ? {} : { requests: entry.requests.map(asRequest) }),
       });
       admitted.push(entry);
     }
@@ -386,29 +383,13 @@ function selectedTables(
 /**
  * What kind of thing is behind one captured entry's name.
  *
- * It travels with the entry because an operation core supplies the body for and
- * an answer the import chain resolved are different grants even under one
- * identity: the first cannot be composed around and the second was resolved
- * through middleware. The identity itself is not restated here — it is on the
- * definition the entry already carries, where its owner declared it.
+ * Every selected entry is an answer the import chain resolved, because that is
+ * the one way a selected name reaches an implementation now. It travels with
+ * the entry rather than being inferred at the record, so a reader comparing two
+ * admissions reads what each row was retained as.
  */
 function implementation(entry: CapturedEntry): GeneratedImplementation {
   return entry.kind === "component-answer" ? "component-answer" : "capability";
-}
-
-/** One captured ceiling, as the request record the evaluator compares against. */
-function asRequest(request: {
-  url: string;
-  method: string;
-  headers: Record<string, string>;
-  timeout?: number;
-}): Record<string, Json> {
-  return {
-    url: request.url,
-    method: request.method,
-    headers: { ...request.headers },
-    ...(request.timeout === undefined ? {} : { timeout: `${request.timeout}ms` }),
-  };
 }
 
 /**

@@ -126,6 +126,7 @@ export type {
   ComponentApi,
   ComponentExpansionPhase,
   ComponentExpansionRequest,
+  GeneratedSelection,
 } from "./src/component-api.ts";
 export type { Expansion } from "./src/expansion.ts";
 

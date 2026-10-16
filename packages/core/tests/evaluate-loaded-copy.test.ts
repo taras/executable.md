@@ -30,8 +30,8 @@ import { API, fileWriteSuccess } from "@executablemd/runtime";
 import { collect } from "../src/collect.ts";
 import { Component } from "../src/component-api.ts";
 import { executeInstalled } from "../host.ts";
-import { fileDeleteEntry, fileReadEntry, fileWriteEntry } from "../host.ts";
 import type { ExecutionInstallation } from "../host.ts";
+import { useSelection } from "./support/generated-selection.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
@@ -40,19 +40,26 @@ import type { RecordedFiles } from "./support/fragment-files.ts";
 const ROOT_PATH = "evaluate.md";
 const NOTE = "the retained note\n";
 
-/** A read-only profile: no write table at all. */
+/** A read-only selection: core's `<File />` and no writing spelling at all. */
 function reading(files: RecordedFiles): ExecutionInstallation {
-  return { evaluation: { read: [fileReadEntry()] }, install: () => useRecordedFiles(files) };
+  return {
+    *install(): Operation<void> {
+      yield* useSelection({ File: ["self-closing"] });
+      yield* useRecordedFiles(files);
+    },
+  };
 }
 
-/** A profile offering both classes. */
+/** A selection whose spellings reach both classes. */
 function both(files: RecordedFiles): ExecutionInstallation {
   return {
-    evaluation: {
-      read: [fileReadEntry()],
-      write: [fileWriteEntry(), fileDeleteEntry()],
+    *install(): Operation<void> {
+      yield* useSelection({
+        File: ["self-closing", "paired"],
+        "File.Delete": ["self-closing"],
+      });
+      yield* useRecordedFiles(files);
     },
-    install: () => useRecordedFiles(files),
   };
 }
 

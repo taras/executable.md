@@ -216,6 +216,13 @@ write table, so a generated program can preview what it is about to do and ask
 before doing it — and its validated answer drives what follows through ordinary
 bindings.
 
+The ordinary ceiling is the command's default rather than the entry's answer. The
+session offers it in each entry's own execution scope as ordinary middleware that
+delegates first and supplies the default only where nothing nearer stated one, so
+a plugin or host installation that states its own selection is the one that entry
+runs under — including a defined empty one, which refuses the entry's setup
+instead of being replaced.
+
 ## Sessions: one chronology, and which conversation you are reading
 
 The Sessions surface shows every Agent turn this execution has, in one order:

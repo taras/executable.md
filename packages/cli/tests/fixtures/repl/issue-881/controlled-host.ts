@@ -32,7 +32,7 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
 
 import { useDenoRepl } from "../../../../src/deno-repl.ts";
 import { runReplProgram } from "../../../../src/repl/program.ts";
-import { ordinaryEvaluationProfile } from "../../../../src/evaluation-profile.ts";
+import { ordinaryGeneratedSelection } from "../../../../src/evaluation-profile.ts";
 
 /**
  * The two latch paths, narrowed once at the edge.
@@ -92,7 +92,8 @@ await main(function* (args) {
   const ran = yield* runReplProgram({
     profile: {
       includes: [process.cwd()],
-      installations: [{ evaluation: ordinaryEvaluationProfile() }, holdingTeardown()],
+      installations: [holdingTeardown()],
+      generated: ordinaryGeneratedSelection(),
       permissionMode: "deny-all",
     },
     ...(args[0] === undefined ? {} : { location: args[0] }),

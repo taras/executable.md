@@ -55,9 +55,9 @@ inside `<Evaluate>`, and not something the agent can reach.
 
 <If condition={props.approved}>
 
-`allow={["write"]}` selects the host's write table rather than granting
-anything: a paired `<File>` and a lexical `<Dir>`, chosen before this document
-existed. A proposal naming a Git push, an issue, a command or a network read
+`allow={["write"]}` narrows to the writing spellings the host chose rather than
+granting anything: a paired `<File>` and a lexical `<Dir>`, chosen before this
+document existed. A proposal naming a Git push, an issue, a command or a network read
 refuses whole, and nothing it asked for happens.
 
 <Evaluate text={proposal.source} allow={["write"]} />

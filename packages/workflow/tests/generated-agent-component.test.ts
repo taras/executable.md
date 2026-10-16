@@ -14,25 +14,24 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
-import { directoryEntry, elicitWriteEntry, executeInstalled } from "@executablemd/core/host";
-import type { FragmentEntry } from "@executablemd/core/host";
+import { executeInstalled } from "@executablemd/core/host";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
-import type { ComponentInvocation } from "@executablemd/core";
+import type { ComponentInvocation, InvocationForm } from "@executablemd/core";
 import { collect, Component, content, inlineSource, registerComponents } from "@executablemd/core";
 import { createContext } from "effection";
 import type { Context } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import type { ComponentRegistry, RegistryEntry } from "@executablemd/core";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { API, useHostFiles } from "@executablemd/runtime";
+import { API, FETCH_NOT_PERMITTED_MESSAGE, Permissions, useHostFiles } from "@executablemd/runtime";
 import { readTextFile } from "@effectionx/fs";
 import { fileURLToPath } from "node:url";
 import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
-import { evaluationProfile } from "../src/deno/workspace/evaluate.ts";
+import { useWorkflowGenerated } from "../src/deno/workspace/evaluate.ts";
 import type { GeneratedEvaluationOptions } from "../src/deno/workspace/evaluate.ts";
 import { transactWorkspaceRoots } from "../src/deno/workspace/private.ts";
 import { createRun, useStorageRoot, withStorage } from "./support/storage.ts";
@@ -63,6 +62,12 @@ function* useTransport(hold?: () => Operation<void>): Operation<Transport> {
   yield* API.Fetch.around(
     {
       *fetch([url, init]): Operation<RuntimeFetchResponse> {
+        // Asked first, because that is what an implementation performing the
+        // request does: the question is asked at the terminal, after every
+        // contextual transformation and immediately before transport.
+        if (!(yield* Permissions.operations.fetch(url, init))) {
+          throw new Error(FETCH_NOT_PERMITTED_MESSAGE);
+        }
         performed.push({ url, init });
         if (hold !== undefined) {
           yield* hold();
@@ -117,6 +122,15 @@ function runDocument(
   // while a generated fragment resolved its paths through the evaluator's own
   // cursor instead of the contextual directory.
   within?: string,
+  /**
+   * What this host registers in the executing scope, for a case whose selection
+   * names a component of its own.
+   *
+   * A host selects the names it answers for, so a row that offers one supplies
+   * it the way a host does: an ordinary registration, carrying its own
+   * generated metadata.
+   */
+  registering?: () => Operation<void>,
 ): Operation<Attempt> {
   return scoped(function* () {
     yield* API.Env.around(
@@ -147,24 +161,24 @@ function runDocument(
               { at: "min" },
             );
           }
+          // `<Evaluate>` is canonical core's. What this run offers is the
+          // selection, read by canonical execution before any document code
+          // exists — and offered here, in the scope that executes the document.
+          if (registering !== undefined) {
+            yield* registering();
+          }
+          yield* useWorkflowGenerated({
+            ...evaluation,
+            components: {
+              // Canonical core implements `<Dir>`; this host chooses the name
+              // and the spelling. The generic selection offers no directory at
+              // all, as WGAC16 demonstrates explicitly.
+              ...HOST_DIRECTORY,
+              ...(evaluation.components ?? {}),
+            },
+          });
           return yield* collect(
-            yield* executeInstalled(
-              { ...inlineSource(source), stream: database.journal },
-              // `<Evaluate>` is canonical core's. What this run states is the
-              // ceiling, captured by canonical execution before any document
-              // code exists.
-              [
-                {
-                  evaluation: yield* evaluationProfile(database, {
-                    // Canonical core implements `<Dir>`; this host supplies its
-                    // admission entry. The profile states no directory entry of
-                    // its own, as WGAC16 demonstrates explicitly.
-                    directory: HOST_DIRECTORY,
-                    ...evaluation,
-                  }),
-                },
-              ],
-            ),
+            yield* executeInstalled({ ...inlineSource(source), stream: database.journal }, []),
           );
         }),
       );
@@ -251,20 +265,6 @@ function policyOf(event: DurableEvent): Record<string, Json> | undefined {
     return undefined;
   }
   return input;
-}
-
-/**
- * The Workspace basis one admission was recorded under.
- *
- * A version-2 policy carries it as one member, because a host that evaluates
- * against no Workspace states none at all.
- */
-function basisOf(event: DurableEvent): Record<string, Json> | undefined {
-  const workspace = policyOf(event)?.workspace;
-  if (typeof workspace !== "object" || workspace === null || Array.isArray(workspace)) {
-    return undefined;
-  }
-  return workspace;
 }
 
 /**
@@ -400,7 +400,16 @@ function row(
   identity: string,
   effect: "read" | "write" | "composition",
 ): Record<string, string> {
-  return { name, form, identity, kind: "capability", effect };
+  // Every selected name is an answer the import chain resolved, which is the
+  // one way a selected name reaches an implementation. Core's own composition
+  // keeps its own representation.
+  return {
+    name,
+    form,
+    identity,
+    kind: effect === "composition" ? "capability" : "component-answer",
+    effect,
+  };
 }
 
 describe("Tier WGAC — the registered Evaluate component", () => {
@@ -442,16 +451,16 @@ describe("Tier WGAC — the registered Evaluate component", () => {
     });
   });
 
-  it("WGAC4: the roots come from the run, and follow it as it moves", function* () {
+  it("WGAC4: both observations go through the run's own Workspace as it moves", function* () {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
       const database = yield* createRun();
       yield* plant(database, "notes.md", "the retained note\n");
 
       // Two observations with a Workspace write between them. The write
-      // publishes a new root, so the second observation is admitted against a
+      // publishes a new root, so the second observation runs against a
       // different current root than the first — which is what makes this a test
-      // of "the root this run is on" rather than "some root this run retains".
+      // of the run's own frontier rather than of a basis stated once.
       const attempt = yield* runDocument(
         database,
         `<Evaluate text={'<File path="notes.md" />'} as="first" />\n\n` +
@@ -469,31 +478,20 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       expect(reported(attempt)).not.toContain('"name"');
       expect(reported(attempt)).not.toContain("observations");
 
+      // Two admissions, and neither of them states a Workspace at all. The
+      // frontier is the run's live state; a grant compared against a copy of it
+      // would refuse a run for its own progress.
       const recorded = admissions(attempt.events);
       expect(recorded).toHaveLength(2);
-      const first = basisOf(recorded[0]!);
-      const second = basisOf(recorded[1]!);
+      for (const event of recorded) {
+        expect(Object.keys(policyOf(event) ?? {}).sort()).toEqual(["allow", "allowed", "version"]);
+      }
 
-      // The run moved between them, and the stated ceiling moved with it.
-      expect(typeof first?.selectedRoot).toBe("string");
-      expect(second?.selectedRoot).not.toBe(first?.selectedRoot);
-
-      // And the last one is the run's authoritative current root, read back
-      // independently rather than from the record under test.
+      // And the run did move: the write between them advanced the current root.
       const current = yield* transactWorkspaceRoots(database, (workspace) =>
         workspace.currentRoot(),
       );
       expect(current.ok).toBe(true);
-      expect(second?.selectedRoot).toBe(current.ok ? current.value : undefined);
-
-      const retained = Array.isArray(second?.roots) ? second.roots : [];
-      expect(retained.length).toBeGreaterThan(1);
-      expect(retained).toContain(second?.selectedRoot);
-      // Deterministic order, so the record reads the same however SQLite would
-      // have ordered the rows. A continuation asks for this basis by membership
-      // rather than positionally, so the order is record stability rather than
-      // the thing the comparison turns on.
-      expect(retained).toEqual([...retained].sort());
     });
   });
 
@@ -928,13 +926,13 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       const admitted = yield* runDocument(
         database,
         `<Evaluate allow={["write"]} text={'<Elicit schema={{}} as="x">ask?</Elicit>'} />\n`,
-        { writes: [elicitWriteEntry()] },
+        { components: { Elicit: ["paired"] } },
       );
       expect(reported(admitted)).not.toContain("did not admit");
     });
   });
 
-  it("WGAC5: the exact Fetch ceiling is the host's, and an empty one admits no request", function* () {
+  it("WGAC5: the host offers `<Fetch>` only where it bounds one, and the bound is live", function* () {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
       const database = yield* createRun();
@@ -963,31 +961,55 @@ describe("Tier WGAC — the registered Evaluate component", () => {
     const third = yield* useStorageRoot();
     yield* withStorage(third, function* () {
       const database = yield* createRun();
-      // A different request under the same ceiling performs nothing.
+      // A different destination under the same bound performs nothing. The name
+      // is offered — this host bounds a request — so the refusal is the live
+      // terminal's, asked immediately before transport.
       const outside = yield* runDocument(
         database,
         `<Evaluate text={'<Fetch url="${URL_OTHER}" />'} />\n`,
         { requests: [{ url: URL_ADMITTED }] },
       );
-      expect(reported(outside)).toContain("did not admit");
+      expect(reported(outside)).toContain("not permitted in this scope");
       expect(outside.performed).toHaveLength(0);
     });
   });
 });
 
 /**
- * The directory entry this test host states.
+ * The directory spelling this test host offers.
  *
- * The identity released builds retained, written out here as this suite's own
- * compatibility data — several rows below assert the table a run admits, and
- * what they assert is exactly these strings.
- *
- * Canonical core implements `<Dir>`. This host states its admission identity;
- * the origin and version-1 alias below are retained compatibility strings,
- * not the implementation's package. The profile supplies no directory entry
- * of its own.
+ * Canonical core implements `<Dir>`. This host chooses the name and the
+ * spelling; the identity and the effect the paired form runs under are core's
+ * own declaration's. The generic workflow selection offers none.
  */
-const HOST_DIRECTORY: FragmentEntry = directoryEntry("Dir");
+const HOST_DIRECTORY: Readonly<Record<string, readonly InvocationForm[]>> = { Dir: ["paired"] };
+
+/**
+ * One component of this host's own, which its selection may name.
+ *
+ * Registered in the executing scope, with its own declaration stating the
+ * identity and the effect its self-closing spelling runs under. A host offers
+ * a name it answers for; what offering it grants is this declaration's.
+ */
+function nestedComponent(wrote: string[]) {
+  return {
+    name: "Nested",
+    origin: "test://nested",
+    props: { type: "object", properties: {}, additionalProperties: false },
+    forms: ["self-closing"] as const,
+    generated: {
+      "self-closing": {
+        identity: "https://executable.md/components/nested/write",
+        effect: "write" as const,
+      },
+    },
+    // deno-lint-ignore require-yield
+    *fn(): Operation<string> {
+      wrote.push("nested ran");
+      return "";
+    },
+  };
+}
 
 /**
  * Tier WGAC — the effect classes `<Evaluate>` selects between
@@ -1111,8 +1133,8 @@ describe("Tier WGAC — the standard write table", () => {
         // The trusted composition table leads every policy, whatever the
         // selection asked for.
         row("Json", "self-closing", "https://executable.md/components/json", "composition"),
-        row("File", "paired", "https://executable.md/components/file/write", "write"),
         row("Dir", "paired", "https://executable.md/components/dir/ensure", "write"),
+        row("File", "paired", "https://executable.md/components/file/write", "write"),
         row("File.Delete", "self-closing", "https://executable.md/components/file/delete", "write"),
       ]);
     });
@@ -1154,50 +1176,55 @@ describe("Tier WGAC — the standard write table", () => {
       // A host states the component behind `<Dir>`; this package states the
       // rest of the ceiling. A host that states none is admitted under no
       // directory entry at all, which is why every case here supplies one.
-      const attempt = yield* runDocument(database, evaluates(WRITES, ["write"]), {
-        directory: directoryEntry("Dir"),
-      });
+      const attempt = yield* runDocument(database, evaluates(WRITES, ["write"]));
 
       expect(attempt.failure).toBe(undefined);
       expect(yield* stored(database, "/nested/out.md")).toBe("the fragment wrote this");
 
-      // Same position in the same table: the captured entry replaces the one
-      // this package states rather than being appended beside it, so a
-      // continuation compares one directory grant and not two.
+      // One row per selected spelling, in the canonical order the selection is
+      // admitted in: a host's object order is a property of how the selection
+      // was assembled rather than of what it chose, so the retained rows are
+      // ordered by name and a continuation compares one directory grant.
       const policy = policyOf(admissions(attempt.events)[0]!);
       expect(policy?.allowed).toEqual([
         row("Json", "self-closing", "https://executable.md/components/json", "composition"),
-        row("File", "paired", "https://executable.md/components/file/write", "write"),
         row("Dir", "paired", "https://executable.md/components/dir/ensure", "write"),
+        row("File", "paired", "https://executable.md/components/file/write", "write"),
         row("File.Delete", "self-closing", "https://executable.md/components/file/delete", "write"),
       ]);
     });
   });
 
-  it("WGAC17: a captured write is admitted beside the standard table, not instead of it", function* () {
+  it("WGAC17: a host's own name is offered beside the generic selection, not instead of it", function* () {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
       const database = yield* createRun();
+      const wrote: string[] = [];
 
-      // `writes` is additive and stays additive: a host that states one of its
-      // own keeps core's write and delete and this package's directory entry,
-      // and its own entry follows them.
-      const attempt = yield* runDocument(database, evaluates(WRITES, ["write"]), {
-        writes: [directoryEntry("Nested")],
-      });
+      // `components` is additive and stays additive: a host that offers one of
+      // its own keeps core's write and delete and this package's directory
+      // spelling. What it offers is a name *it* answers for — a host selects
+      // its registered or provider-backed components, and cannot rename core's.
+      const attempt = yield* runDocument(
+        database,
+        evaluates(`${WRITES}<Nested />\n`, ["write"]),
+        { components: { Nested: ["self-closing"] } },
+        undefined,
+        undefined,
+        () => registerComponents([nestedComponent(wrote)]),
+      );
 
       expect(attempt.failure).toBe(undefined);
       expect(yield* stored(database, "/nested/out.md")).toBe("the fragment wrote this");
+      expect(wrote).toEqual(["nested ran"]);
 
       const policy = policyOf(admissions(attempt.events)[0]!);
       expect(policy?.allowed).toEqual([
         row("Json", "self-closing", "https://executable.md/components/json", "composition"),
-        row("File", "paired", "https://executable.md/components/file/write", "write"),
-        // The released entry, still in its own position and unmoved by the
-        // addition beside it.
         row("Dir", "paired", "https://executable.md/components/dir/ensure", "write"),
+        row("File", "paired", "https://executable.md/components/file/write", "write"),
         row("File.Delete", "self-closing", "https://executable.md/components/file/delete", "write"),
-        row("Nested", "paired", "https://executable.md/components/dir/ensure", "write"),
+        row("Nested", "self-closing", "https://executable.md/components/nested/write", "write"),
       ]);
     });
   });

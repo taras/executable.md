@@ -445,17 +445,20 @@ describe("C1 — the command line this REPL runs under", () => {
     // Fixed includes: this command takes no include option, because an entry is
     // typed rather than named.
     expect(settled.includes).toEqual(["components", "."]);
-    // One installation of this command's own, holding the packaged `<Plan>` and
-    // the ceiling a generated fragment runs under — and the ordinary write
-    // table, questions included.
+    // One installation of this command's own, holding the packaged `<Plan>`.
     expect(settled.installations).toHaveLength(1);
     const own = settled.installations[0]!;
     expect((own.declarations ?? []).map((declaration) => declaration.name)).toEqual(["Plan"]);
-    expect((own.evaluation?.write ?? []).map((entry) => entry.name)).toEqual([
-      "File",
-      "File.Delete",
-      "Elicit",
-    ]);
+    // And the selection a generated fragment runs under, carried as data on the
+    // profile rather than as an installation: the session offers it in each
+    // entry's own execution scope, because that is the scope core reads it in.
+    expect(settled.generated).toEqual({
+      File: ["self-closing", "paired"],
+      "File.Delete": ["self-closing"],
+      Glob: ["self-closing"],
+      Syntax: ["self-closing"],
+      Elicit: ["paired"],
+    });
     // Read once and never changed: a profile a later entry could edit would be
     // two sets of rules in one session.
     expect(Object.isFrozen(settled)).toBe(true);

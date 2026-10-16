@@ -130,13 +130,18 @@ export {
   isJournalableWorkspaceFailure,
 } from "./src/deno/workspace/errors.ts";
 /**
- * What a host declares to the execution so an authored workflow document has
- * `<Evaluate>`: its implementation names durable work after its own invocation,
- * so canonical execution builds it from the invocation identity function it
- * minted.
+ * The names and authored forms a workflow run offers generated XMD.
+ *
+ * `useWorkflowGenerated()` offers them as ordinary `Component.generated`
+ * middleware, installed in the scope that executes the document.
+ * `workflowGeneratedSelection()` is the value itself, for a host that composes
+ * its own middleware around it.
  */
-export { evaluationProfile } from "./src/deno/workspace/evaluate.ts";
-export type { GeneratedEvaluationOptions } from "./src/deno/workspace/evaluate.ts";
+export { useWorkflowGenerated, workflowGeneratedSelection } from "./src/deno/workspace/evaluate.ts";
+export type {
+  GeneratedEvaluationOptions,
+  WorkflowRequestBound,
+} from "./src/deno/workspace/evaluate.ts";
 export type { WorkflowWorkspaceOptions } from "./src/deno/workspace/published.ts";
 export type {
   WorkflowAgentAttachment,

@@ -23,11 +23,19 @@
 
 import type { ComponentRegistry, FunctionComponentDefinition, RegistryEntry } from "../types.ts";
 import { form as codeBlockForm, props as codeBlockProps } from "./CodeBlock.ts";
-import Elicit, { props as elicitProps, returns as elicitReturns } from "./Elicit.ts";
+import Elicit, {
+  generated as elicitGenerated,
+  props as elicitProps,
+  returns as elicitReturns,
+} from "./Elicit.ts";
 import TempDir, { props as tempDirProps } from "./TempDir.ts";
 import { form as failForm, props as failProps } from "./Fail.ts";
-import Fetch, { props as fetchProps } from "./Fetch.ts";
-import Glob, { props as globProps, returns as globReturns } from "./Glob.ts";
+import Fetch, { generated as fetchGenerated, props as fetchProps } from "./Fetch.ts";
+import Glob, {
+  generated as globGenerated,
+  props as globProps,
+  returns as globReturns,
+} from "./Glob.ts";
 import Json, { props as jsonProps } from "./Json.ts";
 import Parse, { props as parseProps, returns as parseReturns } from "./Parse.ts";
 import SafeParse, { props as safeParseProps, returns as safeParseReturns } from "./SafeParse.ts";
@@ -171,9 +179,7 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
     },
     {
       returns: parseJsonObject(elicitReturns),
-      generated: {
-        paired: { identity: "https://executable.md/components/elicit/ask", effect: "write" },
-      },
+      generated: elicitGenerated,
     },
   ),
   core("TempDir", TempDir, parseJsonObject(tempDirProps), {
@@ -207,9 +213,7 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
       context: null,
     },
     {
-      generated: {
-        "self-closing": { identity: "https://executable.md/components/fetch/read", effect: "read" },
-      },
+      generated: fetchGenerated,
     },
   ),
   core(
@@ -226,9 +230,7 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
     },
     {
       returns: parseJsonObject(globReturns),
-      generated: {
-        "self-closing": { identity: "https://executable.md/components/glob/read", effect: "read" },
-      },
+      generated: globGenerated,
     },
   ),
   core("CodeBlock", codeBlockForm, parseJsonObject(codeBlockProps), {

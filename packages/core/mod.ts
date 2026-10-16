@@ -48,7 +48,7 @@ export { combine } from "@effectionx/middleware";
 export type { ModifierFactory, ModifierMiddleware, CodeBlockWorkflow } from "./src/modifiers.ts";
 export { useCodeBlock } from "./src/modifiers.ts";
 
-export type { ComponentApi } from "./src/component-api.ts";
+export type { ComponentApi, GeneratedSelection } from "./src/component-api.ts";
 export {
   Component,
   importComponent,
@@ -57,6 +57,7 @@ export {
   raise,
   env,
   evalScope,
+  generated,
   codeBlock,
   persistent,
   content,

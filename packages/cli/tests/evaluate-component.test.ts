@@ -16,12 +16,17 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { runCli } from "@executablemd/test-support/launch";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { ensure, scoped } from "effection";
+import { ensure, scoped, useScope } from "effection";
 import type { Operation } from "effection";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CORE_COMPONENT_NAMES } from "@executablemd/core";
+import { Component } from "@executablemd/core/api";
+import {
+  ordinaryGeneratedSelection,
+  useOrdinaryGeneratedSelection,
+} from "../src/evaluation-profile.ts";
 import { syntaxSymbols } from "../src/syntax.ts";
 
 const NOTE = "the retained note\n";
@@ -107,6 +112,72 @@ describe("Tier FE — the ordinary run profile", () => {
         expect(`${result.stdout}${result.stderr}`).toContain("did not admit");
       },
     );
+  });
+});
+
+describe("Tier FE — the ordinary selection is middleware, and it delegates", () => {
+  /**
+   * The exact map `xmd run` offers.
+   *
+   * Written out rather than derived, because what these rows are about is the
+   * value: a selection assembled by calling the thing under test would prove
+   * only that it equals itself.
+   */
+  it("FE24: the ordinary selection is exactly File, File.Delete, Glob, Syntax and Elicit", function* () {
+    expect(ordinaryGeneratedSelection()).toEqual({
+      File: ["self-closing", "paired"],
+      "File.Delete": ["self-closing"],
+      Glob: ["self-closing"],
+      Syntax: ["self-closing"],
+      Elicit: ["paired"],
+    });
+    // `Dir` and `Fetch` are absent rather than offered with nothing a fragment
+    // could usefully do with them.
+    expect(Object.keys(ordinaryGeneratedSelection())).not.toContain("Dir");
+    expect(Object.keys(ordinaryGeneratedSelection())).not.toContain("Fetch");
+    yield* useScope();
+  });
+
+  it("FE24: a host's own defined selection is preserved, and two handlers compose", function* () {
+    // Delegate first, default only on absence. A host that stated its own
+    // keeps it, and the ordinary selection answers only where nothing did.
+    // This command's handler first, so it is the outer one and the host's
+    // answer is what its `next()` reaches — which is the composition a workflow
+    // attachment makes, where the attachment's scope encloses the run's.
+    const stated = yield* scoped(function* () {
+      yield* useOrdinaryGeneratedSelection();
+      yield* Component.around({ generated: () => ({ File: ["self-closing"] }) });
+      return yield* Component.operations.generated;
+    });
+    expect(stated).toEqual({ File: ["self-closing"] });
+
+    const defaulted = yield* scoped(function* () {
+      yield* useOrdinaryGeneratedSelection();
+      return yield* Component.operations.generated;
+    });
+    expect(defaulted).toEqual(ordinaryGeneratedSelection());
+
+    // Two of this command's own handlers compose rather than refusing: the
+    // nearer one answers, and there is no contributor count to object to.
+    const composed = yield* scoped(function* () {
+      yield* useOrdinaryGeneratedSelection();
+      yield* useOrdinaryGeneratedSelection();
+      return yield* Component.operations.generated;
+    });
+    expect(composed).toEqual(ordinaryGeneratedSelection());
+  });
+
+  it("FE24: a defined empty selection is preserved for core to refuse", function* () {
+    // Only absence defaults. An empty selection is a host statement core
+    // validates and refuses; replacing it here would answer a host's mistake
+    // with this command's permission, and the run would quietly evaluate under
+    // a vocabulary nobody chose.
+    const empty = yield* scoped(function* () {
+      yield* useOrdinaryGeneratedSelection();
+      yield* Component.around({ generated: () => ({}) });
+      return yield* Component.operations.generated;
+    });
+    expect(empty).toEqual({});
   });
 });
 

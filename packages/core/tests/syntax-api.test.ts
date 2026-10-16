@@ -17,7 +17,8 @@ import {
   renderSyntaxMarkdown,
   UnknownComponentError,
 } from "../mod.ts";
-import { executeInstalled, syntaxReadEntry, useSyntax } from "../host.ts";
+import { executeInstalled, useSyntax } from "../host.ts";
+import { selecting } from "./support/generated-selection.ts";
 
 function symbolsOf(...names: string[]): SyntaxSymbols {
   return {
@@ -62,7 +63,7 @@ function* run(text: string, stream = new InMemoryStream()): Operation<string> {
   return String(
     yield* collect(
       yield* executeInstalled({ ...inlineSource(text), stream, includes: [] }, [
-        { evaluation: { read: [syntaxReadEntry()] } },
+        selecting({ Syntax: ["self-closing"] }),
       ]),
     ),
   );

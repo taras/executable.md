@@ -40,21 +40,16 @@ import type {
   Json,
   SyntaxSymbols,
 } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
+import type { ComponentAnswerInstallation } from "@executablemd/core/host";
 import {
-  executeInstalled,
-  fileReadEntry,
-  globReadEntry,
-  syntaxReadEntry,
-} from "@executablemd/core/host";
-import type {
-  ComponentAnswerInstallation,
-  FragmentEntry,
-  FragmentEvaluationInput,
-} from "@executablemd/core/host";
-import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
-import { elicitWriteEntry } from "@executablemd/core/host";
+  ordinaryGeneratedSelection,
+  useOrdinaryGeneratedSelection,
+} from "../src/evaluation-profile.ts";
 import { useSyntax } from "@executablemd/core/host";
 import { Elicitation } from "@executablemd/core";
+import type { GeneratedSelection } from "@executablemd/core/api";
+import { Component } from "@executablemd/core/api";
 import { recordedFiles, useRecordedFiles } from "../../core/tests/support/fragment-files.ts";
 import type { RecordedFiles } from "../../core/tests/support/fragment-files.ts";
 import { answerProvider } from "../../core/tests/support/answer-provider.ts";
@@ -150,12 +145,12 @@ interface RunOptions {
    */
   componentAnswers?: readonly ComponentAnswerInstallation[];
   /**
-   * The evaluation ceiling this case's information requests run under.
+   * The names and forms this case's information requests may write.
    *
    * The command's own by default. A case supplies its own when it needs to
    * narrow what a request may name, or to withhold a class.
    */
-  evaluation?: FragmentEvaluationInput;
+  generated?: GeneratedSelection;
   /**
    * The document filesystem this execution runs against.
    *
@@ -231,6 +226,16 @@ function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
     yield* useNormalizedOutput();
     try {
       yield* useSyntax(harness.symbols);
+      // What an information request may write, offered in the scope this
+      // execution runs in — exactly where the command offers it. A case that
+      // narrows the selection offers its own instead, which is how a row shows
+      // a name withheld rather than a table edited.
+      if (options.generated === undefined) {
+        yield* useOrdinaryGeneratedSelection();
+      } else {
+        const stated = options.generated;
+        yield* Component.around({ generated: () => stated });
+      }
       const execution = yield* executeInstalled(
         {
           ...retainedSource(PLAN_COMMAND_IDENTITY, source),
@@ -246,11 +251,6 @@ function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
           {
             components: agentIdentityComponents(),
             declarations: [harness.declaration],
-            // The ceiling the command installs, so an information request this
-            // document evaluates reads through exactly what `xmd run` states.
-            // A case that supplies its own recorder gets that instead, which is
-            // how a row proves which operation a read actually reached.
-            evaluation: options.evaluation ?? ordinaryEvaluationProfile(),
             ...(options.files === undefined && options.installing === undefined
               ? {}
               : {
@@ -808,7 +808,7 @@ describe("Tier PI — read-only information requests", () => {
     const enclosing: string[] = [];
     const run = yield* runDocument({
       turns: [{ reply: COMPOSED }, { reply: CANDIDATE }],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
       files,
       *installing(): Operation<void> {
         // Nearer the provider, and transforming.
@@ -852,7 +852,7 @@ describe("Tier PI — read-only information requests", () => {
     const files = recordedFiles({ "notes.md": "the retained note\n" });
     const run = yield* runDocument({
       turns: [{ reply: COMPOSED }, { reply: CANDIDATE }],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
       files,
     });
 
@@ -883,7 +883,7 @@ describe("Tier PI — read-only information requests", () => {
     const files = recordedFiles({ "notes.md": "the retained note\n" });
     const run = yield* runDocument({
       turns: [{ reply: COMPOSED }, { reply: CANDIDATE }],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
       files,
       verbose: true,
     });
@@ -905,7 +905,7 @@ describe("Tier PI — read-only information requests", () => {
       // A paired `<File>` write under a read-only selection: refused whole,
       // before any read.
       turns: [{ reply: '<File path="notes.md">written</File>\n' }, { reply: CANDIDATE }],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
       files,
     });
 
@@ -932,7 +932,7 @@ describe("Tier PI — read-only information requests", () => {
       // The ninth would search a second time if it were evaluated, so the
       // recorder answers "was it?" rather than a count standing in for it.
       turns: [...turns, { reply: '<Glob include={["ninth.md"]} as="paths" />\n' }],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
       files,
     });
 
@@ -967,7 +967,7 @@ describe("Tier PI — read-only information requests", () => {
       ],
       reviews: [{ decision: "Request changes", feedback: "say more" }, { decision: "Approve" }],
       validations: [unsound, sound],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
       files,
     });
 
@@ -1064,7 +1064,7 @@ describe("Tier PI — read-only information requests", () => {
         { reply: '<Glob include={["absent.md"]} as="paths" />\n<Json value={paths} />\n' },
         { reply: CANDIDATE },
       ],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
       files,
     });
 
@@ -1089,7 +1089,7 @@ describe("Tier PI — read-only information requests", () => {
         },
         { reply: CANDIDATE },
       ],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
       files,
     });
 
@@ -1103,7 +1103,7 @@ describe("Tier PI — read-only information requests", () => {
     const files = recordedFiles({ "notes.md": "the retained note\n" });
     const run = yield* runDocument({
       turns: [{ reply: COMPOSED }, { reply: CANDIDATE }],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
       files,
       verbose: true,
     });
@@ -1130,7 +1130,7 @@ describe("Tier PI — read-only information requests", () => {
         { reply: '<File path="notes.md" as="note" />\n<Json value={note} />\n' },
         { reply: CANDIDATE },
       ],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
       files,
       verbose: true,
     });
@@ -1169,23 +1169,17 @@ describe("Tier PI — read-only information requests", () => {
    * exactly that: findings are published and the next turn begins *after*
    * cleanup, not beside it. So this holds cleanup open and looks.
    *
-   * The barrier is an admitted `component-answer` — the same arm canonical
-   * protected `<Syntax />` is admitted through — so the protected route is
-   * carrying it rather than a capability core supplies the body for. Its body
-   * registers cleanup that blocks; while that block is held the case asserts
-   * the two things that must not have happened yet, then releases and asserts
-   * they did.
+   * The barrier is a selected name a provider answers for, so the resolution
+   * canonical capture performed is what is carrying it. Its body registers
+   * cleanup that blocks; while that block is held the case asserts the two
+   * things that must not have happened yet, then releases and asserts they
+   * did.
    *
    * This holds the successful settlement. The refusal path's ordering is
    * established elsewhere, and between them the two are covered — see the
    * refusal row below for where.
    */
   const HELD_ORIGIN = "test://held-provider";
-
-  /** The admitted entry the barrier is written as. */
-  function heldEntry(): FragmentEntry {
-    return { kind: "component-answer", name: "Held", forms: ["self-closing"] };
-  }
 
   /** One barrier: a body whose cleanup blocks until the case releases it. */
   function barrier(): {
@@ -1245,7 +1239,12 @@ describe("Tier PI — read-only information requests", () => {
         { reply: '<File path="notes.md" as="note" />\n<Json value={note} />\n<Held />\n' },
         { reply: CANDIDATE },
       ],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry(), heldEntry()] },
+      generated: {
+        File: ["self-closing"],
+        Glob: ["self-closing"],
+        Syntax: ["self-closing"],
+        Held: ["self-closing"],
+      },
       files,
       componentAnswers: [held.provider],
       verbose: true,
@@ -1303,7 +1302,7 @@ describe("Tier PI — read-only information requests", () => {
     const files = recordedFiles({ "notes.md": "the retained note\n" });
     const run = yield* runDocument({
       turns: [{ reply: '<File path="absent.md" as="gone" />\n' }, { reply: CANDIDATE }],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
       files,
       verbose: true,
     });
@@ -1323,7 +1322,7 @@ describe("Tier PI — read-only information requests", () => {
     const files = recordedFiles({ "notes.md": "the retained note\n" });
     const run = yield* runDocument({
       turns: [{ reply: CANDIDATE }],
-      evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+      generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
       files,
     });
 
@@ -1344,18 +1343,22 @@ describe("Tier PI — read-only information requests", () => {
  * its second site nothing. The failure names the turn and quotes the prompt, so
  * the case that under-scripted is identifiable from the message alone.
  */
-describe("Tier PI — the ordinary ceiling admits the question with the write", () => {
-  it("EL1: the ordinary write table holds canonical `<Elicit>` once, and the read table none", function* () {
-    const profile = ordinaryEvaluationProfile();
+describe("Tier PI — the ordinary selection offers the question with the write", () => {
+  it("EL1: the ordinary selection offers `<Elicit>` paired, and in no other form", function* () {
+    const selection = ordinaryGeneratedSelection();
 
-    // One entry, and exactly the one core states. Two would be two grants
-    // under one spelling; a hand-written copy would be a second place this
-    // command decided what canonical `<Elicit>` is.
-    const asking = profile.write?.filter((entry) => entry.name === "Elicit") ?? [];
-    expect(asking).toEqual([elicitWriteEntry()]);
-    // And nothing in the read table: `allow={["read"]}` promises nobody will
-    // be interrupted, so the question is not there to select.
-    expect(profile.read.map((entry) => entry.name)).toEqual(["File", "Glob", "Syntax"]);
+    // The paired spelling and only that one. Which table it lands in is not
+    // this command's to say: core reads the effect off core's own `<Elicit>`
+    // declaration, which offers that form as a write — so `allow={["read"]}`
+    // promises nobody will be interrupted without this file deciding it.
+    expect(selection.Elicit).toEqual(["paired"]);
+    expect(Object.keys(selection).sort()).toEqual([
+      "Elicit",
+      "File",
+      "File.Delete",
+      "Glob",
+      "Syntax",
+    ]);
     yield* useScope();
   });
 
@@ -1381,7 +1384,7 @@ describe("Tier PI — the ordinary ceiling admits the question with the write", 
           { reply: '<Elicit schema={{ type: "object" }}>Which file?</Elicit>\n' },
           { reply: CANDIDATE },
         ],
-        evaluation: { read: [fileReadEntry(), globReadEntry(), syntaxReadEntry()] },
+        generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
         files,
       });
     });

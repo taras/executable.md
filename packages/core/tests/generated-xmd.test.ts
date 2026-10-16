@@ -50,6 +50,11 @@ import { SOURCE_POSITION_FIELD } from "../src/source-position.ts";
 import { useSecretScannerFactory } from "../src/secrets/policy.ts";
 import { createSecretScanner } from "../src/secrets/scanner.ts";
 import type { SecretScanner } from "../src/secrets/scanner.ts";
+// The evaluator itself, which is core's internal boundary rather than
+// something a host reaches: a trusted host contributes one `Component.generated`
+// selection and canonical execution drives this. These rows drive it directly,
+// which is what keeps the mechanism's own refusals separable from the capture
+// that normally supplies its tables.
 import {
   evaluateGeneratedXmd,
   pinnedComponent,
@@ -58,17 +63,16 @@ import {
   pinnedFileRead,
   pinnedFileWrite,
   pinnedMutation,
-} from "../host.ts";
-import { executeInstalled } from "../host.ts";
+} from "../src/generated-xmd.ts";
 import type {
-  DurablePreparation,
-  ExecutionInstallation,
   GeneratedComponentForm,
   GeneratedEffectClass,
   GeneratedMutation,
   GeneratedObservation,
   GeneratedXmdRequest,
-} from "../host.ts";
+} from "../src/generated-xmd.ts";
+import { executeInstalled } from "../host.ts";
+import type { DurablePreparation, ExecutionInstallation } from "../host.ts";
 import type { GeneratedEffect, GeneratedForms } from "../src/components/generated-metadata.ts";
 import type { FunctionComponentDefinition, Json, JsonObject } from "../src/types.ts";
 
@@ -96,9 +100,13 @@ const COMPOSITION_RECORD: JsonObject = { ...COMPOSITION[0] };
 const ROOT_SOURCE = "The host ran a generated fragment.\n";
 const URL_ONE = "https://api.example.test/one";
 const URL_TWO = "https://api.example.test/two";
+/**
+ * Workspace roots a marker-3 record carried.
+ *
+ * Kept only so a hostile-history row can state that shape and be refused:
+ * nothing this build writes or reads holds a Workspace basis.
+ */
 const ROOTS = ["workspace://primary", "workspace://secondary"];
-/** A root the run retains after the admission — its own legitimate progress. */
-const ADVANCED = "workspace://advanced";
 
 /**
  * What one host component's declaration offers a spelling as.
@@ -271,13 +279,7 @@ function request(
   source: string,
   observations: readonly GeneratedObservation[],
 ): GeneratedXmdRequest {
-  return {
-    id: "turn-1",
-    source,
-    workspaceRoots: ROOTS,
-    selectedRoot: ROOTS[0] ?? "",
-    observations,
-  };
+  return { id: "turn-1", source, observations };
 }
 
 /** What one host-driven evaluation produced. */
@@ -406,7 +408,7 @@ describe("Tier GX — the trusted-host seam", () => {
     expect(attempt.output).toContain("probed");
   });
 
-  it("GX2: records one admission naming the source, the roots and the identities", function* () {
+  it("GX2: records one admission naming the source and the selected identities", function* () {
     const attempt = yield* evaluate(request("<Probe />\n", [probe()]));
 
     const [admission] = admissions(attempt.events);
@@ -414,12 +416,12 @@ describe("Tier GX — the trusted-host seam", () => {
       throw new Error("the run recorded no generated-XMD admission");
     }
     expect(admission.description.name).toBe("generated:turn-1");
-    // The current shape: marked, and carrying the Workspace basis as one
-    // member rather than two top-level ones, because a host may have none. One
-    // row per admitted spelling, each holding the URL its owner offers that
-    // spelling under, what kind of thing answered for the name, and which
+    // The current shape: marked, and holding the selection and nothing live.
+    // One row per admitted spelling, each carrying the URL its owner offers
+    // that spelling under, what kind of thing answered for the name, and which
     // effect table admitted it — so an admission that moved says which
-    // spelling of which name moved.
+    // spelling of which name moved. There is no Workspace basis and no request
+    // inventory: what a request may reach is decided where it is performed.
     const PROBE_ROW = {
       name: "Probe",
       form: "self-closing",
@@ -427,9 +429,9 @@ describe("Tier GX — the trusted-host seam", () => {
       kind: "component-answer",
       effect: "read",
     };
-    expect(admission.description.input).toMatchObject({
-      version: 3,
-      workspace: { roots: ROOTS, selectedRoot: ROOTS[0] },
+    expect(admission.description.input).toEqual({
+      version: 4,
+      allow: ["read"],
       allowed: [...COMPOSITION, PROBE_ROW],
     });
     expect(admission.result).toMatchObject({
@@ -441,10 +443,9 @@ describe("Tier GX — the trusted-host seam", () => {
         // Retained in the result as well as the input, because durable replay
         // matches an effect by type and name and never compares a description.
         policy: {
-          version: 3,
-          workspace: { roots: ROOTS, selectedRoot: ROOTS[0] },
+          version: 4,
+          allow: ["read"],
           allowed: [...COMPOSITION, PROBE_ROW],
-          requests: [],
         },
       },
     });
@@ -465,7 +466,7 @@ describe("Tier GX — the complete fragment is read first", () => {
     it(`GX3: an unsafe construct ${where} costs no request and no admission`, function* () {
       const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
 
-      const attempt = yield* evaluate(request(source, [pinnedFetch([ADMITTED_REQUEST]), probe()]));
+      const attempt = yield* evaluate(request(source, [pinnedFetch(), probe()]));
 
       expect(transport.performed).toHaveLength(0);
       expect(admittedFragments(attempt.events)).toHaveLength(0);
@@ -507,7 +508,7 @@ describe("Tier GX — the complete fragment is read first", () => {
     it(`GX4: refuses ${what} before any effect`, function* () {
       const transport = yield* useTransport(() => ({ status: 200 }));
 
-      const attempt = yield* evaluate(request(source, [pinnedFetch([ADMITTED_REQUEST]), probe()]));
+      const attempt = yield* evaluate(request(source, [pinnedFetch(), probe()]));
 
       expect(transport.performed).toHaveLength(0);
       expect(admittedFragments(attempt.events)).toHaveLength(0);
@@ -529,7 +530,7 @@ describe("Tier GX — the complete fragment is read first", () => {
     const source = `<Each in={["a", "b"]} let="item">\n<Fetch url="${URL_ONE}" as="got" />\n</Each>\n`;
     const stream = new InMemoryStream();
     const live = yield* useTransport(() => ({ status: 200, body: "answer" }));
-    const first = yield* evaluate(request(source, [pinnedFetch([ADMITTED_REQUEST])]), { stream });
+    const first = yield* evaluate(request(source, [pinnedFetch()]), { stream });
 
     // One authored element, entered twice, so two durable effects.
     expect(live.performed).toHaveLength(2);
@@ -544,7 +545,7 @@ describe("Tier GX — the complete fragment is read first", () => {
     const partial = events.slice(0, cut + 1);
     const resumedTransport = yield* useTransport(() => ({ status: 200, body: "answer" }));
     const before = resumedTransport.performed.length;
-    const resumed = yield* evaluate(request(source, [pinnedFetch([ADMITTED_REQUEST])]), {
+    const resumed = yield* evaluate(request(source, [pinnedFetch()]), {
       stream: new InMemoryStream(partial),
     });
 
@@ -561,7 +562,7 @@ describe("Tier GX — the complete fragment is read first", () => {
     const attempt = yield* evaluate(
       request("<Reads>\n\n```bash exec\nprintf ran\n```\n\n</Reads>\n", [
         reads(),
-        pinnedFetch([ADMITTED_REQUEST]),
+        pinnedFetch(),
         probe(),
       ]),
     );
@@ -603,10 +604,7 @@ describe("Tier GX — only pinned identities execute", () => {
     yield* writeTextFile(join(workspace, "Fetch.md"), "the repository Fetch ran.\n");
 
     const attempt = yield* evaluate(
-      request(`<Probe />\n\n<Fetch url="${URL_ONE}" />\n`, [
-        pinnedFetch([ADMITTED_REQUEST]),
-        probe(),
-      ]),
+      request(`<Probe />\n\n<Fetch url="${URL_ONE}" />\n`, [pinnedFetch(), probe()]),
       { includes: [workspace] },
     );
 
@@ -688,10 +686,7 @@ describe("Tier GX — only pinned identities execute", () => {
       const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
 
       const attempt = yield* evaluate(
-        request(`<Fetch url="${URL_ONE}" />\n\n<Probe />\n`, [
-          pinnedFetch([ADMITTED_REQUEST]),
-          probe(),
-        ]),
+        request(`<Fetch url="${URL_ONE}" />\n\n<Probe />\n`, [pinnedFetch(), probe()]),
         { installations: [installation] },
       );
 
@@ -731,97 +726,30 @@ describe("Tier GX — the request a generated fragment may perform", () => {
   it("GX11: the exact admitted request performs once", function* () {
     const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
 
-    const attempt = yield* evaluate(
-      request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]),
-    );
+    const attempt = yield* evaluate(request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch()]));
 
     expect(attempt.failure).toBe(undefined);
     expect(transport.performed).toEqual([{ url: URL_ONE, init: { method: "GET", headers: {} } }]);
     expect(observations(attempt.events)).toHaveLength(1);
   });
 
-  const CEILING: Record<string, Json> = {
-    url: URL_ONE,
-    method: "GET",
-    headers: { accept: "application/json" },
-    timeout: "30s",
-  };
-
-  const MISMATCHES: Array<[string, string]> = [
-    [
-      "a different scheme",
-      `<Fetch url="http://api.example.test/one" method="GET" headers={{ accept: "application/json" }} timeout="30s" />`,
-    ],
-    [
-      "a different host",
-      `<Fetch url="https://other.example.test/one" method="GET" headers={{ accept: "application/json" }} timeout="30s" />`,
-    ],
-    [
-      "a different path",
-      `<Fetch url="${URL_ONE}/deeper" method="GET" headers={{ accept: "application/json" }} timeout="30s" />`,
-    ],
-    [
-      "a different method",
-      `<Fetch url="${URL_ONE}" method="HEAD" headers={{ accept: "application/json" }} timeout="30s" />`,
-    ],
-    [
-      "a different header value",
-      `<Fetch url="${URL_ONE}" method="GET" headers={{ accept: "text/plain" }} timeout="30s" />`,
-    ],
-    [
-      "an extra header",
-      `<Fetch url="${URL_ONE}" method="GET" headers={{ accept: "application/json", "x-extra": "1" }} timeout="30s" />`,
-    ],
-    ["a missing header", `<Fetch url="${URL_ONE}" method="GET" timeout="30s" />`],
-    [
-      "a different timeout",
-      `<Fetch url="${URL_ONE}" method="GET" headers={{ accept: "application/json" }} timeout="1s" />`,
-    ],
-    [
-      "no timeout at all",
-      `<Fetch url="${URL_ONE}" method="GET" headers={{ accept: "application/json" }} />`,
-    ],
-  ];
-
-  for (const [what, element] of MISMATCHES) {
-    it(`GX12: ${what} performs no request`, function* () {
-      const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
-
-      const attempt = yield* evaluate(request(`${element}\n`, [pinnedFetch([CEILING])]));
-
-      expect(transport.performed).toHaveLength(0);
-      expect(admittedFragments(attempt.events)).toHaveLength(0);
-      expect(refusals(attempt.events)).toHaveLength(1);
-      expect(attempt.failure).toContain("did not admit");
-    });
-  }
-
-  it("GX13: the exact ceiling still admits the request it describes", function* () {
-    const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
-
-    const attempt = yield* evaluate(
-      request(
-        `<Fetch url="${URL_ONE}" method="GET" headers={{ Accept: "application/json" }} timeout="30s" />\n`,
-        [pinnedFetch([CEILING])],
-      ),
-    );
-
-    expect(attempt.failure).toBe(undefined);
-    expect(transport.performed).toEqual([
-      {
-        url: URL_ONE,
-        init: { method: "GET", headers: { accept: "application/json" }, timeout: 30_000 },
-      },
-    ]);
-  });
-
+  /**
+   * What a request may *reach* is no longer this boundary's question.
+   *
+   * The evaluator admits names and forms; which destination, method and headers
+   * an admitted `<Fetch />` may actually send is decided by the effective
+   * `Permissions` of the scope that performs it, after every `API.Fetch`
+   * transformation and immediately before transport. So a fragment whose data
+   * expressions produce a dynamic destination is an ordinary input here, and the
+   * rows that prove a forbidden destination, method or header reaches zero
+   * transport calls live where that decision is made — `shared-operation-permissions`
+   * Tier PRM, against a host that states such a bound.
+   */
   it("GX13b: two admitted reads in one fragment are two observations, not one replayed twice", function* () {
     const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
 
     const attempt = yield* evaluate(
-      request(`<Fetch url="${URL_ONE}" />\n\n<Fetch url="${URL_TWO}" />\n`, [
-        pinnedFetch([{ url: URL_ONE }, { url: URL_TWO }]),
-      ]),
+      request(`<Fetch url="${URL_ONE}" />\n\n<Fetch url="${URL_TWO}" />\n`, [pinnedFetch()]),
     );
 
     expect(attempt.failure).toBe(undefined);
@@ -831,81 +759,6 @@ describe("Tier GX — the request a generated fragment may perform", () => {
     );
     expect(names).toHaveLength(2);
     expect(new Set(names).size).toBe(2);
-  });
-
-  it("GX14: admitting Fetch without a ceiling is refused before any evaluation", function* () {
-    expect(() => pinnedFetch([])).toThrow();
-  });
-
-  /**
-   * One admitted read that states a ceiling and records what it was asked.
-   *
-   * Two of these make the pair these rows need: each entry states its own
-   * ceiling, and the run keys its ceiling table by the entry itself rather than
-   * by anything describing it — so one entry's limit is never the other's,
-   * however alike two entries look.
-   */
-  function bounded(name: string, url: string, performed: string[]): GeneratedObservation {
-    return {
-      name,
-      kind: "component-answer",
-      requests: [{ url }],
-      definition: {
-        kind: "function",
-        name,
-        forms: ["self-closing"],
-        generated: offers(`${name.toLowerCase()}/read`, "read"),
-        props: {
-          type: "object",
-          properties: { url: { type: "string" } },
-          required: ["url"],
-          additionalProperties: false,
-        },
-        // deno-lint-ignore require-yield
-        *fn(props: Record<string, Json>): Operation<Json> {
-          performed.push(`${name} ${String(props.url)}`);
-          return name;
-        },
-      },
-    };
-  }
-
-  it("GX14b: two admitted reads keep their own ceilings", function* () {
-    const performed: string[] = [];
-    const attempt = yield* evaluate(
-      request(`<One url="${URL_ONE}" />\n\n<Other url="${URL_TWO}" />\n`, [
-        bounded("One", URL_ONE, performed),
-        bounded("Other", URL_TWO, performed),
-      ]),
-    );
-
-    // Each element performed the request its own entry stated. A shared
-    // ceiling would have left one of the two holding the other's limit, and one
-    // of these two admitted requests would have been refused.
-    expect(attempt.failure).toBe(undefined);
-    expect(performed).toEqual([`One ${URL_ONE}`, `Other ${URL_TWO}`]);
-    // And the retained policy holds both limits rather than one of them twice.
-    const policy = recordedPolicy(admittedFragments(attempt.events)[0]);
-    expect(isRecord(policy) ? policy.requests : undefined).toEqual([
-      { url: URL_ONE, method: "GET", headers: {} },
-      { url: URL_TWO, method: "GET", headers: {} },
-    ]);
-  });
-
-  it("GX14c: one entry's ceiling never admits the other's request", function* () {
-    const performed: string[] = [];
-    const attempt = yield* evaluate(
-      request(`<One url="${URL_TWO}" />\n`, [
-        bounded("One", URL_ONE, performed),
-        bounded("Other", URL_TWO, performed),
-      ]),
-    );
-
-    // The negative half of the pair above. `<One />` may perform exactly what
-    // its own entry stated, and the other entry's limit is not its own.
-    expect(attempt.failure).toContain("did not admit");
-    expect(admittedFragments(attempt.events)).toHaveLength(0);
-    expect(performed).toEqual([]);
   });
 });
 
@@ -924,10 +777,10 @@ describe("Tier GX — what the run keeps", () => {
   it("GX15: a partial replay restores the admission and performs no second request", function* () {
     const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
 
-    const first = yield* evaluate(request(SOURCE, [pinnedFetch([ADMITTED_REQUEST])]));
+    const first = yield* evaluate(request(SOURCE, [pinnedFetch()]));
     expect(transport.performed).toHaveLength(1);
 
-    const again = yield* evaluate(request(SOURCE, [pinnedFetch([ADMITTED_REQUEST])]), {
+    const again = yield* evaluate(request(SOURCE, [pinnedFetch()]), {
       stream: partial(first.events),
     });
 
@@ -940,10 +793,10 @@ describe("Tier GX — what the run keeps", () => {
   it("GX16: a completed replay restores the root result and repeats no observation", function* () {
     const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
 
-    const first = yield* evaluate(request(SOURCE, [pinnedFetch([ADMITTED_REQUEST])]));
+    const first = yield* evaluate(request(SOURCE, [pinnedFetch()]));
     expect(transport.performed).toHaveLength(1);
 
-    const again = yield* evaluate(request(SOURCE, [pinnedFetch([ADMITTED_REQUEST])]), {
+    const again = yield* evaluate(request(SOURCE, [pinnedFetch()]), {
       stream: new InMemoryStream(first.events),
     });
 
@@ -992,9 +845,7 @@ describe("Tier GX — what the run keeps", () => {
     const stream = new InMemoryStream();
 
     const attempt = yield* evaluate(
-      request(`<Fetch url="${URL_ONE}" />\n\n<Fetch url="${URL_TWO}" />\n`, [
-        pinnedFetch([{ url: URL_ONE }, { url: URL_TWO }]),
-      ]),
+      request(`<Fetch url="${URL_ONE}" />\n\n<Fetch url="${URL_TWO}" />\n`, [pinnedFetch()]),
       { stream },
     );
 
@@ -1010,9 +861,7 @@ describe("Tier GX — what the run keeps", () => {
     // the second element never ran rather than because the first was kept.
     const transport = yield* useTransport(() => ({ status: 200, body: "answered" }));
     const attempt = yield* evaluate(
-      request(`<Fetch url="${URL_ONE}" />\n\n<Fetch url="${URL_TWO}" />\n`, [
-        pinnedFetch([{ url: URL_ONE }, { url: URL_TWO }]),
-      ]),
+      request(`<Fetch url="${URL_ONE}" />\n\n<Fetch url="${URL_TWO}" />\n`, [pinnedFetch()]),
     );
 
     expect(attempt.failure).toBe(undefined);
@@ -1036,9 +885,7 @@ describe("Tier GX — what the run keeps", () => {
         });
         const installation = driven(function* () {
           yield* evaluateGeneratedXmd(
-            request(`<Fetch url="${URL_ONE}" />\n\n<Fetch url="${URL_TWO}" />\n`, [
-              pinnedFetch([{ url: URL_ONE }, { url: URL_TWO }]),
-            ]),
+            request(`<Fetch url="${URL_ONE}" />\n\n<Fetch url="${URL_TWO}" />\n`, [pinnedFetch()]),
           );
         });
         yield* collect(
@@ -1081,7 +928,7 @@ describe("Tier GX — what the run keeps", () => {
     yield* scoped(function* () {
       const running = yield* spawn(function* () {
         const installation = driven(function* () {
-          yield* evaluateGeneratedXmd(request(SOURCE, [pinnedFetch([ADMITTED_REQUEST])]));
+          yield* evaluateGeneratedXmd(request(SOURCE, [pinnedFetch()]));
         });
         yield* collect(
           yield* executeInstalled(
@@ -1099,7 +946,7 @@ describe("Tier GX — what the run keeps", () => {
     expect(admissions(interrupted)).toHaveLength(1);
     expect(observations(interrupted)).toHaveLength(0);
 
-    const continued = yield* evaluate(request(SOURCE, [pinnedFetch([ADMITTED_REQUEST])]), {
+    const continued = yield* evaluate(request(SOURCE, [pinnedFetch()]), {
       stream: new InMemoryStream(interrupted),
     });
 
@@ -1183,8 +1030,7 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
   it("GX18a: a generated read and a later parent marker replay as one offered sequence", function* () {
     const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
     const executed: string[] = [];
-    const candidate = () =>
-      request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]);
+    const candidate = () => request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch()]);
 
     const first = yield* evaluate(candidate(), { after: marker(executed) });
     expect(first.failure).toBe(undefined);
@@ -1197,16 +1043,12 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
       "import_component",
     ]);
 
-    // The continuation runs after the run's own progress: one more retained
-    // root, and the run stands on it. The admission's basis is still retained,
-    // so the same sequence is offered and restores.
-    const again = yield* evaluate(
-      { ...candidate(), workspaceRoots: [...ROOTS, ADVANCED], selectedRoot: ADVANCED },
-      {
-        after: marker(executed),
-        stream: partial(first.events),
-      },
-    );
+    // The continuation runs after the run's own progress, so the same sequence
+    // is offered and restores.
+    const again = yield* evaluate(candidate(), {
+      after: marker(executed),
+      stream: partial(first.events),
+    });
 
     expect(again.failure).toBe(undefined);
     expect(again.output).toBe(first.output);
@@ -1245,14 +1087,11 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
     ]);
 
     // The continuation runs after the run's own progress — the very progress a
-    // committed generated write makes: one more retained root, now current.
-    const again = yield* evaluate(
-      { ...candidate(), workspaceRoots: [...ROOTS, ADVANCED], selectedRoot: ADVANCED },
-      {
-        after: marker(executed),
-        stream: partial(first.events),
-      },
-    );
+    // committed generated write makes.
+    const again = yield* evaluate(candidate(), {
+      after: marker(executed),
+      stream: partial(first.events),
+    });
 
     expect(again.failure).toBe(undefined);
     expect(again.output).toBe(first.output);
@@ -1268,7 +1107,7 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
 
   it("GX18c: an empty fragment keeps its output and invents no nested effect on replay", function* () {
     const executed: string[] = [];
-    const candidate = () => request("", [pinnedFetch([ADMITTED_REQUEST])]);
+    const candidate = () => request("", [pinnedFetch()]);
 
     const first = yield* evaluate(candidate(), { after: marker(executed) });
     expect(first.failure).toBe(undefined);
@@ -1324,138 +1163,21 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
   });
 });
 
-describe("Tier GX — a malformed generated request reports its class, not itself", () => {
-  beforeAll(() => useTempFileCompiler());
+/**
+ * The rows a malformed request used to be refused by are gone with the
+ * inventory that refused it.
+ *
+ * Preflight settled what a fragment may *name*; whether a request is well
+ * formed at all is the component's own question, asked where the request is
+ * made — after the admission has already been recorded, which is where the
+ * exact source is retained on purpose. So there is no pre-admission refusal
+ * left to keep the candidate's text out of, and nothing here to assert about
+ * one. What an admitted read may reach is proved against a live bound in
+ * `shared-operation-permissions` Tier PRM, and `<Fetch>`'s own refusals are
+ * `fetch-component`'s.
+ */
 
-  /**
-   * `prepareFetchRequest()` reports what is wrong with a request by quoting it.
-   * Every case below writes a distinct marker into the part it makes malformed,
-   * and then asks the same three questions: did anything run, what does the run
-   * say, and what did the journal keep. The marker must appear in none of them.
-   */
-  const MALFORMED: Array<[string, string, string]> = [
-    ["an invalid URL", "gx-url-marker", `<Fetch url="gx-url-marker" />`],
-    ["a non-HTTP scheme", "gx-scheme-marker", `<Fetch url="file:///gx-scheme-marker" />`],
-    ["an unknown method", "GXMETHODMARKER", `<Fetch url="${URL_ONE}" method="GXMETHODMARKER" />`],
-    [
-      "a malformed timeout",
-      "gx-timeout-marker",
-      `<Fetch url="${URL_ONE}" timeout="gx-timeout-marker" />`,
-    ],
-    [
-      "a non-string header value",
-      "gx-header-marker",
-      `<Fetch url="${URL_ONE}" headers={{ "gx-header-marker": 1 }} />`,
-    ],
-    [
-      "one header name written twice",
-      "gx-twice-marker",
-      `<Fetch url="${URL_ONE}" headers={{ "GX-Twice-Marker": "a", "gx-twice-marker": "b" }} />`,
-    ],
-  ];
-
-  for (const [what, marker, element] of MALFORMED) {
-    it(`GX25: ${what} is refused as a request, carrying nothing of itself`, function* () {
-      const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
-
-      const attempt = yield* evaluate(request(`${element}\n`, [pinnedFetch([ADMITTED_REQUEST])]));
-
-      expect(transport.performed).toHaveLength(0);
-      expect(admittedFragments(attempt.events)).toHaveLength(0);
-      expect(refusals(attempt.events)).toHaveLength(1);
-      expect(observations(attempt.events)).toHaveLength(0);
-      // The run says the class, and the journal keeps the class.
-      expect(attempt.failure).toContain("did not admit");
-      expect(persisted(attempt.events)).toContain('"construct":"request"');
-      // And neither of them keeps the request that caused it.
-      expect(attempt.failure).not.toContain(marker);
-      expect(persisted(attempt.events)).not.toContain(marker);
-    });
-  }
-
-  /** Every incoherent Workspace basis a host can state, and what is wrong. */
-  const INCOHERENT: readonly (readonly [string, Partial<GeneratedXmdRequest>])[] = [
-    ["roots without a selected root", { workspaceRoots: ROOTS, selectedRoot: undefined }],
-    ["a selected root without roots", { workspaceRoots: undefined, selectedRoot: ROOTS[0] }],
-    ["no retained root at all", { workspaceRoots: [], selectedRoot: "" }],
-    ["an empty retained root", { workspaceRoots: [""], selectedRoot: "" }],
-    ["one retained root twice", { workspaceRoots: [ROOTS[0], ROOTS[0]], selectedRoot: ROOTS[0] }],
-    [
-      "a selected root it does not retain",
-      {
-        workspaceRoots: ROOTS,
-        selectedRoot: "workspace://never-retained",
-      },
-    ],
-  ];
-
-  /** The probe under its admitted identity, counting live invocations. */
-  function countingProbe(performed: string[]): GeneratedObservation {
-    return pinnedComponent(
-      "Probe",
-      {
-        kind: "function",
-        name: "Probe",
-        props: { type: "object", properties: {}, additionalProperties: false },
-        forms: ["self-closing"],
-        generated: offers("probe/read", "read"),
-        // deno-lint-ignore require-yield
-        *fn(): Operation<Json> {
-          performed.push("probed");
-          return "probed";
-        },
-      },
-      "component-answer",
-    );
-  }
-
-  for (const [what, basis] of INCOHERENT) {
-    it(`GX26b: a host stating ${what} fails before anything is appended`, function* () {
-      const performed: string[] = [];
-      const attempt = yield* evaluate({
-        ...request("<Probe />\n", [countingProbe(performed)]),
-        ...basis,
-      });
-
-      // The host's own values, so this is the host's own error — and it happens
-      // before the candidate is read, so nothing of it is retained.
-      expect([what, attempt.failure !== undefined]).toEqual([what, true]);
-      expect([what, admissions(attempt.events).length]).toEqual([what, 0]);
-      expect([what, performed]).toEqual([what, []]);
-    });
-  }
-
-  it("GX26c: a host stating no Workspace basis at all evaluates", function* () {
-    // The positive control the six above need, and the ordinary-run shape: a
-    // host with no Workspace is not a host with a broken one.
-    const {
-      workspaceRoots: _roots,
-      selectedRoot: _selected,
-      ...withoutBasis
-    } = request("<Probe />\n", [probe()]);
-
-    const attempt = yield* evaluate(withoutBasis);
-
-    expect(attempt.failure).toBe(undefined);
-    expect(attempt.output).toContain("probed");
-  });
-
-  it("GX26: a malformed host ceiling fails as the host's own error, before anything is appended", function* () {
-    const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
-
-    const attempt = yield* evaluate(
-      request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([{ url: "gx-host-ceiling-marker" }])]),
-    );
-
-    // The host's own values are not generated text: a host that states a
-    // request it cannot mean is told which one, and nothing is retained.
-    expect(transport.performed).toHaveLength(0);
-    expect(admissions(attempt.events)).toHaveLength(0);
-    expect(attempt.failure).toContain("gx-host-ceiling-marker");
-  });
-});
-
-describe("Tier GX — a resumed run is held to the ceilings it was admitted under", () => {
+describe("Tier GX — a resumed run is held to the selection it was admitted under", () => {
   beforeAll(() => useTempFileCompiler());
 
   /** A second definition under the same name, so a substitution is visible. */
@@ -1545,9 +1267,8 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
    * offers that spelling under.
    */
   const CURRENT_POLICY: JsonObject = Object.freeze({
-    version: 3,
+    version: 4,
     allow: ["read"],
-    workspace: { roots: [...ROOTS], selectedRoot: ROOTS[0] },
     allowed: [
       { ...COMPOSITION_RECORD },
       {
@@ -1558,7 +1279,6 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
         effect: "read",
       },
     ],
-    requests: [],
   });
 
   /** One admission holding that policy, as the event a journal holds. */
@@ -1570,7 +1290,7 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
       result: {
         status: "ok",
         value: {
-          version: 3,
+          version: 4,
           decision: "admitted",
           source,
           named: [{ name: "Probe", identity: PROBE_IDENTITY, form: "self-closing" }],
@@ -1797,7 +1517,7 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
       description: { type: "generated_xmd", name: "generated:turn-1", input: CURRENT_POLICY },
       result: {
         status: "ok",
-        value: { version: 3, decision: "refused", construct: "block" },
+        value: { version: 4, decision: "refused", construct: "block" },
       },
     };
     const again = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]), {
@@ -1826,7 +1546,7 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
       result: {
         status: "ok",
         value: {
-          version: 3,
+          version: 4,
           decision: "admitted",
           source: "<Probe />\n",
           named: [{ name: "Probe", identity: PROBE_IDENTITY, form: "self-closing" }],
@@ -1949,22 +1669,30 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
       "a row whose identity is null",
       forgedAdmission({ ...CURRENT_POLICY, ...forgedRow({ identity: null }) }),
     ],
-    ["a repeated retained root", forgedPolicyWorkspace([ROOTS[0], ROOTS[0]], ROOTS[0])],
-    ["no retained roots at all", forgedPolicyWorkspace([], "")],
-    ["a selected root the basis does not hold", forgedPolicyWorkspace(ROOTS, "workspace://never")],
+    // A marker-3 record is the shape this build does not have: it carried a
+    // Workspace basis and a request inventory, and both are gone. Nothing
+    // recovers a current policy from it, so it is refused whole rather than
+    // read for the members it still shares.
     [
-      "a request carrying a member this build does not know",
+      "a marker-3 record carrying a Workspace basis and a request inventory",
       forgedAdmission({
-        ...CURRENT_POLICY,
-        requests: [{ url: URL_ONE, method: "GET", headers: {}, widened: true }],
+        version: 3,
+        allow: ["read"],
+        workspace: { roots: [...ROOTS], selectedRoot: ROOTS[0] },
+        allowed: CURRENT_POLICY.allowed,
+        requests: [],
       }),
     ],
     [
-      "a request whose timeout is not a number",
+      "a current record carrying a Workspace basis beside the selection",
       forgedAdmission({
         ...CURRENT_POLICY,
-        requests: [{ url: URL_ONE, method: "GET", headers: {}, timeout: "soon" }],
+        workspace: { roots: [...ROOTS], selectedRoot: ROOTS[0] },
       }),
+    ],
+    [
+      "a current record carrying a request inventory beside the selection",
+      forgedAdmission({ ...CURRENT_POLICY, requests: [] }),
     ],
     [
       "a result carrying a member this build does not know",
@@ -1996,7 +1724,7 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
         result: {
           status: "ok",
           value: {
-            version: 3,
+            version: 4,
             decision: "admitted",
             source: "<Probe />\n",
             named: [
@@ -2021,7 +1749,7 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
         result: {
           status: "ok",
           value: {
-            version: 3,
+            version: 4,
             decision: "admitted",
             source: "<Probe />\n",
             named: [{ name: "Probe", identity: "urn:host:probe/v1", form: "self-closing" }],
@@ -2031,14 +1759,6 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
       },
     ],
   ];
-
-  /** One admission whose Workspace basis is whatever a case states. */
-  function forgedPolicyWorkspace(roots: readonly string[], selectedRoot: string): DurableEvent {
-    return forgedAdmission({
-      ...CURRENT_POLICY,
-      workspace: { roots: [...roots], selectedRoot },
-    });
-  }
 
   for (const [what, admission] of HOSTILE) {
     it(`FE18/GX21y: a retained record with ${what} refuses before any effect`, function* () {
@@ -2094,129 +1814,36 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
     expect(admittedFragments(again.events)).toHaveLength(1);
   });
 
-  it("GX22: the run's own root progression resumes and reaches the generated component", function* () {
+  it("GX22: the run's own progress resumes and reaches the generated component", function* () {
     const performed: string[] = [];
     const first = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]));
     expect(first.failure).toBe(undefined);
     expect(performed).toHaveLength(1);
 
-    // One more retained root, and the run stands on it now. The admission's
-    // basis is still retained, so the continuation proceeds — and performs the
-    // observation its interrupted history never committed, once more.
-    const again = yield* evaluate(
-      {
-        id: "turn-1",
-        source: "<Probe />\n",
-        workspaceRoots: [...ROOTS, ADVANCED],
-        selectedRoot: ADVANCED,
-        observations: [countedProbe(performed)],
-      },
-      { stream: duringPreparation(first.events) },
-    );
+    // The run has moved on since the admission — a committed mutation retains
+    // another root and advances the frontier — and the selection is what the
+    // continuation is held to. Nothing about the Workspace takes part, so the
+    // continuation proceeds and performs the observation its interrupted
+    // history never committed, once more.
+    const again = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]), {
+      stream: duringPreparation(first.events),
+    });
 
     expect(again.failure).toBe(undefined);
     expect(again.output).toContain("probed");
     expect(performed).toHaveLength(2);
   });
 
-  it("GX22b: the run may stand on another root it already retained", function* () {
-    const performed: string[] = [];
-    const first = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]));
-    expect(first.failure).toBe(undefined);
-    expect(performed).toHaveLength(1);
-
-    const again = yield* evaluate(
-      {
-        id: "turn-1",
-        source: "<Probe />\n",
-        workspaceRoots: ROOTS,
-        selectedRoot: ROOTS[1] ?? "",
-        observations: [countedProbe(performed)],
-      },
-      { stream: duringPreparation(first.events) },
-    );
-
-    expect(again.failure).toBe(undefined);
-    expect(again.output).toContain("probed");
-    expect(performed).toHaveLength(2);
-  });
-
-  it("GX22c: a lost admission root refuses before the component runs", function* () {
-    const performed: string[] = [];
-    const first = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]));
-    expect(performed).toHaveLength(1);
-
-    // The admission retained both roots; this run kept only the selected one.
-    const again = yield* evaluate(
-      {
-        id: "turn-1",
-        source: "<Probe />\n",
-        workspaceRoots: [ROOTS[0] ?? ""],
-        selectedRoot: ROOTS[0] ?? "",
-        observations: [countedProbe(performed)],
-      },
-      { stream: duringPreparation(first.events) },
-    );
-
-    expect(again.failure).toContain("admitted under");
-    expect(String(again.output ?? "")).not.toContain("probed");
-    expect(performed).toHaveLength(1);
-  });
-
-  it("GX22d: losing the admission's selected root refuses before the component runs", function* () {
-    const performed: string[] = [];
-    const first = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]));
-    expect(performed).toHaveLength(1);
-
-    // The run progressed, but the root the admission addressed is gone.
-    const again = yield* evaluate(
-      {
-        id: "turn-1",
-        source: "<Probe />\n",
-        workspaceRoots: [ROOTS[1] ?? "", ADVANCED],
-        selectedRoot: ROOTS[1] ?? "",
-        observations: [countedProbe(performed)],
-      },
-      { stream: duringPreparation(first.events) },
-    );
-
-    expect(again.failure).toContain("admitted under");
-    expect(String(again.output ?? "")).not.toContain("probed");
-    expect(performed).toHaveLength(1);
-  });
-
-  it("GX23: a widened Fetch ceiling refuses before API.Fetch", function* () {
+  it("GX23b: the unchanged selection still resumes and commits the observation", function* () {
     const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
-    const candidate = request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]);
-
-    const history = yield* interrupted(candidate);
-    expect(transport.performed).toHaveLength(1);
-    expect(admissions(history)).toHaveLength(1);
-    expect(observations(history)).toHaveLength(0);
-
-    // The widened ceiling still contains the original request, so a run that
-    // consulted only the current policy would admit this fragment again.
-    const again = yield* evaluate(
-      request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST, { url: URL_TWO }])]),
-      { stream: new InMemoryStream(history) },
-    );
-
-    expect(transport.performed).toHaveLength(1);
-    expect(observations(again.events)).toHaveLength(0);
-    expect(again.failure).toContain("admitted under");
-  });
-
-  it("GX23b: the unchanged ceiling still resumes and commits the observation", function* () {
-    const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
-    const candidate = request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]);
+    const candidate = request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch()]);
 
     const history = yield* interrupted(candidate);
     expect(transport.performed).toHaveLength(1);
 
-    const again = yield* evaluate(
-      request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]),
-      { stream: new InMemoryStream(history) },
-    );
+    const again = yield* evaluate(request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch()]), {
+      stream: new InMemoryStream(history),
+    });
 
     expect(again.failure).toBe(undefined);
     expect(transport.performed).toHaveLength(2);
@@ -2303,9 +1930,7 @@ describe("Tier GX — the secret gate covers what is retained", () => {
       yield* useProbedScanner(scanned);
       yield* useTransport(() => ({ status: 200, body: "response-body-marker" }));
       return yield* evaluate(
-        request(`<Fetch url="${URL_ONE}?query=url-marker" />\n`, [
-          pinnedFetch([{ url: `${URL_ONE}?query=url-marker` }]),
-        ]),
+        request(`<Fetch url="${URL_ONE}?query=url-marker" />\n`, [pinnedFetch()]),
       );
     });
 
@@ -2320,7 +1945,6 @@ describe("Tier GX — the secret gate covers what is retained", () => {
     // spelling runs under beside the effect table that admitted it.
     for (const marker of [
       "url-marker",
-      "workspace://primary",
       "https://executable.md/components/fetch/read",
       '"effect":"read"',
     ]) {
@@ -2334,9 +1958,7 @@ describe("Tier GX — the secret gate covers what is retained", () => {
 
     const attempt = yield* scoped(function* () {
       return yield* evaluate(
-        request(`token ${CANARY}\n\n<Fetch url="${URL_ONE}" />\n`, [
-          pinnedFetch([ADMITTED_REQUEST]),
-        ]),
+        request(`token ${CANARY}\n\n<Fetch url="${URL_ONE}" />\n`, [pinnedFetch()]),
       );
     });
 
@@ -2351,11 +1973,7 @@ describe("Tier GX — the secret gate covers what is retained", () => {
     const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
     const element = `<Fetch url="${URL_ONE}" headers={{ authorization: "${CANARY}" }} />`;
 
-    const attempt = yield* evaluate(
-      request(`${element}\n`, [
-        pinnedFetch([{ url: URL_ONE, headers: { authorization: CANARY } }]),
-      ]),
-    );
+    const attempt = yield* evaluate(request(`${element}\n`, [pinnedFetch()]));
 
     expect(attempt.failure).toContain("secret detection rejected content");
     expect(persisted(attempt.events)).not.toContain(CANARY);
@@ -2480,7 +2098,7 @@ describe("Tier WGAC — the pinned read-only File", () => {
 
     const attempt = yield* scoped(function* () {
       yield* useWorkspaceFiles(root);
-      return yield* evaluate(request(source, [pinnedFileRead(), pinnedFetch([ADMITTED_REQUEST])]));
+      return yield* evaluate(request(source, [pinnedFileRead(), pinnedFetch()]));
     });
 
     expect(attempt.failure).toBe(undefined);
@@ -3545,9 +3163,7 @@ describe("Tier GS — generated work names its own admission", () => {
 
   it("GS1: the effect inside a fragment carries that fragment's id and no path", function* () {
     const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
-    const attempt = yield* evaluate(
-      request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]),
-    );
+    const attempt = yield* evaluate(request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch()]));
 
     expect(attempt.failure).toBe(undefined);
     expect(transport.performed).toHaveLength(1);
@@ -3564,17 +3180,14 @@ describe("Tier GS — generated work names its own admission", () => {
   it("GS2: two fragments in one run stamp their own ids on identical places", function* () {
     const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
     const second: GeneratedXmdRequest = {
-      ...request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]),
+      ...request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch()]),
       id: "turn-2",
     };
-    const attempt = yield* evaluate(
-      request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]),
-      {
-        *after(): Operation<void> {
-          yield* evaluateGeneratedXmd(second);
-        },
+    const attempt = yield* evaluate(request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch()]), {
+      *after(): Operation<void> {
+        yield* evaluateGeneratedXmd(second);
       },
-    );
+    });
 
     expect(attempt.failure).toBe(undefined);
     expect(transport.performed).toHaveLength(2);

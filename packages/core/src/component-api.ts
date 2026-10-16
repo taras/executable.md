@@ -20,6 +20,7 @@ import { settle } from "./errors.ts";
 import { ComponentExpansionProtocolError } from "./component-expansion.ts";
 import type { BoundExecRequest } from "./bound-exec.ts";
 import type { Expansion } from "./expansion.ts";
+import type { InvocationForm } from "./invocation-identity.ts";
 import type {
   CodeBlockContext,
   CodeBlockResult,
@@ -81,7 +82,36 @@ export interface ComponentExpansionRequest {
   readonly phases: Stream<ComponentExpansionPhase, void>;
 }
 
+/**
+ * The component forms a host offers to generated XMD, by name.
+ *
+ * Names and spellings only. Which URL each selected spelling runs under, what
+ * it is validated against, and whether it observes or mutates belong to the
+ * declaration that owns the implementation, so a host chooses what a fragment
+ * may write and never what writing it grants.
+ */
+export type GeneratedSelection = Readonly<Record<string, readonly InvocationForm[]>>;
+
 export interface ComponentApi {
+  /**
+   * The component forms this host offers to generated XMD (spec §5.3.2).
+   *
+   * A plain value property: a consumer yields `Component.operations.generated`
+   * without parentheses, and middleware composes one complete selection rather
+   * than contributing to a collection. Core reads the final answer once, after
+   * initialization and the captured installation callbacks have assembled the
+   * host and before public `Execution.execute` policy, copies it, validates all
+   * of it, and resolves each selected name once. A later policy that supplies a
+   * broader value, replaces a registration or imports a different body changes
+   * neither the captured vocabulary nor the captured implementations.
+   *
+   * `undefined` is the default and preserves absence: the host offers no
+   * generated evaluation, so a document with no `<Evaluate>` runs and an
+   * `<Evaluate>` refuses before its producer. A defined selection names at
+   * least one component, and a malformed one refuses setup rather than being
+   * repaired, filtered or replaced with a default.
+   */
+  readonly generated: GeneratedSelection | undefined;
   /**
    * Surround one executable element's complete expansion (spec §5.7).
    *
@@ -315,6 +345,12 @@ export function isMissingImportProvider(error: unknown, asked: string): boolean 
  */
 const COMPONENT_DEFAULTS: Omit<ComponentApi, "registry"> = {
   /**
+   * No generated evaluation at all, which is a different statement from
+   * offering an empty one: a host that selected nothing has not stated a
+   * selection core could validate and refuse.
+   */
+  generated: undefined,
+  /**
    * Nothing issued this, so there is nothing to surround.
    *
    * The public descriptor's own terminal is reached only by a caller that
@@ -498,6 +534,7 @@ export const applyModifiers: Operations<ComponentApi>["applyModifiers"] =
 export const applyBoundModifiers: Operations<ComponentApi>["applyBoundModifiers"] =
   Component.operations.applyBoundModifiers;
 export const raise: Operations<ComponentApi>["raise"] = Component.operations.raise;
+export const generated: Operations<ComponentApi>["generated"] = Component.operations.generated;
 export const env: Operations<ComponentApi>["env"] = Component.operations.env;
 export const evalScope: Operations<ComponentApi>["evalScope"] = Component.operations.evalScope;
 export const codeBlock: Operations<ComponentApi>["codeBlock"] = Component.operations.codeBlock;

@@ -18,18 +18,19 @@
  *   entered at all. They are what lets a host — the workflow package, for one —
  *   prepare a run in the journal that the document then runs against.
  *
- * A third act of infrastructure sits beside them. **Generated XMD** is source
- * an Agent produced, and `evaluateGeneratedXmd()` is how a trusted host runs it:
- * the complete fragment is preflighted before its first effect, only the pinned
- * identity the host admitted for that name *and* that authored form may
- * execute, and what was admitted is recorded as one ordinary durable event
- * before the first generated effect. The host states a `read` table and a
- * `write` table and the caller selects between them, so admitting an
- * observation is not admitting a mutation. It is an `Operation`: the
- * production workflow reaches it through its host-declared `<Evaluate>`
- * component inside the owning authored expansion — not through a
- * `DurablePreparation` — so the admission and every durable effect the
- * admitted fragment performs belong to that expansion's own durable sequence.
+ * A third act of infrastructure sits beside them, and it is not on this module
+ * at all. **Generated XMD** is source an Agent produced, and what a host
+ * contributes to running it is one selection of component names and authored
+ * forms, composed through the ordinary `Component.generated` property on
+ * `@executablemd/core/api`. Core reads that selection once before public
+ * execution policy, resolves each selected name through the ordinary import
+ * chain, and derives the identity, the effect and the contract of every
+ * selected spelling from the declaration that owns the implementation. The
+ * complete fragment is then preflighted before its first effect, and what was
+ * admitted is recorded as one ordinary durable event before the first generated
+ * effect — inside the owning authored expansion of the public `<Evaluate>`
+ * element, so the admission and every effect belong to that expansion's own
+ * durable sequence.
  *
  * Both stop at the first refusal, and a refusal stops only what has not
  * happened yet: durable effects an earlier preparation completed stay
@@ -83,34 +84,16 @@ export type {
   JournalAdmission,
 } from "./src/execute.ts";
 /**
- * What a trusted host states about generated-fragment evaluation.
+ * How a trusted host supplies the implementation behind a selected name.
  *
- * Only the input a host writes, and only here, because this is the trusted
- * surface `ExecutionInstallation` already lives on. What canonical execution
- * captures from it — the bound operations and their revocation — is unexported:
- * ordinary core publishes no getter for the active permissions and no way to install
- * a provider.
- */
-export type {
-  CapabilityEntry,
-  ComponentAnswerEntry,
-  FragmentEntry,
-  FragmentEvaluationInput,
-  FragmentForm,
-  FragmentWorkspaceAccess,
-} from "./src/evaluation-profile.ts";
-/**
- * How a trusted host supplies the implementation behind a `component-answer`
- * entry.
- *
- * An installer, not a definition: canonical execution runs it during profile
- * capture and hands it a registrar fixed to this installation's origin. The
- * registrar composes import middleware, and every invocation of that middleware
- * receives its own request — fixed to the name and position it was asked, and
- * closed when that invocation ends — which is the only thing that states what
- * the provider is returning. Canonical execution then decides whether that is
- * what the profile admitted, and resolves the name itself through the ordinary
- * import chain.
+ * An installer, not a definition: canonical execution runs it before the
+ * generated selection is captured and hands it a registrar fixed to this
+ * installation's origin. The registrar composes import middleware, and every
+ * invocation of that middleware receives its own request — fixed to the name
+ * and position it was asked, and closed when that invocation ends — which is
+ * the only thing that states what the provider is returning. Canonical
+ * execution then decides whether that is an implementation it may retain, and
+ * resolves the name itself through the ordinary import chain.
  */
 export type {
   ComponentAnswerHandler,
@@ -118,17 +101,6 @@ export type {
   ComponentAnswerRegistrar,
   ComponentAnswerRequest,
 } from "./src/component-answers.ts";
-/**
- * Which component an admitted entry runs.
- *
- * A name a host admits, and nothing about how the operation behind it is
- * performed: an admitted entry runs canonical core's own ordinary component,
- * through whichever `API.Files` or `API.Fetch` provider is installed where the
- * fragment runs — see `src/fragment-capabilities.ts`. A host that evaluates
- * against its own filesystem installs that provider; it hands no operation to
- * the profile.
- */
-export type { FragmentCapability } from "./src/fragment-capabilities.ts";
 /**
  * The response shape a retained request answers with, and the detaching a host
  * needs to read one.
@@ -140,26 +112,16 @@ export type { FragmentCapability } from "./src/fragment-capabilities.ts";
 export type { FetchResponseRecord } from "./src/fetch-response.ts";
 export { detachHeaders, detachStatus } from "./src/fetch-response.ts";
 /**
- * Core's own entries, for the hosts that admit them.
+ * Why canonical execution could not capture a host's generated selection.
  *
- * Constructors rather than a table a host assembles from `CORE_REGISTRY`,
- * because each of them states a constraint the registry does not hold: which
- * spelling of `<File>` is being admitted, that admitting `<Fetch>` requires the
- * exact requests it may perform, and that `<Syntax />` is admitted as the
- * answer canonical resolution gives for it rather than as a body core supplies
- * a second time.
+ * The selection itself is stated through `Component.generated`, which is an
+ * ordinary contextual property on the consumer surface rather than a host
+ * input: a host composes middleware that answers with the names and forms it
+ * offers, and core derives everything else from the declarations that own those
+ * implementations. What stays here is the refusal a host is held to.
  */
-export {
-  directoryEntry,
-  EvaluationProfileError,
-  fetchEntry,
-  fileDeleteEntry,
-  fileReadEntry,
-  fileWriteEntry,
-  elicitWriteEntry,
-  globReadEntry,
-  syntaxReadEntry,
-} from "./src/evaluation-profile.ts";
+export { EvaluationProfileError } from "./src/evaluation-profile.ts";
+export { GeneratedSelectionError } from "./src/generated-selection.ts";
 /**
  * Whether a failure is core refusing the generated request itself — see
  * `src/generated-request-refusal.ts`.
@@ -315,25 +277,7 @@ export type {
  * author.
  */
 export { installInvocationAgentProvider } from "./src/agent/launch-install.ts";
-export {
-  evaluateGeneratedXmd,
-  GeneratedXmdError,
-  pinnedComponent,
-  pinnedFetch,
-  pinnedFileDelete,
-  pinnedFileRead,
-  pinnedFileWrite,
-  pinnedMutation,
-} from "./src/generated-xmd.ts";
-export type {
-  GeneratedComponentForm,
-  GeneratedEffectClass,
-  GeneratedImplementation,
-  GeneratedMutation,
-  GeneratedObservation,
-  GeneratedRequest,
-  GeneratedXmdRequest,
-} from "./src/generated-xmd.ts";
+export { GeneratedXmdError } from "./src/generated-xmd.ts";
 
 /**
  * Where a completed Prompt publishes, for a host that retains something beside

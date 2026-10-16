@@ -46,7 +46,7 @@ import type {
 } from "@executablemd/core";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 
-import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
+import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { agentReferenceEvents } from "./fixtures/repl/reference.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
@@ -431,15 +431,13 @@ function* useStub(stub: Stub): Operation<void> {
  */
 const PROFILE: ReplExecutionProfile = {
   includes: [],
-  installations: [
-    { evaluation: ordinaryEvaluationProfile() },
-    { components: agentIdentityComponents() },
-  ],
+  installations: [{ components: agentIdentityComponents() }],
+  generated: ordinaryGeneratedSelection(),
   permissionMode: "approve-reads",
 };
 
 function installations(): readonly ExecutionInstallation[] {
-  return [{ evaluation: ordinaryEvaluationProfile() }, { components: agentIdentityComponents() }];
+  return [{ components: agentIdentityComponents() }];
 }
 
 function execution(): ReplExecution {
@@ -956,6 +954,7 @@ function* asking(
     yield* submitReplEntry({
       execution: holder,
       installations: installations(),
+      generated: ordinaryGeneratedSelection(),
       permissionMode,
       source,
     }),
@@ -1617,7 +1616,11 @@ describe("U2 — one action path, and one owner for a pending request", () => {
       stream: new InMemoryStream([...(yield* agentReferenceEvents())]),
     };
     const session = granted(
-      yield* openReplSession({ execution: holder, installations: installations() }),
+      yield* openReplSession({
+        execution: holder,
+        installations: installations(),
+        generated: ordinaryGeneratedSelection(),
+      }),
     );
     const recordedAudits = session.model.turns.flatMap((turn) => turn.permissions);
     expect(recordedAudits.length).toBeGreaterThan(0);
@@ -3310,6 +3313,7 @@ describe("U9 — two entries whose Prompts share one durable name", () => {
       yield* submitReplEntry({
         execution: holder,
         installations: installations(),
+        generated: ordinaryGeneratedSelection(),
         permissionMode: "deny-all",
         source: onePromptAt("one"),
       }),
@@ -3412,6 +3416,7 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
       yield* submitReplEntry({
         execution: holder,
         installations: installations(),
+        generated: ordinaryGeneratedSelection(),
         permissionMode: "deny-all",
         source: onePromptAt("one"),
       }),

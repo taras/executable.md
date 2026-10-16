@@ -74,7 +74,9 @@ import {
 import type { Operation, Result, Stream, Task } from "effection";
 import { INLINE_SOURCE_PATH, inlineSource, validateDocument } from "@executablemd/core";
 import type { DocumentValidationDiagnostic, Json, PermissionMode } from "@executablemd/core";
+import type { GeneratedSelection } from "@executablemd/core/api";
 import { executeInstalled } from "@executablemd/core/host";
+import { useGeneratedFallback } from "../evaluation-profile.ts";
 import type {
   ExecutionDeclaration,
   ExecutionInstallation,
@@ -380,6 +382,18 @@ export interface ReplSessionOptions {
   readonly includes?: readonly string[];
   /** What this host installs around the document. */
   readonly installations?: readonly ExecutionInstallation[];
+  /**
+   * What a generated fragment may write in every entry this session opens,
+   * unless something nearer states its own.
+   *
+   * Installed as ordinary Component middleware inside each entry's own
+   * execution scope, because that is the scope core reads the selection in. The
+   * value is the command's — a fact about the command a person invoked rather
+   * than about the entry they typed — and a default rather than an answer: a
+   * plugin or a host installation that states a selection is the one core
+   * reads, including a defined empty one it then refuses.
+   */
+  readonly generated?: GeneratedSelection;
   /** The history position a location selected, or none for the head. */
   readonly selection?: string;
   /**
@@ -428,7 +442,7 @@ function* start(
   options: ReplSessionOptions,
   submitted: string | undefined,
 ): Operation<Result<ReplSession>> {
-  const { execution, includes, installations = [], selection, permissionMode } = options;
+  const { execution, includes, installations = [], generated, selection, permissionMode } = options;
   const stream = execution.stream;
 
   const events = yield* stream.readAll();
@@ -933,6 +947,18 @@ function* start(
         // provider work come down first, then this attachment discards whatever it
         // never transferred, and only then is the session's entry slot freed.
         const installation = yield* agent.owning(key);
+        // This entry's own selection, offered in the scope this execution runs
+        // in. Every entry installs it again: core reads the final contextual
+        // answer once per execution, and a chain assembled in a scope that has
+        // already ended answers nothing.
+        //
+        // Offered as the ordinary fallback rather than as the answer. The
+        // session's value is the command's; a plugin or a captured installation
+        // callback that states its own is nearer, and answering here is what
+        // would hide it.
+        if (generated !== undefined) {
+          yield* useGeneratedFallback(generated);
+        }
         const started = yield* executeInstalled(
           {
             ...inlineSource(source),

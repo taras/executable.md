@@ -70,7 +70,7 @@ import { field, object, cli } from "configliere";
 import { z } from "zod";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { retainedSource, validateProps } from "@executablemd/core";
-import { gitDirectoryEntry } from "@executablemd/git";
+import { gitDirectorySelection } from "@executablemd/git";
 import type { PropsSchema } from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
 import {
@@ -95,6 +95,7 @@ import type {
 import type { SuspensionControllerOptions, SuspensionNotice } from "@executablemd/workflow/deno";
 import { SUSPENSION_REQUEST } from "@executablemd/workflow";
 import { describeError } from "./props.ts";
+import { offering, useNoGeneratedEvaluation } from "./workflow-generated.ts";
 import { preflightFork } from "./workflow-fork.ts";
 import type { EstablishedDefinition, RetainedSources } from "./workflow-definition.ts";
 import type { RetainedDefinitionSources } from "@executablemd/workflow/deno";
@@ -1040,7 +1041,7 @@ export function runWorkflow(
     // reason: it is closed over this run's storage, and a run that opens no
     // workflow storage must not load the adapter that reaches `node:sqlite` —
     // which Bun does not have at all.
-    const { createSuspensionController, evaluationProfile } = yield* until(
+    const { createSuspensionController, useWorkflowGenerated } = yield* until(
       import("@executablemd/workflow/deno"),
     );
     const suspension = createSuspensionController({ database });
@@ -1071,21 +1072,6 @@ export function runWorkflow(
         ...(source.value.components.length === 0
           ? []
           : [workflowBundleInstallation(source.value.components)]),
-        // The ceiling a generated fragment runs under. `<Evaluate>` itself is
-        // canonical core's, so what this run states is the profile and nothing
-        // about the component. Stated where the Workspace is attached — a
-        // completed replay restores its retained output and expands nothing, so
-        // it needs no ceiling of its own.
-        // `<Dir>`'s entry comes from the Git Plugin, which decides that a
-        // workflow run has one at all; the identity it is admitted under is
-        // core's, from the declaration that owns the component.
-        ...(completed || replay
-          ? []
-          : [
-              {
-                evaluation: yield* evaluationProfile(database, { directory: gitDirectoryEntry() }),
-              },
-            ]),
       ],
       around<T>(operation: Operation<T>): Operation<T> {
         // A completed run replays its retained output and result. Attaching a
@@ -1096,9 +1082,25 @@ export function runWorkflow(
         // The suspension controller owns the scope *inside* the attachment, so
         // halting a suspended execution tears the Workspace down with it and
         // nothing survives the settlement.
+        //
+        // The generated selection is offered inside the attachment, in the
+        // scope that executes the document: a completed replay restores its
+        // retained output and expands nothing, so it is offered nothing — and
+        // states that, because this command's ordinary default encloses it and
+        // a run offered nothing is not a run that inherits a vocabulary.
+        // `<Dir>`'s spelling comes from the Git Plugin, which decides that a
+        // workflow run offers the name at all; the identity it runs under is
+        // core's, from the declaration that owns the component.
         return completed || replay
-          ? suspension.own(operation)
-          : host.attach(database, suspension.own(operation));
+          ? suspension.own(offering(operation, useNoGeneratedEvaluation))
+          : host.attach(
+              database,
+              suspension.own(
+                offering(operation, () =>
+                  useWorkflowGenerated({ components: gitDirectorySelection() }),
+                ),
+              ),
+            );
       },
     };
 

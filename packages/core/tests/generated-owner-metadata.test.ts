@@ -36,6 +36,7 @@ import type { Operation } from "effection";
 import { collect } from "../src/collect.ts";
 import { executeInstalled } from "../host.ts";
 import type { ComponentAnswerInstallation, ExecutionInstallation } from "../host.ts";
+import { useSelection } from "./support/generated-selection.ts";
 import { retainedSource } from "../src/root-source.ts";
 import type { IdentityComponent } from "../src/invocation-identity.ts";
 import { Component } from "../src/component-api.ts";
@@ -570,9 +571,13 @@ describe("Tier GOM — a declared component's offer survives capture", () => {
   ): ExecutionInstallation {
     return {
       components: [component],
-      evaluation: { read: [{ kind: "component-answer", name: "Probe", forms: ["self-closing"] }] },
       componentAnswers: [publishing(published)],
-      ...(install === undefined ? {} : { install }),
+      *install(): Operation<void> {
+        yield* useSelection({ Probe: ["self-closing"] });
+        if (install !== undefined) {
+          yield* install();
+        }
+      },
     };
   }
 

@@ -7,8 +7,9 @@ import { Execution } from "../api.ts";
 import { parseFilesFatal } from "@executablemd/runtime";
 import { fatalCause } from "../src/errors.ts";
 import { collect, execute, Execution as RootExecution, inlineSource } from "../mod.ts";
-import { executeInstalled, fileReadEntry, Markdown, sourceDigest } from "../host.ts";
+import { executeInstalled, Markdown, sourceDigest } from "../host.ts";
 import type { JournalAdmission } from "../host.ts";
+import { useSelection } from "./support/generated-selection.ts";
 import { Documentation } from "../src/documentation-api.ts";
 import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
 
@@ -99,7 +100,17 @@ describe("Tier EI — execution-owned initialization", () => {
     expect(order).toEqual(["init", "install", "documentation", "execute", "document"]);
   });
 
-  it("EI3: init cannot rewrite captured admissions, declarations or generated profile tables", function* () {
+  /**
+   * EI3 — what init runs *after*, and what it runs *before*.
+   *
+   * Admissions and declarations are read once and copied before any
+   * installation runs, so init editing the host's arrays changes nothing. The
+   * generated selection is deliberately the other way round: init is where a
+   * host establishes it, and core reads the final contextual answer afterwards
+   * — before public execution policy, which is the boundary the selection is
+   * protected at. That half is `generated-selection` U5-2's.
+   */
+  it("EI3: init cannot rewrite captured admissions or declarations", function* () {
     const admitted: string[] = [];
     const admissions: JournalAdmission[] = [
       function* () {
@@ -110,13 +121,14 @@ describe("Tier EI — execution-owned initialization", () => {
     const declarations = [
       Markdown({ name: "Kept", origin: "test://init/kept", source, digest: sourceDigest(source) }),
     ];
-    const read = [fileReadEntry()];
     const files = recordedFiles({ "note.md": "CAPTURED PROFILE" });
     yield* Execution.around({
       *init(_args, next) {
         admissions.length = 0;
         declarations.length = 0;
-        read.length = 0;
+        // The selection, established here: this is init's own job rather than
+        // something it is editing behind core's back.
+        yield* useSelection({ File: ["self-closing"] });
         yield* useRecordedFiles(files);
         yield* next();
       },
@@ -124,7 +136,7 @@ describe("Tier EI — execution-owned initialization", () => {
     const text = "<Kept />\n<Evaluate text={'<File path=\"note.md\" />'} />\n";
     const execution = yield* executeInstalled(
       { ...inlineSource(text), includes: [], stream: new InMemoryStream() },
-      [{ admissions, declarations, evaluation: { read } }],
+      [{ admissions, declarations }],
     );
     const output = String(yield* collect(execution));
     expect(admitted).toEqual(["original"]);

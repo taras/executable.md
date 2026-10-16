@@ -61,7 +61,7 @@ import { installDocumentComponents } from "./cli.ts";
 import { installPlugins } from "./plugin-host.ts";
 import { nestedRunProfile } from "./run-profile.ts";
 import type { Plugin } from "@executablemd/core/api";
-import { ordinaryEvaluationProfile } from "./evaluation-profile.ts";
+import { useOrdinaryGeneratedSelection } from "./evaluation-profile.ts";
 import type { HostServiceInstaller } from "./cli.ts";
 import type { RepositoryInstaller } from "./run-repositories.ts";
 
@@ -342,11 +342,6 @@ function* runProfileChild(
   // this child settled above, rather than taken from a declaration the
   // entrypoint built before this child's configuration had been read.
   installations.push({
-    // The run profile's own evaluation ceiling. A `host="run"` child is an
-    // ordinary run whatever command is hosting it, so a child of `xmd test` —
-    // whose own document is a different profile — still evaluates a generated
-    // fragment under exactly what `xmd run` states.
-    evaluation: ordinaryEvaluationProfile(),
     declarations: [
       yield* settings.planDeclaration({
         context,
@@ -387,6 +382,13 @@ function* runProfileChild(
   // And Repository selection the same way, from the same installer the command
   // used — a fresh instance for this child alone.
   yield* settings.installRepositories();
+  // The run profile's own generated selection, offered in this child's own
+  // scope. A `host="run"` child is an ordinary run whatever command is hosting
+  // it, so a child of `xmd test` — whose own document is a different profile —
+  // still evaluates a generated fragment under exactly what `xmd run` offers.
+  // Installed here rather than inherited: the child's scope is isolated from
+  // the command that started it, so a parent's middleware reaches none of this.
+  yield* useOrdinaryGeneratedSelection();
 
   const execution = yield* executeInstalled(
     {

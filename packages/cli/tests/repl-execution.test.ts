@@ -27,7 +27,8 @@ import { appendFile, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
+import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
+import { selecting } from "../../core/tests/support/generated-selection.ts";
 import {
   COMPONENT_BOUNDARIES,
   EXECUTION_BOUNDARIES,
@@ -54,7 +55,13 @@ import {
   referenceSource,
 } from "./fixtures/repl/reference.ts";
 
-const INSTALLATIONS = [{ evaluation: ordinaryEvaluationProfile() }];
+/**
+ * What a generated fragment may write in every entry this suite opens.
+ *
+ * The selection rather than an installation: the session offers it in each
+ * entry's own execution scope, which is the scope core reads it in.
+ */
+const GENERATED = ordinaryGeneratedSelection();
 
 /**
  * A Node-backed host, installed by the test rather than by the kernel.
@@ -135,7 +142,7 @@ function execution(events: readonly DurableEvent[] = []): ReplExecution {
 }
 
 function options(execution: ReplExecution) {
-  return { execution, includes: [REFERENCE_DIRECTORY], installations: INSTALLATIONS };
+  return { execution, includes: [REFERENCE_DIRECTORY], generated: GENERATED };
 }
 
 function opened(result: Result<ReplSession>): ReplSession {
@@ -909,6 +916,70 @@ describe("REPL execution: one execution's file", () => {
 
     const opened = yield* openExecutionFile(root, "kf39sla2");
     expect(yield* opened.stream.readAll()).toEqual([]);
+  });
+});
+
+describe("REPL execution: the selection each entry reads", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /**
+   * One entry whose fragment writes a name the ordinary selection offers.
+   *
+   * `<Syntax />` rather than a file, because what the row is about is which
+   * selection the entry read: a refusal here is an admission refusal and
+   * nothing else touches a filesystem, a provider or a question.
+   */
+  const DESCRIBING = '<Evaluate text="<Syntax />" allow={["read"]} />\n';
+
+  it("X1: the session's selection is the entry's default, and a host's own is not replaced", function* () {
+    // Control: no host states a selection, so the entry runs under the one the
+    // command supplies and the fragment is admitted.
+    const ordinary = opened(
+      yield* submitReplEntry({ ...options(execution()), source: DESCRIBING }),
+    );
+    const settled = yield* ordinary.join();
+    expect(settled.ok).toBe(true);
+    expect(ordinary.model.terminal?.status).toBe("ok");
+
+    // The same entry, where a host installation states its own. It is defined,
+    // narrower, and nearer than the session's default — so it is what core
+    // reads, and the same fragment is refused for the name it writes.
+    const narrowed = opened(
+      yield* submitReplEntry({
+        ...options(execution()),
+        source: DESCRIBING,
+        installations: [selecting({ Glob: ["self-closing"] })],
+      }),
+    );
+    const refused = yield* narrowed.join();
+    expect(refused.ok).toBe(false);
+    expect(refused.ok ? "" : refused.error.message).toContain("did not admit");
+    expect(narrowed.model.terminal?.status).toBe("err");
+  });
+
+  it("X1: a host's defined empty selection refuses the entry before its body", function* () {
+    const holder = execution();
+    const entry = opened(
+      yield* submitReplEntry({
+        ...options(holder),
+        source: DESCRIBING,
+        installations: [selecting({})],
+      }),
+    );
+
+    // Defined and empty is a host statement, not an absence: core refuses the
+    // setup rather than this session answering over it with its default.
+    const settled = yield* entry.join();
+    expect(settled.ok).toBe(false);
+    expect(settled.ok ? "" : settled.error.message).toContain("selected no component");
+    // Refused before the entry body: the document rendered nothing and the
+    // fragment was never admitted.
+    expect(entry.model.terminal?.output ?? "").toBe("");
+    expect(
+      (yield* readAll(holder)).filter(
+        (event) => event.type === "yield" && event.description.type === "generated_xmd",
+      ),
+    ).toEqual([]);
   });
 });
 

@@ -53,6 +53,19 @@ import type { Json } from "../types.ts";
 export const props = GLOB_PROPS;
 
 /**
+ * The generated use this component is offered for, where it is implemented.
+ *
+ * Stated here rather than only at the registration, because a component is one
+ * declaration wherever it is loaded from: core's registry reads this, and so
+ * does a repository `Glob.ts` on a search path, which is the same
+ * implementation reached the other way. A host that selects the name is then
+ * offered the same thing by whichever copy answers.
+ */
+export const generated = {
+  "self-closing": { identity: "https://executable.md/components/glob/read", effect: "read" },
+} as const;
+
+/**
  * Declaring `returns` is what makes this a value component: the engine requires
  * `as`, renders nothing, and validates what comes back (§6.10).
  */

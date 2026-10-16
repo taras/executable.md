@@ -35,7 +35,8 @@ import { until } from "effection";
 
 import { API } from "@executablemd/runtime";
 import { Elicitation, useTempFileCompiler } from "@executablemd/core";
-import { ordinaryEvaluationProfile } from "../src/evaluation-profile.ts";
+import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
+import type { ExecutionInstallation } from "@executablemd/core/host";
 import { installReplHost } from "../src/repl-assembly.ts";
 import { installReplTerminal } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
@@ -90,8 +91,13 @@ const EMPTY_MODEL_FOR_TEST = Object.freeze({
 });
 const TEXT = new TextDecoder();
 
-/** What this host installs around the reference entry. */
-const INSTALLATIONS = [{ evaluation: ordinaryEvaluationProfile() }];
+/**
+ * What this host installs around the reference entry.
+ *
+ * Nothing. What a generated fragment may write is on the profile beside this,
+ * as the selection the session offers in each entry's own execution scope.
+ */
+const INSTALLATIONS: readonly ExecutionInstallation[] = [];
 
 /**
  * The profile this suite's REPL runs under.
@@ -104,6 +110,7 @@ const INSTALLATIONS = [{ evaluation: ordinaryEvaluationProfile() }];
 const PROFILE: ReplExecutionProfile = {
   includes: [REFERENCE_DIRECTORY],
   installations: INSTALLATIONS,
+  generated: ordinaryGeneratedSelection(),
   permissionMode: "deny-all",
 };
 

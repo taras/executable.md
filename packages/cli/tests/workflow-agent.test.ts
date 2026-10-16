@@ -13,7 +13,7 @@
  * rather than restated here: a fixture a test rewrites is a fixture nobody runs.
  */
 
-import { gitDirectoryEntry } from "@executablemd/git";
+import { gitDirectorySelection } from "@executablemd/git";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, spawn } from "effection";
@@ -29,12 +29,13 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { DatabaseSync } from "node:sqlite";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import {
-  evaluationProfile,
   transactAgentPromptCheckpoints,
+  useWorkflowGenerated,
   withWorkflowWorkspace,
-  workflowRunPath,
   workflowProviderSessions,
+  workflowRunPath,
 } from "@executablemd/workflow/deno";
+import type { WorkflowRequestBound } from "@executablemd/workflow/deno";
 import { executeInstalled } from "@executablemd/core/host";
 import { agentIdentityComponents } from "@executablemd/core";
 import { useWorkflowAgentProfile, WORKFLOW_SESSION_INSTRUCTIONS } from "../src/workflow-agent.ts";
@@ -196,8 +197,8 @@ function runFixture(
      * forgot rather than a process that restarted.
      */
     readonly sessionStore?: AgentProfileOptions["sessionStore"];
-    /** What this host admits a generated fragment under, beyond the standard profile. */
-    readonly evaluation?: { readonly requests?: readonly Record<string, Json>[] };
+    /** What this host bounds a generated fragment's requests to, when it bounds any. */
+    readonly requests?: readonly WorkflowRequestBound[];
     /** The root props this run was started with. */
     readonly props?: Record<string, Json>;
     /** Answers one admitted HTTP read, and counts what was asked for. */
@@ -250,6 +251,14 @@ function runFixture(
       output = yield* withWorkflowWorkspace(
         database,
         scoped(function* () {
+          // This fixture stands in for the bundled XMD workflow host, which
+          // supplies Git's `<Dir>` spelling and bounds what a request may
+          // reach. Offered inside the attachment, in the scope the document
+          // runs in.
+          yield* useWorkflowGenerated({
+            components: gitDirectorySelection(),
+            ...(options.requests === undefined ? {} : { requests: options.requests }),
+          });
           return yield* collect(
             yield* executeInstalled(
               {
@@ -259,18 +268,9 @@ function runFixture(
               },
               // The Agent words name durable work after their own invocations,
               // so the host declares them to the execution. `<Evaluate>` is
-              // canonical core's: what the host states for it is the ceiling.
-              [
-                {
-                  components: [...agentIdentityComponents()],
-                  evaluation: yield* evaluationProfile(database, {
-                    // This harness stands in for the bundled XMD workflow
-                    // profile, which supplies Git's directory entry.
-                    directory: gitDirectoryEntry(),
-                    ...(options.evaluation ?? {}),
-                  }),
-                },
-              ],
+              // canonical core's: what the host offers for it is the selection,
+              // which this fixture installs in the executing scope above.
+              [{ components: [...agentIdentityComponents()] }],
             ),
           );
         }),
@@ -555,7 +555,7 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
 
       const attempt = yield* runFixture(root, database, source, {
         createRuntime: fake.create,
-        evaluation: { requests: [{ url }] },
+        requests: [{ url }],
         transport,
       });
 
@@ -602,7 +602,7 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       const first = yield* runFixture(root, database, source, {
         createRuntime: live.create,
         sessionStore: store,
-        evaluation: { requests: [{ url }] },
+        requests: [{ url }],
         transport: { performed },
       });
       expect(first.failure).toBe(undefined);
@@ -618,7 +618,7 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       const replay = yield* runFixture(root, database, source, {
         createRuntime: tripwireAcp((what) => reached.push(what)),
         sessionStore: store,
-        evaluation: { requests: [{ url }] },
+        requests: [{ url }],
         transport: { performed: replayed },
       });
 

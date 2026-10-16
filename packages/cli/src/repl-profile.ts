@@ -16,13 +16,14 @@
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { agentIdentityComponents } from "@executablemd/core";
 import type { PermissionMode } from "@executablemd/core";
+import type { GeneratedSelection } from "@executablemd/core/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { useScope } from "effection";
 import type { Operation } from "effection";
 
 import { installAgentProviderStack } from "./agent-stack.ts";
 import type { AgentStack } from "./agent-stack.ts";
-import { ordinaryEvaluationProfile } from "./evaluation-profile.ts";
+import { ordinaryGeneratedSelection } from "./evaluation-profile.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
 import { planAgentContext } from "./plan-writer-profile.ts";
 import type { CommandPlugins } from "./plugin-host.ts";
@@ -60,10 +61,20 @@ export interface ReplExecutionProfile {
    * What this command declares to every execution it opens.
    *
    * In installation order: the selected Plugins as they were assembled, then
-   * this command's own vocabulary — the Agent identity components, the packaged
-   * `<Plan>` Component, and the ceiling a generated fragment runs under.
+   * this command's own vocabulary — the Agent identity components and the
+   * packaged `<Plan>` Component.
    */
   readonly installations: readonly ExecutionInstallation[];
+  /**
+   * What a generated fragment may write in every entry this command opens.
+   *
+   * Data, like everything else here: the names and authored forms this command
+   * offers, which the session installs as ordinary Component middleware in each
+   * entry's own execution scope. A profile-construction scope ends before the
+   * first entry runs, so a selection installed there would be a chain nothing
+   * reads.
+   */
+  readonly generated: GeneratedSelection;
   /** How this REPL answers an Agent permission request. */
   readonly permissionMode: PermissionMode;
 }
@@ -115,9 +126,9 @@ export function* assembleReplProfile(
       Object.freeze({
         components: agentIdentityComponents(),
         declarations: Object.freeze([plan]),
-        evaluation: ordinaryEvaluationProfile(),
       }),
     ]),
+    generated: ordinaryGeneratedSelection(),
     permissionMode: stack.permissionMode,
   });
 }

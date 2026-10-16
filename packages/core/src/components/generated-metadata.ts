@@ -144,9 +144,10 @@ function read(value: unknown, form: InvocationForm): Result<GeneratedForm> {
  * Why this metadata is unusable, or nothing when it is usable.
  *
  * The sentence alone, for a caller that refuses rather than retains: a
- * registration, a factory declaration and a resolved provider definition each
- * raise their own kind of failure with their own diagnostic context, and a
- * shared throw here would take that context away from all three.
+ * registration, a factory declaration, a repository component file and a
+ * resolved provider definition each raise their own kind of failure with their
+ * own diagnostic context, and a shared throw here would take that context away
+ * from all of them.
  */
 export function generatedRefusal(
   generated: unknown,
