@@ -59,7 +59,7 @@ import {
   type Surfaced,
 } from "./fixtures/repl/surface.ts";
 
-/** A screen with something on it, so placement has something to place. */
+/** A screen with something on it, so the layout has something to place. */
 const FILLED: ReplFixtureState = {
   route: "entries",
   sessions: ["kf39sla2"],
@@ -2683,7 +2683,7 @@ describe("REPL terminal: a frame that cannot be placed on cell boundaries", () =
     },
   ]);
 
-  it("TL8: a fractional placement is refused, not rounded into a hit box", function* () {
+  it("TL8: a fractional layout is refused, not rounded into a hit box", function* () {
     for (const shape of SHAPES) {
       yield* scoped(function* (): Operation<void> {
         const size = { columns: 60, rows: 40 };

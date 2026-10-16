@@ -12,7 +12,7 @@
  * and a component's copy of one could be a frame out of date.
  */
 
-import type { ReplDrawerRef, ReplSurface } from "../route.ts";
+import type { ReplDrawerRef, ReplPane, ReplSurface } from "../route.ts";
 
 export type ReplAction =
   /**
@@ -28,7 +28,32 @@ export type ReplAction =
   | { readonly kind: "erase"; readonly field?: string }
   /** Admit the draft as this execution's next entry. */
   | { readonly kind: "submit" }
+  /**
+   * Ask the Sidekick for what the message box holds.
+   *
+   * Its own member rather than `submit`, because the two destinations are two
+   * things: Run admits a document as an entry, and this sends a message to a
+   * conversation. One action meaning either would be decided by whichever text
+   * the reducer happened to look at.
+   */
+  | { readonly kind: "send-message" }
+  /**
+   * Stop whatever the Sidekick is doing.
+   *
+   * Only the Sidekick. An entry it already admitted belongs to the session and
+   * goes on running, and leaving the command is `exit` — a control that meant
+   * all three would be three decisions behind one key.
+   */
+  | { readonly kind: "stop-sidekick" }
   | { readonly kind: "select-surface"; readonly surface: ReplSurface }
+  /**
+   * Read one of the two right-hand panes.
+   *
+   * One member for both, because they are one choice: activating the Sidekick
+   * selects it as the reading as well, and activating Bindings puts the saved
+   * surface back. Two actions would be two places deciding one rule.
+   */
+  | { readonly kind: "select-pane"; readonly pane: ReplPane }
   /** Select a structural scope by its key path, outermost first. */
   | { readonly kind: "select-scope"; readonly scopes: readonly string[] }
   | { readonly kind: "open-drawer"; readonly drawer: ReplDrawerRef }
@@ -42,6 +67,65 @@ export type ReplAction =
   | { readonly kind: "continue" }
   /** Answer the question waiting right now, from the form as it stands. */
   | { readonly kind: "answer" }
+  /**
+   * Open the Sidekick's own question, which this key names.
+   *
+   * The key travels because the question it names is the only one this opens:
+   * a reply may finish and ask again while somebody is reaching for the
+   * control, and an opener that meant "whatever is pending" would open a
+   * different question from the one it was drawn for.
+   */
+  | { readonly kind: "open-sidekick-question"; readonly question: string }
+  /** Hide the Sidekick's question form, leaving the question pending. */
+  | { readonly kind: "close-sidekick-question" }
+  /** Give one field of the Sidekick's own form the focus text acts on. */
+  | {
+      readonly kind: "select-sidekick-field";
+      readonly question: string;
+      readonly field: string;
+    }
+  /** Put one offered value into one field of the Sidekick's own form. */
+  | {
+      readonly kind: "choose-sidekick";
+      readonly question: string;
+      readonly field: string;
+      readonly option: string;
+    }
+  /** Answer the Sidekick's own question this key names, from its form. */
+  | { readonly kind: "answer-sidekick"; readonly question: string }
+  /**
+   * Open Configure for this conversation, inspecting what its agent offers.
+   *
+   * The conversation travels because the choices belong to it: a drawer opened
+   * for one conversation cannot be applied to another, and a reply that
+   * finished and started a new one while somebody was reaching for this
+   * control would otherwise be configured by it.
+   */
+  | { readonly kind: "open-configure"; readonly conversation: string | undefined }
+  /** Ask the agent again for what it offers, explicitly. */
+  | { readonly kind: "refresh-configure" }
+  /** Hide Configure, discarding whatever was chosen and not applied. */
+  | { readonly kind: "close-configure" }
+  /** Choose one model, by the exact id the provider named. */
+  | { readonly kind: "choose-model"; readonly model: string }
+  /** Choose one effort level, which belongs to the model chosen now. */
+  | { readonly kind: "choose-effort"; readonly effort: string }
+  /** Give the agent-name field the focus text and Backspace act on. */
+  | { readonly kind: "name-agent" }
+  /** Save what Configure holds: a preference, or a replacement conversation. */
+  | { readonly kind: "apply-configure" }
+  /**
+   * Send the saved failed request this names again, as a new message.
+   *
+   * Its conversation and message id, because that is what names one saved
+   * request: the text is not evidence of which one, and two requests may read
+   * identically.
+   */
+  | {
+      readonly kind: "retry-message";
+      readonly conversation: string;
+      readonly message: number;
+    }
   /** Give this form field the focus that text and Backspace act on. */
   | { readonly kind: "select-field"; readonly field: string }
   /** Put one offered enum value into one field. */
@@ -54,6 +138,22 @@ export type ReplAction =
    * frame's to decide, and clamping belongs where the height is known.
    */
   | { readonly kind: "scroll"; readonly delta: number }
+  /**
+   * Move the Sidekick question form's own window by whole lines.
+   *
+   * Its own member for the same reason `scroll-sessions` is: the two question
+   * forms have two windows and two offsets, and one action meaning either would
+   * move whichever the reducer guessed.
+   */
+  | { readonly kind: "scroll-sidekick-question"; readonly delta: number }
+  /**
+   * Move Configure's own window by whole lines.
+   *
+   * Its own member for the same reason the question form's is: Configure is a
+   * pane-local drawer with a window of its own, and an agent that advertises
+   * more choices than it can draw has choices only scrolling can reach.
+   */
+  | { readonly kind: "scroll-configure"; readonly delta: number }
   /**
    * Move the Sessions reading by whole rows.
    *
@@ -80,6 +180,43 @@ export type ReplAction =
    * reader was not pointing at.
    */
   | { readonly kind: "scroll-reading"; readonly delta: number }
+  /**
+   * Open the chat that holds this saved Sidekick turn, and bring it into view.
+   *
+   * Its chat and its canonical ordinal, because that is what names one saved
+   * turn: a title is not evidence of which one, and two turns may read
+   * identically. It selects a *reading*, so it starts nothing, sends nothing
+   * and changes no conversation anybody may continue.
+   */
+  | {
+      readonly kind: "read-sidekick-turn";
+      readonly conversation: string;
+      /**
+       * Its canonical ordinal, or none for work no record holds yet.
+       *
+       * None still opens the chat — that is where the turn is — and brings
+       * nothing into view, because there is no saved row to bring. A predicted
+       * ordinal would be a statement about whichever turn this conversation
+       * happened to be on.
+       */
+      readonly turn: number | undefined;
+    }
+  /**
+   * Stop reading a saved chat and go back to the current one.
+   *
+   * Only the selector: the Sidekick stays the selected reading, the saved
+   * surface, the entry, the filter and the history position are untouched, and
+   * the current message draft comes back exactly as it was.
+   */
+  | { readonly kind: "read-current-chat" }
+  /**
+   * Move the Sidekick's chat by whole rows.
+   *
+   * Its own member for the same reason `scroll-sessions` is: a wide frame has
+   * the Sessions reading and a chat open at once, and one action meaning either
+   * would move whichever the reducer guessed.
+   */
+  | { readonly kind: "scroll-sidekick"; readonly delta: number }
   /**
    * Show only the conversation this provider session key names.
    *

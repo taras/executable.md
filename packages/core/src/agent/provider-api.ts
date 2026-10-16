@@ -24,7 +24,7 @@ import { type Api, createApi } from "@effectionx/context-api";
 import { ensure, type Operation } from "effection";
 import type { PermissionMode } from "./agent-api.ts";
 import type { AgentLaunchCoordinator } from "./launch-coordinator.ts";
-import type { AgentSessionPlacement } from "./session-placement.ts";
+import type { AgentSessionSetup } from "./session-setup.ts";
 
 export interface AgentProviderOptions {
   defaultAgent: string;
@@ -164,7 +164,7 @@ function deliveryOf(value: unknown): {
   }
   const perform = Reflect.get(launchCoordinator, "perform");
   const refuse = Reflect.get(launchCoordinator, "refuse");
-  const sessionPlacement = Reflect.get(launchCoordinator, "sessionPlacement");
+  const sessionSetup = Reflect.get(launchCoordinator, "sessionSetup");
   const checkpoint = Reflect.get(launchCoordinator, "checkpoint");
   const sessionUse = Reflect.get(launchCoordinator, "sessionUse");
   const registerSessionConfiguration = Reflect.get(
@@ -174,7 +174,7 @@ function deliveryOf(value: unknown): {
   if (
     typeof perform !== "function" ||
     typeof refuse !== "function" ||
-    typeof sessionPlacement !== "function" ||
+    typeof sessionSetup !== "function" ||
     typeof checkpoint !== "function" ||
     typeof sessionUse !== "function"
   ) {
@@ -188,8 +188,8 @@ function deliveryOf(value: unknown): {
       perform: (request, phases) => Reflect.apply(perform, launchCoordinator, [request, phases]),
       refuse: (request, preparation) =>
         Reflect.apply(refuse, launchCoordinator, [request, preparation]),
-      sessionPlacement: (request) =>
-        placementOf(Reflect.apply(sessionPlacement, launchCoordinator, [request])),
+      sessionSetup: (request) =>
+        sessionSetupOf(Reflect.apply(sessionSetup, launchCoordinator, [request])),
       checkpoint: (terminal, token) => {
         Reflect.apply(checkpoint, launchCoordinator, [terminal, token]);
       },
@@ -199,28 +199,45 @@ function deliveryOf(value: unknown): {
 }
 
 /**
- * What the terminal answered a placement with, read rather than believed.
+ * What the terminal answered a session setup with, read rather than believed.
  *
  * The handle settles one conversation, so a value that cannot do that is a
  * value this side refuses rather than hands to a provider.
  */
-function placementOf(value: unknown): AgentSessionPlacement {
+function sessionSetupOf(value: unknown): AgentSessionSetup {
   if (typeof value !== "object" || value === null) {
     throw new AgentProviderInstallError(
-      "the live agent provider installation answered a session placement with nothing that " +
+      "the live agent provider installation answered a session setup with nothing that " +
         "could settle it",
     );
   }
-  const complete = Reflect.get(value, "complete");
+  const activate = Reflect.get(value, "activate");
+  const finish = Reflect.get(value, "finish");
   const sessionIdentity = Reflect.get(value, "sessionIdentity");
-  if (typeof complete !== "function") {
+  if (typeof finish !== "function") {
     throw new AgentProviderInstallError(
-      "the live agent provider installation answered a session placement that settles nothing",
+      "the live agent provider installation answered a session setup that settles nothing",
+    );
+  }
+  if (typeof activate !== "function") {
+    // No fallback, and deliberately none. A setup that cannot be activated is
+    // one whose conversation could not say whether this provider may work
+    // against it, and treating that as authorization is exactly the
+    // reattachment the activation exists to prevent.
+    throw new AgentProviderInstallError(
+      "the live agent provider installation answered a session setup that authorizes nothing, " +
+        "so there is nothing here that could say whether this provider may work against the " +
+        "conversation it names",
     );
   }
   return {
     ...(typeof sessionIdentity === "string" ? { sessionIdentity } : {}),
-    complete: (session, state) => Reflect.apply(complete, value, [session, state]),
+    // Bound to the handle that answered, like `finish`: both are closures over
+    // one issuance in the copy of core that opened it, and calling either with
+    // any other receiver would reach a different copy's state or none.
+    activate: (provider, agentCommand, configuration) =>
+      Reflect.apply(activate, value, [provider, agentCommand, configuration]),
+    finish: (session, state) => Reflect.apply(finish, value, [session, state]),
   };
 }
 

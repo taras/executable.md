@@ -387,8 +387,8 @@ no generated TypeScript copy and no second Markdown implementation.
 
 The Component contains one enclosing `<Session>` expansion whose body holds every
 initial, repair and human-revision `<Prompt>`. A loop inside that one Session
-creates no second placement; sibling Sessions are not used, because sibling
-placements stay distinct even when their authored names match.
+creates no second session; sibling Sessions are not used, because sibling
+sessions stay distinct even when their authored names match.
 
 The host owns the provider instruction layer and the Agent ceiling. The Markdown
 owns the text of each generation, repair and revision request: the initial prompt
@@ -411,8 +411,8 @@ run. TypeScript supplies neither the words nor the choice between them.
 
 **The seven private capabilities.** They are components only these exact bytes may
 write, declared by the host with the definition and revoked with the execution.
-`<PlanInputs>` freezes the instruction identity, session placement, surface and
-whether that placement outlives the invocation, and refuses a continuation whose
+`<PlanInputs>` freezes the instruction identity, session name, surface and
+whether that session outlives the invocation, and refuses a continuation whose
 instructions render differently — as stale input, before a directory, a provider,
 a turn or a review exists. Paired `<PlanWriter>` installs the constrained
 frame and does not return until every part of it has torn down; paired
@@ -459,20 +459,20 @@ so the symbols and the question are two records that can be read and reconciled
 independently, and a missing, additional or mistyped member in either refuses
 before authorship begins.
 
-Whether the placement is durable is carried across that boundary rather than
+Whether the session is durable is carried across that boundary rather than
 re-derived, because `<PlanInputs>` is the last thing that sees the public
-`session` prop: a placement cannot be asked whether somebody wrote it. An
+`session` prop: a session name cannot be asked whether somebody wrote it. An
 authored name gets the existing durable named-directory lifetime — the same name
 at the same site reaches the same directory next time — and an omitted one gets
-an expansion-owned placement that is site- and iteration-unique, replay-stable,
+an expansion-owned session name that is site- and iteration-unique, replay-stable,
 and handed back non-recursively after complete teardown. Sibling sites stay
 distinct even when they write one name, and the name never becomes a path: the
-directory is keyed by the digest of the placement.
+directory is keyed by the digest of that name.
 
 **A host with no coding agent still has the Component.** `<Plan>` is declared to
 every ordinary run profile, including the `<Execution host="run">` child an
 `xmd test` document launches. A host that cannot establish the ACPX ceiling
-refuses there — before any placement, directory or turn — rather than reporting
+refuses there — before any session, directory or turn — rather than reporting
 a component nothing supplies, because the profile does have `<Plan>` and what is
 missing is an agent to write one with. The `xmd test` root itself is a different
 profile and does not gain the component. None of them is syntax any document may write — not
@@ -537,7 +537,7 @@ adapter it is about to launch and opens the form it is already serving
 No permission flag reaches this ceiling, because `xmd plan` defines none: the
 flags that select a permission mode belong to `xmd run`, and what settles
 authorship carries a provider and a default agent and nothing else. A provider
-that cannot establish this ceiling refuses before session materialization or a
+that cannot establish this ceiling refuses before session creation or a
 turn; there is no silent downgrade.
 
 The profile's working directory is
@@ -1094,7 +1094,7 @@ Help
 says plainly that the gate may not catch every sensitive detail and that the
 journal can contain prompts, drafts and review answers.
 
-An existing path is refused before symbol preparation, session placement, Agent
+An existing path is refused before symbol preparation, session naming, Agent
 startup, review or artifact creation, and is left byte-identical:
 
 ```text

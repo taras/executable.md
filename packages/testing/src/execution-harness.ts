@@ -88,7 +88,7 @@ import { DeclarationScan } from "@executablemd/core/host";
 import { cwd } from "@executablemd/runtime";
 import type {
   AnswerConfiguration,
-  AnswersPlacement,
+  AnswersState,
   ExecutionInstallation,
   TestHarness,
   TestHarnessBinding,
@@ -635,7 +635,7 @@ function* followScan(state: HarnessState, declared: DeclarationState): Operation
     exitList(): void {
       declared.depth -= 1;
     },
-    declaresAnswers(site: string): AnswersPlacement | undefined {
+    declaresAnswers(site: string): AnswersState | undefined {
       if (state.phase !== "scan") {
         return parsed.has(site) ? "parsed" : undefined;
       }

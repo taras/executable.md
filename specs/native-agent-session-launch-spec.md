@@ -100,7 +100,7 @@ feature reuses these contracts unchanged:
 - `Agent` selects the coding agent lexically, and is the availability boundary
   for what it wraps;
 - `Session` identifies stateful continuity lexically;
-- under ordinary `xmd run` ACPX placement, the contextual cwd participates in
+- under ordinary `xmd run` ACPX session resolution, the contextual cwd participates in
   the resolved logical session key;
 - the Agent provider belongs to `DocumentExecution` and finishes teardown before
   the document completes;
@@ -264,7 +264,7 @@ that issued it is live. The launch provider reads it through the coordinator
 delivered directly to that installation; a same-named Context, sibling run,
 retained post-teardown value or another loaded Core copy cannot supply that
 owner. Provider teardown invalidates lookup before a later launch can prepare
-anything. Placement completion and its registration state do not participate in
+anything. Finishing a session setup and its registration state do not participate in
 launch admission: `AgentLaunchRequest` remains the launch's one-use identity.
 
 Raw prepared instructions never appear in process arguments or environment
@@ -524,7 +524,7 @@ that turn is accepted:
     **fresh** session on an adapter that owes a materialization turn does not:
     creation yields provisional occupancy and asserts no native identity at all.
 11. XMD commits the prepared launch record before releasing ownership. For an
-    already-established session it carries the asserted identity and **no**
+    already-existing session it carries the asserted identity and **no**
     materialization plan, and no turn is spent. For a fresh one it carries an
     **empty** `nativeSessionId`, its executable binding, and the exact
     materialization plan this launch owes.
@@ -585,7 +585,7 @@ From there both rejoin:
 13. The provider spawns the native UI as an interactive child with the root
     terminal inherited — resuming, for a provider-returned adapter,
     the identity its materialization turn asserted, or the one an
-    already-established session already had; and for a client-allocated one
+    already-existing session already had; and for a client-allocated one
     creating it under the allocated identity from the private file, or resuming
     it by the same name when the route already named it. No provider-returned
     path reaches this step without an asserted identity.
@@ -618,7 +618,7 @@ ownership, and continuation after the UI closes.
 A `<Session>` or `<Prompt>` naming a session a native process constructed runs
 this sequence, and every step happens while the coordinator holds the session:
 
-1. Resolve placement without creating a runtime or probing availability, so
+1. Resolve the session without creating a runtime or probing availability, so
    nothing touches the provider session before the route has been read.
 2. Acquire the same machine coordinator, non-blockingly.
 3. Read and classify the route. `acp-first` follows the existing ACP path; a
@@ -698,14 +698,14 @@ are met rather than a further invariant beside them:
   only when no unreleased handle for the session remains, whether or not it ever
   became usable.
 - **A settled close leaves only the session's name behind.** What a returned
-  `Session` value still resolves to is placement metadata; the handle and the
+  `Session` value still resolves to is session metadata; the handle and the
   runtime that made it are gone from everything this provider can reach. A
   runtime carries the transient child environment, and therefore the canonical
   executable path, so a released session that still named one would be that path
   outliving the operation it was observed for. The next use of that value
   re-ensures, which reattaches to whatever holds the session now.
 - **A close that failed released nothing.** It does not decrement the
-  partition, evict it, forget the handle, detach the placement, or let the
+  partition, evict it, forget the handle, detach the session, or let the
   operation acknowledge quiescence. The refusal is still raised; what differs is that this
   scope still has something to answer for, and the handle stays reachable for
   teardown.
@@ -904,18 +904,18 @@ overwrites, deletes, converts or partially reads it.
 Reconciliation happens while ownership is held, before any provider
 construction effect:
 
-1. a fresh `session()` publishes nothing. It places the session — validating the
+1. a new `session()` publishes nothing. It names the session — validating the
    agent and where the session will live — and constructs nothing, so the first
-   operation that consumes that placement is what chooses the route. A
-   `session()` on a placement that is already established reconciles its route
+   operation that consumes that request is what chooses the route. A
+   `session()` on a session that already exists reconciles its route
    eagerly, as it always has;
-2. the first subscribed prompt on a pending placement publishes or adopts
+2. the first subscribed prompt on a new session publishes or adopts
    `acp-first` before ACP runtime creation, `ensureSession()` or a turn, and a
    turn that fails, is interrupted, or is never accepted by the backend
    afterwards leaves that route standing: provider state may exist before the
    caller observed the failure, and preserving the route is what stops that
    uncertainty from later being reclassified. An `acp-first` route by itself is
-   not establishment;
+   not creation;
 3. a launch by an adapter that names its own sessions reads both the route and
    existing durable ACPX state; existing state publishes or adopts `acp-first`,
    and otherwise the adapter allocates a candidate and publishes `client-native`;
@@ -928,7 +928,7 @@ construction effect:
    [ACP attachment on a bound route](#acp-attachment-on-a-bound-route), including
    advertisement, exact build and canonical assertion checks.
 
-The resolved agent command is carried from placement through the coordinator
+The resolved agent command is carried from session resolution through the coordinator
 key, the route key and provider work. It is never resolved a second time inside
 ownership, because a registry free to answer differently would name a different
 session than the one this operation prepared.
@@ -1413,7 +1413,7 @@ degrading:
   successful preparation retains one canonical `configuration`. A launch that
   could not apply them refuses with `configuration-refused` and retains no
   configuration. Core issued the frozen session use that carried both the exact
-  provider Session that completed its placement and these settings; the provider retains no
+  provider Session that finished its setup and these settings; the provider retains no
   desired-settings association, and a rebuilt use authorizes nothing. Middleware
   may route another whole Session, and the preparation describes only the final
   route that actually succeeded.

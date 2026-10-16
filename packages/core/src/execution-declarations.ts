@@ -692,8 +692,8 @@ export interface StructuralRelationship {
   readonly children: readonly string[];
 }
 
-/** What one occurrence's placement decided: its violations and its regions. */
-export interface StructuralPlacement {
+/** What one occurrence's analysis decided: its violations and its regions. */
+export interface StructuralAnalysis {
   readonly violations: readonly StructuralViolation[];
   /** The accepted direct regions, in the order they were authored. */
   readonly regions: readonly ComponentElement[];
@@ -704,25 +704,25 @@ export interface StructuralPlacement {
  * alone.
  *
  * Both non-executing validation and canonical expansion read this, so a
- * placement one of them accepts is a placement the other accepts. The
+ * structure one of them accepts is a structure the other accepts. The
  * construct's own name is the element's: selection already decided that this
  * element is this declaration.
  */
-export function structuralPlacement(
+export function analyzeStructure(
   segment: ComponentElement,
   declaration: StructuralRelationship,
   /** The construct this element is written directly inside, if any. */
   enclosing: string | undefined,
-): StructuralPlacement {
+): StructuralAnalysis {
   return declaration.parent === null
-    ? constructPlacement(segment, declaration.children)
-    : regionPlacement(segment.name, declaration.parent, enclosing);
+    ? analyzeConstruct(segment, declaration.children)
+    : analyzeRegion(segment.name, declaration.parent, enclosing);
 }
 
-function constructPlacement(
+function analyzeConstruct(
   segment: ComponentElement,
   children: readonly string[],
-): StructuralPlacement {
+): StructuralAnalysis {
   const violations: StructuralViolation[] = [];
   const regions: ComponentElement[] = [];
   const accepted = new Set(children);
@@ -749,11 +749,11 @@ function constructPlacement(
   return { violations, regions };
 }
 
-function regionPlacement(
+function analyzeRegion(
   name: string,
   parent: string,
   enclosing: string | undefined,
-): StructuralPlacement {
+): StructuralAnalysis {
   if (enclosing === parent) {
     return { violations: [], regions: [] };
   }

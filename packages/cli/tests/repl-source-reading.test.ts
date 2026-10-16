@@ -1119,3 +1119,59 @@ describe("S5 a reading is measured once for the inputs it was measured for", () 
       expect(settled.value.rows.every((one) => one.badge === undefined)).toBe(true);
     }));
 });
+
+/**
+ * S6 a reading longer than one measuring render (A1).
+ *
+ * The engine takes a bounded number of elements per render, and a finished
+ * reading is as long as the entry that produced it: a viewport limits what is
+ * drawn, never what exists. Measuring every candidate in one render therefore
+ * failed on a long enough entry, and failed misleadingly — the engine reported
+ * unbalanced structure for a perfectly balanced list, which is not a capacity
+ * refusal and so came back as a real error before any frame could be drawn.
+ *
+ * Both arms go through the real fitter and a real engine. The short one is the
+ * control that always worked; the long one is past the old ceiling, which sat
+ * between 4,000 and 4,096 rows.
+ */
+describe("S6 a reading longer than one measuring render is still measured whole", () => {
+  for (const count of [900, 5000]) {
+    it(`recovers all ${count} lines, their exact text and their written order`, () =>
+      withRenderer(function* (renderer) {
+        const lines = linesOf(longSource(count));
+        const prepared = yield* prepareReading(renderer, WIDE, lines, 100);
+        if (!prepared.ok) {
+          throw prepared.error;
+        }
+
+        // Every logical line is there, and no row belongs to a line that was
+        // not asked for.
+        const whole = recovered(prepared.value);
+        expect(whole.size).toBe(lines.length);
+
+        // Exact text, line by line, blank ones included: nothing dropped,
+        // trimmed, shortened or invented to make the engine accept the list.
+        for (const line of lines) {
+          expect([line.key, whole.get(line.key)]).toEqual([line.key, line.text]);
+        }
+
+        // And in the order they were written. The rows arrive as one run per
+        // line, so the lines in row order are the reading's own sequence —
+        // which is the claim a batched measurement could break by returning
+        // its answers out of order.
+        const order: string[] = [];
+        for (const row of prepared.value.rows) {
+          if (order[order.length - 1] !== row.line) {
+            order.push(row.line);
+          }
+        }
+        expect(order).toEqual(lines.map((one) => one.key));
+
+        // Every row still carries exactly its own text through its runs, so a
+        // width answered from the wrong batch would show up here.
+        for (const row of prepared.value.rows) {
+          expect(runText(row.runs)).toBe(row.text);
+        }
+      }));
+  }
+});

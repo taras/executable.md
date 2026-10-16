@@ -3,7 +3,7 @@
  * (specs/test-agent-spec.md, "Configuring one nested run").
  *
  * The wrapper form scripts the Agent an assertion body reaches. This is the
- * other placement: written as a direct declaration in an
+ * other position: written as a direct declaration in an
  * `<Execution host="run">` prefix, `<TestAgent>` scripts the Agent the *child*
  * reaches, and the child is a document nobody edited to be testable.
  *

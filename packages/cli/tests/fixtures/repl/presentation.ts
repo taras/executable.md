@@ -446,7 +446,7 @@ export interface Drawn<T> {
   readonly admission: ReplAdmission;
   readonly mounted: readonly string[];
   /**
-   * The keys this frame **placed**, in placement order.
+   * The keys this frame **placed**, in layout order.
    *
    * Placed, not merely mounted: a description whose box the manifest left out
    * contributes no cell and no target, and the whole point of asking is to tell
@@ -459,11 +459,11 @@ export interface Drawn<T> {
   cellOf(key: string): string | undefined;
   boundsOf(key: string): ReplBounds | undefined;
   regionOf(id: string): ReplBounds | undefined;
-  /** The keys this frame placed in one region, in placement order. */
+  /** The keys this frame placed in one region, in layout order. */
   inRegion(region: string): readonly string[];
   /** Where one named region landed, read from the committed frame. */
   boundsOfRegion(region: string): ReplBounds | undefined;
-  /** Every region this frame placed, in placement order. */
+  /** Every region this frame placed, in layout order. */
   readonly regions: readonly string[];
   tree: ReplTree<T>;
 }
@@ -750,6 +750,7 @@ export function measuringContext(size: ReplTerminalSize): ReplPresentationContex
       surface: size.columns,
       list: size.columns,
       inspection: size.columns,
+      body: size.columns,
       drawer: size.columns,
     },
     admission: NOTHING_ADMITTED,
@@ -757,10 +758,17 @@ export function measuringContext(size: ReplTerminalSize): ReplPresentationContex
     entriesWindowed: false,
     entriesRows: undefined,
     capture: "capture",
-    // The measuring pass has no fitted reading or preview, which is what makes
-    // it the pass that asks how wide the panes holding them are.
+    // The measuring pass has no fitted reading, preview or chat, which is what
+    // makes it the pass that asks how wide the panes holding them are.
     reading: undefined,
     preview: undefined,
+    chat: undefined,
+    // One blank value row: the composer's minimum, which is what a pass that
+    // has measured nothing describes.
+    message: Object.freeze([""]),
+    // One blank guidance row, which is the geometry this pass asks about.
+    guidance: Object.freeze([""]),
+    refusal: undefined,
     rail: undefined,
   };
 }

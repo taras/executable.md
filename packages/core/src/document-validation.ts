@@ -4,7 +4,7 @@
  * A host that generated a program, or received one, needs to know whether it is
  * a program at all before it asks a person to approve it. That question is
  * answerable: component resolution, declaration admission, authored forms, body
- * shape, structural placement and prop schemas are all decided from source and
+ * shape, structure and prop schemas are all decided from source and
  * from what the host declared, never from a value the document computes.
  *
  * So this reads. It applies ordinary target selection to the supplied root,
@@ -35,7 +35,7 @@ import {
 import type { BodyStructureFacts } from "./body-structure.ts";
 import { Component } from "./component-api.ts";
 import { declaredRegistry } from "./components/declared-registry.ts";
-import { admitExecutionDeclarations, structuralPlacement } from "./execution-declarations.ts";
+import { admitExecutionDeclarations, analyzeStructure } from "./execution-declarations.ts";
 import type {
   ExecutionDeclaration,
   ExecutionDeclarationCatalog,
@@ -861,12 +861,11 @@ class ValidationState {
       if (admitted === undefined) {
         throw new Error(`${segment.name} resolved as declared structural syntax nothing admitted`);
       }
-      // Placement first, from the shared analysis canonical expansion reads, so
+      // Structure first, from the shared analysis canonical expansion reads, so
       // a region reported for sitting outside its construct is not also
       // reported for the props it wrote there. Both are decided from source;
       // neither reaches the installation's handler or expands a region body.
-      for (const violation of structuralPlacement(segment, admitted, context.enclosing)
-        .violations) {
+      for (const violation of analyzeStructure(segment, admitted, context.enclosing).violations) {
         const anchor = violation.element ?? segment;
         const token = this.#draft(context.entry.ordinal, violation.code, {
           message: violation.message,

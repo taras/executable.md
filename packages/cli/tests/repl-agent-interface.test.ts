@@ -28,6 +28,7 @@ import {
 } from "effection";
 import type { Operation, Result, Stream, Subscription } from "effection";
 import { DurableContext, InMemoryStream } from "@executablemd/durable-streams";
+import { DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import {
   Agent,
   agentIdentityComponents,
@@ -48,6 +49,7 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
 
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { agentReferenceEvents } from "./fixtures/repl/reference.ts";
+import { ENTRIES_FILE, PAIRED_DIRECTORY } from "../src/repl/sidekick/history.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
@@ -88,7 +90,9 @@ import type { ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { ReplClock } from "../src/repl/frame.ts";
 import { runReplProgram } from "../src/repl/program.ts";
+import { entryVocabulary } from "../src/repl-profile.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
+import { NO_PLUGINS } from "../src/plugin-host.ts";
 import type { ReplOutcome } from "../src/repl/program.ts";
 import { appendFile, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -100,6 +104,7 @@ import { useReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplRenderer } from "../src/repl/renderer.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import type { ReplTree } from "../src/repl/reconcile.ts";
+import { sidekickAssembly } from "../src/repl/sidekick/assembly.ts";
 
 /** The widest accepted frame, stated here because layout keeps it private. */
 const WIDE = { columns: 160, rows: 36 };
@@ -434,6 +439,14 @@ const PROFILE: ReplExecutionProfile = {
   installations: [{ components: agentIdentityComponents() }],
   generated: ordinaryGeneratedSelection(),
   permissionMode: "approve-reads",
+  // No row here opens a Sidekick conversation, so the selection is the one an
+  // unconfigured command settles.
+  sidekickAgent: DEFAULT_AGENT_NAME,
+  // Declared because a profile carries one, and never installed: no row here
+  // opens a Sidekick conversation.
+  sidekickAssembly: sidekickAssembly(DEFAULT_AGENT_NAME, {}),
+  plugins: NO_PLUGINS.plugins.map((plugin) => plugin.name),
+  vocabulary: entryVocabulary([], NO_PLUGINS),
 };
 
 function installations(): readonly ExecutionInstallation[] {
@@ -581,7 +594,7 @@ interface Frame {
   cell(key: string): string | undefined;
   /** Where one placed row's own cell landed. */
   boundsOf(key: string): ReplBounds | undefined;
-  /** The keys this frame placed in one region, in placement order. */
+  /** The keys this frame placed in one region, in layout order. */
   inRegion(name: ReplRegion): string[];
   /** Where one named region landed. */
   region(name: ReplRegion): ReplBounds | undefined;
@@ -3818,7 +3831,11 @@ describe("U2 — a pending permission announces itself without taking the screen
  */
 function* focusTheDraft(terminal: Terminal, limit = 240): Operation<void> {
   for (let press = 0; press <= limit; press += 1) {
-    if (screenOf(terminal).some((line) => line.includes(">> "))) {
+    // The draft's own row, not any focused field. This screen has two input
+    // destinations now — the draft and `Message Sidekick` (#883 section 5) — and
+    // both wear the same focus marker, so a helper looking for the marker alone
+    // stops at whichever it reaches first and types an entry into a chat box.
+    if (screenOf(terminal).some((line) => line.includes(`>> ${DRAFT_PROMPT}`))) {
       return;
     }
     terminal.feed("\t");
@@ -3848,11 +3865,17 @@ function* focusTheDraft(terminal: Terminal, limit = 240): Operation<void> {
  */
 function* admittedSources(hostRoot: string): Operation<readonly string[]> {
   const directory = join(hostRoot, "xmd", "repl");
-  const files = yield* readdir(directory);
-  // One execution, so one file. More than one would mean this row read a
-  // history it did not write, and picking the first would hide that.
-  expect(files).toHaveLength(1);
-  const events = yield* readRecords(join(directory, files[0] ?? ""));
+  const held = yield* readdir(directory);
+  // One execution, so one entry in the repository. More than one would mean
+  // this row read a history it did not write, and picking the first would hide
+  // that. A published pair keeps its entries inside `v1/<execution>/`, so the
+  // one entry here is that directory.
+  expect(held).toHaveLength(1);
+  const executions = yield* readdir(join(directory, PAIRED_DIRECTORY));
+  expect(executions).toHaveLength(1);
+  const events = yield* readRecords(
+    join(directory, PAIRED_DIRECTORY, executions[0] ?? "", ENTRIES_FILE),
+  );
   const projected = projectRepl(events);
   if (!projected.ok) {
     throw projected.error;

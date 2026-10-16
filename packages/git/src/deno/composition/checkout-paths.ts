@@ -1,13 +1,13 @@
 /**
  * Where a named Repository or Worktree lands in the Workspace.
  *
- * The provider owns placement, and a name is identity rather than a path. Two
+ * The provider owns these paths, and a name is identity rather than a path. Two
  * documents may name a Repository `../etc` and `project`, and both must land
  * somewhere inside the Workspace without one being able to reach the other or
  * to escape.
  *
  * A slot is therefore a readable stem and a digest of the whole identity. The
- * digest is what makes placement collision-free — two distinct identities have
+ * digest is what makes the paths collision-free — two distinct identities have
  * distinct slots even when their stems collapse to the same characters — and the
  * stem is what makes a retained path legible to somebody reading the database.
  * Neither half is parsed back: the retained `checkout_path` column is the

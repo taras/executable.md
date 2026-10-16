@@ -682,7 +682,7 @@ export function carriesEmbeddedAdapter(adapters: EmbeddedAdapters, agentName: st
  * preparation would materialize an adapter and then run whatever `npx` resolved.
  *
  * Preparation happens at the first point the provider would run that command,
- * which is its availability probe — earlier than a `<Session>` placement, and
+ * which is its availability probe — earlier than a `<Session>` request, and
  * earlier than any turn. A snapshot that cannot prove itself refuses the agent
  * there rather than surfacing later as an adapter that would not start.
  *

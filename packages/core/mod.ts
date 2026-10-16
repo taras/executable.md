@@ -94,7 +94,11 @@ export {
 export type { PreparedElicitation } from "./src/elicit.ts";
 
 export { canonicalize, canonicalFingerprint } from "./src/canonical.ts";
-export { isJsonObject } from "./src/json.ts";
+// What "JSON" means here, for a host that has to hand Core a value Core will
+// hold: an installed provider declaring its own validated configuration parses
+// it through the same reader Core would, rather than guessing which values
+// would survive the journal.
+export { isJsonObject, JsonParseError, parseJson } from "./src/json.ts";
 export { walkSchema } from "./src/schema-walk.ts";
 export type { NameKind, SchemaVisitor } from "./src/schema-walk.ts";
 
@@ -117,7 +121,7 @@ export type {
  */
 export { formDispatcher } from "./src/invocation-identity.ts";
 /**
- * The opaque session placement a `<Session>` element routes. A handler reads its
+ * The opaque session request a `<Session>` element routes. A handler reads its
  * descriptive name; only the delivered launch coordinator reads the engine identity.
  */
 export { AgentSessionProtocolError, isSessionRequest } from "./src/agent/session-request.ts";
@@ -393,13 +397,14 @@ export type {
 export { AgentLaunchProtocolError } from "./src/agent/launch-request.ts";
 export type { AgentLaunchRequest } from "./src/agent/launch-request.ts";
 export type { AgentLaunchPhases, AgentLaunchCoordinator } from "./src/agent/launch-coordinator.ts";
-// What settles one placement. A provider receives the handle through the
+// What settles one session setup. A provider receives the handle through the
 // coordinator delivered to its factory; the types are here so it can name them.
 export type {
-  AgentSessionPlacement,
-  AgentSessionPlacementState,
+  AgentSessionSetup,
+  AgentSessionSetupState,
   ConfigureAgentSession,
-} from "./src/agent/session-placement.ts";
+  ProviderSessionConfiguration,
+} from "./src/agent/session-setup.ts";
 // The checkpoint type, because the coordinator's signature names it. The carrier
 // itself is exported from nowhere: writing one is reachable only through a
 // delivered coordinator, and reading one only from the prompt core is running.

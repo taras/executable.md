@@ -49,7 +49,7 @@ import type {
   ReplDescription,
   ReplInputEvent,
   ReplNode,
-  ReplPlacement,
+  ReplLayout,
   ReplViewData,
 } from "./description.ts";
 
@@ -69,7 +69,7 @@ interface Mounted<Action> {
   key: string;
   component: ReplComponent<Action>;
   input: { value: ReplViewData };
-  placement: ReplPlacement;
+  layout: ReplLayout;
   onInput: { handle: ((input: ReplViewData) => void) | undefined };
   detach: { run: (() => void) | undefined };
   /** The bound pop of this node's modal focus root, when it pushed one. */
@@ -113,6 +113,22 @@ export type ReplDispatched<Action> =
 
 /** The mounted tree, as the application drives it. */
 export interface ReplTree<Action> {
+  /**
+   * Judge a set without mounting it.
+   *
+   * The same whole-set judgment `apply()` makes, asked ahead of time: what is
+   * described, whether two children share a key, whether two request focus and
+   * whether a focus request sits inside the open modal. It attaches, updates,
+   * draws and removes nothing, moves focus nowhere and leaves the frame where
+   * it was.
+   *
+   * Synchronous, because judging a described set reads nothing but the set.
+   *
+   * An `Ok` is an answer about these values, not a reservation: nothing is
+   * held, and `apply()` judges whatever it is actually given rather than
+   * trusting that it was asked about first.
+   */
+  validate(descriptions: readonly ReplDescription<Action>[]): Result<void>;
   /** Reconcile the root's children to exactly this set. */
   apply(descriptions: readonly ReplDescription<Action>[]): Operation<Result<void>>;
   /** The frame the tree contributes as it stands. */
@@ -141,9 +157,7 @@ export interface ReplTree<Action> {
  * parented to Effection's global would outlive its owner and raise node
  * failures into a boundary nobody is watching.
  */
-export function* useReplTree<Action>(
-  placementsAllowed?: (placement: ReplPlacement, parent: string) => boolean,
-): Operation<ReplTree<Action>> {
+export function* useReplTree<Action>(): Operation<ReplTree<Action>> {
   const root: Root = yield* useRoot();
   const owner: Scope = yield* useScope();
   useFocus(root.node);
@@ -186,7 +200,7 @@ export function* useReplTree<Action>(
       key: described.key,
       component: described.component,
       input: { value: described.input },
-      placement: described.placement,
+      layout: described.layout,
       onInput: { handle: undefined },
       detach: { run: undefined },
       pop: { release: undefined },
@@ -222,8 +236,8 @@ export function* useReplTree<Action>(
       get input() {
         return state.input.value;
       },
-      get placement() {
-        return state.placement;
+      get layout() {
+        return state.layout;
       },
       onInput(handle: (input: ReplViewData) => void) {
         state.onInput.handle = handle;
@@ -271,7 +285,7 @@ export function* useReplTree<Action>(
         state.component === described.component
       ) {
         state.input.value = described.input;
-        state.placement = described.placement;
+        state.layout = described.layout;
         state.claimsFocus = described.focus;
         // A preserved node whose modal intent changed pushes or pops in the
         // stack pass below, without losing the lifetime it already has.
@@ -434,7 +448,7 @@ export function* useReplTree<Action>(
       yield* outstanding;
     }
 
-    const judged = validateDescriptions(descriptions, placementsAllowed);
+    const judged = validateDescriptions(descriptions);
     if (!judged.ok) {
       // Nothing has been touched: the whole set was judged before the first
       // node was created, so the previous tree is exactly what it was.
@@ -465,7 +479,7 @@ export function* useReplTree<Action>(
 
     // A description may claim focus, and exactly one can: the validator
     // refused the set otherwise. Focus intent is its own thing rather than a
-    // member of the placement a parent chose, because placement is opaque to
+    // member of the layout a parent chose, because the layout is opaque to
     // everyone but that parent and focus is the tree's.
     const mountedNodes = walkMounted(root.node, []);
     for (const node of mountedNodes) {
@@ -507,6 +521,13 @@ export function* useReplTree<Action>(
   }
 
   return {
+    validate(descriptions: readonly ReplDescription<Action>[]): Result<void> {
+      // The commit's own judgment, asked without committing. Nothing is taken
+      // and nothing is recorded: a set judged here is judged again from the
+      // values `apply()` receives, so an answer that has gone stale cannot let
+      // anything through.
+      return validateDescriptions(descriptions);
+    },
     *apply(descriptions: readonly ReplDescription<Action>[]): Operation<Result<void>> {
       yield* take();
       try {

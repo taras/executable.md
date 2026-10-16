@@ -37,7 +37,9 @@ import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
 import { durableRun, InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
-import { content } from "../src/component-api.ts";
+import { Component, content } from "../src/component-api.ts";
+import { Elicitation } from "../src/elicitation-api.ts";
+import type { ElicitationRequest } from "../src/elicitation-api.ts";
 import { pinnedJson } from "../src/generated-xmd.ts";
 import { useSelection } from "./support/generated-selection.ts";
 import { answerProvider } from "./support/answer-provider.ts";
@@ -187,6 +189,15 @@ interface Ceilings {
   readonly observations?: readonly GeneratedObservation[];
   readonly mutations?: readonly GeneratedMutation[];
   readonly allow?: readonly ("read" | "write")[];
+  /**
+   * Further names this host selects without answering for them itself.
+   *
+   * For a *protected* component, which is the only kind a host selects and does
+   * not supply: canonical resolution answers for it from core's own tier, and
+   * the capture retains that exact implementation. A provider published beside
+   * it would be a second definition for one name.
+   */
+  readonly protectedNames?: Readonly<Record<string, readonly InvocationForm[]>>;
 }
 
 /**
@@ -229,7 +240,10 @@ function request(source: string, ceilings: Ceilings = {}): Candidate {
   const observations = stated.length > 0 ? stated : [countedProbe([])];
   const mutations = ceilings.mutations ?? [];
   const entries = [...observations, ...mutations];
-  const selection = Object.fromEntries(entries.map((entry) => [entry.name, formsOf(entry)]));
+  const selection = {
+    ...Object.fromEntries(entries.map((entry) => [entry.name, formsOf(entry)])),
+    ...(ceilings.protectedNames ?? {}),
+  };
   return {
     root: {
       id: "turn-1",
@@ -250,9 +264,10 @@ function request(source: string, ceilings: Ceilings = {}): Candidate {
       // and seals what it retained.
       componentAnswers: entries.map((entry) => answerProvider(entry.name, entry.definition)),
       *install(): Operation<void> {
-        // Canonical `<Syntax />` is not selected here: the root evaluator admits
-        // the exact implementation its execution minted, and naming it as well
-        // would be two definitions for one name.
+        // Canonical `<Syntax />` is not selected here by default: the root
+        // evaluator already carries the exact implementation its execution
+        // minted. A row that wants a protected name in the table states it as
+        // `protectedNames`, with no provider of its own.
         yield* useSelection(selection);
       },
     },
@@ -1465,5 +1480,234 @@ describe("Tier GR — a root describes its own vocabulary", () => {
 
     // And once the execution is gone, so is the route it minted the body in.
     expect(identity.componentRouting.body(syntax.fn)).toBe(undefined);
+  });
+});
+
+/**
+ * Tier GR — the canonical question, admitted into a generated root.
+ *
+ * A reply that is about to write something a person has to agree to needs one
+ * thing a ceiling cannot give it by withholding: a way to ask. A host selects
+ * `Elicit` the way it selects any other name, and because `<Elicit>` is
+ * protected, what the capture retains is core's own definition — so the
+ * question a generated root asks is the same question an authored document
+ * asks: same schema preparation, same durable question identity, same
+ * validation of the answer. The answer arrives through ordinary `as` capture
+ * rather than through anything this boundary invents.
+ *
+ * What the rows below are about is that it is *core's* `<Elicit>`. The name is
+ * ordinary: a repository component, a nested registration or a middleware
+ * replacement can take it, and a question answered by whoever last took the
+ * name would be a question nobody admitted. The captured entry carries the
+ * definition canonical resolution answered with before the root import, and
+ * the invocation reaches the installed Elicitation provider through it.
+ *
+ * It is admitted paired and in the write class. The question is the content, so
+ * a self-closing spelling is a request with nothing in it — refused in
+ * preflight, before an earlier element has run and before anyone is asked — and
+ * `allow={["read"]}` admits source that may look at things without anyone being
+ * interrupted, which is a promise source that can ask would break.
+ */
+describe("Tier GR — a root asks the canonical question", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** The answer shape these rows ask for, written the way a reply writes one. */
+  const DECISION = {
+    type: "object",
+    properties: { decision: { type: "string", enum: ["approve", "reject"] } },
+    required: ["decision"],
+    additionalProperties: false,
+  } as const;
+
+  /**
+   * One question element, with its schema as the declarative data a generated
+   * root may write.
+   *
+   * An object literal and nothing else: §5.3.3 admits JSON literals, arrays,
+   * objects and the source's own bindings, so a schema a reply states is a
+   * value it wrote rather than one it computed.
+   */
+  function asking(body: string): string {
+    return `<Elicit schema={${JSON.stringify(DECISION)}} as="answer">${body}</Elicit>`;
+  }
+
+  /**
+   * Install an Elicitation provider on the *calling* scope, and hand back what
+   * it was asked.
+   *
+   * Not a resource: middleware installs on the scope that runs the install, and
+   * the held execution these rows evaluate in is a child of this one. `at:
+   * "min"` is the position a provider must install at — the default lets an
+   * outer install shadow it, which is the opposite of what a provider is.
+   */
+  function* installProvider(
+    answer: (request: ElicitationRequest, index: number) => Operation<unknown>,
+  ): Operation<ElicitationRequest[]> {
+    const asked: ElicitationRequest[] = [];
+    yield* Elicitation.around(
+      {
+        *elicit([request]) {
+          asked.push(request);
+          return yield* answer(request, asked.length - 1);
+        },
+      },
+      { at: "min" },
+    );
+    return asked;
+  }
+
+  /** What one asking root produced, and everything it touched on the way. */
+  interface Asked {
+    readonly attempt: Attempt;
+    /** Every question the provider was given, in order. */
+    readonly asked: readonly ElicitationRequest[];
+    /** Every counted observation that ran, so a refusal can be shown to cost none. */
+    readonly performed: readonly string[];
+    /** Every name the document's own import chain was asked to answer. */
+    readonly imported: readonly string[];
+  }
+
+  /**
+   * Evaluate one root that admits the canonical question.
+   *
+   * `replace` installs a same-name component in the *document's* chain, which
+   * is the scope the evaluation runner is attached inside — the same position
+   * GR28b uses, and the only one where a replacement could reach the root at
+   * all. A replacement in a sibling caller scope would prove nothing.
+   */
+  function ask(
+    source: string,
+    answer: (request: ElicitationRequest, index: number) => Operation<unknown>,
+    options: { readonly replace?: boolean } = {},
+  ): Operation<Asked> {
+    return scoped(function* () {
+      const asked = yield* installProvider(answer);
+      const performed: string[] = [];
+      const imported: string[] = [];
+      if (options.replace === true) {
+        /** A second definition under core's name, answering something else. */
+        const substitute: FunctionComponentDefinition = {
+          kind: "function",
+          name: "Elicit",
+          props: { type: "object", properties: { schema: {} }, additionalProperties: true },
+          // deno-lint-ignore require-yield
+          *fn(): Operation<Json> {
+            return { decision: "approve", by: "the replacement" };
+          },
+        };
+        yield* Execution.around({
+          *document([claimed], next) {
+            yield* Component.around(
+              {
+                *importComponent([name], nextImport) {
+                  imported.push(name);
+                  if (name === "Elicit") {
+                    return substitute;
+                  }
+                  return yield* nextImport(name);
+                },
+              },
+              { at: "min" },
+            );
+            yield* next(claimed);
+          },
+        });
+      }
+      const attempt = yield* evaluateRoot(
+        request(source, {
+          observations: [countedProbe(performed)],
+          // Selected by name, with no provider beside it. `<Elicit>` is
+          // protected, so canonical resolution answers for it from core's own
+          // tier and the capture retains that exact definition — which is what
+          // makes the question the one an authored document asks. Its
+          // declaration offers only the paired spelling, and offers it as a
+          // write, so the form and the class are the owner's statement rather
+          // than this row's.
+          protectedNames: { Elicit: ["paired"] },
+          allow: ["read", "write"],
+        }),
+      );
+      return { attempt, asked, performed, imported };
+    });
+  }
+
+  it("GR30: a paired question asks the installed provider once and binds its answer", function* () {
+    const outcome = yield* ask(
+      `${asking("Approve the plan?")}\n\n<Output>\n<Json value={answer} />\n</Output>\n`,
+      // deno-lint-ignore require-yield
+      function* () {
+        return { decision: "approve" };
+      },
+    );
+
+    // Asked once, with the two things a question is: the rendered content as
+    // the message, and the normalized schema the answer must satisfy.
+    expect(outcome.asked).toHaveLength(1);
+    expect(outcome.asked[0].message).toContain("Approve the plan?");
+    expect(outcome.asked[0].schema).toEqual(DECISION);
+
+    // And the validated structured value arrived under `as`, through ordinary
+    // capture — `<Json>` renders the value it was handed, so what the root
+    // rendered is the answer the provider gave rather than text the element
+    // wrote. Parsed, so the row is about the value and not about how the
+    // rendering spaced it.
+    expect(JSON.parse(rendered(outcome.attempt).output)).toEqual({ decision: "approve" });
+  });
+
+  it("GR30b: an answer the schema rejects fails the root, and keeps what it rendered", function* () {
+    const outcome = yield* ask(
+      `<Output>\nasking\n</Output>\n\n${asking("Approve the plan?")}\n`,
+      // deno-lint-ignore require-yield
+      function* () {
+        return { decision: "maybe" };
+      },
+    );
+
+    // Validation is the canonical component's, unchanged: the provider was
+    // reached, and what it answered is held to the schema the source stated.
+    expect(outcome.asked).toHaveLength(1);
+    const failure = failed(outcome.attempt);
+    expect(failure.partial?.hasOutput).toBe(true);
+    expect(failure.partial?.output).toContain("asking");
+  });
+
+  it("GR31: a self-closing question is refused before anything runs or anyone is asked", function* () {
+    const outcome = yield* ask(
+      `<Probe />\n\n<Elicit schema={${JSON.stringify(DECISION)}} />\n`,
+      // deno-lint-ignore require-yield
+      function* () {
+        return { decision: "approve" };
+      },
+    );
+
+    // The form is decided in preflight, so the counted element that was
+    // written first has not run and nobody has been interrupted.
+    expect(failed(outcome.attempt).message).toContain("paired form");
+    expect(outcome.performed).toEqual([]);
+    expect(outcome.asked).toEqual([]);
+  });
+
+  it("GR32: a same-name replacement cannot answer the admitted question", function* () {
+    const outcome = yield* ask(
+      `${asking("Approve the plan?")}\n\n<Output>\n<Json value={answer} />\n</Output>\n`,
+      // deno-lint-ignore require-yield
+      function* () {
+        return { decision: "reject" };
+      },
+      { replace: true },
+    );
+
+    // The chain is live and is asked — the document's own holding component
+    // resolves through it — so the name the root admitted being absent from
+    // that list is a fact about the admission rather than about the wrapper.
+    expect(outcome.imported).toContain("Held");
+    // The admitted entry carries the registry's own definition, so the root
+    // never asks the document's chain for this name at all — and the question
+    // reached the installed provider rather than the substitute's return.
+    expect(outcome.imported).not.toContain("Elicit");
+    expect(outcome.asked).toHaveLength(1);
+    // Exactly the provider's answer: the substitute returns a different
+    // decision and a field of its own, so neither could survive this.
+    expect(JSON.parse(rendered(outcome.attempt).output)).toEqual({ decision: "reject" });
   });
 });

@@ -53,14 +53,23 @@ import type {
   ReplAction,
   ReplFormMessage,
   ReplLive,
+  ReplSidekickChatRow,
+  ReplSidekickReading,
   ReplState,
   ReplView,
 } from "../src/repl/application.ts";
-import type { ReplDispatched } from "../src/repl/reconcile.ts";
+import type { ReplDispatched, ReplTree } from "../src/repl/reconcile.ts";
 import type { ReplDrawerRef } from "../src/repl/route.ts";
-import { FOOTER_ROWS, HISTORY_ROWS, NARROW } from "../src/repl/layout.ts";
+import { FOOTER_ROWS, HISTORY_ROWS, NARROW, SIDEKICK_GUTTER } from "../src/repl/layout.ts";
 import { HISTORY_TITLE } from "../src/repl/history-rail.ts";
-import { ACTION_ROW, DRAWER_WINDOW, READING_WINDOW } from "../src/repl/application.ts";
+import {
+  ACTION_ROW,
+  DRAWER_WINDOW,
+  READING_WINDOW,
+  SIDEKICK_BODY,
+  SESSIONS_WINDOW,
+  SIDEKICK_WINDOW,
+} from "../src/repl/application.ts";
 import { navigationOf } from "../src/repl/navigation.ts";
 import type { ReplBounds } from "../src/repl/layout.ts";
 import { BOLD, REPL_PALETTE } from "../src/repl/presentation-style.ts";
@@ -74,18 +83,21 @@ import {
   LIFECYCLE,
   RAIL,
 } from "./fixtures/repl/reference-style.ts";
+import { ACCEPTED_EDGE, ACCEPTED_SURFACE } from "./fixtures/repl/issue-883/reference-style.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import {
   createGrid,
   regionBounds,
   usePresenter,
   viewportBounds,
+  windowOf,
 } from "./fixtures/repl/presentation.ts";
 import { referenceEvents } from "./fixtures/repl/reference.ts";
 import { useCountingRenderer } from "./fixtures/repl/presentation.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
-import { createFitStore } from "../src/repl/fitting.ts";
-import { commitReplFrame } from "../src/repl/program.ts";
+import { createFitStore, createPlainFitStore, fitPlain } from "../src/repl/fitting.ts";
+import type { ReplFittedLine } from "../src/repl/fitting.ts";
+import { commitReplFrame, prepareFrame } from "../src/repl/program.ts";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
@@ -124,6 +136,14 @@ const FAILING = [
   '<Elicit schema={{ type: "number" }} as="answer">This schema is outside the REPL\'s form language.</Elicit>',
   "",
 ].join("\n");
+
+/** A Sidekick with nothing said in it, for a frame that has one. */
+const SIDEKICK_QUIET = Object.freeze({
+  chat: Object.freeze([]),
+  busy: false,
+  agent: "stub-agent",
+  refusal: undefined,
+});
 
 const NOTHING_LIVE: ReplLive = Object.freeze({
   output: "",
@@ -324,6 +344,20 @@ function* settledFailedAndRunning(): Operation<ReplModel> {
 
 function stateWith(over: Partial<ReplState>): ReplState {
   return Object.freeze({ ...initialState(EXECUTION), ...over });
+}
+
+/**
+ * The same state with the Bindings pane selected, as activating its tab does.
+ *
+ * Explicit, because the command's accepted default right pane is the Sidekick:
+ * a row about what the Bindings column says has to be looking at the Bindings
+ * column.
+ */
+function inspecting(state: ReplState): ReplState {
+  return Object.freeze({
+    ...state,
+    route: Object.freeze({ ...state.route, right: "bindings", view: undefined }),
+  });
 }
 
 /** The same state selecting one entry, the way the action selects it. */
@@ -978,7 +1012,9 @@ describe("REPL presentation: the panes a reading is laid out in", () => {
       // Nothing selected and nothing live: the Bindings column holds no row at
       // all, which is exactly the state a pane that named itself only when full
       // would read as a gap.
-      const observed = yield* presenter.commit(reading(stateWith({}), model, NOTHING_LIVE, size));
+      const observed = yield* presenter.commit(
+        reading(inspecting(stateWith({})), model, NOTHING_LIVE, size),
+      );
       const { grid } = presenter;
 
       const transcript = placed(observed, "transcript:heading");
@@ -1027,14 +1063,28 @@ describe("REPL presentation: the panes a reading is laid out in", () => {
         // The edge is part of the pane and not part of the room in it.
         expect(inside.width).toBeLessThan(outer.width);
         expect(inside.x).toBeGreaterThan(outer.x - 1);
-        // And every row of that pane is exactly the inside wide — a row sized
-        // from the outer bound would reach into the column beside it.
+        // And every row of that pane is built to the room the pane has — a row
+        // sized from the outer bound would reach into the column beside it.
+        //
+        // Re-anchored for the accepted Sidekick gutter: that pane's body is
+        // inset two cells on each side, so its rows are the inside less the
+        // gutter while its header rows span the inside. Both are measured, and
+        // a row narrower than its pane begins at the gutter rather than adrift
+        // somewhere inside it.
+        const inset = region === "inspection" ? inside.width - SIDEKICK_GUTTER * 2 : inside.width;
         for (const key of observed.keys) {
           const bounds = observed.boundsOf(key);
           if (bounds === undefined || !within(bounds, inside)) {
             continue;
           }
-          expect(bounds.width).toBe(inside.width);
+          expect([region, key, bounds.width === inside.width || bounds.width === inset]).toEqual([
+            region,
+            key,
+            true,
+          ]);
+          if (bounds.width !== inside.width) {
+            expect([region, key, bounds.x]).toEqual([region, key, inside.x + SIDEKICK_GUTTER]);
+          }
         }
       }
     }
@@ -1364,11 +1414,16 @@ describe("REPL presentation: a row stays inside the pane it was measured for", (
 describe("REPL presentation: the one guidance row", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("R6: what the row must say fits the room it was measured for, whole", function* () {
-    // Focus on a mounted control that is not the draft. That is the branch
-    // with the most to say — the state, what Enter does here, and the way back
-    // to the draft are all required together — and it is the branch the
-    // gallery caught running out of a medium transcript column.
+  it("G1: the whole guidance block is readable, and nothing of it is dropped", function* () {
+    // Focus on a mounted control that is not the draft. That is the branch with
+    // the most to say — the state, what Enter does here, the way back and the
+    // movement hint are all in it together — and it is the branch the gallery
+    // caught running out of a transcript column.
+    //
+    // Re-anchored for #883's accepted wrapping. This required all of those
+    // words on one physical row, which the shared column no longer has room
+    // for; the block now takes the rows its words need, and the claim is the
+    // same claim: every direction is there, whole, and nothing is cut.
     const model = yield* settledAndFailed();
 
     for (const size of [WIDE, MEDIUM, NARROW]) {
@@ -1377,43 +1432,58 @@ describe("REPL presentation: the one guidance row", () => {
         reading(stateWith({}), model, NOTHING_LIVE, size, "entries:heading"),
       );
       const { grid } = presenter;
-      const bounds = placed(observed, "guidance");
-      const said = observed.cells.get("guidance") ?? "";
 
-      // It fits the row it was measured for. This engine clips no text, so a
-      // sentence longer than this is not a shortened sentence — it is a
-      // sentence written across the row underneath.
-      expect([size.columns, said.length, bounds.width]).toEqual([
+      // Every row of the block, in the order it is read.
+      const rows = observed.keys
+        .filter((key) => key === "guidance" || key.startsWith("guidance:row:"))
+        .sort((left, right) =>
+          left === "guidance" ? -1 : right === "guidance" ? 1 : left.localeCompare(right),
+        )
+        .map((key) => ({
+          key,
+          bounds: placed(observed, key),
+          said: observed.cells.get(key) ?? "",
+        }));
+      expect([size.columns, rows.length]).toEqual([
         size.columns,
-        said.length,
-        bounds.width >= said.length ? bounds.width : said.length,
+        rows.length >= 1 ? rows.length : 1,
       ]);
+      const said = rows.map((one) => one.said.trim()).join(" ");
 
-      // And it still says the three things it exists to say, each whole: the
-      // state it is in, what the focused control does, and the way back to the
-      // draft. No ellipsis, because nothing required was cut to get here.
+      // Each physical row fits the room it was measured for. This engine clips
+      // no text, so a row longer than its own width is a row written across the
+      // one beneath it.
+      for (const one of rows) {
+        expect([size.columns, one.key, one.said.length <= one.bounds.width]).toEqual([
+          size.columns,
+          one.key,
+          true,
+        ]);
+      }
+
+      // And the block still says everything it exists to say, each whole: the
+      // state, what the focused control does, the way back to the draft and how
+      // to move. No ellipsis, because nothing was cut to get here.
       expect([size.columns, said.startsWith("Ready for Entry ")]).toEqual([size.columns, true]);
       expect([size.columns, said.includes("Enter")]).toEqual([size.columns, true]);
       expect([size.columns, /Tab to (the )?draft/.test(said)]).toEqual([size.columns, true]);
-      expect([size.columns, said.includes("…")]).toEqual([size.columns, false]);
+      expect([size.columns, said.includes("Tab/Shift+Tab move")]).toEqual([size.columns, true]);
+      expect([size.columns, said.includes("\u2026")]).toEqual([size.columns, false]);
 
-      // What is drawn in the row is what the row contributed, and so is every
-      // transcript row beneath it: an overlong sentence lands on the cells of
-      // the row below, which is where it was seen.
-      for (const key of [
-        "guidance",
-        ...observed.keys.filter((one) => one.startsWith("reading:")),
-      ]) {
-        // A narrow frame describes the reading's rows and places none of them,
-        // so there is nothing of theirs on this screen to read.
-        const at = key === "guidance" ? bounds : observed.boundsOf(key);
-        if (at === undefined) {
-          continue;
-        }
-        expect([size.columns, key, textOf(grid, at).trimEnd()]).toEqual([
+      // At the narrow size the compact sentences already fit, so the block is
+      // the one row it has always been.
+      if (size.columns === NARROW.columns) {
+        expect([size.columns, rows.length]).toEqual([size.columns, 1]);
+      }
+
+      // What is drawn in each row is what that row contributed, and so is every
+      // transcript row beneath the block: an overlong sentence lands on the
+      // cells of the row below, which is where it was seen.
+      for (const one of rows) {
+        expect([size.columns, one.key, grid.textIn(one.bounds)[0]?.trimEnd()]).toEqual([
           size.columns,
-          key,
-          (observed.cells.get(key) ?? "").trimEnd(),
+          one.key,
+          one.said.trimEnd(),
         ]);
       }
     }
@@ -1956,19 +2026,40 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
 
     // Each pane's own surface, across the pane the engine admitted — and the
     // first column of a pane that begins with an edge is that edge.
-    const surfaces: readonly { readonly region: string; readonly surface: number }[] = [
-      { region: "sidebar", surface: SURFACE.side },
-      { region: "transcript", surface: SURFACE.center },
-      { region: "inspection", surface: SURFACE.bind },
+    //
+    // Re-anchored for #883. Two of these values are superseded by the accepted
+    // refinement and come from its own fixture: the sidebar and the right
+    // column were restated, and the transcript's own surface was not. The top
+    // anchor moved for the same reason — a pane with a title now has a header
+    // surface of its own on that row — so the pane's surface is read where its
+    // header is not, and the header is asserted as the header. The claim is
+    // unchanged: every measured cell of a pane that no row of its own covers is
+    // that pane's surface, to the pane's full width.
+    const surfaces: readonly {
+      readonly region: string;
+      readonly surface: number;
+      readonly header?: number;
+    }[] = [
+      { region: "sidebar", surface: ACCEPTED_SURFACE.side },
+      {
+        region: "transcript",
+        surface: SURFACE.center,
+        header: ACCEPTED_SURFACE.transcriptHeader,
+      },
+      {
+        region: "inspection",
+        surface: ACCEPTED_SURFACE.right,
+        header: ACCEPTED_SURFACE.rightHeader,
+      },
     ];
-    for (const { region, surface } of surfaces) {
+    for (const { region, surface, header } of surfaces) {
       const bounds = regionBounds(observed, region);
       if (bounds === undefined) {
         throw new Error(`this frame published no ${region} region`);
       }
       expect([region, grid.styleAt(bounds.x + bounds.width - 1, bounds.y).background]).toEqual([
         region,
-        surface,
+        header ?? surface,
       ]);
       // The bottom of the pane's own moving content, not the bottom of the
       // pane. Re-anchored for #881 PR 2: the transcript's last row is now the
@@ -1991,9 +2082,11 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
     if (transcript === undefined || footer === undefined) {
       throw new Error("this frame published no transcript or footer region");
     }
-    expect(grid.styleAt(transcript.x, transcript.y).foreground).toBe(SURFACE.edge);
+    // Re-anchored for #883: the one value that served both roles is now two,
+    // and which of them belongs to which rule is the accepted separation.
+    expect(grid.styleAt(transcript.x, transcript.y).foreground).toBe(ACCEPTED_EDGE.divider);
     // And the rule that parts the body from the footer, on the row above it.
-    expect(grid.styleAt(transcript.x, footer.y - 1).foreground).toBe(SURFACE.edge);
+    expect(grid.styleAt(transcript.x, footer.y - 1).foreground).toBe(ACCEPTED_EDGE.chrome);
 
     // What no row of its own covers is still this application's: the end of the
     // action row, where no control was placed.
@@ -2462,4 +2555,990 @@ describe("REPL responsiveness: a complete frame after a keystroke", () => {
       // And it is a fraction of what the reading cost to fit.
       expect(long.typed).toBeLessThan(long.warmup / 10);
     }));
+});
+
+/**
+ * Tier TE — the accepted columns, headers and edges, in production cells (#883).
+ *
+ * Every expected value here comes from `issue-883/reference-style.ts`, which
+ * transcribes the refinement the Product Owner accepted. Nothing is read back
+ * off `REPL_PALETTE`: a test that asked the product what colour a divider is
+ * would agree with the product however it drifted.
+ *
+ * The two roles that used to share one constant are asserted separately on
+ * purpose. A vertical column divider and the rule between the body and the
+ * footer are different readings of the screen, so a product drawing both from
+ * one value cannot satisfy both of these rows at once.
+ */
+describe("Tier TE — the accepted columns, headers and edges in production cells", () => {
+  /** The two sizes that draw three columns. */
+  const COLUMNED: readonly { readonly name: string; readonly size: ReplTerminalSize }[] =
+    Object.freeze([
+      { name: "160x36", size: WIDE },
+      { name: "120x30", size: MEDIUM },
+    ]);
+
+  /** The right pane's two tabs, and what selects each one. */
+  const TABS: readonly {
+    readonly name: string;
+    readonly select: (state: ReplState) => ReplState;
+    readonly row: string;
+  }[] = Object.freeze([
+    { name: "Sidekick", select: (state: ReplState) => state, row: "tab:sidekick" },
+    { name: "Bindings", select: inspecting, row: "tab:bindings" },
+  ]);
+
+  /** The background of the last cell of a row, which no text reaches. */
+  function fillBeyond(grid: TerminalGrid, bounds: ReplBounds): number | undefined {
+    return grid.styleAt(bounds.x + bounds.width - 1, bounds.y).background;
+  }
+
+  it("TE4: each pane, header, divider and edge is the accepted value in its own cells", function* () {
+    const model = yield* settledAndFailed();
+    for (const { name, size } of COLUMNED) {
+      for (const tab of TABS) {
+        const where = `${name} ${tab.name}`;
+        yield* scoped(function* (): Operation<void> {
+          const presenter = yield* usePresenter(size);
+          const observed = yield* presenter.commit(
+            reading(tab.select(stateWith({})), model, NOTHING_LIVE, size),
+          );
+          const { grid } = presenter;
+
+          // Both header surfaces, across the measured row rather than behind
+          // its text: a fill that stopped where the title ends would leave the
+          // pane's own surface showing for the rest of the header.
+          expect([where, fillBeyond(grid, placed(observed, "transcript:heading"))]).toEqual([
+            where,
+            ACCEPTED_SURFACE.transcriptHeader,
+          ]);
+          for (const key of ["inspection:heading", "tab:bindings", "tab:sidekick"]) {
+            expect([where, key, fillBeyond(grid, placed(observed, key))]).toEqual([
+              where,
+              key,
+              ACCEPTED_SURFACE.rightHeader,
+            ]);
+          }
+
+          // Each header's own edge, which is what closes the band: read in the
+          // row directly under the last header row, not inferred from the
+          // band's bounds — a published row is a position this frame committed.
+          const transcriptHeader = placed(observed, "transcript:heading");
+          const rightHeader = [
+            placed(observed, "inspection:heading"),
+            placed(observed, "tab:bindings"),
+            placed(observed, "tab:sidekick"),
+          ].reduce((lowest, one) => (one.y > lowest.y ? one : lowest));
+          for (const [name, header] of [
+            ["transcript", transcriptHeader],
+            ["inspection", rightHeader],
+          ] as const) {
+            const edge = header.y + 1;
+            // Across the band, not at one cell: the edge closes the whole
+            // header or it is a dash somebody drew in the corner.
+            for (const x of [
+              header.x,
+              header.x + Math.floor(header.width / 2),
+              header.x + header.width - 1,
+            ]) {
+              expect([where, name, x, grid.styleAt(x, edge).foreground]).toEqual([
+                where,
+                name,
+                x,
+                ACCEPTED_EDGE.chrome,
+              ]);
+            }
+          }
+
+          // The transcript's own body is still its own surface, and is none of
+          // the three the refinement gave the chrome around it.
+          const window = viewportBounds(observed, READING_WINDOW);
+          if (window === undefined) {
+            throw new Error(`${where} published no reading window`);
+          }
+          const body = grid.styleAt(
+            window.x + window.width - 1,
+            window.y + window.height - 1,
+          ).background;
+          expect([where, body]).toEqual([where, ACCEPTED_SURFACE.centre]);
+          expect([where, body === ACCEPTED_SURFACE.transcriptHeader]).toEqual([where, false]);
+          expect([where, body === ACCEPTED_SURFACE.right]).toEqual([where, false]);
+
+          // The two panes the refinement restated, read directly rather than
+          // left to the one older assertion: the measured floor of each one's
+          // own window, where no row of its own covers the cells.
+          const sidebar = regionBounds(observed, "sidebar");
+          const right = regionBounds(observed, "inspection");
+          if (sidebar === undefined || right === undefined) {
+            throw new Error(`${where} published no sidebar or inspection region`);
+          }
+          const floorOf = (
+            bounds: ReplBounds,
+            ...windows: readonly string[]
+          ): number | undefined => {
+            for (const window of windows) {
+              const found = viewportBounds(observed, window);
+              if (found !== undefined) {
+                return grid.styleAt(found.x + found.width - 1, found.y + found.height - 1)
+                  .background;
+              }
+            }
+            return grid.styleAt(bounds.x + bounds.width - 1, bounds.y + bounds.height - 1)
+              .background;
+          };
+          expect([where, "sidebar", floorOf(sidebar, SESSIONS_WINDOW)]).toEqual([
+            where,
+            "sidebar",
+            ACCEPTED_SURFACE.side,
+          ]);
+          expect([where, "right", floorOf(right, SIDEKICK_WINDOW, "inspection")]).toEqual([
+            where,
+            "right",
+            ACCEPTED_SURFACE.right,
+          ]);
+
+          // Both column dividers, continuous down the whole pane: one cell, in
+          // the first column of the pane that begins at it, on every row of it.
+          for (const region of ["transcript", "inspection"]) {
+            const bounds = regionBounds(observed, region);
+            if (bounds === undefined) {
+              throw new Error(`${where} published no ${region} region`);
+            }
+            for (let y = bounds.y; y < bounds.y + bounds.height; y += 1) {
+              expect([where, region, y, grid.styleAt(bounds.x, y).foreground]).toEqual([
+                where,
+                region,
+                y,
+                ACCEPTED_EDGE.divider,
+              ]);
+            }
+          }
+
+          // And the rule between the body and the footer, which is the other
+          // role: the chrome edge, not the divider.
+          const transcript = regionBounds(observed, "transcript");
+          const footer = regionBounds(observed, "footer");
+          if (transcript === undefined || footer === undefined) {
+            throw new Error(`${where} published no transcript or footer region`);
+          }
+          expect([where, grid.styleAt(transcript.x, footer.y - 1).foreground]).toEqual([
+            where,
+            ACCEPTED_EDGE.chrome,
+          ]);
+          // The footer keeps its seven rows: no edge was bought with one.
+          expect([where, footer.height]).toEqual([where, FOOTER_ROWS]);
+
+          // And which tab is selected is readable without any of this colour.
+          expect(textOf(grid, placed(observed, tab.row))).toContain("[selected]");
+        });
+      }
+    }
+  });
+
+  it("TE4: a narrow frame routes one body, keeps seven rows and draws no wide chrome", function* () {
+    const model = yield* settledAndFailed();
+    // Each outlet reached by the action that reaches it, rather than by a route
+    // written here: what a narrow frame draws is decided by the surface a
+    // person selected, so the selection has to be the real one.
+    const outlets: readonly { readonly name: string; readonly action: ReplAction }[] =
+      Object.freeze([
+        { name: "entries", action: { kind: "select-surface", surface: "entries" } },
+        { name: "sessions", action: { kind: "select-surface", surface: "sessions" } },
+        { name: "sidekick", action: { kind: "select-pane", pane: "sidekick" } },
+      ]);
+
+    for (const outlet of outlets) {
+      yield* scoped(function* (): Operation<void> {
+        const presenter = yield* usePresenter(NARROW);
+        const initial = stateWith({});
+        const prepared = yield* presenter.prepare(reading(initial, model, NOTHING_LIVE, NARROW));
+        const routed = reduceRepl(initial, outlet.action, model, NOTHING_LIVE, prepared).state;
+        const observed = yield* presenter.commit(reading(routed, model, NOTHING_LIVE, NARROW));
+        const { grid } = presenter;
+
+        // One body, and the footer it shares the screen with is the same seven
+        // rows every other profile has.
+        const content = regionBounds(observed, "content");
+        const footer = regionBounds(observed, "footer");
+        if (content === undefined || footer === undefined) {
+          throw new Error(`the ${outlet.name} outlet published no content or footer region`);
+        }
+        expect([outlet.name, footer.height]).toEqual([outlet.name, FOOTER_ROWS]);
+        for (const absent of ["sidebar", "transcript", "inspection"]) {
+          expect([outlet.name, absent, regionBounds(observed, absent)]).toEqual([
+            outlet.name,
+            absent,
+            undefined,
+          ]);
+        }
+
+        // No wide chrome is drawn: a hidden column has no divider and no header
+        // to draw, so neither colour is anywhere on this screen.
+        for (let y = 0; y < NARROW.rows; y += 1) {
+          for (let x = 0; x < NARROW.columns; x += 1) {
+            const cell = grid.styleAt(x, y);
+            expect([outlet.name, x, y, cell.foreground === ACCEPTED_EDGE.divider]).toEqual([
+              outlet.name,
+              x,
+              y,
+              false,
+            ]);
+            expect([
+              outlet.name,
+              x,
+              y,
+              cell.background === ACCEPTED_SURFACE.transcriptHeader,
+            ]).toEqual([outlet.name, x, y, false]);
+            expect([outlet.name, x, y, cell.background === ACCEPTED_SURFACE.rightHeader]).toEqual([
+              outlet.name,
+              x,
+              y,
+              false,
+            ]);
+          }
+        }
+
+        // And none of it is targetable either. A target names a mounted node, so
+        // a chrome row this frame never mounted has nothing for a keystroke or a
+        // pointer to reach — which is a stronger claim than its cells being
+        // blank, and the reason both are asserted.
+        for (const key of [
+          "transcript:heading",
+          "inspection:heading",
+          "tab:bindings",
+          "tab:sidekick",
+        ]) {
+          expect([outlet.name, key, observed.keys.includes(key)]).toEqual([
+            outlet.name,
+            key,
+            false,
+          ]);
+          expect([outlet.name, key, observed.nodeOf(key)]).toEqual([outlet.name, key, undefined]);
+        }
+      });
+    }
+  });
+});
+
+/**
+ * Tier RS — what a keystroke costs once the chat has something in it (#883).
+ *
+ * The Product Owner reported the Sidekick going sluggish as a conversation
+ * grew, and a read-only diagnosis measured the cause: every frame refitted
+ * every chat line, including while Bindings hid the chat, so twenty wrapping
+ * messages turned one typed key into 1,284 measurement renders.
+ *
+ * These rows count the renders the production commit path actually asks the
+ * engine for, through the real tree and the two stores a running command owns.
+ * Counts rather than milliseconds: a wall time describes this machine and a
+ * render count describes the work. They are display fixtures for deterministic
+ * frame work and state nothing about what an agent can do.
+ */
+describe("REPL responsiveness: a chat the keystroke did not change", () => {
+  /** One line wide enough that the pane has to cut it into several rows. */
+  const WRAPS = "This is a complete sentence with words that have to wrap. ".repeat(4);
+
+  /** One acknowledged reply, as the owner publishes one. */
+  function replyRow(conversation: string, turn: number, text: string): ReplSidekickChatRow {
+    return Object.freeze({
+      key: `${conversation}:response:${turn}`,
+      conversation,
+      turn,
+      kind: "reply",
+      text,
+      hasOutput: true,
+      failure: undefined,
+    });
+  }
+
+  /**
+   * The same item while it is still only what a turn is saying.
+   *
+   * Under the key its reply will carry, because a response is one item on the
+   * screen from its first word to its last — which is what makes growing its
+   * text a change to a line that is already there.
+   */
+  function previewRow(conversation: string, turn: number, text: string): ReplSidekickChatRow {
+    return Object.freeze({
+      key: `${conversation}:response:${turn}`,
+      conversation,
+      turn,
+      kind: "preview",
+      text,
+      hasOutput: false,
+      failure: undefined,
+    });
+  }
+
+  /** Several acknowledged replies in order, which is what most rows need. */
+  function repliesOf(
+    texts: readonly string[],
+    conversation = "chat-one",
+  ): readonly ReplSidekickChatRow[] {
+    return texts.map((text, at) => replyRow(conversation, at + 1, text));
+  }
+
+  /** One chat, as the reading this screen is handed. */
+  function chatOf(
+    rows: readonly ReplSidekickChatRow[],
+    conversation = "chat-one",
+  ): ReplSidekickReading {
+    const reading: ReplSidekickReading = {
+      agent: "scribe",
+      busy: false,
+      refusal: undefined,
+      question: undefined,
+      requested: undefined,
+      verified: undefined,
+      conversation,
+      reading: conversation,
+      current: true,
+      turns: [],
+      availability: { chats: [conversation], sessions: [], refusal: undefined },
+      chat: rows,
+    };
+    return Object.freeze(reading);
+  }
+
+  /** A frame of this chat, with this draft and this right-hand pane. */
+  function frameOf(
+    chat: ReplSidekickReading,
+    over: { readonly draft?: string; readonly message?: string; readonly bindings?: boolean },
+    model: ReplModel,
+    size: ReplTerminalSize = WIDE,
+  ): ReplView {
+    const base = initialState(EXECUTION);
+    const state: ReplState = Object.freeze({
+      ...base,
+      draft: over.draft ?? "",
+      message: over.message ?? "",
+      route: Object.freeze({
+        ...base.route,
+        right: over.bindings === true ? "bindings" : "sidekick",
+      }),
+    });
+    return reading(state, model, { ...NOTHING_LIVE, sidekick: chat }, size);
+  }
+
+  /** The mounted chat rows of the frame this tree last committed. */
+  function chatKeys(tree: ReplTree<ReplAction>): readonly string[] {
+    return tree
+      .mounted()
+      .map((node) => tree.keyOf(node))
+      .filter((key): key is string => key !== undefined && key.startsWith("sidekick:chat-one"));
+  }
+
+  /** One warm command: both stores, one tree, one counting engine pair. */
+  function* commanding(size: ReplTerminalSize = WIDE) {
+    const renderer = yield* useCountingRenderer(size);
+    const tree = yield* useReplTree<ReplAction>();
+    const fits = createFitStore();
+    const chatFits = createPlainFitStore();
+    const model = projectRepl([]);
+    if (!model.ok) {
+      throw model.error;
+    }
+    // One grid across every frame this command draws, because this renderer
+    // writes diffs: a single frame's bytes are what changed, not the screen.
+    const grid = createGrid();
+    return {
+      renderer,
+      tree,
+      model: model.value,
+      /**
+       * The chat rows a frame prepares, warm or cold.
+       *
+       * Cold means prepared with no stores at all, which is the answer every
+       * comparison here is against: the rows a command that had measured
+       * nothing would draw.
+       */
+      *prepared(view: ReplView, warm: boolean): Operation<readonly ReplFittedLine[]> {
+        const done = warm
+          ? yield* prepareFrame(renderer, view, fits, chatFits)
+          : yield* prepareFrame(renderer, view);
+        if (!done.ok) {
+          throw done.error;
+        }
+        return done.value.context.chat ?? [];
+      },
+      /** Commit one view and answer what the engine was asked for. */
+      *commit(view: ReplView): Operation<number> {
+        renderer.reset();
+        const done = yield* commitReplFrame(
+          tree,
+          renderer,
+          view,
+          0,
+          undefined,
+          undefined,
+          fits,
+          chatFits,
+        );
+        if (!done.ok) {
+          throw done.error;
+        }
+        grid.apply(done.value.rendered.output);
+        return renderer.measures();
+      },
+      /** Everything drawn so far, as the accumulated screen reads. */
+      screen(at: ReplTerminalSize = size): string {
+        return grid.textIn({ x: 0, y: 0, width: at.columns, height: at.rows }).join("\n");
+      },
+    };
+  }
+
+  it("RS3: typing reuses an unchanged chat, however long it is", function* () {
+    const measured: Record<string, { warm: number; draft: number; message: number }> = {};
+    for (const [name, texts] of [
+      ["short", ["one", "two", "three"]],
+      ["long", Array.from({ length: 12 }, (_, at) => `${at + 1}. ${WRAPS}`)],
+    ] as const) {
+      yield* scoped(function* (): Operation<void> {
+        const held = yield* commanding();
+        const chat = chatOf(repliesOf(texts));
+        const warm = yield* held.commit(frameOf(chat, { draft: "a" }, held.model));
+        // Only the draft, then only the message. Neither touches the chat.
+        const draft = yield* held.commit(frameOf(chat, { draft: "ab" }, held.model));
+        const message = yield* held.commit(
+          frameOf(chat, { draft: "ab", message: "hello" }, held.model),
+        );
+        // What was typed is what is drawn, which is what makes the counts a
+        // claim about cost rather than about a frame that skipped its work.
+        const screen = held.screen();
+        expect([name, screen.includes("Draft: ab")]).toEqual([name, true]);
+        // The composer draws its name and its value on rows of their own now,
+        // so both are asserted rather than one row holding the pair.
+        expect([name, screen.includes("Message Sidekick:")]).toEqual([name, true]);
+        expect([name, screen.includes("hello")]).toEqual([name, true]);
+        // The first reply's own opening, which is as much of a wrapping line as
+        // one row holds.
+        expect([name, screen.includes(texts[0].slice(0, 10))]).toEqual([name, true]);
+        measured[name] = { warm, draft, message };
+      });
+    }
+    const short = measured["short"];
+    const long = measured["long"];
+    if (short === undefined || long === undefined) {
+      throw new Error("both chats were expected to be measured");
+    }
+    console.log(JSON.stringify({ RS3: measured }));
+
+    // Warming the long chat genuinely costs more: these are real wrapping
+    // lines and the engine really measured them.
+    expect(long.warm).toBeGreaterThan(short.warm);
+
+    // And then it costs nothing. A keystroke's work is the frame's structure,
+    // which is the same for both chats — so the count does not grow with a
+    // history the keystroke did not change.
+    expect(long.draft).toBe(short.draft);
+    expect(long.message).toBe(short.message);
+    expect(long.draft).toBeLessThan(long.warm);
+  });
+
+  /**
+   * What one list of prepared rows states, as a comparison can read it.
+   *
+   * The rows themselves rather than the keys they mounted under: matching keys
+   * cannot say that the text under them, or how many rows it took, is what an
+   * unmeasured command would have drawn.
+   */
+  function shapeOf(
+    rows: readonly ReplFittedLine[],
+  ): readonly { readonly key: string; readonly line: string; readonly text: string }[] {
+    return rows.map((one) => ({ key: one.key, line: one.line, text: one.text }));
+  }
+
+  it("RS4: growing one line measures only the line that grew", function* () {
+    const held = yield* commanding();
+    // Blank lines and a combining grapheme travel with this fixture, because
+    // what the engine answers about them is the reason the cuts come from it.
+    const settled = [
+      `1. ${WRAPS}`,
+      "a line\n\nwith a blank line of its own",
+      `2. e\u0301\u0301 wide \u5e83\u3044 ${WRAPS}`,
+    ];
+    // And a final item that is still only what a turn is saying, which is the
+    // line that is going to grow — under the key its reply will carry.
+    const saying = `GROWING ${WRAPS}`;
+    const withPreview = (text: string): readonly ReplSidekickChatRow[] => [
+      ...repliesOf(settled),
+      previewRow("chat-one", settled.length + 1, text),
+    ];
+
+    yield* held.commit(frameOf(chatOf(withPreview(saying)), { draft: "a" }, held.model));
+    // The structural cost of a frame this shape, with nothing to refit.
+    const baseline = yield* held.commit(
+      frameOf(chatOf(withPreview(saying)), { draft: "ab" }, held.model),
+    );
+
+    // That same item's text grows, its key unchanged. Its new end is marked,
+    // because a following chat shows a growing line's newest rows — which is
+    // where the text that just arrived actually is.
+    const grown = `GROWING ${WRAPS}${WRAPS} TAIL-GROWN`;
+    const growing = yield* held.commit(
+      frameOf(chatOf(withPreview(grown)), { draft: "ab" }, held.model),
+    );
+    // The text that just arrived is on the screen, under the same item.
+    expect(held.screen()).toContain("TAIL-GROWN");
+    // Then the next item is appended behind it.
+    const appended = `4. ${WRAPS}`;
+    const finalRows: readonly ReplSidekickChatRow[] = [
+      ...withPreview(grown),
+      replyRow("chat-one", settled.length + 2, appended),
+    ];
+    const appending = yield* held.commit(frameOf(chatOf(finalRows), { draft: "ab" }, held.model));
+
+    // What fitting those changed lines costs on their own, at the width this
+    // frame measured for the pane they are drawn in.
+    const final = frameOf(chatOf(finalRows), { draft: "ab" }, held.model);
+    const prepared = yield* prepareFrame(held.renderer, final);
+    if (!prepared.ok) {
+      throw prepared.error;
+    }
+    // The body's own width, not the pane's: the chat is inset by the gutter,
+    // so that is the width its lines were actually fitted to.
+    const room = prepared.value.context.widths?.body ?? 0;
+    expect(room).toBeGreaterThan(0);
+    const alone = function* (text: string): Operation<number> {
+      held.renderer.reset();
+      const fitted = yield* fitPlain(held.renderer, WIDE, [{ key: "alone", text }], room);
+      if (!fitted.ok) {
+        throw fitted.error;
+      }
+      return held.renderer.measures();
+    };
+    // Each row carries who said it, so the line the frame fits is the
+    // composed one rather than the bare text.
+    const grownAlone = yield* alone(`  scribe (preview): ${grown}`);
+    const appendedAlone = yield* alone(`  scribe: ${appended}`);
+    console.log(
+      JSON.stringify({
+        RS4: { baseline, growing, appending, grownAlone, appendedAlone, room },
+      }),
+    );
+
+    // Each update paid for exactly the line it changed, and nothing for the
+    // lines in front of it.
+    expect(growing - baseline).toBe(grownAlone);
+    expect(appending - baseline).toBe(appendedAlone);
+
+    // And the rows a warm store prepared are the rows an unmeasured command
+    // prepares: the same text, under the same keys, in the same order, and as
+    // many of them.
+    const warm = yield* held.prepared(final, true);
+    const cold = yield* held.prepared(final, false);
+    expect(shapeOf(warm)).toEqual(shapeOf(cold));
+    expect(warm.length).toBe(cold.length);
+    expect(warm.length).toBeGreaterThan(finalRows.length);
+
+    // And the prepared rows hold the grown text whole, rather than the text
+    // it replaced: concatenating one line's rows recovers exactly that line.
+    const growns = shapeOf(warm)
+      .filter((one) => one.line === `sidekick:chat-one:response:${settled.length + 1}`)
+      .map((one) => one.text.trim())
+      .join(" ");
+    expect(growns).toContain("GROWING");
+    expect(growns).toContain("TAIL-GROWN");
+    expect(
+      shapeOf(warm)
+        .map((one) => one.text)
+        .join(""),
+    ).not.toContain(`${saying} `);
+  });
+
+  it("RS5: a hidden chat is not measured, and showing it measures what is there", function* () {
+    const texts = Array.from({ length: 12 }, (_, at) => `${at + 1}. ${WRAPS}`);
+    const longChat = chatOf(repliesOf(texts));
+    const emptyChat = chatOf([]);
+
+    // The first frame as well as a warmed one. Both commands warm the same
+    // entry reading, so what differs between them is the chat alone.
+    const hidden = function* (
+      chat: ReplSidekickReading,
+    ): Operation<{ readonly first: number; readonly typed: number }> {
+      return yield* scoped(function* () {
+        const own = yield* commanding();
+        const first = yield* own.commit(frameOf(chat, { draft: "a", bindings: true }, own.model));
+        const typed = yield* own.commit(frameOf(chat, { draft: "ab", bindings: true }, own.model));
+        return { first, typed };
+      });
+    };
+    const hiddenLong = yield* hidden(longChat);
+    const hiddenEmpty = yield* hidden(emptyChat);
+    console.log(JSON.stringify({ RS5: { hiddenLong, hiddenEmpty } }));
+
+    // Behind Bindings a long chat costs what an empty one costs, from the
+    // very first frame rather than only once something has been warmed.
+    expect(hiddenLong.first).toBe(hiddenEmpty.first);
+    expect(hiddenLong.typed).toBe(hiddenEmpty.typed);
+
+    const held = yield* commanding();
+    yield* held.commit(frameOf(longChat, { draft: "a", bindings: true }, held.model));
+
+    // Shown, it is fitted against the geometry it has now and its own text is
+    // on the screen: a hidden frame retained nothing that could stand in.
+    const shown = frameOf(longChat, { draft: "ab" }, held.model);
+    yield* held.commit(shown);
+    expect(shapeOf(yield* held.prepared(shown, true))).toEqual(
+      shapeOf(yield* held.prepared(shown, false)),
+    );
+    expect(held.screen()).toContain("12. This is a complete");
+
+    // A resize, then a genuinely different chat, then a Preview that was
+    // there and is withdrawn — one bounded sequence, each transition compared
+    // with what an unmeasured command would prepare.
+    const withdrawn = `WITHDRAWN ${WRAPS}`;
+    const other = "chat-two";
+    const sequence: readonly { readonly name: string; readonly view: ReplView }[] = [
+      { name: "resized", view: frameOf(longChat, { draft: "ab" }, held.model, MEDIUM) },
+      {
+        name: "another chat, with its own identity",
+        view: frameOf(
+          chatOf(
+            [...repliesOf(["only one message here"], other), previewRow(other, 2, withdrawn)],
+            other,
+          ),
+          { draft: "ab" },
+          held.model,
+          MEDIUM,
+        ),
+      },
+      {
+        name: "its Preview withdrawn",
+        view: frameOf(
+          chatOf(repliesOf(["only one message here"], other), other),
+          { draft: "ab" },
+          held.model,
+          MEDIUM,
+        ),
+      },
+    ];
+    for (const step of sequence) {
+      yield* held.commit(step.view);
+      const warm = yield* held.prepared(step.view, true);
+      const cold = yield* held.prepared(step.view, false);
+      expect([step.name, shapeOf(warm)]).toEqual([step.name, shapeOf(cold)]);
+      expect([step.name, warm.length]).toEqual([step.name, cold.length]);
+    }
+
+    // The second chat's rows are the second chat's: its own conversation owns
+    // them, and the first chat's reading is not in them.
+    const second = yield* held.prepared(sequence[2].view, true);
+    expect(second.every((one) => one.line.startsWith(`sidekick:${other}:`))).toBe(true);
+    expect(
+      shapeOf(second)
+        .map((one) => one.text)
+        .join(""),
+    ).not.toContain("12. This is");
+
+    // And the withdrawn Preview is gone from what is prepared and from the
+    // screen: a retained cut never authorizes drawing text the display facts
+    // no longer hold.
+    expect(
+      shapeOf(second)
+        .map((one) => one.text)
+        .join(""),
+    ).not.toContain("WITHDRAWN");
+    expect(held.screen(MEDIUM)).not.toContain("WITHDRAWN");
+  });
+});
+
+/**
+ * Tier PW — the space after the sidebar, shared (#883).
+ *
+ * The right column was a fixed 36 cells wide at 160 and 28 at 120. It holds a
+ * conversation, so the Product Owner accepted splitting what the sidebar leaves
+ * equally with the Transcript, with the spare cell of an odd remainder going to
+ * the Transcript rather than to fractional geometry.
+ *
+ * Every expected number here is the accepted table's. Nothing asks
+ * `inspectionWidth` what it thinks: a test that did would agree with the
+ * product however it drifted.
+ */
+describe("Tier PW — the accepted column shares, in the frame that was committed", () => {
+  // The fixture entry publishes its binding from an eval block, and the
+  // Bindings reading below measures the row that binding draws. Without the
+  // compiler that block refuses and the pane has nothing in it to measure.
+  beforeAll(() => useTempFileCompiler());
+  /** The accepted table, as columns of whole cells. */
+  const SHARES: readonly {
+    readonly name: string;
+    readonly size: ReplTerminalSize;
+    readonly sidebar: number;
+    readonly transcript: number;
+    readonly right: number;
+    readonly rightStartsAt: number;
+    /**
+     * The two accepted bodies of the right pane, where the table states them.
+     *
+     * The pane holds either reading, and they are not inset alike. `bindings`
+     * is the pane's own interior — the pane less the one edge it draws — which
+     * is the body a binding row has always been written to. `sidekick` is that
+     * interior inset two cells on each side, which is what was asked for about
+     * the conversation. Both are the accepted table's own numbers rather than
+     * a subtraction performed here.
+     */
+    readonly body?: {
+      readonly bindings: { readonly startsAt: number; readonly width: number };
+      readonly sidekick: { readonly startsAt: number; readonly width: number };
+    };
+  }[] = Object.freeze([
+    {
+      name: "160x36",
+      size: WIDE,
+      sidebar: 32,
+      transcript: 64,
+      right: 64,
+      rightStartsAt: 96,
+      body: { bindings: { startsAt: 97, width: 63 }, sidekick: { startsAt: 99, width: 59 } },
+    },
+    {
+      name: "120x30",
+      size: MEDIUM,
+      sidebar: 28,
+      transcript: 46,
+      right: 46,
+      rightStartsAt: 74,
+      body: { bindings: { startsAt: 75, width: 45 }, sidekick: { startsAt: 77, width: 41 } },
+    },
+    {
+      name: "161x36",
+      size: { columns: 161, rows: 36 },
+      sidebar: 32,
+      transcript: 65,
+      right: 64,
+      rightStartsAt: 97,
+      body: { bindings: { startsAt: 98, width: 63 }, sidekick: { startsAt: 100, width: 59 } },
+    },
+  ]);
+
+  it("PW1: each column is the accepted share, and the three of them are disjoint", function* () {
+    const model = yield* settledAndFailed();
+    for (const share of SHARES) {
+      for (const tab of [
+        { name: "Sidekick", sidekick: true, select: (state: ReplState) => state },
+        { name: "Bindings", sidekick: false, select: inspecting },
+      ]) {
+        const where = `${share.name} ${tab.name}`;
+        yield* scoped(function* (): Operation<void> {
+          const presenter = yield* usePresenter(share.size);
+          // The first entry selected, so the Bindings reading has a real
+          // binding row to measure rather than an empty pane: the row is the
+          // thing the accepted body width is about.
+          const observed = yield* presenter.commit(
+            reading(
+              tab.select(selecting(stateWith({}), "entry-1")),
+              model,
+              NOTHING_LIVE,
+              share.size,
+            ),
+          );
+          const { grid } = presenter;
+          const bounds = (region: string): ReplBounds => {
+            const found = regionBounds(observed, region);
+            if (found === undefined) {
+              throw new Error(`${where} published no ${region} region`);
+            }
+            return found;
+          };
+          const sidebar = bounds("sidebar");
+          const transcript = bounds("transcript");
+          const right = bounds("inspection");
+
+          // The accepted shares, as outer columns.
+          expect([where, sidebar.x, sidebar.width]).toEqual([where, 0, share.sidebar]);
+          expect([where, transcript.x, transcript.width]).toEqual([
+            where,
+            share.sidebar,
+            share.transcript,
+          ]);
+          expect([where, right.x, right.width]).toEqual([where, share.rightStartsAt, share.right]);
+
+          // Whole cells, and the three of them exactly the terminal: no column
+          // overlaps the one beside it and none of the row is unaccounted for.
+          for (const [name, one] of [
+            ["sidebar", sidebar],
+            ["transcript", transcript],
+            ["right", right],
+          ] as const) {
+            expect([where, name, Number.isInteger(one.width)]).toEqual([where, name, true]);
+            expect([where, name, Number.isInteger(one.x)]).toEqual([where, name, true]);
+          }
+          expect([where, sidebar.width + transcript.width + right.width]).toEqual([
+            where,
+            share.size.columns,
+          ]);
+          expect([where, transcript.x]).toEqual([where, sidebar.x + sidebar.width]);
+          expect([where, right.x]).toEqual([where, transcript.x + transcript.width]);
+
+          // Both header edges are still drawn, across the columns they close.
+          const rightHeader = [
+            placed(observed, "inspection:heading"),
+            placed(observed, "tab:bindings"),
+            placed(observed, "tab:sidekick"),
+          ].reduce((lowest, one) => (one.y > lowest.y ? one : lowest));
+          for (const [name, header] of [
+            ["transcript", placed(observed, "transcript:heading")],
+            ["right", rightHeader],
+          ] as const) {
+            expect([
+              where,
+              name,
+              grid.styleAt(header.x + header.width - 1, header.y + 1).foreground,
+            ]).toEqual([where, name, ACCEPTED_EDGE.chrome]);
+          }
+
+          // Whichever of the two bodies this reading has. The inset was asked
+          // for about the Sidekick's own body, so the other reading keeps the
+          // pane it always had — and a row four cells narrower than the source
+          // it quotes is the regression this distinguishes.
+          const body = share.body;
+          if (body !== undefined) {
+            const inside = observed.regionOf(SIDEKICK_BODY);
+            if (tab.sidekick) {
+              if (inside === undefined) {
+                throw new Error(`${where} published no Sidekick body`);
+              }
+              expect([where, inside.x, inside.width]).toEqual([
+                where,
+                body.sidekick.startsAt,
+                body.sidekick.width,
+              ]);
+              // Every body row is inside that width, and the gutters hold no
+              // text of their own.
+              for (const key of observed.keys) {
+                const row = observed.boundsOf(key);
+                if (row === undefined || !within(row, inside)) {
+                  continue;
+                }
+                expect([where, key, row.x, row.width]).toEqual([
+                  where,
+                  key,
+                  inside.x,
+                  inside.width,
+                ]);
+              }
+              const { startsAt, width } = body.sidekick;
+              for (const gutter of [startsAt - 1, startsAt + width]) {
+                expect([where, gutter, grid.at(gutter, inside.y)]).toEqual([where, gutter, " "]);
+              }
+            } else {
+              // No inset body is published for this reading at all, which is
+              // what leaves the measured body width the pane's own.
+              expect([where, inside]).toEqual([where, undefined]);
+              const binding = observed.boundsOf("binding:kept");
+              if (binding === undefined) {
+                throw new Error(`${where} drew no binding row to measure`);
+              }
+              expect([where, binding.x, binding.width]).toEqual([
+                where,
+                body.bindings.startsAt,
+                body.bindings.width,
+              ]);
+            }
+            // The header spans the whole pane, which is the point of measuring
+            // it and the body separately.
+            expect([where, placed(observed, "inspection:heading").width]).toEqual([
+              where,
+              right.width - 1,
+            ]);
+          }
+
+          // And the footer is the seven rows it has always been.
+          expect([where, bounds("footer").height]).toEqual([where, FOOTER_ROWS]);
+        });
+      }
+    }
+  });
+});
+
+/**
+ * Tier AR — a retained reading larger than one measuring render (A2).
+ *
+ * The frame is the point. A finished reading is as long as the entry that
+ * produced it, and measuring every one of its candidates in a single render
+ * refused on a long enough entry — so the command died before it drew
+ * anything, with no frame to scroll and no reading to read. Everything here
+ * goes through the real presenter: the commit, the window the frame measured
+ * and the action a person presses to move it.
+ */
+describe("Tier AR — a retained reading larger than one measuring render", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /**
+   * One entry with more lines than a measuring render carries.
+   *
+   * Prose rather than elements, because what is under test is the length of
+   * the reading and not the work of evaluating it. Blank lines are in it
+   * deliberately: an empty candidate is measured differently from a full one,
+   * and a batch boundary is exactly where that difference could be dropped.
+   */
+  const LONG = Array.from({ length: 1400 }, (_, at) =>
+    at % 5 === 4 ? "" : `Line ${at} of a retained entry, kept exactly as it was written.`,
+  ).join("\n");
+
+  function* longReading(): Operation<ReplModel> {
+    const physical = new InMemoryStream();
+    yield* runEntry(physical, LONG);
+    return projected(yield* physical.readAll());
+  }
+
+  it("A2: it commits, its window reaches later rows, and the draft and History survive", function* () {
+    const model = yield* longReading();
+    const presenter = yield* usePresenter(WIDE);
+    const DRAFT = "a draft nothing here types over";
+    let state = selecting(stateWith({ draft: DRAFT }), "entry-1");
+    const viewOf = (one: ReplState): ReplView => reading(one, model, NOTHING_LIVE, WIDE);
+
+    // A frame at all. This is the commit that used to refuse.
+    const observed = yield* presenter.commit(viewOf(state));
+    if (viewportBounds(observed, READING_WINDOW) === undefined) {
+      throw new Error("this frame published no reading window");
+    }
+
+    // The whole reading exists, and the viewport is what limits the drawing:
+    // more rows than one render carries, and more than the pane can hold.
+    const first = windowOf(yield* presenter.prepare(viewOf(state)), READING_WINDOW);
+    expect(first.total).toBeGreaterThan(1024);
+    expect(first.capacity).toBeLessThan(first.total);
+    expect(first.from).toBe(0);
+    expect(first.more).toBe(true);
+
+    // Later rows, reached the way a reader reaches them: against the window
+    // each frame measured, one press at a time. A few presses are enough: what
+    // is under test is that the window moves over a reading this long at all.
+    for (let press = 0; press < 6; press += 1) {
+      state = reduceRepl(
+        state,
+        { kind: "scroll-reading", delta: 1 },
+        model,
+        NOTHING_LIVE,
+        yield* presenter.prepare(viewOf(state)),
+      ).state;
+      yield* presenter.commit(viewOf(state));
+    }
+    const moved = windowOf(yield* presenter.prepare(viewOf(state)), READING_WINDOW);
+    expect(moved.from).toBeGreaterThan(0);
+    // The reading did not get shorter to fit the engine.
+    expect(moved.total).toBe(first.total);
+
+    // Nothing above typed over the draft.
+    expect(state.draft).toBe(DRAFT);
+
+    // History still opens over this reading, and one Close still leaves it.
+    const over = opening(state);
+    const opened = yield* presenter.commit(viewOf(over));
+    expect(opened.boundsOf("drawer:open")).toBeDefined();
+    const closed = reduceRepl(
+      over,
+      { kind: "close-drawer" },
+      model,
+      NOTHING_LIVE,
+      yield* presenter.prepare(viewOf(over)),
+    ).state;
+    expect(closed.route.drawers.length).toBe(0);
+    const after = yield* presenter.commit(viewOf(closed));
+    expect(after.boundsOf("drawer:open")).toBeUndefined();
+    expect(closed.draft).toBe(DRAFT);
+  });
 });

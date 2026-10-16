@@ -31,7 +31,30 @@ export class ReplHostError extends Error {
   }
 }
 
+/**
+ * One fact a host states about itself, or an explicit unknown.
+ *
+ * `value` is absent when this host cannot state the fact — never a placeholder,
+ * a default or an empty string. A reply is told the difference because the two
+ * mean different things to the next thing it writes: a fact it has is a fact it
+ * may act on, and a fact nobody has is one it must stop at rather than fill in.
+ */
+export interface ReplHostFact {
+  readonly label: string;
+  readonly value: string | undefined;
+}
+
 export interface ReplHostApi {
+  /**
+   * What this process is standing on, stated rather than detected.
+   *
+   * The runtime, the build and the release it belongs to are answers only the
+   * entrypoint has: shared code that sniffed a global would report whichever
+   * runtime it happened to recognize, and a compiled binary recognizes the one
+   * it was compiled by rather than the one it is. So the facts arrive here, as
+   * text that is rendered and never parsed.
+   */
+  environment(): Operation<readonly ReplHostFact[]>;
   /**
    * An opaque, URL-safe name for one new execution.
    *
@@ -59,6 +82,10 @@ export interface ReplHostApi {
 }
 
 export const ReplHost: Api<ReplHostApi> = createApi<ReplHostApi>("ReplHost", {
+  // deno-lint-ignore require-yield
+  *environment(): Operation<readonly ReplHostFact[]> {
+    throw new ReplHostError("describing this host");
+  },
   // deno-lint-ignore require-yield
   *identify(): Operation<string> {
     throw new ReplHostError("naming an execution");

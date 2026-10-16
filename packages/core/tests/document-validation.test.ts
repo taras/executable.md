@@ -764,7 +764,7 @@ describe("Tier DV: the withdrawn terminal-grid names", () => {
 
     expect(result.outcome).toBe("invalid");
     // Exactly what `<DefinitelyMissing />` gets in DV1, once per invocation,
-    // and nothing else: no placement rule, no prop rule, no layout rule.
+    // and nothing else: no structural rule, no prop rule, no layout rule.
     expect(codes(result)).toEqual([
       "component-unresolved",
       "component-unresolved",
@@ -888,7 +888,7 @@ describe("Tier DV: the withdrawn terminal-grid names", () => {
       kind: "repository",
       path: "components/Terminal.md",
     });
-    // The nesting the withdrawn placement rule refused — a pane holding an
+    // The nesting the withdrawn structural rule refused — a pane holding an
     // element that is not a pane, and a pane read as an ordinary region — is
     // ordinary composition now.
     expect(outcomes(result)).toEqual(["valid", "valid", "valid", "valid"]);
@@ -1551,7 +1551,7 @@ const PANEL = Structural({
 
 const DECLARED: ValidateDocumentSettings = { declarations: [DECK, PANEL] };
 
-describe("Tier ED — declared structural placement", () => {
+describe("Tier ED — declared structure", () => {
   it("ED8: accepts a construct holding its declared regions, and walks each body", function* () {
     const { result, seen } = yield* validateText(
       [
@@ -1585,7 +1585,7 @@ describe("Tier ED — declared structural placement", () => {
     expect(nested.seen.effects).toEqual([]);
   });
 
-  it("ED8: every placement, form and literal-prop error is a diagnostic", function* () {
+  it("ED8: every structure, form and literal-prop error is a diagnostic", function* () {
     const cases: readonly (readonly [string, string, readonly DocumentValidationCode[]])[] = [
       [
         "a region written outside its construct",
@@ -1661,7 +1661,7 @@ describe("Tier ED — declared structural placement", () => {
     );
   });
 
-  it("ED9: a dynamic prop is opaque, and opacity hides no placement mistake", function* () {
+  it("ED9: a dynamic prop is opaque, and opacity hides no structural mistake", function* () {
     const dynamic = yield* validateText(
       ["<Deck>", "  <Panel title={heading} />", "</Deck>", ""].join("\n"),
       DECLARED,

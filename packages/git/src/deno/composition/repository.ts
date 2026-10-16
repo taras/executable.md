@@ -46,7 +46,7 @@ import {
   localizeAdministration,
   workspaceEntryPresent,
 } from "./materialize.ts";
-import { repositoryCheckoutPath } from "./placement.ts";
+import { repositoryCheckoutPath } from "./checkout-paths.ts";
 import {
   attempted,
   created,
@@ -177,7 +177,7 @@ export function* prepareRepositoryAttachment(
     throw stale(subject, "metadata");
   }
   // Before the Workspace is read and long before Git runs: what is retained has
-  // to still be this identity's own placement and this identity's own url.
+  // to still be this identity's own path and this identity's own url.
   agreedStored(stored, subject);
   const checkoutPath = agreedRepository(record, subject).checkoutPath;
   if (!(yield* workspaceEntryPresent(workspace.filesystem, checkoutPath))) {

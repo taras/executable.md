@@ -151,7 +151,7 @@ const DENO_ADAPTER: readonly string[] = [
   "src/deno/composition/materialize.ts",
   "src/deno/composition/object-source.ts",
   "src/deno/composition/operations.ts",
-  "src/deno/composition/placement.ts",
+  "src/deno/composition/checkout-paths.ts",
   "src/deno/composition/provider.ts",
   "src/deno/composition/pull-request-operations.ts",
   "src/deno/composition/pull-request.ts",
@@ -176,7 +176,7 @@ const DENO_ADAPTER: readonly string[] = [
   "src/deno/run-composition/leases.ts",
   "src/deno/run-composition/metadata.ts",
   "src/deno/run-composition/operations.ts",
-  "src/deno/run-composition/placement.ts",
+  "src/deno/run-composition/checkout-layout.ts",
   "src/deno/run-composition/provider.ts",
   "src/deno/run-composition/pull-request.ts",
 ];

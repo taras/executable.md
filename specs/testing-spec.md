@@ -718,7 +718,7 @@ corpus that no longer exists.
 The file is parsed rather than trusted. Version, every provenance field, the
 runtime names, the shape of every path, and the positivity and integrality of
 every millisecond are checked; anything else is refused, because a partition
-computed from unplaceable data is worse than no partition.
+computed from unusable data is worse than no partition.
 
 `deno task weights:measure` is the only command that writes it. Measurement runs
 each applicable file alone through that runtime's exact one-file command, times

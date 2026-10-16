@@ -2,7 +2,7 @@
  * Where an ordinary run keeps the repositories and worktrees it manages.
  *
  * A workflow run's checkouts live inside the run's own Workspace, so their
- * placement is Workspace-relative and their lifetime is the run's. An ordinary
+ * layout is Workspace-relative and their lifetime is the run's. An ordinary
  * run has no Workspace and no run. Its checkouts are the person's work — a
  * branch they will look at tomorrow, a worktree an agent is still editing — so
  * they live under one host root, they survive every execution, and nothing here

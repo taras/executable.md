@@ -71,6 +71,7 @@ import type { AgentPromptCheckpoint } from "./checkpoint.ts";
 import { AgentPromptError, parsePromptFailure } from "./errors.ts";
 import type { SerializedPromptFailure } from "./errors.ts";
 import { AgentInternal } from "./internal.ts";
+import { HostObservationFailure } from "./publication.ts";
 import type { AgentPromptAssociation, AgentPromptHandle } from "./publication.ts";
 import { sourceDescription } from "../source-position.ts";
 import type { SourcePosition } from "../types.ts";
@@ -208,16 +209,7 @@ export function* observePermissionDecisions(): Operation<void> {
   yield* Agent.around(
     {
       *prompt([text, options], next) {
-        // One ledger for this exact invocation, made here rather than by
-        // whoever called: nothing outside this middleware creates, places or
-        // brackets an audit, so no caller can get the lifetime wrong.
-        const audit = promptPermissionAudit();
-        const wrapped = audited(yield* next(text, options), audit.ledger);
-        // The association is the wrapped stream itself. Only whoever holds the
-        // exact stream this invocation returned can read its audit, which is
-        // what makes a canonical `<Prompt>` able to and a bystander not.
-        (yield* PromptAudits.get())?.set(wrapped, audit);
-        return wrapped;
+        return yield* auditedPromptStream(yield* next(text, options));
       },
       *requestPermission([request], next) {
         const ledger = yield* PromptAudit.get();
@@ -231,6 +223,31 @@ export function* observePermissionDecisions(): Operation<void> {
     },
     { at: "max" },
   );
+}
+
+/**
+ * Place one ledger around a cold provider stream, and remember whose it is.
+ *
+ * The one implementation of it. Middleware around `Agent.prompt` calls this for
+ * every ordinary turn, and a retained conversation — which reaches its provider
+ * directly, so no middleware runs for it — calls it for the stream its own
+ * canonical runner is about to consume. Both therefore get exactly one audit
+ * for the exact stream that was consumed, which is what `completedPromptAudit`
+ * can then be asked about.
+ *
+ * Made here rather than by whoever called: nothing outside this module creates,
+ * places or brackets an audit, so no caller can get the lifetime wrong. The
+ * association is the wrapped stream itself — only whoever holds the exact
+ * stream this returned can read its audit, which is what makes a canonical turn
+ * able to and a bystander not.
+ */
+export function* auditedPromptStream(
+  stream: Stream<AgentPromptEvent, string>,
+): Operation<Stream<AgentPromptEvent, string>> {
+  const audit = promptPermissionAudit();
+  const wrapped = audited(stream, audit.ledger);
+  (yield* PromptAudits.get())?.set(wrapped, audit);
+  return wrapped;
 }
 
 /**
@@ -444,7 +461,10 @@ class AgentPromptPublicationError extends Error {
  *
  * A publisher that raises activates the run's durability failure rather than
  * returning: the prompt's result is not in the journal, and a run that carried
- * on would be continuing from a history missing the turn it just had.
+ * on would be continuing from a history missing the turn it just had. A host
+ * that raised while being *shown* the turn reaches the same activation,
+ * carrying its own failure: an observation is a trusted host operation like
+ * publication, so failing it is the host's failure and never the agent's.
  */
 function promptPublication(
   association: () => AgentPromptAssociation | undefined,
@@ -460,6 +480,14 @@ function promptPublication(
       try {
         result = { status: "ok", value: yield* execute() };
       } catch (error) {
+        if (error instanceof HostObservationFailure) {
+          // A trusted host failed while being shown this turn, which is not a
+          // result this prompt may answer with. Activated before anything is
+          // appended, carrying the host's own failure rather than this
+          // wrapper: the run stops for the same reason a throwing `publish()`
+          // stops it, and no record claims the turn.
+          throw activateFailure(error.reason);
+        }
         const failure = error instanceof Error ? error : new Error(String(error));
         result = { status: "err", error: serializeError(failure) };
       }

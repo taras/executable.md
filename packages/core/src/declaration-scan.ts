@@ -10,7 +10,7 @@
  * inside it the same standing as one written beside it, and a declaration is
  * what installs a child's providers.
  *
- * So placement is reported here. Expansion says when a segment list begins and
+ * So structure is reported here. Expansion says when a segment list begins and
  * ends, innermost last, and a harness counting those calls knows whether the
  * element it is being asked about is a direct child of the list it is scanning
  * or something a construct reached on its own.
@@ -33,7 +33,7 @@ import type { AnswerConfiguration } from "./answers.ts";
  * reached only because a construct expanded it. A scanner that answers nothing
  * leaves the element an ordinary region.
  */
-export type AnswersPlacement = "parse" | "parsed" | "misplaced";
+export type AnswersState = "parse" | "parsed" | "misplaced";
 
 export interface DeclarationScanner {
   /** One segment list has begun expanding. */
@@ -41,7 +41,7 @@ export interface DeclarationScanner {
   /** …and has finished, on a failure as well as on a completion. */
   exitList(): void;
   /** Whether the `<Answers>` written at `site` configures a child. */
-  declaresAnswers(site: string): AnswersPlacement | undefined;
+  declaresAnswers(site: string): AnswersState | undefined;
   /** The configuration that declaration produced, or why it is malformed. */
   recordAnswers(site: string, configuration: Result<AnswerConfiguration>): void;
 }

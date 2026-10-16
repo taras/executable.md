@@ -67,7 +67,7 @@ function createStubProvider(respond?: (content: string) => StubResponse): Stub {
           },
           // deno-lint-ignore require-yield
           *session([routed]) {
-            // A `<Session>` element routes a placement rather than a bare
+            // A `<Session>` element routes a request rather than a bare
             // string: the descriptive name is on it, and the engine identity is
             // reachable only through the delivered coordinator. A stub provider reads
             // the name exactly as a real one does.

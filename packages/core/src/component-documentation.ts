@@ -223,7 +223,17 @@ export interface DocumentationContribution {
  * Documentation has to account for the protected tier as well, and two sets
  * under one name would eventually be used for each other's question.
  */
-export const CORE_DOCUMENTED_NAMES: ReadonlySet<string> = new Set([
-  ...CORE_REGISTRY.keys(),
-  ...PROTECTED_COMPONENT_NAMES,
-]);
+/**
+ * Built on first use rather than at module load.
+ *
+ * The protected tier lives in a module that reaches back into this one through
+ * the evaluator it declares, so reading it while this module's body runs makes
+ * the answer depend on which file an importer happened to load first. Nothing
+ * needs this set before something asks for it, so nothing reads it then.
+ */
+let documentedNames: ReadonlySet<string> | undefined;
+
+export function coreDocumentedNames(): ReadonlySet<string> {
+  documentedNames ??= new Set([...CORE_REGISTRY.keys(), ...PROTECTED_COMPONENT_NAMES]);
+  return documentedNames;
+}

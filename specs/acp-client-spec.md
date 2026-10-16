@@ -61,7 +61,7 @@ routes an opaque request and cannot manufacture that result.
   `{ agent?; session?: string | Session; timeout? }`.
 - `AgentSessionUse` is an opaque nominal subtype of `Session`: one Core-issued
   configured use of a conversation, carrying the exact provider Session that
-  completed the final opaque placement and its configuration in Core-owned
+  finished the final opaque request and its configuration in Core-owned
   identity state. One configured
   `<Session>` issues one use and selects that same object for its nested
   operations. Core freezes the carrier and its copied configuration; it does not
@@ -155,9 +155,10 @@ routes an opaque request and cannot manufacture that result.
 
 ### The provider-factory seam
 
-A provider is a factory that installs `Agent` middleware for its scope. Core
-delivers its coordinator directly to the factory; it never travels through
-Agent middleware:
+A provider is a factory that installs `Agent` middleware for its scope, and —
+if it serves saved conversations — one provider object for them. Core delivers
+its coordinator directly to the factory; it never travels through Agent
+middleware:
 
 ```ts
 type AgentProviderFactory = (
@@ -170,50 +171,120 @@ type ConfigureAgentSession = (
   configuration: SessionConfiguration,
 ) => Operation<SessionConfiguration>;
 
-type AgentSessionPlacementState =
-  | { readonly kind: "fresh" }
+type AgentSessionSetupState =
+  | { readonly kind: "new" }
   | {
-      readonly kind: "established";
+      readonly kind: "existing";
       readonly configure: ConfigureAgentSession;
     };
 
-interface AgentSessionPlacement {
+interface ProviderSessionConfiguration {
+  readonly providerTools: readonly string[];
+  readonly mcpServers: readonly JsonObject[];
+  readonly permissions: JsonObject;
+  readonly systemPrompt: string | { readonly append: string } | null;
+}
+
+interface AgentSessionSetup {
   readonly sessionIdentity?: string;
-  complete(
+  activate(
+    provider: string,
+    agentCommand: string,
+    configuration?: ProviderSessionConfiguration,
+  ): Operation<Result<void>>;
+  finish(
     session: Session,
-    state: AgentSessionPlacementState,
+    state: AgentSessionSetupState,
   ): Operation<Session>;
 }
 
 interface AgentProviderCoordinator extends AgentLaunchCoordinator {
-  sessionPlacement(request: AgentSessionRequest): AgentSessionPlacement;
+  sessionSetup(request: AgentSessionRequest): AgentSessionSetup;
+}
+
+interface AgentConversationProvider {
+  agent(name: string): Operation<string>;
+  session(request: AgentSessionRequest, agent: string): Operation<Session>;
+  options(agent: string, request?: AgentOptionsRequest): Operation<AgentOptions>;
+  prompt(
+    content: string,
+    options: PromptOptions & { agent: string; session: Session },
+  ): Operation<Stream<AgentPromptEvent, string>>;
 }
 ```
 
-`sessionPlacement()` accepts one exact live opaque placement request. Its handle
-exposes the optional durable component identity and settles that placement once.
-For a fresh Session, `complete()` issues the configured use without reading or
-writing provider configuration. For an established Session, it invokes the
+A provider that serves saved conversations installs an `AgentConversationProvider`
+in its own provider scope, through the Context of that same name on
+`@executablemd/core/api`, alongside whatever `Agent` middleware it provides. The
+factory signature is unchanged. The object carries no coordinator, permission
+flag, configuration approval, history mapping or completion receipt: it is
+trusted behavior a conversation selects, and everything it is held to stays with
+Core.
+
+Each of the four operations takes explicitly what the public chain supplied
+implicitly. `agent` resolves through this provider rather than through
+`Agent.agent`. `session` accepts the genuine opaque request — a name, a `Session`
+or a structural look-alike names no conversation here — and an explicit agent, so
+the setup the coordinator delivers is reached and the agent cannot be answered
+for by anything else. `options` inspects through the same object. `prompt`
+returns a cold stream for the exact `Session` the conversation supplies; its
+liveness check and its native work belong to the subscription, so obtaining a
+stream starts nothing.
+
+The object has its installing provider's lifetime. Its methods resolve that
+provider's concrete state at the moment of use, so a reference kept past the
+provider's teardown refuses rather than reaching state that is gone. A provider
+that selects its state per dispatch does not by itself supply one: a host serving
+a saved conversation installs an object for one concrete state in that
+conversation's scope.
+
+`sessionSetup()` accepts one exact live opaque session request. Its handle
+exposes the optional durable component identity, authorizes provider work once,
+and settles that request once.
+For a new Session, `finish()` issues the configured use without reading or
+writing provider configuration. For an existing Session, it invokes the
 provider's stable `configure` operation, requires the returned canonical value
 to equal the requested members exactly, and issues the use with that returned
-value. An unconfigured placement returns the provider's exact raw Session.
+value. An unconfigured request returns the provider's exact raw Session.
+
+`activate()` is asked before anything is reattached, created or prompted, and
+`finish()` refuses until it has answered `Ok`. The provider names itself, names
+the command it resolved, and states the active provider configuration it is
+about to construct under — the agent's own tool list, the validated MCP
+connection configurations, the permission configuration, and the system-prompt
+replacement, addition or explicit `null`. Every member is required: an input
+this host left to the agent's own default is not an empty one, so a provider
+that cannot state all four states none, and a conversation that requires one
+refuses rather than comparing against a value nobody supplied. Those values are
+built from the same inputs construction uses — detached once from the host's own
+containers — so a configuration this provider declared and a session it then
+created cannot differ.
+
+A retained conversation requires the configuration; an ordinary `<Session>` may
+omit it, saves none and keeps its existing behavior. One setup authorizes one
+attempt: a refusal, a cancellation or a closure leaves that handle unable to
+retry or to settle, and a later explicit action asks for a setup of its own. An
+`Ok` authorizes work and asserts nothing about native creation. A delivered
+setup with no `activate` is refused by the structural adapter rather than read
+as authorized.
 
 One private registration owner is created inside the provider installation's
 operation. Its closure owns liveness, exact Session-to-`configure` registration,
-duplicate detection, completion and configured-use lookup. The same Session and
+duplicate detection, one authorization attempt per setup, settling and
+configured-use lookup. The same Session and
 operation may be registered again; a different operation for that Session, a
-second completion, registration after teardown or lookup after teardown
+second settling, registration after teardown or lookup after teardown
 refuses. Provider teardown runs while the owner is live, then closes it and
 drops its registrations deterministically. Sibling installations and runs have
 distinct owners.
 
-The public placement carries only an unreadable private reference to its own
+The public request carries only an unreadable private reference to its own
 issuance. Middleware may transfer that whole route but cannot read, edit, copy
 or reattach its configuration. The owner and configuration operation are
 reachable through no Context, module registry, public Agent operation,
 middleware-readable member, return value or Session property. Another loaded
 provider copy composes through the coordinator it received; another loaded Core
-copy cannot manufacture a placement or use this owner admits.
+copy cannot manufacture a request or use this owner admits.
 
 `installAgentComponents({ rootProvider: { factory, options } })` owns the root
 provider's lifetime through `Execution.document`: the handler delegates the
@@ -292,26 +363,26 @@ already using and nothing is read or written about either setting; with only
 model the conversation is already on.
 
 Configuration is not an `Agent.session()` argument. Session middleware receives
-only a name or opaque placement and returns the Session selected by its final
-route. The placement's Core-private issuance carries its frozen configuration;
+only a name or opaque request and returns the Session selected by its final
+route. The request's Core-private issuance carries its frozen configuration;
 only the coordinator delivered directly to the provider factory can read that
 issuance and complete it with the provider's exact Session. Core issues a
 configured use only from that completion.
 
 `request.with({ name })` keeps the same issuance and configuration. Replacing it
-with another live placement selects that placement's configuration and optional
+with another live request selects that request's configuration and optional
 durable identity. Replacing it with a raw string, or returning an already-issued
-raw Session without completing a placement, selects the unconfigured path.
+raw Session without finishing a setup, selects the unconfigured path.
 Returning another authentic configured use selects that use. The configuration
 therefore moves only with its whole opaque route; middleware never receives a
 separate setting it can combine with another route.
 
 `useConfiguredSession(name, configuration)` accepts a string, omission or live
-placement request and returns `Operation<Session>`. A live request receives the
+session request and returns `Operation<Session>`. A live request receives the
 frozen configuration before routing. A string or omission opens one fresh
-operation-local placement issuance with no durable component identity, routes
+operation-local request issuance with no durable component identity, routes
 that request, and closes it in `finally`. The result is an
-`AgentSessionUse` only when the final route completed a configured placement;
+`AgentSessionUse` only when the final route finished a configured request;
 middleware may instead select an unconfigured route.
 
 The settings then travel inside that frozen use when a prompt or launch names
@@ -412,11 +483,11 @@ the cwd is not injected as text, and rendered instructions grant no directory.
 ## A conversation a trusted host holds open
 
 `<Session>` and `<Prompt>` are written inside an expansion, with an element to
-name the placement and a journal already around them. A host that discusses
+name the session and a journal already around them. A host that discusses
 something with an agent has neither: a person is typing into a chat, the
 history outlives the process, and there is no document. `useAgentConversation()`
 on `@executablemd/core/host` is that conversation, and it is the genuine one —
-canonical Session placement, journaled turns, verified configuration, and an
+a canonical agent session, journaled turns, verified configuration, and an
 identity the provider reattaches to.
 
 ```ts
@@ -427,6 +498,14 @@ const opened = yield* useAgentConversation({
   installations,  // the trusted assembly that selects the provider and its policy
 });
 ```
+
+The `agent` a host names is the conversation's own for the life of it. Each turn
+resolves it through the conversation's own provider before allocating its
+session, and then states it to both of that turn's operations — so the session
+the request is resolved into and the prompt that is sent are the same agent's,
+and a conversation runs under an agent that is not the host's default. The
+request still names no agent: an agent on it would be an agent anything holding
+it could read or replace.
 
 The handle is provided by a resource owned by the caller's scope and offers
 three members: `prompt(input, configuration?)`, which sends one journaled turn
@@ -447,7 +526,36 @@ is open for all three things it offers; the bridge carries that bound operation
 and nothing behind it, and `AgentConversationHost` stays an ordinary declaration
 local to the synthetic root.
 
-**It is an element inside its own execution.** A provider and its placement
+**It does its work through one installed provider, directly.** The conversation
+reads the `AgentConversationProvider` its host installed once, in its own scope,
+after installation and before it reports itself ready, and every agent, session,
+options and prompt operation of that chat goes to that object. Reading selects;
+it probes no agent, creates no runtime, ensures no session, sends no turn and
+saves nothing, so a cold opening and a replay reach none of its four methods.
+A later selection cannot reach a conversation that is already open.
+
+`Agent` middleware is compositional on purpose, and that is what makes it the
+wrong channel for this: a handler that forwarded a request's descriptive name
+instead of the request opened an ordinary route, so the provider never reached
+the request's setup and the required configuration was never asked for; a prompt
+handler could replace `options.session` after another session had been checked.
+A conversation therefore does not route, and there is no fallback to routing — a
+provider that installs no object refuses the opening with an explicit
+unsupported-conversation error, before the conversation is bound, so no
+configuration record, prompt record or root terminal follows from the refusal.
+Ordinary `<Session>` and `<Prompt>` keep composing through `Agent` exactly as
+before.
+
+Core keeps what it already owned. The one-use request is opened and closed by
+the conversation, the configuration requirement travels inside its issuance, and
+the conversation retains private evidence of the exact `Session` settling that
+request produced: a provider that answers with a session it never settled, or
+with another after settling, is refused before Core asks for a prompt stream.
+That check is not the configuration check — `activate()` still happens inside the
+provider before any native effect — and neither is evidence of native identity,
+which only a turn's own canonical record establishes.
+
+**It is an element inside its own execution.** A provider and its launch
 coordinator are installed inside `Execution.document`, and a durable preparation
 precedes both, so a conversation opened there could reach neither. The
 conversation is a host-declared identity component in a synthetic root core
@@ -484,14 +592,37 @@ refuses rather than reconnecting the wrong chat, and one established with
 another agent refuses rather than changing agent in place — an explicit agent
 change is a new conversation with a new `id`.
 
-**What a turn ran under is the provider's own account.** A placement is made per
-turn, because a placement settles what it asks before it is routed and is good
-for one use: the first is fresh and the provider creates the conversation, and a
-later one is established, so what the turn asks is applied and read back through
-§Session configuration's own machinery. A provider that reports it put the
-conversation under something else refuses that turn rather than having those
-settings recorded. `options()` sends no model prompt and journals nothing, and
-is called on explicit interaction rather than to restore a pane.
+**A conversation is continued under what it was created under.** The first
+turn's activation commits one canonical record holding the provider, the
+resolved command and the complete active provider configuration, and it commits
+before any native work may begin — so a conversation interrupted after the
+provider asserted an identity but before its turn was acknowledged already
+holds what it was created under rather than having it reconstructed from
+whatever this process's defaults are now. Every later activation compares
+against that record and writes nothing: the values are compared as JSON rather
+than by identity or member order, array order is the provider's own, and a
+difference is an unsupported change that refuses before reattachment. The
+conversation, its turns, its native identity and its configuration all stand
+through that refusal, and nothing is created in its place. A reopening on its
+own performs no activation and no provider work at all; the configuration record
+is re-offered in its own position so the turns written after it replay in order.
+
+These are configuration, not identity. A future supported change applies and
+verifies on the same native conversation and is saved before anything relies on
+it; this build records and compares the initial configuration and has no
+live-update protocol. An absent Prompt outcome is never permission to replace an
+existing configuration, and the configuration is never a native identity: that
+remains the canonical assertion a turn records.
+
+**What a turn ran under is the provider's own account.** A request is made per
+turn, because a request settles what it asks before it is routed and is good
+for one use: the first names a new session and the provider creates the
+conversation, and a later one names an existing session, so what the turn asks
+is applied and read back through §Session configuration's own machinery. A
+provider that reports it put the conversation under something else refuses that
+turn rather than having those settings recorded. `options()` sends no model
+prompt and journals nothing, and is called on explicit interaction rather than
+to restore a pane.
 
 **The native conversation an established history names.** A completed turn
 retains the exact conversation the provider said it ran in, so the retained
@@ -1100,25 +1231,25 @@ none.
   probe runtime's `doctor()`; a non-ok report throws with the agent's code and
   details. Results are cached per agent.
 - **Sessions.** `session()` places a session by (agent, logical session,
-  contextual cwd): placement walks from the cwd up to the Git root and reuses the
+  contextual cwd): resolution walks from the cwd up to the Git root and reuses the
   nearest existing record for the same agent command and cwd, otherwise names the
   exact cwd. The resolved `sessionKey` — not the caller cwd — keys the session
   queue.
 
-  A placement is **pending** or **established**. Pending says where a session
+  A session is **new** or **existing**. New says where a session
   will live and nothing more, and `session()` returns it having contacted no
   backend, published no construction route, built no runtime, written no record
   and started no turn — so a `<Session.Launch>` nested inside that `<Session>`
-  still gets to choose how the session is constructed. Established says the
+  still gets to choose how the session is constructed. Existing says the
   route and the durable identity already exist, and `session()` keeps its eager
   behavior for one: it takes ownership where the agent needs it, reconciles the
   retained route, ensures through the bound runtime, validates the exact identity
   and host mapping, releases the handle, and starts no turn.
 
-  Directory placement classifies a record still carrying the pending
-  materialization marker as pending, and a record without one — including every
-  record written before deferred materialization existed — as established. A
-  retained client-native route is established even before ACPX has attached to
+  Directory resolution classifies a record still carrying ACPX's own pending
+  marker as new, and a record without one — including every
+  record written before deferred creation existed — as existing. A
+  retained client-native route is existing even before ACPX has attached to
   it. A published `acp-first` route is not: it is what a first turn writes down
   before it runs, and a first turn nobody accepted leaves exactly that behind.
 
@@ -1126,11 +1257,11 @@ none.
   the exact object it issued rather than the key inside it: a structural copy, a
   value another provider copy produced, and one whose provider scope has been
   torn down are all refused before any provider work, as is a value used with a
-  different resolved agent. The provider keeps that object for the placement's
-  life, so a second `<Session>` naming the same placement is answered with it and
+  different resolved agent. The provider keeps that object for the session's
+  life, so a second `<Session>` naming the same session is answered with it and
   a `<Prompt>` given it is acting on the thing that was pinned.
 
-- **Materialization.** A pending ACP-first placement is constructed by the first
+- **Creation.** A new ACP-first session is constructed by the first
   subscribed `<Prompt>`, and only the backend's acceptance of that turn makes it
   a conversation. The provider ensures with
   `materialization: "first-turn-acceptance"`, which makes ACPX persist a
@@ -1176,8 +1307,8 @@ none.
   as `end_turn`; any other stop reason is a failure.
 - **Serialization.** Prompts for one session run FIFO on that session's queue;
   different sessions run concurrently. A subscription enters that queue before
-  any route, ensure or runtime creation for its placement, and re-reads the
-  placement's state once the queue grants — so two concurrent first prompts on
+  any route, ensure or runtime creation for its session, and re-reads the
+  session's state once the queue grants — so two concurrent first prompts on
   one session perform exactly one backend creation and the waiter continues the
   conversation its predecessor established. `withSessionRoute` — the hook an
   embedder supplies through `AcpxProviderDependencies` — wraps registry-dependent
@@ -1225,12 +1356,24 @@ none.
   contextual one is not a directory an agent process could stand in; `mcpServers` and `newSessionOptions` are passed to runtime creation and to
   `ensureSession()` exactly as given; `permissions: "strict"` selects the
   workflow profile's permission path; and `sessions` replaces directory-walk
-  placement with a host's own, answering with the placement's `state` as well as
+  resolution with a host's own, answering with the session's `state` as well as
   its key and directory, and is where a retained session this host cannot
-  continue is refused. `sessions.established()` is called where an assertion
+  continue is refused. `sessions.recordSessionIdentity()` is called where an assertion
   exists and not before: after the ensure that validated a reattachment, and
   after the backend accepted a constructed session's first turn. Every one of
   them defaults to the `xmd run` behavior above.
+- **A session host is both of its methods.** `sessions` stays optional and its
+  absence stays the ordinary walk, with no host database and nothing to record.
+  Supplied, it answers both: a host that decides where every session lives is
+  the host that holds what the provider confirmed stands there. So the provider
+  calls `recordSessionIdentity()` whenever a host is present rather than
+  whenever the method is, and a supplied host missing it is refused as it is
+  supplied — before a session is requested, before one is reattached and before
+  a turn could create one — rather than being read as no host at all. A host
+  refusal at any of the three sites is unchanged: the provider handle is given
+  up through the runtime that made it, further use through that association
+  refuses, and the provider's own assertion stands for the next attachment to
+  reconcile.
 - **Teardown.** Provider-scope teardown cancels active turns and closes each
   distinct runtime handle with an all-settled strategy, throwing a single error or
   an `AggregateError` from the provider scope.

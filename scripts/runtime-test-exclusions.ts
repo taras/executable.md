@@ -182,7 +182,7 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
   {
     path: "packages/acp/tests/loaded-copy.test.ts",
     reason:
-      "builds the second copy of core's placement machinery with `deno bundle`, which is Deno's, and drives the real ACP provider against it; the classification it proves — a resolved Session is recognized by its public data and everything else is handed to the delivered coordinator — is runtime-neutral and the same dispatch is exercised on every runtime by packages/acp/tests/provider.test.ts",
+      "builds the second copy of core's session setup machinery with `deno bundle`, which is Deno's, and drives the real ACP provider against it; the classification it proves — a resolved Session is recognized by its public data and everything else is handed to the delivered coordinator — is runtime-neutral and the same dispatch is exercised on every runtime by packages/acp/tests/provider.test.ts",
     issue: DERIVED_SCOPE,
   },
   {
@@ -673,7 +673,7 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
   {
     path: "packages/cli/tests/run-composition-deno.test.ts",
     reason:
-      "the same provider reached through an ordinary run, asked the questions only a runtime that operates repositories can answer: managed-Worktree session placement, an ordinary journal's diagnostic status, and diagnostic-trace non-authority",
+      "the same provider reached through an ordinary run, asked the questions only a runtime that operates repositories can answer: managed-Worktree session resolution, an ordinary journal's diagnostic status, and diagnostic-trace non-authority",
     issue: DERIVED_SCOPE,
   },
   {

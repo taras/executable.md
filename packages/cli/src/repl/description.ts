@@ -48,8 +48,8 @@ export type ReplViewData =
   | readonly ReplViewData[]
   | { readonly [key: string]: ReplViewData };
 
-/** Placement a parent decides for one direct child. Opaque to everyone else. */
-export type ReplPlacement = { readonly [key: string]: string | number | boolean };
+/** Layout a parent decides for one direct child. Opaque to everyone else. */
+export type ReplLayout = { readonly [key: string]: string | number | boolean };
 
 /**
  * One stretch of a row's text, and what those characters are.
@@ -136,8 +136,8 @@ export interface ReplNode<Action> {
   readonly key: string;
   /** The input as it stands: this description's own copy, already frozen. */
   readonly input: ReplViewData;
-  /** The placement this node's parent gave it. */
-  readonly placement: ReplPlacement;
+  /** The layout this node's parent gave it. */
+  readonly layout: ReplLayout;
   /**
    * Be told when the parent redescribes this node, inside that commit.
    *
@@ -272,7 +272,7 @@ interface Described<Action> {
   readonly key: string;
   readonly component: ReplComponent<Action>;
   readonly input: ReplViewData;
-  readonly placement: ReplPlacement;
+  readonly layout: ReplLayout;
   readonly children: readonly ReplDescription<Action>[];
   /** Whether mounting this node pushes a modal focus root. */
   readonly modal: boolean;
@@ -336,7 +336,7 @@ export interface ReplDescribedView<Action> {
   readonly key: string;
   readonly component: ReplComponent<Action>;
   readonly input: ReplViewData;
-  readonly placement: ReplPlacement;
+  readonly layout: ReplLayout;
   readonly children: readonly ReplDescription<Action>[];
   readonly modal: boolean;
   readonly focus: boolean;
@@ -378,7 +378,7 @@ export function describe<Action>(description: {
   key: string;
   component: ReplComponent<Action>;
   input: ReplViewData;
-  placement?: ReplPlacement;
+  layout?: ReplLayout;
   children?: readonly ReplDescription<Action>[];
   /** Mount this node as a modal focus root while it exists. */
   modal?: true;
@@ -402,7 +402,7 @@ export function describe<Action>(description: {
       key: description.key,
       component: description.component,
       input: detach(description.input),
-      placement: Object.freeze({ ...(description.placement ?? {}) }),
+      layout: Object.freeze({ ...(description.layout ?? {}) }),
       children: Object.freeze([...(description.children ?? [])]),
       modal: description.modal === true,
       focus: description.focus === true,
@@ -475,13 +475,17 @@ function at(path: readonly string[]): string {
  * walked would already have mounted half a tree by the time it found the
  * duplicate key at the end, and the previous tree would be neither the old one
  * nor the new one.
+ *
+ * The one judgment, and the whole of it. A caller asking in advance and a
+ * commit protecting itself reach this same function, so there is no second
+ * validator for the two answers to drift apart in — and nothing a caller
+ * supplies takes part in it: what a layout means is the parent's own, and this
+ * judges what the tree itself owns, which is issuance, keys, focus and
+ * modality.
  */
-export function validateDescriptions(
-  descriptions: readonly unknown[],
-  placementsAllowed: (placement: ReplPlacement, parent: string) => boolean = () => true,
-): Result<void> {
+export function validateDescriptions(descriptions: readonly unknown[]): Result<void> {
   const found: Found = { claims: 0, modals: [], focus: undefined };
-  const judged = walk(descriptions, [], placementsAllowed, found);
+  const judged = walk(descriptions, [], found);
   if (!judged.ok) {
     return judged;
   }
@@ -522,7 +526,6 @@ interface Found {
 function walk(
   descriptions: readonly unknown[],
   path: readonly string[],
-  placementsAllowed: (placement: ReplPlacement, parent: string) => boolean,
   found: Found,
 ): Result<void> {
   const seen = new Set<string>();
@@ -551,13 +554,6 @@ function walk(
     }
     seen.add(described.key);
 
-    if (!placementsAllowed(described.placement, at(path))) {
-      return Err(
-        new ReplDescriptionError(
-          `${at([...path, described.key])} carries a placement ${at(path)} does not accept.`,
-        ),
-      );
-    }
     const here = [...path, described.key];
     if (described.modal) {
       // Two modal roots on branches neither of which contains the other are a
@@ -587,7 +583,7 @@ function walk(
       }
     }
 
-    const nested = walk(described.children, here, placementsAllowed, found);
+    const nested = walk(described.children, here, found);
     if (!nested.ok) {
       return nested;
     }

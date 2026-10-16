@@ -26,7 +26,7 @@ import type { UpgradeAssembly } from "../src/upgrade.ts";
 import { refusedStandardInput } from "./support/standard-input.ts";
 import { refusedPluginModules } from "./support/plugin-modules.ts";
 
-import { replGrammarError } from "../src/cli.ts";
+import { replGrammarError, REPL_VALUES } from "../src/cli.ts";
 import { readQuestionForm } from "../src/repl/elicitation.ts";
 import { decodeLocation, encodeLocation } from "../src/repl/route.ts";
 import type { ReplSurface } from "../src/repl/route.ts";
@@ -456,7 +456,22 @@ describe("REPL documentation: what it says is what the code does", () => {
         .split(/\s+/)
         .filter((token) => token.length > 0)
         .map((token) => token.replace(/^'(.*)'$/, "$1"));
-      const positional = tokens.filter((token) => !token.startsWith("-"));
+      // Which token is the optional location is a question about ownership: a
+      // token after a valued option is that option's value. The roster comes
+      // from the command itself, so this reader cannot disagree with it about
+      // what it was handed.
+      const positional: string[] = [];
+      for (let at = 0; at < tokens.length; at += 1) {
+        const token = tokens[at] ?? "";
+        if (!token.startsWith("-")) {
+          positional.push(token);
+          continue;
+        }
+        // `--name=value` carries its own value, so it consumes nothing after it.
+        if (token.indexOf("=") === -1 && REPL_VALUES.includes(token)) {
+          at += 1;
+        }
+      }
       expect([rest, positional.length]).toEqual([rest, Math.min(positional.length, 1)]);
       // A placeholder is not a location; what is being checked is the shape.
       const concrete = positional[0]?.replace("<execution>", "kf39sla2");
@@ -465,7 +480,7 @@ describe("REPL documentation: what it says is what the code does", () => {
     }
   });
 
-  it("D1: the five options the spec names are the five the parser accepts", function* () {
+  it("D1: the six options the spec names are the six the parser accepts", function* () {
     const spec = yield* read(join(CLI, "..", "..", "specs", "repl-spec.md"));
     // Every option the specification names, from its own prose.
     const named = [...spec.matchAll(/`(--[a-z-]+)`/g)].map((match) => match[1]);
@@ -475,6 +490,7 @@ describe("REPL documentation: what it says is what the code does", () => {
       "--approve-reads",
       "--default-agent",
       "--deny-all",
+      "--sidekick-agent",
     ]);
 
     // Each is one the parser accepts, in both spellings a value option has.
@@ -482,7 +498,7 @@ describe("REPL documentation: what it says is what the code does", () => {
       expect([option, replGrammarError(["repl", option], undefined)]).toEqual([option, undefined]);
       expect(replGrammarError(["repl", `${option}=yes`], undefined)).toContain("takes no value");
     }
-    for (const option of ["--agent-provider", "--default-agent"]) {
+    for (const option of ["--agent-provider", "--default-agent", "--sidekick-agent"]) {
       expect([option, replGrammarError(["repl", option, "acpx"], undefined)]).toEqual([
         option,
         undefined,
@@ -494,7 +510,7 @@ describe("REPL documentation: what it says is what the code does", () => {
       expect(replGrammarError(["repl", option], undefined)).toContain("requires a value");
     }
 
-    // And there is no sixth: an option the specification does not name is
+    // And there is no seventh: an option the specification does not name is
     // refused by the name it was written as.
     expect(replGrammarError(["repl", "--include", "x"], undefined)).toContain(
       "unrecognized option for xmd repl: --include",
@@ -516,6 +532,9 @@ describe("REPL documentation: what it says is what the code does", () => {
       inspect: false,
       draft: undefined,
       session: undefined,
+      view: undefined,
+      right: undefined,
+      sidekick: undefined,
     });
     expect(encoded).toBe("xmd://repl/kf39sla2/entries");
     const decoded = decodeLocation(encoded);
@@ -549,6 +568,9 @@ describe("REPL documentation: what it says is what the code does", () => {
         inspect: false,
         draft: "the next one",
         session: undefined,
+        view: undefined,
+        right: undefined,
+        sidekick: undefined,
       });
       expect(location).toBe(`xmd://repl/kf39sla2/${surface}/entry-2?draft=the%20next%20one`);
       const read = decodeLocation(location);
@@ -582,6 +604,9 @@ describe("REPL documentation: what it says is what the code does", () => {
         inspect: false,
         draft: undefined,
         session: undefined,
+        view: undefined,
+        right: undefined,
+        sidekick: undefined,
       }),
     ).not.toBe("xmd://repl/kf39sla2/repl");
   });

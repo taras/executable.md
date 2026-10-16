@@ -194,7 +194,7 @@ describe("workflow Git.Add durability", () => {
    * Every way a retained add result can stop describing its invocation.
    *
    * Shape, then meaning: an object id that is not one, a checkout that is not
-   * the one this request selects or is not where placement puts it, pathspecs
+   * the one this request selects or is not where its path puts it, pathspecs
    * that are not the ones the document wrote, and a transition staging cannot
    * make — `git add` moves the index and leaves the branch, the commit and the
    * HEAD tree exactly where it found them.
@@ -237,7 +237,7 @@ describe("workflow Git.Add durability", () => {
       },
     },
     {
-      name: "names a Worktree this run's placement does not put there",
+      name: "names a Worktree this run's paths do not put there",
       damage: (record) => {
         Object(record.checkout).worktreeName = "forged";
       },

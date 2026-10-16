@@ -2,7 +2,7 @@
  * Tier TM — deferred first-turn materialization in the vendored ACPX
  * (packages/acp/vendor/acpx/PROVENANCE.md).
  *
- * A session placed for a first turn is occupancy: it names where a
+ * A session opened for a first turn is occupancy: it names where a
  * conversation will live and asserts none. It becomes a conversation when the
  * backend accepts a turn, and only the adapter can say when that happened — so
  * the runtime waits for one exact signal and infers nothing from anything else.
@@ -182,7 +182,7 @@ function runtimeFor(world: World, script: string[]): AcpRuntime {
   });
 }
 
-function* place(
+function* openSession(
   world: World,
   runtime: AcpRuntime,
   sessionKey: string,
@@ -260,24 +260,24 @@ describe(
   "Tier TM — deferred first-turn materialization",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
-    it("TM1: a placed session asserts nothing before a turn is accepted", function* () {
+    it("TM1: a new session asserts nothing before a turn is accepted", function* () {
       const world = yield* useWorld();
       const runtime = runtimeFor(world, []);
 
-      const handle = yield* place(world, runtime, "tm-placed");
+      const handle = yield* openSession(world, runtime, "tm-new");
 
       // Occupancy: the key is taken and no conversation is named, on the
       // handle a caller could publish and in the record a host would read.
       expect(handle.agentSessionId).toBe(undefined);
-      expect(yield* pending(world, "tm-placed")).toBe(true);
-      expect(yield* assertedIdentity(world, "tm-placed")).toBe(undefined);
+      expect(yield* pending(world, "tm-new")).toBe(true);
+      expect(yield* assertedIdentity(world, "tm-new")).toBe(undefined);
       yield* until(runtime.close({ handle, reason: "test" }));
     });
 
     it("TM2: acceptance promotes the record, and the save precedes the answer", function* () {
       const world = yield* useWorld();
       const runtime = runtimeFor(world, ["accept", "text"]);
-      const handle = yield* place(world, runtime, "tm-accepted");
+      const handle = yield* openSession(world, runtime, "tm-accepted");
 
       const outcome = yield* takeTurn(runtime, handle, "hello");
 
@@ -303,7 +303,7 @@ describe(
     it("TM3: the marker is consumed, never published as an event", function* () {
       const world = yield* useWorld();
       const runtime = runtimeFor(world, ["accept", "chatter", "text"]);
-      const handle = yield* place(world, runtime, "tm-quiet");
+      const handle = yield* openSession(world, runtime, "tm-quiet");
 
       const outcome = yield* takeTurn(runtime, handle, "hello");
 
@@ -329,7 +329,7 @@ describe(
       // completed turn that produced an answer still says nothing about
       // whether the backend took it.
       const runtime = runtimeFor(world, ["chatter", "text"]);
-      const handle = yield* place(world, runtime, "tm-silent");
+      const handle = yield* openSession(world, runtime, "tm-silent");
 
       const outcome = yield* takeTurn(runtime, handle, "hello");
 
@@ -344,7 +344,7 @@ describe(
     it("TM5: a turn that failed before acceptance leaves the record occupancy", function* () {
       const world = yield* useWorld();
       const runtime = runtimeFor(world, ["chatter", "fail"]);
-      const handle = yield* place(world, runtime, "tm-failed");
+      const handle = yield* openSession(world, runtime, "tm-failed");
 
       const outcome = yield* takeTurn(runtime, handle, "hello");
 
@@ -358,13 +358,13 @@ describe(
     it("TM6: the next ensure creates fresh backend state, never the unaccepted one", function* () {
       const world = yield* useWorld();
       const first = runtimeFor(world, ["chatter"]);
-      const placed = yield* place(world, first, "tm-retry");
-      yield* takeTurn(first, placed, "hello");
+      const opened = yield* openSession(world, first, "tm-retry");
+      yield* takeTurn(first, opened, "hello");
       const abandoned = (yield* until(world.store.load("tm-retry")))?.acpSessionId;
-      yield* until(first.close({ handle: placed, reason: "test" }));
+      yield* until(first.close({ handle: opened, reason: "test" }));
 
       const retry = runtimeFor(world, ["accept", "text"]);
-      const again = yield* place(world, retry, "tm-retry");
+      const again = yield* openSession(world, retry, "tm-retry");
       const outcome = yield* takeTurn(retry, again, "again");
 
       // A record still marked pending is never reused: this session was
@@ -379,7 +379,7 @@ describe(
     it("TM7: a session that already asserts one is satisfied at once", function* () {
       const world = yield* useWorld();
       const runtime = runtimeFor(world, ["accept", "text"]);
-      const handle = yield* place(world, runtime, "tm-second");
+      const handle = yield* openSession(world, runtime, "tm-second");
       yield* takeTurn(runtime, handle, "hello");
       const asserted = yield* assertedIdentity(world, "tm-second");
 

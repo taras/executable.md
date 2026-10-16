@@ -23,7 +23,7 @@ import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { Agent } from "../src/agent/agent-api.ts";
 import { isSessionUse, sessionOf } from "../src/agent/session-use.ts";
 import { isSessionRequest } from "../src/agent/session-request.ts";
-import type { ConfigureAgentSession } from "../src/agent/session-placement.ts";
+import type { ConfigureAgentSession } from "../src/agent/session-setup.ts";
 import type {
   AgentPromptEvent,
   PermissionOption,
@@ -51,7 +51,7 @@ interface Trace {
   agentLookups: (string | undefined)[];
   /** The timeout each prompt carried, in prompt order. */
   timeouts: (number | undefined)[];
-  /** Every value the provider issued for a placement, in order. */
+  /** Every value the provider issued for a session request, in order. */
   sessions?: Session[];
   /** What each prompt was given as its session, in prompt order. */
   promptSessions?: (string | Session | undefined)[];
@@ -194,8 +194,8 @@ function stubFactory(
 ): AgentProviderFactory {
   const issued = new Map<string, Session>();
   // One operation per conversation, as a provider has: the owner that settles
-  // placements refuses a session registered two different ways, and two
-  // elements naming one conversation are two placements asking the same thing.
+  // setups refuses a session registered two different ways, and two
+  // elements naming one conversation are two setups asking the same thing.
   const applying = new Map<Session, ConfigureAgentSession>();
   const applyFor = (session: Session): ConfigureAgentSession => {
     const known = applying.get(session);
@@ -221,7 +221,7 @@ function stubFactory(
         *session(routed) {
           const [name] = routed;
           trace.sessionArgumentCounts = [...(trace.sessionArgumentCounts ?? []), routed.length];
-          // One value per placement, kept — as a provider that pins a session
+          // One value per request, kept — as a provider that pins a session
           // keeps the exact value it issued rather than minting a look-alike.
           const key = `stub:${typeof name === "string" ? name : "default"}`;
           const held = issued.get(key);
@@ -231,16 +231,26 @@ function stubFactory(
           const session: Session = { sessionKey: key, cwd: "." };
           issued.set(key, session);
           trace.sessions = [...(trace.sessions ?? []), session];
-          // Settling the placement is where this provider says which kind of
+          // Settling the setup is where this provider says which kind of
           // conversation it resolved. Everything this stub issues is
           // established, so core applies the settings here and the use it
           // hands back carries what this provider reports it verified.
           if (!isSessionRequest(name)) {
             return session;
           }
-          return yield* launchCoordinator
-            .sessionPlacement(name)
-            .complete(session, { kind: "established", configure: applyFor(session) });
+          const setup = launchCoordinator.sessionSetup(name);
+          // Authorized before anything is settled, where a real provider asks:
+          // the command is resolved and nothing has been reattached. An
+          // ordinary request belongs to no retained conversation, so there is
+          // nothing to be held to — it authorizes the work and saves nothing.
+          const authorized = yield* setup.activate("stub", "stub-cmd");
+          if (!authorized.ok) {
+            throw authorized.error;
+          }
+          return yield* setup.finish(session, {
+            kind: "existing",
+            configure: applyFor(session),
+          });
         },
         // deno-lint-ignore require-yield
         *prompt([content, options]) {
@@ -628,7 +638,7 @@ describe("Tier AF — registered defaults a document can replace", () => {
   const names = ["AgentProvider", "Agent", "Prompt", "ApproveAll", "AskPermission"];
 
   it("AF24: a Session hands the exact value it was issued to every nested Prompt", function* () {
-    // The value is the capability. A `<Session>` places one and pins it around
+    // The value is the capability. A `<Session>` resolves one and pins it around
     // its body, and what the first nested Prompt is given has to be that exact
     // object — a provider decides whether a session may be acted on by
     // identity, and a rebuilt look-alike was issued by nobody.
@@ -645,15 +655,15 @@ describe("Tier AF — registered defaults a document can replace", () => {
     );
 
     expect(result.ok).toBe(true);
-    // Placed once, however many prompts are inside it.
+    // Resolved once, however many prompts are inside it.
     expect(trace.sessions).toHaveLength(1);
-    const placed = trace.sessions?.[0];
-    expect(trace.promptSessions).toEqual([placed, placed]);
-    expect(trace.promptSessions?.[0]).toBe(placed);
-    expect(trace.promptSessions?.[1]).toBe(placed);
+    const resolved = trace.sessions?.[0];
+    expect(trace.promptSessions).toEqual([resolved, resolved]);
+    expect(trace.promptSessions?.[0]).toBe(resolved);
+    expect(trace.promptSessions?.[1]).toBe(resolved);
   });
 
-  it("AF25: a self-closing Session places one and renders nothing", function* () {
+  it("AF25: a self-closing Session resolves one and renders nothing", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
     const { output, result } = yield* runDoc(
       ["BEFORE", "", '<Session name="review" />', "", "AFTER", ""].join("\n"),
@@ -661,7 +671,7 @@ describe("Tier AF — registered defaults a document can replace", () => {
     );
 
     expect(result.ok).toBe(true);
-    // The placement happened and nothing else did: no prompt, and nothing in
+    // The resolution happened and nothing else did: no prompt, and nothing in
     // the document where the element stood.
     expect(trace.sessions).toHaveLength(1);
     expect(trace.prompts).toEqual([]);
@@ -857,7 +867,7 @@ describe("Tier AF — Session configuration", () => {
     // was handed directly — never routed, so no handler saw a settings object.
     expect(trace.sessionConfigurations).toEqual([{ model: "gpt-5.4", effort: "high" }]);
     expect(trace.sessionArgumentCounts).toEqual([1]);
-    // A configured self-closing Session still places and nothing more: no
+    // A configured self-closing Session still resolves and nothing more: no
     // prompt is sent on its behalf.
     expect(trace.prompts).toEqual([]);
   });
@@ -937,7 +947,7 @@ describe("Tier AF — Session configuration", () => {
     // Only the outer element asked for anything, and it asked the provider
     // about its own conversation rather than routing settings anywhere.
     expect(trace.sessionConfigurations).toEqual([{ model: "gpt-5.4", effort: "high" }]);
-    // Both placements travel the same released one-argument route.
+    // Both requests travel the same released one-argument route.
     expect(trace.sessionArgumentCounts).toEqual([1, 1]);
     // The conversation this prompt belongs to is the inner one, which asked for
     // nothing — so the record says nothing about the outer element's settings.
@@ -1304,7 +1314,7 @@ describe("Tier AF — the final routed Session decides", () => {
     expect(trace.sessionConfigurations).toEqual([{ model: "gpt-5.4" }]);
   });
 
-  it("AF45: a Session a handler answers with never went through placement", function* () {
+  it("AF45: a Session a handler answers with never went through a setup", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
     const { result, events } = yield* runDoc(
       ['<Session name="review" model="gpt-5.4">', '<Prompt text="hi" />', "</Session>", ""].join(
@@ -1316,7 +1326,7 @@ describe("Tier AF — the final routed Session decides", () => {
           Agent.around({
             // deno-lint-ignore require-yield
             *session(): Operation<Session> {
-              // A conversation of the handler's own making. The placement it
+              // A conversation of the handler's own making. The request it
               // was given is never settled, so nothing put this session under
               // anything and no use was minted for it.
               return { sessionKey: "handler:review", cwd: "." };
@@ -1720,6 +1730,70 @@ describe("AFP — a publisher that never appends retains nothing", () => {
     });
 
     expect(result.ok).toBe(true);
+    expect(
+      events.filter((event) => event.type === "yield" && event.description.type === "agent_prompt"),
+    ).toHaveLength(1);
+  });
+
+  it("AFP3: a publisher that observes without beginning is refused before any turn", function* () {
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
+    let refused: unknown;
+    try {
+      yield* runDoc('<Prompt text="one" />\n', {
+        trace,
+        *handler() {
+          yield* useAgentPromptPublisher({
+            // deno-lint-ignore require-yield
+            *observe(): Operation<void> {},
+            *publish(publication) {
+              yield* publication.append();
+            },
+          });
+        },
+      });
+    } catch (error) {
+      refused = error;
+    }
+
+    // Refused where it is installed, which is before a turn exists at all: an
+    // observation names the turn its own begin returned, so a publisher that
+    // begins nothing is asking to be told about turns it cannot name.
+    expect(refused).toBeInstanceOf(Error);
+    expect(String((refused as Error).message)).toContain("must also begin each turn");
+    // Nothing reached the provider, because the document never ran.
+    expect(trace.prompts).toEqual([]);
+  });
+
+  it("AFP3: control — the same publisher that begins each turn installs and publishes", function* () {
+    const seen: (string | null)[] = [];
+    const begun: unknown[] = [];
+    const { result, events } = yield* runDoc('<Prompt text="one" />\n', {
+      *handler() {
+        yield* useAgentPromptPublisher({
+          // deno-lint-ignore require-yield
+          *begin(): Operation<unknown> {
+            const handle = {};
+            begun.push(handle);
+            return handle;
+          },
+          // deno-lint-ignore require-yield
+          *observe({ text }): Operation<void> {
+            seen.push(text);
+          },
+          *publish(publication) {
+            expect(publication.begun).toBe(begun[0]);
+            yield* publication.append();
+          },
+        });
+      },
+    });
+
+    // The discriminating half: what the row above refuses is the missing
+    // `begin`, not observing at all.
+    expect(result.ok).toBe(true);
+    expect(begun).toHaveLength(1);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.includes(null)).toBe(false);
     expect(
       events.filter((event) => event.type === "yield" && event.description.type === "agent_prompt"),
     ).toHaveLength(1);

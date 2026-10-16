@@ -10,26 +10,28 @@ import { scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { Agent, claimsConfiguration, Config, sessionOf } from "@executablemd/core";
 import type { ConfigureAgentSession } from "@executablemd/core";
-import { sessionPlacement } from "../../core/src/agent/session-request.ts";
-import { createSessionPlacementOwner } from "../../core/src/agent/session-placement.ts";
+import { openSessionRequest } from "../../core/src/agent/session-request.ts";
+import { createSessionSetupOwner } from "../../core/src/agent/session-setup.ts";
 import type {
   AgentLaunchRequest,
   AgentPromptEvent,
   AgentLaunchCoordinator,
+  ProviderSessionConfiguration,
   PromptOptions,
   Session,
   SessionConfiguration,
 } from "@executablemd/core";
 import {
+  AcpxSessionPolicyError,
   createAcpxProvider,
   createPartitionedAcpxProvider,
   useAcpxProvider,
 } from "../src/provider.ts";
 import { TOOL_PERMISSION_REFUSED } from "../src/permission-bridge.ts";
 import type {
-  AcpxSessionContext,
+  AcpxSessionRequest,
   AcpxSessionIdentity,
-  AcpxSessionPlacement,
+  AcpxSessionDetails,
   AcpxSessionPolicy,
 } from "../src/provider.ts";
 import { useSerialQueues } from "../src/serial-queue.ts";
@@ -266,15 +268,15 @@ describe("Tier AP — ACPX provider", () => {
       record.acpSessionId = "sid-2";
       record.agentSessionId = "agent-2";
       store.records.set(record.acpxRecordId, record);
-      // A session that already exists, under the placement key a prompt
+      // A session that already exists, under the session key a prompt
       // resolves to. Without it this prompt would be constructing the session
       // rather than reconnecting to one, and there would be no earlier
       // conversation whose ids a reconnect could have replaced.
-      const placed = makeRecord("scribe-cmd", CWD);
-      placed.acpxRecordId = sessionKey;
-      placed.acpSessionId = "sid-2";
-      placed.agentSessionId = "agent-2";
-      store.records.set(sessionKey, placed);
+      const existing = makeRecord("scribe-cmd", CWD);
+      existing.acpxRecordId = sessionKey;
+      existing.acpSessionId = "sid-2";
+      existing.agentSessionId = "agent-2";
+      store.records.set(sessionKey, existing);
 
       const started = withResolvers<Session>();
       const promptTask = yield* spawn(() =>
@@ -756,6 +758,12 @@ interface CoordinatorLog extends AgentLaunchCoordinator {
   configure(session: Session, configuration: SessionConfiguration): Operation<Session>;
   /** Every exact session this provider registered, in order. */
   registered: Session[];
+  /** What this provider declared it was building under, each time it asked. */
+  activated: {
+    provider: string;
+    agentCommand: string;
+    configuration: ProviderSessionConfiguration | undefined;
+  }[];
   /**
    * Every provider turn this provider named, in the order it named them.
    *
@@ -770,11 +778,11 @@ interface CoordinatorLog extends AgentLaunchCoordinator {
 const CONFIGURED_SESSION = Symbol.for("executablemd.agent.session.configured");
 
 function stubCoordinator(): CoordinatorLog {
-  // The real thing, not a stand-in: settling a placement, registering how a
+  // The real thing, not a stand-in: settling a session setup, registering how a
   // conversation is configured and minting the use are exactly what these cases
   // are about, so they run against the owner core creates rather than against a
   // second implementation of it that could be wrong in its own way.
-  const owner = createSessionPlacementOwner();
+  const owner = createSessionSetupOwner();
   // One operation per conversation, as a provider has: registering the same
   // session with two different ones is a refusal, and a provider that knows how
   // to configure a conversation knows it once.
@@ -796,28 +804,44 @@ function stubCoordinator(): CoordinatorLog {
     refused: 0,
     checkpoints: [],
     registered: [],
+    activated: [],
     *configure(session, configuration) {
       // One use of a conversation this provider already issued, the way a
       // second configured `<Session>` naming it produces one.
-      const issuance = sessionPlacement(undefined, undefined);
+      const issuance = openSessionRequest(undefined, undefined);
       issuance.configure(configuration);
       try {
-        return yield* owner
-          .placement(issuance.request)
-          .complete(session, { kind: "established", configure: applyFor(session) });
+        const setup = owner.setup(issuance.request);
+        // Authorized first, like any provider's: this is standing in for a
+        // second configured `<Session>` resolving through an installation, and
+        // one that settled without asking would not be standing in for it.
+        const authorized = yield* setup.activate("acpx", "stub-cmd");
+        if (!authorized.ok) {
+          throw authorized.error;
+        }
+        return yield* setup.finish(session, {
+          kind: "existing",
+          configure: applyFor(session),
+        });
       } finally {
         issuance.close();
       }
     },
-    sessionPlacement: (request) => {
-      const placement = owner.placement(request);
+    sessionSetup: (request) => {
+      const setup = owner.setup(request);
       return {
-        ...(placement.sessionIdentity === undefined
-          ? {}
-          : { sessionIdentity: placement.sessionIdentity }),
-        *complete(session, state) {
+        ...(setup.sessionIdentity === undefined ? {} : { sessionIdentity: setup.sessionIdentity }),
+        // Through the genuine owner, like `finish`: this suite's provider work
+        // is authorized by the same operation a conversation's requirement
+        // would reach, so a provider that settled a setup it never activated
+        // fails here rather than in production.
+        *activate(provider, agentCommand, configuration) {
+          log.activated.push({ provider, agentCommand, configuration });
+          return yield* setup.activate(provider, agentCommand, configuration);
+        },
+        *finish(session, state) {
           log.registered.push(session);
-          return yield* placement.complete(session, state);
+          return yield* setup.finish(session, state);
         },
       };
     },
@@ -887,20 +911,20 @@ function* installPartitioned(
  * its owner has already dismantled, or with nothing at all.
  */
 /**
- * Tier SM — session placement and materialization
+ * Tier SM — session requests and creation
  * (specs/acp-client-spec.md §Session lifecycle).
  *
- * A fresh `<Session>` places a session: it validates and pins where a logical
+ * A new `<Session>` names a session: it validates and pins where a logical
  * session will live and constructs nothing. The first consuming operation
  * chooses how it is constructed, and an ACP-first construction is not a
  * conversation until the backend accepts its first turn.
  *
  * What these ask is what the provider does around that boundary — what it does
- * not do while a placement is pending, what order it does things in once a turn
+ * not do before that session exists, what order it does things in once a turn
  * is accepted, and what it refuses.
  */
-describe("Tier SM — session placement and materialization", () => {
-  it("SM1: a fresh Session constructs nothing at all", function* () {
+describe("Tier SM — session requests and creation", () => {
+  it("SM1: a new Session constructs nothing at all", function* () {
     const harness = createFakeRuntime();
     const store = makeStore();
     yield* scoped(function* () {
@@ -916,7 +940,7 @@ describe("Tier SM — session placement and materialization", () => {
 
       expect(session.sessionKey).toBe(deriveSessionKey("scribe-cmd", CWD));
       expect(session.cwd).toBe(CWD);
-      // Placement, and nothing else: no session was ensured, no handle exists,
+      // The session request, and nothing else: no session was ensured, no handle exists,
       // no record was written, no turn was started, and nothing is asserted
       // about a conversation. The availability probe beside it is agent
       // resolution — it opens a disposable runtime of its own and touches no
@@ -980,24 +1004,24 @@ describe("Tier SM — session placement and materialization", () => {
       const log = yield* installStrictProvider(harness);
       const session = yield* Agent.operations.session();
 
-      // Placed, and nothing retained: a key is occupied and no conversation is
+      // Named, and nothing retained: a key is occupied and no conversation is
       // named, so the host has nothing to map yet.
-      expect(log.places).toHaveLength(1);
-      expect(log.established).toEqual([]);
+      expect(log.requests).toHaveLength(1);
+      expect(log.recorded).toEqual([]);
       expect(harness.ensureCalls).toEqual([]);
 
       yield* collectPrompt("first", { session });
 
-      expect(log.established).toHaveLength(1);
-      expect(log.established[0]!.agentSessionId).toBe(`agent-session:${WORKFLOW_SESSION_KEY}`);
+      expect(log.recorded).toHaveLength(1);
+      expect(log.recorded[0]!.agentSessionId).toBe(`agent-session:${WORKFLOW_SESSION_KEY}`);
 
       // A second turn continues the conversation the first established: it
       // neither creates it again nor maps it again.
       yield* collectPrompt("second", { session });
 
       expect(harness.turns).toHaveLength(2);
-      expect(log.established).toHaveLength(1);
-      expect(log.places).toHaveLength(1);
+      expect(log.recorded).toHaveLength(1);
+      expect(log.requests).toHaveLength(1);
     });
   });
 
@@ -1018,7 +1042,7 @@ describe("Tier SM — session placement and materialization", () => {
       expect(raised).toBeInstanceOf(Error);
       // No mapping, no identity on the value the document holds, and the
       // provider's own record still says it is awaiting one.
-      expect(log.established).toEqual([]);
+      expect(log.recorded).toEqual([]);
       expect(session.agentSessionId).toBe(undefined);
       expect(log.store.records.get(WORKFLOW_SESSION_KEY)?.agentSessionId).toBe(undefined);
       expect(log.store.records.get(WORKFLOW_SESSION_KEY)?.sessionMaterialization?.state).toBe(
@@ -1029,12 +1053,12 @@ describe("Tier SM — session placement and materialization", () => {
       yield* collectPrompt("again", { session });
 
       expect(harness.ensureCalls).toHaveLength(2);
-      expect(log.established).toHaveLength(1);
+      expect(log.recorded).toHaveLength(1);
       expect(session.agentSessionId).toBe(`agent-session:${WORKFLOW_SESSION_KEY}`);
     });
   });
 
-  it("SM6: acceptance followed by a failed turn leaves the session established", function* () {
+  it("SM6: acceptance followed by a failed turn preserves the existing session", function* () {
     const harness = createFakeRuntime();
     harness.script({
       events: [{ type: "text_delta", text: "partial", stream: "output" }],
@@ -1060,13 +1084,13 @@ describe("Tier SM — session placement and materialization", () => {
         raised !== undefined ||
         events.some((event) => event.type === "terminal" && event.status !== "completed");
       expect(failed).toBe(true);
-      expect(log.established).toHaveLength(1);
+      expect(log.recorded).toHaveLength(1);
       expect(log.store.records.get(WORKFLOW_SESSION_KEY)?.sessionMaterialization).toBe(undefined);
 
       // And the next prompt continues it rather than constructing a second one.
       yield* collectPrompt("second", { session });
 
-      expect(log.established).toHaveLength(1);
+      expect(log.recorded).toHaveLength(1);
       expect(harness.ensureCalls).toHaveLength(1);
       expect(harness.turns).toHaveLength(2);
     });
@@ -1088,7 +1112,7 @@ describe("Tier SM — session placement and materialization", () => {
       expect(harness.ensureCalls.filter((call) => call.materialization !== undefined)).toHaveLength(
         1,
       );
-      expect(log.established).toHaveLength(1);
+      expect(log.recorded).toHaveLength(1);
       expect(harness.turns).toHaveLength(2);
     });
   });
@@ -1117,10 +1141,7 @@ describe("Tier SM — session placement and materialization", () => {
       // nothing in its place.
       yield* collectPrompt("again", { session });
 
-      expect(log.established.map((identity) => identity.agentSessionId)).toEqual([
-        asserted,
-        asserted,
-      ]);
+      expect(log.recorded.map((identity) => identity.agentSessionId)).toEqual([asserted, asserted]);
       expect(log.store.records.get(WORKFLOW_SESSION_KEY)?.agentSessionId).toBe(asserted);
       expect([...log.store.records.keys()]).toEqual([WORKFLOW_SESSION_KEY]);
     });
@@ -1372,7 +1393,7 @@ const WORKSPACE = "/workspace";
 /** The runtime's own directory: provider-owned, and not a checkout. */
 const HOST_DIR = "/runs/sessions/host";
 
-/** One logical session's directory, as the host places it. */
+/** One logical session's directory, as the host decides it. */
 const SESSION_DIR = "/runs/sessions/cwd/8f2a";
 
 const WORKFLOW_SESSION_KEY = "xmd:workflow:v1:run:acpx:scribe-cmd:default";
@@ -1383,10 +1404,10 @@ const INSTRUCTIONS = "You have no native tool permissions here.";
 const ACP_SESSION_ID = "acp-session-workflow";
 
 interface StrictHarness {
-  /** Every placement the profile was asked for, in order. */
-  places: AcpxSessionContext[];
+  /** Every session request the profile was asked for, in order. */
+  requests: AcpxSessionRequest[];
   /** Every identity the provider retained, in order. */
-  established: AcpxSessionIdentity[];
+  recorded: AcpxSessionIdentity[];
   /** Public permission decisions the authored policy was asked for. */
   consulted: number;
   /** The ACPX store behind the provider, so a test can seed a record. */
@@ -1396,26 +1417,26 @@ interface StrictHarness {
 function* installStrictProvider(
   harness: FakeRuntimeHarness,
   options: {
-    place?: () => Operation<AcpxSessionPlacement>;
+    requestSession?: () => Operation<AcpxSessionDetails>;
     /** Fail the first retention, as a host interrupted before its commit does. */
     refuseFirstRetention?: boolean;
   } = {},
 ): Operation<StrictHarness> {
   const store = makeStore();
-  const log: StrictHarness = { places: [], established: [], consulted: 0, store };
+  const log: StrictHarness = { requests: [], recorded: [], consulted: 0, store };
   yield* useFlatWorld(WORKSPACE);
   const sessions: AcpxSessionPolicy = {
-    *place(context) {
-      log.places.push(context);
-      if (options.place) {
-        return yield* options.place();
+    *requestSession(request) {
+      log.requests.push(request);
+      if (options.requestSession) {
+        return yield* options.requestSession();
       }
-      return { sessionKey: WORKFLOW_SESSION_KEY, cwd: SESSION_DIR, state: "pending" };
+      return { sessionKey: WORKFLOW_SESSION_KEY, cwd: SESSION_DIR, state: "new" };
     },
     // deno-lint-ignore require-yield
-    *established(_placement, identity) {
-      log.established.push(identity);
-      if (options.refuseFirstRetention && log.established.length === 1) {
+    *recordSessionIdentity(_details, identity) {
+      log.recorded.push(identity);
+      if (options.refuseFirstRetention && log.recorded.length === 1) {
         throw new Error("the run could not retain this session");
       }
     },
@@ -1507,11 +1528,11 @@ describe("Tier WAP — strict workflow Agent profile", () => {
       expect(harness.ensureCalls[0]!.sessionOptions?.allowedTools).toEqual([]);
       expect(harness.ensureCalls[0]!.sessionOptions?.systemPrompt).toBe(INSTRUCTIONS);
 
-      // The host placed the session; nothing walked the contextual directory.
-      expect(log.places).toEqual([
+      // The host named the session; nothing walked the contextual directory.
+      expect(log.requests).toEqual([
         { agentName: "scribe", agentCommand: "scribe-cmd", session: undefined },
       ]);
-      expect(log.established).toEqual([
+      expect(log.recorded).toEqual([
         {
           agentSessionId: `agent-session:${WORKFLOW_SESSION_KEY}`,
           acpxRecordId: `record:${WORKFLOW_SESSION_KEY}`,
@@ -1648,13 +1669,69 @@ describe("Tier WAP — strict workflow Agent profile", () => {
     });
   });
 
+  it("HR4: a host that cannot record an identity is refused rather than read as absent", function* () {
+    const harness = createFakeRuntime();
+    let asked = 0;
+    // A whole host, declared as one, with the recording member taken off it
+    // again. That is the untyped embedder this check is for: the type requires
+    // both members, so the only way to be handed a half a host is from
+    // somewhere the type never reached. Deleting the member is how the fixture
+    // gets there without claiming an incomplete object is a policy.
+    //
+    // WAP4 is the other half of this pair — supplying no host at all is the
+    // ordinary path, and it still creates and continues a directory-based
+    // session with no host database.
+    const incomplete: AcpxSessionPolicy = {
+      // deno-lint-ignore require-yield
+      *requestSession(): Operation<AcpxSessionDetails> {
+        asked += 1;
+        return { sessionKey: WORKFLOW_SESSION_KEY, cwd: SESSION_DIR, state: "new" };
+      },
+      // Removed below, before the provider is built. It throws rather than
+      // doing nothing so that a fixture which failed to remove it would fail
+      // this test instead of quietly passing as a host that records nothing.
+      // deno-lint-ignore require-yield
+      *recordSessionIdentity(): Operation<void> {
+        throw new Error("this host was supposed to have lost its recording method");
+      },
+    };
+    expect(Reflect.deleteProperty(incomplete, "recordSessionIdentity")).toBe(true);
+    expect(Reflect.has(incomplete, "recordSessionIdentity")).toBe(false);
+
+    let raised: Error | undefined;
+    yield* scoped(function* () {
+      yield* useFlatWorld(WORKSPACE);
+      const factory = createAcpxProvider({
+        createRuntime: harness.create,
+        sessionStore: makeStore(),
+        agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
+        sessions: incomplete,
+      });
+      try {
+        yield* factory({ defaultAgent: "scribe", permissionMode: "deny-all" }, stubCoordinator());
+      } catch (error) {
+        raised = error instanceof Error ? error : new Error(String(error));
+      }
+    });
+
+    expect(raised).toBeInstanceOf(AcpxSessionPolicyError);
+    expect(raised?.message).toContain("recordSessionIdentity()");
+    // Before the host was asked anything, and before a runtime, a session or a
+    // turn existed: a half a host is refused where it is supplied, not where it
+    // would first have been needed.
+    expect(asked).toBe(0);
+    expect(harness.createdOptions).toEqual([]);
+    expect(harness.ensureCalls).toEqual([]);
+    expect(harness.turns).toEqual([]);
+  });
+
   it("WAP5: a retained session this host cannot continue refuses before ACPX is contacted", function* () {
     const harness = createFakeRuntime();
     const refusal = new Error("this run's Agent session was established under a different policy");
     yield* scoped(function* () {
       yield* installStrictProvider(harness, {
         // deno-lint-ignore require-yield
-        *place() {
+        *requestSession() {
           throw refusal;
         },
       });
@@ -1891,15 +1968,15 @@ function configured(harness: FakeRuntimeHarness): FakeRuntimeHarness {
  *
  * Two steps, because they are two things: the public route carries a name and
  * nothing else, and how this exact conversation is configured is something only
- * the provider that issued it registered. An established session is configured
- * here; a fresh placement has nothing to configure yet.
+ * the provider that issued it registered. An existing session is configured
+ * here; a new one has nothing to configure yet.
  */
 function* configuredSession(
   _coordinator: CoordinatorLog,
   name: string | undefined,
   configuration: SessionConfiguration,
 ): Operation<Session> {
-  const issuance = sessionPlacement(undefined, name);
+  const issuance = openSessionRequest(undefined, name);
   issuance.configure(configuration);
   try {
     return yield* Agent.operations.session(issuance.request);
@@ -1912,7 +1989,7 @@ function* configuredPrompt(
   coordinator: CoordinatorLog,
   configuration: SessionConfiguration,
 ): Operation<{ events: AgentPromptEvent[]; session: Session }> {
-  // What `<Session model effort>` produces: the provider settled the placement
+  // What `<Session model effort>` produces: the provider settled the setup
   // into one use of the conversation it resolved.
   const use = yield* configuredSession(coordinator, "review", configuration);
   const { events } = yield* collectPrompt("hello", { session: use });
@@ -2173,8 +2250,8 @@ describe("Tier SC — session configuration", () => {
       // Every later route to that exact session refuses before the provider is
       // asked anything at all.
       const again = yield* refusalOf(() => collectPrompt("again", { session: failingUse }));
-      const placed = yield* refusalOf(() => Agent.operations.session("review"));
-      for (const message of [again, placed]) {
+      const reopened = yield* refusalOf(() => Agent.operations.session("review"));
+      for (const message of [again, reopened]) {
         expect(message).toBe(
           `Session "${failing.sessionKey}" may remain reconfigured after a failed ` +
             `restoration and will not be used again during this run.`,
@@ -2195,8 +2272,8 @@ describe("Tier SC — session configuration", () => {
       const identity = first.agentSessionId;
       const ensures = harness.ensureCalls.length;
 
-      // The same placement, now configured. It is established, so this is a
-      // real reconfiguration request rather than an inert placement.
+      // The same session, now configured. It already exists, so this is a
+      // real reconfiguration request rather than an inert setup.
       const again = yield* configuredSession(coordinator, "review", { model: "gpt-5.4-mini" });
       // One use of the conversation that already existed — the same session,
       // the same provider-native identity, reached through the use rather than
@@ -2280,18 +2357,18 @@ describe("Tier SC — session configuration", () => {
     });
   });
 
-  it("SC24: one established conversation configured twice settles through one operation", function* () {
+  it("SC24: one existing conversation configured twice settles through one operation", function* () {
     const harness = configured(createFakeRuntime());
     yield* scoped(function* () {
       const coordinator = yield* installProvider(harness);
-      // Establish it, so both placements below meet a real conversation rather
+      // Create it, so both requests below meet a real conversation rather
       // than an inert one.
       const first = yield* Agent.operations.session("review");
       yield* collectPrompt("hello", { session: first });
       harness.configCalls = [];
 
       // Two configured `<Session>` elements naming one conversation. The
-      // provider knows one way to configure it, so both placements settle —
+      // provider knows one way to configure it, so both setups settle —
       // registering the same session twice with the same operation is the same
       // statement twice, not two answers to reconcile.
       const one = yield* configuredSession(coordinator, "review", { model: "gpt-5.4-mini" });
@@ -2548,7 +2625,7 @@ describe("Tier SC — session configuration", () => {
  *
  * Inspection is not a document session: it creates a conversation of its own,
  * reads it, and gives it up. These rows are as much about what it does not do —
- * no prompt, no host mapping, no placement, nothing left behind for a document
+ * no prompt, no host mapping, no session request, nothing left behind for a document
  * to find — as about the choices it returns.
  */
 describe("Tier SO — agent option discovery", () => {
@@ -2615,14 +2692,14 @@ describe("Tier SO — agent option discovery", () => {
       expect(harness.ensureCalls.length).toBe(1);
       expect(harness.turns.length).toBe(0);
       expect(harness.closeCalls.length).toBe(1);
-      // Its own conversation, under a key no placement would produce, and
+      // Its own conversation, under a key no session request would produce, and
       // closed without asking the provider to forget its history.
       expect(harness.ensureCalls[0]?.sessionKey).toContain("xmd:inspect:");
       expect(harness.ensureCalls[0]?.sessionKey).not.toBe(deriveSessionKey("scribe-cmd", CWD));
       expect(harness.closeInputs[0]?.discardPersistentState).toBe(undefined);
 
-      // Nothing a document can reach: placing a session afterwards produces
-      // the key that placement derives, never the inspection's.
+      // Nothing a document can reach: resolving a session afterwards produces
+      // the key that resolution derives, never the inspection's.
       const session = yield* Agent.operations.session();
       expect(session.sessionKey).toBe(deriveSessionKey("scribe-cmd", CWD));
     });
@@ -2711,7 +2788,7 @@ describe("Tier SO — agent option discovery", () => {
 /**
  * Tier SE — reconfiguring a session a native UI could take (issue #828).
  *
- * An established session is reattached eagerly, so the reconfiguration happens
+ * An existing session is reattached eagerly, so the reconfiguration happens
  * while this run holds both a handle and the session's ownership. Neither may
  * outlive the attempt: a handle kept past it is a second owner of a
  * conversation a native process may be in, and ownership left active is a

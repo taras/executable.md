@@ -12,6 +12,7 @@
  * ```text
  * xmd://repl/<execution>/<surface>[/<entry>][/<scope>]*[/+<drawer>]*
  *   [?at=<marker>][&inspect][&draft=<text>][&session=<session-key>]
+ *   [&view=sidekick][&right=bindings|sidekick]
  * ```
  *
  * The codec is pure and has no model. `decodeLocation` decides only what the
@@ -26,6 +27,14 @@
  * reader is looking at — which is why it accompanies a selected entry, a nested
  * scope, a drawer stack, a conversation filter and a frozen history position
  * rather than being a state the execution can only be in before its first entry.
+ *
+ * `view` and `right` are the two choices the Sidekick adds, and they are
+ * independent of the surface and of each other: `view=sidekick` names the
+ * Sidekick as the reading, while the entries or sessions surface stays selected
+ * underneath it, and `right` retains which right-hand pane was being read.
+ * Omitting `view` selects the surface itself, and omitting `right` means the
+ * Sidekick — so every location written before they existed still decodes to the
+ * view it described and still encodes to exactly its own spelling.
  *
  * `session` selects one Agent conversation to filter the Sessions list by. It
  * is the provider's own session key, which is the one name for a conversation
@@ -59,6 +68,18 @@ export class ReplRouteError extends Error {
 
 /** The two surfaces this slice has. */
 export type ReplSurface = "entries" | "sessions";
+
+/**
+ * The reading a location names instead of its surface.
+ *
+ * One value, because the surface is still the two above: a person reading the
+ * Sidekick has not stopped having an entries or sessions surface selected, and
+ * the saved one is what they come back to.
+ */
+export type ReplReading = "sidekick";
+
+/** Which right-hand pane a location retains. */
+export type ReplPane = "bindings" | "sidekick";
 
 /** One drawer in the stack, as the grammar spells it. */
 export type ReplDrawerRef =
@@ -94,6 +115,54 @@ export interface ReplRoute {
    * key. Absent means every conversation.
    */
   readonly session: string | undefined;
+  /**
+   * The reading selected instead of the surface, or none for the surface.
+   *
+   * Beside {@link surface} rather than a third spelling of it, because the two
+   * are independent: somebody who reads the Sidekick and comes back is owed the
+   * entries or sessions surface they left, and a location that spelled the
+   * Sidekick as a surface would have had to forget it.
+   */
+  readonly view: ReplReading | undefined;
+  /**
+   * Which right-hand pane this location retains, or none.
+   *
+   * Absent is the Sidekick, which is what a location written before this member
+   * existed means by saying nothing — and saying nothing is what keeps those
+   * locations spelled exactly as they were.
+   */
+  readonly right: ReplPane | undefined;
+  /**
+   * The saved Sidekick chat to read, by its CLI conversation ID.
+   *
+   * Absent follows the current chat. Selecting one changes only the reading;
+   * it never changes which conversation Send or Retry may continue.
+   */
+  readonly sidekick: string | undefined;
+}
+
+/**
+ * What this execution's Sidekick says, for a location that names one of them.
+ *
+ * Separate from the entry facts beside it because the two files are separate
+ * histories with separate owners: nothing in an entry prefix answers for a
+ * chat, and nothing in a chat answers for an entry. A caller that has no
+ * Sidekick passes none, which is a different answer from a Sidekick that has
+ * held no conversation.
+ */
+export interface ReplSidekickAvailability {
+  /** Every saved chat this history holds, in the order it prepared them. */
+  readonly chats: readonly string[];
+  /**
+   * The provider conversations its applicable facts establish, earliest first.
+   *
+   * Complete saved facts plus this process's exact live publication facts.
+   * They are applicable beside any entry position, because freezing the entry
+   * prefix freezes entry facts and says nothing about a chat.
+   */
+  readonly sessions: readonly string[];
+  /** Why this history cannot be read at all, when that is the answer. */
+  readonly refusal: string | undefined;
 }
 
 /**
@@ -114,6 +183,15 @@ export interface ReplLiveAvailability {
   readonly permission: boolean;
   /** The non-empty session keys live turns have started under. */
   readonly sessions: readonly string[];
+  /**
+   * What this execution's Sidekick says, where the screen has one.
+   *
+   * Here because the model this route resolves against is the *entry* history,
+   * which holds not one chat record — so the only thing that can answer for a
+   * saved chat or a chat's provider conversation is the caller composing both
+   * readings. Absent is no Sidekick at all.
+   */
+  readonly sidekick?: ReplSidekickAvailability;
 }
 
 /** No live capability at all: what a cold reader of a Journal has. */
@@ -149,6 +227,14 @@ export interface ReplSelection {
    * point at until one of its turns is appended.
    */
   readonly session: ReplAgentSession | undefined;
+  /**
+   * The saved Sidekick chat this location reads, when it names one.
+   *
+   * The exact ID, because that is what a CLI conversation is named by and the
+   * reading is the whole of what it selects. None is the current chat, which is
+   * what omission means — never a chat chosen on somebody's behalf.
+   */
+  readonly sidekick: string | undefined;
   readonly drawers: readonly ReplDrawer[];
 }
 
@@ -237,6 +323,9 @@ export function decodeLocation(location: string): Result<ReplRoute> {
     inspect: query.inspect,
     draft: query.draft,
     session: query.session,
+    view: query.view,
+    right: query.right,
+    sidekick: query.sidekick,
   });
 }
 
@@ -298,6 +387,9 @@ export function encodeLocation(route: ReplRoute): string {
   if (route.session !== undefined && route.session.length === 0) {
     throw new TypeError("a session filter names one conversation");
   }
+  if (route.sidekick !== undefined && route.sidekick.length === 0) {
+    throw new TypeError("a selected chat names one saved Sidekick conversation");
+  }
   const misplaced = misplacedDrawer(route.surface, route.drawers);
   if (misplaced !== undefined) {
     throw new TypeError(misplaced);
@@ -322,6 +414,23 @@ export function encodeLocation(route: ReplRoute): string {
   // character where they say the same thing.
   if (route.session !== undefined) {
     query.push(`session=${encodeValue(route.session)}`);
+  }
+  // And after that one, for the same reason: a location written before either of
+  // these existed has to come back out spelled exactly as it went in, which it
+  // does only while every member that was canonical before them keeps its place.
+  // Neither value needs encoding — each is one word of this grammar's own.
+  if (route.view !== undefined) {
+    query.push(`view=${route.view}`);
+  }
+  if (route.right !== undefined) {
+    query.push(`right=${route.right}`);
+  }
+  // Last again, after every member that was canonical before it, so a location
+  // written before this one existed still comes back out spelled exactly as it
+  // went in. Its value is a conversation ID this host minted, so it is encoded
+  // rather than emitted: what the grammar admits is not what a name may hold.
+  if (route.sidekick !== undefined) {
+    query.push(`sidekick=${encodeValue(route.sidekick)}`);
   }
   const search = query.length === 0 ? "" : `?${query.join("&")}`;
   return `${PREFIX}${path.join("/")}${search}`;
@@ -368,6 +477,14 @@ export function resolveLocation(
   const filtered = selectConversation(model, route, live);
   if (!filtered.ok) {
     return filtered;
+  }
+  // The saved chat this location reads, before any entry scope is walked: a
+  // selector naming a chat this execution never held is a typo to answer, and
+  // answering it with the current chat would show somebody somebody else's
+  // conversation under the name they asked for.
+  const chat = selectChat(route, live);
+  if (!chat.ok) {
+    return chat;
   }
   // The first structural member is the entry, by its own admission-order key,
   // and every nested scope is resolved beneath that one entry. An entry this
@@ -419,8 +536,44 @@ export function resolveLocation(
     ancestry: Object.freeze(ancestry),
     scope,
     session: filtered.value,
+    sidekick: chat.value,
     drawers: opened.value,
   });
+}
+
+/**
+ * The saved chat a selector names, or why this execution cannot read one.
+ *
+ * Three refusals, and each is a different fact. An execution with no Sidekick
+ * at all has no saved chat to select — which is what a legacy single-file
+ * history is, and reading one does not upgrade it. A history this version
+ * cannot read keeps its own refusal rather than answering with the current
+ * chat or an empty one. And an ID this history does not hold refuses, because
+ * falling back to the current chat would hand somebody a different
+ * conversation under the name they copied.
+ *
+ * A prepared or failed association resolves like any other: it is a chat this
+ * execution really held, with a setup status of its own, and reading it is not
+ * a statement that anything may be sent to it.
+ */
+function selectChat(route: ReplRoute, live: ReplLiveAvailability): Result<string | undefined> {
+  if (route.sidekick === undefined) {
+    return Ok(undefined);
+  }
+  const known = live.sidekick;
+  if (known === undefined) {
+    return Err(
+      new ReplRouteError(
+        "this execution has no Sidekick history, so it holds no saved chat to read.",
+      ),
+    );
+  }
+  if (known.refusal !== undefined) {
+    return Err(new ReplRouteError(known.refusal));
+  }
+  return known.chats.includes(route.sidekick)
+    ? Ok(route.sidekick)
+    : Err(new ReplRouteError(`this execution's Sidekick holds no chat ${route.sidekick}.`));
 }
 
 /**
@@ -448,6 +601,15 @@ function selectConversation(
     return Ok(retained);
   }
   if (route.at === undefined && live.sessions.includes(route.session)) {
+    return Ok(undefined);
+  }
+  // The Sidekick's own, beside the entry facts rather than inside the head
+  // branch above. Freezing an entry prefix freezes *entry* facts: a chat is a
+  // separate history with no position in this one, so a key its complete
+  // reading establishes is applicable at every entry checkpoint — and an
+  // entry-only key absent from the selected prefix still refuses, because
+  // nothing here widens what that prefix retained.
+  if (live.sidekick?.sessions.includes(route.session) === true) {
     return Ok(undefined);
   }
   return Err(
@@ -638,14 +800,20 @@ function readQuery(text: string):
       inspect: boolean;
       draft: string | undefined;
       session: string | undefined;
+      view: ReplReading | undefined;
+      right: ReplPane | undefined;
+      sidekick: string | undefined;
     }
   | undefined {
   let at: string | undefined;
   let inspect = false;
   let draft: string | undefined;
   let session: string | undefined;
+  let view: ReplReading | undefined;
+  let right: ReplPane | undefined;
+  let sidekick: string | undefined;
   if (text.length === 0) {
-    return { at, inspect, draft, session };
+    return { at, inspect, draft, session, view, right, sidekick };
   }
   for (const member of text.split("&")) {
     if (member.length === 0) {
@@ -673,9 +841,30 @@ function readQuery(text: string):
       session = value;
       continue;
     }
+    // Both of these name one of a closed set, so a value nothing defines is
+    // refused here rather than carried as a string the layout would later have
+    // to interpret. A second spelling of either is refused for the same reason
+    // every other member's is: two answers to one question is not a location.
+    if (name === "view" && value === "sidekick" && view === undefined) {
+      view = value;
+      continue;
+    }
+    if (name === "right" && (value === "bindings" || value === "sidekick") && right === undefined) {
+      right = value;
+      continue;
+    }
+    // A conversation ID, so it is read like the filter above it rather than
+    // against a closed set: empty is refused because a bare selector names no
+    // chat, and a second one is refused because two answers to one question is
+    // not a location. There is no `chat=` spelling of this; one query member
+    // means one name.
+    if (name === "sidekick" && value !== undefined && value.length > 0 && sidekick === undefined) {
+      sidekick = value;
+      continue;
+    }
     return undefined;
   }
-  return { at, inspect, draft, session };
+  return { at, inspect, draft, session, view, right, sidekick };
 }
 
 /**

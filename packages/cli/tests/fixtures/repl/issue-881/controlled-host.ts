@@ -27,12 +27,16 @@ import type { Operation } from "effection";
 import { exists, writeTextFile } from "@effectionx/fs";
 import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
+import { DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import { compileDataUri } from "@executablemd/core";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 
 import { useDenoRepl } from "../../../../src/deno-repl.ts";
 import { runReplProgram } from "../../../../src/repl/program.ts";
 import { ordinaryGeneratedSelection } from "../../../../src/evaluation-profile.ts";
+import { entryVocabulary } from "../../../../src/repl-profile.ts";
+import { NO_PLUGINS } from "../../../../src/plugin-host.ts";
+import { sidekickAssembly } from "../../../../src/repl/sidekick/assembly.ts";
 
 /**
  * The two latch paths, narrowed once at the edge.
@@ -97,6 +101,14 @@ await main(function* (args) {
       installations: [holdingTeardown()],
       generated: ordinaryGeneratedSelection(),
       permissionMode: "deny-all",
+      // This host opens no Sidekick conversation, so the selection is the one
+      // an unconfigured command settles.
+      sidekickAgent: DEFAULT_AGENT_NAME,
+      // Declared because a profile carries one, and never installed: no row here
+      // opens a Sidekick conversation.
+      sidekickAssembly: sidekickAssembly(DEFAULT_AGENT_NAME, {}),
+      plugins: NO_PLUGINS.plugins.map((plugin) => plugin.name),
+      vocabulary: entryVocabulary([process.cwd()], NO_PLUGINS),
     },
     ...(args[0] === undefined ? {} : { location: args[0] }),
   });

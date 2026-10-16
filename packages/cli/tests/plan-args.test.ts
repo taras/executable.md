@@ -173,7 +173,7 @@ describe("Tier PR — xmd plan fixed grammar", () => {
       // nobody names a directory is how a removed spelling survives.
       ["plan", REQUEST, "--include", "--run"],
       ["plan", REQUEST, "--output", "--run"],
-      // And after the options a caller does keep, so placement decides nothing.
+      // And after the options a caller does keep, so position decides nothing.
       ["plan", REQUEST, "--session", "ada", "--run"],
     ];
     for (const argv of spellings) {

@@ -1097,7 +1097,7 @@ describe("function component content", () => {
  * Tier SR — expanding structural syntax an installation declared.
  *
  * The catalog decides what a name means; this is what happens when a document
- * writes one. Everything a handler receives is settled first — placement, the
+ * writes one. Everything a handler receives is settled first — the request, the
  * authored forms, and every prop the construct and its regions carry — and the
  * handler is then called directly, once, inside a scope that owns whatever it
  * starts.

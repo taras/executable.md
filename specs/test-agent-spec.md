@@ -98,7 +98,7 @@ including values captured by prompt matchers.
 ### Configuring one nested run
 
 Inside the declaration prefix of one canonical test's `<Execution host="run">`,
-`<TestAgent>` has a second placement:
+`<TestAgent>` has a second position:
 
 ```md
 <Execution host="run" target="./document-under-test.md" as="run">
@@ -476,7 +476,7 @@ The essential acceptance coverage is:
    Markdown journey for native session launch, run as an ordinary root document.
    It covers both construction routes against the deterministic agent: a
    provider-returned launch that prepares its own session and spends no turn, an
-   established session refusing a different instruction layer, a launch under
+   existing session refusing a different instruction layer, a launch under
    `test-agent-client-native` that names its own session and is continued by the
    next launch of the same body, and an eager `<Session>` — which settles the
    route as ACP-first — refusing a launch that would name the same session

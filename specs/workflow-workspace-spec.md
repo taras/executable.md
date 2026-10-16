@@ -967,7 +967,7 @@ providers behind it (§2.1). What an author writes — the forms, the props, wha
 is what a checkout *is*.
 
 Under a workflow run a checkout is retained Workspace state: creation identity
-is a durable effect, placement is Workspace-relative, and a completed effect
+is a durable effect, the layout is Workspace-relative, and a completed effect
 restores from the journal. That is what the rest of this section describes.
 
 Under an ordinary `xmd run` a checkout is a directory. `<Repository>` and
@@ -1051,7 +1051,7 @@ Initial props:
 | `as` | no | ordinary binding of the Workspace-relative checkout path |
 
 There are initially no public `path`, `provider`, `remote` or credential props.
-Workspace owns placement; the host owns authorization and credentials. A locator
+Workspace owns the layout; the host owns authorization and credentials. A locator
 that needs one is reached through the authentication the invoking host already
 has, on the terms §13.1 states — there is no XMD credential store, credential
 prop, token argument, workflow secret schema or credential-copy command.
@@ -1118,7 +1118,7 @@ Reusing a Worktree identity with incompatible configuration fails. A branch
 already checked out by another checkout fails instead of moving it or silently
 using detached HEAD.
 
-Worktree has no repository locator, placement, force or detached-head controls.
+Worktree has no repository locator, path, force or detached-head controls.
 Its lexical and self-closing path behavior matches Repository. A branch the
 remote published counts as existing, so naming one checks it out rather than
 recreating it at another commit.
@@ -1295,7 +1295,7 @@ branch, commit, HEAD tree and index tree the checkout held before and after.
 A retained result is read back for the invocation that recorded it, and one whose
 identity, branch, base or transition does not describe that invocation is damage
 rather than history. A Worktree's name and its path are one identity, held to the
-placement that produced them; and switching to the branch a checkout is already
+paths that produced them; and switching to the branch a checkout is already
 on moves nothing, so a result whose commit, HEAD tree or index tree changed
 across it describes a transition Switch does not make.
 
@@ -2288,7 +2288,7 @@ chain may change the name; it cannot choose the durable identity.
 The provider and the resolved agent command are stored beside that identity as
 compatibility attributes. Changing either refuses reattachment rather than
 selecting or creating a second mapping. A working directory and any provider
-placement key are not identity at all.
+provider session key are not identity at all.
 
 **The account is the run's, and only the run's.** The workflow Agent profile
 states both ordinary-run native capability sets empty — no native-launch
@@ -2380,8 +2380,8 @@ association that outlived a Prompt that was never journaled would name a turn
 the run has no record of, and a Prompt whose association was lost would become
 one this run cannot continue from without saying so.
 
-The retained session key is the run's own, supplied by the placement that made
-the session. It is never recovered from the spelling of the provider's placement
+The retained session key is the run's own, supplied by the request that made
+the session. It is never recovered from the spelling of the provider's own
 key: those are two namespaces that happen to share a prefix.
 
 **Order comes from the journal.** A checkpoint names an event, that event has a

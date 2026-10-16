@@ -18,7 +18,7 @@
  *
  * Only a completion the provider named, in a session this run retains. Both are
  * supplied — the token by the provider through core's delivered coordinator, the
- * logical session key by the placement that made the session — and neither is
+ * logical session key by the request that made the session — and neither is
  * derived. In particular the retained key is never recovered from the spelling
  * of the provider's own session key: those are two different namespaces that
  * happen to share a prefix, and reading one out of the other is a parse that

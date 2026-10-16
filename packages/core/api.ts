@@ -72,6 +72,19 @@ export type {
 } from "./src/agent/agent-api.ts";
 export type { AgentSessionRequest } from "./src/agent/session-request.ts";
 /**
+ * The provider a retained conversation does its work through.
+ *
+ * Here, beside `Agent`, because it is the other half of the same boundary: a
+ * host that serves saved conversations installs this object in its provider's
+ * own scope, and the conversation reads it once in its own. Ordinary `<Session>`
+ * and `<Prompt>` keep composing through `Agent`, which is what middleware is
+ * for; a chat does not, because what holds it to the configuration it was
+ * created under cannot be something a handler may route around.
+ *
+ * One name for the interface and the Context, as `Agent` already has.
+ */
+export { AgentConversationProvider } from "./src/agent/conversation-provider.ts";
+/**
  * One authentic use of a conversation, and what a reader may ask about one.
  *
  * A use is a `Session`, so nothing composing around these operations has to

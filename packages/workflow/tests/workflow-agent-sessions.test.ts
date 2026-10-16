@@ -284,9 +284,9 @@ describe("Tier WSL — retained workflow Agent sessions", () => {
       expect(yield* exists(paths.sidecar)).toBe(false);
       expect(yield* readdir(yield* useEmptyDirectory(paths.host))).toEqual([]);
 
-      sessionCwd = yield* useEmptyDirectory(providerSessionDirectory(paths, "placement-key"));
+      sessionCwd = yield* useEmptyDirectory(providerSessionDirectory(paths, "provider-key"));
       yield* writeTextFile(join(sessionCwd, "residue.txt"), "left by a dead process");
-      const again = yield* useEmptyDirectory(providerSessionDirectory(paths, "placement-key"));
+      const again = yield* useEmptyDirectory(providerSessionDirectory(paths, "provider-key"));
       expect(again).toBe(sessionCwd);
       expect(yield* readdir(again)).toEqual([]);
     });

@@ -39,7 +39,7 @@ import {
   localizeAdministration,
   workspaceEntryPresent,
 } from "./materialize.ts";
-import { worktreeCheckoutPath } from "./placement.ts";
+import { worktreeCheckoutPath } from "./checkout-paths.ts";
 import {
   attempted,
   created,

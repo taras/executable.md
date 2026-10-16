@@ -2213,7 +2213,7 @@ function* documentWorkflow(
     // Before any authored work, and in this scope rather than outside
     // `durableRun`: this is the scope `Execution.document` has already
     // installed the document's runtime services in — its Agent provider, its
-    // placement coordinator, whatever middleware a trusted host wrapped the
+    // launch coordinator, whatever middleware a trusted host wrapped the
     // document in — so an explicit root evaluation reaches exactly what the
     // document's own elements reach. A host that calls the method sooner waits
     // for this rather than running somewhere else, and this scope ending is

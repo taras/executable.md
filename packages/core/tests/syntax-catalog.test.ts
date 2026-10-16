@@ -33,6 +33,7 @@ import {
   inspectSyntax,
   PROTECTED_COMPONENT_NAMES,
   registerComponents,
+  renderSyntaxMarkdown,
   RESERVED_STRUCTURAL,
   STRUCTURAL_DECLARATIONS,
 } from "../mod.ts";
@@ -483,6 +484,16 @@ describe("Tier SY: structural vocabulary", () => {
     expect(find(structural(declared).filter(isInstalled), "Terminal").parent).toBe("Terminal.Grid");
     expect(find(structural(declared).filter(isInstalled), "Terminal.Grid").syntax).toEqual(
       grid.syntax,
+    );
+
+    // The rendered label for where a declared construct sits, which only the
+    // Markdown reaches: the catalog carries `parent`, and the renderer is what
+    // turns it into a line a reader sees. Both arms, because the construct and
+    // its region take the two different ones.
+    const markdown = renderSyntaxMarkdown(declared);
+    expect(markdown).toContain("**Structure:** written wherever a document may write structure.");
+    expect(markdown).toContain(
+      "**Structure:** written directly inside `<Terminal.Grid>`, and nowhere else.",
     );
   });
 

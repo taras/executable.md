@@ -55,7 +55,7 @@ structured fields cannot provide, not as a second reference entry.
 
 9. Keep behavior that changes use.
 
-   Activation conditions, placement rules, scope, transport choices, failure
+   Activation conditions, structural rules, scope, transport choices, failure
    behavior and preflight-only forms belong when they determine what an author
    writes or observes.
 

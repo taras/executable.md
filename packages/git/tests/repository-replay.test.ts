@@ -501,7 +501,7 @@ describe("workflow Repository retained integrity", () => {
       const database = yield* createRun();
       yield* runDocument(database, `<Repository name="project" url="${remote.locator}" />`);
 
-      // A retained path that is not the one this identity's placement gives it.
+      // A retained path that is not the one this identity's own path gives it.
       // Concatenated with a materialization root it would name a directory
       // outside the run's own tree entirely.
       dropRootClose(path);

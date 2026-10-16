@@ -100,7 +100,7 @@ import {
 import { selectManagedRepository, selectManagedWorktree } from "../run-composition/checkouts.ts";
 import { ManagedCheckoutError, NoAmbientRepositoryError } from "../run-composition/errors.ts";
 import type { SlotKind } from "../run-composition/leases.ts";
-import { checkoutOf, repositorySlot, worktreeSlot } from "../run-composition/placement.ts";
+import { checkoutOf, repositorySlot, worktreeSlot } from "../run-composition/checkout-layout.ts";
 import type { AmbientRepository } from "../run-composition/ambient.ts";
 import type { SelectionRegistry } from "../selections.ts";
 

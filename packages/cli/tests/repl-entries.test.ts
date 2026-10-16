@@ -21,7 +21,8 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { collect, inlineSource, useTempFileCompiler } from "@executablemd/core";
+import { collect, Execution, inlineSource, useTempFileCompiler } from "@executablemd/core";
+import { RootMetadata } from "@executablemd/core/api";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -30,9 +31,12 @@ import { API } from "@executablemd/runtime";
 import {
   createScope,
   ensure,
+  Err,
+  Ok,
   race,
   scoped,
   sleep,
+  spawn,
   suspend,
   until,
   useScope,
@@ -53,7 +57,7 @@ import {
   ReplLifecycleError,
   submitReplEntry,
 } from "../src/repl/session.ts";
-import type { ReplSession } from "../src/repl/session.ts";
+import type { ReplSession, ReplSubmission } from "../src/repl/session.ts";
 import {
   admitted,
   describeApplication,
@@ -1045,14 +1049,14 @@ function refusedSession(result: Result<ReplSession>): Error {
   return result.error;
 }
 
-function refusedSubmission(result: Result<void>): Error {
+function refusedSubmission(result: Result<unknown>): Error {
   if (result.ok) {
     throw new Error("this submission started an entry, and it must be refused");
   }
   return result.error;
 }
 
-function accepted(result: Result<void>): void {
+function accepted(result: Result<unknown>): void {
   if (!result.ok) {
     throw result.error;
   }
@@ -1874,7 +1878,7 @@ describe("REPL entries: the draft, the gate and the position", () => {
             session.model,
             liveReading(session),
           );
-          expect(whileRunning.intent).toEqual({ kind: "submit", source: DRAFT });
+          expect(whileRunning.intent).toEqual({ kind: "submit", source: DRAFT, revision: 0 });
           expect(whileRunning.state.draft).toBe(DRAFT);
           const running = refusedSubmission(yield* session.submit(DRAFT));
           expect(running.name).toBe("ReplLifecycleError");
@@ -1931,7 +1935,7 @@ describe("REPL entries: the draft, the gate and the position", () => {
 
       const standing = drafting(initialState(EXECUTION), INHERITING);
       const asked = reduceRepl(standing, { kind: "submit" }, session.model, liveReading(session));
-      expect(asked.intent).toEqual({ kind: "submit", source: INHERITING });
+      expect(asked.intent).toEqual({ kind: "submit", source: INHERITING, revision: 0 });
       // Still there while the submission is in flight: a preflight refusal is
       // the one moment somebody most needs their document back.
       expect(asked.state.draft).toBe(INHERITING);
@@ -2139,7 +2143,7 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
     expect(whole.slice(0, shown.length)).toEqual(shown);
 
     // Walked from the first clamped position to the last, through the real tree
-    // and the real placement boundary. Only a placed, offered cell counts.
+    // and the real layout boundary. Only a placed, offered cell counts.
     const reached = new Set<string>();
     for (let press = 0; press < 60; press += 1) {
       const view = reading(state, model, NOTHING_LIVE, NARROW);
@@ -2199,7 +2203,7 @@ describe("REPL entries: the catalog a person reads and reaches", () => {
     expect(pressed).toEqual({ kind: "select-scope", scopes: [key.slice("entry:".length)] });
   });
 
-  it("EU1: a row outside the window is unmounted, unplaced and in no target map", function* () {
+  it("EU1: a row outside the window is unmounted, not laid out and in no target map", function* () {
     const events = yield* manyEntries(14);
     const model = projected(events);
     const tree = yield* useReplTree<ReplAction>();
@@ -3286,7 +3290,7 @@ describe("REPL entries: what a failed entry says it failed with", () => {
 
       // One line, and bounded by the region it will be drawn in rather than by a
       // constant: the row that carries it is cut to where it lands, and the row
-      // below asserts that against the real placement at three sizes.
+      // below asserts that against the real layout at three sizes.
       expect(failed?.includes("\n")).toBe(false);
       expect((failed ?? "").length).toBeLessThanOrEqual(
         WIDE.columns - (sidebarWidth(WIDE) ?? 0) - (inspectionWidth(WIDE) ?? 0),
@@ -3333,7 +3337,7 @@ describe("REPL entries: what a failed entry says it failed with", () => {
         route: Object.freeze({ ...initialState(EXECUTION).route, entry }),
       });
 
-      // Through the real placement boundary, because the claim is about drawn
+      // Through the real layout boundary, because the claim is about drawn
       // cells. A described row that is wider than the region it lands in is
       // reflowed into rows the layout never allocated — and the renderer's cut
       // would take the ellipsis with it, so the row would end mid-word with
@@ -3491,4 +3495,377 @@ describe("EU2 only the actions that move a window are answered with measured geo
       // without a row here is a kind this guard never looked at.
       expect(covered.size).toBe(24);
     }));
+});
+
+/**
+ * One submission's completion handle, over real entries (#883 PPA6).
+ *
+ * The handle exists because `join()` on the session answers a different
+ * question: "is this session busy" is about whatever is running now, and a
+ * caller that admitted Entry 1 wants to know how Entry 1 ended. The two answers
+ * diverge the moment another entry starts, which is the state this row stands
+ * in — so the proof is reading the earlier handle while a *later* entry's task
+ * is still held open.
+ */
+describe("Tier R4 — a submission answers for its own entry", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /**
+   * An installation that holds each entry's teardown on a gate of its own.
+   *
+   * `holdingTeardown` holds one, and one gate cannot be closed again — so a row
+   * that needs a second held entry needs a second gate. Installed once per
+   * execution, which is once per entry, and handed out in order.
+   */
+  function holdingEachTeardown(
+    held: readonly { readonly entered: Gate; readonly release: Gate }[],
+  ): ExecutionInstallation {
+    let at = 0;
+    return {
+      *install(): Operation<void> {
+        const own = held[at];
+        at += 1;
+        if (own === undefined) {
+          return;
+        }
+        // Registered inside the execution, like the single-gate fixture above:
+        // by the time it is entered the root close is in the file and the task
+        // that wrote it has not finished coming down.
+        yield* ensure(function* () {
+          own.entered.open();
+          yield* own.release.opened;
+        });
+      },
+    };
+  }
+
+  /** The handle a submission that was admitted hands back. */
+  function handed(result: Result<ReplSubmission>): ReplSubmission {
+    if (!result.ok) {
+      throw result.error;
+    }
+    return result.value;
+  }
+
+  /**
+   * An installation that refuses one execution before delegating its document.
+   *
+   * The whole document boundary, refused ahead of `next`, so the execution
+   * expands nothing at all. This is the shape that writes a settlement with no
+   * admission: the root never ran, and the record saying which source it was
+   * running was never appended.
+   */
+  function refusingStartup(error: Error): ExecutionInstallation {
+    return {
+      *install(): Operation<void> {
+        yield* Execution.around({
+          *document(): Operation<never> {
+            throw error;
+          },
+        });
+      },
+    };
+  }
+
+  /**
+   * An installation that refuses one runtime root metadata composition.
+   *
+   * Not the whole document boundary, which `refusingStartup` already covers and
+   * which fails *before* admission. This fails after it: the setup import of
+   * `__root__` has been retained, so the entry has a position, and the root's
+   * own metadata and envelope are composed next — before the body expands and
+   * before any boundary the expansion controller wraps is crossed. So it is the
+   * one real interval in which an entry can be admitted, be holding the mode a
+   * person asked for, and hold no continuation at all.
+   *
+   * Composition is synchronous, so `at` is called in it rather than waited for.
+   * One execution's worth: installed per entry, refusing only the first, which
+   * leaves the successor an ordinary startup.
+   */
+  function refusingRootMetadata(at: () => void): ExecutionInstallation {
+    let refused = 0;
+    return {
+      *install(): Operation<void> {
+        yield* Execution.around({
+          *document([request], next): Operation<void> {
+            yield* RootMetadata.around({
+              metadata(args, delegate) {
+                if (refused > 0) {
+                  return delegate(...args);
+                }
+                refused += 1;
+                at();
+                throw new Error("runtime metadata refusal after root import");
+              },
+            });
+            return yield* next(request);
+          },
+        });
+      },
+    };
+  }
+
+  it("R4: an entry armed with no hold disarms itself for its successor", function* () {
+    const holder = replExecution();
+    /** What the refusal could see, read synchronously inside it. */
+    let seam:
+      | { state: string; entries: readonly string[]; released: number | undefined }
+      | undefined;
+    let session: ReplSession | undefined;
+    yield* scoped(function* () {
+      const live = opened(
+        yield* openReplSession({
+          execution: holder,
+          installations: [
+            refusingRootMetadata(() => {
+              const reading = session;
+              if (reading !== undefined) {
+                seam = {
+                  state: reading.expansion.state,
+                  entries: reading.model.entries.map((entry) => entry.key),
+                  released: reading.controller?.released,
+                };
+              }
+            }),
+          ],
+        }),
+      );
+      session = live;
+
+      // Submitted with the pause request standing, as a person who pressed
+      // Pause while the preflight was suspended would leave it.
+      const submitted = yield* live.submit(FIRST, () => true);
+      if (!submitted.ok) {
+        throw submitted.error;
+      }
+      // Admitted, which is what makes this interval reachable: the request was
+      // collected because there was an entry to collect it for.
+      expect(submitted.value.entry).toBe("entry-1");
+      expect((yield* submitted.value.join()).ok).toBe(false);
+
+      // What the refusal saw. This exact entry is in the file, the mode is
+      // asked-for rather than taken — no walk is standing at a boundary, so
+      // there is nothing for it to be satisfied by — and nothing has been
+      // released, because nothing was ever held.
+      expect(seam?.entries).toEqual(["entry-1"]);
+      expect(seam?.state).toBe("pausing");
+      // Read from the controller, which being there at all is the other half of
+      // the boundary: an admitted entry is a live Pause target, and a request
+      // arriving from here on reaches it directly rather than waiting.
+      expect(seam?.released).toBe(0);
+
+      // Disarmed by the cleanup the entry registered before it was armed, which
+      // `join()` above waited through. Nothing is running, so there is no
+      // controller to offer and no mode left standing — which is the mode being
+      // cleared rather than a Continue nobody asked for.
+      expect(live.expansion.state).toBe("playing");
+      expect(live.controller).toBe(undefined);
+
+      // And the successor plays. It is not holding the mode the entry before it
+      // asked for, and nobody continued it.
+      const second = yield* live.submit(FIRST);
+      if (!second.ok) {
+        throw second.error;
+      }
+      expect(second.value.entry).toBe("entry-2");
+      expect((yield* second.value.join()).ok).toBe(true);
+      expect(live.expansion.state).toBe("playing");
+      expect(live.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+    });
+  });
+
+  it("R4: the caller's own terms are asked at the start, and refusing starts nothing", function* () {
+    const holder = replExecution();
+    /** How much of this source had been evaluated each time it was asked. */
+    const asked: number[] = [];
+    let compiles = 0;
+    yield* scoped(function* () {
+      yield* API.Env.around({
+        *compile([source, options], next) {
+          compiles += 1;
+          return yield* next(source, options);
+        },
+      });
+      const session = opened(yield* openReplSession({ execution: holder }));
+
+      // Refused at the actual start. The session's own readiness says nothing
+      // against this submission — it is the first — so what refuses it is the
+      // caller's question, and the only way to tell is that nothing started.
+      const refused = yield* session.submit(FIRST, undefined, () => {
+        asked.push(compiles);
+        return Err(new Error("the draft moved while this was being prepared"));
+      });
+      expect(refused.ok).toBe(false);
+      if (refused.ok) {
+        throw new Error("a submission nobody wants any more starts nothing");
+      }
+      expect(refused.error.message).toBe("the draft moved while this was being prepared");
+      // Asked once, and asked before anything this source wrote was evaluated:
+      // a recheck that ran after the first authored step would be rechecking a
+      // submission that had already taken effect.
+      expect(asked.length).toBe(1);
+      expect(asked[0]).toBe(0);
+      // Nothing started, so nothing was admitted and nothing was appended.
+      expect(session.model.entries).toEqual([]);
+      expect(yield* holder.stream.readAll()).toEqual([]);
+
+      // And the session is not spent: the refusal was this submission's
+      // outcome, not the end of anything.
+      const accepted = yield* session.submit(FIRST, undefined, () => {
+        asked.push(compiles);
+        return Ok(undefined);
+      });
+      if (!accepted.ok) {
+        throw accepted.error;
+      }
+      expect(accepted.value.entry).toBe("entry-1");
+      expect((yield* accepted.value.join()).ok).toBe(true);
+      expect(asked.length).toBe(2);
+      expect(session.model.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+      // And the counter was live: this source's eval block was compiled by the
+      // run, so `0` above was a reading of real work not yet done.
+      expect(compiles).toBeGreaterThan(0);
+      expect(asked[1]).toBe(0);
+    });
+  });
+
+  it("R4: a startup refused before admission returns its failure and no handle", function* () {
+    const holder = replExecution();
+    const refused = new Error("refused before document delegation");
+    yield* scoped(function* () {
+      const session = opened(
+        yield* openReplSession({
+          execution: holder,
+          installations: [refusingStartup(refused)],
+        }),
+      );
+
+      // Submitted with a pause request standing, which is the state this case
+      // was found in: the request is irrelevant to the outcome, and saying so
+      // is the point — a refused startup answers the same way either way.
+      const submitted = yield* session.submit(FIRST, () => true);
+      yield* session.join();
+
+      // The history the refusal left: this entry's settlement, and no record
+      // admitting it. That is a history the projector refuses, and it stays
+      // refused — nothing here repairs the grammar.
+      const events = yield* holder.stream.readAll();
+      expect(events.some((event) => event.type === "close")).toBe(true);
+      expect(started(events)).toBe(0);
+      const read = session.reading(undefined);
+      expect(read.ok).toBe(false);
+      if (read.ok) {
+        throw new Error("an unadmitted settlement refuses the reading");
+      }
+      expect(read.error.message).toContain("settling that it never admitted");
+
+      // And the submission: refused, carrying the authoritative startup
+      // failure, with no completion handle. A record arriving is not an entry
+      // existing, so nothing acknowledged this one as admitted — the handle it
+      // would have been given names an entry the history does not have.
+      expect(submitted.ok).toBe(false);
+      if (submitted.ok) {
+        throw new Error("a startup refused before admission admits nothing");
+      }
+      // The startup's own failure, in its own words. By message rather than by
+      // identity: the execution hands the caller an equivalent error object
+      // rather than the one the policy threw, so asserting identity here would
+      // be asserting something this boundary does not promise.
+      expect(submitted.error.message).toBe(refused.message);
+
+      // The successor is refused too, by that same grammar rather than by this
+      // change: a history that cannot be read admits nothing after it.
+      const successor = yield* session.submit(INHERITING);
+      expect(successor.ok).toBe(false);
+      if (successor.ok) {
+        throw new Error("a refused history admits no successor");
+      }
+      expect(successor.error.message).toContain("settling that it never admitted");
+    });
+  });
+
+  it("R4: a valid startup still returns its exact admitted entry's handle", function* () {
+    const holder = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* openReplSession({ execution: holder }));
+      const submitted = yield* session.submit(FIRST);
+      if (!submitted.ok) {
+        throw submitted.error;
+      }
+      expect(submitted.value.entry).toBe("entry-1");
+      expect((yield* submitted.value.join()).ok).toBe(true);
+      expect(session.model.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+      expect(started(yield* holder.stream.readAll())).toBe(1);
+    });
+  });
+
+  it("R4: a handle joins its own entry, and answers again after another starts", function* () {
+    const holder = replExecution();
+    const one = { entered: gate(), release: gate() };
+    const two = { entered: gate(), release: gate() };
+    const open = (): void => {
+      one.release.open();
+      two.release.open();
+    };
+    try {
+      yield* scoped(function* () {
+        // Released inside this scope as well as outside it, for the reason every
+        // row holding a finalizer does: an assertion that throws while teardown
+        // is parked would deadlock, and a deadlock reports as a timeout rather
+        // than as the assertion that failed.
+        try {
+          const session = opened(
+            yield* openReplSession({
+              execution: holder,
+              installations: [holdingEachTeardown([one, two])],
+            }),
+          );
+
+          const first = handed(yield* session.submit(FIRST));
+          // Its own entry, named by the admission order the session assigned.
+          expect(first.entry).toBe("entry-1");
+          yield* awaiting("the first entry reaching its own teardown", one.entered.opened);
+
+          // The entry has settled and its task has not been joined, which is the
+          // one state where those two facts disagree. The handle waits for the
+          // second of them, so it is pending here — and that is read off the
+          // latch the finalizer itself opened, not off a clock.
+          let joined: Result<unknown> | undefined;
+          const joining = yield* spawn(function* (): Operation<void> {
+            joined = yield* first.join();
+          });
+          expect(session.model.entries[0]?.settled).toBe(true);
+          expect(joined).toBe(undefined);
+
+          one.release.open();
+          yield* joining;
+          expect(joined?.ok).toBe(true);
+
+          // A second entry, held open in its own teardown. The session's own
+          // join now answers for this one.
+          const second = handed(yield* session.submit(INHERITING));
+          expect(second.entry).toBe("entry-2");
+          yield* awaiting("the second entry reaching its own teardown", two.entered.opened);
+
+          // And the earlier handle, read again while that later task is still
+          // held. It answers for the entry it admitted, immediately, without
+          // waiting for the entry that replaced it — which is exactly what a
+          // handle bound to `session.join` or to whichever entry is latest could
+          // not do.
+          const again = yield* first.join();
+          expect(again.ok).toBe(true);
+          expect(first.entry).toBe("entry-1");
+          // The later entry is still held, so nothing about reading the earlier
+          // handle released it.
+          expect(session.live).toBe(true);
+          expect(session.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+        } finally {
+          open();
+        }
+      });
+    } finally {
+      open();
+    }
+    expect(started(yield* holder.stream.readAll())).toBe(2);
+  });
 });

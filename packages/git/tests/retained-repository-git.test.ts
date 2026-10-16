@@ -74,7 +74,7 @@ import { admitReplRepositoryHistory } from "../src/retained-repository/admission
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { parseReplGitRecord, REPL_REPOSITORY_GIT } from "../src/retained-repository/git-records.ts";
 import type { ReplGitRecord } from "../src/retained-repository/git-records.ts";
-import { worktreeSlot } from "../src/deno/run-composition/placement.ts";
+import { worktreeSlot } from "../src/deno/run-composition/checkout-layout.ts";
 
 interface Fixture {
   /** The scenario's own directory: checkouts, managed root and HOME. */

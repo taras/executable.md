@@ -185,7 +185,7 @@ export interface PlanComponentAssembly {
    * A host that establishes none — `xmd test` at its own root, or an
    * unconfigured run child — still declares the Component. A document that
    * writes `<Plan>` there resolves the same protected bytes and is refused at
-   * the frame, before any placement, rather than told the component does not
+   * the frame, before any session is named, rather than told the component does not
    * exist.
    *
    * The capability is a closure the host supplied before this declaration
@@ -209,7 +209,7 @@ export interface PlanComponentAssembly {
    *
    * `xmd plan` settles its own before the document runs — the generated
    * `xmd-plan:<UUID>` or the caller's raw `--session` — and its directory
-   * mapping must not change. An ordinary run fixes none, and a placement is
+   * mapping must not change. An ordinary run fixes none, and a name is
    * derived from the `<Plan>` expansion instead.
    */
   readonly session?: string;
@@ -523,7 +523,7 @@ function* uninvocable(): Operation<never> {
  * comparing it refuses a Plan asked under another prompt before a directory, a
  * provider, a turn, a review or an admission exists.
  *
- * The session placement is derived here too, from the durable identity canonical
+ * The session name is derived here too, from the durable identity canonical
  * execution minted for this exact expansion — which is what makes two `<Plan>`
  * sites, and two iterations of one site, distinct without either of them being
  * nameable.
@@ -546,7 +546,7 @@ function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
         // implementation, for this exact expansion.
         const id = yield* claim(invocation);
         const authored = typeof props.session === "string" ? props.session : undefined;
-        const session = placementFor(assembly, id, authored);
+        const session = sessionNameFor(assembly, id, authored);
 
         const instruction = sourceDigest(String(props.instruction));
 
@@ -574,23 +574,23 @@ function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
 }
 
 /**
- * The logical placement one invocation's conversation belongs to.
+ * The logical session one invocation's conversation belongs to.
  *
  * `xmd plan` settles its own name before the document exists and its directory
  * mapping is unchanged, so that name is used exactly as written. An ordinary
- * run has none: the placement is the digest of this expansion's durable
+ * run has none: the name is the digest of this expansion's durable
  * identity, and of the authored name when the caller wrote one — so a named
  * session continues the same site across runs while two sibling sites writing
  * one name stay two conversations. The name never becomes a path in either
  * case; the directory below is keyed by the digest of whatever this returns.
  */
 /**
- * Whether this placement's directory outlives the invocation.
+ * Whether this session's directory outlives the invocation.
  *
  * The public `session` prop is the whole of the question on the component
  * surface, and it is answered here — inside the frozen inputs — because this is
- * the last place that can see it. `<PlanWriter>` receives a placement rather
- * than a prop, and a placement cannot be asked whether somebody wrote it: a name
+ * the last place that can see it. `<PlanWriter>` receives a session name rather
+ * than a prop, and a name cannot be asked whether somebody wrote it: a name
  * a caller can write again needs a directory that is still there next time, and
  * one this expansion derived belongs to this expansion and goes back with it.
  *
@@ -604,7 +604,7 @@ function durability(assembly: PlanComponentAssembly, authored: string | undefine
   return authored !== undefined;
 }
 
-function placementFor(
+function sessionNameFor(
   assembly: PlanComponentAssembly,
   id: string,
   authored: string | undefined,
@@ -612,11 +612,11 @@ function placementFor(
   if (assembly.session !== undefined) {
     return assembly.session;
   }
-  const placement = createHash("sha256").update(id);
+  const digest = createHash("sha256").update(id);
   if (authored !== undefined) {
-    placement.update("\n").update(authored);
+    digest.update("\n").update(authored);
   }
-  return `xmd-plan:${placement.digest("hex")}`;
+  return `xmd-plan:${digest.digest("hex")}`;
 }
 
 /**
@@ -660,7 +660,7 @@ function planWriter(assembly: PlanComponentAssembly): IdentityComponent {
         const established = yield* useSessionDirectory({
           root: assembly.planWriterRoot ?? DEFAULT_PLAN_WRITER_ROOT,
           session,
-          // A placement this expansion derived belongs to it and goes back with
+          // A session name this expansion derived belongs to it and goes back with
           // it; a name a caller wrote is one they can write again, so its
           // directory is still there next time. The frozen inputs decided which
           // this is, because they are the last thing that saw the public prop.

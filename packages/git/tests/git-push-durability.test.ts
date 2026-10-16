@@ -943,8 +943,8 @@ describe("workflow Git.Push durability", () => {
    *
    * Damaged between the Repository's attachment and the push, so the condition
    * is the one this operation's own selection finds rather than one attachment
-   * had already found. Placement is a function of identity, so a `checkout_path`
-   * that is no longer the one this run's placement gives that name is state the
+   * had already found. A checkout path is a function of identity, so a `checkout_path`
+   * that is no longer the one this run gives that name is state the
    * run cannot have written — fatal, unrepaired, and reached before a host path
    * is joined or a remote exists in the story.
    */

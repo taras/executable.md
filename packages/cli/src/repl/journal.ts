@@ -26,6 +26,7 @@
  * documented one.
  */
 
+import { withResolvers } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, exists, readTextFile, stat } from "@effectionx/fs";
 import { join } from "node:path";
@@ -211,6 +212,151 @@ export function* readRecords(path: string): Operation<DurableEvent[]> {
     events.push(parsed.value);
   }
   return events;
+}
+
+/**
+ * One stable entry writer whose file can be changed exactly once.
+ *
+ * Every `EntrySegmentStream` is constructed over this, so switching the target
+ * inside it reaches every holder at once. That is what lets an entry that is
+ * already running survive its execution's upgrade without being restarted and
+ * without keeping a writer to the superseded path: it never held a path, only
+ * this.
+ */
+export interface MovableWriter extends RetainedStream {
+  /** The file appends currently reach. */
+  readonly path: string;
+  /** Send every later append to this stream instead. */
+  redirect(next: RetainedStream): void;
+  /** Whether an append is in flight right now. */
+  readonly appending: boolean;
+  /**
+   * Return once no append is in flight.
+   *
+   * Waited rather than polled, and this is the acknowledgement the handoff
+   * actually turns on: the root has already stopped admitting new appends, so
+   * what is left is the one record that was mid-write, and the prefix cannot be
+   * copied until the file holds it.
+   */
+  settled(): Operation<void>;
+  /**
+   * Hold every further record, and return once the one in flight has landed.
+   *
+   * What a handoff needs that `settled()` alone cannot give it. A writer that
+   * has merely gone quiet can be written to again a moment later, and an entry
+   * that is still running does exactly that: its next record would reach the
+   * file whose bytes have already been copied, so the published pair would not
+   * hold it *and* the retained origin would no longer match what it was
+   * fingerprinted from — which makes the whole execution unreadable rather than
+   * merely incomplete.
+   *
+   * Held records wait rather than fail, and are written to whichever target the
+   * handoff leaves behind. Every hold has to be released, including the one a
+   * failed or cancelled handoff took.
+   */
+  hold(): Operation<void>;
+  /** Let held records through, to the target the handoff left. */
+  release(): void;
+}
+
+export function movableWriter(initial: RetainedStream): MovableWriter {
+  let target = initial;
+  let appending = 0;
+  /** Whether a handoff is holding records back right now. */
+  let holding = false;
+  /** Records waiting for a handoff to let them go, in the order they arrived. */
+  const queued: Array<() => void> = [];
+  const waiting: Array<() => void> = [];
+  const release = (): void => {
+    if (appending > 0) {
+      return;
+    }
+    // Drained before any of them runs, so a waiter that starts another append
+    // cannot leave a second waiter holding a resolver nobody will call.
+    const settling = waiting.splice(0, waiting.length);
+    for (const settle of settling) {
+      settle();
+    }
+  };
+  const facade: MovableWriter = {
+    settled(): Operation<void> {
+      return {
+        *[Symbol.iterator]() {
+          if (appending === 0) {
+            return;
+          }
+          const reached = withResolvers<void>();
+          waiting.push(reached.resolve);
+          yield* reached.operation;
+        },
+      };
+    },
+    get path(): string {
+      return (target as { path?: string }).path ?? "";
+    },
+    get appending(): boolean {
+      return appending > 0;
+    },
+    get onAppend(): ((event: DurableEvent) => void) | null {
+      return target.onAppend;
+    },
+    set onAppend(observer: ((event: DurableEvent) => void) | null) {
+      target.onAppend = observer;
+    },
+    *readAll(): Operation<DurableEvent[]> {
+      return yield* target.readAll();
+    },
+    *append(event: DurableEvent): Operation<void> {
+      // Held first, and in a loop: a record released by one handoff must not
+      // slip past a second one that started while it was being woken.
+      while (holding) {
+        const allowed = withResolvers<void>();
+        queued.push(allowed.resolve);
+        yield* allowed.operation;
+      }
+      // Counted rather than flagged: the root waits for *the* append in flight,
+      // and a count says truthfully whether one is.
+      appending += 1;
+      try {
+        yield* target.append(event);
+      } finally {
+        appending -= 1;
+        release();
+      }
+    },
+    hold(): Operation<void> {
+      return {
+        *[Symbol.iterator]() {
+          holding = true;
+          yield* facade.settled();
+        },
+      };
+    },
+    release(): void {
+      holding = false;
+      // Drained before any of them runs, for the same reason the settlement
+      // waiters are: a released record that starts another append must not
+      // leave a later one holding a resolver nobody will call.
+      const allowed = queued.splice(0, queued.length);
+      for (const resume of allowed) {
+        resume();
+      }
+    },
+    redirect(next: RetainedStream): void {
+      if (appending > 0) {
+        // The handoff waits for the acknowledgement before it gets here. A
+        // redirect while a record is in flight would leave that record's file
+        // undecided, which is the one thing the ordering exists to prevent.
+        throw new ReplJournalError(
+          "an entry record is still being written, so the history it belongs to cannot be " +
+            "changed yet.",
+        );
+      }
+      next.onAppend = target.onAppend;
+      target = next;
+    },
+  };
+  return facade;
 }
 
 function clone(event: DurableEvent): DurableEvent {

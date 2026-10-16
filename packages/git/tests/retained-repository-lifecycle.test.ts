@@ -56,7 +56,7 @@ import {
   lockOf,
   repositorySlot,
   worktreeSlot,
-} from "../src/deno/run-composition/placement.ts";
+} from "../src/deno/run-composition/checkout-layout.ts";
 import { useLeases } from "../src/deno/run-composition/leases.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { REPL_REPOSITORY_LOCAL } from "../src/retained-repository/records.ts";

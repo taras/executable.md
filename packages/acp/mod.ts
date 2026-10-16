@@ -10,7 +10,7 @@
  *
  * A harness that needs several independent providers in sibling scopes uses
  * `useAcpxProvider()` instead, which is the same operations without the Agent
- * install. Everything else here — the permission bridge, session placement,
+ * install. Everything else here — the permission bridge, session setup,
  * turn consumption, and the queues serializing them — is implementation.
  */
 
@@ -23,9 +23,9 @@ export { createAcpxProvider } from "./src/provider.ts";
 export type {
   AcpMcpServer,
   AcpxProviderDependencies,
-  AcpxSessionContext,
+  AcpxSessionRequest,
   AcpxSessionIdentity,
-  AcpxSessionPlacement,
+  AcpxSessionDetails,
   AcpxSessionPolicy,
   SessionRouteContext,
 } from "./src/provider.ts";
@@ -86,6 +86,7 @@ export type { AcpxRetainedSession, AcpxSessionStore } from "./src/session-store.
 
 export {
   AcpxPartitionError,
+  AcpxSessionPolicyError,
   createPartitionedAcpxProvider,
   useAcpxProvider,
 } from "./src/provider.ts";

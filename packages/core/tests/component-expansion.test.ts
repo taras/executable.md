@@ -747,7 +747,7 @@ describe("Tier CX — what surrounds one expansion", () => {
     // on an owner that outlives the dispatch is told.
     //
     // Asserted as the difference between the two readers rather than as a
-    // timestamp: both read the same stream, and only the placement differs.
+    // timestamp: both read the same stream, and only the position differs.
     const onFrame: string[] = [];
     const onOwner: string[] = [];
     const observed = yield* watch(

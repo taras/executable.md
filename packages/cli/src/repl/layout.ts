@@ -200,7 +200,7 @@ export const FOOTER_ROWS = 7;
 /** The History band's own five rows. */
 export { HISTORY_ROWS } from "./history-rail.ts";
 
-/** Five, at every size — imported for this module's own placement. */
+/** Five, at every size — imported for this module's own layout. */
 import { HISTORY_ROWS } from "./history-rail.ts";
 
 /** How wide a column is at each profile that has one. */
@@ -210,7 +210,6 @@ interface ColumnWidths {
 }
 
 const SIDEBAR: ColumnWidths = { wide: 32, medium: 28 };
-const INSPECTION: ColumnWidths = { wide: 36, medium: 28 };
 
 /**
  * How far the drawer sits in from the body it covers, as a share of it.
@@ -271,13 +270,25 @@ export function sidebarWidth(size: ReplTerminalSize): number | undefined {
   return profile === "medium" ? SIDEBAR.medium : undefined;
 }
 
-/** How wide the inspection column is, or none at a profile that has none. */
+/**
+ * How wide the inspection column is, or none at a profile that has none.
+ *
+ * Half of whatever the sidebar leaves, in whole cells. A share rather than a
+ * number, so the column grows with the terminal instead of staying the width
+ * one terminal happened to be — and the right pane holds a conversation, which
+ * is the reading that wants the room.
+ *
+ * The spare cell of an odd remainder goes to the Transcript, which takes what
+ * is left of the row: one of them has to have it, and fractional geometry is
+ * not an option. So 160 gives 64 and 64, and 161 gives 65 and 64.
+ */
 export function inspectionWidth(size: ReplTerminalSize): number | undefined {
   const profile = profileFor(size);
-  if (profile === "wide") {
-    return INSPECTION.wide;
+  const sidebar = sidebarWidth(size);
+  if (sidebar === undefined || (profile !== "wide" && profile !== "medium")) {
+    return undefined;
   }
-  return profile === "medium" ? INSPECTION.medium : undefined;
+  return Math.floor((size.columns - sidebar) / 2);
 }
 
 /**
@@ -298,6 +309,38 @@ export function drawerRect(size: ReplTerminalSize): ReplBounds | undefined {
     y,
     width: size.columns - 2 * x,
     height: body - 2 * y,
+  });
+}
+
+/**
+ * The Sidekick question form's rectangle, inside the pane that owns it.
+ *
+ * Pane-local rather than whole-body, because the question belongs to the
+ * Sidekick reading: a modal over the entire screen would cover the transcript
+ * and the catalog a person is reading *about*, and would read as the entry's
+ * drawer rather than this conversation's. In a wide or medium frame that pane is
+ * the inspection column, so the rectangle starts where that column starts and
+ * is exactly as wide. A narrow frame routes one outlet, so the pane is the body.
+ *
+ * Above the footer in every case, like every other drawer: the seven rows that
+ * hold the way out, the band and the draft are never covered.
+ *
+ * One calculation, read back by measurement, admission, description, committed
+ * drawing and hit testing alike — a second opinion about where this rectangle
+ * is would be a drawer whose cells and whose targets disagreed.
+ */
+export function sidekickDrawerRect(size: ReplTerminalSize): ReplBounds | undefined {
+  const profile = profileFor(size);
+  if (profile === "too-small") {
+    return undefined;
+  }
+  const inspection = inspectionWidth(size);
+  const width = inspection ?? size.columns;
+  return Object.freeze({
+    x: size.columns - width,
+    y: 0,
+    width,
+    height: bodyRows(size),
   });
 }
 
@@ -390,7 +433,65 @@ export function bodyProps(edged: boolean): ReplBoxProps {
   if (!edged) {
     return { layout };
   }
-  return { layout, border: { color: terminalColour(REPL_PALETTE.edge), bottom: 1 } };
+  return { layout, border: { color: terminalColour(REPL_PALETTE.chromeEdge), bottom: 1 } };
+}
+
+/** How far the Sidekick's body sits in from its pane, on each side. */
+export const SIDEKICK_GUTTER = 2;
+
+/**
+ * The Sidekick's body, inset from the pane that holds it.
+ *
+ * Two cells of gutter on each side, through the engine's own padding, so the
+ * width every row inside is built to is the width the engine reports for this
+ * box rather than a number subtracted somewhere else. The gutter is geometry:
+ * it carries the pane's surface, holds no text and is no part of any message.
+ *
+ * The header rows above are deliberately not in here. A column says what it is
+ * across its whole width, and a title indented to match the chat would read as
+ * one more line of it.
+ */
+export function sidekickBodyProps(): ReplBoxProps {
+  return {
+    layout: {
+      width: grow(),
+      height: grow(),
+      direction: "ttb",
+      padding: { left: SIDEKICK_GUTTER, right: SIDEKICK_GUTTER },
+    },
+  };
+}
+
+/**
+ * One row of a pane's header, on the surface that names the column.
+ *
+ * The same single row {@link rowProps} measures, with a background: what makes
+ * it read as a header is the fill across the measured width, including the
+ * cells the title's own text does not reach.
+ */
+export function headerRowProps(width: number | undefined, surface: number): ReplBoxProps {
+  return { ...rowProps(width), bg: terminalColour(surface) };
+}
+
+/**
+ * The band a pane's header rows sit in, closed by the accepted edge.
+ *
+ * `rows` is how many title rows it holds; the edge is one more, because a
+ * border here is a real row the engine takes out of this box exactly as the
+ * body's own rule is taken out of the body. That is what keeps the two passes
+ * honest: the rows below are built to what the engine leaves after the edge,
+ * so a measured region and the region drawn into it account for the same
+ * decoration rather than one of them guessing it.
+ *
+ * The band carries the header surface too, so the edge row is drawn on the
+ * header's own ground rather than on the reading beneath it.
+ */
+export function headerBandProps(rows: number, surface: number): ReplBoxProps {
+  return {
+    layout: { width: grow(), height: fixed(rows + 1), direction: "ttb" },
+    bg: terminalColour(surface),
+    border: { color: terminalColour(REPL_PALETTE.chromeEdge), bottom: 1 },
+  };
 }
 
 /**
@@ -410,7 +511,7 @@ export function paneColumnProps(width: number | undefined, surface: number): Rep
   return {
     ...columnProps(width),
     bg: terminalColour(surface),
-    border: { color: terminalColour(REPL_PALETTE.edge), left: 1 },
+    border: { color: terminalColour(REPL_PALETTE.columnDivider), left: 1 },
   };
 }
 
@@ -454,7 +555,7 @@ export function columnProps(width: number | undefined): ReplBoxProps {
  * that arithmetic is not whole: measured, two `grow()` viewports in a 29-row
  * sidebar came back `11.994140625` and `12`, which puts every row inside the
  * first one at a fractional position. A target there names a row that is not a
- * row, so placement states the size and lets one child grow into the remainder.
+ * row, so the layout states the size and lets one child grow into the remainder.
  *
  * `"grow"` takes whatever the column has left, `"fit"` takes exactly what its
  * own rows need, and a number states a share.

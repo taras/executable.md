@@ -19,7 +19,7 @@ import type { Operation } from "effection";
 import { content, hasContent, raise } from "../component-api.ts";
 import { getExpansion } from "../expansion.ts";
 
-import { sessionPlacement } from "./session-request.ts";
+import { openSessionRequest } from "./session-request.ts";
 
 import type { ComponentInvocation, FunctionComponent } from "../types.ts";
 import type { IdentityClaimant } from "../invocation-identity.ts";
@@ -42,6 +42,7 @@ import {
   useProviderInstallation,
 } from "./launch-install.ts";
 import type { AgentSessionUse } from "./session-use.ts";
+import type { AgentConversationProvider } from "./conversation-provider.ts";
 import { AgentLaunchError } from "./launch.ts";
 import type {
   DetachedLaunchRecord,
@@ -54,11 +55,22 @@ import { installApproveAll, installAskPermission } from "./permission.ts";
 import { AgentInternal, formatLocation } from "./internal.ts";
 import { serializePromptFailure } from "./errors.ts";
 import type { SerializedPromptFailure } from "./errors.ts";
-import { completedPromptAudit, persistPrompt, promptFailureFromRecord } from "./journal.ts";
+import {
+  auditedPromptStream,
+  completedPromptAudit,
+  persistPrompt,
+  promptFailureFromRecord,
+} from "./journal.ts";
 import type { PromptRecord } from "./journal.ts";
 import { checkpointOf } from "./checkpoint.ts";
 import type { AgentPromptCheckpoint } from "./checkpoint.ts";
-import type { AgentPromptAssociation, AgentPromptHandle } from "./publication.ts";
+import { HostObservationFailure } from "./publication.ts";
+import type {
+  AgentPromptAssociation,
+  AgentPromptHandle,
+  AgentPromptPublisher,
+} from "./publication.ts";
+import { clearsLiveOutput } from "../secrets/policy.ts";
 import type { Stream } from "effection";
 import type { AgentPromptEvent } from "./agent-api.ts";
 
@@ -217,8 +229,7 @@ export function* AgentComponent(props: Record<string, Json>): Operation<Json> {
 }
 
 /**
- * `<Session>`, closed over the identity authenticator that names its
- * placements.
+ * `<Session>`, closed over the identity authenticator that names its sessions.
  *
  * Built per execution, from the identity authenticator that execution
  * delivered to this factory: an implementation built for one execution's
@@ -232,25 +243,25 @@ export function sessionComponent(claim: IdentityClaimant): FunctionComponent {
   ): Operation<Json> {
     // The name routes; the identity does not. `<Session name="review">` written
     // twice is two sessions, and no handler on the public chain can make them one
-    // — it holds the placement, reads the name, and reaches no further.
+    // — it holds the request, reads the name, and reaches no further.
     //
-    // The issuance closes as soon as this element has placed its session, so a
-    // handler that kept the placement cannot route it for the next `<Session>`:
+    // The issuance closes as soon as this element has resolved its session, so a
+    // handler that kept the request cannot route it for the next `<Session>`:
     // both would otherwise resolve to this element's identity. `close()` is
     // synchronous, so the guarantee holds however the call left.
     const identity = yield* claim(invocation);
-    const issuance = sessionPlacement(identity, asString(props.name));
-    // Read before the placement is routed, so one value describes this element
+    const issuance = openSessionRequest(identity, asString(props.name));
+    // Read before the request is routed, so one value describes this element
     // for everything beneath it.
     const configuration = sessionConfigurationOf(props);
     // Settled here, before anything routes, and settled either way: an element
     // that authored nothing says so, which is what leaves a handler holding
-    // this placement with nothing to add to it.
+    // this request with nothing to add to it.
     issuance.configure(configuration);
     let session: Session | AgentSessionUse;
     try {
       // One released one-argument call, configured or not: what a handler sees
-      // is this element's placement and nothing else, and what the element asks
+      // is this element's request and nothing else, and what the element asks
       // travels where the engine identity already travels — inside the value,
       // reachable only by the installed provider's coordinator.
       session = yield* Agent.operations.session(issuance.request);
@@ -390,12 +401,92 @@ interface ConsumedTurn {
 }
 
 /**
+ * The provider a retained conversation reaches, and what it reaches it with.
+ *
+ * Supplied instead of the public chain, not beside it: a conversation that
+ * routed its prompt could have its session replaced after the one its request
+ * finished with had already been checked. Both values are the conversation's
+ * own — the agent it resolved through this same provider, and the exact Session
+ * its own setup settled — so this says which provider, under which agent, in
+ * which conversation, with nothing between able to answer differently.
+ */
+export interface DirectPromptTurn {
+  readonly provider: AgentConversationProvider;
+  readonly agent: string;
+  readonly session: Session;
+}
+
+/**
  * What this turn hands the publication beside the record: the association a
  * host may retain, and the handle that host recognised this exact live turn by.
  */
 export interface Carried {
   association?: AgentPromptAssociation;
   begun?: AgentPromptHandle;
+}
+
+/**
+ * The live account one observing host is given of this turn.
+ *
+ * Whole prefixes, not deltas: what a host shows is the source as it stands, so
+ * a secret split across two transport chunks is found by scanning the
+ * accumulation rather than the piece that happened to arrive. Each prefix is
+ * cleared by the execution this turn runs in before it leaves Core at all.
+ *
+ * Doubt withdraws and stays withdrawn. A finding, a scanner that failed, and a
+ * policy that is absent or not this execution's all answer the same way: the
+ * host is told `null` once, and this turn tells it nothing further. That is a
+ * decision about a screen — the journal's own gate still decides whether the
+ * turn may be persisted at all.
+ */
+function liveObservation(
+  observe: NonNullable<AgentPromptPublisher["observe"]>,
+  carried: Carried,
+): {
+  /** Another piece of source arrived; offer what the whole of it now is. */
+  delta(text: string): Operation<void>;
+  /** The stream returned this; offer it when the deltas did not already say it. */
+  returned(text: string): Operation<void>;
+} {
+  let accumulated = "";
+  /** The last prefix this host was told, where it has been told one. */
+  let offered: string | undefined;
+  let withheld = false;
+  function* tell(text: string | null): Operation<void> {
+    try {
+      yield* observe({ begun: carried.begun, text });
+    } catch (error) {
+      // A trusted host failed its own operation. Carried rather than
+      // classified: the catch below reads errors as what the agent did, and
+      // this is not something the agent did.
+      throw new HostObservationFailure(error);
+    }
+  }
+  function* offer(whole: string): Operation<void> {
+    if (withheld) {
+      return;
+    }
+    if (!(yield* clearsLiveOutput(whole))) {
+      withheld = true;
+      offered = undefined;
+      yield* tell(null);
+      return;
+    }
+    if (whole === offered) {
+      return;
+    }
+    offered = whole;
+    yield* tell(whole);
+  }
+  return {
+    *delta(text: string): Operation<void> {
+      accumulated += text;
+      yield* offer(accumulated);
+    },
+    *returned(text: string): Operation<void> {
+      yield* offer(text);
+    },
+  };
 }
 
 /**
@@ -414,6 +505,7 @@ export function* runPrompt(
   sequence: number,
   throwOnError: boolean,
   carried: Carried,
+  direct?: DirectPromptTurn,
 ): Operation<PromptRecord> {
   let consumed: ConsumedTurn = { text: "" };
   // The exact stream this turn consumed, held out here because the audit
@@ -440,10 +532,31 @@ export function* runPrompt(
       if (publisher?.begin !== undefined) {
         carried.begun = yield* publisher.begin(text);
       }
-      // Auditing is installed by the Agent middleware around this call, not
-      // here: the stream that comes back already carries its own ledger, and
-      // holding it is how this turn reads what it was allowed to do.
-      const stream = yield* Agent.operations.prompt(text, options);
+      // Only for a host that asked to be told. A publisher with no `observe`
+      // accumulates no prefix and is scanned for nothing: this feature costs
+      // an ordinary run exactly nothing.
+      const observing = publisher?.observe;
+      const watching =
+        observing === undefined ? undefined : liveObservation(observing.bind(publisher), carried);
+      // One turn, two ways of reaching a provider, one audit either way.
+      //
+      // An ordinary `<Prompt>` routes, and the middleware around that call is
+      // what places the ledger — the stream that comes back already carries
+      // its own. A retained conversation does not route: it was handed its
+      // provider and the exact Session its own request finished with, so this
+      // places the ledger itself, around that provider's own cold stream.
+      // Holding the stream is how this turn reads what it was allowed to do,
+      // and it is the same stream in both cases.
+      const stream =
+        direct === undefined
+          ? yield* Agent.operations.prompt(text, options)
+          : yield* auditedPromptStream(
+              yield* direct.provider.prompt(text, {
+                ...options,
+                agent: direct.agent,
+                session: direct.session,
+              }),
+            );
       consumedStream = stream;
       const subscription = yield* stream;
       let next = yield* subscription.next();
@@ -459,6 +572,13 @@ export function* runPrompt(
           result.ranIn = event.session;
           if (event.session.agentSessionId !== undefined) {
             result.agentSessionId = event.session.agentSessionId;
+          }
+        } else if (event.type === "text_delta") {
+          // Awaited here, before the next provider event is asked for: one
+          // observation is in flight at a time, and there is no queue of them
+          // to fall behind the turn.
+          if (watching !== undefined) {
+            yield* watching.delta(event.text);
           }
         } else if (event.type === "terminal") {
           result.status = event.status;
@@ -476,12 +596,27 @@ export function* runPrompt(
         next = yield* subscription.next();
       }
       result.text = next.value;
+      // What the stream returned, where it is not what the deltas already
+      // said. A provider that answers with its own whole text — or with
+      // nothing at all — replaces the candidate exactly rather than leaving a
+      // host showing something the record will not hold. The journal's result
+      // is the stream's own return, untouched by any of this.
+      if (watching !== undefined) {
+        yield* watching.returned(next.value);
+      }
       return result;
     });
     if (consumed.status === undefined) {
       consumed.failure = { message: "agent prompt stream closed without a terminal event" };
     }
   } catch (error) {
+    if (error instanceof HostObservationFailure) {
+      // Not this turn's failure to describe. The provider's own cleanup has
+      // already run — the scope above owns it — and this travels on to the
+      // durability failure a host that cannot be trusted with its turn gets,
+      // without a record being appended for it.
+      throw error;
+    }
     consumed.status = "failed";
     consumed.failure = serializePromptFailure(error);
   }

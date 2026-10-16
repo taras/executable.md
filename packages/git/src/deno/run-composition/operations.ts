@@ -126,7 +126,7 @@ export interface PushEvidence {
  * `sameRepositoryIdentity`. A locator fingerprint alone names *where a
  * repository came from*, and two Repositories selected from one locator under
  * different names are different repositories with separate leases, separate
- * placements and separate Push evidence. Admitting on the fingerprint would let
+ * layouts and separate Push evidence. Admitting on the fingerprint would let
  * a `<Dir>` into the second one carry the first one's permission — the element
  * would be authenticated against the Repository in scope and then act in a
  * checkout that Repository never selected.

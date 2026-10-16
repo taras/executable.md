@@ -225,7 +225,7 @@ export function createPlanHarness(options: {
 /**
  * A temporary directory that is also the contextual working directory.
  *
- * Both, because the two answer different questions: session placement and
+ * Both, because the two answer different questions: session naming and
  * `--output` resolve the contextual one, while a real file has to live
  * somewhere.
  */

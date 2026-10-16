@@ -57,6 +57,8 @@ import { createFakeAcp, makeRegistry, makeStore, tripwireAcp } from "./support/f
 import type { FakeAcp } from "./support/fake-acp.ts";
 import { ADAPTERS, AGENT } from "./support/plan-harness.ts";
 import { parseDurableEvent } from "@executablemd/durable-streams";
+
+import { ENTRIES_FILE, PAIRED_DIRECTORY } from "../src/repl/sidekick/history.ts";
 import { projectRepl } from "../src/repl/model.ts";
 
 /** The exact source the Story publishes. */
@@ -609,7 +611,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
 
     // What the live process printed, and what the history holds now.
     expect(location).toContain("xmd://repl/");
-    const before = yield* history(hostRoot);
+    const before = yield* entryHistory(hostRoot);
     expect(live.prompts).toHaveLength(2);
 
     const cold = createFakeAcp();
@@ -677,7 +679,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
     });
 
     // Byte for byte the history it opened: reading a run is not appending to it.
-    expect(yield* history(hostRoot)).toBe(before);
+    expect(yield* entryHistory(hostRoot)).toBe(before);
   });
 
   it("EC1: two entries of retained Agent work reopen cold, asking nobody", function* () {
@@ -728,7 +730,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
     });
 
     expect(live.prompts).toEqual(["ask-one", "ask-two"]);
-    const before = yield* history(hostRoot);
+    const before = yield* entryHistory(hostRoot);
 
     // What the file says the two turns are, so the cold reading below is held
     // to the record rather than to itself.
@@ -816,7 +818,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
     });
 
     // Byte for byte the history it opened: reading a run is not appending to it.
-    expect(yield* history(hostRoot)).toBe(before);
+    expect(yield* entryHistory(hostRoot)).toBe(before);
   });
 
   it("J3: a failed and a cancelled turn restore terminally, with the text they had", function* () {
@@ -1301,7 +1303,7 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
     expect(standingRoute.at).toBeUndefined();
     expect(standingRoute.inspect).toBe(false);
     expect(live.prompts).toHaveLength(3);
-    const before = yield* history(hostRoot);
+    const before = yield* entryHistory(hostRoot);
 
     // A cold process over that exact location: the same filter and the same
     // draft, with no provider reached at all.
@@ -1338,7 +1340,7 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
     });
 
     // And the Journal is byte-identical: a cold process reads, it does not write.
-    expect(yield* history(hostRoot)).toBe(before);
+    expect(yield* entryHistory(hostRoot)).toBe(before);
   });
 });
 
@@ -1701,11 +1703,27 @@ function* absentHistory(hostRoot: string): Operation<boolean> {
   return found.length === 0;
 }
 
-/** The one history file this host holds, as text. */
-function* history(hostRoot: string): Operation<string> {
+/**
+ * The one entry history this host holds, as text.
+ *
+ * Resolved rather than named, because a published pair keeps its entries in
+ * `v1/<execution>/entries.jsonl` while an older single-file execution is
+ * `<execution>.jsonl`. What these rows are about is the records, not the
+ * layout.
+ */
+function* entryHistory(hostRoot: string): Operation<string> {
   const directory = join(hostRoot, "xmd", "repl");
-  const files = yield* untilResolved(readdir(directory));
-  return yield* untilResolved(readFile(join(directory, files[0] ?? ""), "utf8"));
+  const held = (yield* untilResolved(readdir(directory)))[0] ?? "";
+  const path =
+    held === PAIRED_DIRECTORY
+      ? join(
+          directory,
+          held,
+          (yield* untilResolved(readdir(join(directory, held))))[0] ?? "",
+          ENTRIES_FILE,
+        )
+      : join(directory, held);
+  return yield* untilResolved(readFile(path, "utf8"));
 }
 
 /**
@@ -1907,9 +1925,7 @@ function holds(asked: readonly string[]): Holds {
 
 /** Every durable record this run wrote, in order, as `type:status`. */
 function* journal(hostRoot: string): Operation<Record<string, unknown>[]> {
-  const directory = join(hostRoot, "xmd", "repl");
-  const files = yield* untilResolved(readdir(directory));
-  const text = yield* untilResolved(readFile(join(directory, files[0] ?? ""), "utf8"));
+  const text = yield* entryHistory(hostRoot);
   return text
     .split("\n")
     .filter((line) => line.length > 0)
@@ -2349,6 +2365,14 @@ function occurrences(terminal: Terminal, text: string): number {
  * would be an answer attributed to somewhere it never happened.
  */
 function* answeredUnder(terminal: Terminal, scope: string, text: string): Operation<number> {
+  // Bindings first, where the command is showing the Sidekick. A scope's own
+  // rows are the inspector's, and the right pane now defaults to the Sidekick
+  // (#883 section 5) — which is a reading rather than a route, so a row about
+  // the inspector asks for it the way a person does.
+  if (shows(terminal, "Sidekick [selected]")) {
+    yield* click(terminal, "Bindings");
+    yield* settled(40);
+  }
   yield* click(terminal, scope);
   yield* settled(40);
   const found = occurrences(terminal, text);

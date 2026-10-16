@@ -240,7 +240,7 @@ describe("Tier AM — embedded adapter materialization", () => {
     expect(yield* exists(join(root, digestOf("codex"), ".xmd-adapter"))).toBe(true);
 
     // Asking again does nothing and still succeeds; a run reaches this on every
-    // placement.
+    // session creation.
     yield* adapters.materialize("codex");
     expect(yield* exists(entry)).toBe(true);
     // No staging left behind on the happy path.

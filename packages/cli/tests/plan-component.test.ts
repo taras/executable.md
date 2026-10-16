@@ -412,7 +412,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     });
   });
 
-  it("PC5: a host whose provider gives no Agent context refuses before placement", function* () {
+  it("PC5: a host whose provider gives no Agent context refuses before its session", function* () {
     yield* useWorkingDirectory(function* () {
       const root = yield* planWriterRoot();
       const run = yield* runDocument({
@@ -432,7 +432,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       expect(run.failure).toBe(
         "The not-acpx provider did not provide an Agent context for <Plan>. No Plan was returned.",
       );
-      // Before placement: no directory was made, and no turn was taken.
+      // Before the session: no directory was made, and no turn was taken.
       expect(run.leftover).toEqual([]);
       expect(run.harness.fake.prompts).toEqual([]);
     });
@@ -1261,7 +1261,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       // the other.
       expect(run.harness.fake.prompts).toHaveLength(2);
       expect(run.harness.reviews).toHaveLength(2);
-      // And each derived placement was handed back after its own teardown.
+      // And each derived session was handed back after its own teardown.
       expect(run.leftover).toEqual([]);
     });
   });
@@ -1406,7 +1406,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     yield* useWorkingDirectory(function* () {
       const root = yield* planWriterRoot();
       const run = yield* runDocument({
-        // No `session` prop: the placement is this expansion's own, and belongs
+        // No `session` prop: the session is this expansion's own, and belongs
         // to it.
         source: ['<Plan as="approved">Write a program.</Plan>', ""].join("\n"),
         root,
@@ -1439,7 +1439,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     });
   });
 
-  it("PC17: the same site and name continue the same placement", function* () {
+  it("PC17: the same site and name continue the same session", function* () {
     yield* useWorkingDirectory(function* () {
       const root = yield* planWriterRoot();
       const source = ['<Plan session="review" as="approved">Write a program.</Plan>', ""].join(
@@ -1452,8 +1452,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
       // A second run of the same document, against the same root. The
       // continuation contract is that the same site writing the same name
-      // reaches the same placement — so the root still holds exactly the one
-      // directory, and it is the same one. A placement derived per run would
+      // reaches the same session — so the root still holds exactly the one
+      // directory, and it is the same one. A session derived per run would
       // leave a second beside it, because both are durable.
       const two = yield* runDocument({ source, root, reply: PLAN });
 
@@ -1466,7 +1466,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     yield* useWorkingDirectory(function* () {
       const root = yield* planWriterRoot();
       const run = yield* runDocument({
-        // The same authored name at two sites. Sibling placements stay distinct,
+        // The same authored name at two sites. Sibling sessions stay distinct,
         // exactly as sibling `<Session>` elements do, so neither answers for the
         // other and neither refuses the other's directory as occupied.
         source: [
@@ -1481,7 +1481,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
       expect(run.failure).toBe(undefined);
       expect(run.harness.fake.prompts).toHaveLength(2);
-      // Two durable placements, not one shared and not one refused.
+      // Two durable sessions, not one shared and not one refused.
       expect(run.leftover).toHaveLength(2);
       expect(new Set(run.leftover).size).toBe(2);
     });

@@ -29,7 +29,7 @@ import { addPaths } from "./git.ts";
 import type { RepositoryHost } from "./host.ts";
 import { settled, type CompositionOutcome, type MutationContext } from "./effects.ts";
 import { gitOperationFingerprint, performGitOperation, type GitCheckout } from "./operations.ts";
-import { placedCheckout } from "./identity.ts";
+import { checkoutPathAgrees } from "./identity.ts";
 
 /** The effect type one staging command is recorded under. */
 export const WORKSPACE_GIT_ADD = "workspace_git_add";
@@ -121,7 +121,7 @@ export function* createGitAdd(
     performGitAdd(context, host, admitted),
   );
   const result = parseGitAddResult(outcome, admitted);
-  if (result === undefined || !placedCheckout(result.checkout, admitted.repository)) {
+  if (result === undefined || !checkoutPathAgrees(result.checkout, admitted.repository)) {
     throw new GitOperationProtocolError(ADD);
   }
   return result;

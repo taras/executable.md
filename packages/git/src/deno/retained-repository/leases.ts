@@ -21,7 +21,7 @@
 import type { Operation } from "effection";
 import { StaleInputError } from "@executablemd/durable-streams";
 import { useAdvisoryLock } from "@executablemd/workflow/deno";
-import { commonDirectoryLock } from "../run-composition/placement.ts";
+import { commonDirectoryLock } from "../run-composition/checkout-layout.ts";
 import { ManagedCheckoutError } from "../run-composition/errors.ts";
 import type { ManagedCheckoutReason } from "../run-composition/errors.ts";
 

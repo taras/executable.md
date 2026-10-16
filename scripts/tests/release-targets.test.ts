@@ -418,7 +418,7 @@ describe("release.yml binary attestation", () => {
   });
 
   /**
-   * Placement is the whole guarantee: before the compile there are no bytes to
+   * Position is the whole guarantee: before the compile there are no bytes to
    * attest, and after the upload an unattested binary is already in the set
    * `release` downloads.
    */

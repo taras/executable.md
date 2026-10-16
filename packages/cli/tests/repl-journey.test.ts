@@ -18,28 +18,35 @@ import { expect } from "@executablemd/test-support/expect";
 import {
   ensure,
   type Operation,
-  resource,
   type Result,
   scoped,
   sleep,
   spawn,
-  type Stream,
-  type Subscription,
   withResolvers,
 } from "effection";
-import { appendFile, mkdir, mkdtemp, open, readFile, readdir, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  readdir,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { until } from "effection";
 
 import { API } from "@executablemd/runtime";
-import { Elicitation, useTempFileCompiler } from "@executablemd/core";
+import { DEFAULT_AGENT_NAME } from "@executablemd/acp";
+import { Elicitation, Execution, useTempFileCompiler } from "@executablemd/core";
+import { RootMetadata } from "@executablemd/core/api";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { installReplHost } from "../src/repl-assembly.ts";
-import { installReplTerminal } from "../src/repl/terminal-host.ts";
-import type { ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
+import { ENTRIES_FILE, PAIRED_DIRECTORY } from "../src/repl/sidekick/history.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { ReplClock } from "../src/repl/frame.ts";
 import {
@@ -52,7 +59,29 @@ import {
 import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import { readDescription } from "../src/repl/description.ts";
 import { runReplProgram } from "../src/repl/program.ts";
+// The terminal harness and the keyboard helpers these rows drive the product
+// with. They live in the fixture so the mounted Sidekick rows reach the same
+// screen the same way rather than through a second account of it.
+import {
+  activate,
+  draftRow,
+  draftText,
+  focusDraft,
+  focusedOn,
+  focusOn,
+  recordingTerminal,
+  replay,
+  saysAcross,
+  screenOf,
+  settled,
+  statusOn,
+  shows,
+  untilDrawn,
+} from "./fixtures/repl/issue-883/mounted-program.ts";
+import type { Terminal } from "./fixtures/repl/issue-883/mounted-program.ts";
+import { entryVocabulary } from "../src/repl-profile.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
+import { NO_PLUGINS } from "../src/plugin-host.ts";
 import type { ReplOutcome } from "../src/repl/program.ts";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import {
@@ -74,6 +103,7 @@ import {
   referenceSource,
 } from "./fixtures/repl/reference.ts";
 import { measuringContext } from "./fixtures/repl/presentation.ts";
+import { sidekickAssembly } from "../src/repl/sidekick/assembly.ts";
 
 const BYTES = new TextEncoder();
 
@@ -89,7 +119,6 @@ const EMPTY_MODEL_FOR_TEST = Object.freeze({
   turns: Object.freeze([]),
   sessions: Object.freeze([]),
 });
-const TEXT = new TextDecoder();
 
 /**
  * What this host installs around the reference entry.
@@ -112,6 +141,15 @@ const PROFILE: ReplExecutionProfile = {
   installations: INSTALLATIONS,
   generated: ordinaryGeneratedSelection(),
   permissionMode: "deny-all",
+  // No row here opens a Sidekick conversation, so the selection is the one an
+  // unconfigured command settles.
+  sidekickAgent: DEFAULT_AGENT_NAME,
+  // Declared because a profile carries one, and never installed: no row here
+  // opens a Sidekick conversation.
+  sidekickAssembly: sidekickAssembly(DEFAULT_AGENT_NAME, {}),
+  // This suite installs no Plugin, which the snapshot reports as `none`.
+  plugins: NO_PLUGINS.plugins.map((plugin) => plugin.name),
+  vocabulary: entryVocabulary([REFERENCE_DIRECTORY], NO_PLUGINS),
 };
 
 /** What the reference entry's eval publishes, as the model retains it. */
@@ -127,13 +165,6 @@ const SCHEMA = {
 
 /** The answer this journey gives it. */
 const ANSWER = { decision: "approve" };
-
-/** Let every task that is ready take its turn. */
-function* settled(turns = 8): Operation<void> {
-  for (let turn = 0; turn < turns; turn += 1) {
-    yield* sleep(0);
-  }
-}
 
 /** A clock the test moves, so nothing in this suite waits on real time. */
 function immediateClock(): Operation<void> {
@@ -192,225 +223,6 @@ function countingClock(): CountingClock {
   return clock;
 }
 
-/** A terminal the test drives completely. */
-interface Terminal {
-  /** Everything ever presented, in order. */
-  readonly presented: Uint8Array[];
-  /**
-   * When set, the next presentation blocks here until it is released.
-   *
-   * The seam the frame-order control needs: while a frame is being written, the
-   * stream must not have been told that frame was applied.
-   */
-  holdPresent: { release(): void } | undefined;
-  size: ReplTerminalSize;
-  /** How many times the program has asked this terminal how big it is. */
-  sized: number;
-  readonly raw: boolean[];
-  resets: number;
-  listeners: number;
-  readers: number;
-  feed(text: string): void;
-  bytes(raw: Uint8Array): void;
-  /** Make the next presentation block, so a test can look at the frame stream. */
-  holdNextPresent(): void;
-  resized(size: ReplTerminalSize): void;
-  /**
-   * Resize *between* two of the program's size reads.
-   *
-   * A window dragged while a frame is being prepared is exactly this: the read
-   * the frame was resolved against reports one size, and every read after it
-   * reports another. `after` counts reads from now, and the read that triggers
-   * it still answers with the size that is going away.
-   */
-  resizeAfterRead(after: number, next: ReplTerminalSize): void;
-  /**
-   * Move the terminal on *every* one of the next `reads` size reads.
-   *
-   * A window still being dragged. Each read answers with the size that was
-   * there and leaves a different one behind it, so every preparation the
-   * program takes is invalidated before it can revalidate — which is what
-   * exhausting a frame's rebuild budget looks like from outside. The last of
-   * those reads settles on `settled` and the churn is over.
-   */
-  churnSize(reads: number, settled: ReplTerminalSize): void;
-  /** How many churned reads are still owed, so a test can wait for the end. */
-  churning(): number;
-  end(): void;
-}
-
-function recordingTerminal(
-  size: ReplTerminalSize = { columns: 160, rows: 36 },
-  interactive = true,
-): {
-  terminal: Terminal;
-  install(): Operation<void>;
-} {
-  const queue: Uint8Array[] = [];
-  const watchers = new Set<() => void>();
-  let waiting: ((result: IteratorResult<Uint8Array, void>) => void) | undefined;
-  let ended = false;
-
-  let holding = false;
-  let dragging: { after: number; next: ReplTerminalSize } | undefined;
-  let churn: { left: number; settled: ReplTerminalSize } | undefined;
-  const terminal: Terminal = {
-    presented: [],
-    holdPresent: undefined,
-    size,
-    sized: 0,
-    raw: [],
-    resets: 0,
-    listeners: 0,
-    readers: 0,
-    feed(text: string): void {
-      terminal.bytes(BYTES.encode(text));
-    },
-    holdNextPresent(): void {
-      holding = true;
-    },
-    bytes(raw: Uint8Array): void {
-      const resolve = waiting;
-      if (resolve === undefined) {
-        queue.push(raw);
-        return;
-      }
-      waiting = undefined;
-      resolve({ done: false, value: raw });
-    },
-    resized(next: ReplTerminalSize): void {
-      terminal.size = next;
-      for (const watcher of watchers) {
-        watcher();
-      }
-    },
-    resizeAfterRead(after: number, next: ReplTerminalSize): void {
-      dragging = { after: terminal.sized + after, next };
-    },
-    churnSize(reads: number, settled: ReplTerminalSize): void {
-      churn = { left: reads, settled };
-    },
-    churning(): number {
-      return churn?.left ?? 0;
-    },
-    end(): void {
-      ended = true;
-      const resolve = waiting;
-      if (resolve !== undefined) {
-        waiting = undefined;
-        resolve({ done: true, value: undefined });
-      }
-    },
-  };
-
-  const host: ReplTerminalCapabilities = {
-    interactive: () => interactive,
-    size: () => {
-      terminal.sized += 1;
-      const reported = terminal.size;
-      if (churn !== undefined) {
-        churn.left -= 1;
-        // Always a different size from the one just answered with, so no
-        // preparation can be revalidated against the size it was measured for.
-        const next = churn.left > 0 ? DRAGGED[churn.left % DRAGGED.length] : churn.settled;
-        if (churn.left <= 0) {
-          churn = undefined;
-        }
-        // Set rather than announced. The host's own resize watcher reads the
-        // size from inside its listener, so announcing here would re-enter this
-        // read and drain the whole drag in one call. Nothing needs the
-        // announcement: the frame being outrun is already reading again.
-        terminal.size = next;
-      } else if (dragging !== undefined && terminal.sized >= dragging.after) {
-        const { next } = dragging;
-        dragging = undefined;
-        terminal.resized(next);
-      }
-      return reported;
-    },
-    *write(bytes: Uint8Array): Operation<void> {
-      terminal.presented.push(new Uint8Array(bytes));
-      if (!holding) {
-        // A write that completed, which still costs the caller a turn.
-        yield* sleep(0);
-        return;
-      }
-      holding = false;
-      const held = withResolvers<void>();
-      terminal.holdPresent = { release: held.resolve };
-      yield* held.operation;
-    },
-    writeNow(): void {
-      terminal.resets += 1;
-    },
-    setRaw(raw: boolean): void {
-      terminal.raw.push(raw);
-    },
-    input(): Stream<Uint8Array, void> {
-      return resource<Subscription<Uint8Array, void>>(function* (provide) {
-        let open = false;
-        // Registered before the reader is taken, so a scope cancelled between
-        // the two leaves nothing holding this terminal's input.
-        yield* ensure(() => {
-          if (!open) {
-            return;
-          }
-          open = false;
-          terminal.readers -= 1;
-          // Actively cancelled: a cleanup that waited for the outstanding read
-          // to end on its own would need another keystroke to get one.
-          const resolve = waiting;
-          waiting = undefined;
-          resolve?.({ done: true, value: undefined });
-        });
-        terminal.readers += 1;
-        open = true;
-        yield* provide({
-          *next(): Operation<IteratorResult<Uint8Array, void>> {
-            // Always one suspension per chunk, buffered or not: the reader turns
-            // one chunk into many decoded events, and draining a buffer without
-            // yielding hands them over faster than the scanner takes them.
-            const pending = withResolvers<IteratorResult<Uint8Array, void>>();
-            const head = queue.shift();
-            if (head !== undefined) {
-              pending.resolve({ done: false, value: head });
-            } else if (ended) {
-              pending.resolve({ done: true, value: undefined });
-            } else {
-              waiting = pending.resolve;
-            }
-            return yield* pending.operation;
-          },
-        });
-      });
-    },
-    onResize(listener: () => void): () => void {
-      watchers.add(listener);
-      terminal.listeners += 1;
-      return () => {
-        watchers.delete(listener);
-        terminal.listeners -= 1;
-      };
-    },
-  };
-
-  return { terminal, install: () => installReplTerminal(host) };
-}
-
-/**
- * The sizes a churning drag passes through, all of them drawable.
- *
- * Four, cycled, so consecutive reads never answer with the same size twice —
- * and none of them is below the minimum, because what this exercises is a frame
- * being outrun rather than the refusal a too-small window shows.
- */
-const DRAGGED: readonly ReplTerminalSize[] = [
-  { columns: 160, rows: 36 },
-  { columns: 120, rows: 30 },
-  { columns: 100, rows: 26 },
-  { columns: 84, rows: 22 },
-];
-
 /** A REPL host over a temporary directory nothing else uses. */
 function* useTemporaryHost(): Operation<string> {
   const root = yield* until(mkdtemp(join(tmpdir(), "xmd-repl-journey-")));
@@ -421,86 +233,6 @@ function* useTemporaryHost(): Operation<string> {
     appendRecord: (path, record) => appendFile(path, record),
   });
   return root;
-}
-
-/**
- * What the screen says, by replaying what was written to it.
- *
- * A real buffer rather than the bytes with escapes stripped, because this
- * renderer writes *diffs*: it moves the cursor to what changed and writes only
- * that. Concatenating the diffs gives characters in the order they were written
- * rather than the order they appear, and a character the previous frame already
- * had is not written again at all — so stripped bytes read as words with letters
- * missing. Interpreting the cursor moves is what makes an assertion about the
- * screen an assertion about the screen.
- */
-function screenOf(terminal: Terminal): string[] {
-  return replay(terminal.presented);
-}
-
-/**
- * The same replay over a chosen run of presentations.
- *
- * What a resize draws can only be read on its own: this renderer writes diffs,
- * so a buffer that also holds the frames before the resize holds rows the
- * smaller terminal no longer has. The engine redraws completely after a size
- * change, so the presentations from the resize onward are a whole screen.
- */
-function replay(written: readonly Uint8Array[]): string[] {
-  const rows: string[][] = [];
-  let row = 0;
-  let column = 0;
-
-  const put = (character: string): void => {
-    while (rows.length <= row) {
-      rows.push([]);
-    }
-    const line = rows[row];
-    while (line.length < column) {
-      line.push(" ");
-    }
-    line[column] = character;
-    column += 1;
-  };
-
-  const text = written.map((bytes) => TEXT.decode(bytes)).join("");
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if (character !== "\u001B") {
-      if (character === "\n") {
-        row += 1;
-        column = 0;
-      } else if (character === "\r") {
-        column = 0;
-      } else {
-        put(character);
-      }
-      continue;
-    }
-    // CSI: the only sequences this renderer uses to position and to clear.
-    const csi = /^\u001B\[([0-9;]*)([@-~])/.exec(text.slice(index));
-    if (csi !== null) {
-      const parameters = csi[1].split(";").map((one) => (one === "" ? 0 : Number(one)));
-      if (csi[2] === "H") {
-        row = Math.max(0, (parameters[0] ?? 1) - 1);
-        column = Math.max(0, (parameters[1] ?? 1) - 1);
-      } else if (csi[2] === "J") {
-        rows.length = 0;
-        row = 0;
-        column = 0;
-      }
-      index += csi[0].length - 1;
-      continue;
-    }
-    // OSC, and the two-byte escapes. Neither carries anything readable.
-    const osc = /^\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)/.exec(text.slice(index));
-    if (osc !== null) {
-      index += osc[0].length - 1;
-      continue;
-    }
-    index += 1;
-  }
-  return rows.map((line) => line.join(""));
 }
 
 /** What a run really performed, as opposed to what it restored. */
@@ -543,80 +275,6 @@ function* countPerformed(): Operation<Performed> {
     },
   });
   return performed;
-}
-
-/** Whether any row of the screen contains this text. */
-function shows(terminal: Terminal, expected: string): boolean {
-  return screenOf(terminal).some((line) => line.includes(expected));
-}
-
-/**
- * Tab until the control this key names holds focus.
- *
- * Traversal through the ordinary normalized boundary, exactly as a person does
- * it: there is no host shortcut that jumps to a control, and the marker on the
- * focused control is how anybody — a person or this test — knows where they are.
- */
-function* focusOn(terminal: Terminal, label: string, limit = 240): Operation<void> {
-  if (focusedOn(terminal, label)) {
-    return;
-  }
-  for (let press = 0; press < limit; press += 1) {
-    terminal.feed("\t");
-    yield* settled(12);
-    if (focusedOn(terminal, label)) {
-      return;
-    }
-  }
-  throw new Error(`focus never reached ${label} in ${limit} presses`);
-}
-
-/**
- * Put focus on the entry draft.
- *
- * There is no label to aim at: the draft is empty, and what it draws is its own
- * prompt. So the marker and the prompt together are what name it — a focused
- * field renders its marker immediately before its prompt, and the draft's
- * prompt is the only one on this screen that is itself a marker.
- */
-function* focusDraft(terminal: Terminal, limit = 240): Operation<void> {
-  for (let press = 0; press <= limit; press += 1) {
-    if (screenOf(terminal).some((line) => line.includes(">> "))) {
-      return;
-    }
-    terminal.feed("\t");
-    yield* settled(12);
-  }
-  throw new Error(`focus never reached the entry draft in ${limit} presses`);
-}
-
-/**
- * Whether the control holding focus is the one this label names.
- *
- * Anchored to the marker rather than matched anywhere on the line, because a
- * line of this screen crosses three columns: the sidebar, the transcript and the
- * inspection column all write to the same rows, so a label found *somewhere* on
- * a line with a marker on it is usually a different control in a different column.
- * The marker is searched for at any position for the same reason — a focused
- * control in the inspection column has the sidebar's text to the left of it.
- */
-function focusedOn(terminal: Terminal, label: string): boolean {
-  for (const line of screenOf(terminal)) {
-    for (let at = line.indexOf(">"); at !== -1; at = line.indexOf(">", at + 1)) {
-      // Past the selection channel as well as the indent: a row can be both
-      // focused and the one being read, and the two markers are independent.
-      const after = line.slice(at + 1).trimStart();
-      const beyond = after.startsWith("* ") ? after.slice(2) : after;
-      // And past a History row's own ordinal. #881 PR 3 gives every retained
-      // position its number in the full list — `12 · Entry 3 admitted` — which
-      // is another prefix the product puts there, like the two above.
-      const named = beyond.replace(/^\d+ \u00b7 /, "");
-      if (after.startsWith(label) || beyond.startsWith(label) || named.startsWith(label)) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 /**
@@ -664,7 +322,6 @@ function historicalOn(terminal: Terminal): boolean {
 }
 
 /** What the draft row is called, which is how this suite finds it. */
-const DRAFT_PROMPT = "Draft: ";
 
 /**
  * The left column of every row: the sidebar, or the whole row where there is none.
@@ -675,34 +332,6 @@ const DRAFT_PROMPT = "Draft: ";
  */
 function leftColumn(terminal: Terminal): string[] {
   return screenOf(terminal).map((line) => line.split("\u2502")[0] ?? "");
-}
-
-/** The draft row as the screen draws it, or none before a frame has drawn one. */
-function maybeDraftRow(terminal: Terminal): string | undefined {
-  return screenOf(terminal).find((line) => line.includes(DRAFT_PROMPT));
-}
-
-/** The draft row, or a failure saying what the screen was showing instead. */
-function draftRow(terminal: Terminal): string {
-  const row = maybeDraftRow(terminal);
-  if (row === undefined) {
-    throw new Error(
-      "the screen draws its draft row. rows=" +
-        JSON.stringify(screenOf(terminal).map((line) => line.trimEnd())),
-    );
-  }
-  return row;
-}
-
-/**
- * Exactly what the draft is holding, after its marker and its prompt.
- *
- * What a person can read, which for several lines is the last of them under a
- * count of the rest — the field draws one row and says so.
- */
-function draftText(terminal: Terminal): string {
-  const row = draftRow(terminal);
-  return row.slice(row.indexOf(DRAFT_PROMPT) + DRAFT_PROMPT.length).trimEnd();
 }
 
 /**
@@ -759,58 +388,6 @@ function routedSurfaceOn(terminal: Terminal): string | undefined {
     }
   }
   return undefined;
-}
-
-/**
- * Whether a frame a person could actually use has been drawn.
- *
- * Not merely that bytes arrived: a reset and an empty presentation are both
- * frames, and neither is a screen. The draft row and a way out are the two things
- * every drawable frame of this product has, so their presence is what says the
- * command is up and showing something.
- */
-function usable(terminal: Terminal): boolean {
-  const rows = screenOf(terminal);
-  return (
-    statusOn(terminal) !== undefined &&
-    rows.some((line) => line.includes(DRAFT_PROMPT)) &&
-    rows.some((line) => line.includes("[exit]") || line.includes("[history]"))
-  );
-}
-
-/**
- * The contextual status row: what the execution is doing, and what Enter does.
- *
- * Described only once a width has been measured, so its presence is also what
- * says this frame is a measured one rather than the first thing drawn.
- */
-function statusOn(terminal: Terminal): string | undefined {
-  return screenOf(terminal).find((line) => line.includes(" \u00b7 "));
-}
-
-/**
- * Wait until the first frame has been drawn.
- *
- * The command opens a terminal, a repository and a session before it can draw
- * anything, and how long that takes is not a number of turns — so every test
- * that reads the screen waits for it rather than assuming.
- */
-function* untilDrawn(terminal: Terminal): Operation<void> {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    if (usable(terminal)) {
-      return;
-    }
-    yield* sleep(10);
-    yield* settled(10);
-  }
-  throw new Error(
-    `the screen never drew its first frame. frames=${terminal.presented.length} rows=` +
-      JSON.stringify(
-        screenOf(terminal)
-          .map((l) => l.trimEnd())
-          .filter((l) => l.trim().length > 0),
-      ),
-  );
 }
 
 /**
@@ -1096,17 +673,46 @@ function* drawerContent(
   return { first, reached: seen };
 }
 
-/** Focus one control and activate it, the way a person does. */
-function* activate(terminal: Terminal, marker: string): Operation<void> {
-  yield* focusOn(terminal, marker);
-  terminal.feed("\r");
-  yield* settled(30);
+/**
+ * Every execution the repository holds, by identifier.
+ *
+ * By identifier rather than by filename, because an execution's entry history
+ * now lives in one of two places: an older single-file one is
+ * `<execution>.jsonl`, and a published pair keeps its entries inside
+ * `v1/<execution>/`. The identifier is the thing these cases are actually
+ * about — it is what a location names — so the layout is resolved by
+ * `historyPath` below rather than spelled out at forty call sites.
+ */
+function* histories(root: string): Operation<string[]> {
+  const directory = join(root, "xmd", "repl");
+  const found: string[] = [];
+  for (const name of yield* until(readdir(directory))) {
+    if (name.endsWith(".jsonl")) {
+      found.push(name.slice(0, -".jsonl".length));
+      continue;
+    }
+    if (name !== PAIRED_DIRECTORY) {
+      continue;
+    }
+    for (const execution of yield* until(readdir(join(directory, name)))) {
+      found.push(execution);
+    }
+  }
+  return found.sort();
 }
 
-/** Every history file the repository holds, by name. */
-function* histories(root: string): Operation<string[]> {
-  const entries = yield* until(readdir(join(root, "xmd", "repl")));
-  return entries.filter((name) => name.endsWith(".jsonl")).sort();
+/** Where one execution's entry history is, in whichever shape holds it. */
+function* historyPath(root: string, execution: string): Operation<string> {
+  const directory = join(root, "xmd", "repl");
+  const paired = join(directory, PAIRED_DIRECTORY, execution, ENTRIES_FILE);
+  return (yield* until(
+    stat(paired).then(
+      () => true,
+      () => false,
+    ),
+  ))
+    ? paired
+    : join(directory, `${execution}.jsonl`);
 }
 
 /**
@@ -1139,20 +745,10 @@ function flattened(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-/** The last row of the screen that contains this text, or none. */
-function lastRowContaining(rows: readonly string[], text: string): number {
-  for (let row = rows.length - 1; row >= 0; row -= 1) {
-    if (rows[row].includes(text)) {
-      return row;
-    }
-  }
-  return -1;
-}
-
 /** One history file's lines, projected as the model reads them. */
-function* projectionOf(root: string, file: string): Operation<ReplModel> {
+function* projectionOf(root: string, execution: string): Operation<ReplModel> {
   const projected = projectRepl(
-    (yield* records(root, file)).map((line) => {
+    (yield* records(root, execution)).map((line) => {
       const parsed = parseDurableEvent(line);
       if (!parsed.ok) {
         throw parsed.error;
@@ -1167,8 +763,8 @@ function* projectionOf(root: string, file: string): Operation<ReplModel> {
 }
 
 /** One history file's lines, without the trailing empty one. */
-function* records(root: string, file: string): Operation<string[]> {
-  const text = yield* until(readFile(join(root, "xmd", "repl", file), "utf8"));
+function* records(root: string, execution: string): Operation<string[]> {
+  const text = yield* until(readFile(yield* historyPath(root, execution), "utf8"));
   return text.split("\n").filter((line) => line.length > 0);
 }
 
@@ -1342,8 +938,13 @@ describe("REPL journey: one entry, from raw bytes", () => {
       yield* running;
     });
 
-    // The Sessions surface is still there, and still explicitly empty.
-    expect(shows(terminal, "(none retained)")).toBe(true);
+    // The Sessions surface is still there, and both of its sections are still
+    // explicitly empty. Two sections rather than one placeholder since #883
+    // PR 2: this command has a Sidekick, so Sessions has two owners and each
+    // one says what it holds.
+    expect(shows(terminal, "Entry agents")).toBe(true);
+    expect(shows(terminal, "No entry turns.")).toBe(true);
+    expect(shows(terminal, "No Sidekick turns.")).toBe(true);
     expect(location).toBeDefined();
     expect(terminal.resets).toBe(1);
   });
@@ -1441,6 +1042,9 @@ describe("REPL journey: one entry, from raw bytes", () => {
       inspect: true,
       draft: undefined,
       session: undefined,
+      view: undefined,
+      right: undefined,
+      sidekick: undefined,
     });
 
     // A fresh host: a new terminal, a new repository handle, and nothing carried
@@ -1473,20 +1077,33 @@ describe("REPL journey: one entry, from raw bytes", () => {
 
       // The same topology, the same binding value, the same transcript and the
       // same recorded answer — read from the file, not re-run.
-      // The drawer the location named is open on the retained value.
+      // The drawer the location named is open on the retained value — named as
+      // that binding, and holding the value the file retained for it.
       expect(shows(second.terminal, "[close]")).toBe(true);
+      expect(shows(second.terminal, `Binding \u00b7 ${binding.name}`)).toBe(true);
+      expect(shows(second.terminal, '"title": "Ship the REPL"')).toBe(true);
 
       // Out from under the drawer first: a modal covers what it is in front of, so
       // the columns beneath it are read once it is closed.
+      //
+      // Waited for, not counted: a modal closes when the next frame is built,
+      // and a frame is measured work rather than a number of turns.
       second.terminal.feed("\x1b");
-      yield* settled(30);
+      yield* until_(second.terminal, "the drawer closing", (one) => !shows(one, "[close]"));
 
       // The same topology: the entry, and the nested component occurrence beneath
       // it, at the exact keys the first process recorded.
       expect(shows(second.terminal, entry.name)).toBe(true);
       expect(shows(second.terminal, nested.name)).toBe(true);
-      // The same binding value, read from the file.
-      expect(shows(second.terminal, `${binding.name} = `)).toBe(true);
+      // The binding value is asserted above, in the drawer this location named.
+      //
+      // Re-anchored for #883. It was asserted here as a `plan = ` row, which is
+      // the Bindings column's own spelling — and this location carries no right
+      // pane, so the reconstruction selects the Sidekick and that column is
+      // never drawn in this frame. The row it matched was left on the
+      // reconstructed screen by an earlier frame, which the accepted header
+      // edges happen to overwrite. The claim is unchanged and is now read where
+      // the retained value is actually drawn.
       // The same transcript, including the answer the first process gave and the
       // output that answer produced.
       expect(shows(second.terminal, "Decision: approve")).toBe(true);
@@ -1531,8 +1148,11 @@ describe("REPL journey: one entry, from raw bytes", () => {
       expect(yield* records(root, files[0])).toEqual([]);
 
       // The screen says where it is, what it holds and what it is waiting for.
+      // Both Sessions sections say they hold nothing, which is what a mounted
+      // command with a Sidekick draws since #883 PR 2.
       expect(shows(terminal, "Sessions")).toBe(true);
-      expect(shows(terminal, "(none retained)")).toBe(true);
+      expect(shows(terminal, "No entry turns.")).toBe(true);
+      expect(shows(terminal, "No Sidekick turns.")).toBe(true);
       expect(shows(terminal, "Entries")).toBe(true);
       expect(shows(terminal, "(not submitted)")).toBe(true);
 
@@ -1611,7 +1231,7 @@ describe("REPL journey: leaving", () => {
         refused = !ran.ok;
       });
       yield* settled(20);
-      expect(shows(terminal, "cannot read")).toBe(true);
+      expect(saysAcross(terminal, "cannot read")).toBe(true);
 
       // The interrupt, with the stream left open: the refusal screen is its own
       // loop, so a key that ends the main loop proves nothing about this one.
@@ -1706,7 +1326,7 @@ describe("REPL journey: leaving", () => {
 
     const files = yield* histories(root);
     expect(files).toHaveLength(1);
-    const path = join(root, "xmd", "repl", files[0]);
+    const path = yield* historyPath(root, files[0]!);
     const before = yield* until(readFile(path, "utf8"));
 
     // The three route members this row is about, read out of the file the first
@@ -1739,6 +1359,9 @@ describe("REPL journey: leaving", () => {
       inspect: false,
       draft: "# what comes next",
       session: undefined,
+      view: undefined,
+      right: undefined,
+      sidekick: undefined,
     });
 
     // A fresh host carrying nothing but that location and the file it names.
@@ -2029,7 +1652,7 @@ describe("REPL journey: what it refuses, and what it leaves alone", () => {
       });
       yield* settled(20);
       // What it says, rather than a crash: the command cannot show this history.
-      expect(shows(terminal, "cannot read")).toBe(true);
+      expect(saysAcross(terminal, "cannot read")).toBe(true);
       terminal.end();
       yield* running;
 
@@ -2270,6 +1893,10 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
 
       // 7. The complete binding value, from the drawer that holds it.
       yield* activate(terminal, "1. [ok] entry-1");
+      // Through the tab, because the command's accepted default right pane is
+      // the Sidekick: a person reading their bindings asks for them, and this
+      // row is about what the binding's own drawer holds once they have.
+      yield* activate(terminal, "Bindings");
       yield* activate(terminal, "plan");
       // The binding's own drawer, which is what naming it in a route opens.
       expect(shows(terminal, "[close]")).toBe(true);
@@ -2303,7 +1930,7 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       // the drawer's own window.
       //
       // This drawer scrolls (#875). It used to describe every row at once and
-      // let placement clip whatever did not fit, which put the tail of a long
+      // let the layout clip whatever did not fit, which put the tail of a long
       // record in no cell, no target and no focus stop while still claiming to
       // show it — and cost this drawer its own `[close]`. So the claim is no
       // longer "every line is on screen together" but the stronger one: every
@@ -2321,7 +1948,7 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       // rows than its rectangle has — so the rows on screen at the end are not
       // the rows that were on screen at the start. Without this, `toContain`
       // above would also pass on a drawer that described every row at once and
-      // let placement clip whatever did not fit.
+      // let the layout clip whatever did not fit.
       const content =
         2 +
         JSON.stringify(SCHEMA, undefined, 2).split("\n").length +
@@ -2410,7 +2037,8 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       expect(shows(second.terminal, "generated generated")).toBe(true);
       expect(shows(second.terminal, "Decision: approve")).toBe(true);
 
-      // The same complete binding value.
+      // The same complete binding value, asked for the same way.
+      yield* activate(second.terminal, "Bindings");
       yield* activate(second.terminal, "plan");
       for (const line of JSON.stringify(PLAN, undefined, 2).split("\n")) {
         expect(shows(second.terminal, line)).toBe(true);
@@ -2919,6 +2547,9 @@ describe("REPL journey: what it settles before it acts", () => {
       inspect: false,
       draft: undefined,
       session: undefined,
+      view: undefined,
+      right: undefined,
+      sidekick: undefined,
     });
 
     const second = recordingTerminal();
@@ -3017,6 +2648,9 @@ describe("REPL journey: what it settles before it acts", () => {
       inspect: false,
       draft: undefined,
       session: undefined,
+      view: undefined,
+      right: undefined,
+      sidekick: undefined,
     });
     expect(stale).toContain("+elicit");
 
@@ -3083,7 +2717,7 @@ describe("REPL journey: what it settles before it acts", () => {
       before = yield* until(readFile(path, "utf8"));
       performed = yield* countPerformed();
 
-      const model = yield* projectionOf(root, "unclosed.jsonl");
+      const model = yield* projectionOf(root, "unclosed");
       expect(model.settled).toBe(false);
       expect(model.entries[0]?.scope.elicitations[0].answer).toEqual({ decision: "approve" });
 
@@ -3218,6 +2852,834 @@ describe("REPL journey: what it settles before it acts", () => {
     });
     expect(held.intent.kind).toBe("continue");
     expect(held.state.refusal).toBe(undefined);
+  });
+});
+
+/**
+ * Pause during submission preparation (#883 PPA2–PPA5).
+ *
+ * The window these cases are about is the one between pressing Run and the
+ * entry existing. Preflight validates the document — which reads the Markdown
+ * definition of every component it names — and that read can suspend for as
+ * long as a disk, an import or a provider takes. Submission is off the input
+ * loop so that the person keeps their keyboard throughout it, and Pause is
+ * offered from the moment the slot is reserved so that what they can do with
+ * that keyboard includes stopping the entry they just asked for.
+ *
+ * The hold is proved against the real seam. One actual `validateDocument` read
+ * is held through the runtime's own `API.Fs` middleware, the program is the
+ * production assembly, and readiness comes from latches and the frames the
+ * renderer actually presented. A fake `session.submit` would prove that this
+ * suite can describe the behaviour, not that the product has it.
+ */
+describe("REPL journey: Pause reaches a submission before its entry exists", () => {
+  /** The sizes this evidence covers, which are the three the product supports. */
+  const SIZES: readonly ReplTerminalSize[] = [
+    { columns: 160, rows: 36 },
+    { columns: 120, rows: 30 },
+    { columns: 72, rows: 20 },
+  ];
+
+  /** The Markdown definition the reference entry's first element names. */
+  const DEFINITION = "Checklist.md";
+
+  /**
+   * Hold the one definition read a preflight makes, and release it on demand.
+   *
+   * The first read of that one path and no other, so what is held is the
+   * validation and not the event loop: the screen keeps drawing, the draft keeps
+   * taking bytes, and every other read — including the same component's import
+   * once the entry really runs — goes straight through. Installed on the test's
+   * own scope, which is outside the command, so it wraps the reads the command
+   * makes without being part of what it installs.
+   */
+  function heldDefinition(path: string): {
+    install(): Operation<void>;
+    /** Resolves once the preflight is actually standing in that read. */
+    readonly reached: Operation<void>;
+    release(): void;
+    readonly holding: boolean;
+  } {
+    const entered = withResolvers<void>();
+    const gate = withResolvers<void>();
+    let holding = false;
+    let held = 0;
+    return {
+      get holding() {
+        return holding;
+      },
+      reached: entered.operation,
+      release(): void {
+        gate.resolve();
+      },
+      *install(): Operation<void> {
+        // Registered before anything waits on the gate, so a scope torn down
+        // while the read is held releases it rather than joining a suspend
+        // nobody is going to resolve.
+        yield* ensure(() => gate.resolve());
+        yield* API.Fs.around({
+          *readTextFile([one], next) {
+            if (held > 0 || !one.endsWith(path)) {
+              return yield* next(one);
+            }
+            held += 1;
+            holding = true;
+            entered.resolve();
+            try {
+              yield* gate.operation;
+            } finally {
+              holding = false;
+            }
+            return yield* next(one);
+          },
+        });
+      },
+    };
+  }
+
+  /**
+   * Hold the first runtime execution before its document is delegated.
+   *
+   * The window this opens is the one the early-live route was reachable
+   * through: the entry has a task and the session says work is in flight, but
+   * the record that gives the entry a position has not been written, so there
+   * is nothing yet for a hold to hold. Only the first one, so the successor an
+   * entry is followed by runs ordinarily.
+   */
+  function heldStartup(): {
+    install(): Operation<void>;
+    /** Resolves once a real execution is standing in front of its document. */
+    readonly reached: Operation<void>;
+    release(): void;
+  } {
+    const entered = withResolvers<void>();
+    const gate = withResolvers<void>();
+    let held = 0;
+    return {
+      reached: entered.operation,
+      release(): void {
+        gate.resolve();
+      },
+      *install(): Operation<void> {
+        yield* ensure(() => gate.resolve());
+        yield* Execution.around({
+          *document([request], next): Operation<void> {
+            if (held > 0) {
+              return yield* next(request);
+            }
+            held += 1;
+            entered.resolve();
+            yield* gate.operation;
+            return yield* next(request);
+          },
+        });
+      },
+    };
+  }
+
+  /**
+   * Refuse one runtime root metadata composition, once.
+   *
+   * Installed *inside* `Execution.document`, so it belongs to the runtime
+   * invocation and not to the preflight that validated it: refusing the
+   * preflight would be the ordinary refusal PPA3(a) already covers, and the
+   * interval this is about is the one after the entry has been admitted. Root
+   * metadata and the document envelope are composed there, before the body
+   * expands and before any gate is crossed — which is the one place an entry
+   * can be armed, hold nothing, and then fail.
+   *
+   * Composition is synchronous, so the seam cannot be held open and `at` is
+   * called in it rather than waited for. What a caller can read there is
+   * whatever it can read without suspending.
+   */
+  function refusedRootMetadata(at: () => void): { install(): Operation<void> } {
+    let refused = 0;
+    return {
+      *install(): Operation<void> {
+        yield* Execution.around({
+          *document([request], next): Operation<void> {
+            yield* RootMetadata.around({
+              metadata(args, delegate) {
+                if (refused > 0) {
+                  return delegate(...args);
+                }
+                refused += 1;
+                at();
+                throw new Error("runtime metadata refusal after root import");
+              },
+            });
+            return yield* next(request);
+          },
+        });
+      },
+    };
+  }
+
+  /** The footer's one action row, at whatever size this terminal is. */
+  function actionRow(terminal: Terminal): string {
+    return screenOf(terminal)[terminal.size.rows - FOOTER_ROWS] ?? "";
+  }
+
+  /**
+   * Count how often the reference entry's first authored step actually runs.
+   *
+   * The first thing its author wrote is the eval block at the top of
+   * `fixtures/repl/entry.md`, and a hold that is early enough has to be earlier
+   * than that. Counting the *invocation* rather than the compilation is the
+   * whole point: a block is compiled before it is run, so a compile count would
+   * go up at a hold that was working correctly. Counting the drawn row or the
+   * later question would be looser still — a row that has not been painted yet
+   * and a step that never ran look the same from the terminal.
+   *
+   * Wrapped around the real compiler rather than replacing it: the block that
+   * runs is the one the production compiler produced, and only the first one is
+   * wrapped, so a later block cannot add to this entry's count.
+   */
+  function* countFirstEval(): Operation<{ readonly invoked: number }> {
+    const counted = { invoked: 0 };
+    let wrapped = false;
+    yield* API.Env.around({
+      *compile([source, options], next) {
+        const block = yield* next(source, options);
+        if (wrapped) {
+          return block;
+        }
+        wrapped = true;
+        return (env: Record<string, unknown>) => {
+          counted.invoked++;
+          return block(env);
+        };
+      },
+    });
+    return counted;
+  }
+
+  for (const size of SIZES) {
+    const at = `${size.columns}x${size.rows}`;
+
+    it(`PPA2/PPA5: Pause is offered, requested and applied to the exact entry at ${at}`, function* () {
+      const source = yield* referenceSource();
+      const { terminal, install } = recordingTerminal(size);
+      const preflight = heldDefinition(DEFINITION);
+
+      yield* scoped(function* (): Operation<void> {
+        yield* install();
+        yield* immediateClock();
+        yield* useTempFileCompiler();
+        const root = yield* useTemporaryHost();
+        const performed = yield* countPerformed();
+        // Installed after the compiler it wraps, so what it counts is the block
+        // the production compiler returned.
+        const authored = yield* countFirstEval();
+        yield* preflight.install();
+
+        const exited = exitRoute();
+        const running = yield* spawn(function* (): Operation<void> {
+          const ran = yield* runReplProgram({ profile: PROFILE });
+          if (!ran.ok) {
+            throw ran.error;
+          }
+          exited.settle(ran.value);
+        });
+        yield* untilDrawn(terminal);
+        const files = yield* histories(root);
+
+        terminal.bytes(BYTES.encode(source));
+        yield* settled(60);
+        expect(draftFocused(terminal)).toBe(true);
+
+        // 1. Run. The slot is reserved and the preflight is already suspended in
+        // the definition read, so this is the whole window the amendment is
+        // about: the entry does not exist and will not for as long as that read
+        // is held.
+        terminal.feed("\r");
+        yield* preflight.reached;
+        yield* until_(terminal, "the submission preparing", (one) =>
+          shows(one, "[pause] preparing"),
+        );
+        expect(preflight.holding).toBe(true);
+        // Nothing is admitted and nothing is held: there is no entry, so there
+        // is no continuation, so there is nothing for Continue to release.
+        expect(shows(terminal, "[continue]")).toBe(false);
+        expect(yield* records(root, files[0] ?? "")).toEqual([]);
+
+        // PPA5. The button, the state and nothing else, in the accepted order —
+        // and the state is text. Backtab from the draft reaches Pause, because
+        // the word beside it is not a focus stop and Continue is not mounted.
+        const preparing = actionRow(terminal);
+        expect(preparing.indexOf("[pause]")).toBeLessThan(preparing.indexOf("preparing"));
+        expect(screenOf(terminal).length).toBe(size.rows);
+        terminal.feed("\x1b[Z");
+        yield* settled(30);
+        expect(focusedOn(terminal, "[pause]")).toBe(true);
+        expect(focusedOn(terminal, "preparing")).toBe(false);
+
+        // 2. Activate it. The request stands against this exact submission and
+        // stops nothing yet, so the word changes and Continue stays away.
+        terminal.feed("\r");
+        yield* until_(terminal, "the request standing", (one) => shows(one, "[pause] pausing"));
+        expect(shows(terminal, "[continue]")).toBe(false);
+        // Still the same control, still holding focus: one mounted identity
+        // across the whole of this, which is what keeps a person's place.
+        expect(focusedOn(terminal, "[pause]")).toBe(true);
+        // And still nothing admitted — asking an entry to stop is not starting
+        // it, and it is not cancelling the preparation either.
+        expect(yield* records(root, files[0] ?? "")).toEqual([]);
+        expect(performed.asked).toBe(0);
+
+        // 3. Release the validation. The entry starts, is admitted, and holds —
+        // before anything its author wrote has taken effect.
+        preflight.release();
+        yield* until_(terminal, "the exact entry held", (one) => shows(one, "[pause] paused"));
+        expect(shows(terminal, "[continue]")).toBe(true);
+        // The first thing this document's author wrote that anything outside it
+        // can see is its question, and it has not been asked. Counted at the
+        // seam that performs it as well as read off the screen: a row that has
+        // not been drawn yet and a question that was never asked look the same
+        // from the terminal alone.
+        expect(askedRow(terminal)).toBeUndefined();
+        expect(performed.asked).toBe(0);
+        // And the first thing the author wrote has not run. The question is the
+        // last of four authored steps, so a hold that stopped anywhere among
+        // them would still show no question; this says the hold is earlier than
+        // all of them.
+        expect(authored.invoked).toBe(0);
+        // The entry it holds is the one that was submitted, admitted under the
+        // source that was reserved. The request changed neither.
+        const admitted = yield* projectionOf(root, files[0] ?? "");
+        expect(admitted.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+        expect(admitted.entries[0]?.source).toBe(source);
+
+        // PPA5 again, now that a continuation is held: the state word sits
+        // between the button and Continue, and is still not a focus stop.
+        const paused = actionRow(terminal);
+        expect(paused.indexOf("[pause]")).toBeLessThan(paused.indexOf("paused"));
+        expect(paused.indexOf("paused")).toBeLessThan(paused.indexOf("[continue]"));
+        expect(screenOf(terminal).length).toBe(size.rows);
+        expect(focusedOn(terminal, "[pause]")).toBe(true);
+
+        // 4. Continue releases the hold, and the effect it was held before
+        // happens once.
+        yield* activate(terminal, "[continue]");
+        yield* until_(terminal, "the authored question", (one) => askedRow(one) !== undefined);
+        expect(performed.asked).toBe(1);
+        // Released, not replayed: the step the hold stood before has now run,
+        // and run once. A hold that re-ran what it released would show two.
+        expect(authored.invoked).toBe(1);
+        yield* settled(60);
+        expect(performed.asked).toBe(1);
+        expect(authored.invoked).toBe(1);
+        // One entry, one source, start to finish.
+        const after = yield* projectionOf(root, files[0] ?? "");
+        expect(after.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+        expect(after.entries[0]?.source).toBe(source);
+
+        terminal.end();
+        yield* running;
+      });
+    });
+  }
+
+  /**
+   * Clear the draft the way a person does, one key at a time.
+   *
+   * There is no host call that empties it: the draft is a field, and what
+   * empties a field is the key that deletes a character. A scenario that reached
+   * past the field would be a scenario proving the field was never involved.
+   */
+  function* erase(terminal: Terminal, characters: number): Operation<void> {
+    yield* focusDraft(terminal);
+    for (let press = 0; press < characters; press += 1) {
+      terminal.feed("\x7f");
+    }
+    yield* settled(40);
+  }
+
+  it("PPA1: one burst submits and requests the pause, with no frame in between", function* () {
+    // The two J1 rows feed Run and the Backtab that reaches Pause as separate
+    // writes, and a batch boundary falls between them — so the frame at the end
+    // of the first batch is what mounts Pause for the second. This row removes
+    // that help: both keys arrive in one write, so they are one batch, and the
+    // tree that answers the Backtab is the one Run left behind. Without a mount
+    // inside the batch the Backtab reaches `[exit]` and Enter ends the command.
+    const source = yield* referenceSource();
+    const { terminal, install } = recordingTerminal();
+    const preflight = heldDefinition(DEFINITION);
+
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      const root = yield* useTemporaryHost();
+      yield* preflight.install();
+
+      const exited = exitRoute();
+      let ended = false;
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        ended = true;
+        exited.settle(ran.value);
+      });
+      yield* untilDrawn(terminal);
+      const files = yield* histories(root);
+
+      terminal.bytes(BYTES.encode(source));
+      yield* settled(60);
+      expect(draftFocused(terminal)).toBe(true);
+
+      // Submit, walk back one control, activate it. One write, so nothing is
+      // read and nothing waits.
+      terminal.feed("\r\x1b[Z\r");
+      yield* preflight.reached;
+      yield* until_(terminal, "the request standing", (one) => shows(one, "[pause] pausing"));
+      // The command is still running: the Backtab reached Pause, not the way out.
+      expect(ended).toBe(false);
+      expect(shows(terminal, "[continue]")).toBe(false);
+
+      // And it was this submission's request: the entry it names holds.
+      preflight.release();
+      yield* until_(terminal, "the exact entry held", (one) => shows(one, "[pause] paused"));
+      expect(shows(terminal, "[continue]")).toBe(true);
+      const admitted = yield* projectionOf(root, files[0] ?? "");
+      expect(admitted.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+
+      terminal.end();
+      yield* running;
+    });
+  });
+
+  it("PPA3(a): a refused preflight discards its pause request, and the next entry plays", function* () {
+    // Invalid, and invalid *after* the definition it names: the component is
+    // resolved — which is the read this holds — and then nothing supplies the
+    // second one, so the refusal is an ordinary preflight refusal rather than a
+    // document that was never read.
+    const refusedSource = '<Checklist title="held" steps={1} />\n\n<Nowhere />';
+    const valid = yield* referenceSource();
+    const { terminal, install } = recordingTerminal();
+    const preflight = heldDefinition(DEFINITION);
+
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      const root = yield* useTemporaryHost();
+      const performed = yield* countPerformed();
+      yield* preflight.install();
+
+      const exited = exitRoute();
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        exited.settle(ran.value);
+      });
+      yield* untilDrawn(terminal);
+      const files = yield* histories(root);
+
+      terminal.bytes(BYTES.encode(refusedSource));
+      yield* settled(40);
+      terminal.feed("\r");
+      yield* preflight.reached;
+      yield* until_(terminal, "the submission preparing", (one) => shows(one, "[pause] preparing"));
+
+      // Armed against a submission that is about to be refused.
+      yield* activate(terminal, "[pause]");
+      yield* until_(terminal, "the request standing", (one) => shows(one, "[pause] pausing"));
+
+      preflight.release();
+      // Refused, and said so. Nothing was admitted and the draft is the one
+      // thing a person needs back.
+      yield* until_(terminal, "the refusal", (one) =>
+        screenOf(one).some((line) => line.includes("!")),
+      );
+      expect(yield* records(root, files[0] ?? "")).toEqual([]);
+      expect(shows(terminal, "<Nowhere />")).toBe(true);
+      // The request went with the submission it belonged to. There is no
+      // preparation and no live entry, so there is no Pause at all.
+      yield* until_(terminal, "no preparation left", (one) => !shows(one, "[pause]"));
+      expect(shows(terminal, "[continue]")).toBe(false);
+
+      // The successor, submitted into the same session and the same controller.
+      // It plays: the refused request did not survive to be applied to it.
+      yield* erase(terminal, refusedSource.length);
+      terminal.bytes(BYTES.encode(valid));
+      yield* settled(60);
+      terminal.feed("\r");
+      yield* until_(terminal, "the successor's question", (one) => askedRow(one) !== undefined);
+      expect(performed.asked).toBe(1);
+      // Never held, so never continued: the effect happened without anybody
+      // releasing anything.
+      expect(shows(terminal, "[continue]")).toBe(false);
+      expect(shows(terminal, "[pause] paused")).toBe(false);
+      expect(shows(terminal, "[pause] pausing")).toBe(false);
+      const admitted = yield* projectionOf(root, files[0] ?? "");
+      expect(admitted.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+      expect(admitted.entries[0]?.source).toBe(valid);
+
+      terminal.end();
+      yield* running;
+    });
+  });
+
+  it("PPA3(b): an entry armed with no hold is disarmed by its own failure", function* () {
+    const source = yield* referenceSource();
+    const { terminal, install } = recordingTerminal({ columns: 160, rows: 36 });
+    const preflight = heldDefinition(DEFINITION);
+    /** What the refusal could see of this entry's authored work, from inside it. */
+    let atSeam: number | undefined;
+
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      const root = yield* useTemporaryHost();
+      const performed = yield* countPerformed();
+      const authored = yield* countFirstEval();
+      yield* preflight.install();
+      yield* refusedRootMetadata(() => {
+        atSeam = authored.invoked;
+      }).install();
+
+      const exited = exitRoute();
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        exited.settle(ran.value);
+      });
+      yield* untilDrawn(terminal);
+      const files = yield* histories(root);
+
+      terminal.bytes(BYTES.encode(source));
+      yield* settled(60);
+
+      // Pause asked for before the entry exists, which is the request this row
+      // is about: it is still only a request when the thing that fails happens.
+      terminal.feed("\r");
+      yield* preflight.reached;
+      yield* until_(terminal, "the submission preparing", (one) => shows(one, "[pause] preparing"));
+      yield* activate(terminal, "[pause]");
+      yield* until_(terminal, "the request standing", (one) => shows(one, "[pause] pausing"));
+
+      // The entry starts, is admitted, takes the request — and then fails while
+      // its root metadata is composed, before the body expands. The failure is
+      // the entry's own and reaches the screen.
+      preflight.release();
+      // Failed as an entry, not refused as a submission: it was admitted, so it
+      // has a position of its own to carry its failure.
+      yield* until_(terminal, "the failed entry", (one) => shows(one, "[err] entry-1"));
+      // Read from inside the refusal: by the time it fails the entry is armed,
+      // and nothing its author wrote has run. The body was never reached, so
+      // the hold it was asked for had nothing to be early for.
+      expect(atSeam).toBe(0);
+      expect(performed.asked).toBe(0);
+      // Disarmed by the cleanup the entry registered before it was armed, and
+      // disarmed without releasing a hold nobody is standing in: once the entry
+      // is gone there is no preparation and no live expansion, so there is no
+      // Pause at all and nothing ever offered Continue.
+      yield* until_(terminal, "no mode left behind", (one) => !shows(one, "[pause]"));
+      expect(shows(terminal, "[continue]")).toBe(false);
+      // Readable, and readable as one failed entry rather than as wreckage.
+      const failed = yield* projectionOf(root, files[0] ?? "");
+      expect(failed.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+
+      // The successor, into the same session and the same controller. It plays:
+      // the mode the failed entry asked for is not waiting for it, so its first
+      // authored step happens with nobody releasing anything.
+      //
+      // Back to the draft first: the last thing activated was Pause, and the
+      // control it was is not there any more.
+      yield* focusDraft(terminal);
+      expect(draftFocused(terminal)).toBe(true);
+      terminal.bytes(BYTES.encode(source));
+      yield* settled(60);
+      terminal.feed("\r");
+      yield* until_(terminal, "the successor's question", (one) => askedRow(one) !== undefined);
+      expect(authored.invoked).toBe(1);
+      expect(performed.asked).toBe(1);
+      expect(shows(terminal, "[continue]")).toBe(false);
+      expect(shows(terminal, "[pause] paused")).toBe(false);
+      expect(shows(terminal, "[pause] pausing")).toBe(false);
+      const after = yield* projectionOf(root, files[0] ?? "");
+      expect(after.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
+
+      terminal.end();
+      yield* running;
+    });
+  });
+
+  it("PPA3(c): Pause during startup waits for the entry it names", function* () {
+    const source = yield* referenceSource();
+    const { terminal, install } = recordingTerminal({ columns: 160, rows: 36 });
+    const startup = heldStartup();
+
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      const root = yield* useTemporaryHost();
+      const performed = yield* countPerformed();
+      const authored = yield* countFirstEval();
+      yield* startup.install();
+
+      const exited = exitRoute();
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        exited.settle(ran.value);
+      });
+      yield* untilDrawn(terminal);
+      const files = yield* histories(root);
+
+      terminal.bytes(BYTES.encode(source));
+      yield* settled(60);
+
+      // Run, and let the preflight through. What is held is further in than
+      // PPA2's window: the entry has a task, the session is doing work, and the
+      // execution is standing in front of its own document — and still nothing
+      // has been admitted.
+      terminal.feed("\r");
+      yield* startup.reached;
+      expect(yield* records(root, files[0] ?? "")).toEqual([]);
+
+      // Pause now, through the mounted control. There is no entry to stop, so
+      // there is nothing to offer a controller for: the request stands against
+      // the reservation exactly as it would have during the preflight.
+      yield* until_(terminal, "the submission preparing", (one) => shows(one, "[pause] preparing"));
+      expect(shows(terminal, "[continue]")).toBe(false);
+      yield* activate(terminal, "[pause]");
+      yield* until_(terminal, "the request standing", (one) => shows(one, "[pause] pausing"));
+      // Pending, and pending because there is nothing it could have taken: no
+      // continuation is held, so Continue is absent, and the file still says
+      // nothing was submitted. A hold taken here would be a hold on the import
+      // that gives the entry its position.
+      expect(shows(terminal, "[continue]")).toBe(false);
+      expect(shows(terminal, "[pause] paused")).toBe(false);
+      expect(yield* records(root, files[0] ?? "")).toEqual([]);
+      expect(authored.invoked).toBe(0);
+
+      // Release the startup. Now the entry is admitted, and the request it has
+      // been holding reaches it — before its author's first step.
+      startup.release();
+      yield* until_(terminal, "the exact entry held", (one) => shows(one, "[pause] paused"));
+      expect(shows(terminal, "[continue]")).toBe(true);
+      expect(authored.invoked).toBe(0);
+      expect(performed.asked).toBe(0);
+      const admitted = yield* projectionOf(root, files[0] ?? "");
+      expect(admitted.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+      expect(admitted.entries[0]?.source).toBe(source);
+
+      // And Continue runs the step the hold stood before, once.
+      yield* activate(terminal, "[continue]");
+      yield* until_(terminal, "the authored question", (one) => askedRow(one) !== undefined);
+      expect(authored.invoked).toBe(1);
+      expect(performed.asked).toBe(1);
+      yield* settled(60);
+      expect(authored.invoked).toBe(1);
+      expect(performed.asked).toBe(1);
+
+      terminal.end();
+      yield* running;
+    });
+  });
+
+  it("PPA3(d): walking away from the head while a preflight is held admits nothing", function* () {
+    // Two entries' worth of draft, because freezing the view needs a recorded
+    // position to freeze at — so the first one is admitted ordinarily and the
+    // second is the one this row is about.
+    const first = "<Output>one</Output>";
+    const second = '<Checklist title="second" steps={1} />';
+    const { terminal, install } = recordingTerminal({ columns: 160, rows: 36 });
+    const preflight = heldDefinition(DEFINITION);
+
+    yield* scoped(function* (): Operation<void> {
+      yield* install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      const root = yield* useTemporaryHost();
+      yield* preflight.install();
+
+      const exited = exitRoute();
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        exited.settle(ran.value);
+      });
+      yield* untilDrawn(terminal);
+      const files = yield* histories(root);
+
+      // One recorded entry, admitted the ordinary way. Its source names no
+      // component, so the held definition read is not reached by it.
+      terminal.bytes(BYTES.encode(first));
+      yield* settled(60);
+      terminal.feed("\r");
+      yield* until_(terminal, "the first entry settled", (one) => shows(one, "entry-1"));
+      expect(preflight.holding).toBe(false);
+
+      // The second, which does name it — so submitting suspends in the
+      // validation and the keyboard is still the person's throughout.
+      yield* focusDraft(terminal);
+      terminal.bytes(BYTES.encode(second));
+      yield* settled(60);
+      terminal.feed("\r");
+      yield* preflight.reached;
+      expect(preflight.holding).toBe(true);
+
+      // And while it is held, they walk back to the recorded position. Nothing
+      // about this is a withdrawal: they did not press Stop and they did not
+      // edit anything — they are reading their own history.
+      yield* activate(terminal, "[history]");
+      yield* focusOn(terminal, "Entry 1 admitted");
+      terminal.feed("\r");
+      yield* settled(40);
+      expect(historicalOn(terminal)).toBe(true);
+
+      // Released. The preflight succeeds, and the submission is refused at the
+      // entry's actual start rather than admitted: the route it was reserved
+      // against is not the route anybody is standing at any more.
+      preflight.release();
+      yield* until_(terminal, "the refusal at the start", (one) =>
+        shows(one, "moved away from the live head"),
+      );
+      // One entry, which is the one that was admitted before any of this.
+      const after = yield* projectionOf(root, files[0] ?? "");
+      expect(after.entries.map((entry) => entry.key)).toEqual(["entry-1"]);
+      expect(after.entries[0]?.source).toBe(first);
+      // And the draft they never got to submit is still theirs.
+      terminal.feed("\x1b");
+      yield* settled(30);
+      yield* activate(terminal, "[live]");
+      expect(shows(terminal, second)).toBe(true);
+
+      terminal.end();
+      yield* running;
+    });
+  });
+
+  it("PPA4: the keyboard still works while a preflight is held, and closing discards the request", function* () {
+    // One line, so what the draft row says is the draft itself rather than a
+    // count of lines — and naming the definition this holds, so submitting it
+    // is what suspends in the read.
+    const held = '<Checklist title="held" steps={1} />';
+    const typed = " and more";
+    const first = recordingTerminal();
+    const preflight = heldDefinition(DEFINITION);
+    let root = "";
+    let execution = "";
+    let location = "";
+
+    yield* scoped(function* (): Operation<void> {
+      yield* first.install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      root = yield* useTemporaryHost();
+      const performed = yield* countPerformed();
+      yield* preflight.install();
+
+      const exited = exitRoute();
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        exited.settle(ran.value);
+      });
+      yield* untilDrawn(first.terminal);
+      const files = yield* histories(root);
+
+      first.terminal.bytes(BYTES.encode(held));
+      yield* settled(40);
+      first.terminal.feed("\r");
+      yield* preflight.reached;
+      yield* until_(first.terminal, "the submission preparing", (one) =>
+        shows(one, "[pause] preparing"),
+      );
+      yield* activate(first.terminal, "[pause]");
+      yield* until_(first.terminal, "the request standing", (one) => shows(one, "[pause] pausing"));
+
+      // The whole point of taking submission off the loop: the read is still
+      // suspended, and the keyboard still reaches the draft. Asserted *before*
+      // the release, so what is proved is that the edit was processed while the
+      // validation was held rather than after it finished.
+      yield* focusDraft(first.terminal);
+      first.terminal.bytes(BYTES.encode(typed));
+      yield* settled(40);
+      expect(preflight.holding).toBe(true);
+      expect(draftText(first.terminal)).toBe(draftPreview(held + typed));
+
+      // And Exit reaches the command while it is still held. This cancels and
+      // joins the work the submission owns; nothing is admitted, and no
+      // terminal is invented for an entry that never existed.
+      yield* activate(first.terminal, "[exit]");
+      yield* running;
+      // Joined, not abandoned: the read the submission was standing in unwound
+      // with the task that owned it, so the command did not return while work
+      // it started was still suspended somewhere.
+      expect(preflight.holding).toBe(false);
+      expect(yield* records(root, files[0] ?? "")).toEqual([]);
+      expect(performed.asked).toBe(0);
+
+      // The location it prints carries the newer draft, not the source that was
+      // reserved: what was prepared was never admitted, and what the person has
+      // is what they typed.
+      location = exited.location();
+      execution = exited.route().execution;
+      expect(exited.route().draft).toBe(held + typed);
+    });
+
+    // A cold reopen of exactly that location, structurally unable to start an
+    // execution. Nothing of the preparation comes back: it was this process's,
+    // and no record carries it.
+    const second = recordingTerminal();
+    yield* scoped(function* (): Operation<void> {
+      yield* second.install();
+      yield* immediateClock();
+      yield* useTempFileCompiler();
+      yield* installReplHost({
+        dataRoot: () => root,
+        identify: () => {
+          throw new Error("a reopened execution mints no identifier");
+        },
+        createExclusive: () => Promise.reject(new Error("a reopened execution creates no file")),
+        appendRecord: (path, record) => appendFile(path, record),
+      });
+      const performed = yield* countPerformed();
+      const reopened = exitRoute();
+      const running = yield* spawn(function* (): Operation<void> {
+        const ran = yield* runReplProgram({ profile: PROFILE, location });
+        if (!ran.ok) {
+          throw ran.error;
+        }
+        reopened.settle(ran.value);
+      });
+      yield* untilDrawn(second.terminal);
+      yield* settled(60);
+
+      // The draft is restored and nothing else is: no preparation, no request,
+      // and no Pause, because there is no submission and no live entry.
+      expect(draftText(second.terminal)).toBe(draftPreview(held + typed));
+      expect(shows(second.terminal, "[pause]")).toBe(false);
+      expect(shows(second.terminal, "preparing")).toBe(false);
+      expect(shows(second.terminal, "pausing")).toBe(false);
+      expect(shows(second.terminal, "[continue]")).toBe(false);
+      // And no work started on its own: a reopened location is something to
+      // read, not something to run.
+      expect(performed.asked).toBe(0);
+      expect(performed.compiles).toBe(0);
+      expect(yield* records(root, execution)).toEqual([]);
+
+      second.terminal.end();
+      yield* running;
+    });
   });
 });
 
@@ -3571,23 +4033,6 @@ function marked(terminal: Terminal, label: string): boolean {
  */
 function without(terminal: Terminal): string[] {
   return screenOf(terminal).map((line) => line.trimEnd());
-}
-
-/**
- * The reading on screen, with the focus cue taken out of it.
- *
- * What a scenario about *state* is comparing: which rows exist and what they say.
- * Which control a keystroke would reach is a different question, and one this
- * product answers by where focus happened to land when a branch unmounted — so a
- * comparison that carried the cue would be asserting that too, by accident.
- */
-function reading(terminal: Terminal): string[] {
-  return screenOf(terminal).map((line) =>
-    line
-      .replace(/^(\s*)>(\s)/, "$1 $2")
-      .replace(/^>> /, " > ")
-      .trimEnd(),
-  );
 }
 
 /**
@@ -4107,7 +4552,7 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
     if (retained === undefined || standing === undefined) {
       throw new Error("the first process created a repository and showed a location");
     }
-    const path = join(retained, "xmd", "repl", files[0]);
+    const path = yield* historyPath(retained, files[0]!);
     const before = yield* until(readFile(path, "utf8"));
 
     // A cold process over that exact location: the same reading, with no work
@@ -4241,7 +4686,7 @@ function expectedRows(model: ReplModel): string[] {
 /**
  * The band's own five rows, at the size the terminal is now.
  *
- * By placement, out of the footer's fixed seven rows: one action row, five band
+ * By layout, out of the footer's fixed seven rows: one action row, five band
  * rows, one draft row. Not by the title the band writes — the guidance row says
  * "History" at a frozen position (#870 UI15), and a walk that aimed at that word
  * would read the sentence about the position instead of the rail.
@@ -4537,7 +4982,7 @@ describe("REPL journey: a cold process at an early position", () => {
       expect(stood.value.draft).toBe(DRAFTED);
       expect(stood.value.at).toBeDefined();
     }
-    const path = join(retained, "xmd", "repl", files[0]);
+    const path = yield* historyPath(retained, files[0]!);
     const before = yield* until(readFile(path, "utf8"));
     const retainedFiles = yield* histories(retained);
 
@@ -4663,7 +5108,7 @@ describe("REPL journey: a cold process over a multi-entry journal", () => {
     if (retained === undefined) {
       throw new Error("the first process created a repository");
     }
-    const path = join(retained, "xmd", "repl", files[0]);
+    const path = yield* historyPath(retained, files[0]!);
     const before = yield* until(readFile(path, "utf8"));
     const execution = files[0].replace(/\.jsonl$/, "");
 
@@ -4681,6 +5126,9 @@ describe("REPL journey: a cold process over a multi-entry journal", () => {
       inspect: false,
       draft: undefined,
       session: undefined,
+      view: undefined,
+      right: undefined,
+      sidekick: undefined,
     });
 
     const second = recordingTerminal();
@@ -4903,7 +5351,7 @@ describe("REPL first use: UI2", () => {
       yield* untilDrawn(terminal);
 
       const files = yield* histories(root);
-      const before = yield* until(readFile(join(root, "xmd", "repl", files[0]), "utf8"));
+      const before = yield* until(readFile(yield* historyPath(root, files[0]!), "utf8"));
 
       // Reached by traversal, from what the screen shows: no hidden key, and the
       // control says what it is.
@@ -4918,7 +5366,7 @@ describe("REPL first use: UI2", () => {
 
       // Nothing was appended for leaving. Leaving is the absence of further work,
       // not an outcome, so the file is byte-identical.
-      expect(yield* until(readFile(join(root, "xmd", "repl", files[0]), "utf8"))).toBe(before);
+      expect(yield* until(readFile(yield* historyPath(root, files[0]!), "utf8"))).toBe(before);
     });
 
     // Ordinary success, with a location to come back to, and the terminal given
@@ -4979,7 +5427,7 @@ describe("REPL first use: UI1", () => {
         // does. Not a legend: the words change with the control under the cursor.
         expect(shows(terminal, "Type here")).toBe(true);
         expect(shows(terminal, "Enter submits")).toBe(true);
-        expect(shows(terminal, "Tab/Shift+Tab move")).toBe(true);
+        expect(saysAcross(terminal, "Tab/Shift+Tab move")).toBe(true);
         // And the state it says that about, which is what makes "Enter submits"
         // a fact rather than a legend (#870 UI10).
         expect(shows(terminal, "Ready for Entry 1")).toBe(true);
@@ -5003,7 +5451,7 @@ describe("REPL first use: UI1", () => {
         // equivalence and the longer way of saying "Tab to the draft" are what
         // the extra columns of a wide frame buy.
         if (size.columns > NARROW.columns) {
-          expect(shows(terminal, "Tab to the draft to type")).toBe(true);
+          expect(saysAcross(terminal, "Tab to the draft to type")).toBe(true);
         } else {
           expect(shows(terminal, "Tab to draft")).toBe(true);
         }
@@ -5112,7 +5560,7 @@ describe("REPL first use: UI9", () => {
 
       yield* focusOn(terminal, "[exit]");
       // The explanation is on the screen *before* the keystroke that needs it.
-      expect(shows(terminal, "Tab to the draft to type")).toBe(true);
+      expect(saysAcross(terminal, "Tab to the draft to type")).toBe(true);
 
       terminal.bytes(BYTES.encode("xyz"));
       yield* settled(40);
@@ -5325,9 +5773,11 @@ describe("REPL first use: UI1 selection", () => {
         expect(marked(terminal, "2. [ok] entry-2")).toBe(true);
         expect(marked(terminal, "Entries")).toBe(true);
 
-        // Selecting an entry does not filter the chronology this execution has.
+        // Selecting an entry does not filter the agent work this execution has.
+        // Both sections are still there and still say they hold none.
         yield* activate(terminal, "Sessions");
-        expect(shows(terminal, "(none retained)")).toBe(true);
+        expect(shows(terminal, "No entry turns.")).toBe(true);
+        expect(shows(terminal, "No Sidekick turns.")).toBe(true);
 
         terminal.end();
         yield* running;
@@ -5699,7 +6149,7 @@ describe("REPL first use: UI2 refusal", () => {
       });
 
       const files = yield* histories(root);
-      const path = join(root, "xmd", "repl", files[0]);
+      const path = yield* historyPath(root, files[0]!);
       before = yield* until(readFile(path, "utf8"));
       const execution = files[0].replace(/\.jsonl$/, "");
 
@@ -5729,7 +6179,7 @@ describe("REPL first use: UI2 refusal", () => {
     expect(outcome?.ok).toBe(false);
     expect(terminal.resets).toBe(1);
     const files = yield* histories(root);
-    expect(yield* until(readFile(join(root, "xmd", "repl", files[0]), "utf8"))).toBe(before);
+    expect(yield* until(readFile(yield* historyPath(root, files[0]!), "utf8"))).toBe(before);
   });
 
   it("UI2: Enter on the refusal's control leaves it too", function* () {
@@ -5986,7 +6436,7 @@ describe("REPL first use: UI7", () => {
       // What the file holds while the question is still waiting, so that what
       // leaving appends is a comparison rather than an assumption.
       const files = yield* histories(root);
-      waiting = yield* until(readFile(join(root, "xmd", "repl", files[0]), "utf8"));
+      waiting = yield* until(readFile(yield* historyPath(root, files[0]!), "utf8"));
 
       // Left while the modal is up. The control is physically in the footer and
       // belongs to the modal's own subtree, so a pointer on it reaches it without
@@ -6003,7 +6453,7 @@ describe("REPL first use: UI7", () => {
     expect(ended?.location).not.toContain("+permission");
     expect(ended?.location).toContain("/entry-1");
 
-    const path = join(root, "xmd", "repl", (yield* histories(root))[0]);
+    const path = yield* historyPath(root, (yield* histories(root))[0]!);
     // Leaving appended nothing at all: no close, no cancellation, no audit.
     expect(yield* until(readFile(path, "utf8"))).toBe(waiting);
     // The entry was interrupted, so the file holds no close for it. An unfinished
@@ -6062,7 +6512,7 @@ describe("REPL first use: UI7", () => {
     });
 
     expect(settledLocation).toBeDefined();
-    const settledPath = join(settledRoot, "xmd", "repl", (yield* histories(settledRoot))[0]);
+    const settledPath = yield* historyPath(settledRoot, (yield* histories(settledRoot))[0]!);
     const settledBytes = yield* until(readFile(settledPath, "utf8"));
 
     const cold = recordingTerminal();
@@ -6149,7 +6599,7 @@ describe("REPL first use: UI8", () => {
       // Frozen: what the draft's guidance says changes, because what Enter there
       // does changed — there is no head to submit into from here.
       yield* focusDraft(terminal);
-      expect(shows(terminal, "activate live to return to the head")).toBe(true);
+      expect(saysAcross(terminal, "activate live to return to the head")).toBe(true);
       expect(shows(terminal, "Enter submits")).toBe(false);
       yield* activate(terminal, "[live]");
       yield* until_(terminal, "the head", (one) => !historicalOn(one));

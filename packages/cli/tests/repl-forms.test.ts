@@ -767,12 +767,12 @@ function* framed(
 const DRAFT = Array.from({ length: 40 }, (_, line) => `draft line ${line}`).join("\n");
 
 /**
- * Every key layout actually placed, with whether it can be pointed at.
+ * Every key the layout actually placed, with whether it can be pointed at.
  *
  * At module scope because two describes need the same answer: what a pointer can
  * reach is also the set a keystroke has to be able to reach.
  */
-function* placedKeys(
+function* laidOutKeys(
   tree: ReplTree<ReplAction>,
   view: ReplView,
   engine?: ReplRenderer,
@@ -831,7 +831,7 @@ describe("F3 — complete content and reachable navigation", () => {
     const asked = yield* askingFor(NAMED_LIKE_FACTS_SCHEMA);
     const live = asking(asked.question);
     const tree = yield* useReplTree<ReplAction>();
-    const keys = yield* placedKeys(tree, reading(opened(live), live, EMPTY_MODEL, NARROW));
+    const keys = yield* laidOutKeys(tree, reading(opened(live), live, EMPTY_MODEL, NARROW));
     expect(keys.get("drawer:field:text")).toBe(true);
     expect(keys.get("drawer:value:text")).toBe(true);
     expect(keys.get("drawer:field:stop")).toBe(true);
@@ -845,13 +845,13 @@ describe("F3 — complete content and reachable navigation", () => {
     const tree = yield* useReplTree<ReplAction>();
 
     // Walked from the first clamped position to the last, through the real
-    // tree and the real placement boundary. A described node layout never
+    // tree and the real layout boundary. A described node layout never
     // placed is not something a person can see or point at, so only placed
     // cells count here.
     let state = opened(live);
     const reached = new Map<string, boolean>();
     for (let press = 0; press < 120; press++) {
-      for (const [key, targetable] of yield* placedKeys(
+      for (const [key, targetable] of yield* laidOutKeys(
         tree,
         reading(state, live, EMPTY_MODEL, NARROW, undefined),
       )) {
@@ -907,7 +907,7 @@ describe("F3 — complete content and reachable navigation", () => {
     const seenKeys = new Set<string>();
     for (let press = 0; press < 160; press++) {
       const view = reading(state, live, EMPTY_MODEL, NARROW, undefined);
-      for (const [key] of yield* placedKeys(tree, view)) {
+      for (const [key] of yield* laidOutKeys(tree, view)) {
         if (key.startsWith("drawer:message:") && !seenKeys.has(key)) {
           seenKeys.add(key);
         }
@@ -983,7 +983,7 @@ describe("F3 — complete content and reachable navigation", () => {
     const reached = new Set<string>();
     let at = opened(live);
     for (let press = 0; press < 160; press++) {
-      for (const [key, targetable] of yield* placedKeys(
+      for (const [key, targetable] of yield* laidOutKeys(
         tree,
         reading(at, live, EMPTY_MODEL, NARROW, undefined),
       )) {
@@ -1341,7 +1341,15 @@ function* retained(): Operation<{
 function withScope(state: ReplState, scope: string): ReplState {
   return Object.freeze({
     ...state,
-    route: Object.freeze({ ...state.route, scopes: Object.freeze([scope]) }),
+    route: Object.freeze({
+      ...state.route,
+      scopes: Object.freeze([scope]),
+      // Bindings, explicitly. A scope's own rows are the inspector's, and the
+      // command's right pane now defaults to the Sidekick (#883 section 5) —
+      // which is a reading rather than a route, so a row about the inspector
+      // asks for it the way a person does instead of relying on a default.
+      right: "bindings",
+    }),
   });
 }
 
@@ -1650,9 +1658,9 @@ describe("F3 — every placed modal control is in the ring", () => {
 
     // Every control this frame actually placed and can be pointed at. What a
     // pointer can reach is the set a keystroke has to be able to reach too.
-    const placed = yield* placedKeys(tree, view);
+    const laidOut = yield* laidOutKeys(tree, view);
     const inside = yield* modalKeys(view);
-    const targetable = [...placed.entries()]
+    const targetable = [...laidOut.entries()]
       .filter(([key, can]) => can && inside.has(key))
       .map(([key]) => key);
     expect(targetable.length).toBeGreaterThan(4);
@@ -1682,7 +1690,7 @@ describe("F3 — every placed modal control is in the ring", () => {
     // And nothing outside the modal is in it: a ring that walked out of an open
     // drawer would let a keystroke reach the screen the drawer is covering.
     for (const key of forward) {
-      expect([key, inside.has(key), placed.get(key)]).toEqual([key, true, true]);
+      expect([key, inside.has(key), laidOut.get(key)]).toEqual([key, true, true]);
     }
 
     // The reverse cycle visits the same ring the other way round.
@@ -2178,15 +2186,15 @@ describe("F3 — a narrow frame offers no inspection control (#875 R1)", () => {
     // targetable. Without this the absence below would be absence of nothing.
     const wideTree = yield* useReplTree<ReplAction>();
     const wideView = reading(state, live, recorded.model, WIDE);
-    const widePlaced = yield* placedKeys(wideTree, wideView);
-    expect(inspecting(widePlaced.keys()).length).toBeGreaterThan(0);
-    expect(widePlaced.get(`elicit:${recorded.marker}`)).toBe(true);
-    expect(inspecting(widePlaced.keys()).some((key) => key.startsWith("binding:"))).toBe(true);
+    const wideLaidOut = yield* laidOutKeys(wideTree, wideView);
+    expect(inspecting(wideLaidOut.keys()).length).toBeGreaterThan(0);
+    expect(wideLaidOut.get(`elicit:${recorded.marker}`)).toBe(true);
+    expect(inspecting(wideLaidOut.keys()).some((key) => key.startsWith("binding:"))).toBe(true);
 
     // Narrow, where there is not.
     const tree = yield* useReplTree<ReplAction>();
     const view = reading(state, live, recorded.model, NARROW);
-    const placed = yield* placedKeys(tree, view);
+    const laidOut = yield* laidOutKeys(tree, view);
     const described = rowsOf(presentationFor(view, yield* contextOf(view)).descriptions);
     const forward = yield* ring(tree, "Tab");
     const back = yield* ring(tree, "Backtab");
@@ -2201,14 +2209,14 @@ describe("F3 — a narrow frame offers no inspection control (#875 R1)", () => {
     expect({
       described: inspecting(described.map((one) => one.key)),
       mounted: inspecting(tree.mounted().map((node) => tree.keyOf(node))),
-      placed: inspecting(placed.keys()),
-      targets: inspecting([...placed.entries()].filter(([, can]) => can).map(([key]) => key)),
+      laidOut: inspecting(laidOut.keys()),
+      targets: inspecting([...laidOut.entries()].filter(([, can]) => can).map(([key]) => key)),
       forward: inspecting(forward),
       back: inspecting(back),
     }).toEqual({
       described: [],
       mounted: [],
-      placed: [],
+      laidOut: [],
       targets: [],
       forward: [],
       back: [],
@@ -2252,13 +2260,13 @@ describe("F3 — a narrow frame offers no inspection control (#875 R1)", () => {
     ).state;
     expect(closed.route.drawers).toEqual([]);
     const after = reading(closed, live, recorded.model, NARROW, keyed(tree));
-    const placed = yield* placedKeys(tree, after);
+    const laidOut = yield* laidOutKeys(tree, after);
     const landed = keyed(tree);
     expect(landed).toBeDefined();
     expect(inspecting([landed])).toEqual([]);
     // Drawn, and reachable by a pointer: whatever focus found is a row this frame
     // actually placed.
-    expect(placed.get(landed ?? "")).toBe(true);
+    expect(laidOut.get(landed ?? "")).toBe(true);
   });
 });
 

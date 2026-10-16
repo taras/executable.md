@@ -176,6 +176,81 @@ export interface ReplFitStore {
   ): void;
 }
 
+/**
+ * The plain-text line cuts one running REPL is holding on to.
+ *
+ * Per line, which is the whole point of it being separate from
+ * {@link ReplFitStore}. The chat's newest line grows on its own and a new
+ * message is appended on its own, so a store that could only answer for a whole
+ * list would remeasure every older message for every delta — and a wrapping
+ * message costs an engine render per line plus a binary search per row it
+ * overflows into. Twenty of them turned one typed key into 1,284 measurement
+ * renders.
+ *
+ * A cut is an answer for one exact text at one exact room and size, so that is
+ * what it is keyed by. Two lines spelled the same are the same question and
+ * share the answer. Nothing is digested: a string comparison is far below one
+ * render, and a digest would trade a guarantee for a cheapness already had.
+ */
+export interface ReplPlainFitStore {
+  /** The cuts retained for this exact line and these exact inputs, or none. */
+  held(text: string, room: number, size: ReplTerminalSize): readonly ReplRowCut[] | undefined;
+  /** Retain these cuts as the answer for that line at those inputs. */
+  keep(text: string, room: number, size: ReplTerminalSize, cuts: readonly ReplRowCut[]): void;
+  /**
+   * Keep the lines this preparation actually prepared, and nothing else.
+   *
+   * Called once a preparation has succeeded, so a replaced Preview version, a
+   * message that is no longer in the chat and the cuts of a size nothing is
+   * drawn at now all leave rather than accumulating for the command's whole
+   * life. A preparation that failed or was cancelled calls none of this: the
+   * cuts it did complete are exact answers and stay, and the set it never
+   * finished is not published as one.
+   */
+  settle(texts: readonly string[], room: number, size: ReplTerminalSize): void;
+}
+
+/**
+ * A store holding one list of plain-text cuts, owned by whoever creates it.
+ *
+ * One set of measured dimensions at a time. Cuts taken at another width answer
+ * a different question, so a room or terminal size that moves empties it rather
+ * than keeping a cache of every size this command has ever drawn at.
+ */
+export function createPlainFitStore(): ReplPlainFitStore {
+  let at: { readonly room: number; readonly columns: number; readonly rows: number } | undefined;
+  let cuts = new Map<string, readonly ReplRowCut[]>();
+  const here = (room: number, size: ReplTerminalSize): boolean =>
+    at !== undefined && at.room === room && at.columns === size.columns && at.rows === size.rows;
+  const moveTo = (room: number, size: ReplTerminalSize): void => {
+    if (here(room, size)) {
+      return;
+    }
+    cuts = new Map();
+    at = { room, columns: size.columns, rows: size.rows };
+  };
+  return {
+    held(text, room, size) {
+      return here(room, size) ? cuts.get(text) : undefined;
+    },
+    keep(text, room, size, held) {
+      moveTo(room, size);
+      cuts.set(text, held);
+    },
+    settle(texts, room, size) {
+      moveTo(room, size);
+      const kept = new Map<string, readonly ReplRowCut[]>();
+      for (const one of texts) {
+        const found = cuts.get(one);
+        if (found !== undefined) {
+          kept.set(one, found);
+        }
+      }
+      cuts = kept;
+    },
+  };
+}
+
 /** A store holding one reading's geometry, owned by whoever creates it. */
 export function createFitStore(): ReplFitStore {
   let held:
@@ -215,11 +290,30 @@ const RAIL = "│";
 const SEPARATOR = "  ";
 
 /**
+ * How many texts one measuring render may carry.
+ *
+ * Each nonempty candidate costs the engine an element for its own box and
+ * another for the text inside it, and an engine refuses a list that outgrows
+ * its element budget. It says so as unbalanced structure rather than as a
+ * capacity refusal, which is not something to reinterpret here: the operations
+ * really are balanced, and a larger engine would not bound the request anyway.
+ *
+ * So the request is bounded instead. A finished reading is as long as the entry
+ * that produced it, which is a length no viewport limits — measured through
+ * this path, 4,000 short rows went through and 4,096 did not. A batch of a
+ * thousand leaves the budget most of its room whatever else a frame is
+ * measuring, and costs another pass rather than another answer.
+ */
+const WIDTHS_PER_RENDER = 1024;
+
+/**
  * Ask the engine how wide each of these texts is.
  *
- * One fit-sized element per text, each under its own structural id, all in one
- * render — and every answer copied into a plain map before returning, because
- * the engine's geometry is only valid until the next measurement.
+ * One fit-sized element per text, each under its own structural id, in as many
+ * renders as the count needs — and every answer copied out of each batch
+ * before the next render, because the engine's geometry is only valid until
+ * the next measurement. The answers come back in the order they were asked
+ * for, one per text, empty ones included.
  */
 function* widths(
   renderer: ReplRenderer,
@@ -229,6 +323,32 @@ function* widths(
   if (texts.length === 0) {
     return Ok([]);
   }
+  const answers: number[] = [];
+  for (let from = 0; from < texts.length; from += WIDTHS_PER_RENDER) {
+    const batch = yield* batchWidths(renderer, size, texts.slice(from, from + WIDTHS_PER_RENDER));
+    if (!batch.ok) {
+      return batch;
+    }
+    answers.push(...batch.value);
+  }
+  return Ok(answers);
+}
+
+/**
+ * One measuring render, read before anything can invalidate it.
+ *
+ * The ids are the batch's own, and every batch reuses them. The measuring
+ * instance accumulates state for each distinct id it is given, across renders:
+ * measured, a run of four thousand freshly named elements left the last of
+ * them with no bounds and reported no error for it. Numbering from zero again
+ * each time keeps that set no larger than one batch. A refusal names the text
+ * rather than the position, so nothing outside here needs the numbering.
+ */
+function* batchWidths(
+  renderer: ReplRenderer,
+  size: ReplTerminalSize,
+  texts: readonly string[],
+): Operation<Result<readonly number[]>> {
   const ops: Op[] = [
     open("fit:root", { layout: { width: fit(), height: fit(), direction: "ttb" } }),
   ];
@@ -438,6 +558,15 @@ export interface ReplFittedLine {
   readonly key: string;
   readonly text: string;
   readonly runs: readonly ReplTokenRun[];
+  /**
+   * The logical line this row is a piece of.
+   *
+   * The same key for every piece, so a caller that composed those lines can
+   * find its own item again without parsing one back out of a row's key. The
+   * first piece carries the line's own key and a continuation carries a derived
+   * one, which is a fact about rows rather than about what was written.
+   */
+  readonly line: string;
   /** Whether a previous row already carried the start of this line. */
   readonly continuation: boolean;
   /** The column this line was written at, carried onto its continuations. */
@@ -466,6 +595,15 @@ export function* fitPlain(
     readonly runs?: readonly ReplTokenRun[];
   }[],
   room: number,
+  /**
+   * Where this caller is holding the cuts it has already measured.
+   *
+   * Geometry only. The keys, the text and the runs below are this frame's, so a
+   * reused cut decorates the line in front of it rather than restoring a row
+   * somebody drew earlier. A caller with no store measures everything, which is
+   * what one holding a single frame wants.
+   */
+  store?: ReplPlainFitStore,
 ): Operation<Result<readonly ReplFittedLine[]>> {
   if (room < 1) {
     return Ok([]);
@@ -482,11 +620,19 @@ export function* fitPlain(
       badge: undefined,
       style: Object.freeze({ role: "source" as const, selected: false, inspected: false }),
     });
-    const cuts = yield* fitLine(renderer, size, line, room);
-    if (!cuts.ok) {
-      return cuts;
+    const retained = store?.held(one.text, room, size);
+    let pieces: readonly ReplRowCut[];
+    if (retained === undefined) {
+      const cuts = yield* fitLine(renderer, size, line, room);
+      if (!cuts.ok) {
+        return cuts;
+      }
+      pieces = cuts.value;
+      store?.keep(one.text, room, size, pieces);
+    } else {
+      pieces = retained;
     }
-    for (const cut of cuts.value) {
+    for (const cut of pieces) {
       const drawn = row(
         line,
         line.text.slice(cut.from, cut.from + cut.length),
@@ -499,12 +645,20 @@ export function* fitPlain(
           key: drawn.key,
           text: drawn.text,
           runs: drawn.runs,
+          line: drawn.line,
           continuation: drawn.continuation,
           indent: drawn.indent,
         }),
       );
     }
   }
+  // Only now, with every line of this list fitted: what is retained is the set
+  // this preparation prepared, so whatever it no longer holds goes.
+  store?.settle(
+    lines.map((one) => one.text),
+    room,
+    size,
+  );
   return Ok(Object.freeze(fitted));
 }
 
