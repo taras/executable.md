@@ -17,7 +17,6 @@ import { importPluginModule } from "./host-plugin-modules.ts";
 import type { UpgradeAssembly } from "./upgrade.ts";
 import { unassembledMachineSessions } from "./session-coordinator.ts";
 import { unsupportedWorkflowHost } from "./workflow.ts";
-import { unsupportedRepositories } from "./run-repositories.ts";
 import { useBunService } from "./bun-service.ts";
 
 const ENTRYPOINT = fileURLToPath(import.meta.url);
@@ -72,7 +71,6 @@ await main(function* (args) {
     args,
     useBunService,
     UPGRADE,
-    unsupportedRepositories,
     () => readInputStream(process.stdin),
     importPluginModule,
     unsupportedWorkflowHost,

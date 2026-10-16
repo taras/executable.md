@@ -28,8 +28,13 @@
 
 import type { Operation } from "effection";
 import { Plugin } from "@executablemd/core/api";
-import type { PluginInstallRequest, PluginInstallation } from "@executablemd/core/api";
+import type {
+  JournalAdmission,
+  PluginInstallRequest,
+  PluginInstallation,
+} from "@executablemd/core/api";
 import { useCompositionComponents } from "./composition/installation.ts";
+import { admitReplRepositoryHistory } from "./retained-repository/admission.ts";
 import { gitHostIdentityAdmission, issueIdentityAdmission } from "./identities.ts";
 
 /**
@@ -192,8 +197,32 @@ export const gitPlugin: Plugin = Plugin({
     // provider that performs what they name is attached by the host, lazily,
     // when a run actually has a Workspace to perform it in.
     yield* useCompositionComponents();
-    return { admissions: [gitHostIdentityAdmission(), issueIdentityAdmission()] };
+    return {
+      admissions: [
+        gitHostIdentityAdmission(),
+        issueIdentityAdmission(),
+        // The REPL's own: what an entry retained about the checkout it was
+        // standing in has to be readable before any of it is replayed. It
+        // belongs to this contribution because an admission is applied inside
+        // each execution's journal read, and this is the trusted path that
+        // already declares for the command. It holds no native state and names
+        // no runtime: a Node session that retained nothing has nothing here to
+        // refuse.
+        ...(request.command === "repl" ? [replHistoryAdmission()] : []),
+      ],
+    };
   },
 });
+
+/**
+ * What a REPL entry requires of the history it is about to continue.
+ *
+ * Provider-neutral, and about integrity alone: every record of this feature's
+ * own types parses and is named by the request it carries. Which entry a record
+ * belongs to is the stream segment's question, not this one's.
+ */
+function replHistoryAdmission(): JournalAdmission {
+  return (retained) => admitReplRepositoryHistory(retained);
+}
 
 export default gitPlugin;

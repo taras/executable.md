@@ -14,47 +14,20 @@
  * no environment variable naming a different root, because the only caller that
  * needs one is a test, and a test is handed the root directly.
  *
- * Node and Bun install none of this. They register the same thirteen
- * declarations, so `xmd syntax` describes one language and a document resolves
- * the same names everywhere, and every operation then reaches a clear
+ * Node and Bun configure none of this. They select the provider-neutral
+ * bundled Plugin, so `xmd syntax` describes one language and a document
+ * resolves the same names everywhere, and every operation then reaches a clear
  * provider-absence error before anything local or remote is touched.
  *
  * Nothing here imports the Deno adapter. This module is on the shared command
  * path, and the adapter's module graph reaches `node:sqlite` — a built-in Bun
  * does not have — so a static import of it here would stop `xmd` loading there
- * at all. The live installer lives beside the entrypoints that can use it, in
- * `deno-repositories.ts`.
+ * at all. The configured Plugin that holds this root lives beside the
+ * entrypoints that can use it, in `deno-repositories.ts`.
  */
 
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Operation } from "effection";
 
 /** Where managed repositories and worktrees live. */
 export const DEFAULT_REPOSITORY_ROOT: string = join(homedir(), ".xmd", "repositories");
-
-/**
- * How one document execution obtains repository operations, or does not.
- *
- * A function rather than a value, because the provider is installed *inside*
- * the execution scope and holds that execution's own invocation identity,
- * leases and Push evidence. A nested `<Execution host="run">` calls it again
- * and gets a fresh instance, which is what keeps a child's evidence and locks
- * out of its parent and its siblings.
- */
-export type RepositoryInstaller = () => Operation<void>;
-
-/**
- * The runtimes that register the vocabulary and operate none of it.
- *
- * Installing nothing is the whole implementation: `<Repository>`, `<Worktree>`,
- * the Git operations, `<Issue>` and `<PullRequest>` each reach their own Api's
- * default, which reports an absent provider before a lock, a credential, a
- * subprocess or a request exists. `<Dir>` is unaffected — it needs no provider.
- */
-export function unsupportedRepositories(): Operation<void> {
-  return noRepositories();
-}
-
-// deno-lint-ignore require-yield
-function* noRepositories(): Operation<void> {}

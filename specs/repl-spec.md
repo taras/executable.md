@@ -765,6 +765,67 @@ Sessions to follow a conversation and coming back returns you to the entry you
 left. It never carries focus, pause state, how far a window is scrolled, form
 internals, rendered cells or this process's overlay.
 
+### The files an entry wrote in the checkout you are standing in
+
+Start the REPL inside a Git checkout and an entry's file work is retained too,
+under the ordinary records above and no record type of its own. Four things are
+kept: a self-closing `<File path="…" as="…" />` text read; a paired
+`<File path="…">…</File>` write, after its content has expanded; a self-closing
+`<File.Delete path="…" />`; and the directory a paired `<Dir path="…">…</Dir>`
+ensures, before its content is entered. The reads, writes and deletions an
+admitted `<Evaluate>` fragment performs are kept on the same terms, because a
+fragment's operations go to the same document filesystem an authored one does.
+
+What that buys is the one thing experimentation needs: leave an entry at a
+question, come back to the printed location, and the work it already did is not
+done again. The question is offered again, and the write after it happens for
+the first time when you answer.
+
+A completed operation answers from what it produced, and reads nothing. So a
+file somebody else changed in the meantime stays changed, a file somebody
+deleted stays deleted, and a checkout you have since moved or removed does not
+stop the entry continuing — only a *new* operation needs the checkout to be
+there, and it fails or succeeds exactly as it would have the first time. The
+honest cost of that is one window: work can happen and its outcome can fail to
+be recorded, and a continuation then does that one operation again. Work that
+*was* recorded before you left is answered from the record, so an edit somebody
+made in the meantime survives the continuation untouched.
+
+A retained read is the same rule, which is worth saying plainly because its
+answer is a value you can see. The binding a completed read produced is the text
+it read when it ran: a question showing that binding still shows it after the
+file has changed, because nothing re-reads the file to answer an operation that
+is already done. Type a *new* entry that reads the same path and it reads what
+is there now. What is retained is each operation, not a value the session
+remembers for a path.
+
+Any of the four anywhere else — beside the document, in a temporary directory,
+in any directory that is not inside the checkout the entry started in — is
+ordinary file work, is retained by nothing here, and happens again if the entry
+is continued. That includes a read: what is retained is a read *inside* the
+checkout. Searches and temporary directories are ordinary throughout, wherever
+they point. The lexical path rules and the permission a `<File>` already answers
+to are unchanged, and they are not checkout validation: a path this run may not
+read or write is refused the same way it is anywhere else.
+
+One entry at a time *changes* one repository. A second entry — in this process
+or another — whose next new write, deletion or directory is in a checkout
+somebody else is changing is told so immediately rather than waiting:
+
+```text
+Another XMD entry or process holds this checkout. End that work before trying
+again. Nothing was read and nothing was changed.
+```
+
+Reading is not changing, so it is not excluded: an entry may read a file in a
+checkout another entry is holding, and reading takes nothing that would stop
+that entry carrying on. Only a new write, deletion or directory waits on the
+hold, and a completed operation of any kind takes nothing at all.
+
+Starting outside a checkout retains none of this and changes nothing else: the
+entry performs ordinary file work, exactly as it would anywhere else, and never
+looks for a repository twice.
+
 ## What the head says the execution is doing
 
 Seven states and no eighth, in one precedence, each a fact about retained
@@ -810,6 +871,19 @@ recorded output replaces it.
 
 ## Who owns what
 
+Repository behavior belongs to the entry that is executing, and to nothing
+wider. The command selects it; the entry's own task prepares it, once, inside
+that task, and everything it takes — the Git session it reads through, where it
+looked for a checkout, the hold on that repository — is released when the entry
+is torn down. Each entry reads and writes its own range of the one history, so
+the same text typed twice is two sets of records rather than one replayed, and
+the entry after an interrupted one replays nothing of it however identical its
+text. No second name for the entry appears in a record: which history an entry
+may continue is the range it was given. Reading is not owning: a settled
+history, a frozen position and a refused location prepare nothing, look for no
+checkout and hold nothing. A host that registers no recording runs the same
+file work with nothing retained, which is what Node and Bun do.
+
 Components receive immutable view data and answer with a typed semantic action.
 They hold no events, no history, no session, no repository and no host operation,
 so a keystroke cannot reach the file except through the one place that owns the
@@ -835,7 +909,19 @@ schedules no timer.
 ## Exclusions
 
 - Two processes writing one execution is unsupported. There is no lease protocol;
-  do not open the same location twice for writing.
+  do not open the same location twice for writing. The hold on a checkout is a
+  different thing: it says one entry at a time may mutate one repository, and it
+  says nothing about who may write this execution's history.
+- Repository components are not part of this. `<Repository>`, `<Worktree>`, the
+  local Git operations, `<Issue>` and `<PullRequest>` refuse in a REPL entry
+  exactly as they do under any host that installs no provider for them. What an
+  entry retains is file and directory work in the checkout it was started in,
+  and nothing is managed, cloned, staged, committed or published.
+- Continuing an entry is explicit. Returning to the live head starts the one
+  unfinished entry, once; a frozen position starts nothing at all.
+- A continuation does not reconcile. Nothing compares a saved result with what
+  is on disk, reports a difference or offers to repair one — if what you are
+  looking at is not what you expected, that is for you to read and act on.
 - `xmd repl` takes one optional location and the five Agent options above. It
   renders no file and takes no document reference.
 - `<Session.Launch>` is unavailable. This command has no terminal to give away —

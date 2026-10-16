@@ -34,7 +34,7 @@ import { syntaxSymbols } from "../src/syntax.ts";
 import { installPlugins } from "../src/plugin-host.ts";
 import type { CommandPlugins } from "../src/plugin-host.ts";
 import { BUNDLED_PLUGIN } from "../src/run-profile.ts";
-import { DEFAULT_REPOSITORY_ROOT, unsupportedRepositories } from "../src/run-repositories.ts";
+import { DEFAULT_REPOSITORY_ROOT } from "../src/run-repositories.ts";
 
 /** Every element an author can write that needs a repository provider. */
 const OPERATIONS: readonly { readonly name: string; readonly source: string }[] = [
@@ -96,7 +96,6 @@ function ordinaryWithoutProvider(source: string, cwd: string): Operation<unknown
     );
     yield* useHostFiles();
     yield* registerComponents(COMPOSITION_REGISTRATIONS);
-    yield* unsupportedRepositories();
     return yield* collect(
       yield* execute({ ...inlineSource(source), stream: new InMemoryStream() }),
     );

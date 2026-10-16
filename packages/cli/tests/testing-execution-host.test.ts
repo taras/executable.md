@@ -28,8 +28,8 @@ import { PLAN_WRITER_INSTRUCTIONS, DEFAULT_PLAN_WRITER_ROOT } from "../src/plan-
 import type { PlanWriterObservation } from "../src/plan-writer-profile.ts";
 import { testingExecutionHost } from "../src/testing-host.ts";
 import { planComponentDeclaration, planComponentDescription } from "../src/plan-component.ts";
+import { BUNDLED_PLUGIN } from "../src/run-profile.ts";
 
-import { unsupportedRepositories } from "../src/run-repositories.ts";
 import reviewPlugin from "@executablemd/code-review-agent";
 function doc(...lines: string[]): string {
   return `${lines.join("\n")}\n`;
@@ -783,7 +783,7 @@ describe("deterministic dependencies declared for a nested run", () => {
       secretDetection: true,
       // deno-lint-ignore require-yield
       installService: function* (): Operation<void> {},
-      installRepositories: unsupportedRepositories,
+      bundledPlugin: BUNDLED_PLUGIN,
       testAgentWorker: Ok([...cliBase(), "test-agent"]),
       planDeclaration: (request) =>
         planComponentDeclaration({
@@ -1006,7 +1006,7 @@ describe("deterministic dependencies declared for a nested run", () => {
       secretDetection: true,
       // deno-lint-ignore require-yield
       installService: function* (): Operation<void> {},
-      installRepositories: unsupportedRepositories,
+      bundledPlugin: BUNDLED_PLUGIN,
       testAgentWorker: Err(new Error("xmd command not installed")),
       // The run profile's own Component is built for every child, and this case
       // is about the relaunch it cannot perform rather than about `<Plan>`.

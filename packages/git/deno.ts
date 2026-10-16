@@ -48,3 +48,5 @@ export { gitWorkspaceAttachment } from "./src/deno/attachment.ts";
 export type { GitWorkspaceOptions } from "./src/deno/attachment.ts";
 export { useRunComposition } from "./src/deno/run-composition/provider.ts";
 export type { RunCompositionOptions } from "./src/deno/run-composition/provider.ts";
+export { useReplRepositoryRecording } from "./src/deno/retained-repository/provider.ts";
+export type { ReplRecordingOptions } from "./src/deno/retained-repository/provider.ts";

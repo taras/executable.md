@@ -100,26 +100,47 @@ function release(file: AdvisoryLockFile): void {
  * The file is closed immediately when the lock is refused: a descriptor that
  * holds nothing has nothing to release, and keeping it open until the scope
  * ends would make a refusal cost the caller a handle it never acquired.
+ *
+ * The release is registered before the file is opened, like its waiting sibling
+ * below, so no acquisition and no cancellation between the open and the lock can
+ * leave an open or locked file nothing owns. Registering it afterwards is the
+ * ordering a descriptor outliving its owner comes from: `ensure` suspends, and
+ * an owner halted while it registers unwinds with no cleanup on it at all.
  */
 export function useAdvisoryLock(path: string): Operation<AdvisoryLockFile | undefined> {
   return resource<AdvisoryLockFile | undefined>(function* (provide) {
     yield* ensureDir(dirname(path));
 
-    const file = locking().openSync(path, { read: true, write: true, create: true });
+    let file: AdvisoryLockFile | undefined;
     let locked = false;
+    let closed = false;
+    yield* ensure(() => {
+      if (file === undefined || closed) {
+        return;
+      }
+      closed = true;
+      if (locked) {
+        release(file);
+      } else {
+        file.close();
+      }
+    });
+
+    file = locking().openSync(path, { read: true, write: true, create: true });
     try {
       locked = file.tryLockSync(true);
     } catch (error) {
+      closed = true;
       file.close();
       throw error;
     }
     if (!locked) {
+      closed = true;
       file.close();
       yield* provide(undefined);
       return;
     }
 
-    yield* ensure(() => release(file));
     yield* provide(file);
   });
 }

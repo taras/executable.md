@@ -53,11 +53,12 @@ const INTERNAL: readonly string[] = [
 const ROOT_PUBLISHED: readonly string[] = ["gitPlugin", "gitPluginDeclaresFor"];
 
 /**
- * GitHub names this package publishes on purpose.
+ * The names this package publishes to a Deno host on purpose.
  *
  * Listed so that losing one is a failure rather than a silent narrowing: a
- * host configuring a ceiling needs the recognizer, and a document naming a
- * provider needs the discriminator.
+ * host configuring a ceiling needs the recognizer, a document naming a
+ * provider needs the discriminator, and the REPL host needs the one operation
+ * an executing entry initializes its recording with.
  */
 const PUBLISHED: readonly string[] = [
   "GITHUB",
@@ -69,6 +70,7 @@ const PUBLISHED: readonly string[] = [
   "recognizesGitHubUrl",
   "useGitHubIssues",
   "useGitHubPullRequests",
+  "useReplRepositoryRecording",
 ];
 
 /**

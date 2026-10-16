@@ -23,6 +23,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
 
 /** The layout, relative to whichever root the entrypoint chose. */
 export const REPOSITORIES = "repositories";
@@ -80,4 +81,25 @@ export function metadataOf(slot: string): string {
  */
 export function lockOf(root: string, kind: "repository" | "worktree", slot: string): string {
   return `${root}/${LOCKS}/${kind}/${digest(slot)}.lock`;
+}
+
+/** Where the locks keyed on a shared Git directory rather than on a slot live. */
+export const COMMON_DIRECTORIES = "xmd-common-lanes";
+
+/**
+ * The lock sidecar for one shared Git directory.
+ *
+ * Outside both the checkout and the managed root, because the directory this
+ * protects is the person's own: a lock file written inside a checkout would be
+ * an untracked file appearing in their status, and one under the managed root
+ * would tie an ambient checkout's exclusion to a root an ambient run never
+ * creates. The host's temporary directory is where a lock that belongs to a
+ * running process belongs, and the digest is of the canonical common directory,
+ * so no arrangement of path characters names another repository's lock.
+ *
+ * Nothing unlinks it. Unlinking a locked path lets the next caller create and
+ * lock a different file at the same name while this lock is still held.
+ */
+export function commonDirectoryLock(commonDirectory: string): string {
+  return `${tmpdir()}/${COMMON_DIRECTORIES}/${digest(commonDirectory)}.lock`;
 }

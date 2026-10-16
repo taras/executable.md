@@ -608,6 +608,12 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
       "asks the compiled `dist/xmd` to load a Plugin module that is not embedded in it — a binary with no checkout, no node_modules and no module graph to add to, which only `deno compile` produces and no test shard builds; it belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
     issue: "https://github.com/taras/executable.md/issues/567",
   },
+  {
+    path: "scripts/tests/repl-repositories-compiled.test.ts",
+    reason:
+      "drives the compiled `dist/xmd` through a real terminal: it starts a REPL inside a seeded checkout, leaves at a question and reopens the printed location to prove the binary carries the same entry host the source does. Only `deno compile` produces it and no test shard builds it, so it belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
+    issue: "https://github.com/taras/executable.md/issues/567",
+  },
 ];
 
 /**
@@ -668,6 +674,30 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     path: "packages/cli/tests/run-composition-nested.test.ts",
     reason:
       "a nested execution's own provider instance, which needs the same kernel-released advisory lock the root's does, and real subprocesses to prove where a child stands",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/git/tests/retained-repository-local.test.ts",
+    reason:
+      "the subject is a REPL entry's native repository host: it discovers a real checkout with a `git` subprocess and records what a real filesystem answered. The record format and the admission are provider-neutral and are proven on every runtime by packages/git/tests/retained-repository-records.test.ts",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/git/tests/retained-repository-lifecycle.test.ts",
+    reason:
+      "holds a shared Git directory under a kernel-released exclusive advisory lock taken through the Deno runtime, and spawns a second Deno process to prove the cross-process half; Node and Bun expose no equivalent",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/cli/tests/testing-execution-host-native.test.ts",
+    reason:
+      "its subject is the configured native Plugin an isolated run child initializes, which comes from @executablemd/git/deno and so from Workflow's storage adapter and node:sqlite. What a child does with the *selected* value — that a test root hands its host=\"run\" child what the host chose, reinstalled in the child's own scope after its working directory — is proven portably by packages/cli/tests/testing-execution-host.test.ts, which runs everywhere",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/cli/tests/repl-repositories.test.ts",
+    reason:
+      "drives the production entry host, which only Deno and the compiled binary register: its module graph reaches @executablemd/git/deno and so Workflow's storage adapter and node:sqlite. That Node and Bun start a REPL and perform ordinary File and Dir work without it is proven by packages/cli/tests/repl-repositories-pty.test.ts, which runs everywhere",
     issue: DERIVED_SCOPE,
   },
 ];

@@ -128,6 +128,11 @@
     // canonicalizes against the host filesystem and asks the exact observed
     // path for its version through `Deno.Command`. The runtime exclusions keep
     // the same test out of the Node and Bun execution suites.
-    "packages/runtime/tests/executable-observer.test.ts"
+    "packages/runtime/tests/executable-observer.test.ts",
+    // A REPL entry's hold on a checkout is a kernel-released advisory lock, so
+    // this proof observes `Deno.openSync` directly and spawns a second
+    // `Deno.Command` to take the same sidecar from another process. The runtime
+    // exclusions keep the same test out of the Node and Bun execution suites.
+    "packages/git/tests/retained-repository-lifecycle.test.ts"
   ]
 }

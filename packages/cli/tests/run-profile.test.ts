@@ -11,6 +11,13 @@
  * carried, never loaded, and the reserved selector names that value rather than
  * a module — so any module load at all is the failure this suite exists to
  * catch, and nothing here needs a fixture on disk.
+ *
+ * What the value *is* comes from the host: a Deno or compiled entrypoint
+ * selects a configured native variant before any command is dispatched, and
+ * Node and Bun leave the provider-neutral default. These rows select a distinct
+ * object deliberately, and assert on identity rather than on the name, because
+ * a prefix hard-coded to the statically imported default would pass every
+ * name-shaped assertion while delivering the wrong host's Plugin.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -20,6 +27,7 @@ import {
   assembleRunProfile,
   BUNDLED_PLUGIN,
   BUNDLED_SELECTOR,
+  BundledRunPlugin,
   nestedRunProfile,
 } from "../src/run-profile.ts";
 import { installPlugins } from "../src/plugin-host.ts";
@@ -39,7 +47,30 @@ function* profile(args: readonly string[]): Operation<string[]> {
   return assembled.map((plugin) => plugin.name);
 }
 
+/** The values one command line assembles, with this host's own selection made. */
+function selected(args: readonly string[]): Operation<readonly Plugin[]> {
+  return scoped(function* () {
+    yield* BundledRunPlugin.set(CONFIGURED);
+    return yield* assembleRunProfile(selectPlugins(args), refusing);
+  });
+}
+
 const GIT = "@executablemd/git";
+
+/**
+ * What a runtime entrypoint selects: the bundled Plugin, configured.
+ *
+ * A distinct object under the bundled name, which is what a native variant is.
+ * Nothing here needs it to do anything — the question these rows ask is which
+ * object arrives.
+ */
+const CONFIGURED: Plugin = Plugin({
+  name: GIT,
+  // deno-lint-ignore require-yield
+  *install(): Operation<undefined> {
+    return undefined;
+  },
+});
 
 describe("the bundled run profile", () => {
   it("carries the bundled Plugin for the commands that reach a document", function* () {
@@ -70,6 +101,34 @@ describe("the bundled run profile", () => {
     }
   });
 
+  it("assembles the value this host selected, and the default where it selects none", function* () {
+    // The host's selection reaches the profile as the bundled prefix.
+    expect(yield* selected(["run", "doc.md"])).toEqual([CONFIGURED]);
+    // And with nothing selected, the provider-neutral default stands: that is
+    // what Node and Bun run with.
+    expect(
+      yield* scoped(() => assembleRunProfile(selectPlugins(["run", "doc.md"]), refusing)),
+    ).toEqual([BUNDLED_PLUGIN]);
+  });
+
+  it("resolves the reserved selector to the selected value without loading anything", function* () {
+    // Once, five times, and beside an ineligible command: the selector names
+    // the value this host selected, so it is consumed rather than resolved —
+    // and it is that object, not the statically imported default.
+    expect(yield* selected(["--plugin", BUNDLED_SELECTOR, "run", "doc.md"])).toEqual([CONFIGURED]);
+    expect(
+      yield* selected([
+        "--plugin",
+        BUNDLED_SELECTOR,
+        "--plugin",
+        BUNDLED_SELECTOR,
+        "--plugin=git",
+        "run",
+        "doc.md",
+      ]),
+    ).toEqual([CONFIGURED]);
+  });
+
   it("resolves the reserved selector without loading anything", function* () {
     // Once, five times, and beside an ineligible command: the selector names
     // the value this profile already holds, so it is consumed rather than
@@ -92,12 +151,13 @@ describe("the bundled run profile", () => {
     expect(yield* profile(["--plugin", BUNDLED_SELECTOR, "test"])).toEqual([]);
   });
 
-  it("gives a nested run child the bundled prefix without duplicating it", function* () {
-    // The outer command held the bundled value itself — an operator who wrote
-    // the reserved selector holds exactly this object. Prefixing it again would
-    // be the host duplicating itself, so it is dropped by identity.
-    expect(nestedRunProfile([BUNDLED_PLUGIN]).map((plugin) => plugin.name)).toEqual([GIT]);
-    expect(nestedRunProfile([]).map((plugin) => plugin.name)).toEqual([GIT]);
+  it("gives a nested run child the captured value without duplicating it", function* () {
+    // The value a child installs is the one its parent captured from the host,
+    // so these are identities rather than names: a child handed the neutral
+    // default where the host selected a configured variant would install the
+    // wrong Plugin under the right name.
+    expect(nestedRunProfile([CONFIGURED], CONFIGURED)).toEqual([CONFIGURED]);
+    expect(nestedRunProfile([], CONFIGURED)).toEqual([CONFIGURED]);
 
     // And an unrelated Plugin keeps its place behind the prefix.
     const other = Plugin({
@@ -107,7 +167,10 @@ describe("the bundled run profile", () => {
         return undefined;
       },
     });
-    expect(nestedRunProfile([other]).map((plugin) => plugin.name)).toEqual([GIT, "other"]);
+    expect(nestedRunProfile([other], CONFIGURED)).toEqual([CONFIGURED, other]);
+    // The outer list's own order is what follows the prefix.
+    const third = Plugin({ name: "third" });
+    expect(nestedRunProfile([other, third], CONFIGURED)).toEqual([CONFIGURED, other, third]);
   });
 
   it("refuses an impostor claiming the bundled name rather than dropping it", function* () {
@@ -122,9 +185,9 @@ describe("the bundled run profile", () => {
         return undefined;
       },
     });
-    expect(impostor).not.toBe(BUNDLED_PLUGIN);
+    expect(impostor).not.toBe(CONFIGURED);
 
-    const assembled = nestedRunProfile([impostor]);
+    const assembled = nestedRunProfile([impostor], CONFIGURED);
     expect(assembled).toHaveLength(2);
     expect(assembled[1]).toBe(impostor);
 

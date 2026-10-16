@@ -16,6 +16,7 @@ import process from "node:process";
 import type { Operation } from "effection";
 import { installReplHost, platformDataRoot } from "./repl-assembly.ts";
 import { useCompiledReplTerminal } from "./compiled-repl-terminal.ts";
+import { useDenoReplRepositories } from "./deno-repositories.ts";
 
 export function* useCompiledRepl(): Operation<void> {
   yield* installReplHost({
@@ -26,5 +27,12 @@ export function* useCompiledRepl(): Operation<void> {
     createExclusive: (path) => open(path, "wx").then((handle) => handle.close()),
     appendRecord: (path, record) => appendFile(path, record),
   });
+  // What an entry's execution initializes: the recording of the File and Dir
+  // work it does in the checkout the person opened the session in. Registered
+  // here, in the runtime scope the selected REPL host owns, because only a
+  // runtime-named module may name the native adapter — and registering it
+  // acquires nothing, so a session that only reads history discovers no
+  // checkout and takes no lease.
+  yield* useDenoReplRepositories();
   yield* useCompiledReplTerminal();
 }

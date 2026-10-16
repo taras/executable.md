@@ -91,6 +91,8 @@ const PROVIDER_NEUTRAL: readonly string[] = [
   "src/issue/records.ts",
   "src/issue/tracker.ts",
   "src/plugin.ts",
+  "src/retained-repository/admission.ts",
+  "src/retained-repository/records.ts",
 ];
 
 /**
@@ -156,10 +158,15 @@ const DENO_ADAPTER: readonly string[] = [
   "src/deno/composition/subprocess.ts",
   "src/deno/composition/switch.ts",
   "src/deno/composition/worktree.ts",
+  "src/deno/retained-repository/files.ts",
+  "src/deno/retained-repository/leases.ts",
+  "src/deno/retained-repository/local.ts",
+  "src/deno/retained-repository/provider.ts",
   "src/deno/run-composition/ambient.ts",
   "src/deno/run-composition/checkouts.ts",
   "src/deno/run-composition/errors.ts",
   "src/deno/run-composition/identity.ts",
+  "src/deno/run-composition/lazy.ts",
   "src/deno/run-composition/leases.ts",
   "src/deno/run-composition/metadata.ts",
   "src/deno/run-composition/operations.ts",
