@@ -12,7 +12,7 @@
  * Workspace roots that share some content and not the rest, a hardlink group, a
  * symbolic link, a non-default file mode, sourced and inherited journal rows, a
  * prior fork lineage, both suspension-answer states, a Repository with a
- * Worktree, an Agent session mapping, a retained external effect, and one
+ * Worktree, an Agent session mapping, a saved external effect, and one
  * declared component the run never expanded.
  */
 
@@ -59,7 +59,7 @@ export const SOURCE_RUN_ID = "release-1.3";
  * fixture cannot drift from the shape the verifier authenticates against. The
  * request carries the wait's identity twice over and the schema an answer is
  * judged by; the publication is what makes an answer consumed rather than
- * pending, and carries the value that was retained.
+ * pending, and carries the value that was saved.
  */
 export function wait(
   id: string,
@@ -216,7 +216,7 @@ const CHECKLIST = "- [ ] tag\n";
 const UNUSED = "This component was declared and never expanded.\n";
 
 /** Every path this fixture's bundle retains, in canonical order. */
-const RETAINED: readonly { readonly path: string; readonly content: string }[] = [
+const SAVED: readonly { readonly path: string; readonly content: string }[] = [
   { path: "workflows/Checklist.md", content: CHECKLIST },
   { path: "workflows/Unused.md", content: UNUSED },
   { path: "workflows/release.md", content: ROOT_DOCUMENT },
@@ -240,7 +240,7 @@ export function definitionOf(overrides: Record<string, unknown> = {}): WorkflowD
     hashAlgorithm: "sha256",
     bundleHash: FIXTURE_BUNDLE_HASH,
     entrypoint: "workflows/release.md",
-    sources: RETAINED.map((entry) => ({
+    sources: SAVED.map((entry) => ({
       path: entry.path,
       sourceHash: SOURCE_HASHES[entry.path],
       byteLength: new TextEncoder().encode(entry.content).byteLength,
@@ -258,15 +258,15 @@ export function definitionOf(overrides: Record<string, unknown> = {}): WorkflowD
   return parsed.value;
 }
 
-/** The retained closure those sources are, as the store hands it back. */
-export function retainedSourcesOf(): {
+/** The saved closure those sources are, as the store hands it back. */
+export function savedSourcesOf(): {
   definition: WorkflowDefinition;
   sources: readonly { path: string; bytes: Uint8Array }[];
 } {
   const encoder = new TextEncoder();
   return {
     definition: definitionOf(),
-    sources: RETAINED.map((entry) => ({
+    sources: SAVED.map((entry) => ({
       path: entry.path,
       bytes: encoder.encode(entry.content),
     })),
@@ -285,7 +285,7 @@ export const SUSPENSIONS = {
   /**
    * A wait the *source* run answered, inherited whole.
    *
-   * Its request and its publication are both copied by a fork; the retained
+   * Its request and its publication are both copied by a fork; the saved
    * answer row behind them is not, because fork creation copies journal rows,
    * Workspace roots and checkout records and nothing else. So this pair is
    * present with no row of its own — which is a shape the verifier has to
@@ -296,7 +296,7 @@ export const SUSPENSIONS = {
     { kind: "approval", release: "1.3" },
     { type: "object", properties: { approved: { type: "boolean" } }, required: ["approved"] },
   ),
-  /** A wait this run reached and answered itself. Its row is retained. */
+  /** A wait this run reached and answered itself. Its row is saved. */
   consumed: wait(
     suspensionId(RUN_ID, { coroutineId: "root", index: 3 }),
     { kind: "approval", release: "1.4" },
@@ -374,7 +374,7 @@ export function richArtifact(): DetachedXmdArtifact {
       own: false,
     },
     {
-      // root.0/0 — a retained external effect keeps its own journal record and
+      // root.0/0 — a saved external effect keeps its own journal record and
       // nothing else: the record is the evidence, not a second projection.
       event: sourced(
         {
@@ -410,7 +410,7 @@ export function richArtifact(): DetachedXmdArtifact {
     record: serializeDurableEvent(each.event),
     workspaceRootId: each.root,
     // Provenance marks exactly the rows a fork copies. A row this run wrote
-    // carries none, and its absence is what says so — so a retained answer row,
+    // carries none, and its absence is what says so — so a saved answer row,
     // which fork creation never copies, never sits behind an inherited request.
     ...(each.own
       ? {}
@@ -503,11 +503,11 @@ export function richArtifact(): DetachedXmdArtifact {
       },
     ],
     agentSessions: [agentSession()],
-    definition: retainedSourcesOf(),
+    definition: savedSourcesOf(),
   };
 }
 
-/** One Agent session mapping, retained under the key its identity derives. */
+/** One Agent session mapping, saved under the key its identity derives. */
 function agentSession(
   sessionIdentity = "expansion:release/Agent[0]/Session[0]",
   assertion = "sess_01J",
@@ -588,7 +588,7 @@ export function agentBundle(): Uint8Array {
 }
 
 /**
- * One retained Prompt, as the durable event a live run journals for it.
+ * One saved Prompt, as the durable event a live run journals for it.
  *
  * The result is the serialized Prompt record the Agent package's own parser
  * reads, so the fixture cannot drift from the shape the artifact verifier
@@ -623,13 +623,13 @@ function promptEvent(
 }
 
 /**
- * The same snapshot, finalized: every session that retained a Prompt is
+ * The same snapshot, finalized: every session that saved a Prompt is
  * classified.
  *
  * The Prompts run in a coroutine of their own, appended after everything the
  * rich snapshot already held, so the durable positions the suspension
  * identities are derived from cannot move. One session is portable with two
- * ordered associations and a bundle; one lacks retained evidence because a
+ * ordered associations and a bundle; one lacks saved evidence because a
  * Prompt failed; one was complete and captured by nothing. The mapping the rich
  * snapshot already carried retains no Prompt at all, so it is classified by
  * nothing — which is the shape a finalized artifact has to accept.
@@ -725,7 +725,7 @@ export const FIXTURE_BUNDLE_PATH = "release.md";
 export const FIXTURE_BUNDLE_SOURCE = "# Release\n\nthe bytes this artifact seals\n";
 
 /**
- * The same snapshot, as a run of a retained source bundle.
+ * The same snapshot, as a run of a saved source bundle.
  *
  * Everything outside the definition is the version-1 fixture's, so what a
  * format-2 case is comparing is the definition and nothing else. The descriptor

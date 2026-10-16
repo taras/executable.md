@@ -1028,7 +1028,7 @@ interface LaunchRecord {
 /**
  * The launch records one diagnostic journal holds, in order.
  *
- * A retained preparation carries the prepared instruction text, so this reads
+ * A saved preparation carries the prepared instruction text, so this reads
  * it and nothing that reaches a verdict repeats it: what crosses out of here is
  * whether a digest exists, never the text or the digest's own bytes.
  */
@@ -1612,8 +1612,8 @@ function decideZeroTurn(verdict: JourneyVerdict): void {
   verdict.verdict = "PASS";
   verdict.detail =
     verdict.outcome === "same-identity"
-      ? "re-entry reached its conversation surface under the exact retained identity"
-      : "re-entry refused the exact retained identity, and XMD failed closed";
+      ? "re-entry reached its conversation surface under the exact saved identity"
+      : "re-entry refused the exact saved identity, and XMD failed closed";
 }
 
 function decideTwoTurn(verdict: JourneyVerdict): void {

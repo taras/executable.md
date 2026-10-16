@@ -244,17 +244,17 @@ describe("Tier FT — a workflow run's Fetch", () => {
         method: "GET",
         headers: { accept: "application/json" },
       });
-      const retained = committed?.result?.value;
-      if (retained === null || typeof retained !== "object") {
+      const saved = committed?.result?.value;
+      if (saved === null || typeof saved !== "object") {
         throw new Error("the run committed no Fetch response");
       }
-      const value: Record<string, unknown> = { ...retained };
+      const value: Record<string, unknown> = { ...saved };
       expect(Object.keys(value)).toEqual(["status", "headers", "body"]);
       expect(value.status).toBe(200);
       expect(value.body).toBe('{"greeting":"hello"}');
       const headers = value.headers;
       if (headers === null || typeof headers !== "object") {
-        throw new Error("the retained response carries no header object");
+        throw new Error("the saved response carries no header object");
       }
       // Whatever the host reported, the names are lowercase and ordered.
       const named: Record<string, unknown> = { ...headers };

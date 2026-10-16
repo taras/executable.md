@@ -8,12 +8,12 @@
  * does that work rather than answering from the earlier entry's records. A view
  * that is only reading — a settled history, a frozen position — prepares
  * nothing at all, so it discovers nothing and takes no lease. And a host that
- * installs no setup runs ordinary file work with nothing retained.
+ * installs no setup runs ordinary file work with nothing saved.
  *
  * The generated half is here rather than beside the provider because a
  * generated fragment's operations cross the same one Files route an authored
  * one does: there is no second instance to wrap, and what proves it is a
- * fragment's read, write and delete being retained exactly as an authored
+ * fragment's read, write and delete being saved exactly as an authored
  * one's are.
  */
 
@@ -35,7 +35,7 @@ import {
   parseReplLocalRecord,
   REPL_REPOSITORY_LOCAL,
   REPL_REPOSITORY_SELECTION,
-} from "../../git/src/retained-repository/records.ts";
+} from "../../git/src/saved-repository/records.ts";
 import { Execution } from "@executablemd/core/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
@@ -203,7 +203,7 @@ function* submit(
     yield* useWorkingDirectory(fixture.checkout);
     const installations = yield* replInstallations();
     // Absent for the row about a host that registers none: the entry then runs
-    // on the ordinary Files provider with nothing retained.
+    // on the ordinary Files provider with nothing saved.
     if (counted !== undefined) {
       yield* useCountedRecording(counted);
     }
@@ -514,7 +514,7 @@ describe("how a REPL entry gets its repository behavior", () => {
     // A record of this feature's type that this version never wrote, standing
     // *past* where the entry stopped. Nothing replays it, so the operation-level
     // reader never looks at it: what refuses it is the admission the Git Plugin
-    // contributes for this command, which reads the whole retained segment
+    // contributes for this command, which reads the whole saved segment
     // before any of it is replayed.
     const tampered: readonly DurableEvent[] = [
       ...events,

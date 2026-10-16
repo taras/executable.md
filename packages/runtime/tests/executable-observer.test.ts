@@ -177,12 +177,12 @@ describe("Tier EO — executable observation", () => {
     // And the durable half of an observation is exactly two facts.
     const file = yield* script(secret, "claude", "2.1.235");
     const observed = yield* observer.observe(file);
-    const retained = {
+    const saved = {
       schema: "executable-build.v1",
       reportedVersion: observed.versionOutput.trim(),
       executableDigest: observed.digest,
     };
-    expect(JSON.stringify(retained)).not.toContain(root);
+    expect(JSON.stringify(saved)).not.toContain(root);
     expect(Object.keys(observed).sort()).toEqual(["digest", "path", "versionOutput"]);
   });
 });

@@ -2,7 +2,7 @@
  * Tier WF — what a `<Git.Push>` retains, replays and refuses to guess.
  *
  * These tests inspect the run's database and the remote together. A replayed
- * push must reach no remote and append no second transition; a retained record
+ * push must reach no remote and append no second transition; a saved record
  * that no longer describes the invocation it was recorded for must stop the run
  * rather than be read around; a cancelled push must leave the journal, the
  * frontier and the materializations exactly as it found them; and the request
@@ -64,8 +64,8 @@ import {
   inlinePosition,
   physicalGitApiCopy,
   raised,
-  retainedRepositories,
-  retainedWorktrees,
+  savedRepositories,
+  savedWorktrees,
   runWorkflowDocument,
   subcommands,
   survivingRoots,
@@ -171,7 +171,7 @@ function isHostProtocolFailure(value: unknown): value is GitHostProtocolError {
 }
 
 /**
- * Damage the one retained reconciliation record, and refuse if it damaged none.
+ * Damage the one saved reconciliation record, and refuse if it damaged none.
  *
  * A tamper that matched nothing leaves the run healthy, and a regression built
  * on one passes by replaying an undamaged record.
@@ -208,13 +208,13 @@ describe("workflow Git.Push durability", () => {
       yield* runWorkflowDocument(database, source(remote.locator));
       const head = yield* headCommit(
         database,
-        (yield* retainedRepositories(database))[0]?.record.checkoutPath ?? "",
+        (yield* savedRepositories(database))[0]?.record.checkoutPath ?? "",
       );
       expect(remoteBranch(remote, BRANCH)).toBe(head.commit);
       const published = publishedRoots(path);
 
       dropRootClose(path);
-      // Deleted, so what continues this run is what it retained or nothing.
+      // Deleted, so what continues this run is what it saved or nothing.
       yield* remote.remove();
 
       const counting = countingHost();
@@ -227,7 +227,7 @@ describe("workflow Git.Push durability", () => {
       expect(subcommands(counting.counters)).not.toContain("init");
       const effects = yield* gitHostEvents(database);
       expect(effects).toHaveLength(1);
-      // The retained effect names the authored `<Git.Push>` element itself —
+      // The saved effect names the authored `<Git.Push>` element itself —
       // diagnostic data beside the identity, which the replay above proved is
       // still matched by type and name alone.
       const [effect] = effects;
@@ -243,7 +243,7 @@ describe("workflow Git.Push durability", () => {
   });
 
   /**
-   * An advance is retained as completely as a creation, and proves nothing
+   * An advance is saved as completely as a creation, and proves nothing
    * twice.
    *
    * The ancestry behind a fast-forward is a fact this run established once, at
@@ -262,13 +262,13 @@ describe("workflow Git.Push durability", () => {
       yield* runWorkflowDocument(database, advanced(remote.locator));
       const head = yield* headCommit(
         database,
-        (yield* retainedRepositories(database))[0]?.record.checkoutPath ?? "",
+        (yield* savedRepositories(database))[0]?.record.checkoutPath ?? "",
       );
       expect(remoteBranch(remote, "main")).toBe(head.commit);
 
-      const retained = yield* gitHostOutcomes(database);
-      expect(retained).toHaveLength(1);
-      const advance = retained[0]?.record;
+      const saved = yield* gitHostOutcomes(database);
+      expect(saved).toHaveLength(1);
+      const advance = saved[0]?.record;
       expect(advance?.decision).toBe("performed");
       expect(advance?.preState).toEqual({
         remoteCommit: head.parents[0],
@@ -285,7 +285,7 @@ describe("workflow Git.Push durability", () => {
         expect(subcommands(counting.counters)).not.toContain(command);
       }
       expect(yield* gitHostEvents(database)).toHaveLength(1);
-      expect(yield* gitHostOutcomes(database)).toEqual(retained);
+      expect(yield* gitHostOutcomes(database)).toEqual(saved);
     });
   });
 
@@ -295,7 +295,7 @@ describe("workflow Git.Push durability", () => {
    * Each Push named its request from the checkout as it stood when it ran, so
    * the first one asked about A and the second about B. Reconstructing either
    * from the frontier the run ended on would ask the journal a question that
-   * position never asked — the first Push would arrive at A's retained record
+   * position never asked — the first Push would arrive at A's saved record
    * holding B's request — and the run could never be resumed at all.
    *
    * The remote is deleted before the continuation, so the two restored records
@@ -312,12 +312,12 @@ describe("workflow Git.Push durability", () => {
 
       const head = yield* headCommit(
         database,
-        (yield* retainedRepositories(database))[0]?.record.checkoutPath ?? "",
+        (yield* savedRepositories(database))[0]?.record.checkoutPath ?? "",
       );
       const first = head.parents[0] ?? "";
-      const retained = yield* gitHostOutcomes(database);
-      expect(retained).toHaveLength(2);
-      const sources = retained.map((outcome) =>
+      const saved = yield* gitHostOutcomes(database);
+      expect(saved).toHaveLength(2);
+      const sources = saved.map((outcome) =>
         Reflect.get(Object(outcome.record?.result), "sourceCommit"),
       );
       expect(sources).toEqual([first, head.commit]);
@@ -333,14 +333,14 @@ describe("workflow Git.Push durability", () => {
       // Both restored, in order, unchanged — and neither of them asked the
       // Git host, proved ancestry, fetched or pushed anything again.
       expect(yield* gitHostEvents(database)).toHaveLength(2);
-      expect(yield* gitHostOutcomes(database)).toEqual(retained);
+      expect(yield* gitHostOutcomes(database)).toEqual(saved);
       for (const command of ["init", "ls-remote", "merge-base", "fetch", "push"]) {
         expect(subcommands(counting.counters)).not.toContain(command);
       }
       // Reading history is not returning to it: the run is still at B.
       const resumed = yield* headCommit(
         database,
-        (yield* retainedRepositories(database))[0]?.record.checkoutPath ?? "",
+        (yield* savedRepositories(database))[0]?.record.checkoutPath ?? "",
       );
       expect(resumed.commit).toBe(head.commit);
       expect(committedRoot(path)).toBe(latestRoot(path));
@@ -366,13 +366,13 @@ describe("workflow Git.Push durability", () => {
       yield* runWorkflowDocument(database, readopted(remote.locator));
       const head = yield* headCommit(
         database,
-        (yield* retainedRepositories(database))[0]?.record.checkoutPath ?? "",
+        (yield* savedRepositories(database))[0]?.record.checkoutPath ?? "",
       );
 
-      const retained = yield* gitHostOutcomes(database);
-      expect(retained).toHaveLength(2);
-      const created = retained[0]?.record;
-      const adopted = retained[1]?.record;
+      const saved = yield* gitHostOutcomes(database);
+      expect(saved).toHaveLength(2);
+      const created = saved[0]?.record;
+      const adopted = saved[1]?.record;
       expect(created?.decision).toBe("performed");
       expect(created?.preState).toEqual({ remoteCommit: null });
       expect(adopted?.decision).toBe("adopted");
@@ -387,18 +387,18 @@ describe("workflow Git.Push durability", () => {
       for (const command of ["init", "ls-remote", "merge-base", "fetch", "push"]) {
         expect(subcommands(counting.counters)).not.toContain(command);
       }
-      expect(yield* gitHostOutcomes(database)).toEqual(retained);
+      expect(yield* gitHostOutcomes(database)).toEqual(saved);
     });
   });
 
   /**
-   * A completed push derives and parses its retained request, and asks the
+   * A completed push derives and parses its saved request, and asks the
    * object source for nothing.
    *
    * Containment is the live provider's first act, so a replay that performed it
    * anyway would fail here — the object graph is left in a state no push may
    * read from before the replay runs. It succeeds, which proves the intended
-   * isolation: the shared engine hands back the retained record without
+   * isolation: the shared engine hands back the saved record without
    * reaching a provider, so no graph is walked, no control repository is built
    * and no Git runs for the push.
    */
@@ -416,7 +416,7 @@ describe("workflow Git.Push durability", () => {
       const published = yield* gitHostOutcomes(database);
       expect(published[0]?.status).toBe("ok");
 
-      const [repository] = yield* retainedRepositories(database);
+      const [repository] = yield* savedRepositories(database);
       const checkout = repository?.record.checkoutPath ?? "";
       yield* writeCheckoutFile(
         database,
@@ -439,7 +439,7 @@ describe("workflow Git.Push durability", () => {
   });
 
   /**
-   * Every way a retained record can stop describing the invocation it was
+   * Every way a saved record can stop describing the invocation it was
    * recorded for.
    *
    * Shape is the cheap half. The rest is meaning: a remote that is not origin,
@@ -556,7 +556,7 @@ describe("workflow Git.Push durability", () => {
   ];
 
   for (const { name, damage } of DAMAGE) {
-    it(`fails a replay whose retained record ${name}`, function* () {
+    it(`fails a replay whose saved record ${name}`, function* () {
       const root = yield* useStorageRoot();
       const remote = yield* useBareRemote(REMOTE);
       const path = runPath(root, "release-1.4");
@@ -658,7 +658,7 @@ describe("workflow Git.Push durability", () => {
     ).toBe("adopted");
   });
 
-  it("fails a replay whose retained record answers a different request", function* () {
+  it("fails a replay whose saved record answers a different request", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
     const path = runPath(root, "release-1.4");
@@ -830,7 +830,7 @@ describe("workflow Git.Push durability", () => {
 
       const head = yield* headCommit(
         database,
-        (yield* retainedRepositories(database))[0]?.record.checkoutPath ?? "",
+        (yield* savedRepositories(database))[0]?.record.checkoutPath ?? "",
       );
       expect(remoteBranch(remote, BRANCH)).toBe(head.commit);
 
@@ -889,7 +889,7 @@ describe("workflow Git.Push durability", () => {
 
       const head = yield* headCommit(
         database,
-        (yield* retainedRepositories(database))[0]?.record.checkoutPath ?? "",
+        (yield* savedRepositories(database))[0]?.record.checkoutPath ?? "",
       );
       expect(remoteBranch(remote, BRANCH)).toBe(head.commit);
       expect(counting.counters.effects).toContain("git:push");
@@ -897,7 +897,7 @@ describe("workflow Git.Push durability", () => {
     });
   });
 
-  it("moves no retained row and publishes no Workspace root", function* () {
+  it("moves no saved row and publishes no Workspace root", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
     const path = runPath(root, "release-1.4");
@@ -912,9 +912,9 @@ describe("workflow Git.Push durability", () => {
       expect(committedRoot(path)).toBe(latestRoot(path));
       expect(yield* gitHostEvents(database)).toHaveLength(1);
 
-      // The retained Repository row is the one its creation effect journaled:
+      // The saved Repository row is the one its creation effect journaled:
       // a Push retains no host path, no materialization and no current branch.
-      const [repository] = yield* retainedRepositories(database);
+      const [repository] = yield* savedRepositories(database);
       const created = yield* compositionEvents(database);
       const journaled = Reflect.get(
         Object(Reflect.get(Object(Reflect.get(created[0] ?? {}, "result")), "value")),
@@ -939,7 +939,7 @@ describe("workflow Git.Push durability", () => {
   });
 
   /**
-   * Retained state that stopped agreeing with the identity naming it.
+   * Saved state that stopped agreeing with the identity naming it.
    *
    * Damaged between the Repository's attachment and the push, so the condition
    * is the one this operation's own selection finds rather than one attachment
@@ -948,7 +948,7 @@ describe("workflow Git.Push durability", () => {
    * run cannot have written — fatal, unrepaired, and reached before a host path
    * is joined or a remote exists in the story.
    */
-  it("fails on retained state that no longer agrees, without reaching a remote", function* () {
+  it("fails on saved state that no longer agrees, without reaching a remote", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
     const path = runPath(root, "release-1.4");
@@ -1001,12 +1001,12 @@ describe("workflow Git.Push durability", () => {
 });
 
 /**
- * The whole authored vocabulary, retained, and replayed cold.
+ * The whole authored vocabulary, saved, and replayed cold.
  *
  * `<Repository>`, `<Worktree>` and the four `<Git.*>` elements reach their
  * provider through `Repository` and `Git`, and a consumer replaces those two
  * names. Middleware that observes and delegates is what shows the components
- * arrive there: an element still routed through an operation the retained
+ * arrive there: an element still routed through an operation the saved
  * provider no longer answers would refuse rather than be seen, and one routed
  * through a second identity would perform the work unobserved.
  *
@@ -1085,7 +1085,7 @@ describe("the authored Git vocabulary under a workflow run", () => {
 
       // The normalized results are unchanged: `<Git.Commit>` still renders the
       // commit it made, and that commit is what the branch holds at the remote.
-      const [worktree] = yield* retainedWorktrees(database, "project");
+      const [worktree] = yield* savedWorktrees(database, "project");
       const head = yield* headCommit(database, worktree?.checkoutPath ?? "");
       expect(live).toContain(`commit ${head.commit}`);
       expect(remoteBranch(remote, FULL_BRANCH)).toBe(head.commit);

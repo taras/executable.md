@@ -33,7 +33,7 @@ import {
   withWorkspaceCoordinationProvider,
 } from "../src/workspace/effect.ts";
 import { createDurableWorkspaceOperation } from "../mod.ts";
-import { retainedWorkflowInstallation } from "../src/run.ts";
+import { savedWorkflowInstallation } from "../src/run.ts";
 import { gitPlugin } from "../../git/src/plugin.ts";
 import type { WorkflowRun } from "../src/run.ts";
 import { GIT_HOST_EFFECT } from "../../git/src/git-host/effect.ts";
@@ -63,7 +63,7 @@ import type {
  * Asked of the Plugin value rather than assembled here, so what these cases
  * exercise is the same contribution a command gets — one Plugin value, and an
  * admission that derives this execution's identities from this execution's own
- * retained history.
+ * saved history.
  */
 function* gitPluginAdmissions(): Operation<ExecutionInstallation> {
   const install = gitPlugin.install;
@@ -155,7 +155,7 @@ const PERFORMED_COMPLETION: GitHostCompletion = Object.freeze({
 /**
  * One run's history as another run's, so a fork can inherit it.
  *
- * Only the Git-host record moves: its retained identity becomes the source's,
+ * Only the Git-host record moves: its saved identity becomes the source's,
  * and the durable operation is renamed to the digest that identity produces —
  * which is what the source itself wrote and what a fork copies verbatim.
  */
@@ -229,7 +229,7 @@ function loadedGitHostCopy(value: unknown): value is LoadedGitHostCopy {
  * module graph.
  *
  * The whole shared tree is copied rather than the four Git-host modules,
- * because what the copy must reach — the retained identities and the canonical
+ * because what the copy must reach — the saved identities and the canonical
  * encoding beside them — is exactly what a real second copy reaches. The host
  * adapter is left behind: this boundary names no host, so a copy of it needs
  * none. What the copy does *not* carry is `@executablemd/workflow`: a second
@@ -306,7 +306,7 @@ function useGitHostEffectComponent(
 function* gitHostDocument(stream: InMemoryStream): Operation<unknown> {
   return yield* collect(
     yield* executeInstalled({ ...inlineSource(GIT_HOST_SOURCE), stream }, [
-      retainedWorkflowInstallation(GIT_HOST_RUN),
+      savedWorkflowInstallation(GIT_HOST_RUN),
       yield* gitPluginAdmissions(),
     ]),
   );
@@ -529,12 +529,12 @@ describe("Tier DLG — physical Git-host package composition", () => {
     expect(gitHostYields(stream)).toHaveLength(1);
   });
 
-  it("DLG3: the other copy consumes an inherited record under its retained identity", function* () {
+  it("DLG3: the other copy consumes an inherited record under its saved identity", function* () {
     // A fork's journal holds records its source wrote, and a Git-host effect is
     // named by a digest that includes the run id — so a copy that could not see
-    // the retained identity would fingerprint an inherited record with the fork
+    // the saved identity would fingerprint an inherited record with the fork
     // id and diverge. Which physical module object asks must not decide which
-    // retained history is accepted.
+    // saved history is accepted.
     const copy = yield* physicalGitHostCopy();
     const sourceRunId = "run-297-git-host-source";
 

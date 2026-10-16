@@ -79,13 +79,13 @@ function record(overrides: Partial<AgentSessionRecord> = {}): AgentSessionRecord
 
 /** What one resolution did, as a value rather than a throw. */
 function attempt(
-  retained: AgentSessionRecord | undefined,
+  saved: AgentSessionRecord | undefined,
   policy: string,
   assertions: readonly ProviderAssertion[],
   who: AgentSessionIdentity,
 ): { kind?: string; refusal?: string } {
   try {
-    return { kind: resolveAgentSession(retained, policy, assertions, who).kind };
+    return { kind: resolveAgentSession(saved, policy, assertions, who).kind };
   } catch (error) {
     return { refusal: error instanceof Error ? error.message : String(error) };
   }
@@ -126,7 +126,7 @@ function withLifecycle<T>(root: string, body: () => Operation<T>): Operation<T> 
   });
 }
 
-describe("Tier WSL — retained workflow Agent sessions", () => {
+describe("Tier WSL — saved workflow Agent sessions", () => {
   it("WSL1: the mapping key is the engine identity alone", function* () {
     // Two sibling `<Session name="review">` elements: same authored name, same
     // provider, same agent, different engine identity. Two sessions.
@@ -164,7 +164,7 @@ describe("Tier WSL — retained workflow Agent sessions", () => {
   it("WSL4: missing, mismatched, replaced, changed and ambiguous each refuse", function* () {
     const cases = [
       {
-        name: "the provider asserts nothing for a session this run retained",
+        name: "the provider asserts nothing for a session this run saved",
         assertions: [] as ProviderAssertion[],
         who: identity(),
         says: "asserts no durable identity",
@@ -220,16 +220,16 @@ describe("Tier WSL — retained workflow Agent sessions", () => {
     }
   });
 
-  it("WSL5: a matching assertion reattaches the retained mapping unchanged", function* () {
-    const retained = record();
+  it("WSL5: a matching assertion reattaches the saved mapping unchanged", function* () {
+    const saved = record();
     const outcome = resolveAgentSession(
-      retained,
+      saved,
       POLICY,
       [asserted("agent-session:alpha")],
       identity(),
     );
     expect(outcome.kind).toBe("reattach");
-    expect(outcome.kind === "reattach" ? outcome.record : undefined).toBe(retained);
+    expect(outcome.kind === "reattach" ? outcome.record : undefined).toBe(saved);
   });
 
   it("WSL6: the mapping commits in the run's own transaction and reads back per Session", function* () {
@@ -267,7 +267,7 @@ describe("Tier WSL — retained workflow Agent sessions", () => {
 
       // Rolled back with everything else the attempt did: an interruption
       // between the provider's assertion and this run recording it leaves
-      // nothing retained, which is the state the pre-commit rule reconciles.
+      // nothing saved, which is the state the pre-commit rule reconciles.
       expect(yield* readMapping(database, key)).toBe(undefined);
     });
   });

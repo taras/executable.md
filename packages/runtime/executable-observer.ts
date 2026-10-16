@@ -7,7 +7,7 @@
  * provider accept the same session identity and disagree silently about what
  * it names — that is how issue #519's first gate produced a healthy-looking
  * session with no history in it. So before a session crosses an ownership
- * boundary, the exact file about to run is observed, and enough is retained to
+ * boundary, the exact file about to run is observed, and enough is saved to
  * recognize it later.
  *
  * What is observed is a canonical path, the SHA-256 of that file's bytes, and
@@ -17,7 +17,7 @@
  *
  * This is a plain capability the trusted host builds and hands directly to the
  * provider that needs it. It is deliberately not a contextual Api. Executable
- * validation decides which retained history is accepted, and a decision
+ * validation decides which saved history is accepted, and a decision
  * document middleware could replace is not one — a replaceable resolver could
  * point the observation at a different binary than the one that runs.
  *
@@ -40,7 +40,7 @@ export type ExecutableRefusal =
  * An observation failure that names its reason.
  *
  * The reason is the actionable part and the message is diagnostic. Neither is
- * retained: a caller turns this into its own refusal, and the paths involved
+ * saved: a caller turns this into its own refusal, and the paths involved
  * stay on this side of that boundary.
  */
 export class ExecutableObservationError extends Error {

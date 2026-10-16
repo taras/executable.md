@@ -121,7 +121,7 @@ export function* refuseCheckedFailure(checkedFailures: CheckedFailures): Operati
  *
  * ```ts
  * export default printErrors(function* (props) {
- *   // body, requested content, retained work and teardown are all inside
+ *   // body, requested content, saved work and teardown are all inside
  * });
  * ```
  *

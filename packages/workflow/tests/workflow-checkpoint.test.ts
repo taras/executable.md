@@ -105,19 +105,19 @@ function withRun<T>(
   });
 }
 
-/** Every durable yield this run retained, as `type` alone. */
+/** Every durable yield this run saved, as `type` alone. */
 function* yields(database: WorkflowRunDatabase): Operation<string[]> {
   const events: DurableEvent[] = yield* database.journal.readAll();
   return events.filter(isYield).map((event) => event.description.type);
 }
 
-/** The retained suspension requests, in order. */
+/** The saved suspension requests, in order. */
 function* requests(database: WorkflowRunDatabase): Operation<Yield[]> {
   const events: DurableEvent[] = yield* database.journal.readAll();
   return events.filter(isYield).filter((event) => event.description.type === SUSPENSION_REQUEST);
 }
 
-/** The run's retained status, read the way something outside XMD would. */
+/** The run's saved status, read the way something outside XMD would. */
 function status(root: string, runId: string): string {
   const database = new DatabaseSync(runPath(root, runId), { readOnly: true });
   try {
@@ -129,7 +129,7 @@ function status(root: string, runId: string): string {
   }
 }
 
-/** One retained JSON object field, parsed rather than asserted. */
+/** One saved JSON object field, parsed rather than asserted. */
 function object(value: Json | undefined, what: string): Record<string, Json> {
   if (!isJsonObject(value)) {
     throw new Error(`${what} is not a JSON object`);
@@ -189,12 +189,10 @@ describe("Tier CK — the durable checkpoint", () => {
       // What the person was asked, and what an answer must satisfy, are the
       // request — not something a later execution reconstructs.
       const description = published[0].description;
-      const request = object(description.request, "the retained request");
+      const request = object(description.request, "the saved request");
       expect(request.kind).toBe("elicitation");
       expect(String(request.message)).toContain("Proceed with the change?");
-      expect(object(description.responseSchema, "the retained response schema").type).toBe(
-        "object",
-      );
+      expect(object(description.responseSchema, "the saved response schema").type).toBe("object");
 
       expect(yield* yields(database)).not.toContain(ELICIT);
     });

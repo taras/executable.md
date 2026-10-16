@@ -110,7 +110,7 @@ export function committedRoot(path: string): unknown {
 }
 
 /**
- * Damage one retained row, and refuse to continue if it damaged none.
+ * Damage one saved row, and refuse to continue if it damaged none.
  *
  * A tamper that matched nothing leaves the run healthy, and a regression built
  * on one passes by testing the unmodified case. The row count is what makes the
@@ -156,11 +156,11 @@ export function latestRoot(path: string): unknown {
 /**
  * Damage the checkout path in both places a run keeps it.
  *
- * The retained row and the journaled record are separately authoritative, and
+ * The saved row and the journaled record are separately authoritative, and
  * the attachment check that compares them already refuses when only one has
  * moved. Damaging one would therefore test that comparison rather than what
  * happens when a path is *used* — so both are set to the same untrusted value,
- * which is what a partial replay of damaged retained state actually looks like.
+ * which is what a partial replay of damaged saved state actually looks like.
  */
 export function damageCheckoutPath(path: string, name: string, replacement: string): void {
   changedExactlyOne(path, "UPDATE workspace_repositories SET checkout_path = ? WHERE name = ?", [
@@ -203,7 +203,7 @@ export function isStale(candidate: unknown): candidate is RepositoryStaleStateEr
  *
  * The status is the outcome these assertions check. A refusal that the run
  * reports to the document and records as a success is a history that disagrees
- * with itself, and only the retained result says which one happened.
+ * with itself, and only the saved result says which one happened.
  */
 export function* compositionResults(
   database: WorkflowRunDatabase,
@@ -226,7 +226,7 @@ export function* compositionResults(
  * substitution is aimed at.
  *
  * The staging half of every substitution suite: it produces a real tree on the
- * host, and the caller imports it over the retained one through the test-only
+ * host, and the caller imports it over the saved one through the test-only
  * storage fixture.
  */
 /** A host directory holding `tree`, ready to be imported over `workspacePath`. */

@@ -52,7 +52,7 @@ import {
   gitHostEvents,
   gitHostOutcomes,
   headCommit,
-  retainedRepositories,
+  savedRepositories,
   runWorkflowDocument,
   subcommands,
 } from "./support/composition.ts";
@@ -197,7 +197,7 @@ describe("workflow Git.Push across a process boundary", () => {
 
       const head = yield* headCommit(
         database,
-        (yield* retainedRepositories(database))[0]?.record.checkoutPath ?? "",
+        (yield* savedRepositories(database))[0]?.record.checkoutPath ?? "",
       );
       expect(head.commit).toBe(pushedCommit);
       expect(remoteBranch(remote, PUSH_BRANCH)).toBe(pushedCommit);
@@ -352,7 +352,7 @@ describe("workflow Git.Push across a process boundary", () => {
       yield* runWorkflowDocument(database, pushDocument(served.locator), countingOptions(counting));
 
       // A different chain entirely, asked once — the Repository replays from
-      // what the crash retained and acquires nothing, so the only acquisition
+      // what the crash saved and acquires nothing, so the only acquisition
       // here is the Push's own.
       expect(yield* resumeHome.operations()).toEqual(["get"]);
 

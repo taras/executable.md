@@ -11,7 +11,7 @@
  * Every member is a value the live workflow contract already retains, spelled
  * with the type that contract already uses. Restating them here would be a
  * second definition of the same records that could disagree with the first, so
- * the retained shapes are imported and only the two things the live contract
+ * the saved shapes are imported and only the two things the live contract
  * has no name for — the artifact frontier and the definition source closure —
  * are declared.
  *
@@ -29,15 +29,10 @@ import type { InheritedEventProvenance } from "../../lifecycle/history.ts";
 import type { DocumentExecutionRecord, WorkflowRunRecord } from "../../storage/record.ts";
 import type { XmdArtifactFrontier } from "../../lifecycle/export.ts";
 import type { AgentSessionRecord } from "../workspace/agent-sessions.ts";
-import type { RetainedAnswer } from "../answers.ts";
-import type {
-  RetainedBlob,
-  RetainedManifest,
-  RetainedRepository,
-  RetainedWorktree,
-} from "../fork-source.ts";
+import type { SavedAnswer } from "../answers.ts";
+import type { SavedBlob, SavedManifest, SavedRepository, SavedWorktree } from "../fork-source.ts";
 import type { StoredWorkspaceRoot } from "../workspace/manifest.ts";
-import type { RetainedDefinitionSources } from "../../lifecycle/source.ts";
+import type { SavedDefinitionSources } from "../../lifecycle/source.ts";
 
 /** The boundary the lifecycle chose, as the shape every record here is about. */
 export type { XmdArtifactFrontier };
@@ -51,9 +46,9 @@ export interface XmdArtifactForkLineage {
 }
 
 /**
- * One retained journal row, and what the run knows about where it came from.
+ * One saved journal row, and what the run knows about where it came from.
  *
- * `record` is the exact retained NDJSON text, never a re-encoding of a parsed
+ * `record` is the exact saved NDJSON text, never a re-encoding of a parsed
  * event: the journal's security gate already filtered these bytes, and a
  * container that normalized them would be retaining something no gate had seen.
  * The authored source position lives inside those bytes and is validated from
@@ -77,10 +72,10 @@ export interface XmdArtifactJournalRow {
  */
 
 /**
- * One retained Prompt event, and the provider checkpoint token taken at it.
+ * One saved Prompt event, and the provider checkpoint token taken at it.
  *
  * A token is opaque: it is whatever the provider that issued it can later
- * present, and nothing here derives, normalizes or infers one. It is retained
+ * present, and nothing here derives, normalizes or infers one. It is saved
  * evidence rather than a credential — it names a place in a
  * conversation, not permission to reach the host that had it.
  */
@@ -116,7 +111,7 @@ export interface XmdArtifactAgentPortabilityBase {
 /**
  * A session a fork could continue, and the bundle that would continue it.
  *
- * The bundled identity is retained separately from the source identity because
+ * The bundled identity is saved separately from the source identity because
  * detached bytes may name a transported session rather than the live one they
  * were captured from.
  */
@@ -134,7 +129,7 @@ export interface XmdArtifactPortableAgentSession extends XmdArtifactAgentPortabi
 /**
  * A session no bundle was sealed for, and which of the two reasons applies.
  *
- * `checkpoint-token-unavailable` is intrinsic: the run's own retained evidence
+ * `checkpoint-token-unavailable` is intrinsic: the run's own saved evidence
  * is incomplete, and no other host's capability can repair it.
  * `provider-capability-unavailable` is the export decision — every Prompt was
  * completed and covered, and nothing declared a way to capture the session.
@@ -183,11 +178,11 @@ export interface XmdArtifactContents {
   readonly lineage?: XmdArtifactForkLineage;
   readonly journal: readonly XmdArtifactJournalRow[];
   readonly roots: readonly StoredWorkspaceRoot[];
-  readonly manifests: readonly RetainedManifest[];
-  readonly blobs: readonly RetainedBlob[];
-  readonly repositories: readonly RetainedRepository[];
-  readonly worktrees: readonly RetainedWorktree[];
-  readonly answers: readonly RetainedAnswer[];
+  readonly manifests: readonly SavedManifest[];
+  readonly blobs: readonly SavedBlob[];
+  readonly repositories: readonly SavedRepository[];
+  readonly worktrees: readonly SavedWorktree[];
+  readonly answers: readonly SavedAnswer[];
   readonly agentSessions: readonly AgentSessionRecord[];
   /** Absent unless the artifact classifies its Prompt-contributing sessions. */
   readonly agentEvidence?: XmdArtifactAgentEvidence;
@@ -199,7 +194,7 @@ export interface XmdArtifactContents {
    * so the writer selects a format from what it was handed rather than from a
    * superset both versions could be read out of.
    */
-  readonly definition: RetainedDefinitionSources;
+  readonly definition: SavedDefinitionSources;
 }
 
 /**

@@ -20,7 +20,7 @@ import { collect, inlineSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { WorkflowRunStorage } from "@executablemd/workflow";
 import { useWorkflowRunStorage } from "@executablemd/workflow/deno";
-import { retainedWorkflowInstallation } from "../../../workflow/src/run.ts";
+import { savedWorkflowInstallation } from "../../../workflow/src/run.ts";
 import { gitWorkspaceAttachment } from "../../src/deno/attachment.ts";
 import { gitPluginAdmissions } from "./composition.ts";
 import { withWorkflowWorkspace } from "../../../workflow/src/deno/workspace/host.ts";
@@ -81,7 +81,7 @@ function* open(root: string, runId: string, locator: string, endpoint: string): 
             stream: database.journal,
           },
           [
-            retainedWorkflowInstallation({
+            savedWorkflowInstallation({
               runId: record.runId,
               bundleHash: record.definition.bundleHash,
             }),

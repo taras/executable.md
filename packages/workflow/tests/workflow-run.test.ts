@@ -35,7 +35,7 @@ import { GitQuery } from "@executablemd/git/api";
 import { createWorkflowRunInstallation, getWorkflowRun } from "../src/run.ts";
 import { WORKFLOW_RUN } from "../src/journal.ts";
 import type { WorkflowRun } from "../src/run.ts";
-import { retainedRunMismatch } from "../mod.ts";
+import { savedRunMismatch } from "../mod.ts";
 
 const BUNDLE = "9fceb02d0ae598e95dc970b74767f19372d61af89fceb02d0ae598e95dc970b74";
 const OTHER_BUNDLE = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -70,7 +70,7 @@ function runInstallation(
     },
     agree(recorded: WorkflowRun): WorkflowRun {
       if (recorded.bundleHash !== bundleHash) {
-        throw retainedRunMismatch(["bundleHash"]);
+        throw savedRunMismatch(["bundleHash"]);
       }
       return recorded;
     },
@@ -550,7 +550,7 @@ describe("Tier WR — workflow runs", () => {
       description: { type: "workflow_run", name: "workflow_run", bundleHash: BUNDLE },
       result: { status: "ok", value: { runId: "seeded-run", bundleHash: BUNDLE } },
     });
-    // The root import a real completed run always records. A retained terminal
+    // The root import a real completed run always records. A saved terminal
     // result is reused on the strength of the selection its root import
     // established, so a journal that carries one without the other describes a
     // run that never happened and is refused.
@@ -690,7 +690,7 @@ describe("Tier WR — workflow runs", () => {
   // package reads the run through its own descriptor of the same context name.
   it("WR17: a descriptor of the same name built elsewhere reads the run", function* () {
     // The binding is the execution's own slot, and what it holds is the exact
-    // frozen run. Retained-history admission and durable preparation both
+    // frozen run. Saved-history admission and durable preparation both
     // decide the run from outside the scope that reads it, so a context set
     // from either would end with the operation that set it; the slot is what
     // gives them somewhere to put it that the document can still see.
@@ -748,7 +748,7 @@ describe("Tier WR — workflow runs", () => {
    * Tier WM — what public middleware cannot do to a workflow run.
    *
    * The run is prepared by canonical core inside the durable root, after
-   * retained-history admission and before any public `Execution.document`
+   * saved-history admission and before any public `Execution.document`
    * policy. These are the ways a handler might try to get in front of that, and
    * what happens instead.
    */
@@ -895,7 +895,7 @@ describe("Tier WR — workflow runs", () => {
   /**
    * What a host outside this package supplies, and what it does not.
    *
-   * `runInstallation(bundleHash)` and `retainedWorkflowInstallation(run)` are
+   * `runInstallation(bundleHash)` and `savedWorkflowInstallation(run)` are
    * both this constructor with a different preparation, so a host that resolves
    * its own repository supplies the same four terms. What it never supplies is
    * when the admission runs, what parses the record, or where the run is
@@ -942,7 +942,7 @@ describe("Tier WR — workflow runs", () => {
     });
   });
 
-  it("WR22: a host preparation's agreement decides a retained history", function* () {
+  it("WR22: a host preparation's agreement decides a saved history", function* () {
     const stream = new InMemoryStream();
     yield* stream.append({
       type: "yield",

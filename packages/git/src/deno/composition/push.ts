@@ -12,8 +12,8 @@
  * ## What happens before the remote exists in the story
  *
  * Admission first, and all of it locally. The enclosing `<Repository>` and the
- * contextual working directory select a retained checkout the way they do for
- * every other Git operation; the observed record is compared with the retained
+ * contextual working directory select a saved checkout the way they do for
+ * every other Git operation; the observed record is compared with the saved
  * row member for member, every row is held to the identity naming it, and the
  * exported family is proven to be the checkout the record describes. Only then
  * are the branch and the commit read — from the checkout, never from a
@@ -39,7 +39,7 @@
  * ## What the provider is given, and what it is not
  *
  * The transport needs the objects and the destination, and nothing else may
- * travel with them. The retained locator, the disposable control repository and
+ * travel with them. The saved locator, the disposable control repository and
  * the object database live in this module's own closure: public Git-host
  * middleware sees the frozen JSON request #297 defines and no part of any of
  * them. The durable request carries the Repository's filtered identity without
@@ -161,7 +161,7 @@ function* provenAncestor(
 }
 
 /**
- * The Workspace root this invocation's own retained Push was written against,
+ * The Workspace root this invocation's own saved Push was written against,
  * or `undefined` when it has none and this is a live attempt.
  *
  * A Push names its request from the checkout: the branch it is on and the
@@ -174,7 +174,7 @@ function* provenAncestor(
  * So a completed Push is reconstructed from the root its own journal row was
  * appended against. That association was made when the event was written and is
  * the only thing here that says where this position was; the current pointer,
- * the branch name and the retained payload all describe somewhere else, or
+ * the branch name and the saved payload all describe somewhere else, or
  * describe it circularly.
  *
  * Reading history is all this does. The root it names still has to produce the
@@ -182,7 +182,7 @@ function* provenAncestor(
  * one refuses the replay rather than answering it, and no root selected here
  * can admit live Git-host work.
  */
-function* retainedPushRoot(
+function* savedPushRoot(
   database: WorkflowRunDatabase,
   expansionId: string,
   repository: RepositoryIdentity,
@@ -207,7 +207,7 @@ function* retainedPushRoot(
         : undefined;
     // A record this position cannot read as a Push of the Repository it
     // admitted is not one to reconstruct from. It is not read around either:
-    // the shared engine holds every retained record at this position to the
+    // the shared engine holds every saved record at this position to the
     // request being made, and refuses one that answers a different question.
     if (inputs === undefined || !sameRepositoryIdentity(inputs.repository, repository)) {
       continue;
@@ -223,25 +223,25 @@ function* retainedPushRoot(
 /**
  * The selection and the checkout family this invocation names its request from.
  *
- * One inspection, at the root this invocation is speaking from. A retained Push
+ * One inspection, at the root this invocation is speaking from. A saved Push
  * names the moment it published, and reading the Workspace as it was then —
  * without the run returning to it — is the inspection boundary's own
  * responsibility: it materializes that root, hands it to this callback, and
  * rolls the materialization back however the callback ends.
  *
- * The rows the selection reads are the same either way. Retained Repository and
+ * The rows the selection reads are the same either way. Saved Repository and
  * Worktree identity is creation identity, which a Workspace root does not hold
  * and a restoration does not move.
  */
 function prepareRequestSource(
   database: WorkflowRunDatabase,
-  retained: string | undefined,
+  saved: string | undefined,
   root: string,
   admitted: GitOperationRequest,
 ): Operation<Result<{ selection: GitCheckoutSelection; exported: ExportedCheckouts }>> {
   return readWorkflowWorkspace(
     database,
-    retained === undefined ? {} : { rootId: retained },
+    saved === undefined ? {} : { rootId: saved },
     function* (workspace) {
       const selection = selectGitCheckout(readWorkspaceMetadata(workspace.storage), PUSH, admitted);
       return {
@@ -256,7 +256,7 @@ function prepareRequestSource(
  * The provider that answers this exact reconciliation, and no other.
  *
  * Installed around one `reconcileGitHostEffect()` call and reachable only from
- * inside it. Its closure holds the retained locator and the object source; what
+ * inside it. Its closure holds the saved locator and the object source; what
  * it receives from the engine is the frozen request, which it parses and holds
  * to the inputs this invocation admitted. A request naming another Repository,
  * branch or commit is not this invocation's, and answering one would publish a
@@ -416,7 +416,7 @@ function* admitInputs(checkout: GitCheckout, admitted: GitPushRequest): Operatio
  * The whole of what `<Git.Push>` asks for: one reconciled effect, exactly parsed.
  *
  * Ordered so that everything a later step trusts has already been proven: the
- * retained rows and the export inside one short transaction, the exported
+ * saved rows and the export inside one short transaction, the exported
  * checkout's identity outside it, the branch and commit from that checkout, and
  * only then a frozen request and a provider that can answer for it.
  */
@@ -441,10 +441,10 @@ export function* createGitPush(
     const git = gitSession(host, root);
 
     // Which moment this invocation is naming its request from. Read before the
-    // transaction, because it is a question about retained history rather than
+    // transaction, because it is a question about saved history rather than
     // about the Workspace, and a transaction here cannot nest inside itself.
     const expansion = yield* getExpansion();
-    const retained = yield* retainedPushRoot(
+    const saved = yield* savedPushRoot(
       database,
       expansion.id,
       filteredRepositoryIdentity(admitted.repository),
@@ -452,7 +452,7 @@ export function* createGitPush(
 
     // Held open for the export alone. Everything after this reads files, and a
     // remote round trip must never keep the run's database locked.
-    const prepared = yield* prepareRequestSource(database, retained, root, admitted);
+    const prepared = yield* prepareRequestSource(database, saved, root, admitted);
     if (!prepared.ok) {
       throw prepared.error;
     }
@@ -461,7 +461,7 @@ export function* createGitPush(
     const checkout = yield* prepareCheckout(root, git, selection, exported, PUSH);
     const inputs = yield* admitInputs(checkout, admitted);
 
-    // The exact retained locator, authenticated against its own fingerprint
+    // The exact saved locator, authenticated against its own fingerprint
     // when the row was read, rather than `remote.origin.url` or a `pushurl` out
     // of a configuration file this run merely stores.
     const locator = selection.repository.locator;

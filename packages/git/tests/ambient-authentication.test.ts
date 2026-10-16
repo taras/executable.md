@@ -82,7 +82,7 @@ import {
   inCheckout,
   TEST_HELPER,
   raised,
-  retainedRepositories,
+  savedRepositories,
   runDocument,
   runWorkflowDocument,
   subcommands,
@@ -178,7 +178,7 @@ function* present(path: string): Operation<boolean> {
 }
 
 function* checkoutPath(database: WorkflowRunDatabase): Operation<string> {
-  const [repository] = yield* retainedRepositories(database);
+  const [repository] = yield* savedRepositories(database);
   if (repository === undefined) {
     throw new Error("the run retains no Repository");
   }
@@ -233,7 +233,7 @@ function published(locator: string, ...extra: string[]): string {
   );
 }
 
-/** Append configuration to the retained checkout mid-document. */
+/** Append configuration to the saved checkout mid-document. */
 function plant(database: WorkflowRunDatabase, configuration: string): ComponentRegistration {
   return {
     name: "Plant",
@@ -289,9 +289,9 @@ describe("workflow ambient Git authentication", () => {
       expect(served.requests[0]?.credentialed).toBe(false);
       expect(served.requests.some((request) => request.accepted)).toBe(true);
 
-      // What was retained is the credential-free locator, unchanged.
-      const [retained] = yield* retainedRepositories(database);
-      expect(retained?.locator).toBe(served.locator);
+      // What was saved is the credential-free locator, unchanged.
+      const [saved] = yield* savedRepositories(database);
+      expect(saved?.locator).toBe(served.locator);
       expect(subcommands(counting.counters)).toContain("clone");
     });
   });
@@ -318,7 +318,7 @@ describe("workflow ambient Git authentication", () => {
       // is the failed establishment, which is what makes a later attempt a new
       // attempt rather than a replay of a completion nobody reached.
       expect(served.requests.every((request) => !request.accepted)).toBe(true);
-      expect(yield* retainedRepositories(database)).toHaveLength(0);
+      expect(yield* savedRepositories(database)).toHaveLength(0);
       const events = yield* compositionEvents(database);
       expect(events).toHaveLength(1);
       expect(JSON.stringify(events[0])).toContain('"status":"err"');
@@ -371,7 +371,7 @@ describe("workflow ambient Git authentication", () => {
 
       // Two live provider invocations — the Repository's creation and the
       // Push's reconciliation — and therefore two sessions, each for this
-      // Repository's own retained locator.
+      // Repository's own saved locator.
       expect(recorded.locators).toEqual([served.locator, served.locator]);
 
       // Three commands left the materialization: the clone, the push and the
@@ -439,7 +439,7 @@ describe("workflow ambient Git authentication", () => {
       expect(forSecond.every((request) => !request.accepted)).toBe(true);
       // And its own word, because acquisition is what the classification reads.
       expect(causedBy(failure, isRepositoryRefusal)?.reason).toBe("authentication-unavailable");
-      expect((yield* retainedRepositories(database)).map((entry) => entry.record.name)).toEqual([
+      expect((yield* savedRepositories(database)).map((entry) => entry.record.name)).toEqual([
         "reachable",
       ]);
     });
@@ -495,19 +495,19 @@ describe("workflow ambient Git authentication", () => {
         countingOptions(counting),
       );
 
-      // Rendered output, every journaled event, the retained records, the whole
+      // Rendered output, every journaled event, the saved records, the whole
       // command list this run issued, and the Workspace's own configuration.
       // Each is reduced to a verdict before it is asserted.
       expect(carriesCredential(String(output))).toBe(false);
       expect(carriesCredential(JSON.stringify(yield* compositionEvents(database)))).toBe(false);
       expect(carriesCredential(JSON.stringify(yield* gitHostOutcomes(database)))).toBe(false);
-      expect(carriesCredential(JSON.stringify(yield* retainedRepositories(database)))).toBe(false);
+      expect(carriesCredential(JSON.stringify(yield* savedRepositories(database)))).toBe(false);
       expect(carriesCredential(JSON.stringify(counting.counters.commands))).toBe(false);
 
-      const [retained] = yield* retainedRepositories(database);
+      const [saved] = yield* savedRepositories(database);
       const config = yield* workspaceText(
         database,
-        `${retained?.record.checkoutPath ?? ""}/.git/config`,
+        `${saved?.record.checkoutPath ?? ""}/.git/config`,
       );
       expect(carriesCredential(config)).toBe(false);
     });
@@ -654,8 +654,8 @@ describe("workflow ambient authentication classification", () => {
       expect(redirected.every((request) => !request.credentialed)).toBe(true);
       expect(redirected).toHaveLength(0);
 
-      // Nothing was retained from a transport that ended up elsewhere.
-      expect(yield* retainedRepositories(database)).toHaveLength(0);
+      // Nothing was saved from a transport that ended up elsewhere.
+      expect(yield* savedRepositories(database)).toHaveLength(0);
     });
   });
 
@@ -678,7 +678,7 @@ describe("workflow ambient authentication classification", () => {
       // helper was ever reached says nothing: what this run knows is that the
       // locator could not be used.
       expect(causedBy(failure, isRepositoryRefusal)?.reason).toBe("invalid-locator");
-      expect(yield* retainedRepositories(database)).toHaveLength(0);
+      expect(yield* savedRepositories(database)).toHaveLength(0);
     });
   });
 
@@ -750,7 +750,7 @@ describe("workflow ambient authentication containment", () => {
    * does run the planted helper. A setting Git would have ignored anyway would
    * prove nothing.
    */
-  it("cannot be replaced by a credential helper planted in retained configuration", function* () {
+  it("cannot be replaced by a credential helper planted in saved configuration", function* () {
     const root = yield* useStorageRoot();
     const witness = yield* useTempDirectory("xmd-ambient-helper-");
     const sentinel = `${witness}/helper-ran`;
@@ -927,11 +927,11 @@ describe("workflow ambient authentication cancellation", () => {
       expect(yield* present(`${gate}.started`)).toBe(true);
       expect(yield* home.operations()).toEqual(["get"]);
 
-      // No transport was opened, nothing was retained, and the working
+      // No transport was opened, nothing was saved, and the working
       // directory the acquisition needed is gone.
       expect(served.requests).toHaveLength(0);
       expect(subcommands(counting.counters)).not.toContain("clone");
-      expect(yield* retainedRepositories(database)).toHaveLength(0);
+      expect(yield* savedRepositories(database)).toHaveLength(0);
       expect(watcher.surviving()).toEqual([]);
     });
   });
@@ -1002,7 +1002,7 @@ describe("workflow ambient authentication cancellation", () => {
       // completion — a cancelled clone is not a repository this run has.
       expect(recorded.opened).toEqual([served.locator]);
       expect(recorded.disposed).toEqual([served.locator]);
-      expect(yield* retainedRepositories(database)).toHaveLength(0);
+      expect(yield* savedRepositories(database)).toHaveLength(0);
       expect(watcher.surviving()).toEqual([]);
 
       // What must not happen is an authentication artifact being removed while
@@ -1111,7 +1111,7 @@ describe("workflow ambient authentication cancellation", () => {
       });
       expect(recorded.opened).toHaveLength(1);
 
-      // Nothing was retained, so the next attempt is a first attempt — and it
+      // Nothing was saved, so the next attempt is a first attempt — and it
       // opens its own session rather than continuing under one nobody re-proved.
       block = false;
       const output = yield* runDocument(database, source, countingOptions(counting));
@@ -1176,7 +1176,7 @@ describe("workflow ambient authentication mechanisms", () => {
     expect(session.mechanism).toBe("none");
   });
 
-  it("fixes the settings a retained repository could otherwise name", function* () {
+  it("fixes the settings a saved repository could otherwise name", function* () {
     const home = yield* useInvokingHome([]);
     const session = yield* denoGitAuthentication({
       ambient: home.ambient,
@@ -1277,7 +1277,7 @@ describe("workflow GitHub source sessions", () => {
     const counting = counted("from-host");
     // Constructed and kept, exactly as installed middleware keeps one, and
     // never opened. A source that read a credential to exist would be an
-    // identity retained for a middleware's whole lifetime.
+    // identity saved for a middleware's whole lifetime.
     gitHubSource(counting.access);
     expect(counting.reads).toEqual([]);
     expect(counting.sent).toEqual([]);

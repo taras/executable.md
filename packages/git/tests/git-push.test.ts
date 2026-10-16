@@ -5,7 +5,7 @@
  * remote and a real `git`, because the test checks two places at once: what the
  * other end of the transport holds afterwards, and what this run's journal says
  * it published. Rendered text proves neither — a push renders nothing — so
- * every test here reads the remote's refs and the retained reconciliation
+ * every test here reads the remote's refs and the saved reconciliation
  * record.
  *
  * Nothing here reaches a network. A remote is a bare repository in a temporary
@@ -60,8 +60,8 @@ import {
   headCommit,
   inCheckout,
   raised,
-  retainedRepositories,
-  retainedWorktrees,
+  savedRepositories,
+  savedWorktrees,
   runWorkflowDocument,
   subcommands,
   survivingRoots,
@@ -200,7 +200,7 @@ const FORGED: RepositorySelection = Object.freeze({
 });
 
 /**
- * A test-owned component that writes bytes into the retained checkout.
+ * A test-owned component that writes bytes into the saved checkout.
  *
  * Reaches past every component on purpose, and mid-document on purpose: what it
  * plants has to be there before `<Git.Push>` expands, and `<File>` renders its
@@ -239,7 +239,7 @@ function plant(
 }
 
 /**
- * A test-owned component that edits the retained checkout's object graph.
+ * A test-owned component that edits the saved checkout's object graph.
  *
  * Mid-document on purpose: what it writes has to be there when `<Git.Push>`
  * expands, and only a fixture can plant a symbolic link or an alternates file
@@ -292,7 +292,7 @@ function isProviderError(value: unknown): value is GitCompositionProviderError {
 
 /** What the run retains for its one Repository, so a suite can read a checkout. */
 function* checkoutPath(database: WorkflowRunDatabase): Operation<string> {
-  const [repository] = yield* retainedRepositories(database);
+  const [repository] = yield* savedRepositories(database);
   if (repository === undefined) {
     throw new Error("the run retains no Repository");
   }
@@ -326,7 +326,7 @@ describe("workflow Git.Push", () => {
       expect(record?.decision).toBe("performed");
       expect(record?.preState).toEqual({ remoteCommit: null });
       expect(record?.observations).toEqual({ remoteCommit: head.commit });
-      const [repository] = yield* retainedRepositories(database);
+      const [repository] = yield* savedRepositories(database);
       const identity = repository?.record;
       expect(record?.result).toEqual({
         repository: {
@@ -393,7 +393,7 @@ describe("workflow Git.Push", () => {
         ),
       );
 
-      const [worktree] = yield* retainedWorktrees(database, "project");
+      const [worktree] = yield* savedWorktrees(database, "project");
       const head = yield* headCommit(database, worktree?.checkoutPath ?? "");
       expect(head.branch).toBe("feature/new");
       expect(remoteBranch(remote, "feature/new")).toBe(head.commit);
@@ -486,7 +486,7 @@ describe("workflow Git.Push", () => {
       // parent of the one that replaced it.
       expect(head.parents).not.toContain(published1);
 
-      // The predecessor is retained, and so is the fact that made publishing
+      // The predecessor is saved, and so is the fact that made publishing
       // over it an advance rather than a replacement.
       expect(second?.decision).toBe("performed");
       expect(second?.preState).toEqual({ remoteCommit: published1, relation: "ancestor" });
@@ -869,7 +869,7 @@ describe("workflow Git.Push", () => {
     });
   });
 
-  it("fails when the working directory is inside no retained checkout", function* () {
+  it("fails when the working directory is inside no saved checkout", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
 
@@ -1013,7 +1013,7 @@ describe("workflow Git.Push", () => {
 
 describe("workflow Git.Push containment", () => {
   /**
-   * A checkout's own configuration is retained document data, not an
+   * A checkout's own configuration is saved document data, not an
    * instruction to the run.
    *
    * Every setting planted here is one that would change where this push goes,
@@ -1026,7 +1026,7 @@ describe("workflow Git.Push containment", () => {
    * pushed from the ordinary way, and that one is redirected and refused. A
    * planted configuration Git would have ignored anyway would prove nothing.
    */
-  it("publishes to the retained locator despite a hostile checkout configuration", function* () {
+  it("publishes to the saved locator despite a hostile checkout configuration", function* () {
     const root = yield* useStorageRoot();
     const witness = yield* useTempDirectory("xmd-push-hook-");
     const sentinel = `${witness}/pre-push-ran`;
@@ -1067,7 +1067,7 @@ describe("workflow Git.Push containment", () => {
 
       const checkout = yield* checkoutPath(database);
       const head = yield* headCommit(database, checkout);
-      // The retained locator decided the destination, not `pushurl` and not the
+      // The saved locator decided the destination, not `pushurl` and not the
       // rewrite: the real remote has the branch and the decoy has nothing.
       expect(remoteBranch(remote, BRANCH)).toBe(head.commit);
       expect(remoteBranch(decoy, BRANCH)).toBe(undefined);
@@ -1101,7 +1101,7 @@ describe("workflow Git.Push containment", () => {
    * What public Git-host middleware is shown, and what it can do with it.
    *
    * One frozen routing request describing the detached ask, and nothing that is
-   * a capability. The object source, the retained locator, the control
+   * a capability. The object source, the saved locator, the control
    * repository and every host path stay in the provider's own closure — so a
    * handler cannot redirect the push, and a value it returns cannot become the
    * effect's outcome.

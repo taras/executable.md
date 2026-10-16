@@ -3,7 +3,7 @@
  * Operations without an authored name can use this to identify their position.
  *
  * The count advances on replayed yields and committed live yields. The replay
- * cursor alone stops at the retained prefix and would collide for every
+ * cursor alone stops at the saved prefix and would collide for every
  * operation in a live suffix.
  *
  * This is derived observation, not durable state or permission. Decisions that

@@ -104,8 +104,8 @@ function parseCheckpoint(value: unknown): AgentPromptCheckpoint {
 /**
  * Read a checkpoint out of a value nobody has authenticated, or none.
  *
- * The total counterpart of the parser above, for a reader holding retained
- * bytes rather than something a provider just handed over. A retained
+ * The total counterpart of the parser above, for a reader holding saved
+ * bytes rather than something a provider just handed over. A saved
  * checkpoint that does not read back is not a checkpoint, and a caller that
  * needed one says so itself — this reports absence and refuses nothing.
  */

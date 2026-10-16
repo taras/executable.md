@@ -83,7 +83,7 @@ describe("workflow Issue scenarios", () => {
       throw new Error("the attempt journaled no Issue effect");
     }
 
-    // The retained effect names the authored `<Issue>` element in the staged
+    // The saved effect names the authored `<Issue>` element in the staged
     // document itself — diagnostic data beside the identity, computed here
     // from the checked-in source rather than trusted from the journal.
     const path = fileURLToPath(

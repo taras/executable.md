@@ -1,5 +1,5 @@
 /**
- * The History band: every retained position, on five rows of measured rail.
+ * The History band: every saved position, on five rows of measured rail.
  *
  * A map of the whole recorded order, not of the part a reader has reached.
  * The selection sits on it in amber; the head sits below its end. Content

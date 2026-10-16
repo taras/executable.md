@@ -34,7 +34,7 @@ import { Err, Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
 
-import { retainedSource, useNormalizedOutput } from "@executablemd/core";
+import { savedSource, useNormalizedOutput } from "@executablemd/core";
 import type { IdentityComponent } from "@executablemd/core/host";
 import { executeInstalled } from "@executablemd/core/host";
 import type { DurableStream } from "@executablemd/durable-streams";
@@ -223,7 +223,7 @@ export function* runUpgrade(run: UpgradeRun): Operation<Result<void>> {
 
       const execution = yield* executeInstalled(
         {
-          ...retainedSource(UPGRADE_COMMAND_IDENTITY, source),
+          ...savedSource(UPGRADE_COMMAND_IDENTITY, source),
           stream: run.stream,
           // No repository component search. What the document may name is what
           // this command declares, so a file in the caller's tree cannot answer

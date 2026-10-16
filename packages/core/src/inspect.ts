@@ -71,7 +71,7 @@ export interface DocumentInfo {
    * Every target the document addresses, as canonical encoded fragments without
    * the document path or a leading `#`, in document order.
    *
-   * Duplicates are retained: two sections that canonicalize to the same path
+   * Duplicates are saved: two sections that canonicalize to the same path
    * are an ambiguity a caller can see rather than one a selector resolves
    * arbitrarily.
    */

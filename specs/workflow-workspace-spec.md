@@ -4,12 +4,12 @@
 - **Audience:** Workflow host, provider and component implementors
 
 This specification defines the observable contract of `xmd workflow`: a
-provider-neutral retained environment in which readable Markdown procedures run
+provider-neutral saved environment in which readable Markdown procedures run
 as repeatable workflows. It complements `architecture.md`, which owns the
 implementation invariants. Start with [A document running](../architecture.md#a-document-running)
 for the ordinary/workflow and replay model. This document owns lifecycle
 commands, workflow profiles and observable behavior; [Workflow runs](workflow-spec.md)
-owns retained identity and storage, and the [Executable MDX specification](executable-mdx-spec.md)
+owns saved identity and storage, and the [Executable MDX specification](executable-mdx-spec.md)
 owns authored syntax, bindings and ordinary component behavior.
 
 ## 1. First workflow
@@ -108,7 +108,7 @@ on every runtime.
 
 ### 2.2 `xmd workflow`
 
-`xmd workflow` executes supported operations against a retained constrained
+`xmd workflow` executes supported operations against a saved constrained
 environment.
 
 - Every run owns an implicit root Workspace.
@@ -171,7 +171,7 @@ whatever the same glob would name against a later checkout.
 
 Every source check happens under the executor lock and **before** stale
 recovery, a new document-execution record, Workspace attachment, journal replay
-or root import. A run's retained content is re-derived from its own store, so no
+or root import. A run's saved content is re-derived from its own store, so no
 host supplies a source capability and nothing reaches a repository to begin,
 fork or stage a run.
 
@@ -237,7 +237,7 @@ xmd workflow start prepare-release.md
 Each invocation streams its rendered document output to standard output while
 executing. Run identity and lifecycle metadata go to standard error.
 
-`resume` names the exact retained run and supplies neither the document nor its
+`resume` names the exact saved run and supplies neither the document nor its
 root props again:
 
 ```sh
@@ -256,7 +256,7 @@ source-bundle run by its entrypoint and bundle hash, with its exact target when
 it has one, and reports no base and no fabricated commit for it.
 
 `start` executes until completion, failure, suspension or interruption.
-`resume` continues an interrupted or ready suspended run under its retained
+`resume` continues an interrupted or ready suspended run under its saved
 definition and normalized props. A document path locates a definition; it never
 selects a previous run implicitly.
 
@@ -294,7 +294,7 @@ xmd workflow start \
 
 Starting an unused ID creates its run. Compatible reuse addresses the same run.
 The immutable definition and normalized props must agree; incompatible reuse
-fails. A completed compatible run performs a full replay and emits its retained
+fails. A completed compatible run performs a full replay and emits its saved
 output without attaching the Workspace or external providers.
 
 Only one workflow executor advances a run. It acquires one scope-owned executor
@@ -330,7 +330,7 @@ An unfinished execution left after its host dies is not stale because time
 passed or a PID disappeared. A new workflow executor proves staleness by
 acquiring the released executor lock. For a `running` run it atomically closes
 the exact execution and publishes `interrupted` before beginning another when
-retained history has no root Close. A Close restores its canonical terminal
+saved history has no root Close. A Close restores its canonical terminal
 state. A `cancel` command that acquires the executor lock instead publishes
 `cancelled` without beginning another execution, also only when no root Close
 already won.
@@ -357,11 +357,11 @@ The initial statuses are:
 
 Expected transient recovery belongs in document middleware or an effect policy.
 An uncaught root failure is terminal. Reusing its compatible ID replays the
-retained failure rather than silently retrying it. A corrected document starts
+saved failure rather than silently retrying it. A corrected document starts
 a new run or an eligible history fork. A host-settlement failure may have no
-root Close; compatible reuse reports that retained failed state and reason
+root Close; compatible reuse reports that saved failed state and reason
 without entering replay. Neither kind is advanced under the same ID.
-A cancelled run reports its retained state without entering replay under either
+A cancelled run reports its saved state without entering replay under either
 command.
 
 ### 3.5 Suspension releases the executor lock
@@ -389,7 +389,7 @@ copies through stable contextual routing. That route carries a suspension
 notice, not an answer: a middleware handler may refuse or suppress its own
 descendant's call, but returning a value cannot make an unanswered
 `suspendFor()` continue. The executor accepts a notice only at the exact current
-durable position of the matching retained request.
+durable position of the matching saved request.
 
 With no delivered input, `suspendFor()` remains pending while the workflow host
 halts the document execution as structured control flow. It throws no document
@@ -406,7 +406,7 @@ host installs beside the composition components, for a live or partial
 attachment only; it asks the same question core's does and writes no durable
 record of its own, because a durable wait cannot sit inside another durable
 operation. The host's provider calls `suspendFor()` with the rendered message as
-the request and the compiled schema as the response schema, so what is retained
+the request and the compiled schema as the response schema, so what is saved
 is what the person was asked, and a delivered value is judged against the schema
 the document itself compiled. An `<Answers>` region installs nearer and answers
 first, so a document that already knows the answer never suspends. `resume`
@@ -419,7 +419,7 @@ Providers remain lazy and are not contacted for replayed effects.
 #### Typed answer delivery
 
 Delivery is an operation separate from execution. Its public correlation
-boundary is the retained suspension ID and response schema:
+boundary is the saved suspension ID and response schema:
 
 ```sh
 xmd workflow answer [--secret-detection|--no-secret-detection] <run-id> <suspension-id> <json>
@@ -436,9 +436,9 @@ workflow answer: <run-id> (<suspension-id>)
 ```
 
 A value is accepted only when the run is `suspended`, its stop reason names a
-retained `suspension_request` event carrying the supplied suspension ID, and the
-value satisfies the response schema that request retained. Secret detection
-applies to the retained state and the answer event it would become, on the same
+saved `suspension_request` event carrying the supplied suspension ID, and the
+value satisfies the response schema that request saved. Secret detection
+applies to the saved state and the answer event it would become, on the same
 terms as durable journal persistence, and is on unless `--no-secret-detection`
 disables it for that delivery. Duplicate, consumed, wrong-run, wrong-request,
 late, invalid, cancelled-run and missing-run delivery is refused, and a refusal
@@ -447,12 +447,12 @@ nor a secret match in its diagnostic.
 
 `resume` keeps its grammar: exactly one run id, no answer flag and no untyped
 generic answer. On a later explicit resume, `suspendFor()` continues only from
-retained pending answer state for the exact current unanswered request, and
+saved pending answer state for the exact current unanswered request, and
 publishes one ordinary durable `suspension_answer` Yield before returning the
 value to the document. Consuming that pending state and appending that Yield are
 one database transaction: a crash or an injected failure before it commits
 leaves the answer pending and publishes nothing, and replay after it commits
-restores the retained answer event without consuming or publishing again.
+restores the saved answer event without consuming or publishing again.
 
 This suspension and executor-lock-release contract folds issue #322 into #367;
 #322 is not a separate implementation prerequisite. Scheduling — automatic
@@ -473,12 +473,12 @@ Explicit cancellation makes a run without a live workflow executor terminal.
 It retains the journal and Workspace for inspection, training and an eligible
 history fork. It does not undo completed local or external effects.
 
-Cancellation follows the retained status:
+Cancellation follows the saved status:
 
 - `running` with a live workflow executor refuses without mutation and tells
   the caller to interrupt the foreground process;
 - stale `running` acquires the executor lock and becomes `cancelled` when no
-  retained root Close already proves completion or failure;
+  saved root Close already proves completion or failure;
 - `suspended` and `interrupted` acquire the executor lock and become
   `cancelled` without starting an execution;
 - `cancelled` succeeds idempotently; and
@@ -490,7 +490,7 @@ unfinished stale execution when one exists, and publishes `cancelled`
 atomically. No live scope is halted, watched or polled by another process, and
 there is no request or
 acknowledgement to outlive either process. A lifecycle storage refusal leaves
-the retained state unchanged and reports no uncommitted terminal status.
+the saved state unchanged and reports no uncommitted terminal status.
 
 Ctrl-C remains foreground interruption: the workflow executor attempts every
 finalizer, publishes `interrupted` and releases the executor lock. A teardown
@@ -517,7 +517,7 @@ no status line.
 
 **What an execution reports.** `start`, `resume` and `fork` each publish two
 lines on standard error: the run identity once the run exists, and the status
-once it is retained.
+once it is saved.
 
 ```text
 workflow run: <run-id>
@@ -535,13 +535,13 @@ workflow status: suspended
 ```
 
 The suspension line is published on the same terms as the status line: after the
-settlement transition commits, never before. A wait nothing retained is not one
+settlement transition commits, never before. A wait nothing saved is not one
 a caller can answer, and a refused settlement publishes neither line. The
-identifier is the one the retained `suspension_request` event carries, so what
+identifier is the one the saved `suspension_request` event carries, so what
 the caller is told to answer and what the run is waiting on are the same
 suspension. The status line stays the closing word on every outcome.
 
-**A status line says what was retained**, so a lifecycle transition storage
+**A status line says what was saved**, so a lifecycle transition storage
 refused publishes none. Finishing the document-execution record and publishing
 the run state are one transaction; no command observes one without the other.
 What a refusal costs the exit code depends on when it happened:
@@ -557,7 +557,7 @@ What a refusal costs the exit code depends on when it happened:
   `interrupted` rather than saying something untrue about it.
 
 In both cases the refusal is authoritative and stops what depends on it. Only
-the status and a categorical host reason are retained; a storage diagnostic
+the status and a categorical host reason are saved; a storage diagnostic
 reaches the caller and is never written into the run.
 
 Management commands report their own request. `workflow cancel <id>` exits zero
@@ -611,7 +611,7 @@ line is the closing word either way.
 A status line is published only after the transaction that finishes the
 document-execution record and publishes the run state has committed. What a
 refusal costs the exit code is §3.7's; what it costs the *record* is the same
-everywhere: neither half is retained, the unpersisted status is neither
+everywhere: neither half is saved, the unpersisted status is neither
 published nor claimed, and a document failure that also occurred is still
 reported.
 
@@ -627,7 +627,7 @@ Source is proved first, under the executor lock and before every one of those
 (§3.1), so a run whose source cannot be obtained is refused for that with its
 lifecycle and journal untouched. Reusing a
 compatible id through `start` is a separate rule: it replays a failed run's
-retained failure, and that does not make the run eligible for `resume`.
+saved failure, and that does not make the run eligible for `resume`.
 
 - `start` takes exactly one Markdown document reference — a path, optionally
   followed by `#` and one target selector, with a literal `#` in a filename
@@ -643,7 +643,7 @@ retained failure, and that does not make the run eligible for `resume`.
 - `fork` takes the run it continues, the committed event it continues from and
   the definition it continues with, and every one of the three is required. Its
   generated `--props-*` arguments are the candidate definition's and merge over
-  the props the source retained, and `--at` belongs to it alone (§11).
+  the props the source saved, and `--at` belongs to it alone (§11).
 - The document filesystem (§10.1), Repository/Worktree/Dir composition (§6),
   and the constrained ACP-only Agent profile (§8) are capabilities a run has.
   Git operations, native Agent session launch, Worker Shell and native services
@@ -666,7 +666,7 @@ Runs live beneath `~/.xmd/runs` unless `XMD_WORKFLOW_RUNS` names another
 absolute directory. Where a run's database is on a host is arrangement, not
 identity (§5.2).
 
-Status, list and history for retained runs are built (§4), and so are cancel and
+Status, list and history for saved runs are built (§4), and so are cancel and
 delete, and export. Artifact export and artifact status/history are built; the
 artifact-backed fork is specified in `specs/xmd-artifact-spec.md` and remains
 unbuilt.
@@ -681,7 +681,7 @@ same wait. Typed answer delivery is what ends such a wait, and `xmd workflow
 answer` is built by #300; scheduling is not, so a wait ends when somebody
 resumes the run rather than on its own. Fork is built (§11): a run's history can
 be continued under a changed definition from any committed checkpoint the
-retained events allow.
+saved events allow.
 
 The component bundle is built: a root declares one, `start` reads it from beside
 the root, the definition retains its bytes, and `resume` and completed replay
@@ -720,7 +720,7 @@ Human output is the default; `--json` returns the same data structurally.
 An artifact source first passes the complete read-only recognition and manifest
 validation in `specs/xmd-artifact-spec.md`. It then projects the same lifecycle
 snapshot and history shapes, with the artifact identity and artifact frontier
-added. Artifact inspection never makes the file a discovered retained run and
+added. Artifact inspection never makes the file a discovered saved run and
 never creates a SQLite sidecar.
 
 The projection is the same whichever profile the artifact holds. An artifact
@@ -740,7 +740,7 @@ though it were complete, and it changes no candidate.
 
 A crash does not prevent read-only inspection of the last committed state.
 When SQLite requires rollback recovery, inspection reads a privately recovered
-copy and leaves the retained database and journal unchanged. It processes one
+copy and leaves the saved database and journal unchanged. It processes one
 candidate at a time and returns success only after removing its scratch copy.
 Failure to produce or remove that copy is an inspection-recovery refusal,
 separate from damage revealed in the recovered run. Recovery obtains neither an
@@ -755,7 +755,7 @@ xmd workflow history release-1.4 --forkable
 xmd workflow history release-1.4 --json
 ```
 
-`history --json` exposes every retained protocol event in append order and its
+`history --json` exposes every saved protocol event in append order and its
 stable public event ID. `fork --at` accepts eligible IDs under §11. Human
 history presents durable operations without repeating protocol event kinds:
 
@@ -768,11 +768,11 @@ EVENT                                 OPERATION       SOURCE            RESULT  
 Outcome: completed at 3c9f…, Workspace 4c5d…
 ```
 
-The identifiers are the retained event and Workspace-root identities, shortened
+The identifiers are the saved event and Workspace-root identities, shortened
 here for the page. A row with no authored source shows that it has none rather
 than a location the command derived.
 
-Each entry contains the exact retained event ID and protocol event, the
+Each entry contains the exact saved event ID and protocol event, the
 Workspace root associated with that row, its forkability, an optional normalized
 authored source, and — for a row a fork inherited — the source run and source
 event it came from. Yield descriptions carry it under the stable namespaced
@@ -793,7 +793,7 @@ visible with the corresponding coroutine. A suspended, interrupted or
 cancelled run with no root Close says that no canonical document outcome was
 recorded. History never reconstructs a filtered value from the Workspace or
 provider, materializes the associated root, mixes rendered stdout into the
-trace, removes a retained event from JSON, or synthesizes a journal event.
+trace, removes a saved event from JSON, or synthesizes a journal event.
 
 `--json` always includes `forkability`, and `--forkable --json` returns the same
 JSON. `--forkable` adds `FORKABLE` and `BLOCKERS` to human output and keeps
@@ -815,7 +815,7 @@ introduced it, under one of four stable codes: `workspace-root-unavailable`,
 `unsupported-effect`. An effect type is inheritable because it is recognized,
 never because it failed to match something, so history a later build wrote
 reports `unsupported-effect` rather than a checkpoint this build is guessing
-about. Blocker output carries stable codes and retained event IDs and nothing
+about. Blocker output carries stable codes and saved event IDs and nothing
 else: no filtered values, props, provider diagnostics or secrets. Candidate
 definition and prop divergence are reported by `fork`, not here.
 
@@ -859,7 +859,7 @@ The run's own record is the part of that database the lifecycle reads. It holds
 the immutable definition and the normalized props; the current status and its
 stop reason; one document-execution record per start and per resume; replaceable
 retrieval metadata; and the filtered journal. It holds no base and no pinned
-commit: a run starts from exact retained bytes rather than from a repository
+commit: a run starts from exact saved bytes rather than from a repository
 state, so a member naming one would be a claim about a repository the run never
 had.
 
@@ -867,7 +867,7 @@ The immutable definition is a source bundle: a hash algorithm, a bundle hash, a
 logical entrypoint, and a canonically ordered manifest holding each source's
 logical path, its domain-separated content hash and its byte length. Its
 component bundle maps each declared name onto a logical path the same manifest
-retains. The bytes behind every path are retained with the run, so nothing has
+retains. The bytes behind every path are saved with the run, so nothing has
 to be fetched at all; an optional credential-free provenance observation lives
 in a replaceable metadata boundary, free of credentials, reauthorized by the
 host before use, excluded from the comparison that decides whether a reused run
@@ -883,7 +883,7 @@ component bundle, and the normalized props, canonically. The comparison covers
 the bundle hash, the entrypoint, the complete canonical source manifest, the
 component mapping and the exact presence and value of the target — the manifest
 whole, even though the bundle hash commits to it, because a hash is not a reason
-to admit a retained structure that disagrees with itself.
+to admit a saved structure that disagrees with itself.
 
 A changed component name, path or component set conflicts as `definition`, and
 the refusal names that field rather than any value behind it. Status, stop reason, retrieval metadata, provenance,
@@ -891,7 +891,7 @@ timestamps, document executions and journal records are excluded, so a completed
 run asked for again is found rather than refused.
 
 A stop reason is a categorical host code or a reference to an already-filtered
-journal event. Arbitrary failure text is not retained beside the journal that
+journal event. Arbitrary failure text is not saved beside the journal that
 filtered it, and `history` therefore exposes no value the journal's security
 policy has not already seen.
 
@@ -913,7 +913,7 @@ retried operation or region and belongs to the journal.
 
 A run is found by its public ID alone, without consulting a second registry.
 The database's location on a host is arrangement rather than identity, so the
-run ID is also retained inside the run and checked: storage holding a different
+run ID is also saved inside the run and checked: storage holding a different
 run than its location implies is reported as a distinct failure.
 
 Absent, conflicting, foreign, version-incompatible, damaged and unparseable
@@ -929,7 +929,7 @@ providers behind it (§2.1). What an author writes — the forms, the props, wha
 `as` binds, and the refusal vocabulary — is the same either way; what differs
 is what a checkout *is*.
 
-Under a workflow run a checkout is retained Workspace state: creation identity
+Under a workflow run a checkout is saved Workspace state: creation identity
 is a durable effect, placement is Workspace-relative, and a completed effect
 restores from the journal. That is what the rest of this section describes.
 
@@ -939,7 +939,7 @@ by a closed version 1 sidecar and held for one document execution by an
 exclusive non-blocking advisory lock; reuse compares creation identity alone
 and never resets, cleans, fetches, repairs or deletes; and a Worktree written
 outside a lexical `<Repository>` belongs to the ambient Repository the command
-was run in. Nothing there is retained, replayed or forkable, and none of the
+was run in. Nothing there is saved, replayed or forkable, and none of the
 durability this section states applies to it.
 
 What both share is the composition value a component observes: a Repository
@@ -1030,7 +1030,7 @@ A locator is admitted before it is used, and admission is an allowlist: an
 `https`, `http`, `ssh`, `git` or `file` URL carrying no userinfo, Git's
 `user@host:path` form, or an absolute local path. A locator carrying a
 credential is refused rather than rewritten, because rewriting it would retain a
-run nobody asked for. What is retained beside the record is the admitted locator
+run nobody asked for. What is saved beside the record is the admitted locator
 itself; what travels through the journal, a binding or a diagnostic is its
 fingerprint.
 
@@ -1126,7 +1126,7 @@ only cwd. It neither selects nor replaces the Repository in scope, so a Git
 operation inside a directory beneath a selected checkout still addresses that
 same Repository.
 
-Under the interactive `xmd repl` the ensure is retained where the target is
+Under the interactive `xmd repl` the ensure is saved where the target is
 inside the checkout the entry was started in, so continuing an interrupted entry
 answers a completed ensure from its record and asks the provider for nothing
 (`specs/repl-spec.md`). Everything stated above is unchanged by that: the ensure
@@ -1170,7 +1170,7 @@ describes. Under an ordinary `xmd run` the same authored transitions happen
 directly against the selected checkout: no transaction encloses them, nothing
 rolls back, nothing replays, and no such claim is made. Section 7.3's fixed
 Git identity is a workflow run's, for a reason that inverts here — a workflow's
-retained state must not depend on whose machine made it, and an ordinary run's
+saved state must not depend on whose machine made it, and an ordinary run's
 commit lands in that person's own checkout. So an ordinary commit records the
 invoking user's own effective identity, and a host that can name none refuses
 rather than substituting one. Push keeps the
@@ -1216,10 +1216,10 @@ written in `<Dir path="packages/core">` still operates on the whole checkout tha
 directory belongs to, and that directory is only where the operation runs.
 
 Neither observation admits anything. The Repository is compared with the row
-the run retained under that name, member for member, and the working directory
+the run saved under that name, member for member, and the working directory
 has to be a real directory inside one of the checkouts the run retains for it.
-No enclosing `<Repository>` at all, a Repository that is not the retained one, a
-directory inside no retained checkout, and retained state that no longer agrees
+No enclosing `<Repository>` at all, a Repository that is not the saved one, a
+directory inside no saved checkout, and saved state that no longer agrees
 with the identity naming it are failures of the run rather than outcomes: no Git
 runs, nothing is published, and `<PrintErrors>` cannot print them. The same is
 true of a native Git failure the provider has no word for — the refusals are a
@@ -1231,7 +1231,7 @@ evidence: the checkout it ran in, the requested and resolved branch, the
 requested base and the commit a created branch actually started from, and the
 branch, commit, HEAD tree and index tree the checkout held before and after.
 
-A retained result is read back for the invocation that recorded it, and one whose
+A saved result is read back for the invocation that recorded it, and one whose
 identity, branch, base or transition does not describe that invocation is damage
 rather than history. A Worktree's name and its path are one identity, held to the
 placement that produced them; and switching to the branch a checkout is already
@@ -1260,7 +1260,7 @@ than read as "here" or as "everything".
 A pathspec must be well-formed text. A string is UTF-16 code units and need not
 be well-formed, but the way to Git is UTF-8, and an unpaired surrogate becomes
 U+FFFD in transit — so what Git received would differ from what the run
-retained. A pathspec holding one is refused as malformed input, before any effect
+saved. A pathspec holding one is refused as malformed input, before any effect
 exists and before Git runs, wherever the request enters: a document's element and
 a direct call on the composition Api are held to the same boundary. Nothing is
 normalized or respelled to make one fit, and every well-formed string — U+FFFD
@@ -1276,11 +1276,11 @@ that contains it.
 Add renders nothing, binds nothing and takes no content. What it retains is
 evidence: the checkout it ran in, the pathspecs exactly as they were given, and
 the branch, commit, HEAD tree and index tree the checkout held before and after.
-Staging moves the index and nothing else, so a retained result whose branch,
+Staging moves the index and nothing else, so a saved result whose branch,
 commit or HEAD tree changed describes a transition Add does not make, while its
 index tree may have moved or not — staging what is already staged changes
 nothing. What Git matched is not enumerated: naming files it discovered would put
-content beyond the document's own pathspecs into retained history.
+content beyond the document's own pathspecs into saved history.
 
 Failure follows §7.1, with four refusals of its own. A pathspec that matched no
 files, one that selects an ignored path — Add has no force control — one that
@@ -1334,7 +1334,7 @@ run retains is a digest of the bytes it committed.
 
 **Time.** The provider captures one instant while the effect runs, truncates it
 to whole seconds and records it as both author and committer time. There is no
-prop and no caller-supplied time, and a replay restores the retained second
+prop and no caller-supplied time, and a replay restores the saved second
 rather than reading a clock.
 
 **What it commits.** Exactly the index. There is no `paths`, no implicit staging,
@@ -1349,7 +1349,7 @@ length of its exact bytes, the parent, tree and commit object ids, the second it
 recorded, and the branch, commit, HEAD tree and index tree the checkout held
 before and after.
 
-A retained result is read back for the invocation that recorded it. Beyond that
+A saved result is read back for the invocation that recorded it. Beyond that
 evidence it describes an object graph a commit of the index can have: exactly one
 parent, which is the commit the checkout was on; a tree that is the one the index
 described; and a checkout that ends on that commit with both HEAD and the index
@@ -1439,8 +1439,8 @@ Push is explicit. Neither Commit nor PullRequest publishes implicitly.
 nothing to publish. It is decided from the checkout's own state, before a
 Git-host effect exists and before any remote is contacted, and it is a
 `unnamed-branch` refusal a document can act on. Failure otherwise follows §7.1:
-no Repository in scope, a Repository that is not the retained one and a
-directory inside no retained checkout are failures of the run.
+no Repository in scope, a Repository that is not the saved one and a
+directory inside no saved checkout are failures of the run.
 
 **What reaches the Git host, and how.** The network operation never runs through
 the selected checkout's own `.git/config`. That file is inside the Workspace the
@@ -1450,7 +1450,7 @@ signing program are all things it could then name. The provider instead runs the
 transport in a disposable repository of its own, configured by nothing but its
 own creation, which reads the selected checkout's object database through a
 read-only alternate — the authenticated private object-source attachment of
-§10.2. The transport destination is the exact private retained locator, not a
+§10.2. The transport destination is the exact private saved locator, not a
 mutable `remote.origin.url` or `pushurl`, and the push carries one explicit
 refspec, no upstream option and no force option.
 
@@ -1498,11 +1498,11 @@ The pre-state is what the destination held, in one of exactly three shapes:
 ```
 
 The relation is the provider's attestation, not the traversal that produced it:
-no Git object, path or command output is retained for it. The observations and
+no Git object, path or command output is saved for it. The observations and
 the result name the commit this attempt published and nothing else, so what
 advanced and what it advanced from are read from two different members.
 
-A retained record is read back for the invocation that recorded it. Beyond the
+A saved record is read back for the invocation that recorded it. Beyond the
 shape it describes a reconciliation this operation can reach: the remote is
 `origin`, the destination is that branch's ref, the refspec is that commit
 published to that destination, the observed commit is the one published, and the
@@ -1553,7 +1553,7 @@ that checkout is on and there are no `repository`, `head`, `remote`, `provider`,
 
 Content expands first and completely. A body that never finished rendering stops
 everything this component owns, before a Repository is observed, a checkout is
-selected, retained history is read or a Git host exists in the story.
+selected, saved history is read or a Git host exists in the story.
 
 **PullRequest is an upsert over one explicit pull-request identity.** Without a
 number the document asks for a pull request from this head to this base: one is
@@ -1592,7 +1592,7 @@ last one at another commit is conflicting rather than missing, because saying
 Missing, conflicting and unreadable evidence are three fixed local refusals:
 each names its category and, where there is one, its remedy, quotes no journal
 content, and happens before the Git host is observed. So do a missing or
-replaced Repository context, a working directory inside no retained checkout,
+replaced Repository context, a working directory inside no saved checkout,
 and a checkout whose HEAD names no branch. None of them is printable: a later
 sibling must not run as though a pull request had been opened or updated.
 
@@ -1617,7 +1617,7 @@ name different external resources:
 
 The complete request fingerprint covers every input, so a changed title, body,
 draft flag, base, head commit or number diverges at the durable position rather
-than consuming the result retained for another question. In create mode, a
+than consuming the result saved for another question. In create mode, a
 branch pair with no open pull request and no closed or merged one is absent and
 is created once; one whose single open pull request agrees with every field the
 request names is adopted; one that disagrees, or holds a closed or merged pull
@@ -1625,11 +1625,11 @@ request, is a conflict; more than one open pull request is ambiguous, even if
 one of them fits. In update mode, the numbered pull request is fetched exactly:
 one that already holds every requested field is adopted as a no-op, and one that
 differs in a mutable field is the requested completion being absent, with the
-existing pull request retained as the pre-state that a performed update
+existing pull request saved as the pre-state that a performed update
 describes itself against.
 
 **The first adapter** works over `github.com`, on direct same-repository pull
-requests. It is selected from the private retained locator — the admitted
+requests. It is selected from the private saved locator — the admitted
 credential-free HTTPS, SSH-URL and `git@github.com:owner/repository` forms, with
 an optional terminal `.git` — and a Repository this adapter does not recognize
 is refused as an unsupported effect kind from observation, before any remote
@@ -1739,7 +1739,7 @@ mutates a remote and must adopt an interrupted attempt rather than repeat it.
 These change nothing, have no natural key and no pre-state, and are ordinary
 non-mutating durable reads. An interruption before the result commits may repeat
 the requests, which is safe for a read in the way it is not for a write; no
-incomplete list is ever retained. A completed replay restores the retained array
+incomplete list is ever saved. A completed replay restores the saved array
 without opening an authentication session or sending anything.
 
 **Complete, or unavailable.** The host follows the provider's pagination until
@@ -1764,23 +1764,23 @@ document names a URL, never a host or a credential. Absence of that
 configuration authorizes no URL read and disables nothing else: `<PullRequest>`
 upserts on this run's own matching Push evidence, which no configuration grants
 or withdraws. Nothing of the credential, the endpoint, the raw
-response or the pagination state is retained: what the journal holds is the
+response or the pagination state is saved: what the journal holds is the
 complete normalized request and the normalized evidence, across the ordinary
-secret gate. The retained request is the whole normalized question: the operation, the
+secret gate. The saved request is the whole normalized question: the operation, the
 canonical URL, the provider discriminator, the collection, the run and the
 expansion. The effect's name covers the question rather than the run — a fork is
 a different run reaching the same position with the same question, and a name
-carrying the run would make every inherited read a different effect. A retained
+carrying the run would make every inherited read a different effect. A saved
 read *is* inheritable: it changed nothing at the host, so a fork consumes the
 record and asks the provider nothing.
 
-The retained result is a discriminated envelope: `{ kind: "reviews", items }`,
+The saved result is a discriminated envelope: `{ kind: "reviews", items }`,
 `{ kind: "comments", items }`, or `{ kind: "checks", headSha, items }`. Only a
 checks result has a head, so the other two carry no member a reader must know to
 ignore. Only `items` becomes the component's binding.
 
 The records are closed and provider-neutral. Bodies and provider messages are
-retained byte-for-byte, because a reviewer reading a summary of an objection has
+saved byte-for-byte, because a reviewer reading a summary of an objection has
 not read the objection; identifiers are decimal strings, because a provider
 identifier already exceeds what a JSON number holds exactly; and timestamps are
 the provider's own strings, unreformatted. Check runs and commit statuses keep
@@ -1833,7 +1833,7 @@ native tool set, and the permission mode is `deny-all` with non-interactive
 denial.
 
 A fixed session instruction layer states that boundary to the Agent in the same
-terms, and states all of it: no native tool is authorized; retained work can be
+terms, and states all of it: no native tool is authorized; saved work can be
 asked for only when the prompt being answered asks for it and only in the exact
 closed shape that prompt supplies (§8.4); and nothing the Agent returns carries
 permission, because source it writes is data this run may admit under ceilings it
@@ -1846,7 +1846,7 @@ with a fixed diagnostic that names nothing the request carried. It does not
 reach the public permission chain, so an authored `<ApproveAll>` composes around
 nothing: there is no native tool permission for it to widen.
 
-That directory is attachment arrangement rather than retained state. It does not
+That directory is attachment arrangement rather than saved state. It does not
 identify a logical session, is never imported into the Workspace, and is
 recreated empty on the next attachment. Provider caches and provider-owned
 session state live in the run's own provider-session sidecar (§8.5), which the
@@ -1862,7 +1862,7 @@ foreground launcher, so a launch is refused before provider preparation,
 session ownership transfer, or process creation. The host does not expose the
 machine-wide coordinator, construction-route store or executable observer to
 repair that refusal. Supporting an interactive workflow-native handoff would
-require a separate retained-host and permission contract; it does not weaken the
+require a separate saved-host and permission contract; it does not weaken the
 current sandbox.
 
 ### 8.4 Generated XMD
@@ -1904,7 +1904,7 @@ selected spellings all read refuses `allow={["write"]}` outright.
 
 #### Admission
 
-The evaluator is given the exact candidate source, the retained implementations
+The evaluator is given the exact candidate source, the saved implementations
 each selected name resolved to with the forms it was selected for, and the
 classes this fragment draws on. It is given no Workspace basis and no request
 inventory: what the run stands on and what a request may reach are both live
@@ -1950,11 +1950,11 @@ so does what the run retains of it, so a rejected fragment publishes nothing —
 including a credential a rejected element carried. A request the fragment
 malformed is the component's own refusal, reported where the request is made:
 that is after the admission, which is the line past which the exact source is
-retained on purpose, so there is no pre-admission diagnostic for it to escape
+saved on purpose, so there is no pre-admission diagnostic for it to escape
 through.
 
-Admission is the line. Before it nothing of the candidate is retained; after it
-the exact source is retained deliberately, so an ordinary expansion diagnostic
+Admission is the line. Before it nothing of the candidate is saved; after it
+the exact source is saved deliberately, so an ordinary expansion diagnostic
 naming part of the fragment discloses nothing the journal does not already
 hold.
 
@@ -1967,7 +1967,7 @@ construct class and nothing else. It carries no Workspace basis and no request
 inventory: both are live, and a grant compared against a copy of either would
 refuse a run for its own progress. The whole event crosses the journal's secret filter like
 any other, and it commits before the first generated effect. The effects
-themselves are retained by their ordinary records — `fetch` for `<Fetch>`,
+themselves are saved by their ordinary records — `fetch` for `<Fetch>`,
 `workspace_file` for `<File>` (§10.1) — and the admission and every nested
 generated effect are offered inline by the owning document expansion, in
 authored order and ahead of the expansion's later effects, so one durable
@@ -1980,11 +1980,11 @@ or a provider anything.
 
 An interruption before an observation's own record commits retains no partial
 observation; a later continuation may perform that read once more under the same
-retained admission.
+saved admission.
 
 #### A continuation is held to the selection it was admitted under
 
-A continuation uses the exact source and selected policy retained by the
+A continuation uses the exact source and selected policy saved by the
 admission, not a newly supplied candidate. It checks them before invoking a
 generated component or performing a request.
 
@@ -1993,11 +1993,11 @@ admitted spellings with the identity each runs under and the class that admitted
 it. Only the classes the selection reached participate, so changing a writing
 spelling a read-only admission never drew on does not invalidate it.
 [Generated admission and continuation](../architecture.md#agent-permissions-and-generated-xmd)
-owns the retained policy's shape.
+owns the saved policy's shape.
 
 The run's own progress is deliberately not a term. A committed mutation retains
 another immutable root and advances the frontier, and a continuation compared
-against a retained copy of that frontier would refuse a run for exactly the work
+against a saved copy of that frontier would refuse a run for exactly the work
 it was admitted to do. So is a destination policy: it is asked live, where the
 request is performed.
 
@@ -2152,7 +2152,7 @@ it runs under — and core's self-closing `<File.Delete>`. A host's own extensio
 are names it answers for, and the selection offers no external-write and no
 execution class at all.
 
-The retained rows are the identity, in the canonical order the selection is
+The saved rows are the identity, in the canonical order the selection is
 admitted in rather than in whatever order a host's object happened to enumerate.
 A continuation compares them row by row
 ([§8.4, continuation](#a-continuation-is-held-to-the-selection-it-was-admitted-under)), so a run admitted
@@ -2173,7 +2173,7 @@ owns atomicity, failure and cancellation.
 
 Selecting `allow={["write"]}` therefore intentionally authorizes persistent,
 recursive directory creation by the admitted `<Dir>`. A continuation whose
-retained rows hold another identity, spelling or effect behind that name refuses
+saved rows hold another identity, spelling or effect behind that name refuses
 before any generated component executes; the write ceiling is not silently
 broadened.
 
@@ -2202,7 +2202,7 @@ Workflow-bundled Markdown component admission is unbuilt. Directory
 registration is not among them: §8.1 is the contract, and a workflow Agent is
 given no directory to register.
 
-A final proposal is the retained response of its Prompt and nothing more. It is
+A final proposal is the saved response of its Prompt and nothing more. It is
 returned as source data; the Prompt executes none of it, and a proposal that
 describes a mutation describes one nobody has made until an authored element
 admits it. Any later execution of those mutations crosses the mutation-proposal
@@ -2212,7 +2212,7 @@ channel for it to cross instead.
 ### 8.5 Agent session continuity
 
 The filtered workflow journal and the provider-owned Agent session are separate
-retained assets. The journal preserves observable prompts, responses, tool
+saved assets. The journal preserves observable prompts, responses, tool
 events and outcomes for replay and training. It does not claim to reconstruct
 provider-internal summaries, hidden context or tool state.
 
@@ -2241,7 +2241,7 @@ served here is served over ACP alone. Composing the two is a separate design.
 
 **The mapping lives in the run.** Its database row commits in the run's
 transaction and is part of the initial schema. Provider session stores and empty
-working directories beside the run are disposable attachment state, not retained
+working directories beside the run are disposable attachment state, not saved
 workflow identity.
 
 **First-turn publication follows the mapping commit.** Placement is inert:
@@ -2272,15 +2272,15 @@ host resolves the same identity under a new empty working directory:
 No refusal starts a replacement session, and none injects a transcript while
 claiming conversation continuity.
 
-Deleting a run removes its retained storage — the mapping with it, because the
+Deleting a run removes its saved storage — the mapping with it, because the
 mapping is in it — and its provider-session directory, under the executor lock,
 and reports exactly the categories that went. A refused deletion removes neither.
 
 **A sealed artifact may carry detached portability evidence about these
 sessions.** Its format classifies every logical Agent session that contributed a
-retained Prompt as portable — with ordered provider checkpoint tokens and an
+saved Prompt as portable — with ordered provider checkpoint tokens and an
 opaque Agent session bundle — or as explicitly unavailable, under
-`specs/xmd-artifact-spec.md` §2.5. That evidence is detached: it is retained
+`specs/xmd-artifact-spec.md` §2.5. That evidence is detached: it is saved
 bytes about a conversation, never a live provider session, never control over
 the host that issued a token, and it changes nothing above. The mapping, the
 canonical assertion, reattachment, replay and the disposable session directory
@@ -2314,12 +2314,12 @@ at once supplies no checkpoint and changes nothing else about the completion.
 outside any transaction; a transaction opens only to publish it. That
 transaction appends the ordinary `agent_prompt` event, names the exact event
 that append produced, retains the checkpoint against it and the run's own
-retained session key, and commits. Both halves survive or neither does: an
+saved session key, and commits. Both halves survive or neither does: an
 association that outlived a Prompt that was never journaled would name a turn
 the run has no record of, and a Prompt whose association was lost would become
 one this run cannot continue from without saying so.
 
-The retained session key is the run's own, supplied by the placement that made
+The saved session key is the run's own, supplied by the placement that made
 the session. It is never recovered from the spelling of the provider's placement
 key: those are two namespaces that happen to share a prefix.
 
@@ -2344,7 +2344,7 @@ a workflow run executes the snapshots this build carries for those two providers
 ordinary agent registry, not a replacement for it. Every other agent resolves to
 the same command, and retains the same compatibility identity, as it did before
 any adapter was carried: a run may use one, it completes normally, and a session
-it retained under an earlier version stays the session it was.
+it saved under an earlier version stays the session it was.
 
 The override is qualified rather than best-effort. For Codex and Claude the
 snapshot is verified against its recorded digest and materialized before the
@@ -2358,7 +2358,7 @@ when a provider returns to a published release.
 **An agent that names no turn is not a failed Prompt.** A run whose agent
 reports no checkpoint — because this build overrides nothing for it, or because
 the metadata was missing or unreadable — completes exactly as it always did. The
-`agent_prompt` event is journaled, the Prompt result is retained and replays
+`agent_prompt` event is journaled, the Prompt result is saved and replays
 from it, and the run simply holds zero associations. Only the association is
 absent; nothing about the completion is.
 
@@ -2371,12 +2371,12 @@ them, not in them.
 Replay reaches none of this. A completed or partial replay answers from the
 stored Prompt result alone — it contacts no provider, opens no publication
 transaction and associates nothing — and a Prompt replayed from a run that
-retained no checkpoint remains unassociated.
+saved no checkpoint remains unassociated.
 
 ## 9. Replay and continuation
 
 Everything in this section is workflow-only. An ordinary `xmd run` has no
-WorkflowRun, no retained history and nothing to replay: its repository
+WorkflowRun, no saved history and nothing to replay: its repository
 operations are performed once per execution, and a second run is a second
 question rather than a continuation of the first.
 
@@ -2397,23 +2397,23 @@ capturing the root the run already had.
 | Construct | Partial replay behavior |
 | --- | --- |
 | implicit Workspace | reattach the same run-owned Workspace |
-| bundled component import | restore the retained `{ kind: "workflow", path, sourceHash, content }` selection and reconstruct the component from that exact source, resolving no name and reading no file |
+| bundled component import | restore the saved `{ kind: "workflow", path, sourceHash, content }` selection and reconstruct the component from that exact source, resolving no name and reading no file |
 | lexical Repository/Worktree | reinstall contextual cwd and live facade |
-| Dir directory ensure | restore the recorded `workspace_file` success and retained root without creating again, then reinstall the contextual cwd |
+| Dir directory ensure | restore the recorded `workspace_file` success and saved root without creating again, then reinstall the contextual cwd |
 | Agent provider/session | attach lazily before the first live Agent operation |
 | Repository base/default resolution | restore pinned result |
-| Repository/Worktree creation | restore the retained creation record, then reattach and verify the retained Git state without recloning |
+| Repository/Worktree creation | restore the saved creation record, then reattach and verify the saved Git state without recloning |
 | File read | restore historical content |
-| File write/delete | restore completion without mutating again; a deletion whose effect was never published is performed once by the continuation, against the retained frontier |
+| File write/delete | restore completion without mutating again; a deletion whose effect was never published is performed once by the continuation, against the saved frontier |
 | Glob | restore historical path set |
-| generated XMD | restore the retained admission — every selected row exact, and nothing about the run's own frontier compared — then offer each nested generated effect inline in authored order: a completed read or mutation restores without another live execution or root publication, an uncommitted one is performed once by the continuation, and the sequence continues to later parent effects and any durable wait |
+| generated XMD | restore the saved admission — every selected row exact, and nothing about the run's own frontier compared — then offer each nested generated effect inline in authored order: a completed read or mutation restores without another live execution or root publication, an uncommitted one is performed once by the continuation, and the sequence continues to later parent effects and any durable wait |
 | Prompt/Sample | restore response |
 | suspension request | restore its filtered request; with no input, settle the new execution `suspended` and release the executor lock again |
-| suspension answer | restore the delivered value without reaching the live controller and without consuming retained delivery state again |
+| suspension answer | restore the delivered value without reaching the live controller and without consuming saved delivery state again |
 | Git.Add/Switch/Commit | restore transactional result |
-| Git.Push/PullRequest | restore the retained reconciliation record — including a Push's attested `ancestor` pre-state, which is a fact this run established when it published and never proves again — or observe the Git host again under the same external identity and adopt only a proven compatible completion |
-| Issue read | restore the retained `IssueDetails` without reaching `IssueApi` at all, and therefore without network access |
-| Issue upsert | restore the retained `IssueReference` without reaching `IssueApi` at all, or call it again under the same idempotency key, which is what lets a provider recognize an issue an interrupted attempt already filed |
+| Git.Push/PullRequest | restore the saved reconciliation record — including a Push's attested `ancestor` pre-state, which is a fact this run established when it published and never proves again — or observe the Git host again under the same external identity and adopt only a proven compatible completion |
+| Issue read | restore the saved `IssueDetails` without reaching `IssueApi` at all, and therefore without network access |
+| Issue upsert | restore the saved `IssueReference` without reaching `IssueApi` at all, or call it again under the same idempotency key, which is what lets a provider recognize an issue an interrupted attempt already filed |
 
 Reads restore historical values even when current frontier state differs.
 Replay never uses a guard such as current file existence to infer whether an
@@ -2426,20 +2426,20 @@ Readable is not enough — a valid checkout of an unrelated repository is
 perfectly readable — so the creation identity the record claims is read back out
 of the checkout itself: the locator it was cloned from, the algorithm it names
 objects with, and the presence of the commit it was created at. A Worktree
-additionally proves that its checkout is a worktree of the retained Repository
+additionally proves that its checkout is a worktree of the saved Repository
 it belongs to, rather than a repository of its own standing in its place.
 
 What attachment deliberately does not require is that HEAD or the current branch
 equal creation state. Those move, transactionally, when a Git effect moves them;
-creation identity does not. Missing, damaged or conflicting retained state is a fatal
+creation identity does not. Missing, damaged or conflicting saved state is a fatal
 stale-input condition: children and later siblings do not begin, `<PrintErrors>`
 cannot print it, and nothing is recloned or repaired.
 
-Before replay, a run authenticates its retained component bundle under the
+Before replay, a run authenticates its saved component bundle under the
 executor lock, before beginning a document-execution record, attaching a
 Workspace or appending anything.
 
-A run authenticates it from its own retained source BLOBs. Every retained length
+A run authenticates it from its own saved source BLOBs. Every saved length
 and content hash is recomputed from the bytes the run holds, and so is the bundle
 hash over the resulting manifest and mapping. Nothing is read from a repository,
 from the file the run was started from, or from the files its components were
@@ -2448,19 +2448,19 @@ is what the run is a run of. Missing content and content that no longer
 describes itself are distinct refusals, and neither falls back to any other
 source.
 
-The obtained bundle then holds the retained history to itself — a
+The obtained bundle then holds the saved history to itself — a
 recorded import naming a component the bundle does not declare, or holding a
 different path, hash or source, appends nothing and invokes nothing.
 
 A completed root result returns without expanding the document or attaching
-Workspace, Agent or external providers. It still authenticates the retained
-bundle and applies admission, so retained output is accepted only for this run's
+Workspace, Agent or external providers. It still authenticates the saved
+bundle and applies admission, so saved output is accepted only for this run's
 history.
 
 A partial replay that reaches a completed Git-host effect may still reconstruct
 what that effect needed locally — a Push rebuilds its checkout from the Workspace
 in order to name the request it is asking about — and then hands back the
-retained record without selecting a provider, contacting the host or appending
+saved record without selecting a provider, contacting the host or appending
 anything. The object-source attachment such a reconstruction produces is never
 durable and never reaches routing middleware.
 
@@ -2470,25 +2470,25 @@ question about the moment it ran. A run publishes one branch repeatedly, so by
 the time it is resumed the Workspace has moved on, and reconstructing an earlier
 Push from the frontier would ask the journal about a request that position never
 made. The root each completed Push is reconstructed from is therefore the one
-its own journal event was appended against, which is the retained association
+its own journal event was appended against, which is the saved association
 the run made when it wrote that event. Nothing else stands in for it: the
 current pointer and the branch name describe where the run got to, and the
-retained Push payload would be answering for itself.
+saved Push payload would be answering for itself.
 
 Reading that root is a read of history, not a return to it. The historical root
 is materialized, the checkout family is exported from it, and everything the
 materialization wrote is discarded on every path out — success, failure and
-cancellation alike. The current root, the retained roots, the retained metadata
+cancellation alike. The current root, the saved roots, the saved metadata
 and the journal are exactly what they were, no root is published, and the run's
 frontier stays where the run left it. What leaves is the exported host tree the
 reconstruction reads its branch and commit from.
 
-A position with no retained successful Push is a live attempt and names its
+A position with no saved successful Push is a live attempt and names its
 request from the current root, as it always did. The root selected here decides
 only what question is asked: the request it produces still has to be the one the
-retained position asked, so a reconstruction that named the wrong moment refuses
+saved position asked, so a reconstruction that named the wrong moment refuses
 the replay rather than answering it, and it can authorize no Git-host work. Nothing about an advance is
-decided a second time: the ancestry a live attempt proved is retained as the
+decided a second time: the ancestry a live attempt proved is saved as the
 relation in its pre-state, so a restored Push builds no control repository,
 observes no destination and asks no ancestry question — which it could not
 answer anyway against a remote that has since moved or gone. A live continuation
@@ -2540,10 +2540,10 @@ resulting Workspace root commit with the sanitized successful outcome; only
 then does `<Dir>` install that directory as cwd for its content. A documented
 refusal rolls back the savepoint and publishes its sanitized refusal against the
 unchanged root. An infrastructure failure or cancellation before commit rolls
-the outer transaction back and publishes neither outcome nor root. No retained
+the outer transaction back and publishes neither outcome nor root. No saved
 record contains a host path, platform code, raw platform message or cause.
 
-A completed replay restores the recorded success and retained resulting root
+A completed replay restores the recorded success and saved resulting root
 without attempting creation again. Once committed, creation is not owned by the
 cwd scope: later content failure or cancellation restores the enclosing cwd but
 does not remove the directory. `<Dir>` neither reads nor changes the Repository
@@ -2558,7 +2558,7 @@ before anything is attempted, including an empty one the pinned filesystem would
 otherwise remove. It renders nothing and returns nothing.
 
 Each deletion is one `workspace_file` effect, named by the expansion, the
-operation and the resolved logical target, and its retained outcome is exactly
+operation and the resolved logical target, and its saved outcome is exactly
 `{ kind: "deleted" }` — including the no-op. A deletion an admitted generated
 fragment performs is that same effect: the standard selection offers the
 ordinary component (§8.4), so there is one account of the removal and the
@@ -2619,7 +2619,7 @@ what the provider looks the effect up by when no local result exists.
 Credentials are not inputs and stay inside the provider. The durable operation
 is journaled under the type `git_host_effect` and named by a SHA-256 fingerprint
 of the complete detached request, so a changed kind, input or natural key
-diverges rather than consuming the result retained at the same journal position.
+diverges rather than consuming the result saved at the same journal position.
 There is no schema change, migration or compatibility reader: the filtered Yield
 is the local record.
 
@@ -2645,7 +2645,7 @@ authorizes a mutation: a later explicit attempt starts again at observation.
 **The record.** A decision publishes one journal result holding the request, the
 normalized pre-state, the normalized observations, the decision — `adopted` or
 `performed` — and the normalized result. Replaying it contacts no provider and
-installs none, and the retained record is parsed and compared with the request
+installs none, and the saved record is parsed and compared with the request
 being made before it is accepted. Conflict, permanent ambiguity and temporary
 unavailability publish the same effect's failed result and replay as the same
 fixed local failure, rebuilt from its closed name rather than recognized across
@@ -2661,7 +2661,7 @@ credential, no capability, no answer operation and no phase evidence.
 There is one surface rather than two on purpose. A design that selected a
 provider on one surface and coordinated the invocation on a second let public
 middleware read a credential from the first, take an invocation capability from
-the second, and answer a phase itself — and the journal then retained a
+the second, and answer a phase itself — and the journal then saved a
 completion no provider had produced. Two individually harmless public surfaces
 composed into the power to settle a completion, so there is now nothing to compose.
 
@@ -2702,15 +2702,15 @@ one place it may prove the two are related. All of it travels as an
 composition data the trusted host builds for exactly one reconciliation, holds in
 the selected provider's own closure, and disposes with that invocation.
 
-An attachment is authenticated against the retained identity it belongs to
-before it exists — the observed Repository record is compared with the retained
-row member for member, every retained row is held to the identity naming it, and
+An attachment is authenticated against the saved identity it belongs to
+before it exists — the observed Repository record is compared with the saved
+row member for member, every saved row is held to the identity naming it, and
 the exported checkout is proven to be the one that record claims. What it grants
 access to is authenticated too, and separately: the local state behind an
 attachment can name further state, so the graph a provider could traverse through
 it is proven contained before the attachment is first used. That proof is the
 live provider's first act and happens on no other path — a completed replay
-reaches no provider, so it derives and parses its retained record without
+reaches no provider, so it derives and parses its saved record without
 performing it. A graph that leaves what the run authenticated is a boundary
 failure like any other: it publishes no outcome, exposes no authored path, and
 activates fail-stop.
@@ -2744,7 +2744,7 @@ The durable envelope described here is a workflow run's. Under an ordinary run
 `<Issue>` reaches the same configured transport under the same host ceiling
 with no envelope at all: identity is that execution's own opaque invocation
 identity together with the engine's expansion identity, an upsert presents an
-idempotency key derived from them, and nothing is retained.
+idempotency key derived from them, and nothing is saved.
 
 An **Issue provider** is an external service that owns a collection of issues.
 GitHub and Atlassian Cloud are Issue-provider adapters.
@@ -2850,7 +2850,7 @@ target.
 
 `url` is a credential-free URL naming the container new issues are created in —
 a GitHub repository issue collection, an Atlassian project. It is canonicalized
-before the request is made and retained in canonical form. The context, not the
+before the request is made and saved in canonical form. The context, not the
 component, owns this deployment choice. A nested context replaces the whole
 target for its descendants; parent and child members are never merged, and
 leaving the nested context restores the enclosing one whole.
@@ -2930,10 +2930,10 @@ could not be asked.
 whose record carries an operation discriminator so that the two are never
 confused for one another. A read and an upsert at one position are different
 questions, and a name that could be either would let a read consume an upsert's
-retained result.
+saved result.
 
 The envelope guarantees that the call happens at most once per position, that a
-replay returns the retained result without reaching `IssueApi` at all — and
+replay returns the saved result without reaching `IssueApi` at all — and
 therefore without any network access — and that a changed request diverges
 rather than consuming another request's result. The complete request
 fingerprint, which is what the durable operation is named by, covers the
@@ -3068,10 +3068,10 @@ positionals, as they do for `start`: they are declared by the document rather
 than by the command, so option parsing stops at the first one and a positional
 written after it would not be read.
 
-The new run inherits the source's retained normalized props by default. Explicit
+The new run inherits the source's saved normalized props by default. Explicit
 generated `--props-*` arguments add or override values, property by property,
 and the merged result is validated against the candidate definition before
-anything is created — a property the source retained and the candidate does not
+anything is created — a property the source saved and the candidate does not
 declare is refused here rather than reported later as divergence. Those merged
 props are what the preflight replays under, what the fork is admitted with, what
 the run retains, and one of the terms a reused fork ID is compared on.
@@ -3085,7 +3085,7 @@ nor `--at`.
 
 A fork is a new immutable WorkflowRun identity. It holds a new run ID, the
 supplied definition entire — its complete component bundle, its manifest and its
-retained bytes — the merged normalized props, its lineage, and a journal made of two records it writes for itself followed by
+saved bytes — the merged normalized props, its lineage, and a journal made of two records it writes for itself followed by
 everything it inherited.
 
 The two records are its own `workflow_run` and its own root import. The first is
@@ -3108,10 +3108,10 @@ so deleting the source after admission leaves the fork's history readable and
 its roots loadable.
 
 When the source is an XMD artifact, lineage additionally retains the XMD
-artifact identity. The new run copies every retained record and byte it needs;
+artifact identity. The new run copies every saved record and byte it needs;
 it never attaches the artifact as writable storage or depends on its path after
 admission. An embedded candidate definition is copied into the new run's
-retained definition state for the same reason.
+saved definition state for the same reason.
 
 ### 11.2 What compatibility means
 
@@ -3142,7 +3142,7 @@ alter the admitted prefix or root.
 
 The fork's candidate is established exactly as a `start`'s is: its own document
 reference, its own bytes, its own logical entrypoint and its own bundle. The
-fork is therefore a run of what that file said, and its retained source is
+fork is therefore a run of what that file said, and its saved source is
 independent of the source run's — deleting the source run, the candidate's file
 or the repository either sat in changes nothing about what the fork replays.
 Staging assembles the same candidate under the same rules, so a compatibility
@@ -3186,7 +3186,7 @@ by the identity the record holds, while every live attempt is named by the run
 performing it. That is what keeps the fork definitive for what it does next
 without making it the author of what it inherited.
 
-That identity is established once, when the engine admits the run's retained
+That identity is established once, when the engine admits the run's saved
 snapshot, and published beside the run itself — where every physical copy of the
 workflow package reads it. A second copy loaded from disk reconciles through the
 same operation name, and a fork whose Git-host history replayed for one copy and
@@ -3195,7 +3195,7 @@ object asked.
 
 What makes an answer safe is not where it came from but what happens to a wrong
 one, and what authorizes live execution is not that answer at all. A run that walked away
-from retained history it never consumed performs no Git-host effect at all: it
+from saved history it never consumed performs no Git-host effect at all: it
 asks the Git host nothing and appends nothing. The engine's own account of the
 coroutine decides that, and it holds for every operation after the one that
 diverged rather than only at that one — so removing, replacing or forging the
@@ -3204,13 +3204,13 @@ replay correctly or refuse. On replay the record consumed is
 additionally held to the request being made, so an identity that is not that
 record's own is a refusal too.
 
-It belongs to the exact retained event it came from, at the position that event
+It belongs to the exact saved event it came from, at the position that event
 occupies. One element may ask for more than one Git-host effect, so the records
 are offered in order: a call may take only the next one not yet taken, and only
 when that record asks exactly what the call asks. Anything else leaves the
 inherited prefix behind for good.
 
-Falling through to live is final in the same way. A request named by a retained
+Falling through to live is final in the same way. A request named by a saved
 record that reaches live execution — a mismatch earlier in the history, and a
 divergence policy that chose to run live, are enough — performs nothing. It asks
 the Git host nothing, appends nothing, and fails, because the run that may
@@ -3229,7 +3229,7 @@ a new session or transcript.
 
 ## 12. Retention, deletion and training
 
-Every run status is retained by default. The local host has no automatic
+Every run status is saved by default. The local host has no automatic
 expiration. A deployment may impose an external storage- or age-based policy.
 Lexical scope cleanup releases live attachments but does not delete run-owned
 state.
@@ -3245,14 +3245,14 @@ Delete targets one authorized run ID, accepts no wildcard and prompts for no
 additional confirmation. It first acquires the executor lock. A live workflow
 executor is refused; every status without one may be deleted, including a stale
 `running` record after acquiring the executor lock proves staleness. The command
-removes the local database and run-owned retained provider-session records, and
+removes the local database and run-owned saved provider-session records, and
 reports those categories. An empty advisory-lock sidecar may remain because it
-is host arrangement rather than retained run state. An absent run is an error rather
+is host arrangement rather than saved run state. An absent run is an error rather
 than idempotent success. A host pruning operation may select explicit statuses
 and ages. Documents cannot delete workflow runs.
 
 Deletion does not undo pushes, pull requests or other remote effects. Forks and
-retained runs keep the Workspace roots they reference; garbage collection may
+saved runs keep the Workspace roots they reference; garbage collection may
 remove an unreferenced historical root only after those references disappear.
 An exported XMD artifact owns its copied retention independently: deleting its
 source run does not change or remove the file, and deleting the file is an
@@ -3262,7 +3262,7 @@ The journal security policy filters arguments, results, errors and generated
 XMD before insertion. Retention makes filtered history available for deliberate
 training ingestion. It does not authorize ingestion of the database's arbitrary
 filesystem content. Secrets remain ephemeral host-owned bindings and never
-belong in retained Workspace configuration.
+belong in saved Workspace configuration.
 
 ## 13. Local topology
 
@@ -3346,19 +3346,19 @@ Workflow start, resume and the history commands do not reach it in this slice.
 That boundary holds across processes as well as within one. A host killed
 between the mutation and the commit publishes nothing, and a process that
 opens the database afterwards finds the last committed filesystem, current
-root, retained roots and ordered event-to-root associations. Reopening replays
+root, saved roots and ordered event-to-root associations. Reopening replays
 recorded effects instead of performing them, and the adapter-private
-materializer reconstructs an older event's root from that root's retained DOFS
+materializer reconstructs an older event's root from that root's saved DOFS
 manifests and blobs.
 
 Native Git runs against directories, and the authoritative Workspace is a
 database, so the Deno provider exports a checkout into a disposable host
 materialization, runs Git there and imports the result back inside the same
 effect transaction. **Native Git operates only on that export**, and what enforces that is a
-distinction between two kinds of retained entry.
+distinction between two kinds of saved entry.
 
 *Content* is what a commit records. A symbolic link among a checkout's tracked
-files is content whatever it points at: it is retained and restored verbatim,
+files is content whatever it points at: it is saved and restored verbatim,
 nothing resolves it, and a target outside the Workspace makes it no less a
 faithful copy of what Git produced.
 
@@ -3376,22 +3376,22 @@ writes back to what it found.
 The control plane is therefore validated rather than trusted. A checkout root
 and a `.git` must be real directories, a linked worktree's `.git` a real regular
 file, each administration slot and pointer a real entry of its own kind, and
-every retained pointer value must name one place beneath the Workspace root —
+every saved pointer value must name one place beneath the Workspace root —
 relative, empty, dot-segmented and traversal-shaped values are refused rather
 than resolved. The pointers of an exported pair must name each other. All of it
 is decided before any administration path is rewritten and before any Git
 command runs, because both are what would otherwise trust it, and any violation
-is fatal stale retained state: nothing is repaired, recloned or adopted. Bytes, modes and symbolic-link targets carry both ways. The
+is fatal stale saved state: nothing is repaired, recloned or adopted. Bytes, modes and symbolic-link targets carry both ways. The
 absolute paths Git writes into a linked worktree's administration are reduced to
 Workspace paths before capture and reconstructed only inside a live
-materialization, so nothing retained is specific to the machine that created it.
+materialization, so nothing saved is specific to the machine that created it.
 Deleting a materialization costs time and nothing else. Git runs with a built
 environment rather than an inherited one — no user configuration, no terminal
 prompt, and a fixed workflow identity — so a clone does not vary with whoever ran
 the host. Authentication is the one thing borrowed from the invoking environment,
 and §13.1 says exactly what is borrowed and when. The narrower retention invariant is about paths:
-a provider-generated disposable materialization path is never retained, and
-never accepted as a control path. Content is retained as Git produced it,
+a provider-generated disposable materialization path is never saved, and
+never accepted as a control path. Content is saved as Git produced it,
 including absolute symbolic-link targets a commit happens to record.
 
 SQLite is a host implementation detail. The CLI deliberately exposes no remote
@@ -3403,7 +3403,7 @@ delegated without changing the document language.
 A workflow reaches a private clone or a protected remote wherever the equivalent
 local Git command reaches one, with no XMD-specific credential setup. That is a
 property of the machine the run is standing on, not of the run: authentication is
-a live host input and never retained workflow state.
+a live host input and never saved workflow state.
 
 **The credential belongs to one invocation, and to the adapter alone.** The
 trusted Deno host adapter retains one HTTP credential in memory for one live
@@ -3427,7 +3427,7 @@ absent one, and both are authentication unavailability.
 Transport Git resets ambient credential helpers and installs only the
 provider-owned one. No ambient `credential.*` definition or value is copied into
 its arguments, and neither the credential nor the locator nor the marker appears
-in a launcher, a command line, a URL or retained configuration.
+in a launcher, a command line, a URL or saved configuration.
 
 Only what the adapter directly observes is infrastructure: an acquisition
 process that could not be started, a launcher that could not be installed, a
@@ -3473,7 +3473,7 @@ of three host-owned mechanisms:
   askpass hooks off and `credential.useHttpPath=true` forced. An answer whose
   protocol, host or path differs from the request has not authorized it, and one
   that omits the path is an answer about the server rather than the repository.
-  What comes back is retained by the adapter for this invocation alone.
+  What comes back is saved by the adapter for this invocation alone.
 
 - **GitHub API transport** uses `GH_TOKEN`, then `GITHUB_TOKEN`, then the token
   `gh auth token --hostname github.com` returns. A variable that is set but empty
@@ -3491,7 +3491,7 @@ line.
 Repository and locator admission checks that operation requires, shared by that
 invocation's observations and its mutation so both go out under one identity, and
 disposed with the invocation. A later attempt on an interrupted request opens its
-own. The invocation keeps the exact retained locator as its destination. A
+own. The invocation keeps the exact saved locator as its destination. A
 request for another Repository opens a separate exact-locator session; what one
 session stands on is never carried forward as admission for another. Host helpers
 remain free to return the same account for several locators according to their
@@ -3499,7 +3499,7 @@ own policy.
 
 **What still cannot decide anything.** The native Git command still runs in the
 provider-built environment and, for Push, in the provider-owned control
-repository. A retained `.git/config`, caller Git configuration, caller SSH
+repository. A saved `.git/config`, caller Git configuration, caller SSH
 configuration, URL rewrites, hooks, signing programs, filesystem monitors, push
 URLs and transport programs remain unable to select behavior — `credential.helper`
 and `core.sshCommand` join that family, fixed on the command line where they
@@ -3533,9 +3533,9 @@ fetch operation requires its own language and durability contract.
 | Contract | Status at this design revision |
 | --- | --- |
 | workflow-run and expansion identity | built by #289 / PR #341 |
-| retained run record and filtered journal | built by #291 |
+| saved run record and filtered journal | built by #291 |
 | caller-owned storage transaction | built by #291; Workspace mutations join it in #365 |
-| provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; mandatory directory ensure is specified by #643 for both providers; process capabilities unbuilt (#218) |
+| provider-backed saved Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; mandatory directory ensure is specified by #643 for both providers; process capabilities unbuilt (#218) |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition under a workflow run | Repository and Worktree built by #293, Deno provider only; `<Dir>`'s mandatory `API.Files.ensureDirectory` is specified by #643 as one transactional `workspace_file` mutation followed by lexical cwd installation |
 | the same twelve declarations under every runtime | built by #643: one shadowable array declared by the bundled Git Plugin and consumed wherever its profile is assembled — `xmd syntax`, `xmd plan`, an ordinary document execution and a workflow action that executes a document. `<Dir>` left that array when canonical core took the name, and is present under every runtime without it |
@@ -3561,4 +3561,4 @@ fetch operation requires its own language and durability contract.
 | Deno-local DOFS persistence | POC proven by #349 / PR #350 |
 | scoped Deno Worker Shell | containment proven by #351 / PR #353 and transactions by #357 / PR #362; production integration unbuilt |
 | Worker JavaScript | deferred |
-| bundled workerd local host | omitted; POC #347 / PR #348 retained as provider evidence |
+| bundled workerd local host | omitted; POC #347 / PR #348 saved as provider evidence |

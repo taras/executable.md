@@ -100,7 +100,7 @@ const FIRST = [
  * One entry that publishes a root value and then fails.
  *
  * Two blocks, so the journal holds one durable publication *before* the
- * failure: `token` is retained, and `lost` is a name the failing block never
+ * failure: `token` is saved, and `lost` is a name the failing block never
  * got to publish.
  */
 const FAILING = [
@@ -156,7 +156,7 @@ const EDITS_INHERITED = [
  */
 const PUBLISHES_PROPS = [
   "```js eval",
-  'const props = "retained";',
+  'const props = "saved";',
   'const token = "gamma";',
   "```",
   "",
@@ -422,18 +422,18 @@ describe("REPL entries: the segments one physical journal holds", () => {
     const physical = new InMemoryStream(events);
 
     // Settled, because its own range holds its terminal close.
-    const closed = new EntrySegmentStream(physical, { retained: second.events, final: true });
+    const closed = new EntrySegmentStream(physical, { saved: second.events, final: true });
     expect(closed.settled).toBe(true);
     expect(yield* refusedAppend(closed, first.events[1])).toContain("already settled");
 
     // Not final, because another entry already follows it in the file.
-    const earlier = new EntrySegmentStream(physical, { retained: first.events, final: false });
+    const earlier = new EntrySegmentStream(physical, { saved: first.events, final: false });
     expect(yield* refusedAppend(earlier, first.events[1])).toContain("not the last one");
 
     // And an open final segment closes itself on its own terminal close, so the
     // append after it is refused for the first reason rather than accepted.
     const live = new EntrySegmentStream(physical, {
-      retained: first.events.slice(0, -1),
+      saved: first.events.slice(0, -1),
       final: true,
     });
     expect(live.settled).toBe(false);
@@ -748,7 +748,7 @@ describe("REPL entries: what each entry owns and what the next one inherits", ()
     expect(value(after.entries[1].bindings, "seen")).toBe("draft/build/2");
   });
 
-  it("EP1: a retained `props` is the entry's own and reaches no successor", function* () {
+  it("EP1: a saved `props` is the entry's own and reaches no successor", function* () {
     const physical = new InMemoryStream();
     const run = yield* runEntry(physical, PUBLISHES_PROPS);
     const events = yield* physical.readAll();
@@ -758,7 +758,7 @@ describe("REPL entries: what each entry owns and what the next one inherits", ()
     // It really was published: the run succeeded and the record holds the name.
     expect(run.failure).toBe(undefined);
     expect(only.scope.bindings.map((binding) => binding.name)).toContain("props");
-    expect(value(only.scope.bindings, "props")).toBe("retained");
+    expect(value(only.scope.bindings, "props")).toBe("saved");
 
     // And it is absent from the effective bindings and from the record a next
     // entry would start from — rather than listed there and then silently
@@ -773,7 +773,7 @@ describe("REPL entries: what each entry owns and what the next one inherits", ()
     expect(second.output).toContain("Two: gamma/object");
   });
 
-  it("EP1: a retained export name no binding can have refuses projection", function* () {
+  it("EP1: a saved export name no binding can have refuses projection", function* () {
     const physical = new InMemoryStream();
     yield* runEntry(physical, FIRST);
     const events = yield* physical.readAll();
@@ -1227,7 +1227,7 @@ describe("REPL entries: one session, one entry task, in turn", () => {
 
       const [first, second] = session.model.entries;
       expect(second.terminal?.output).toContain("Three: alpha/first");
-      // Exactly the two names the first entry retained, and nothing else: the
+      // Exactly the two names the first entry saved, and nothing else: the
       // record handed to the second entry is the one a cold command derives from
       // the same bytes, not a reading of what this process had in memory.
       expect(entryInitialBindings(session.model, second)).toEqual({
@@ -1939,7 +1939,7 @@ describe("REPL entries: the draft, the gate and the position", () => {
       accepted(yield* session.submit(INHERITING));
       yield* session.join();
 
-      // The source the journal retained is the draft, character for character.
+      // The source the journal saved is the draft, character for character.
       const admittedEntry = session.model.entries[1];
       expect(admittedEntry?.source).toBe(INHERITING);
       // And the key is the one the session really assigned, not a constant.
@@ -2366,7 +2366,7 @@ function* sessionsOf(view: ReplView): Operation<Array<{ key: string; label: stri
 describe("REPL entries: the transcript belongs to the entry that is selected", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("EU1: each entry shows its own retained transcript, and no other entry's", function* () {
+  it("EU1: each entry shows its own saved transcript, and no other entry's", function* () {
     const physical = new InMemoryStream();
     yield* runEntry(physical, saying("ALPHA-ONE"));
     yield* runEntry(physical, saying("BRAVO-TWO"));
@@ -2512,7 +2512,7 @@ describe("REPL entries: restoring an answer at a narrow size (#875 R1)", () => {
       expect(keyedBy(tree)).toBe(`entry:${entry.key}`);
 
       // The claim is spent by the commit that satisfied it — a restoration is one
-      // claim, not a standing one — and the reveal it caused is retained in the
+      // claim, not a standing one — and the reveal it caused is saved in the
       // offset this process holds.
       const committed = (yield* contextOf(view)).admission;
       const settled = focusSettled(view, `entry:${entry.key}`, committed);
@@ -2720,7 +2720,7 @@ describe("REPL entries: what each prefix of a two-entry history shows", () => {
     // [3] At its terminal position: the same row, now carrying its outcome.
     expect(yield* catalogAt(terminal)).toEqual(["1. [ok] entry-1", "2. [ok] entry-2"]);
 
-    // Each prefix shows only what it retained. The second entry's output is in
+    // Each prefix shows only what it saved. The second entry's output is in
     // none of the readings before its own close.
     const linesAt = function* (marker: string): Operation<string[]> {
       const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
@@ -2729,7 +2729,7 @@ describe("REPL entries: what each prefix of a two-entry history shows", () => {
     // The Output half alone. Re-anchored for #881 PR 2: the reading also shows
     // the source each prefix admitted, and at the admission checkpoint that
     // source is the second entry's own — so the claim being made here, that no
-    // prefix shows output it had not retained, is read off the half that
+    // prefix shows output it had not saved, is read off the half that
     // carries output.
     const outputAt = function* (marker: string): Operation<string[]> {
       const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
@@ -2742,7 +2742,7 @@ describe("REPL entries: what each prefix of a two-entry history shows", () => {
     expect(yield* outputAt(terminal)).toContain("BRAVO-TWO");
 
     // The draft is current route state throughout: it is not a thing a prefix
-    // retained, so freezing the durable view does not freeze it.
+    // saved, so freezing the durable view does not freeze it.
     for (const marker of [before, admission, terminal]) {
       const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
       const view = reading(state, projected(events, marker), NOTHING_LIVE, WIDE);
@@ -2797,7 +2797,7 @@ describe("REPL entries: a third entry inherits the file, not the run before it",
       // Entry 1 publishes a nested value. Entry 2 inherits it and edits what it
       // inherited — ordinary mutation of an ordinary binding, which publishes
       // nothing, so the two readings of `plan` diverge from here on: the file
-      // holds what Entry 1 retained and this process holds what Entry 2 made of
+      // holds what Entry 1 saved and this process holds what Entry 2 made of
       // it.
       const session = opened(
         yield* submitReplEntry({ execution: holder, source: PUBLISHES_NESTED }),
@@ -3148,7 +3148,7 @@ describe("REPL entries: what a frozen position says is unavailable", () => {
  * opens. Nothing here is produced by elapsed time. The only timing is the bounded
  * wait that keeps a genuine deadlock from reporting as a hang.
  */
-describe("REPL entries: a retained close while the task is still coming down", () => {
+describe("REPL entries: a saved close while the task is still coming down", () => {
   beforeAll(() => useTempFileCompiler());
 
   /** The contextual guidance this view describes. */

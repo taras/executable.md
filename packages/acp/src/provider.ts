@@ -199,7 +199,7 @@ export interface AcpxSessionIdentity {
  * Absent keeps the ordinary walk from the caller's directory toward the Git
  * repository root. A host that keys a session by something other than a path —
  * a workflow run, say — answers here instead, which is also where it refuses a
- * retained session it cannot continue: before ACPX is contacted, and therefore
+ * saved session it cannot continue: before ACPX is contacted, and therefore
  * before a turn could start against a replacement.
  *
  * Supplied directly by the host that built it, like the coordinator beside it:
@@ -269,7 +269,7 @@ export interface AcpxProviderDependencies {
    *
    * Supplied directly by the host that built it, like the coordinator and the
    * route store beside it. It is deliberately not a contextual Api: executable
-   * validation decides which retained history may be accepted, and a decision
+   * validation decides which saved history may be accepted, and a decision
    * document middleware could replace could point the observation at one binary
    * while the run spawns another.
    *
@@ -420,7 +420,7 @@ interface DetachedSession {
   /**
    * The exact value `session()` issued for this placement.
    *
-   * Retained rather than rebuilt, and compared by identity rather than by
+   * Saved rather than rebuilt, and compared by identity rather than by
    * `sessionKey`: provider provenance is what this value carries, and a
    * structural copy carrying the same key was issued by nobody.
    */
@@ -433,7 +433,7 @@ interface ManagedSession extends DetachedSession {
   /**
    * The runtime that created this handle.
    *
-   * Retained rather than looked up again: reaching for "the" runtime afterwards
+   * Saved rather than looked up again: reaching for "the" runtime afterwards
    * opens a second child for a session the first already owns, so every turn,
    * close, detach and teardown goes through the one that made the handle.
    */
@@ -506,7 +506,7 @@ function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
 }
 
-/** The provider identity retained in a launch record. */
+/** The provider identity saved in a launch record. */
 const ACPX_PROVIDER = "acpx";
 
 /** Where this provider puts prepared instructions on a session it creates. */
@@ -554,8 +554,8 @@ class HostAssemblyIncomplete extends AgentSessionRecoveryRequired {
  * class means "already decided": anything else raised on the same path came
  * from private setup and says nothing repeatable.
  */
-class RetainedRefusal extends Error {
-  override name = "RetainedRefusal";
+class SavedRefusal extends Error {
+  override name = "SavedRefusal";
   constructor(readonly failure: LaunchFailure) {
     super(failure.message);
   }
@@ -566,7 +566,7 @@ class RetainedRefusal extends Error {
  *
  * `<Session>` and `<Prompt>` raise rather than retain, so the same settled
  * decision travels as an ordinary error with its stable class attached. A
- * launch that meets one turns it back into a retained refusal.
+ * launch that meets one turns it back into a saved refusal.
  */
 class AttachmentRefused extends Error {
   override name = "AttachmentRefused";
@@ -600,11 +600,11 @@ interface LaunchInvocation {
    */
   readonly configured: Set<string>;
   /**
-   * Sessions whose retained record this invocation has already checked against
+   * Sessions whose saved record this invocation has already checked against
    * its route.
    *
    * A replay reconciles before its own first live phase, and which phase that
-   * is depends on what the journal retained — detach for one suffix, exit for
+   * is depends on what the journal saved — detach for one suffix, exit for
    * the other. Recording it is what keeps the check from running twice.
    */
   readonly reconciled: Set<string>;
@@ -1892,7 +1892,7 @@ function* useAcpxProviderState(
     const version = binding.version(observed.versionOutput);
     if (version === undefined) {
       // Deliberately without the raw output: it is provider-private, and this
-      // message is retained in a diagnostic.
+      // message is saved in a diagnostic.
       throw new AttachmentRefused({
         class: "executable-binding-refused",
         message:
@@ -1917,13 +1917,13 @@ function* useAcpxProviderState(
   /** The stable comparison two builds of one session fail. */
   function buildDrift(
     sessionKey: string,
-    retained: ExecutableBuildBindingV1,
+    saved: ExecutableBuildBindingV1,
     live: ExecutableBuildBindingV1,
   ): LaunchFailure {
     return {
       class: "executable-binding-refused",
       message:
-        `session "${sessionKey}" was created by ${retained.reportedVersion} and this run ` +
+        `session "${sessionKey}" was created by ${saved.reportedVersion} and this run ` +
         `would use ${live.reportedVersion}, so the conversation it names cannot be confirmed`,
     };
   }
@@ -1937,7 +1937,7 @@ function* useAcpxProviderState(
    * disagree — a record asserting another conversation, or asserting none at
    * all, describes provider state this session cannot account for.
    */
-  function* retainedAssertion(sessionKey: string, nativeSessionId: string): Operation<void> {
+  function* savedAssertion(sessionKey: string, nativeSessionId: string): Operation<void> {
     const record = yield* until(store.load(sessionKey));
     if (record === undefined) {
       return;
@@ -2110,7 +2110,7 @@ function* useAcpxProviderState(
         buildDrift(prepared.sessionKey, route.executableBinding, build.binding),
       );
     }
-    yield* retainedAssertion(prepared.sessionKey, route.nativeSessionId);
+    yield* savedAssertion(prepared.sessionKey, route.nativeSessionId);
     return { build, resumeSessionId: route.nativeSessionId };
   }
 
@@ -2839,7 +2839,7 @@ function* useAcpxProviderState(
     // with nothing written into the record it never had.
     if (route?.route === "client-native" && route.schema === "session-route.v1") {
       invocation.fresh.set(sessionKey, false);
-      return retained(agentName, adapter, route, instructions, sessionCwd, "resumed");
+      return saved(agentName, adapter, route, instructions, sessionCwd, "resumed");
     }
 
     // Observed before an identity exists, so a build this run cannot name stops
@@ -2867,7 +2867,7 @@ function* useAcpxProviderState(
     if (route?.route === "client-native") {
       invocation.fresh.set(sessionKey, false);
       invocation.bound.set(sessionKey, { build, adapter });
-      return retained(agentName, adapter, route, instructions, sessionCwd, "resumed");
+      return saved(agentName, adapter, route, instructions, sessionCwd, "resumed");
     }
 
     // The adapter allocates, because only it knows what identity this provider
@@ -2876,7 +2876,7 @@ function* useAcpxProviderState(
     const candidate = adapter.allocate();
 
     // Publish or adopt: a caller meeting a compatible existing route takes its
-    // retained identity rather than insisting its own candidate win, because
+    // saved identity rather than insisting its own candidate win, because
     // the first durable publication is authoritative.
     let winner: AgentSessionRoute;
     try {
@@ -2916,7 +2916,7 @@ function* useAcpxProviderState(
     // observation as that session's history.
     if (winner.schema === "session-route.v1") {
       invocation.fresh.set(sessionKey, false);
-      return retained(agentName, adapter, winner, instructions, sessionCwd, "resumed");
+      return saved(agentName, adapter, winner, instructions, sessionCwd, "resumed");
     }
     if (!sameExecutableBuild(winner.executableBinding, build.binding)) {
       const drift = buildDrift(sessionKey, winner.executableBinding, build.binding);
@@ -2930,7 +2930,7 @@ function* useAcpxProviderState(
     invocation.fresh.set(sessionKey, fresh);
     invocation.bound.set(sessionKey, { build, adapter });
     void prepared;
-    return retained(
+    return saved(
       agentName,
       adapter,
       winner,
@@ -2941,7 +2941,7 @@ function* useAcpxProviderState(
   }
 
   /** The prepared record a client-native route describes, exactly. */
-  function retained(
+  function saved(
     agentName: string,
     adapter: ClientAllocatedAdapter,
     route: Extract<AgentSessionRoute, { route: "client-native" }>,
@@ -2976,8 +2976,8 @@ function* useAcpxProviderState(
     return record;
   }
 
-  /** What a retained preparation says its conversation was put under. */
-  function retainedConfiguration(prepared: PreparedLaunchRecord): SessionConfiguration | undefined {
+  /** What a saved preparation says its conversation was put under. */
+  function savedConfiguration(prepared: PreparedLaunchRecord): SessionConfiguration | undefined {
     return prepared.configuration;
   }
 
@@ -3114,7 +3114,7 @@ function* useAcpxProviderState(
     // owed. A resumed session has already been spoken in — whatever made it
     // openable happened before this run — so taking a turn in it would be
     // spending someone's model turn to learn nothing. The request id is minted
-    // here rather than at the turn so a replay reading the retained record is
+    // here rather than at the turn so a replay reading the saved record is
     // looking for the turn the first attempt committed to.
     const plan: MaterializationPlan | undefined =
       sessionState === "created" && adapter.materialization
@@ -3238,15 +3238,15 @@ function* useAcpxProviderState(
    * Reached at a replay's own first live phase, which is wherever the journal
    * stopped: the detach for a launch that never handed over, and the spawn for
    * one that did. The session is reattached by the exact identity the
-   * preparation retained, configured, and given up again — a replay reopens a
+   * preparation saved, configured, and given up again — a replay reopens a
    * conversation, it does not author a second account of relinquishing it.
    */
-  function* reconfigureRetained(
+  function* reconfigureSaved(
     invocation: LaunchInvocation,
     prepared: PreparedLaunchRecord,
     agentCommand: string,
   ): Operation<LaunchFailure | undefined> {
-    const requested = retainedConfiguration(prepared);
+    const requested = savedConfiguration(prepared);
     if (requested === undefined || invocation.configured.has(prepared.sessionKey)) {
       return undefined;
     }
@@ -3359,7 +3359,7 @@ function* useAcpxProviderState(
    * Reached only for a preparation that planned one, which is only ever a
    * conversation this launch created through an adapter that says a fresh one is
    * not yet openable. Everything about it is fixed before it runs: the exact
-   * prompt and the request id come from the retained plan, so a replay is
+   * prompt and the request id come from the saved plan, so a replay is
    * looking for this turn rather than authorizing another.
    *
    * It is not a Prompt. It publishes no event stream, reaches no authored
@@ -3657,7 +3657,7 @@ function* useAcpxProviderState(
     // A replay that stopped before handing over reaches its conversation here
     // for the first time, so this is where what it was prepared with is put
     // back into force — before the detach that follows says the handoff began.
-    const unconfigured = yield* reconfigureRetained(invocation, prepared, agentCommand);
+    const unconfigured = yield* reconfigureSaved(invocation, prepared, agentCommand);
     if (unconfigured) {
       return { phase: "detached", failure: unconfigured };
     }
@@ -3778,7 +3778,7 @@ function* useAcpxProviderState(
         );
       } catch (error) {
         // Contention and an unrecovered session are launch outcomes, not
-        // crashes: they are retained as a refusal, before any ACP ensure,
+        // crashes: they are saved as a refusal, before any ACP ensure,
         // detach or child, so the reader is told what to do about it.
         const refusal = ownershipRefusal(error, agentName, placement.sessionKey, callerCwd);
         if (!refusal) {
@@ -3793,11 +3793,11 @@ function* useAcpxProviderState(
   /**
    * What this run must ask the native process to do.
    *
-   * The retained phase is the whole question, and it is answered by what the
+   * The saved phase is the whole question, and it is answered by what the
    * journal gave back rather than by anything the provider kept. A replay that
-   * retained only `prepared` proves the handoff never began — core retains
+   * saved only `prepared` proves the handoff never began — core retains
    * `detached` before it invokes this phase — so creation may still be owed. A
-   * replay that retained `detached` may have had a process start under this
+   * replay that saved `detached` may have had a process start under this
    * identity already, so it resumes and never falls back to creating.
    */
   function* nativeCommand(
@@ -3814,7 +3814,7 @@ function* useAcpxProviderState(
       // prepared-only one has already been checked at its own.
       const refused = yield* reconcile(invocation, prepared, agentCommand);
       if (refused) {
-        return Err(new RetainedRefusal(refused));
+        return Err(new SavedRefusal(refused));
       }
     }
     // Creation is a question only for an identity XMD chose. A session the
@@ -3840,7 +3840,7 @@ function* useAcpxProviderState(
     return Ok(observed ? [observed.build.livePath, ...argv.slice(1)] : argv);
   }
 
-  /** Check a retained launch against its route once per invocation. */
+  /** Check a saved launch against its route once per invocation. */
   function* reconcile(
     invocation: LaunchInvocation,
     prepared: PreparedLaunchRecord,
@@ -3849,7 +3849,7 @@ function* useAcpxProviderState(
     if (invocation.reconciled.has(prepared.sessionKey)) {
       return undefined;
     }
-    const refused = yield* reconcileRetainedLaunch(invocation, prepared, agentCommand);
+    const refused = yield* reconcileSavedLaunch(invocation, prepared, agentCommand);
     if (refused) {
       return refused;
     }
@@ -3858,7 +3858,7 @@ function* useAcpxProviderState(
   }
 
   /**
-   * Check a retained launch against the route before resuming or creating.
+   * Check a saved launch against the route before resuming or creating.
    *
    * Two durable accounts of this session already exist — the journal's and the
    * route's — and a replay may act only if they still agree. Neither account
@@ -3866,7 +3866,7 @@ function* useAcpxProviderState(
    * disagreement has discovered that the session it was going to continue is
    * not the session it prepared.
    */
-  function* reconcileRetainedLaunch(
+  function* reconcileSavedLaunch(
     invocation: LaunchInvocation,
     prepared: PreparedLaunchRecord,
     agentCommand: string,
@@ -3887,7 +3887,7 @@ function* useAcpxProviderState(
         `session "${prepared.sessionKey}" was prepared before XMD recorded which build its ` +
         `identity belongs to, so this run cannot confirm the conversation it names`,
     });
-    // Which provider retained this preparation, before anything is compared
+    // Which provider saved this preparation, before anything is compared
     // against it. A record another provider wrote describes a session this one
     // does not own, and an ACPX route that happens to agree about a UUID is not
     // evidence that it does — it is two providers naming one string.
@@ -3916,7 +3916,7 @@ function* useAcpxProviderState(
     } catch (error) {
       return stop(routeMessage(error));
     }
-    let retainedBinding: ExecutableBuildBindingV1;
+    let savedBinding: ExecutableBuildBindingV1;
     if (allocatesIdentity(adapter)) {
       if (!route || route.route !== "client-native") {
         return stop(
@@ -3935,7 +3935,7 @@ function* useAcpxProviderState(
       if (route.schema === "session-route.v1") {
         return unrecorded();
       }
-      retainedBinding = route.executableBinding;
+      savedBinding = route.executableBinding;
     } else {
       if (!route || route.route !== "acp-first") {
         return stop(
@@ -3946,13 +3946,13 @@ function* useAcpxProviderState(
       if (route.schema !== "session-route.v3") {
         return unrecorded();
       }
-      retainedBinding = route.executableBinding;
+      savedBinding = route.executableBinding;
       // ACPX's own record, which is what any later ACP operation would reopen
       // this session through. A record naming another conversation, or none,
       // means the identity the native process is about to be handed is not the
       // one this provider would come back to.
       try {
-        yield* retainedAssertion(prepared.sessionKey, prepared.nativeSessionId);
+        yield* savedAssertion(prepared.sessionKey, prepared.nativeSessionId);
       } catch (error) {
         if (error instanceof AttachmentRefused) {
           return error.failure;
@@ -3963,7 +3963,7 @@ function* useAcpxProviderState(
     if (prepared.executableBinding === undefined) {
       return unrecorded();
     }
-    if (!sameExecutableBuild(retainedBinding, prepared.executableBinding)) {
+    if (!sameExecutableBuild(savedBinding, prepared.executableBinding)) {
       return disagree();
     }
     // The live half, before the first effect a native process could act on.
@@ -3976,8 +3976,8 @@ function* useAcpxProviderState(
       }
       throw error;
     }
-    if (!sameExecutableBuild(build.binding, retainedBinding)) {
-      return buildDrift(prepared.sessionKey, retainedBinding, build.binding);
+    if (!sameExecutableBuild(build.binding, savedBinding)) {
+      return buildDrift(prepared.sessionKey, savedBinding, build.binding);
     }
     invocation.bound.set(prepared.sessionKey, { build, adapter });
     return undefined;
@@ -4021,11 +4021,11 @@ function* useAcpxProviderState(
         return { phase: "exited", failure: unconfirmed };
       }
     }
-    // A launch whose detach was already retained reaches its conversation for
+    // A launch whose detach was already saved reaches its conversation for
     // the first time here. It is configured and relinquished again before the
     // UI opens, and nothing durable is appended for that: the detach this
     // replay is standing on is the one that happened.
-    const unconfigured = yield* reconfigureRetained(invocation, prepared, agentCommand);
+    const unconfigured = yield* reconfigureSaved(invocation, prepared, agentCommand);
     if (unconfigured) {
       return { phase: "exited", failure: unconfigured };
     }
@@ -4042,7 +4042,7 @@ function* useAcpxProviderState(
       // Only a refusal this provider already settled says anything; a failure
       // of any other kind came from that same private path.
       const failure =
-        resolved.error instanceof RetainedRefusal ? resolved.error.failure : privateFailure();
+        resolved.error instanceof SavedRefusal ? resolved.error.failure : privateFailure();
       return { phase: "exited", failure };
     }
     const command = resolved.value;
@@ -4064,7 +4064,7 @@ function* useAcpxProviderState(
     }
   }
 
-  /** The retained refusal an ownership failure becomes, if it is one. */
+  /** The saved refusal an ownership failure becomes, if it is one. */
   function ownershipRefusal(
     error: unknown,
     agentName: string,

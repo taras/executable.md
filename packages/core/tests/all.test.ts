@@ -39,7 +39,7 @@ import { forEach } from "@effectionx/stream-helpers";
 import { collect } from "../src/collect.ts";
 import { Component, retain } from "../src/component-api.ts";
 import { getExpansion } from "../src/expansion.ts";
-import { retainedSource } from "../src/root-source.ts";
+import { savedSource } from "../src/root-source.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { Agent } from "../src/agent/agent-api.ts";
 import type { AgentPromptEvent } from "../src/agent/agent-api.ts";
@@ -123,9 +123,9 @@ class Harness {
   readonly ran: string[] = [];
   /** The expansion identifier each `<Probe>` saw, by its name. */
   readonly identities = new Map<string, string>();
-  /** `start:`/`stop:` marks the retained resources published. */
+  /** `start:`/`stop:` marks the saved resources published. */
   readonly timeline: string[] = [];
-  /** What each `<Observe>` saw of a retained resource. */
+  /** What each `<Observe>` saw of a saved resource. */
   readonly observed: string[] = [];
 
   readonly #arrivals = new Map<string, Signal>();
@@ -803,7 +803,7 @@ const ISOLATION_DOC = [
 describe("Tier ALL — PA4: a child's bindings and resources are its own", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("ALL7: a binding and a retained resource live on in their child and nowhere else", function* () {
+  it("ALL7: a binding and a saved resource live on in their child and nowhere else", function* () {
     const shared = harness();
     const result = yield* run(ISOLATION_DOC, { shared });
 
@@ -994,7 +994,7 @@ describe("Tier ALL — PA6: a failure cancels its siblings and publishes nothing
 
     expect(outcome).toBe("cancelled");
     // The scope exited while both children were held, and both were joined:
-    // the retained resource is released and no gate recorded work.
+    // the saved resource is released and no gate recorded work.
     expect(shared.timeline).toEqual(["start:kept", "stop:kept"]);
     expect(gateOrder(stream.snapshot())).toEqual([]);
   });
@@ -1276,7 +1276,7 @@ function evaluateFragment(source: string): Operation<Attempt> {
     };
     const installation: ExecutionInstallation = { prepare };
     const execution = yield* executeInstalled(
-      { ...retainedSource(GENERATED_ROOT, GENERATED_SOURCE), stream, includes: [] },
+      { ...savedSource(GENERATED_ROOT, GENERATED_SOURCE), stream, includes: [] },
       [installation],
     );
     const result = yield* execution;

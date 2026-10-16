@@ -34,7 +34,7 @@ export type { SourceBundleComponent, WorkflowDefinition };
  * host that builds one by hand — or reads one from a file — can build one that
  * type-checks and does not describe a definition. The parser is closed, so a
  * value carrying any member this shape does not declare is refused rather than
- * read loosely. A record retained under an older format carried a `version`
+ * read loosely. A record saved under an older format carried a `version`
  * member, and is therefore refused here rather than guessed at.
  */
 export function parseWorkflowDefinition(value: unknown): Result<WorkflowDefinition> {

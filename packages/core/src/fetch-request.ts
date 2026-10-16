@@ -62,7 +62,7 @@ export function requestRecord(request: FetchRequest): JsonObject {
  * Parsing answers whether the string is an absolute `http:` or `https:` URL;
  * it does not decide what the request is *for*. `URL.href` normalizes case,
  * default ports, and escaping, and sending a URL the author did not write would
- * make the retained request disagree with the document.
+ * make the saved request disagree with the document.
  */
 function admitUrl(value: Json): string {
   if (typeof value !== "string") {

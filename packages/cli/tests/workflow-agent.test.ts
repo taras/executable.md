@@ -21,7 +21,7 @@ import type { Operation } from "effection";
 import { ensureDir, exists, readTextFile } from "@effectionx/fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { collect, execute, retainedSource } from "@executablemd/core";
+import { collect, execute, savedSource } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
 import type { RuntimeFetchResponse } from "@executablemd/runtime";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -51,7 +51,7 @@ const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "work
 const NOTE = "the release checklist is three items long\n";
 
 /**
- * What ACPX resolves this agent to, and what the base branch retained for it.
+ * What ACPX resolves this agent to, and what the base branch saved for it.
  *
  * Written out rather than read back through `createAgentRegistry()`, because
  * the requirement is that this value did not move. Recomputing it from the same
@@ -116,7 +116,7 @@ function stubAdapters(): EmbeddedAdapters & { readonly materialized: string[] } 
   return {
     materialized,
     providers: ["codex", "claude"],
-    // Stable, and deliberately carrying no path: this is what a retained
+    // Stable, and deliberately carrying no path: this is what a saved
     // session and a sealed artifact record, so it must not vary with where a
     // host materialized anything.
     identity(provider) {
@@ -136,8 +136,8 @@ function stubAdapters(): EmbeddedAdapters & { readonly materialized: string[] } 
   };
 }
 
-/** Every Agent session one run retained, as its database holds it. */
-function retainedSessions(path: string): Record<string, unknown>[] {
+/** Every Agent session one run saved, as its database holds it. */
+function savedSessions(path: string): Record<string, unknown>[] {
   const database = new DatabaseSync(path);
   try {
     return database.prepare("SELECT * FROM agent_sessions ORDER BY session_key").all();
@@ -152,8 +152,8 @@ const TOKEN_VALUE = "wal-canary-turn-6b3f9d";
 /** The kind this host records that identity under. */
 const TOKEN_KIND = "app-server-turn-id";
 
-/** Which provider turn each Prompt of this run was, as the run retained it. */
-function* retained(
+/** Which provider turn each Prompt of this run was, as the run saved it. */
+function* saved(
   database: WorkflowRunDatabase,
 ): Operation<{ eventId: string; tokenKind: string; tokenValue: string }[]> {
   const read = yield* transactAgentPromptCheckpoints(database, function* (checkpoints) {
@@ -262,7 +262,7 @@ function runFixture(
           return yield* collect(
             yield* executeInstalled(
               {
-                ...retainedSource("workflows/observation-loop.md", source),
+                ...savedSource("workflows/observation-loop.md", source),
                 stream: database.journal,
                 ...(options.props === undefined ? {} : { props: options.props }),
               },
@@ -505,7 +505,7 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
     });
   });
 
-  it("WAL10: a named turn is retained against its Prompt and rendered nowhere", function* () {
+  it("WAL10: a named turn is saved against its Prompt and rendered nowhere", function* () {
     const root = yield* useStorageRoot();
     const source = yield* documentWithNote();
 
@@ -518,9 +518,9 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       const attempt = yield* runFixture(root, database, source, { createRuntime: fake.create });
 
       expect(attempt.failure).toBe(undefined);
-      // Retained, and against the run's own Prompt events. Without this the
+      // Saved, and against the run's own Prompt events. Without this the
       // absence below would be the absence of something that never existed.
-      const rows = yield* retained(database);
+      const rows = yield* saved(database);
       expect(rows.map((row) => row.tokenValue)).toEqual([`${TOKEN_VALUE}-1`, `${TOKEN_VALUE}-2`]);
       expect(rows.every((row) => row.tokenKind === TOKEN_KIND)).toBe(true);
       const promptEvents = typed(attempt.events, "agent_prompt").map((event) => event);
@@ -567,7 +567,7 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       // that rendering is what reaches the next prompt.
       expect(fake.prompts).toHaveLength(2);
       const second = fake.prompts[1] ?? "";
-      // The complete retained response, not a summary of it: status, headers and
+      // The complete saved response, not a summary of it: status, headers and
       // body, exactly as the fragment chose to render them.
       expect(second).toContain('"status": 200');
       expect(second).toContain('"content-type"');
@@ -611,7 +611,7 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       expect(observed).toContain("the release notes are ready");
 
       // The same document over its own journal: the response is restored from
-      // the retained `fetch` effect, and neither the agent nor the server is
+      // the saved `fetch` effect, and neither the agent nor the server is
       // asked anything.
       const replayed: string[] = [];
       const reached: string[] = [];
@@ -648,14 +648,14 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       // observation where a proposal was required.
       expect(reported(attempt)).toMatch(/proposal|const/i);
       expect(fake.prompts).toHaveLength(4);
-      // And the evidence that produced it is retained: four turns, four
+      // And the evidence that produced it is saved: four turns, four
       // admissions.
       expect(typed(attempt.events, "agent_prompt")).toHaveLength(4);
       expect(admitted(attempt.events)).toHaveLength(4);
     });
   });
 
-  it("WAL5: a mutation-shaped proposal is retained as data and mutates nothing", function* () {
+  it("WAL5: a mutation-shaped proposal is saved as data and mutates nothing", function* () {
     const root = yield* useStorageRoot();
     const source = yield* documentWithNote();
 
@@ -679,7 +679,7 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
     });
   });
 
-  it("WAL6: a denied native tool becomes the retained Prompt failure", function* () {
+  it("WAL6: a denied native tool becomes the saved Prompt failure", function* () {
     const root = yield* useStorageRoot();
     const source = yield* documentWithNote();
 
@@ -696,13 +696,13 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
 
       // Rejected where ACP offered a rejection.
       expect(fake.decisions).toEqual(["reject_once"]);
-      // The turn failed, and the failure is retained rather than inferred.
+      // The turn failed, and the failure is saved rather than inferred.
       const prompts = typed(attempt.events, "agent_prompt");
       expect(prompts).toHaveLength(1);
-      const retained = JSON.stringify(prompts[0]);
-      expect(retained).toContain("native tool");
+      const saved = JSON.stringify(prompts[0]);
+      expect(saved).toContain("native tool");
       // Nothing the request carried reached the record.
-      expect(retained).not.toContain(marker);
+      expect(saved).not.toContain(marker);
     });
   });
 
@@ -817,7 +817,7 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
           // Read straight out of the file, because the durable row is the claim
           // — it is what a later attachment compares and what the artifact
           // encoder writes `agentCommand` from.
-          sessions: retainedSessions(workflowRunPath(root, "observation-run")),
+          sessions: savedSessions(workflowRunPath(root, "observation-run")),
           launch: adapters.executablePath("codex"),
           identity: adapters.identity("codex"),
         };
@@ -849,11 +849,11 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
     expect(here.sessions[0]?.["agent_command"]).toBe(here.identity);
     expect(there.sessions[0]?.["agent_command"]).toBe(here.identity);
 
-    // Neither host's path is anywhere in what was retained.
-    const retained = JSON.stringify(here.sessions) + JSON.stringify(there.sessions);
-    expect(retained).not.toContain(plainRoot);
-    expect(retained).not.toContain(spacedRoot);
-    expect(retained).not.toContain("adapters/");
+    // Neither host's path is anywhere in what was saved.
+    const saved = JSON.stringify(here.sessions) + JSON.stringify(there.sessions);
+    expect(saved).not.toContain(plainRoot);
+    expect(saved).not.toContain(spacedRoot);
+    expect(saved).not.toContain("adapters/");
 
     // And each host still launches its own local executable.
     expect(there.launch).not.toBe(here.launch);
@@ -894,13 +894,13 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       // provider it does not carry, so any of those would have failed the run.
       expect(adapters.materialized).toEqual([]);
 
-      // The ordinary Prompt events are retained exactly as they always were.
+      // The ordinary Prompt events are saved exactly as they always were.
       expect(typed(attempt.events, "agent_prompt")).toHaveLength(2);
 
       // And nothing was associated, because nothing named a turn. An absent
       // checkpoint is not a failed Prompt: the event above is the proof that
       // this zero is a zero rather than a run that did not happen.
-      expect(yield* retained(database)).toEqual([]);
+      expect(yield* saved(database)).toEqual([]);
     });
   });
 
@@ -934,9 +934,9 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       expect(reported(replay)).toBe(reported(first));
       expect(reached).toEqual([]);
       expect(replay.events.length).toBe(committed);
-      // And still nothing associated. A run that retained no checkpoint
+      // And still nothing associated. A run that saved no checkpoint
       // replays from the stored Prompt alone, exactly like one that did.
-      expect(yield* retained(database)).toEqual([]);
+      expect(yield* saved(database)).toEqual([]);
     });
 
     // An interrupted run, resumed. This is the partial case: one Prompt is on
@@ -988,11 +988,11 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       );
       // Two completed Prompts on the journal and no association for either.
       expect(typed(second.events, "agent_prompt")).toHaveLength(2);
-      expect(yield* retained(database)).toEqual([]);
+      expect(yield* saved(database)).toEqual([]);
     });
   });
 
-  it("WAL15: its retained identity is the resolved command, as it was before", function* () {
+  it("WAL15: its saved identity is the resolved command, as it was before", function* () {
     const root = yield* useStorageRoot();
     const source = yield* baselineAgentSource();
 
@@ -1007,14 +1007,14 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
 
       // The compatibility attribute a reattachment compares and an artifact
       // seals. For an agent this build does not override it is ACPX's resolved
-      // command and nothing else — the same value this profile retained before
-      // any adapter was embedded, so a session retained by an earlier run of
+      // command and nothing else — the same value this profile saved before
+      // any adapter was embedded, so a session saved by an earlier run of
       // the same workflow is still that session.
-      const rows = retainedSessions(workflowRunPath(root, "observation-run"));
+      const rows = savedSessions(workflowRunPath(root, "observation-run"));
       expect(rows).toHaveLength(1);
-      // Two claims, and they are different ones. That the retained value *is*
+      // Two claims, and they are different ones. That the saved value *is*
       // what the registry resolved, and that what the registry resolved is
-      // ACPX's own built-in — the literal the base branch retained for this
+      // ACPX's own built-in — the literal the base branch saved for this
       // agent, written out rather than recomputed through the code under test.
       expect(rows[0]?.["agent_command"]).toBe(fake.created[0]?.agentRegistry.resolve("gemini"));
       expect(rows[0]?.["agent_command"]).toBe(GEMINI_COMMAND);
@@ -1071,10 +1071,10 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
 
       // Refused, by the snapshot's own words, and before any turn: the run
       // never sent a Prompt and never fell through to the published Codex
-      // adapter, which would have completed everything and retained nothing.
+      // adapter, which would have completed everything and saved nothing.
       expect(attempt.failure).toContain("cannot be verified");
       expect(fake.prompts).toEqual([]);
-      expect(yield* retained(database)).toEqual([]);
+      expect(yield* saved(database)).toEqual([]);
     });
 
     // The same broken snapshots, and an agent they have nothing to do with.

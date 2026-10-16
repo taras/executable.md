@@ -133,6 +133,6 @@
     // this proof observes `Deno.openSync` directly and spawns a second
     // `Deno.Command` to take the same sidecar from another process. The runtime
     // exclusions keep the same test out of the Node and Bun execution suites.
-    "packages/git/tests/retained-repository-lifecycle.test.ts"
+    "packages/git/tests/saved-repository-lifecycle.test.ts"
   ]
 }

@@ -17,7 +17,7 @@ import type { ExecutorLock } from "./api.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
 import type { JsonObject } from "../storage/members.ts";
 import type { SourceBundleSnapshotEntry, WorkflowDefinition } from "../storage/source-bundle.ts";
-import type { RetainedDefinitionSources } from "./source.ts";
+import type { SavedDefinitionSources } from "./source.ts";
 import type {
   DocumentExecutionCompletion,
   DocumentExecutionRecord,
@@ -52,7 +52,7 @@ export interface WorkflowForkSelection {
 /**
  * One caller's request to admit a fork and begin its first execution.
  *
- * The creation is the fork's own: its definition, its retained bytes and the
+ * The creation is the fork's own: its definition, its saved bytes and the
  * props it was normalized to. What it inherits is decided by the selection, and the source
  * takes no part in this run's identity beyond being named as its lineage.
  */
@@ -105,12 +105,12 @@ export interface WorkflowExecutionBegun {
    * Always present. A source-bundle run's content comes out of its own store;
    * a Git run's comes through the host's legacy reader, which is consulted
    * against the descriptor about to be persisted — before persistence — when
-   * the run is being created, and against the retained descriptor when it
+   * the run is being created, and against the saved descriptor when it
    * already exists. A host that installed no reader cannot begin a Git run at
    * all, which is the honest answer: it has no way to obtain what that run
    * executes.
    */
-  readonly sources: RetainedDefinitionSources;
+  readonly sources: SavedDefinitionSources;
 }
 
 /**

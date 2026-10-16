@@ -181,7 +181,7 @@ function reviewComponent(fn: (props: any) => Operation<unknown>): FunctionCompon
  * Reserve the seven TypeScript component names alongside the Markdown declarations.
  * These implementations run processes, read credentials and reach the network;
  * leaving them shadowable would let the review subject replace its own reviewers.
- * Their existing public names and contracts are retained.
+ * Their existing public names and contracts are saved.
  */
 export const REVIEW_REGISTRATIONS: readonly ComponentRegistration[] = [
   {

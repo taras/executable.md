@@ -10,7 +10,7 @@
  *
  * The failure this tier exists to prevent is a provider that keeps working
  * after the run that admitted it. A resolution suspended when the execution is
- * cancelled, a request retained past teardown, a losing answer arriving late,
+ * cancelled, a request saved past teardown, a losing answer arriving late,
  * and a captured body invoked afterwards are four shapes of the same thing, and
  * each of them here is asked about state the run actually left behind rather
  * than about the wording of a refusal.
@@ -39,7 +39,7 @@ import {
 } from "../src/evaluation-profile.ts";
 import type { ResolvedAnswer } from "../src/evaluation-profile.ts";
 import { useSelection } from "./support/generated-selection.ts";
-import { retainedSource } from "../src/root-source.ts";
+import { savedSource } from "../src/root-source.ts";
 import { answerProvider, implementation, offering } from "./support/answer-provider.ts";
 import type { Implementation } from "./support/answer-provider.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
@@ -76,12 +76,12 @@ function run(
 ): Operation<Json> {
   return scoped(function* () {
     return yield* collect(
-      yield* executeInstalled({ ...retainedSource(ROOT_PATH, source), stream }, [...installations]),
+      yield* executeInstalled({ ...savedSource(ROOT_PATH, source), stream }, [...installations]),
     );
   });
 }
 
-/** What a retained request refused with when it was used, as a string. */
+/** What a saved request refused with when it was used, as a string. */
 function refusalFrom(request: ComponentAnswerRequest | undefined): string {
   if (request === undefined) {
     throw new Error("the provider was never asked");
@@ -91,7 +91,7 @@ function refusalFrom(request: ComponentAnswerRequest | undefined): string {
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
-  throw new Error("expected the retained request to refuse");
+  throw new Error("expected the saved request to refuse");
 }
 
 /** What one execution refused with, as a string. */
@@ -127,7 +127,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     const stream = new InMemoryStream();
     const cleanup: string[] = [];
     const reached = withResolvers<void>();
-    const retained: ComponentAnswerRequest[] = [];
+    const saved: ComponentAnswerRequest[] = [];
 
     yield* scoped(function* () {
       const running = yield* spawn(() =>
@@ -144,7 +144,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
                       if (request.name !== "Open") {
                         return yield* next();
                       }
-                      retained.push(request);
+                      saved.push(request);
                       // Registered before the barrier, so cancellation cannot
                       // arrive between entering the handler and owning the
                       // cleanup.
@@ -180,30 +180,30 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     expect(A.invoked).toEqual([]);
     // Cancellation is a teardown like any other: the request this handler was
     // handed belongs to an execution that is over.
-    expect(refusalFrom(retained[0])).toContain("has ended");
+    expect(refusalFrom(saved[0])).toContain("has ended");
   });
 
-  it("FE15: a request retained past a successful execution states nothing afterwards", function* () {
+  it("FE15: a request saved past a successful execution states nothing afterwards", function* () {
     const A = implementation("Open", "A ran");
-    const retained: ComponentAnswerRequest[] = [];
+    const saved: ComponentAnswerRequest[] = [];
 
     // The provider keeps the request its handler received.
     const output = yield* run(OPEN, [
       {
         install: admits,
-        componentAnswers: [answerProvider("Open", A.definition, { retain: retained })],
+        componentAnswers: [answerProvider("Open", A.definition, { retain: saved })],
       },
     ]);
     expect(String(output)).toContain("A ran");
 
     // The execution has ended. The request is the object the provider kept,
     // and it refuses rather than recording into a run that is over.
-    expect(refusalFrom(retained[0])).toContain("has ended");
+    expect(refusalFrom(saved[0])).toContain("has ended");
   });
 
   it("FE15: a failed execution revokes the request it minted", function* () {
     const A = implementation("Open", "A ran");
-    const retained: ComponentAnswerRequest[] = [];
+    const saved: ComponentAnswerRequest[] = [];
 
     // The third way a run ends. The fragment names something the profile never
     // admitted, so the run fails after capture succeeded — and teardown is
@@ -212,14 +212,14 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
       run(`<Evaluate text={'<Elsewhere />\\n'} />\n`, [
         {
           install: admits,
-          componentAnswers: [answerProvider("Open", A.definition, { retain: retained })],
+          componentAnswers: [answerProvider("Open", A.definition, { retain: saved })],
         },
       ]),
     );
 
     expect(failed).toContain("did not admit");
     expect(A.invoked).toEqual([]);
-    expect(refusalFrom(retained[0])).toContain("has ended");
+    expect(refusalFrom(saved[0])).toContain("has ended");
   });
 
   it("FE15: a losing handler's request states nothing into the execution still running", function* () {
@@ -548,7 +548,7 @@ describe("Tier FE15 — a provider's answer belongs to the execution that captur
     expect(yield* sealed({}, invocation)).toBe("A ran");
     expect(A.invoked).toEqual(["A ran"]);
 
-    // Teardown. Whatever a provider, a handler or a retained callback still
+    // Teardown. Whatever a provider, a handler or a saved callback still
     // holds is bound to an execution that has ended.
     profile.revoke();
 

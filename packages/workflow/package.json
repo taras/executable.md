@@ -1,7 +1,7 @@
 {
   "name": "@executablemd/workflow",
   "version": "0.13.1",
-  "description": "Workflow runs for executable.md: one pinned definition per run, retained durably so another process can find it.",
+  "description": "Workflow runs for executable.md: one pinned definition per run, saved durably so another process can find it.",
   "type": "module",
   "exports": {
     ".": "./mod.ts",

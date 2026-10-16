@@ -6,7 +6,7 @@
  * reattaching the conversation it was having rather than replaying transcript
  * text into a new one. What makes that decidable is one row in the run's own
  * database, written in the run's own transaction — beside the journal it
- * belongs to, for the same reason retained Repository identity lives there: a
+ * belongs to, for the same reason saved Repository identity lives there: a
  * conversation and the record naming it are one fact, and a record that could
  * commit without the run committing would describe a session this run never had.
  *
@@ -40,7 +40,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 
-/** A retained Agent session this host will not continue under. */
+/** A saved Agent session this host will not continue under. */
 export class WorkflowAgentSessionError extends Error {
   override name = "WorkflowAgentSessionError";
 }
@@ -67,7 +67,7 @@ export interface AgentSessionIdentity {
   readonly sessionIdentity: string;
 }
 
-/** One retained mapping, as the run's database holds it. */
+/** One saved mapping, as the run's database holds it. */
 export interface AgentSessionRecord extends AgentSessionIdentity {
   readonly sessionKey: string;
   /** The session policy in force when the provider created this session. */
@@ -81,7 +81,7 @@ function digest(value: string): string {
 }
 
 /**
- * The key one logical session is retained under, within this run.
+ * The key one logical session is saved under, within this run.
  *
  * The engine-derived Session expansion identity and nothing else. The provider
  * and the resolved agent command are compatibility attributes stored beside it:
@@ -106,7 +106,7 @@ const INSERT = `INSERT INTO agent_sessions (session_key, provider, agent_command
   session_identity, policy, assertion_kind, assertion_value, created_at)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
 
-/** Every retained mapping this run holds. Reading is not a transaction. */
+/** Every saved mapping this run holds. Reading is not a transaction. */
 export interface AgentSessions {
   read(sessionKey: string): AgentSessionRecord | undefined;
   commit(record: AgentSessionRecord): void;
@@ -207,7 +207,7 @@ export type AgentSessionResolution =
  * name.
  */
 export function resolveAgentSession(
-  retained: AgentSessionRecord | undefined,
+  saved: AgentSessionRecord | undefined,
   policy: string,
   asserted: readonly ProviderAssertion[],
   identity: AgentSessionIdentity,
@@ -222,7 +222,7 @@ export function resolveAgentSession(
   }
   const current = asserted[0];
 
-  if (retained === undefined) {
+  if (saved === undefined) {
     if (current === undefined) {
       // Neither side holds anything: nothing was ever established here.
       return { kind: "create", sessionKey };
@@ -243,10 +243,10 @@ export function resolveAgentSession(
   }
 
   if (
-    retained.provider !== identity.provider ||
-    retained.agentCommand !== identity.agentCommand ||
-    retained.sessionIdentity !== identity.sessionIdentity ||
-    retained.policy !== policy
+    saved.provider !== identity.provider ||
+    saved.agentCommand !== identity.agentCommand ||
+    saved.sessionIdentity !== identity.sessionIdentity ||
+    saved.policy !== policy
   ) {
     throw new WorkflowAgentSessionError(
       "this run's Agent session was established under a different provider, agent or session " +
@@ -256,17 +256,17 @@ export function resolveAgentSession(
   }
   if (current === undefined) {
     throw new WorkflowAgentSessionError(
-      "the provider asserts no durable identity for the Agent session this run retained, and " +
+      "the provider asserts no durable identity for the Agent session this run saved, and " +
         "this host does not reconstruct a conversation by replaying it into a new session. " +
         "Start a new run rather than continuing this one.",
     );
   }
-  if (current.kind !== retained.assertion.kind || current.value !== retained.assertion.value) {
+  if (current.kind !== saved.assertion.kind || current.value !== saved.assertion.value) {
     throw new WorkflowAgentSessionError(
       "the provider asserts a different durable identity than the Agent session this run " +
-        "retained, so it did not resume the conversation this run was having. This host does " +
+        "saved, so it did not resume the conversation this run was having. This host does " +
         "not continue under a replacement session.",
     );
   }
-  return { kind: "reattach", record: retained };
+  return { kind: "reattach", record: saved };
 }

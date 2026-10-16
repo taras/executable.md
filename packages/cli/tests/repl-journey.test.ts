@@ -607,7 +607,7 @@ function focusedOn(terminal: Terminal, label: string): boolean {
       // focused and the one being read, and the two markers are independent.
       const after = line.slice(at + 1).trimStart();
       const beyond = after.startsWith("* ") ? after.slice(2) : after;
-      // And past a History row's own ordinal. #881 PR 3 gives every retained
+      // And past a History row's own ordinal. #881 PR 3 gives every saved
       // position its number in the full list — `12 · Entry 3 admitted` — which
       // is another prefix the product puts there, like the two above.
       const named = beyond.replace(/^\d+ \u00b7 /, "");
@@ -658,7 +658,7 @@ function exitRoute(): ExitRoute {
   };
 }
 
-/** Whether this reading is a retained position rather than the live head. */
+/** Whether this reading is a saved position rather than the live head. */
 function historicalOn(terminal: Terminal): boolean {
   return screenOf(terminal).some((line) => line.includes("[live]"));
 }
@@ -1317,7 +1317,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
 
       // The question announces itself and opens nothing. Activating that
       // announcement is what opens the drawer, and the drawer then shows the
-      // retained schema as a form: one field, its choices.
+      // saved schema as a form: one field, its choices.
       expect(shows(terminal, "decision: approve | decline")).toBe(false);
       yield* openQuestion(terminal);
       expect(shows(terminal, "decision: approve | decline")).toBe(true);
@@ -1343,7 +1343,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
     });
 
     // The Sessions surface is still there, and still explicitly empty.
-    expect(shows(terminal, "(none retained)")).toBe(true);
+    expect(shows(terminal, "(none saved)")).toBe(true);
     expect(location).toBeDefined();
     expect(terminal.resets).toBe(1);
   });
@@ -1390,13 +1390,13 @@ describe("REPL journey: one entry, from raw bytes", () => {
     expect(first.terminal.resets).toBe(1);
     expect(first.terminal.readers).toBe(0);
 
-    const retained = root;
-    expect(retained).toBeDefined();
-    if (retained === undefined) {
+    const saved = root;
+    expect(saved).toBeDefined();
+    if (saved === undefined) {
       throw new Error("the first process created a repository");
     }
     const execution = files[0].replace(/\.jsonl$/, "");
-    const lines = yield* records(retained, files[0]);
+    const lines = yield* records(saved, files[0]);
 
     // A location that selects something meaningful: a structural scope inside the
     // entry, a historical position, and a recorded drawer.
@@ -1426,7 +1426,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
       binding === undefined ||
       marker === undefined
     ) {
-      throw new Error("the retained history holds an entry, a nested scope, a binding and markers");
+      throw new Error("the saved history holds an entry, a nested scope, a binding and markers");
     }
 
     // A drawer names something inside the scope the location selects, which is
@@ -1451,7 +1451,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
       yield* second.install();
       yield* immediateClock();
       yield* installReplHost({
-        dataRoot: () => retained,
+        dataRoot: () => saved,
         identify: () => {
           throw new Error("a reopened execution mints no identifier");
         },
@@ -1473,7 +1473,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
 
       // The same topology, the same binding value, the same transcript and the
       // same recorded answer — read from the file, not re-run.
-      // The drawer the location named is open on the retained value.
+      // The drawer the location named is open on the saved value.
       expect(shows(second.terminal, "[close]")).toBe(true);
 
       // Out from under the drawer first: a modal covers what it is in front of, so
@@ -1501,7 +1501,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
     expect(performed?.compiles).toBe(0);
     expect(performed?.asked).toBe(0);
     // And nothing was appended: the file is exactly what the first process left.
-    expect(yield* records(retained, files[0])).toEqual(lines);
+    expect(yield* records(saved, files[0])).toEqual(lines);
     expect(second.terminal.resets).toBe(1);
   });
 
@@ -1522,7 +1522,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
       });
       yield* settled();
 
-      // One retained execution, created exclusively, and named opaquely.
+      // One saved execution, created exclusively, and named opaquely.
       const files = yield* histories(root);
       expect(files).toHaveLength(1);
       const execution = files[0].replace(/\.jsonl$/, "");
@@ -1532,7 +1532,7 @@ describe("REPL journey: one entry, from raw bytes", () => {
 
       // The screen says where it is, what it holds and what it is waiting for.
       expect(shows(terminal, "Sessions")).toBe(true);
-      expect(shows(terminal, "(none retained)")).toBe(true);
+      expect(shows(terminal, "(none saved)")).toBe(true);
       expect(shows(terminal, "Entries")).toBe(true);
       expect(shows(terminal, "(not submitted)")).toBe(true);
 
@@ -1727,7 +1727,7 @@ describe("REPL journey: leaving", () => {
     const entry = projected.value.entries[0]?.scope;
     const marker = projected.value.checkpoints[projected.value.checkpoints.length - 1]?.marker;
     if (entry === undefined || marker === undefined) {
-      throw new Error("the retained history holds an entry and at least one position");
+      throw new Error("the saved history holds an entry and at least one position");
     }
 
     const location = encodeLocation({
@@ -2295,11 +2295,11 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       yield* activate(terminal, "answered");
 
       // The reading this state *is*, said on the screen: an entry selected, a
-      // recorded position being read, and the retained answer's drawer over it.
+      // recorded position being read, and the saved answer's drawer over it.
       expect(selectedEntryOn(terminal)).toContain("entry-1");
       expect(historicalOn(terminal)).toBe(true);
       expect(shows(terminal, "[close]")).toBe(true);
-      // The whole retained schema and the whole retained answer, reached through
+      // The whole saved schema and the whole saved answer, reached through
       // the drawer's own window.
       //
       // This drawer scrolls (#875). It used to describe every row at once and
@@ -2309,11 +2309,11 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       // longer "every line is on screen together" but the stronger one: every
       // line is **reachable**, and the rows that are not visible are not mounted.
       const { first: firstFrame, reached } = yield* drawerContent(terminal);
-      const retainedRows = [
+      const savedRows = [
         ...JSON.stringify(SCHEMA, undefined, 2).split("\n"),
         ...JSON.stringify(ANSWER, undefined, 2).split("\n"),
       ].map((line) => line.trim());
-      for (const line of retainedRows) {
+      for (const line of savedRows) {
         expect(reached).toContain(line);
       }
       // And it really was a window rather than one tall drawer. This record is
@@ -2346,11 +2346,11 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       }
     });
 
-    const retained = root;
-    if (retained === undefined || captured === undefined) {
+    const saved = root;
+    if (saved === undefined || captured === undefined) {
       throw new Error("the first process ran and reported a location");
     }
-    const lines = yield* records(retained, files[0]);
+    const lines = yield* records(saved, files[0]);
     expect(lines.length).toBeGreaterThan(0);
 
     // 10. A fresh host, with nothing but that location and the file.
@@ -2360,7 +2360,7 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       yield* second.install();
       yield* immediateClock();
       yield* installReplHost({
-        dataRoot: () => retained,
+        dataRoot: () => saved,
         identify: () => {
           throw new Error("a reopened execution mints no identifier");
         },
@@ -2386,7 +2386,7 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
       expect(selectedEntryOn(second.terminal)).toContain("entry-1");
       expect(historicalOn(second.terminal)).toBe(true);
 
-      // The same retained question: the whole schema and the whole answer, not a
+      // The same saved question: the whole schema and the whole answer, not a
       // label that happens to contain the word. Reached through the drawer's own
       // window, which a reopened process opens at its first row — how far a
       // window is scrolled is process-local and no location carries it.
@@ -2443,7 +2443,7 @@ describe("REPL journey: the whole of it, from raw bytes", () => {
     expect(performed?.reads ?? ["unmeasured"]).toEqual([]);
     expect(performed?.compiles).toBe(0);
     expect(performed?.asked).toBe(0);
-    expect(yield* records(retained, files[0])).toEqual(lines);
+    expect(yield* records(saved, files[0])).toEqual(lines);
     expect(second.terminal.resets).toBe(1);
     expect(second.terminal.readers).toBe(0);
     expect(second.terminal.listeners).toBe(0);
@@ -2735,7 +2735,7 @@ describe("REPL journey: the same product at every size", () => {
         // finding one inside the drawer means it showed through.
         // Re-anchored for #881 PR 2: the transcript's record rows became the
         // entry's reading, so these are two lines of what that reading shows.
-        // Both belong to it and to nothing this drawer lists — the retained
+        // Both belong to it and to nothing this drawer lists — the saved
         // positions name `summarySource` and `<Checklist /> admitted`, so
         // neither `Source` nor `Checklist` would discriminate anything.
         const underneath = ["### Ship the REPL", "2 steps remain."];
@@ -2868,7 +2868,7 @@ describe("REPL journey: what it settles before it acts", () => {
   it("J1: a route naming a scope the history never had refuses before anything replays", function* () {
     const source = yield* referenceSource();
     const first = recordingTerminal();
-    let retained = "";
+    let saved = "";
     let files: string[] = [];
     let entryKey = "";
 
@@ -2879,7 +2879,7 @@ describe("REPL journey: what it settles before it acts", () => {
     yield* scoped(function* (): Operation<void> {
       yield* first.install();
       yield* immediateClock();
-      retained = yield* useTemporaryHost();
+      saved = yield* useTemporaryHost();
 
       const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
@@ -2890,7 +2890,7 @@ describe("REPL journey: what it settles before it acts", () => {
         exited.settle(ran.value);
       });
       yield* untilDrawn(first.terminal);
-      files = yield* histories(retained);
+      files = yield* histories(saved);
 
       first.terminal.bytes(BYTES.encode(source));
       yield* settled(60);
@@ -2902,11 +2902,11 @@ describe("REPL journey: what it settles before it acts", () => {
       yield* running;
     });
 
-    const model = yield* projectionOf(retained, files[0]);
+    const model = yield* projectionOf(saved, files[0]);
     expect(model.entries[0]?.scope).toBeDefined();
     entryKey = model.entries[0]?.key ?? "";
     expect(model.settled).toBe(false);
-    const lines = yield* records(retained, files[0]);
+    const lines = yield* records(saved, files[0]);
 
     // A URL a person could plausibly type: the execution is real, the entry is
     // real, and one segment of the path is a typo.
@@ -2928,7 +2928,7 @@ describe("REPL journey: what it settles before it acts", () => {
       yield* second.install();
       yield* immediateClock();
       yield* installReplHost({
-        dataRoot: () => retained,
+        dataRoot: () => saved,
         identify: () => {
           throw new Error("a reopened execution mints no identifier");
         },
@@ -2961,13 +2961,13 @@ describe("REPL journey: what it settles before it acts", () => {
     // what the first process left behind.
     expect(performed?.asked).toBe(0);
     expect(performed?.compiles).toBe(0);
-    expect(yield* records(retained, files[0])).toEqual(lines);
+    expect(yield* records(saved, files[0])).toEqual(lines);
   });
 
   it("J1: a stale live-question URL refuses against a finished execution", function* () {
     const source = yield* referenceSource();
     const first = recordingTerminal();
-    let retained = "";
+    let saved = "";
     let files: string[] = [];
 
     // A history that ran to the end: the question was asked, answered and
@@ -2975,7 +2975,7 @@ describe("REPL journey: what it settles before it acts", () => {
     yield* scoped(function* (): Operation<void> {
       yield* first.install();
       yield* immediateClock();
-      retained = yield* useTemporaryHost();
+      saved = yield* useTemporaryHost();
 
       const exited = exitRoute();
       const running = yield* spawn(function* (): Operation<void> {
@@ -2986,7 +2986,7 @@ describe("REPL journey: what it settles before it acts", () => {
         exited.settle(ran.value);
       });
       yield* untilDrawn(first.terminal);
-      files = yield* histories(retained);
+      files = yield* histories(saved);
 
       first.terminal.bytes(BYTES.encode(source));
       yield* settled(60);
@@ -3001,9 +3001,9 @@ describe("REPL journey: what it settles before it acts", () => {
       yield* running;
     });
 
-    const model = yield* projectionOf(retained, files[0]);
+    const model = yield* projectionOf(saved, files[0]);
     expect(model.settled).toBe(true);
-    const lines = yield* records(retained, files[0]);
+    const lines = yield* records(saved, files[0]);
 
     // The URL somebody kept from while the question was up. The execution it
     // names is real and the drawer it names was real — and the question is gone,
@@ -3027,7 +3027,7 @@ describe("REPL journey: what it settles before it acts", () => {
       yield* second.install();
       yield* immediateClock();
       yield* installReplHost({
-        dataRoot: () => retained,
+        dataRoot: () => saved,
         identify: () => {
           throw new Error("a reopened execution mints no identifier");
         },
@@ -3053,7 +3053,7 @@ describe("REPL journey: what it settles before it acts", () => {
     expect(outcome?.ok).toBe(false);
     expect(performed?.asked).toBe(0);
     expect(performed?.compiles).toBe(0);
-    expect(yield* records(retained, files[0])).toEqual(lines);
+    expect(yield* records(saved, files[0])).toEqual(lines);
   });
 
   it("J1: an answered history with its root still open refuses the same URL", function* () {
@@ -4103,11 +4103,11 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
       expect(stood.value.draft).toBe(DRAFTED);
     }
 
-    const retained = root;
-    if (retained === undefined || standing === undefined) {
+    const saved = root;
+    if (saved === undefined || standing === undefined) {
       throw new Error("the first process created a repository and showed a location");
     }
-    const path = join(retained, "xmd", "repl", files[0]);
+    const path = join(saved, "xmd", "repl", files[0]);
     const before = yield* until(readFile(path, "utf8"));
 
     // A cold process over that exact location: the same reading, with no work
@@ -4117,7 +4117,7 @@ describe("REPL journey: a selection, a position and a draft across a resize", ()
     yield* scoped(function* (): Operation<void> {
       yield* second.install();
       yield* immediateClock();
-      yield* reopening(retained);
+      yield* reopening(saved);
       performed = yield* countPerformed();
 
       const coldRoute = exitRoute();
@@ -4525,8 +4525,8 @@ describe("REPL journey: a cold process at an early position", () => {
       standing = exited.location();
     });
 
-    const retained = root;
-    if (retained === undefined || standing === undefined) {
+    const saved = root;
+    if (saved === undefined || standing === undefined) {
       throw new Error("the first process created a repository and showed a location");
     }
     // What the location names: the early position and the draft, and nothing
@@ -4537,16 +4537,16 @@ describe("REPL journey: a cold process at an early position", () => {
       expect(stood.value.draft).toBe(DRAFTED);
       expect(stood.value.at).toBeDefined();
     }
-    const path = join(retained, "xmd", "repl", files[0]);
+    const path = join(saved, "xmd", "repl", files[0]);
     const before = yield* until(readFile(path, "utf8"));
-    const retainedFiles = yield* histories(retained);
+    const savedFiles = yield* histories(saved);
 
     const second = recordingTerminal({ columns: 160, rows: 36 });
     let performed: Performed | undefined;
     yield* scoped(function* (): Operation<void> {
       yield* second.install();
       yield* immediateClock();
-      yield* reopening(retained);
+      yield* reopening(saved);
       performed = yield* countPerformed();
       const terminal = second.terminal;
 
@@ -4617,7 +4617,7 @@ describe("REPL journey: a cold process at an early position", () => {
     expect(performed?.reads.filter((one) => one.endsWith(".md"))).toEqual([]);
     expect(performed?.asked).toBe(0);
     // And nothing was written: the same files, byte for byte.
-    expect(yield* histories(retained)).toEqual(retainedFiles);
+    expect(yield* histories(saved)).toEqual(savedFiles);
     expect(yield* until(readFile(path, "utf8"))).toBe(before);
     expect(second.terminal.resets).toBe(1);
   });
@@ -4659,15 +4659,15 @@ describe("REPL journey: a cold process over a multi-entry journal", () => {
     expect(first.terminal.resets).toBe(1);
     expect(first.terminal.readers).toBe(0);
 
-    const retained = root;
-    if (retained === undefined) {
+    const saved = root;
+    if (saved === undefined) {
       throw new Error("the first process created a repository");
     }
-    const path = join(retained, "xmd", "repl", files[0]);
+    const path = join(saved, "xmd", "repl", files[0]);
     const before = yield* until(readFile(path, "utf8"));
     const execution = files[0].replace(/\.jsonl$/, "");
 
-    const live = yield* projectionOf(retained, files[0]);
+    const live = yield* projectionOf(saved, files[0]);
     expect(live.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
 
     // A location that names the *second* entry, so what comes back has to be a
@@ -4689,7 +4689,7 @@ describe("REPL journey: a cold process over a multi-entry journal", () => {
       yield* second.install();
       yield* immediateClock();
       yield* installReplHost({
-        dataRoot: () => retained,
+        dataRoot: () => saved,
         identify: () => {
           throw new Error("a reopened execution mints no identifier");
         },
@@ -4718,7 +4718,7 @@ describe("REPL journey: a cold process over a multi-entry journal", () => {
 
       // The value the first entry published is still what the second inherited,
       // read back from the file rather than from anything this process ran.
-      const cold = yield* projectionOf(retained, files[0]);
+      const cold = yield* projectionOf(saved, files[0]);
       expect(cold.entries[1]?.bindings.find((binding) => binding.name === "carried")?.value).toBe(
         "alpha-again",
       );
@@ -5327,7 +5327,7 @@ describe("REPL first use: UI1 selection", () => {
 
         // Selecting an entry does not filter the chronology this execution has.
         yield* activate(terminal, "Sessions");
-        expect(shows(terminal, "(none retained)")).toBe(true);
+        expect(shows(terminal, "(none saved)")).toBe(true);
 
         terminal.end();
         yield* running;

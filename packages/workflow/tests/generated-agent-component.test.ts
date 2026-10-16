@@ -455,7 +455,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      yield* plant(database, "notes.md", "the retained note\n");
+      yield* plant(database, "notes.md", "the saved note\n");
 
       // Two observations with a Workspace write between them. The write
       // publishes a new root, so the second observation runs against a
@@ -474,7 +474,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       // transaction-bound Files provider. Each fragment's read renders its own
       // text, so the binding holds that text and `<Json>` renders it as the
       // string it is — no name, no envelope, nothing collected beside it.
-      expect(reported(attempt)).toContain("the retained note");
+      expect(reported(attempt)).toContain("the saved note");
       expect(reported(attempt)).not.toContain('"name"');
       expect(reported(attempt)).not.toContain("observations");
 
@@ -499,7 +499,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      yield* plant(database, "notes.md", "the retained note\n");
+      yield* plant(database, "notes.md", "the saved note\n");
 
       // `Evaluate` is a live registered component in this very scope. The
       // fragment still cannot name it: the evaluator resolves only its own
@@ -514,7 +514,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       expect(reported(attempt)).toContain("did not admit");
       // One admission, and it refused. No second one from a nested evaluation.
       expect(admissions(attempt.events)).toHaveLength(1);
-      expect(reported(attempt)).not.toContain("the retained note");
+      expect(reported(attempt)).not.toContain("the saved note");
     });
   });
 
@@ -522,7 +522,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      yield* plant(database, "notes.md", "the retained note\n");
+      yield* plant(database, "notes.md", "the saved note\n");
 
       const attempt = yield* scoped(function* () {
         // A loaded component that binds the expansion context for its
@@ -885,7 +885,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
         const resumed = yield* runDocument(database, source, CEILING);
         expect(resumed.failure).toBe(undefined);
 
-        // The first site came back from its own record: its retained read is
+        // The first site came back from its own record: its saved read is
         // the only one this run holds, so nothing re-observed the Workspace.
         expect(reported(resumed)).toContain(ADMITTED_NOTE.trim());
         expect(reads(resumed.events)).toEqual(reads(interrupted));
@@ -1089,14 +1089,14 @@ describe("Tier WGAC — the classes an authored element may select", () => {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      yield* plant(database, "notes.md", "the retained note\n");
+      yield* plant(database, "notes.md", "the saved note\n");
 
       const attempt = yield* runDocument(database, evaluates(`<File path="notes.md" />`));
 
       expect(attempt.failure).toBe(undefined);
       const recorded = admissions(attempt.events);
       expect(policyOf(recorded[0]!)?.allow).toEqual(["read"]);
-      // And the write table is not in the retained policy at all, so a run that
+      // And the write table is not in the saved policy at all, so a run that
       // changed it has not changed what this admission was granted under. Read
       // as the identity the write spelling runs under, which is what a row in
       // that table would hold.
@@ -1183,7 +1183,7 @@ describe("Tier WGAC — the standard write table", () => {
 
       // One row per selected spelling, in the canonical order the selection is
       // admitted in: a host's object order is a property of how the selection
-      // was assembled rather than of what it chose, so the retained rows are
+      // was assembled rather than of what it chose, so the saved rows are
       // ordered by name and a continuation compares one directory grant.
       const policy = policyOf(admissions(attempt.events)[0]!);
       expect(policy?.allowed).toEqual([
@@ -1321,7 +1321,7 @@ describe("Tier WGAC — the standard write table", () => {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      yield* plant(database, "notes.md", "the retained note\n");
+      yield* plant(database, "notes.md", "the saved note\n");
       const planted = reads(yield* database.journal.readAll()).length;
 
       const attempt = yield* runDocument(
@@ -1360,7 +1360,7 @@ describe("Tier WGAC — what a selection binds", () => {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      yield* plant(database, "notes.md", "the retained note\n");
+      yield* plant(database, "notes.md", "the saved note\n");
 
       const fragment = `<File path="notes.md" />\n\n<File path="proposed.md">the fragment wrote this</File>\n`;
       const attempt = yield* runDocument(
@@ -1374,7 +1374,7 @@ describe("Tier WGAC — what a selection binds", () => {
       // The read renders its own text and the write renders nothing, so what
       // the binding holds is exactly the read's output — once, with no entry
       // for the write and no envelope naming either of them.
-      expect(bound).toContain("the retained note");
+      expect(bound).toContain("the saved note");
       expect(bound).not.toContain('"name"');
       expect(bound).not.toContain("the fragment wrote this");
       expect(yield* stored(database, "/proposed.md")).toBe("the fragment wrote this");
@@ -1397,7 +1397,7 @@ describe("Tier WGAC — a committed mutation is not repeated", () => {
       const again = yield* runDocument(database, document);
 
       expect(again.failure).toBe(undefined);
-      // Nothing new was journaled and no second mutation happened; the retained
+      // Nothing new was journaled and no second mutation happened; the saved
       // content is what the first attempt left.
       expect(again.events.length).toBe(committed);
       expect(reads(again.events).length).toBe(written);

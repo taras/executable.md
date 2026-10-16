@@ -15,11 +15,11 @@
  * chosen that way would reach a live observation, a live performance and the
  * journal.
  *
- * So the table is built in one place — the retained-run installation's
+ * So the table is built in one place — the saved-run installation's
  * admission, inside core's own trusted journal read, from the snapshot core
  * admitted — and published beside the run itself, where every physical copy of
  * this package reads it. A second copy loaded from disk reconciles through the
- * same stable operation name (Tier DLG), and it must see the same retained
+ * same stable operation name (Tier DLG), and it must see the same saved
  * identities: a fork whose Git-host history replayed for one copy and diverged
  * for another would accept different history depending on which module object
  * asked.
@@ -27,13 +27,13 @@
  * What makes an answer safe is not where it came from but what happens to a
  * wrong one. On replay the shared reconciliation holds the record it consumed
  * to the request being made, so an identity that is not that record's own is a
- * refusal. And a request named by a retained record that reaches live execution
+ * refusal. And a request named by a saved record that reaches live execution
  * performs nothing at all. A substituted answer can therefore deny this effect;
  * it cannot make it observe, perform or journal under another run.
  *
  * ## One record, one position, in order
  *
- * A retained identity belongs to the exact retained event it came from, and to
+ * A saved identity belongs to the exact saved event it came from, and to
  * the position that event occupies. `reconcileGitHostEffect()` is a public
  * surface, so one expansion may reach it more than once, and a fork whose
  * inherited prefix ends after the first of those calls must not lend the
@@ -50,7 +50,7 @@
  *
  * Falling through to live is final. Once a call runs live, replay has left the
  * inherited prefix, and nothing after it may borrow: the reconciliation reports
- * that back through {@link exhaustRetainedGitHostIdentities}, so a borrowed name
+ * that back through {@link exhaustSavedGitHostIdentities}, so a borrowed name
  * that reaches the live path takes the rest of the prefix out of use with it.
  *
  * A caller holding a run object cannot enroll it, and a caller holding a
@@ -67,8 +67,8 @@ import { GIT_HOST_EFFECT } from "./effect-type.ts";
 import { parseGitHostReconciliationRecord } from "./records.ts";
 import type { CompleteGitHostEffectRequest } from "./records.ts";
 
-/** One retained record's identity, and what it was a record of. */
-export interface RetainedIdentity {
+/** One saved record's identity, and what it was a record of. */
+export interface SavedIdentity {
   readonly runId: string;
   /** The request it answers for, with the run it was written under left out. */
   readonly asked: string;
@@ -78,12 +78,12 @@ export interface RetainedIdentity {
 /**
  * The identities one admitted history holds, in the order it holds them.
  *
- * Built by the retained-run installation's admission, from the snapshot
+ * Built by the saved-run installation's admission, from the snapshot
  * canonical core admitted, and published where every physical copy of this
  * package reads it.
  */
-export function retainedGitHostIdentities(retained: readonly DurableEvent[]): RetainedIdentity[] {
-  return identitiesIn(retained);
+export function savedGitHostIdentities(saved: readonly DurableEvent[]): SavedIdentity[] {
+  return identitiesIn(saved);
 }
 
 /**
@@ -92,20 +92,20 @@ export function retainedGitHostIdentities(retained: readonly DurableEvent[]): Re
  * Called when a call has run live: replay has left the prefix, and a later
  * record must not be borrowed by whatever happens next.
  */
-export function exhaustRetainedGitHostIdentities(held: RetainedIdentity[] | undefined): void {
+export function exhaustSavedGitHostIdentities(held: SavedIdentity[] | undefined): void {
   if (held !== undefined) {
     exhaust(held);
   }
 }
 
 /**
- * Take the identity of the retained record at the next unconsumed position,
+ * Take the identity of the saved record at the next unconsumed position,
  * when that record asks exactly what this request asks.
  *
  * Nothing is the ordinary answer, and it is what every live position gives.
  */
-export function claimRetainedGitHostIdentity(
-  held: RetainedIdentity[] | undefined,
+export function claimSavedGitHostIdentity(
+  held: SavedIdentity[] | undefined,
   request: CompleteGitHostEffectRequest,
 ): string | undefined {
   if (held === undefined) {
@@ -130,7 +130,7 @@ export function claimRetainedGitHostIdentity(
  * expansion stays in, so a record never answers for a position somewhere else
  * in the document.
  */
-function exhaust(held: RetainedIdentity[]): void {
+function exhaust(held: SavedIdentity[]): void {
   for (const identity of held) {
     identity.claimed = true;
   }
@@ -153,9 +153,9 @@ function asked(request: CompleteGitHostEffectRequest): string {
  * outcome is the durable operation's failed result — and there is nothing there
  * to name an identity with.
  */
-function identitiesIn(retained: readonly DurableEvent[]): RetainedIdentity[] {
-  const identities: RetainedIdentity[] = [];
-  for (const event of retained) {
+function identitiesIn(saved: readonly DurableEvent[]): SavedIdentity[] {
+  const identities: SavedIdentity[] = [];
+  for (const event of saved) {
     const request = requestOf(event);
     if (request === undefined) {
       continue;

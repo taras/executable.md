@@ -19,7 +19,7 @@ interface RecognizedNamespace {
   readonly namespace: string;
   /** The member inside it that holds the identity. */
   readonly member: string;
-  /** How this provider names itself in a retained checkpoint. */
+  /** How this provider names itself in a saved checkpoint. */
   readonly provider: string;
   /** What kind of identity the value is. */
   readonly kind: string;

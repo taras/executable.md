@@ -35,7 +35,7 @@ import {
   gitHostOutcomes,
   headCommit,
   raised,
-  retainedRepositories,
+  savedRepositories,
   runWorkflowDocument,
   subcommands,
 } from "./support/composition.ts";
@@ -69,7 +69,7 @@ function isSelectionFailure(value: unknown): value is GitOperationAdmissionError
 
 /** What the run retains for its one Repository, so a suite can read a checkout. */
 function* checkoutPath(database: WorkflowRunDatabase): Operation<string> {
-  const [repository] = yield* retainedRepositories(database);
+  const [repository] = yield* savedRepositories(database);
   if (repository === undefined) {
     throw new Error("the run retains no Repository");
   }
@@ -113,7 +113,7 @@ describe("workflow PullRequest", () => {
       const record = Object(yield* pullRequestRecord(database));
       expect(record.decision).toBe("performed");
       expect(record.preState).toEqual({ pullRequest: null });
-      const [repository] = yield* retainedRepositories(database);
+      const [repository] = yield* savedRepositories(database);
       expect(record.result).toEqual({
         repository: {
           name: "project",
@@ -151,7 +151,7 @@ describe("workflow PullRequest", () => {
       expect(created?.baseRef).toBe("main");
       // The base default is the Repository's recorded initial branch, which is
       // what the first document asserted by writing no base at all.
-      const [repository] = yield* retainedRepositories(database);
+      const [repository] = yield* savedRepositories(database);
       expect(repository?.record.primaryBranch).toBe("main");
     });
   });
@@ -290,7 +290,7 @@ describe("workflow PullRequest admission", () => {
     });
   });
 
-  it("fails when the working directory is inside no retained checkout", function* () {
+  it("fails when the working directory is inside no saved checkout", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
 
@@ -453,7 +453,7 @@ describe("workflow PullRequest admission", () => {
       const database = yield* createRun();
       const counting = countingHost();
       const store = gitHubStore({ token: TOKEN });
-      // The document names the bare repository directly, so the retained
+      // The document names the bare repository directly, so the saved
       // locator is a local path rather than a repository on github.com.
       const source = [
         `<Repository name="project" url="${remote.locator}">`,

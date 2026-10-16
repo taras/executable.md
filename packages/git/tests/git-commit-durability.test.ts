@@ -3,12 +3,12 @@
  *
  * These tests inspect the run's database rather than a repository. A replay
  * must write no object, read no clock and append no second transition; a
- * retained result that no longer describes the invocation it was recorded for
+ * saved result that no longer describes the invocation it was recorded for
  * must stop the run; a cancelled or unretainable commit must leave the frontier
  * exactly as it was.
  *
  * Every replay happens after the remote is deleted, so what continues a run is
- * what the run retained or nothing does.
+ * what the run saved or nothing does.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -54,7 +54,7 @@ import {
   headCommit,
   physicalGitApiCopy,
   raised,
-  retainedRepositories,
+  savedRepositories,
   runDocument,
   stagedPaths,
   subcommands,
@@ -107,9 +107,9 @@ function isGitFailure(value: unknown): value is GitOperationError {
 }
 
 function* checkoutOf(database: WorkflowRunDatabase): Operation<string> {
-  const [repository] = yield* retainedRepositories(database);
+  const [repository] = yield* savedRepositories(database);
   if (repository === undefined) {
-    throw new Error("the run retained no repository");
+    throw new Error("the run saved no repository");
   }
   return repository.record.checkoutPath;
 }
@@ -127,7 +127,7 @@ function tableNames(path: string): string[] {
   }
 }
 
-/** Damage the one retained commit result, refusing to continue if it damaged none. */
+/** Damage the one saved commit result, refusing to continue if it damaged none. */
 function damageCommitResult(path: string, damage: (record: Record<string, unknown>) => void): void {
   let rewritten = 0;
   tamper(path, (database) => {
@@ -183,7 +183,7 @@ describe("workflow Git.Commit durability", () => {
   });
 
   /**
-   * Every way a retained commit result can stop describing its invocation.
+   * Every way a saved commit result can stop describing its invocation.
    *
    * Shape, then meaning: an object id that is not one, a checkout that is not
    * the one this request selects, message evidence that is not the evidence of
@@ -298,7 +298,7 @@ describe("workflow Git.Commit durability", () => {
   ];
 
   for (const { name, damage } of DAMAGE) {
-    it(`fails a replay whose retained result ${name}`, function* () {
+    it(`fails a replay whose saved result ${name}`, function* () {
       const root = yield* useStorageRoot();
       const remote = yield* useBareRemote(REMOTE);
       const path = runPath(root, "release-1.4");
@@ -349,12 +349,12 @@ describe("workflow Git.Commit durability", () => {
       expect(committedRoot(path)).toBe(latestRoot(path));
 
       // Nothing Git printed, nowhere it ran.
-      const retained = `${outcome?.name} ${outcome?.message}`;
-      expect(retained).toContain("empty-index");
-      expect(retained).not.toContain("nothing to commit");
-      expect(retained).not.toContain(tmpdir());
+      const saved = `${outcome?.name} ${outcome?.message}`;
+      expect(saved).toContain("empty-index");
+      expect(saved).not.toContain("nothing to commit");
+      expect(saved).not.toContain(tmpdir());
       for (const materialization of live.counters.roots) {
-        expect(retained).not.toContain(materialization);
+        expect(saved).not.toContain(materialization);
       }
 
       const published = publishedRoots(path);
@@ -483,19 +483,19 @@ describe("workflow Git.Commit durability", () => {
       expect(tableNames(runPath(root, "recorded"))).toEqual(tableNames(runPath(root, "untouched")));
 
       // Creation identity does not move when a branch tip does.
-      const [before] = yield* retainedRepositories(untouched);
-      const [after] = yield* retainedRepositories(recorded);
+      const [before] = yield* savedRepositories(untouched);
+      const [after] = yield* savedRepositories(recorded);
       expect(after?.record).toEqual(before?.record);
 
       const [, outcome] = yield* gitOutcomes(recorded);
-      const retained = JSON.stringify(outcome?.record);
+      const saved = JSON.stringify(outcome?.record);
       for (const materialization of counting.counters.roots) {
-        expect(retained).not.toContain(materialization);
+        expect(saved).not.toContain(materialization);
       }
-      expect(retained).not.toContain(tmpdir());
+      expect(saved).not.toContain(tmpdir());
       // The message is described rather than kept.
-      expect(retained).not.toContain(MESSAGE);
-      expect(retained).toContain("messageDigest");
+      expect(saved).not.toContain(MESSAGE);
+      expect(saved).toContain("messageDigest");
     });
   });
 });

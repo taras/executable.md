@@ -144,10 +144,10 @@ export const RAIL = Object.freeze({
  * The archive marks a selected row and a focused one with a badge, a variable
  * font size and an animation, none of which a terminal has. The accepted
  * presentation retains this product's own `*` cue and row surface instead, and
- * names the value: these are the retained terminal adaptations, stated here so
+ * names the value: these are the saved terminal adaptations, stated here so
  * a regression asserting one is not reading it back off the product either.
  */
-export const RETAINED = Object.freeze({
+export const SAVED = Object.freeze({
   /** Behind a selected row, for the whole width the frame measured it at. */
   selectedSurface: 0x122026,
 });

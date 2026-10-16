@@ -58,7 +58,7 @@ import type { DefinitionRetrieval, DocumentExecutionRecord, WorkflowRunRecord } 
  * transition instead, which takes the complete snapshot with the descriptor.
  */
 export interface CreateWorkflowRunRequest {
-  /** The public run id. Retained inside the run, and the only way back to it. */
+  /** The public run id. Saved inside the run, and the only way back to it. */
   readonly runId: string;
   /** The immutable definition this run is a run of. */
   readonly definition: WorkflowDefinition;
@@ -94,7 +94,7 @@ export interface WorkflowRunTransaction {
 }
 
 /**
- * One retained event together with the id it keeps and the root it was written
+ * One saved event together with the id it keeps and the root it was written
  * against.
  *
  * `DurableStream` carries events and not their identities, and a stop reason
@@ -131,7 +131,7 @@ export interface WorkflowRunDatabase {
   /** The run's filtered journal. An append here commits on its own. */
   readonly journal: DurableStream;
 
-  /** Every retained event with its opaque id, in append order. */
+  /** Every saved event with its opaque id, in append order. */
   readJournalEntries(): Operation<Result<JournalEntry[]>>;
 
   /**

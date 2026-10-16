@@ -133,7 +133,7 @@ describe("journal provenance", () => {
     }
     expect(duplicate).toBeInstanceOf(Error);
     // A refused duplicate leaves the original witness in place rather than
-    // minting a second one the provider never retained.
+    // minting a second one the provider never saved.
     expect(getJournalProvenance(backend)).toBe(provenance);
   });
 

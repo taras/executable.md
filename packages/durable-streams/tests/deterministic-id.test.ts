@@ -206,7 +206,7 @@ describe("deterministic IDs", () => {
 
     const partialStream = new InMemoryStream(partialEvents);
 
-    // The new third child has no retained entries, so it executes live.
+    // The new third child has no saved entries, so it executes live.
     const tracker2 = createCallTracker();
 
     // With 3 children, root's childCounter goes to 3, but journal has

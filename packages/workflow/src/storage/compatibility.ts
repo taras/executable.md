@@ -27,7 +27,7 @@ export interface WorkflowRunComparison {
  * The immutable fields in which a stored run and a request disagree.
  *
  * Empty means the request addresses the stored run. Field names are reported,
- * never the values behind them: props are retained history, and a conflict is
+ * never the values behind them: props are saved history, and a conflict is
  * not a reason to print them.
  */
 export function conflictingFields(
@@ -65,7 +65,7 @@ export function conflictingFields(
  *
  * The whole bundle is compared, not just the hash that commits to it. The
  * bundle hash already names this manifest, and it is compared too — but a hash
- * is not a reason to admit a retained structure that disagrees with itself, and
+ * is not a reason to admit a saved structure that disagrees with itself, and
  * a stored descriptor whose manifest no longer matches its hash must not be
  * reused merely because a candidate carried the same hash.
  */
@@ -104,7 +104,7 @@ function sameSources(
  * descriptors were parsed in.
  *
  * A component the run no longer declares and a name pointed at a different
- * retained source are the same fact: this request asks for code the stored run
+ * saved source are the same fact: this request asks for code the stored run
  * is not a run of. Reusing the run id would resume a procedure under components
  * it never executed.
  */

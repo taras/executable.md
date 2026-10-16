@@ -215,7 +215,7 @@ function segment(
 /** What range of the physical stream one execution may read and write. */
 export interface EntrySegmentView {
   /** The events this entry's range already holds, in append order. */
-  readonly retained?: readonly DurableEvent[];
+  readonly saved?: readonly DurableEvent[];
   /** Whether nothing follows this range in the physical stream. */
   readonly final?: boolean;
 }
@@ -228,7 +228,7 @@ export interface EntrySegmentView {
  * repeated coroutine id from somebody else's. `append()` goes to the physical
  * stream first and is remembered only once that stream has acknowledged it —
  * the same order the physical stream itself keeps, and for the same reason: a
- * local record of a write that was never retained is a view describing a history
+ * local record of a write that was never saved is a view describing a history
  * the file does not hold. After a failed append there is nothing to roll back,
  * because nothing moved.
  *
@@ -250,7 +250,7 @@ export class EntrySegmentStream implements DurableStream {
 
   constructor(physical: DurableStream, view: EntrySegmentView = {}) {
     this.physical = physical;
-    this.snapshot = (view.retained ?? []).map(clone);
+    this.snapshot = (view.saved ?? []).map(clone);
     this.last = view.final ?? true;
     // Read off the range rather than taken as a claim: what settles an entry is
     // its own terminal close, and the records say whether it holds one.

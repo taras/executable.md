@@ -22,9 +22,9 @@ import type { DurableEvent, EffectDescription } from "@executablemd/durable-stre
 /**
  * One workflow run.
  *
- * No base and no pinned commit: a run starts from exact retained bytes rather
+ * No base and no pinned commit: a run starts from exact saved bytes rather
  * than from a repository state, and a member naming one would be an assertion
- * about a repository the run never had. The bundle hash is what the retained
+ * about a repository the run never had. The bundle hash is what the saved
  * definition is, and the exact target is what distinguishes two runs over it.
  *
  * The value a journal records, and the value `getWorkflowRun()` answers with.
@@ -48,7 +48,7 @@ const RUN_TARGET = "targetPath";
  *
  * Object-member order is presentation and not identity — a canonical-JSON
  * container sorts these keys under its own rule without changing the value —
- * but one ordinary spelling is what keeps a retained record byte for byte what
+ * but one ordinary spelling is what keeps a saved record byte for byte what
  * it always was.
  */
 export function workflowRunValue(run: WorkflowRun): Record<string, string | number> {
@@ -125,7 +125,7 @@ export function readWorkflowRun(value: unknown): WorkflowRun | undefined {
   // The exact member set, in any order, with the target the one optional
   // addition. Nothing in between: a value carrying a member this shape does not
   // declare is not a run read loosely — it is a value this build cannot account
-  // for. A record retained under an older format carried `definitionVersion`,
+  // for. A record saved under an older format carried `definitionVersion`,
   // `base` or `pinnedCommit`, and is refused here for exactly that reason.
   const names = Object.keys(record);
   const targeted = names.length === RUN_MEMBERS.length + 1;
@@ -152,7 +152,7 @@ export function readWorkflowRun(value: unknown): WorkflowRun | undefined {
   return Object.freeze({ runId, bundleHash, targetPath });
 }
 
-/** What one retained event records about the run, when it records anything. */
+/** What one saved event records about the run, when it records anything. */
 interface RunClaim {
   readonly settled: boolean;
   readonly value: unknown;
@@ -199,7 +199,7 @@ function runClaim(event: DurableEvent): RunClaim | undefined {
  * What one installation requires of a history that is not empty.
  *
  * The two installations differ in one thing, and it is not strictness. A
- * retained run was created by a host before anything executed, so a history of
+ * saved run was created by a host before anything executed, so a history of
  * its own is something it must have: none, or one that failed, means the
  * recorded work is not this run's. A programmatic run allocates itself on first
  * execution, and §6 records a base that would not resolve as a *failed* effect —
@@ -214,7 +214,7 @@ export interface RunHistoryRules {
 }
 
 /**
- * Hold a retained history to the run it belongs to.
+ * Hold a saved history to the run it belongs to.
  *
  * An empty history is the ordinary live start and is held to nothing. Otherwise
  * every canonical record it carries must read as a workflow run and agree with
@@ -222,16 +222,16 @@ export interface RunHistoryRules {
  * the root document is imported, so two describe two runs.
  */
 export function admitWorkflowRunHistory(
-  retained: readonly DurableEvent[],
+  saved: readonly DurableEvent[],
   rules: RunHistoryRules,
 ): WorkflowRun | undefined {
-  if (retained.length === 0) {
+  if (saved.length === 0) {
     return undefined;
   }
 
   const runs: WorkflowRun[] = [];
   let claimed = 0;
-  for (const event of retained) {
+  for (const event of saved) {
     const claim = runClaim(event);
     if (claim === undefined) {
       continue;
@@ -309,17 +309,17 @@ export function duplicateRunRecords(records: number): StaleInputError {
 }
 
 /**
- * The recorded run is not the retained run this execution was installed with.
+ * The recorded run is not the saved run this execution was installed with.
  *
  * The differing fields are named and their values are not. A run id may be
  * caller-selected and a base may be any revision expression, so both are
- * external text on the same terms as retained props: naming a field says what
+ * external text on the same terms as saved props: naming a field says what
  * disagrees without carrying the disagreement into logs and rendered output.
  */
-export function retainedRunMismatch(fields: readonly string[]): StaleInputError {
+export function savedRunMismatch(fields: readonly string[]): StaleInputError {
   return new StaleInputError(
-    `The journal records a workflow run whose ${fields.join(", ")} differs from the retained ` +
-      "run this execution was installed with. A retained run is replayed as itself rather " +
+    `The journal records a workflow run whose ${fields.join(", ")} differs from the saved ` +
+      "run this execution was installed with. A saved run is replayed as itself rather " +
       "than onto a different one. Resume the run the journal belongs to.",
     { coroutineId: ROOT_COROUTINE, description: refusalDescription() },
   );

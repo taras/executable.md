@@ -117,7 +117,7 @@ export interface CapturedSymbolInputs {
  * nothing at all.
  *
  * Each ask builds afresh. Two authored occurrences are two references, which
- * is what makes an occurrence's retained symbols its own rather than a copy of
+ * is what makes an occurrence's saved symbols its own rather than a copy of
  * whichever one ran first.
  */
 export function rootSyntaxReference(
@@ -271,7 +271,7 @@ export function select(
   const selected: SelectedEntry[] = [];
   // Walked in symbol order rather than request order, so two documents asking
   // for the same components in different orders render the same text — which is
-  // what makes one occurrence's retained result comparable with another's.
+  // what makes one occurrence's saved result comparable with another's.
   for (const category of authoring.categories) {
     for (const entry of category.entries) {
       // Components only. `names` is a component lookup under the current

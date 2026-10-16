@@ -390,7 +390,7 @@ export function* sourceBundleCreation(
  * recompute every hash from the snapshot they are given, so a fixture naming
  * anything else retains nothing.
  */
-export function* retainedSource(
+export function* savedSource(
   entrypoint: string,
   content: string,
 ): Operation<{
@@ -418,7 +418,7 @@ export function* retainedSource(
 }
 
 /**
- * A creation over several retained sources, with a declared component mapping.
+ * A creation over several saved sources, with a declared component mapping.
  *
  * The manifest is derived from the bytes and sorted canonically, so a fixture
  * says what it retains and the descriptor it gets is the one those bytes

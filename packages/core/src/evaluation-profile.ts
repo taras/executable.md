@@ -62,12 +62,12 @@ import type { FunctionComponent, FunctionComponentDefinition, Json, PropsSchema 
  *
  * Produced by canonical execution's capture step before this module is asked to
  * capture anything: the chain has answered, the definition published on that
- * exact final answer has been taken off it, and it has been retained
+ * exact final answer has been taken off it, and it has been saved
  * defensively. What arrives here is the settled result, so nothing in this
  * module resolves, looks up, or holds a resolver it could call later.
  */
 export interface ResolvedAnswer {
-  /** Core's own retained copy, which is what a fragment invokes. */
+  /** Core's own saved copy, which is what a fragment invokes. */
   readonly definition: FunctionComponentDefinition;
   /** Which installation published it, as documentation provenance. */
   readonly origin: string;
@@ -115,7 +115,7 @@ export interface CapturedEntry {
   /**
    * What a fragment invokes.
    *
-   * Core's retained copy of the exact final answer the import chain gave, held
+   * Core's saved copy of the exact final answer the import chain gave, held
    * behind this execution's lifetime — never the object the chain was holding,
    * and never something re-resolved later.
    */
@@ -153,7 +153,7 @@ export interface EvaluationProfile {
    * End them.
    *
    * Called by canonical execution at teardown, and reachable from nowhere a
-   * document can put code: an operation a fragment or a handler retained past
+   * document can put code: an operation a fragment or a handler saved past
    * the execution refuses rather than acting on a filesystem the run no longer
    * holds a transaction for.
    */
@@ -207,7 +207,7 @@ export function evaluationLifetime(): EvaluationLifetime {
  * resolved and before public execution policy.
  *
  * Nothing is consulted here that a host still holds. The selection arrived as
- * owned, validated data; each definition arrived as core's own retained copy of
+ * owned, validated data; each definition arrived as core's own saved copy of
  * an answer canonical resolution produced; and everything structural this
  * module derives — the props contract, the description, the admitted forms and
  * which table each of them lands in — is read off that definition rather than

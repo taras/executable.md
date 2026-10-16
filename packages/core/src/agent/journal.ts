@@ -41,7 +41,7 @@
  * The prompt itself has already finished by then. Talking to a provider happens
  * outside all of this, and only its outcome reaches a publisher.
  *
- * Replay reaches none of it. A retained entry answers before the live path
+ * Replay reaches none of it. A saved entry answers before the live path
  * exists, so a replayed prompt contacts no provider, opens no transaction and
  * associates nothing.
  */
@@ -138,7 +138,7 @@ export interface PromptRecord {
    * Ordinarily a checkpoint is not journalled at all: it is associated with one
    * terminal event and published through a host's own transaction, because what
    * a host keeps beside a Prompt is that host's business. A launch is the one
-   * caller that has to keep it here — the turn it owes is retained so a replay
+   * caller that has to keep it here — the turn it owes is saved so a replay
    * never spends a second one, and the record of the turn is only evidence that
    * it happened if it names which turn it was.
    */
@@ -619,7 +619,7 @@ function serializePermission(permission: PromptPermission): Json {
   return payload;
 }
 
-/** What a retained audit that does not read back is, as distinct from none. */
+/** What a saved audit that does not read back is, as distinct from none. */
 const UNREADABLE = Symbol("unreadable permission audit");
 
 /**
@@ -726,7 +726,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * One durable `agent_prompt` result, as the record it describes itself as.
  *
  * Pure and total: it reads a value nobody has authenticated and answers with
- * the record or with nothing, so a caller that has only retained bytes — a
+ * the record or with nothing, so a caller that has only saved bytes — a
  * sealed artifact's verifier, for one — asks the same question a live run
  * asks rather than spelling the shape a second time.
  */

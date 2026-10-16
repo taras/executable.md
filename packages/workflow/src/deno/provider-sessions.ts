@@ -1,7 +1,7 @@
 /**
  * Where a run keeps the disposable arrangement its Agent sessions need.
  *
- * Two things, and neither is retained state: the provider's own persistent
+ * Two things, and neither is saved state: the provider's own persistent
  * session store, and one empty working directory per session. What a
  * continuation is decided from is not here at all — it is a row in the run's own
  * database (`workspace/agent-sessions.ts`), because a mapping and the run it
@@ -85,7 +85,7 @@ export function* useEmptyDirectory(path: string): Operation<string> {
  * filesystem rather than merely asserted: the directories below appear when a
  * session is placed and a record is written, and not before.
  *
- * What it does own is the end. The retained half — the mapping records and the
+ * What it does own is the end. The saved half — the mapping records and the
  * provider's own session store — outlives the attachment, because that is what a
  * continuation reads. The working directories do not, and their removal is
  * registered before anything is installed over this, so it runs after provider

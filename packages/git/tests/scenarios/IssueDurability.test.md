@@ -17,7 +17,7 @@ run, the same document, the same request.
 
 ## The second attempt asks nobody
 
-The replay answers from what the run retained. The evidence is the tracker's
+The replay answers from what the run saved. The evidence is the tracker's
 own request log rather than a claim about the boundary: a replay that had asked
 would have left a request behind, and it left none. What makes that worth
 saying is the assertion above it: the first attempt *did* leave requests behind,
@@ -41,7 +41,7 @@ in which nobody ever calls anything.
 <AssertEquals actual={tracker.titles} expected={["Retry the publish step"]} />
 </Test>
 
-## What the run retained
+## What the run saved
 
 An upsert retains the normalized request, a reference — a URL — and where this
 document wrote its `<Issue>`, and nothing else. The marker in particular is not
@@ -50,9 +50,9 @@ recognized by the next one, and the run carries the key it is a digest of.
 Retaining the marker as well would put a run's internal identity into the
 document that asked the question. The authored position is the run's own
 document naming its own element — diagnostic data like `import_component`'s
-retained paths, never the provider's or the deployment's.
+saved paths, never the provider's or the deployment's.
 
-<Test name="the retained upsert holds nothing private to the provider or the host">
+<Test name="the saved upsert holds nothing private to the provider or the host">
 <IssueJournal as="journal" />
 <AssertEquals actual={journal.effects} expected={1} />
 <AssertEquals actual={journal.retains.credential} expected={false} />

@@ -6,7 +6,7 @@
  *
  * A Plugin is a plain structural value. It carries a name and, optionally, one
  * `install` operation. Everything else about it — what it declares, what it
- * expands, what it requires of a retained history, what middleware it composes
+ * expands, what it requires of a saved history, what middleware it composes
  * — happens inside that call, in the scope the host installs it in.
  *
  * Structural rather than branded, because a Plugin is ordinarily loaded from a
@@ -63,7 +63,7 @@ export interface PluginInstallation {
   readonly structural?: readonly Structural[];
   /** How this Plugin expands the structural syntax it declared. */
   expand?(request: ExpansionRequest): Operation<void>;
-  /** What this Plugin requires of a retained history before it is replayed. */
+  /** What this Plugin requires of a saved history before it is replayed. */
   readonly admissions?: readonly JournalAdmission[];
 }
 

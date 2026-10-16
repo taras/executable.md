@@ -23,7 +23,7 @@
  * installed alongside them because canonical core applies an admission inside
  * each execution's own journal read: a host that installs this Plugin once and
  * runs two documents gets two journal reads, so each execution derives its
- * identities from its own retained history and neither can read the other's.
+ * identities from its own saved history and neither can read the other's.
  */
 
 import type { Operation } from "effection";
@@ -34,7 +34,7 @@ import type {
   PluginInstallation,
 } from "@executablemd/core/api";
 import { useCompositionComponents } from "./composition/installation.ts";
-import { admitReplRepositoryHistory } from "./retained-repository/admission.ts";
+import { admitReplRepositoryHistory } from "./saved-repository/admission.ts";
 import { gitHostIdentityAdmission, issueIdentityAdmission } from "./identities.ts";
 
 /**
@@ -201,12 +201,12 @@ export const gitPlugin: Plugin = Plugin({
       admissions: [
         gitHostIdentityAdmission(),
         issueIdentityAdmission(),
-        // The REPL's own: what an entry retained about the checkout it was
+        // The REPL's own: what an entry saved about the checkout it was
         // standing in has to be readable before any of it is replayed. It
         // belongs to this contribution because an admission is applied inside
         // each execution's journal read, and this is the trusted path that
         // already declares for the command. It holds no native state and names
-        // no runtime: a Node session that retained nothing has nothing here to
+        // no runtime: a Node session that saved nothing has nothing here to
         // refuse.
         ...(request.command === "repl" ? [replHistoryAdmission()] : []),
       ],
@@ -222,7 +222,7 @@ export const gitPlugin: Plugin = Plugin({
  * belongs to is the stream segment's question, not this one's.
  */
 function replHistoryAdmission(): JournalAdmission {
-  return (retained) => admitReplRepositoryHistory(retained);
+  return (saved) => admitReplRepositoryHistory(saved);
 }
 
 export default gitPlugin;

@@ -89,7 +89,7 @@ export interface BoundExecChain {
    * Run the built-in exec terminal against a context, as a bound command.
    *
    * Composition uses this rather than the registry's `exec` entry, so the
-   * command runs against the context canonical core retained rather than one
+   * command runs against the context canonical core saved rather than one
    * public `codeBlock` middleware could answer with.
    */
   terminal(context: CodeBlockContext): CodeBlockWorkflow;
@@ -195,7 +195,7 @@ export function composeModifierChain(
 /**
  * Compose the chain for one bound command (spec §3.6).
  *
- * Everything here comes from what canonical core retained when it issued the
+ * Everything here comes from what canonical core saved when it issued the
  * request: the authored modifiers, the context the block was expanded with, and
  * the built-in middleware this execution installed. Nothing a handler delegated
  * takes part, so a chain that lost a word, gained one, or was handed a different

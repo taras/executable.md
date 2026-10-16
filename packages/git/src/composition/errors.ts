@@ -17,7 +17,7 @@
  * otherwise — for everything inside that region rather than for these
  * components alone.
  *
- * A stale-state failure is the retained authoritative state disagreeing with
+ * A stale-state failure is the saved authoritative state disagreeing with
  * what attachment found. That is not something the document did, and not
  * something an authored region may decide either.
  */
@@ -74,7 +74,7 @@ export class WorktreeCompositionError extends Error {
 }
 
 /**
- * Retained authoritative state disagrees with what attachment found.
+ * Saved authoritative state disagrees with what attachment found.
  *
  * A `StaleInputError`, which is what makes it fatal rather than printable: the
  * journal says this run has a checkout on a commit, and the Workspace root the
@@ -83,7 +83,7 @@ export class WorktreeCompositionError extends Error {
  * history does not describe — and an enclosing `<PrintErrors>` must not be able
  * to downgrade that to a comment.
  *
- * Nothing here repairs anything. Recloning would replace authoritative retained
+ * Nothing here repairs anything. Recloning would replace authoritative saved
  * state with whatever the current remote happens to hold, which is a different
  * run wearing this run's identity.
  */
@@ -94,7 +94,7 @@ export class RepositoryStaleStateError extends StaleInputError {
 
   constructor(subject: string, reason: string) {
     super(
-      `the retained Git state for ${subject} is not what this run recorded: ${reason}. ` +
+      `the saved Git state for ${subject} is not what this run recorded: ${reason}. ` +
         "The run is left exactly as it was found; nothing is recloned or repaired, and no " +
         "later work runs against state this run's history does not describe.",
     );
@@ -188,10 +188,10 @@ export class GitOperationError extends Error {
 }
 
 /**
- * The observation an operation arrived with is not this run's retained state.
+ * The observation an operation arrived with is not this run's saved state.
  *
  * A Repository record that is not the row this run retains, a working directory
- * inside no checkout it holds, a retained path that has stopped agreeing with
+ * inside no checkout it holds, a saved path that has stopped agreeing with
  * the identity naming it — none of these is something a document asked for and
  * did not get. Each is the run's own state disagreeing with what was presented
  * for it, so each fails the run the way a stale-state condition does: children
@@ -200,7 +200,7 @@ export class GitOperationError extends Error {
  *
  * The sentence names the operation and the condition, and nothing else. What a
  * caller presented is not quoted back: a forged record is untrusted input, and
- * an untrusted value belongs in a diagnostic even less than a retained one does.
+ * an untrusted value belongs in a diagnostic even less than a saved one does.
  */
 export class GitOperationAdmissionError extends StaleInputError {
   override name = "GitOperationAdmissionError";
@@ -209,7 +209,7 @@ export class GitOperationAdmissionError extends StaleInputError {
 
   constructor(operation: string, reason: string) {
     super(
-      `${operation} is not admitted against this run's retained state: ${reason}. The run is ` +
+      `${operation} is not admitted against this run's saved state: ${reason}. The run is ` +
         "left exactly as it was found; no Git ran and no result was recorded for it.",
     );
     this.operation = operation;
@@ -231,17 +231,17 @@ export type PullRequestAdmissionReason =
   | "unreadable-push-evidence";
 
 /**
- * `<PullRequest>` is not admitted by what this run retained.
+ * `<PullRequest>` is not admitted by what this run saved.
  *
  * A `StaleInputError`, on the same terms as {@link GitOperationAdmissionError}:
- * a document cannot avoid a Repository context that was replaced or a retained
+ * a document cannot avoid a Repository context that was replaced or a saved
  * Push result that stopped being readable, and later siblings must not run as
  * though a pull request had been opened. None of these is a Git-host answer —
  * every one of them is decided before anything is observed — so none of them is
  * printable and none of them is journaled as an effect outcome.
  *
  * The sentence names the category and, where there is one, the remedy. It
- * quotes no journal content, no retained record and nothing a caller presented:
+ * quotes no journal content, no saved record and nothing a caller presented:
  * the evidence this refuses to read is exactly the evidence it must not repeat.
  */
 export class PullRequestAdmissionError extends StaleInputError {
@@ -251,7 +251,7 @@ export class PullRequestAdmissionError extends StaleInputError {
 
   constructor(reason: PullRequestAdmissionReason, sentence: string) {
     super(
-      `<PullRequest> is not admitted against this run's retained state: ${sentence} Nothing ` +
+      `<PullRequest> is not admitted against this run's saved state: ${sentence} Nothing ` +
         "was observed at the Git host, and no pull request was created.",
     );
     this.reason = reason;

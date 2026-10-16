@@ -139,7 +139,7 @@ export const returns: ReturnsSchema = {
 
 export default function* PullRequest(props: Record<string, Json>): Operation<Json> {
   // Before anything of this element's own exists — before a Repository is
-  // observed, before a checkout is selected, before retained Push evidence is
+  // observed, before a checkout is selected, before saved Push evidence is
   // read and long before a Git host is contacted. The body is what the pull
   // request would say, and a body that never finished rendering must not become
   // one that was published.

@@ -1,7 +1,7 @@
 /**
  * What inspecting a sealed artifact answers with.
  *
- * A retained run and an artifact are addressed differently on purpose. A run id
+ * A saved run and an artifact are addressed differently on purpose. A run id
  * names live lifecycle ownership — something a caller may still advance, cancel
  * or delete — while an artifact path names immutable evidence that left the
  * machine which produced it. So they are sibling operations rather than one
@@ -10,13 +10,13 @@
  *
  * The values are the same values. An artifact carries the run's own record, its
  * executions, its journal and the Workspace roots it was associated with, so
- * inspection projects exactly the lifecycle and history shapes a retained run
+ * inspection projects exactly the lifecycle and history shapes a saved run
  * projects, plus the two facts only an artifact has: which artifact this is, and
  * the committed boundary it was sealed at.
  *
  * Nothing here names a container, a path, a database or a byte. This module is
  * the provider-neutral half of the boundary: the Deno adapter opens the file and
- * verifies it, and hands back these values. The retained record shapes an
+ * verifies it, and hands back these values. The saved record shapes an
  * artifact holds — DOFS manifests, DOFS blobs, SQLite rows — stay with that
  * adapter, because a host that cannot open one has no use for their names.
  */
@@ -44,7 +44,7 @@ export interface WorkflowArtifactIdentity {
  * One artifact's snapshot: what the run said about itself, and whose evidence
  * this is.
  *
- * It extends the shared inspection base rather than the retained-run snapshot,
+ * It extends the shared inspection base rather than the saved-run snapshot,
  * so `retrieval` is not a key of this type. That is the whole point: an
  * artifact excludes where its definition could be fetched from now, because
  * that is ownership belonging to the machine that exported rather than
@@ -59,7 +59,7 @@ export interface WorkflowArtifactSnapshot extends WorkflowInspectionSnapshot {
 /**
  * One artifact's history, and whose history it is.
  *
- * An envelope rather than the bare array a retained run answers with, because
+ * An envelope rather than the bare array a saved run answers with, because
  * there is nowhere else for the identity and the frontier to go: repeating them
  * on every row would make one fact into many, and reporting them beside the
  * result would put them outside the value a caller parses.

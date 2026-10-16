@@ -73,7 +73,7 @@ import {
  *
  * `Assert<false>` is the only instantiation that type-checks, so this stops
  * compiling the moment `WorkflowArtifactSnapshot` gains the member again —
- * including by going back to extending the retained-run snapshot, which is how
+ * including by going back to extending the saved-run snapshot, which is how
  * it acquired it the first time.
  */
 type Assert<T extends false> = T;
@@ -92,21 +92,21 @@ type SharedIsRetrievalFree = Assert<
 >;
 const SHARED_IS_RETRIEVAL_FREE: SharedIsRetrievalFree = false;
 
-/** A retained snapshot is the one that still has it. */
-type RetainedKeepsRetrieval = Assert<
+/** A saved snapshot is the one that still has it. */
+type SavedKeepsRetrieval = Assert<
   "retrieval" extends keyof WorkflowLifecycleSnapshot ? false : true
 >;
-const RETAINED_KEEPS_RETRIEVAL: RetainedKeepsRetrieval = false;
+const SAVED_KEEPS_RETRIEVAL: SavedKeepsRetrieval = false;
 
 const { history, inspect, list } = WorkflowLifecycle.operations;
 
 /**
- * A run with a settled record, one execution and three retained events.
+ * A run with a settled record, one execution and three saved events.
  *
  * The events name the run they belong to, so two runs of this fixture are told
  * apart by what they retain and not only by the ids SQLite happened to assign.
  */
-function* retainedRun(root: string, runId: string): Operation<void> {
+function* savedRun(root: string, runId: string): Operation<void> {
   yield* withRunHost(root, function* (transitions) {
     yield* withExecutorRun(
       transitions,
@@ -238,7 +238,7 @@ function* historyOf(runId: string): Operation<readonly WorkflowHistoryEntry[]> {
 describe("Tier WLI — immutable lifecycle inspection", () => {
   it("WLI1: one snapshot describes the record, executions, frontier and root together", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "release-1.4");
+    yield* savedRun(root, "release-1.4");
 
     yield* withLifecycle(root, function* () {
       const snapshot = yield* snapshotOf("release-1.4");
@@ -280,7 +280,7 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
 
   it("WLI3: status, list and history change no byte, row or mode", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "release-1.4");
+    yield* savedRun(root, "release-1.4");
     const path = runPath(root, "release-1.4");
     const before = yield* fingerprint(path);
 
@@ -295,8 +295,8 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
 
   it("WLI4: list orders newest update first and reads only the run namespace", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "older");
-    yield* retainedRun(root, "newer");
+    yield* savedRun(root, "older");
+    yield* savedRun(root, "newer");
     // Names outside the hashed `.sqlite` namespace are the provider's own
     // arrangement, and a lifecycle sidecar is never a database candidate.
     yield* writeTextFile(join(root, "lifecycle.lock"), "");
@@ -313,7 +313,7 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
 
   it("WLI5: one validly named foreign candidate fails the whole list", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "release-1.4");
+    yield* savedRun(root, "release-1.4");
     // Named exactly the way a run is named, and holding something else.
     const candidate = join(root, `${"a".repeat(64)}.sqlite`);
     yield* writeTextFile(candidate, "not a workflow run database");
@@ -331,7 +331,7 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
 
   it("WLI5b: a healthy database at another run's name is not a second run", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "release-1.4");
+    yield* savedRun(root, "release-1.4");
     const original = runPath(root, "release-1.4");
     // A perfectly good version-1 workflow database, recognized in every
     // structural way, sitting where another run id would put it. Nothing about
@@ -362,9 +362,9 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
     expect(yield* fileFingerprint(copy)).toEqual(before.copy);
   });
 
-  it("WLI5c: a retained id whose stored bytes no reader sees fails the whole list", function* () {
+  it("WLI5c: a saved id whose stored bytes no reader sees fails the whole list", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "release-1.4");
+    yield* savedRun(root, "release-1.4");
     // An id SQLite stores every byte of and every reader sees only the first
     // seven characters of: `length()` says 7 where the blob says 14, and
     // node:sqlite hands back the truncated string. Bound parameters truncate at
@@ -372,7 +372,7 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
     //
     // What refuses this is the location check, not the run-id rule: the reader
     // never sees a NUL, so what it compares is `release` against a file named
-    // for `release\u0000shadow`. Removing the retained run-id parity leaves
+    // for `release\u0000shadow`. Removing the saved run-id parity leaves
     // this test passing, and removing the location check fails it — which is
     // why the parity is a contract rather than something this proves.
     const shadowed = `release\u0000shadow`;
@@ -406,9 +406,9 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
     expect(yield* fileFingerprint(candidate)).toEqual(before.candidate);
   });
 
-  it("WLI6: history is every retained event with its exact id, root and source", function* () {
+  it("WLI6: history is every saved event with its exact id, root and source", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "release-1.4");
+    yield* savedRun(root, "release-1.4");
     const stored = storedEvents(runPath(root, "release-1.4"));
 
     yield* withLifecycle(root, function* () {
@@ -436,7 +436,7 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
 
   it("WLI18: a generated operation exposes the fragment it was written in", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "release-1.4");
+    yield* savedRun(root, "release-1.4");
     const path = runPath(root, "release-1.4");
     // What the engine records for an operation inside admitted generated source:
     // the fragment's own identity, and no path, because generated text is not a
@@ -474,7 +474,7 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
 
   it("WLI19: a source naming both a file and a fragment makes the entry unreadable", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "release-1.4");
+    yield* savedRun(root, "release-1.4");
     const path = runPath(root, "release-1.4");
     // Two answers to where one operation was written. Reading either would be
     // choosing which of them to believe.
@@ -510,7 +510,7 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
 
   it("WLI7: a present source that does not parse makes the entry unreadable", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "release-1.4");
+    yield* savedRun(root, "release-1.4");
     const path = runPath(root, "release-1.4");
     const secret = "s3cret-position-value";
     tamper(path, (database) => {
@@ -600,9 +600,9 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
   });
   it("WLI9: an id holding * or ? addresses exactly its own run", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "release-*");
-    yield* retainedRun(root, "release-?");
-    yield* retainedRun(root, "release-1");
+    yield* savedRun(root, "release-*");
+    yield* savedRun(root, "release-?");
+    yield* savedRun(root, "release-1");
     const reached: string[] = [];
 
     yield* scoped(function* () {
@@ -836,7 +836,7 @@ function recoverInPlace(path: string): void {
   }
 }
 
-/** Everything about the retained pair that inspection may not change. */
+/** Everything about the saved pair that inspection may not change. */
 interface PairPrint {
   readonly database: string;
   readonly journal: string;
@@ -906,7 +906,7 @@ function withObserved<T>(
 describe("Tier WLI — inspecting a crashed run", () => {
   it("WLI10: a hot run reports its last committed state, and stays hot", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "hot-1");
+    yield* savedRun(root, "hot-1");
     const path = runPath(root, "hot-1");
 
     // What the run committed, read while it is still readable.
@@ -949,7 +949,7 @@ describe("Tier WLI — inspecting a crashed run", () => {
       "before-cleanup",
     ]);
 
-    // The retained pair is byte-for-byte what the crash left, and still hot:
+    // The saved pair is byte-for-byte what the crash left, and still hot:
     // recovering it is the next write-capable owner's job, not inspection's.
     expect(yield* pairPrint(path)).toEqual(before);
     expect(directCode(path)).toBe(READONLY_ROLLBACK);
@@ -960,9 +960,9 @@ describe("Tier WLI — inspecting a crashed run", () => {
 
   it("WLI11: list answers a healthy run and a hot one together, one copy at a time", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "healthy-1");
-    yield* retainedRun(root, "hot-2");
-    yield* retainedRun(root, "hot-3");
+    yield* savedRun(root, "healthy-1");
+    yield* savedRun(root, "hot-2");
+    yield* savedRun(root, "hot-3");
 
     // The order these are answered in while every one of them is readable.
     const ordered = yield* withLifecycle(root, function* () {
@@ -1011,7 +1011,7 @@ describe("Tier WLI — inspecting a crashed run", () => {
 
   it("WLI12: a copy is taken before any owner may recover, and a recovered source is read as itself", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "race-1");
+    yield* savedRun(root, "race-1");
     yield* leaveHot(root, "race-1");
     const path = runPath(root, "race-1");
 
@@ -1063,7 +1063,7 @@ describe("Tier WLI — inspecting a crashed run", () => {
     // The other way round: an owner holds coordination and recovers the source
     // while inspection is already waiting for it. The coordinated retry reads
     // the run as itself, so nothing is ever copied.
-    yield* retainedRun(root, "race-2");
+    yield* savedRun(root, "race-2");
     yield* leaveHot(root, "race-2");
     const second = recorder();
     const holding = withResolvers<void>();
@@ -1124,7 +1124,7 @@ describe("Tier WLI — inspecting a crashed run", () => {
       },
       {
         runId: "content-1",
-        what: "a retained row that does not describe what its column claims",
+        what: "a saved row that does not describe what its column claims",
         *damage(_root, path) {
           // A column SQLite is satisfied by and a reader is not: the text is
           // there, and it is not the timestamp the record says it holds.
@@ -1155,8 +1155,8 @@ describe("Tier WLI — inspecting a crashed run", () => {
 
     for (const planted of damages) {
       const root = yield* useStorageRoot();
-      yield* retainedRun(root, "healthy-source");
-      yield* retainedRun(root, planted.runId);
+      yield* savedRun(root, "healthy-source");
+      yield* savedRun(root, planted.runId);
       const path = runPath(root, planted.runId);
       yield* planted.damage(root, path);
 
@@ -1185,7 +1185,7 @@ describe("Tier WLI — inspecting a crashed run", () => {
       expect(answered.error.message).toBe(expected.message);
       expect(answered.error).not.toBeInstanceOf(WorkflowInspectionRecoveryError);
       // A refusal that names a file names the run's own. One that names a
-      // retained location instead has no path to get wrong.
+      // saved location instead has no path to get wrong.
       if (expected.message.includes(path)) {
         expect(answered.error.message).toContain(path);
       }
@@ -1270,7 +1270,7 @@ describe("Tier WLI — inspecting a crashed run", () => {
 
     for (const fault of cleaned) {
       const root = yield* useStorageRoot();
-      yield* retainedRun(root, "fault-1");
+      yield* savedRun(root, "fault-1");
       const path = runPath(root, "fault-1");
       yield* leaveHot(root, "fault-1");
       const before = yield* pairPrint(path);
@@ -1293,7 +1293,7 @@ describe("Tier WLI — inspecting a crashed run", () => {
       // nothing to name.
       expect(failure.scratchPath).toBeUndefined();
       expect(failure.cause).toBeUndefined();
-      // The condition, not SQLite's words for it and not anything retained.
+      // The condition, not SQLite's words for it and not anything saved.
       expect(failure.message).not.toContain("SQLITE");
       expect(failure.message).not.toContain("readonly");
       for (const directory of watched.directories) {
@@ -1314,7 +1314,7 @@ describe("Tier WLI — inspecting a crashed run", () => {
     // `Result` to return because nobody is waiting for one.
     {
       const root = yield* useStorageRoot();
-      yield* retainedRun(root, "cancel-1");
+      yield* savedRun(root, "cancel-1");
       const path = runPath(root, "cancel-1");
       yield* leaveHot(root, "cancel-1");
       const before = yield* pairPrint(path);
@@ -1350,7 +1350,7 @@ describe("Tier WLI — inspecting a crashed run", () => {
     for (const cancelled of [false, true]) {
       const root = yield* useStorageRoot();
       const runId = cancelled ? "residue-2" : "residue-1";
-      yield* retainedRun(root, runId);
+      yield* savedRun(root, runId);
       const path = runPath(root, runId);
       yield* leaveHot(root, runId);
       const before = yield* pairPrint(path);
@@ -1416,7 +1416,7 @@ describe("Tier WLI — inspecting a crashed run", () => {
     // receiver either: it has to be raised.
     {
       const root = yield* useStorageRoot();
-      yield* retainedRun(root, "residue-3");
+      yield* savedRun(root, "residue-3");
       const path = runPath(root, "residue-3");
       yield* leaveHot(root, "residue-3");
       const before = yield* pairPrint(path);
@@ -1470,7 +1470,7 @@ describe("Tier WLI — inspecting a crashed run", () => {
 
   it("WLI17: a connection that is already open owns the pair until it closes", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "cached-1");
+    yield* savedRun(root, "cached-1");
     const path = runPath(root, "cached-1");
 
     yield* scoped(function* () {
@@ -1507,7 +1507,7 @@ describe("Tier WLI — inspecting a crashed run", () => {
         throw answered.error;
       }
       expect(answered.value.record.runId).toBe("cached-1");
-      // It recovered a copy, and the retained pair is still the crash's.
+      // It recovered a copy, and the saved pair is still the crash's.
       expect(watched.phases).toContain("source-pair-copied");
       expect(directCode(path)).toBe(READONLY_ROLLBACK);
     });
@@ -1515,7 +1515,7 @@ describe("Tier WLI — inspecting a crashed run", () => {
 
   it("WLI16: the clean path costs nothing, and the hot one takes no ownership", function* () {
     const root = yield* useStorageRoot();
-    yield* retainedRun(root, "clean-1");
+    yield* savedRun(root, "clean-1");
     const path = runPath(root, "clean-1");
 
     // The run host that created it has closed, so the empty sidecar its
@@ -1536,7 +1536,7 @@ describe("Tier WLI — inspecting a crashed run", () => {
     // Recovering a crashed run buys inspection nothing it did not already
     // have. The same probes WLI8 holds the clean path to, against a run that
     // does take the recovery path.
-    yield* retainedRun(root, "hot-16");
+    yield* savedRun(root, "hot-16");
     yield* leaveHot(root, "hot-16");
     const hot = runPath(root, "hot-16");
     // The executor that created this run left its own sidecar, which goes

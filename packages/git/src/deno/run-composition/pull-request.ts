@@ -20,7 +20,7 @@
  * interruption there is no exactly-once guarantee: GitHub may have accepted a
  * change for which this run recorded no result, and the next run observes what
  * is there and decides from that. Nothing pretends otherwise, and nothing is
- * retained that would let it.
+ * saved that would let it.
  */
 
 import type { Operation } from "effection";

@@ -4,7 +4,7 @@
  * Written with content it is a working directory: everything expanded inside
  * observes it as the contextual `Env.cwd`, and it is removed when the content
  * finishes, fails, or is cancelled. Written self-closing it is an allocation:
- * the directory is retained at the invocation site so a later sibling can use
+ * the directory is saved at the invocation site so a later sibling can use
  * the path it renders, and removed with that scope.
  *
  * The directory comes from the installed `API.Files` provider, so this

@@ -11,7 +11,7 @@
  *     installation → target recognition → configuration → credential → transport
  *
  * Everything driven through the *real* host assembly — the ordinary-run
- * profile and a retained workflow run — lives in
+ * profile and a saved workflow run — lives in
  * `github-workflow-activation.test.ts`, because assembling either reaches
  * Workflow's storage adapter and so `node:sqlite`. What is here installs the
  * adapters directly and is portable across all three runtimes.

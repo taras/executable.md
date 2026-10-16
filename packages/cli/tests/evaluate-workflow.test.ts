@@ -75,7 +75,7 @@ function runDocument(
   });
 }
 
-const NOTE = "the retained note";
+const NOTE = "the saved note";
 
 describe("Tier FE — the workflow host's profile", () => {
   it("FE22: `<Dir>` is the host's choice, and Git is what supplies it", function* () {

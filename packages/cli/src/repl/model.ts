@@ -29,7 +29,7 @@
  *
  * ## Agent conversations
  *
- * A retained `agent_prompt` is one Agent turn, read through Core's own record
+ * A saved `agent_prompt` is one Agent turn, read through Core's own record
  * parser rather than through a second spelling of that shape here. Turns are
  * ordered by the sequence the record states, because a Journal's append order
  * is the order turns *finished* and a chronology built from it would reorder a
@@ -55,7 +55,7 @@ export const ENTRY_SCOPE = entryKey(1);
 /**
  * The root namespace each entry's own validated props owns.
  *
- * Named here because two things turn on it: a retained value under this name is
+ * Named here because two things turn on it: a saved value under this name is
  * not inherited, and Core refuses one supplied as an initial binding.
  */
 const ROOT_PROPS_BINDING = "props";
@@ -113,7 +113,7 @@ export interface ReplGenerated {
  * One source region the entry admitted, and what that region holds.
  *
  * `kind` says where the source came from: the submitted entry, a nested
- * component occurrence the run retained, or a generated fragment an authored
+ * component occurrence the run saved, or a generated fragment an authored
  * invocation produced. A scope exists in a model only where the projected prefix
  * admitted it, so a selection earlier than an admission has no scope to show and
  * needs no separate flag saying so.
@@ -132,7 +132,7 @@ export interface ReplScope {
   readonly scopes: readonly ReplScope[];
 }
 
-/** One provider choice a retained permission request offered. */
+/** One provider choice a saved permission request offered. */
 export interface ReplAgentOption {
   readonly optionId: string;
   readonly name: string;
@@ -140,7 +140,7 @@ export interface ReplAgentOption {
 }
 
 /**
- * One permission request a retained turn answered.
+ * One permission request a saved turn answered.
  *
  * A fact about a decision already made. It has no action and no authority: the
  * request it describes was answered while that turn ran, by a process that may
@@ -163,10 +163,10 @@ export interface ReplAgentConfiguration {
 }
 
 /**
- * One retained Agent turn, at the position its record was appended.
+ * One saved Agent turn, at the position its record was appended.
  *
  * Everything a reader can be shown about a Prompt that has settled, and nothing
- * about the process that ran it. A provider checkpoint a host retained beside
+ * about the process that ran it. A provider checkpoint a host saved beside
  * the record is not here: it names a turn something could be *continued* from,
  * which is durable identity rather than something to read.
  */
@@ -211,7 +211,7 @@ export interface ReplAgentTurn {
   readonly permissions: readonly ReplAgentPermission[];
 }
 
-/** One retained conversation: a non-empty session key and the turns it held. */
+/** One saved conversation: a non-empty session key and the turns it held. */
 export interface ReplAgentSession {
   readonly sessionKey: string;
   readonly turns: readonly ReplAgentTurn[];
@@ -321,7 +321,7 @@ export type ReplRow =
  * earlier entries durably published, with this entry's own published values over
  * them. It is what the next entry starts from, which is why it is a reading of
  * the Journal and never of a process's memory — a value a run computed and never
- * retained is a value a cold reopen would not have.
+ * saved is a value a cold reopen would not have.
  */
 export interface ReplEntry {
   /** Its admission-order key: `entry-1`, `entry-2`, and so on. */
@@ -347,7 +347,7 @@ export interface ReplEntry {
    * it happened rather than appearing here as something a successor receives.
    */
   readonly bindings: readonly ReplBinding[];
-  /** This entry's retained turns, in its own Prompt sequence order. */
+  /** This entry's saved turns, in its own Prompt sequence order. */
   readonly turns: readonly ReplAgentTurn[];
 }
 
@@ -366,7 +366,7 @@ export interface ReplModel {
   readonly checkpoints: readonly ReplCheckpoint[];
   readonly transcript: readonly ReplRow[];
   /**
-   * Every retained turn, in entry admission order and then Prompt sequence.
+   * Every saved turn, in entry admission order and then Prompt sequence.
    *
    * Two orders rather than one, because a sequence is local to the entry that
    * recorded it: both entries of a two-entry history may hold sequence `0`, and
@@ -435,7 +435,7 @@ export function projectRepl(
 
   // Every segment in the complete prefix is read before any view escapes —
   // including a view a selection shortens. Boundaries alone are not enough:
-  // a later entry whose retained payload this version cannot read is damage to
+  // a later entry whose saved payload this version cannot read is damage to
   // the file, and an earlier position is not a place to stand and be shown a
   // catalog in front of it. A reader inspecting history would see a model that
   // looks whole, go back to the head, and only then be told the file is broken.
@@ -644,7 +644,7 @@ function build(
  * A name keeps the position it first appeared in, so a reader watching a value
  * change across entries watches it change in place rather than move. Only values
  * an entry durably published are here — a value a run computed and never
- * retained is not something a cold reopen could find, so it is not something an
+ * saved is not something a cold reopen could find, so it is not something an
  * entry may inherit either.
  *
  * `props` is the one name that does not cross. Every entry's props namespace is
@@ -694,7 +694,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
   const events = segment.events;
   const transcript: ReplRow[] = [];
   const checkpoints: ReplCheckpoint[] = [];
-  /** Every retained turn, in append order, before the chronology is ordered. */
+  /** Every saved turn, in append order, before the chronology is ordered. */
   const turns: ReplAgentTurn[] = [];
   let terminal: ReplTerminal | undefined;
   /** Every scope by the source path it was admitted from, for owner lookup. */
@@ -716,7 +716,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
   // reading below has an entry from its first iteration and the one thing a
   // segment cannot hold — a second root admission — needs no check it could
   // never reach.
-  const rootSource = readRetainedSource(segment.admission);
+  const rootSource = readSavedSource(segment.admission);
   if (rootSource === undefined) {
     return Err(
       new ReplProjectionError(
@@ -792,8 +792,8 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
     }
 
     if (description.type === "import_component") {
-      const retained = readRetainedSource(event);
-      if (retained === undefined) {
+      const saved = readSavedSource(event);
+      if (saved === undefined) {
         transcript.push({
           kind: "effect",
           marker,
@@ -820,8 +820,8 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
         key: `${description.name}-${ordinal}`,
         kind: "component",
         name: description.name,
-        path: retained.path,
-        source: retained.content,
+        path: saved.path,
+        source: saved.content,
         position,
         marker,
         bindings: [],
@@ -938,7 +938,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
           scopes: [],
         };
         owner.value.scope.scopes.push(fragment);
-        // Retained by the identity the admission carries rather than indexed by
+        // Saved by the identity the admission carries rather than indexed by
         // a path it does not have: what belongs to this scope is the work the
         // fragment itself performed, and every one of those effects names this
         // exact admission.
@@ -1115,7 +1115,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
 }
 
 /**
- * One retained turn, copied out of the parsed record and frozen all the way
+ * One saved turn, copied out of the parsed record and frozen all the way
  * down.
  *
  * Copied again rather than kept: the parser's record is a reading of the event,
@@ -1448,7 +1448,7 @@ function readPosition(event: Yield): ReplPosition | undefined | typeof MALFORMED
 }
 
 /**
- * The exact source a recorded import retained, or none when it retained none.
+ * The exact source a recorded import saved, or none when it saved none.
  *
  * Two shapes, because an import resolves two kinds of thing. A component read
  * from somewhere states the `path` it was read from; a component the host
@@ -1464,7 +1464,7 @@ function readPosition(event: Yield): ReplPosition | undefined | typeof MALFORMED
  * unreadable record is nothing, and an effect that then names its path has no
  * owner — which is the refusal, not a scope assembled from a guess.
  */
-function readRetainedSource(event: Yield): { path: string; content: string } | undefined {
+function readSavedSource(event: Yield): { path: string; content: string } | undefined {
   if (event.result.status !== "ok" || !isJsonObject(event.result.value)) {
     return undefined;
   }
@@ -1523,7 +1523,7 @@ function readExports(
       continue;
     }
     // Checked against the parser an authored binding is checked against, here
-    // and not when something tries to use it. A retained name no eval block
+    // and not when something tries to use it. A saved name no eval block
     // could have bound is a record this version cannot read — and reading it
     // anyway puts the name into a later entry's environment, where it reaches
     // the generated preamble and fails as a syntax error about a document that
@@ -1616,7 +1616,7 @@ function isOrdinal(value: Json | undefined): value is number {
 /**
  * Freeze a scope and everything reachable from it.
  *
- * Everything reachable is already this projection's own: a retained value was
+ * Everything reachable is already this projection's own: a saved value was
  * detached the moment it was read, so freezing here cannot reach an object the
  * caller still holds. What the router hands a component is the exact object the
  * model holds, which is what makes two readings of one prefix one reading.
@@ -1655,7 +1655,7 @@ function freeze<T>(value: T): Readonly<T> {
 }
 
 /**
- * One retained value, copied out of the event graph and frozen.
+ * One saved value, copied out of the event graph and frozen.
  *
  * Copied rather than frozen in place, because the events belong to whoever
  * handed them over. Freezing a value inside them would reach back out of this

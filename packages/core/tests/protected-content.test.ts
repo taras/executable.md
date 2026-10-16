@@ -114,16 +114,16 @@ describe("Tier PCL — one projection, then nothing", () => {
     expect(underlying.calls).toHaveLength(0);
   });
 
-  it("PCL3: a retained callback called after close refuses", function* () {
+  it("PCL3: a saved callback called after close refuses", function* () {
     const underlying = counted();
     const lease = protectedContentLease("Evaluate", underlying.perform);
     // Exactly what a body keeping the callback in a closure, on a returned
     // object, or in something it spawned would hold.
-    const retained = lease.project;
+    const saved = lease.project;
 
     lease.close();
 
-    const refused = yield* refusalOf(retained(REFERENCE));
+    const refused = yield* refusalOf(saved(REFERENCE));
     expect(refused).toBeInstanceOf(ComponentInvocationError);
     expect(underlying.calls).toHaveLength(0);
   });

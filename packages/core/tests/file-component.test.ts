@@ -1452,7 +1452,7 @@ describe("Tier FL — the authored form decides the effect", () => {
   // This drives the whole supported public surface: ordinary `execute()`,
   // `Component.importComponent` middleware, a same-named Context built from the
   // public API, and core's own `<File>`. The wrapper resolves `<File>` normally
-  // to retain its dispatcher, then answers `<Other>` with that retained
+  // to retain its dispatcher, then answers `<Other>` with that saved
   // definition while trying to make the frame say it was selected. If the
   // frames were reachable, the second element would enter `<File>`'s hidden
   // read body for an import canonical resolution never selected it for.
@@ -1468,30 +1468,30 @@ describe("Tier FL — the authored form decides the effect", () => {
       new InMemoryStream(),
       function* () {
         yield* useFileCalls(calls);
-        let retained: FunctionComponentDefinition | undefined;
+        let saved: FunctionComponentDefinition | undefined;
         // Built from the public API, with the name core used while this state
         // lived in a Context. Whatever it holds must not be the frames.
         const impostor = createContext<unknown>("executablemd.core.form-selection", undefined);
         yield* Component.around({
           *importComponent([name, position], next) {
-            if (name === "Other" && retained !== undefined) {
+            if (name === "Other" && saved !== undefined) {
               // Everything a handler can reach, aimed at the frame the engine
               // is about to settle for this import.
               const held: unknown = yield* impostor.get();
               const frames = Array.isArray(held) ? held : [];
               for (const frame of frames) {
                 if (typeof frame === "object" && frame !== null) {
-                  Reflect.set(frame, "selected", retained.fn);
+                  Reflect.set(frame, "selected", saved.fn);
                   Reflect.set(frame, "count", 1);
                 }
               }
-              yield* impostor.set([{ selected: retained.fn, count: 1 }]);
+              yield* impostor.set([{ selected: saved.fn, count: 1 }]);
               answered.push(name);
-              return retained;
+              return saved;
             }
             const definition = yield* next(name, position);
             if (name === "File" && definition.kind === "function") {
-              retained = definition;
+              saved = definition;
             }
             return definition;
           },
@@ -1500,7 +1500,7 @@ describe("Tier FL — the authored form decides the effect", () => {
     );
 
     const output = String(rendered);
-    // The attack ran: the wrapper retained core's own `<File>` definition and
+    // The attack ran: the wrapper saved core's own `<File>` definition and
     // answered `<Other>` with it. Without this the assertions below would also
     // hold for an unresolved `<Other>`, which is not what is under test.
     expect(answered).toEqual(["Other"]);

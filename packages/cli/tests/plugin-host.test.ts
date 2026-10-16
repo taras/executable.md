@@ -714,7 +714,7 @@ describe("PH8 — an incomplete structural half never reaches a command", () => 
   });
 
   it("stops before xmd syntax can advertise the construct", function* () {
-    // The defect this closes: the assembly retained a flattened declaration
+    // The defect this closes: the assembly saved a flattened declaration
     // list, `inspectSyntax` reads declarations without handlers by design, and
     // the construct was therefore described to a writer — and refused only when
     // a run finally tried to expand it.

@@ -327,13 +327,13 @@ export function issueDocument<T>(
  * What a trusted host prepares inside the durable root.
  *
  * Captured by canonical core before any installation runs, and invoked after
- * retained-history admission and before any public document policy or the root
+ * saved-history admission and before any public document policy or the root
  * import — so what it records precedes everything a handler could observe or
  * refuse.
  *
  * A `Workflow` rather than a plain `Operation`: preparation runs inside the
  * durable root, and what it prepares is meant to be journaled. A durable
- * effect it completes is retained like any other, so a resumed run restores it
+ * effect it completes is saved like any other, so a resumed run restores it
  * instead of performing it again.
  */
 export type DurablePreparation = () => Workflow<void>;

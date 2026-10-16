@@ -1,5 +1,5 @@
 /**
- * What admits a provisional session: work that went beyond the retained prefix.
+ * What admits a provisional session: work that went beyond the saved prefix.
  *
  * A session reconstructing from history is provisional until something proves
  * the run reached new work — a queued Agent turn, a question, a fresh record.

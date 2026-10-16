@@ -14,7 +14,7 @@
  * around the import. It may observe it, delegate it and refuse it by throwing;
  * what it cannot do is answer one. A replacement, a rebuilt descriptor, another
  * name's answer and a separately constructed dispatcher are each refused
- * against the copy canonical execution retained, and core's copy is what runs.
+ * against the copy canonical execution saved, and core's copy is what runs.
  *
  * Underneath both, the components are *ordinary*: each body performs its
  * operations through contextual `API.Files`, which middleware still answers,
@@ -604,7 +604,7 @@ describe("Tier FX — the final import answer is verified", () => {
     const fixture = yield* useFixture();
 
     // A dispatcher built from the same declaration, so every field matches and
-    // the function is not the one this execution retained. A definition from an
+    // the function is not the one this execution saved. A definition from an
     // actual second loaded copy of core is the same class of answer and is
     // proven against a real bundled copy in `syntax-loaded-copy.test.ts`, which
     // is Deno-only; this file runs under every supported runtime.

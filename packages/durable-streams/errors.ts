@@ -57,7 +57,7 @@ function isCoordinate(value: Json | undefined, least: number): value is number {
 }
 
 /**
- * The terminal-divergence message, naming the first retained entry the
+ * The terminal-divergence message, naming the first saved entry the
  * terminating subtree did not reach when one was selected.
  */
 function withUnreached(message: string, unconsumed: Yield | Close | undefined): string {
@@ -90,9 +90,9 @@ export class DurablePersistenceError extends Error {
  *
  * `path` locates the offending member within the record, such as
  * `$.result.error.message`. Members the protocol does not name appear as `*`,
- * because a record's own member names are as much retained content as its
+ * because a record's own member names are as much saved content as its
  * values. Neither the path nor the message repeats anything from the record: a
- * journal is retained, filtered history, and a parse failure is not a reason to
+ * journal is saved, filtered history, and a parse failure is not a reason to
  * copy its contents into an error that travels to logs and terminals.
  */
 export class MalformedDurableEventError extends Error {
@@ -147,7 +147,7 @@ export class DivergenceError extends Error {
 
 /**
  * Raised when a workflow terminates while replay still has unconsumed entries.
- * The retained journal describes effects that the current execution did not
+ * The saved journal describes effects that the current execution did not
  * reach, so no terminal Close may be appended over that history.
  */
 export class TerminalDivergenceError extends Error {
@@ -156,7 +156,7 @@ export class TerminalDivergenceError extends Error {
   coroutineId: CoroutineId;
   consumedCount: number;
   totalCount: number;
-  /** The first retained entry the terminating subtree did not reach. */
+  /** The first saved entry the terminating subtree did not reach. */
   unconsumed?: Yield | Close;
 
   constructor(

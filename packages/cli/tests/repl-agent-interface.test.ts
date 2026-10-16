@@ -965,7 +965,7 @@ function* asking(
 describe("U1 — one chronology, filtered, undisturbed by the background", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("U1: retained, streaming and queued turns show together, in scheduling order", function* () {
+  it("U1: saved, streaming and queued turns show together, in scheduling order", function* () {
     const { session, stub } = yield* asking({
       review: {},
       build: { streaming: true },
@@ -1030,7 +1030,7 @@ describe("U1 — one chronology, filtered, undisturbed by the background", () =>
     expect(yield* labelOf(before, last)).toContain("completed, recorded");
     // The earlier turn is still live and the later one is already in the
     // history, and the earlier one is still first. Appending the live list to
-    // the retained one would put it last.
+    // the saved one would put it last.
     const shown = (yield* turnRows(before)).map((one) => one.label);
     expect(shown.findIndex((label) => showsPrompt(label, first))).toBeLessThan(
       shown.findIndex((label) => showsPrompt(label, last)),
@@ -1608,7 +1608,7 @@ describe("U2 — one action path, and one owner for a pending request", () => {
 
   it("U2: a recorded permission audit is read, never answered", function* () {
     // Reconstructed from a journal a real run recorded, because what this row owns
-    // is how a *retained* audit is presented: read, with no target, no action and
+    // is how a *saved* audit is presented: read, with no target, no action and
     // no authority call. How a live turn comes to retain one is Slice B's, and is
     // proved there.
     const holder: ReplExecution = {
@@ -2790,7 +2790,7 @@ describe("U8 — a target is a control, whatever its key is spelled", () => {
       expect(drawerFrame.node(key)).toBeDefined();
       expect(drawerFrame.targetable(key)).toBe(false);
     }
-    // A turn's own facts and a retained audit are lines wherever they appear.
+    // A turn's own facts and a saved audit are lines wherever they appear.
     const sessions = reading(onSessions(session), session, WIDE);
     const sessionsFrame = yield* drawn(tree, sessions);
     for (const key of sessionsFrame.keys) {
@@ -3604,7 +3604,7 @@ describe("EU1 — selecting an entry moves the transcript locus and nothing else
     yield* until(session, "the second entry's turn being recorded", () => recorded(session) === 2);
     yield* session.join();
 
-    // Read at one retained position, so this round trip carries history state
+    // Read at one saved position, so this round trip carries history state
     // alongside the selection, the draft and the conversation filter. The last
     // one, because what each entry's transcript holds has to be distinguishable
     // for the locus below to be a claim about which entry is being read.
@@ -3993,7 +3993,7 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
         yield* pressUntil(terminal, "Entries");
         terminal.feed("\r");
         yield* settled(40);
-        // Not `[ok]`, which is the retained close: a close is recorded while the
+        // Not `[ok]`, which is the saved close: a close is recorded while the
         // task that wrote it is still coming down, and a submission taken in that
         // window has nowhere to go. The row that says the next entry may start is
         // the one that means the teardown finished too (#870 UI11).

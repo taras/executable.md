@@ -37,7 +37,7 @@ import { Execution } from "../api.ts";
 import { executeInstalled } from "../host.ts";
 import type { ExecutionInstallation } from "../host.ts";
 import { registerComponents } from "../src/components/registration.ts";
-import { retainedSource } from "../src/root-source.ts";
+import { savedSource } from "../src/root-source.ts";
 import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
 import type { RecordedFiles } from "./support/fragment-files.ts";
 import { answerProvider, implementation } from "./support/answer-provider.ts";
@@ -45,7 +45,7 @@ import { useSelection } from "./support/generated-selection.ts";
 import type { ComponentDefinition, FunctionComponentDefinition } from "../src/types.ts";
 
 const ROOT_PATH = "selection.md";
-const NOTE = "the retained note\n";
+const NOTE = "the saved note\n";
 
 /** One document, run under one selection. */
 interface Attempt {
@@ -91,7 +91,7 @@ function run(
       const output = yield* collect(
         yield* executeInstalled(
           {
-            ...retainedSource(ROOT_PATH, source),
+            ...savedSource(ROOT_PATH, source),
             stream,
             includes: [...(options.includes ?? [])],
           },
@@ -331,7 +331,7 @@ describe("Tier GS — a selection core cannot capture refuses setup", () => {
     });
 
     expect(attempt.failure).toBe(undefined);
-    expect(attempt.output).toContain("the retained note");
+    expect(attempt.output).toContain("the saved note");
     expect(policy).toEqual(["execute"]);
     expect(rootImports(attempt.events)).toHaveLength(1);
     expect(produced).toHaveLength(1);
@@ -763,7 +763,7 @@ describe("Tier GS — what a selected name resolves to", () => {
                   }
                   const published = request.answer(definition);
                   // Published, and then edited in place. What the execution
-                  // retained is the copy taken at publication, so this reaches
+                  // saved is the copy taken at publication, so this reaches
                   // nothing — and the answer the chain is now holding no longer
                   // describes what was published, which refuses.
                   Object.assign(definition, {
@@ -792,7 +792,7 @@ describe("Tier GS — what a selected name resolves to", () => {
     const readings: string[] = [];
     // A declaration whose metadata would answer one thing while it is validated
     // and another when it is read again. The reading that was validated is the
-    // reading that is retained, so a value that behaved once is not a value
+    // reading that is saved, so a value that behaved once is not a value
     // this execution may retain — and it never gets a second turn to prove it.
     const definition = {
       kind: "function" as const,
@@ -836,16 +836,16 @@ describe("Tier GS — what a selected name resolves to", () => {
     expect(attempt.output ?? "").not.toContain("the shifty answer ran");
     expect(admissions(attempt.events)).toHaveLength(0);
     // At most one reading, which is the whole of the protection: what the check
-    // was made about is what would have been retained, and the second answer
+    // was made about is what would have been saved, and the second answer
     // this accessor was waiting to give is never asked for.
     expect(readings.length).toBeLessThanOrEqual(1);
   });
 
-  it("U5-3: the retained admission holds the identity the owner declared", function* () {
+  it("U5-3: the saved admission holds the identity the owner declared", function* () {
     const ran: string[] = [];
 
     // The positive control for the two refusals above: an ordinary declaration
-    // is retained with the URL its own metadata states, and that is the row the
+    // is saved with the URL its own metadata states, and that is the row the
     // admission records.
     const attempt = yield* run(evaluating("<Local />\n"), {
       installations: [

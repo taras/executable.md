@@ -1107,7 +1107,7 @@ interface LaunchRecord {
 /**
  * The launch records one diagnostic journal holds, in order.
  *
- * A retained preparation carries the prepared instruction text, so this reads
+ * A saved preparation carries the prepared instruction text, so this reads
  * it and nothing that reaches a verdict repeats it: what crosses out of here is
  * whether a digest exists, never the text or the digest's own bytes.
  */
@@ -1585,7 +1585,7 @@ function* settleAccounts(journey: Journey, verdict: JourneyVerdict): Operation<v
   verdict.cleanup.journalsRemoved = journalsGone;
 }
 
-/** The canonical version a retained build binding names, or nothing. */
+/** The canonical version a saved build binding names, or nothing. */
 function bindingVersion(value: unknown): string {
   if (!isRecord(value)) {
     return "";
@@ -1694,7 +1694,7 @@ function* runAttachment(
   verdict.markerRecovered = squeeze(acp.stdout).includes(`${RECOVER_PREFIX}${marker}`);
   verdict.outcome = verdict.markerRecovered ? "same-conversation" : "unresolved";
 
-  // Reobserved after the whole journey, against what the route retained. A
+  // Reobserved after the whole journey, against what the route saved. A
   // build that moved is the same build; a build that changed is not.
   const reobserved = yield* observeBuild(journey);
   verdict.observed.version = reobserved.version;
@@ -1851,7 +1851,7 @@ function decideAttachment(verdict: JourneyVerdict): void {
     verdict.journal.buildVersion !== verdict.route.buildVersion
   ) {
     verdict.verdict = "PRODUCT_FAILED";
-    verdict.detail = "the retained build and the build this run would use are not the same";
+    verdict.detail = "the saved build and the build this run would use are not the same";
     return;
   }
   if (verdict.substitutedIdentity || verdict.freshFallback || verdict.routeConverted) {

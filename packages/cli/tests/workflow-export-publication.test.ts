@@ -115,7 +115,7 @@ function useExportedRun<T>(body: (fixture: Fixture) => Operation<T>): Operation<
 /**
  * The host this package installs, pointed at the fixture's runs.
  *
- * Run from inside the repository, because reading a retained definition back
+ * Run from inside the repository, because reading a saved definition back
  * means opening the checkout that run recorded.
  */
 function withHost<T>(fixture: Fixture, body: () => Operation<T>): Operation<T> {
@@ -376,9 +376,9 @@ describe("Tier WXP — what an export leaves behind", () => {
       expect(said.err.join("\n")).not.toContain("will not replace");
 
       // The warning names the private entry that was left, and only that.
-      const retained = yield* leftovers(fixture);
-      expect(retained).toHaveLength(1);
-      expect(said.err.join("\n")).toContain(retained[0] ?? "<none>");
+      const saved = yield* leftovers(fixture);
+      expect(saved).toHaveLength(1);
+      expect(said.err.join("\n")).toContain(saved[0] ?? "<none>");
       expect(said.err.join("\n")).toContain("The artifact is complete");
 
       // The committed output is never a target of a removal — not by the

@@ -42,7 +42,7 @@
  * acceptance is the default handler of an Api instance created for that one
  * call and reachable from nowhere else. A handler that answers without
  * delegating, substitutes either argument, reconstructs the Api name, delegates
- * twice, or replays a retained request or a retired credential can refuse the
+ * twice, or replays a saved request or a retired credential can refuse the
  * call — none of them can make that terminal record it as accepted.
  */
 

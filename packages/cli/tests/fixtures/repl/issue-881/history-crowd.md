@@ -2,7 +2,7 @@
   The crowded recorded order (#881 PR 3).
 
   Two hundred consecutive invocations of one component. Each invocation admits
-  a scope, and each admitted scope is one retained position — which is what
+  a scope, and each admitted scope is one saved position — which is what
   makes this fixture crowded: two hundred positions is more than the rail has
   columns at 160, 120 or 72, so marks have to share columns at every measured
   width.

@@ -11,7 +11,7 @@
  *
  * Both journal as `issue_effect`, and the request carries which one it is. That
  * discriminator is in the durable name and, for an upsert, in the idempotency
- * key — so a read can never arrive at an upsert's retained result, and two
+ * key — so a read can never arrive at an upsert's saved result, and two
  * reads of different issues at one position are two different questions.
  *
  * ## What each guarantees, and what it does not
@@ -22,7 +22,7 @@
  * reading a live object means.
  *
  * An upsert guarantees that the call happens at most once per position and that
- * a replay returns the retained URL. It does not guarantee that the *service*
+ * a replay returns the saved URL. It does not guarantee that the *service*
  * was touched once: that is the provider's, and the idempotency key is what this
  * side hands over so the provider can make it true. An attempt interrupted
  * after the service accepted it leaves no journal entry, and the next attempt
@@ -45,8 +45,8 @@ import {
 } from "@executablemd/durable-streams";
 import { getExpansion, sourceDescription } from "@executablemd/core";
 import { getWorkflowRun } from "@executablemd/workflow";
-import { retainedIssueIdentitiesHere } from "../identities.ts";
-import { claimRetainedIssueIdentity, exhaustRetainedIssueIdentities } from "./identities.ts";
+import { savedIssueIdentitiesHere } from "../identities.ts";
+import { claimSavedIssueIdentity, exhaustSavedIssueIdentities } from "./identities.ts";
 import { ISSUE_EFFECT } from "./effect-type.ts";
 import { IssueApi } from "./api.ts";
 import { IssueOperations } from "./operations.ts";
@@ -98,27 +98,24 @@ export function* readIssue(request: IssueReadEffectRequest): Operation<IssueDeta
     provider: request.provider ?? null,
   });
 
-  const retained: unknown = yield* attempt(
-    yield* describe(complete),
-    function* (): Operation<Json> {
-      const answered = yield* IssueApi.operations.read(complete.url, {
-        ...(complete.provider === null ? {} : { provider: complete.provider }),
-      });
-      // Validated before it is retained. A provider that answered with more
-      // than the shared fields answered with something this boundary will not
-      // carry, and reading it anyway is how a provider's own shape reaches a
-      // document.
-      const details = parseIssueDetails(answered);
-      if (details === undefined) {
-        throw new IssueProtocolError(
-          "the issue provider answered a read with something that is not an issue's shared " +
-            "fields, so nothing was retained",
-        );
-      }
-      return issueDetailsJson(details);
-    },
-  );
-  const details = parseIssueDetails(retained);
+  const saved: unknown = yield* attempt(yield* describe(complete), function* (): Operation<Json> {
+    const answered = yield* IssueApi.operations.read(complete.url, {
+      ...(complete.provider === null ? {} : { provider: complete.provider }),
+    });
+    // Validated before it is saved. A provider that answered with more
+    // than the shared fields answered with something this boundary will not
+    // carry, and reading it anyway is how a provider's own shape reaches a
+    // document.
+    const details = parseIssueDetails(answered);
+    if (details === undefined) {
+      throw new IssueProtocolError(
+        "the issue provider answered a read with something that is not an issue's shared " +
+          "fields, so nothing was saved",
+      );
+    }
+    return issueDetailsJson(details);
+  });
+  const details = parseIssueDetails(saved);
   if (details === undefined) {
     throw new IssueProtocolError(
       "the journal holds a value that does not describe an issue's shared fields",
@@ -131,7 +128,7 @@ export function* readIssue(request: IssueReadEffectRequest): Operation<IssueDeta
  * Create or bring up to date one issue, as this run's next durable effect.
  *
  * Live, this calls `IssueApi.upsert()` once and retains the URL it answered
- * with. Replayed, it hands back the retained URL without resolving a provider,
+ * with. Replayed, it hands back the saved URL without resolving a provider,
  * reaching one, or appending anything.
  */
 export function* upsertIssue(request: IssueUpsertEffectRequest): Operation<IssueReference> {
@@ -152,43 +149,40 @@ export function* upsertIssue(request: IssueUpsertEffectRequest): Operation<Issue
   // Only an upsert borrows. A read has no key and reconciles nothing, so
   // lending it an identity would buy nothing and cost the ordering the
   // inherited prefix is consumed in.
-  const held = yield* retainedIssueIdentitiesHere();
-  const borrowed = claimRetainedIssueIdentity(held, live);
+  const held = yield* savedIssueIdentitiesHere();
+  const borrowed = claimSavedIssueIdentity(held, live);
   const complete: IssueUpsertRequest =
     borrowed === undefined
       ? live
       : Object.freeze({ ...live, identity: { ...identity, runId: borrowed } });
 
-  const retained: unknown = yield* attempt(
-    yield* describe(complete),
-    function* (): Operation<Json> {
-      if (borrowed !== undefined) {
-        // The request was named by a retained record, which cannot be a live
-        // request: performing under a run this execution is not would repeat
-        // work that already happened at a service this journal does not
-        // enclose.
-        exhaustRetainedIssueIdentities(held);
-        throw new IssueProtocolError(
-          "this request is named by retained history it never consumed, so creating an issue " +
-            "here would repeat work that already happened outside this journal",
-        );
-      }
-      const answered = yield* IssueApi.operations.upsert(complete.issue, {
-        url: complete.target,
-        ...(complete.provider === null ? {} : { provider: complete.provider }),
-        idempotencyKey: issueIdempotencyKey(complete.identity, "upsert", complete.target),
-      });
-      const record = parseIssueRecord(answered);
-      if (record === undefined) {
-        throw new IssueProtocolError(
-          "the issue provider answered an upsert with something that is not a URL, so nothing " +
-            "was retained",
-        );
-      }
-      return issueRecordJson(record);
-    },
-  );
-  const record = parseIssueRecord(retained);
+  const saved: unknown = yield* attempt(yield* describe(complete), function* (): Operation<Json> {
+    if (borrowed !== undefined) {
+      // The request was named by a saved record, which cannot be a live
+      // request: performing under a run this execution is not would repeat
+      // work that already happened at a service this journal does not
+      // enclose.
+      exhaustSavedIssueIdentities(held);
+      throw new IssueProtocolError(
+        "this request is named by saved history it never consumed, so creating an issue " +
+          "here would repeat work that already happened outside this journal",
+      );
+    }
+    const answered = yield* IssueApi.operations.upsert(complete.issue, {
+      url: complete.target,
+      ...(complete.provider === null ? {} : { provider: complete.provider }),
+      idempotencyKey: issueIdempotencyKey(complete.identity, "upsert", complete.target),
+    });
+    const record = parseIssueRecord(answered);
+    if (record === undefined) {
+      throw new IssueProtocolError(
+        "the issue provider answered an upsert with something that is not a URL, so nothing " +
+          "was saved",
+      );
+    }
+    return issueRecordJson(record);
+  });
+  const record = parseIssueRecord(saved);
   if (record === undefined) {
     throw new IssueProtocolError(
       "the journal holds a value that does not describe an issue reference",
@@ -208,7 +202,7 @@ function* describe(request: IssueRequest): Operation<EffectDescription> {
   return {
     type: ISSUE_EFFECT,
     name: yield* issueRequestFingerprint(request),
-    // Carried in the description so a retained history describes what it asked
+    // Carried in the description so a saved history describes what it asked
     // for. The identity table reads it back to recognize a record a fork
     // inherited, and it holds only what a document wrote.
     request: issueRequestJson(request),
@@ -229,7 +223,7 @@ function* attempt(
 export { issueRequestJson };
 
 /**
- * Install the retained Issue lifecycle for the current scope and below.
+ * Install the saved Issue lifecycle for the current scope and below.
  *
  * What a workflow run adds to the transport underneath is exactly the envelope
  * above: one durable effect per operation, named by this run and this
@@ -237,7 +231,7 @@ export { issueRequestJson };
  * `IssueApi` middleware still owns which service is reached and what a
  * credential may see.
  */
-export function useRetainedIssueOperations(): Operation<void> {
+export function useSavedIssueOperations(): Operation<void> {
   return IssueOperations.around(
     {
       read: ([invocation]: [IssueReadInvocation]) => readIssue(invocation),

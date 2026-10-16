@@ -60,8 +60,8 @@ import {
   gitOutcomes,
   physicalGitApiCopy,
   raised,
-  retainedRepositories,
-  retainedWorktrees,
+  savedRepositories,
+  savedWorktrees,
   runDocument,
   runWorkflowDocument,
   subcommands,
@@ -162,7 +162,7 @@ function runForged(
 }
 
 /**
- * What a retained result is read back for.
+ * What a saved result is read back for.
  *
  * A result is parsed for one request, so a suite that wants to read one has to
  * say which request it is reading it for — which is the point: the parse is a
@@ -175,11 +175,11 @@ function* expectation(
   base?: string,
   within = "",
 ): Operation<GitSwitchExpectation> {
-  const [repository] = yield* retainedRepositories(database);
+  const [repository] = yield* savedRepositories(database);
   if (repository === undefined) {
-    throw new Error("the run retained no repository to read a result against");
+    throw new Error("the run saved no repository to read a result against");
   }
-  const [worktree] = yield* retainedWorktrees(database, repository.record.name);
+  const [worktree] = yield* savedWorktrees(database, repository.record.name);
   return {
     repository: repository.record,
     workingDirectory:
@@ -198,7 +198,7 @@ function document(locator: string, ...lines: string[]): string {
  * A working directory inside the selected checkout that is not a directory.
  *
  * The subject of the case below is the Git provider's own admission check: a
- * contextual working directory the retained checkout does not actually hold is
+ * contextual working directory the saved checkout does not actually hold is
  * refused, before the provider spawns anything. Reaching that state needs a cwd
  * that names something which is not there.
  *
@@ -261,23 +261,20 @@ describe("workflow Git.Switch", () => {
 
       const [outcome] = yield* gitOutcomes(database);
       expect(outcome?.status).toBe("ok");
-      const retained = parseGitSwitchResult(
-        outcome?.record,
-        yield* expectation(database, "release"),
-      );
-      expect(retained?.checkout.repositoryName).toBe("project");
-      expect(retained?.checkout.worktreeName).toBe(null);
-      expect(retained?.requestedBranch).toBe("release");
-      expect(retained?.resolvedBranch).toBe("release");
-      expect(retained?.requestedBase).toBe(null);
+      const saved = parseGitSwitchResult(outcome?.record, yield* expectation(database, "release"));
+      expect(saved?.checkout.repositoryName).toBe("project");
+      expect(saved?.checkout.worktreeName).toBe(null);
+      expect(saved?.requestedBranch).toBe("release");
+      expect(saved?.resolvedBranch).toBe("release");
+      expect(saved?.requestedBase).toBe(null);
       // The branch already existed, so nothing was created from a base.
-      expect(retained?.resolvedBase).toBe(null);
-      expect(retained?.before.branch).toBe("main");
-      expect(retained?.before.commit).toBe(remote.heads.get("main"));
-      expect(retained?.after.commit).toBe(remote.heads.get("release"));
-      expect(retained?.before.headTree).not.toBe(retained?.after.headTree);
+      expect(saved?.resolvedBase).toBe(null);
+      expect(saved?.before.branch).toBe("main");
+      expect(saved?.before.commit).toBe(remote.heads.get("main"));
+      expect(saved?.after.commit).toBe(remote.heads.get("release"));
+      expect(saved?.before.headTree).not.toBe(saved?.after.headTree);
       // A clean checkout stages nothing, so the index describes what HEAD does.
-      expect(retained?.after.indexTree).toBe(retained?.after.headTree);
+      expect(saved?.after.indexTree).toBe(saved?.after.headTree);
       expect(yield* survivingRoots(counting.counters)).toEqual([]);
     });
   });
@@ -301,14 +298,14 @@ describe("workflow Git.Switch", () => {
 
       expect(String(output)).toContain("after: main");
       const [outcome] = yield* gitOutcomes(database);
-      const retained = parseGitSwitchResult(
+      const saved = parseGitSwitchResult(
         outcome?.record,
         yield* expectation(database, "feature/new"),
       );
-      expect(retained?.resolvedBranch).toBe("feature/new");
-      expect(retained?.requestedBase).toBe(null);
-      expect(retained?.resolvedBase).toBe(remote.heads.get("main"));
-      expect(retained?.after.commit).toBe(remote.heads.get("main"));
+      expect(saved?.resolvedBranch).toBe("feature/new");
+      expect(saved?.requestedBase).toBe(null);
+      expect(saved?.resolvedBase).toBe(remote.heads.get("main"));
+      expect(saved?.after.commit).toBe(remote.heads.get("main"));
     });
   });
 
@@ -331,13 +328,13 @@ describe("workflow Git.Switch", () => {
 
       expect(String(output)).toContain("after: release");
       const [outcome] = yield* gitOutcomes(database);
-      const retained = parseGitSwitchResult(
+      const saved = parseGitSwitchResult(
         outcome?.record,
         yield* expectation(database, "feature/new", "release"),
       );
-      expect(retained?.requestedBase).toBe("release");
-      expect(retained?.resolvedBase).toBe(remote.heads.get("release"));
-      expect(retained?.after.commit).toBe(remote.heads.get("release"));
+      expect(saved?.requestedBase).toBe("release");
+      expect(saved?.resolvedBase).toBe(remote.heads.get("release"));
+      expect(saved?.after.commit).toBe(remote.heads.get("release"));
     });
   });
 
@@ -371,13 +368,13 @@ describe("workflow Git.Switch", () => {
       expect(rendered).toContain("outside: main");
 
       const [outcome] = yield* gitOutcomes(database);
-      const retained = parseGitSwitchResult(
+      const saved = parseGitSwitchResult(
         outcome?.record,
         yield* expectation(database, "release", undefined, "/worktrees/"),
       );
-      expect(retained?.checkout.worktreeName).toBe("implementation");
-      expect(retained?.before.branch).toBe("feature/new");
-      expect(retained?.after.branch).toBe("release");
+      expect(saved?.checkout.worktreeName).toBe("implementation");
+      expect(saved?.before.branch).toBe("feature/new");
+      expect(saved?.after.branch).toBe("release");
     });
   });
 
@@ -405,19 +402,16 @@ describe("workflow Git.Switch", () => {
 
       const rendered = String(output);
       expect(rendered).toContain("which: release");
-      const [repository] = yield* retainedRepositories(database);
+      const [repository] = yield* savedRepositories(database);
       expect(
         yield* workspaceText(database, `${repository?.record.checkoutPath}/shared.txt`),
       ).toContain("carried");
       const [outcome] = yield* gitOutcomes(database);
-      const retained = parseGitSwitchResult(
-        outcome?.record,
-        yield* expectation(database, "release"),
-      );
+      const saved = parseGitSwitchResult(outcome?.record, yield* expectation(database, "release"));
       // A modified working tree is not a staged one: the index still describes
       // HEAD on both sides of the switch.
-      expect(retained?.before.indexTree).toBe(retained?.before.headTree);
-      expect(retained?.after.indexTree).toBe(retained?.after.headTree);
+      expect(saved?.before.indexTree).toBe(saved?.before.headTree);
+      expect(saved?.after.indexTree).toBe(saved?.after.headTree);
     });
   });
 
@@ -454,7 +448,7 @@ describe("workflow Git.Switch", () => {
       const [outcome] = yield* gitOutcomes(database);
       expect(outcome?.status).toBe("err");
       expect(committedRoot(path)).toBe(latestRoot(path));
-      const [repository] = yield* retainedRepositories(database);
+      const [repository] = yield* savedRepositories(database);
       const held = yield* workspaceText(database, `${repository?.record.checkoutPath}/which.txt`);
       expect(held).toContain("local");
       expect(held).not.toContain("release");
@@ -509,17 +503,17 @@ describe("workflow Git.Switch selection", () => {
       );
 
       // A directory inside a checkout is where Git runs, not what it runs on:
-      // the whole checkout moved, and the retained identity is the Repository's.
+      // the whole checkout moved, and the saved identity is the Repository's.
       expect(String(output)).toContain("after: release");
       const [outcome] = yield* gitOutcomes(database);
-      const [repository] = yield* retainedRepositories(database);
-      const retained = parseGitSwitchResult(
+      const [repository] = yield* savedRepositories(database);
+      const saved = parseGitSwitchResult(
         outcome?.record,
         yield* expectation(database, "release", undefined, "/nested"),
       );
-      expect(retained?.checkout.worktreeName).toBe(null);
-      expect(retained?.checkout.checkoutPath).toBe(repository?.record.checkoutPath);
-      expect(retained?.after.branch).toBe("release");
+      expect(saved?.checkout.worktreeName).toBe(null);
+      expect(saved?.checkout.checkoutPath).toBe(repository?.record.checkoutPath);
+      expect(saved?.after.branch).toBe("release");
     });
   });
 
@@ -552,13 +546,13 @@ describe("workflow Git.Switch selection", () => {
       expect(rendered).toContain("inside: release");
       expect(rendered).toContain("outside: main");
       const [outcome] = yield* gitOutcomes(database);
-      const [worktree] = yield* retainedWorktrees(database, "project");
-      const retained = parseGitSwitchResult(
+      const [worktree] = yield* savedWorktrees(database, "project");
+      const saved = parseGitSwitchResult(
         outcome?.record,
         yield* expectation(database, "release", undefined, "/worktrees/"),
       );
-      expect(retained?.checkout.worktreeName).toBe("implementation");
-      expect(retained?.checkout.checkoutPath).toBe(worktree?.checkoutPath);
+      expect(saved?.checkout.worktreeName).toBe("implementation");
+      expect(saved?.checkout.checkoutPath).toBe(worktree?.checkoutPath);
     });
   });
 
@@ -629,18 +623,18 @@ describe("workflow Git.Switch selection", () => {
     ].join("\n");
 
     yield* withStorage(root, function* () {
-      const unretainedRun = yield* createRun({ runId: "ghost" });
+      const unsavedRun = yield* createRun({ runId: "ghost" });
       const counting = countingHost();
-      const unretained = yield* raised(
-        runForged(unretainedRun, FORGED, source, countingOptions(counting)),
+      const unsaved = yield* raised(
+        runForged(unsavedRun, FORGED, source, countingOptions(counting)),
       );
-      expect(causedBy(unretained, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
-      expect(causedBy(unretained, isGitFailure)).toBe(undefined);
+      expect(causedBy(unsaved, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
+      expect(causedBy(unsaved, isGitFailure)).toBe(undefined);
       // Not an outcome: nothing about it is in this run's history.
-      expect(yield* gitEvents(unretainedRun)).toHaveLength(0);
+      expect(yield* gitEvents(unsavedRun)).toHaveLength(0);
 
       // The second context names a Repository this run really retains, and
-      // carries a record that is not the retained one. A name can be looked up;
+      // carries a record that is not the saved one. A name can be looked up;
       // the record is compared, so the substitution is what fails.
       const substitutedRun = yield* createRun({ runId: "substituted" });
       const substituted = yield* raised(
@@ -652,26 +646,26 @@ describe("workflow Git.Switch selection", () => {
         ),
       );
       expect(causedBy(substituted, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
-      expect(yield* retainedRepositories(substitutedRun)).toHaveLength(1);
+      expect(yield* savedRepositories(substitutedRun)).toHaveLength(1);
       expect(yield* gitEvents(substitutedRun)).toHaveLength(0);
 
-      // And a context carrying the retained Repository's own facts, exactly,
+      // And a context carrying the saved Repository's own facts, exactly,
       // still admits nothing: a selection is what this provider minted,
       // not what a value says about itself. The identity here is the one the
-      // first run retained, which the same fixture retains again here —
+      // first run saved, which the same fixture retains again here —
       // creation identity is a function of the name, the url and the base.
-      const [retained] = yield* retainedRepositories(unretainedRun);
+      const [saved] = yield* savedRepositories(unsavedRun);
       const exactRun = yield* createRun({ runId: "exact" });
       const exact = yield* raised(
         runForged(
           exactRun,
-          retained === undefined
+          saved === undefined
             ? FORGED
             : {
                 ...FORGED,
-                name: retained.record.name,
-                identity: filteredRepositoryIdentity(retained.record),
-                checkoutPath: retained.record.checkoutPath,
+                name: saved.record.name,
+                identity: filteredRepositoryIdentity(saved.record),
+                checkoutPath: saved.record.checkoutPath,
               },
           source,
           countingOptions(counting),
@@ -850,7 +844,7 @@ describe("workflow Git.Switch failure kinds", () => {
       );
       expect(causedBy(failure, isGitFailure)).toBe(undefined);
       expect(yield* gitEvents(database)).toHaveLength(0);
-      const [repository] = yield* retainedRepositories(database);
+      const [repository] = yield* savedRepositories(database);
       expect(yield* workspaceText(database, `${repository?.record.checkoutPath}/which.txt`)).toBe(
         "main\n",
       );
@@ -885,10 +879,10 @@ describe("workflow Git.Switch failure kinds", () => {
 
         expect(failure).not.toBe(undefined);
         expect(causedBy(failure, isGitFailure)).toBe(undefined);
-        // Nothing was committed for the effect that could not be retained, so
+        // Nothing was committed for the effect that could not be saved, so
         // the checkout is still where the Repository left it.
         expect(yield* gitEvents(database)).toHaveLength(0);
-        const [repository] = yield* retainedRepositories(database);
+        const [repository] = yield* savedRepositories(database);
         expect(yield* workspaceText(database, `${repository?.record.checkoutPath}/which.txt`)).toBe(
           "main\n",
         );
@@ -924,7 +918,7 @@ describe("workflow Git.Switch failure kinds", () => {
  * identity: two copies of `git-api.ts` create two different `Api` objects, and
  * both have to reach the one provider a host installed. What a copy does not get
  * is admitted — its request is read by the same provider, against the same
- * retained rows, and a request naming something this run does not hold is
+ * saved rows, and a request naming something this run does not hold is
  * refused exactly as the packaged component's would be.
  */
 describe("workflow Git composition routing", () => {
@@ -968,7 +962,7 @@ describe("workflow Git composition routing", () => {
       expect(outcomes.map((outcome) => outcome.status)).toEqual(["ok"]);
 
       // What the copy does not get is admission. Its request is read against the
-      // same retained rows, and one naming something this run does not hold
+      // same saved rows, and one naming something this run does not hold
       // fails the run rather than being answered.
       const forgedRun = yield* createRun({ runId: "loaded-copy-forged" });
       const failure = yield* raised(
@@ -1139,28 +1133,25 @@ describe("workflow Git.Switch request ownership", () => {
       expect(String(output)).toContain("after: release");
       expect(counting.counters.effects).toEqual(["repository:project", "git:switch"]);
 
-      // What it retained says the same thing, and is read back for the request
+      // What it saved says the same thing, and is read back for the request
       // that was admitted rather than for the one the caller holds.
       const [outcome] = yield* gitOutcomes(database);
       expect(outcome?.status).toBe("ok");
-      const retained = parseGitSwitchResult(
-        outcome?.record,
-        yield* expectation(database, "release"),
-      );
-      expect(retained?.checkout.repositoryName).toBe("project");
-      expect(retained?.checkout.worktreeName).toBe(null);
-      expect(retained?.requestedBranch).toBe("release");
-      expect(retained?.requestedBase).toBe(null);
-      expect(retained?.resolvedBranch).toBe("release");
-      expect(retained?.resolvedBase).toBe(null);
-      expect(retained?.after.commit).toBe(remote.heads.get("release"));
+      const saved = parseGitSwitchResult(outcome?.record, yield* expectation(database, "release"));
+      expect(saved?.checkout.repositoryName).toBe("project");
+      expect(saved?.checkout.worktreeName).toBe(null);
+      expect(saved?.requestedBranch).toBe("release");
+      expect(saved?.requestedBase).toBe(null);
+      expect(saved?.resolvedBranch).toBe("release");
+      expect(saved?.resolvedBase).toBe(null);
+      expect(saved?.after.commit).toBe(remote.heads.get("release"));
 
       // And so does the effect's own durable identity, which is the admitted
       // Repository record and the admitted branch, digested.
-      const [repository] = yield* retainedRepositories(database);
+      const [repository] = yield* savedRepositories(database);
       const record = repository?.record;
       if (record === undefined) {
-        throw new Error("the run retained no repository");
+        throw new Error("the run saved no repository");
       }
       const [event] = yield* gitEvents(database);
       expect(event?.type === "yield" ? event.description.configuration : undefined).toBe(

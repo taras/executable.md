@@ -2,7 +2,7 @@
  * What a workflow run is a run of, established from the bytes the caller named.
  *
  * `xmd workflow start notes.md` names a file, and that file's current bytes are
- * what the run is of. They are read once, hashed, and retained with the run
+ * what the run is of. They are read once, hashed, and saved with the run
  * before it becomes durable — so a file outside a repository, an untracked
  * file, and a file edited since its last commit all start, and all start from
  * what they actually say.
@@ -31,7 +31,7 @@ import {
   fileSource,
   inspectDocument,
   parseMarkdownDefinition,
-  retainedSource,
+  savedSource,
 } from "@executablemd/core";
 import type { DocumentInfo, FileRootDocument } from "@executablemd/core";
 import type { WorkflowBundleComponent } from "@executablemd/core/host";
@@ -72,12 +72,12 @@ export interface EstablishedDefinition {
 }
 
 /** The sources one execution runs: the root, and the bundle it is closed over. */
-export interface RetainedSources {
+export interface SavedSources {
   readonly source: string;
   readonly components: readonly WorkflowBundleComponent[];
 }
 
-/** A definition that cannot be established, or a retained one that cannot be loaded. */
+/** A definition that cannot be established, or a saved one that cannot be loaded. */
 export class WorkflowDefinitionUnavailableError extends Error {
   override name = "WorkflowDefinitionUnavailableError";
 }
@@ -195,7 +195,7 @@ export function* establishDefinition(reference: string): Operation<Result<Establ
     );
   }
 
-  // Resolved against the bytes that are about to be retained, by core, once.
+  // Resolved against the bytes that are about to be saved, by core, once.
   // What the descriptor keeps is the exact canonical target core produced —
   // never the selector the caller wrote, which a later resolution against
   // other bytes could answer differently.
@@ -266,7 +266,7 @@ function* resolveTarget(
   }
   let described: DocumentInfo;
   try {
-    described = yield* inspectDocument(retainedSource(entrypoint, source, { target: selector }));
+    described = yield* inspectDocument(savedSource(entrypoint, source, { target: selector }));
   } catch (error) {
     const failure = asDocumentTargetError(error);
     return Err(
@@ -353,7 +353,7 @@ function* buildSourceBundle(
 
   // Parsed rather than assembled: the descriptor this command hands to storage
   // goes through the same closed parser storage reads one back through, so a
-  // candidate that is not canonical is refused here rather than retained.
+  // candidate that is not canonical is refused here rather than saved.
   const definition = parseSourceBundleDefinition({
     hashAlgorithm: "sha256",
     bundleHash,

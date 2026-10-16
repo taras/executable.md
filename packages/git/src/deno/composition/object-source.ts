@@ -5,7 +5,7 @@
  * Workspace retains and a document can write, and several ordinary settings in
  * one name a program or a destination: `remote.origin.pushurl`, a
  * `url.<base>.pushInsteadOf` rewrite, a `pre-push` hook, a credential helper,
- * `gpg.program`. Running the transport there would let retained document data
+ * `gpg.program`. Running the transport there would let saved document data
  * choose where this run publishes and what else runs while it happens.
  *
  * So the transport runs in a bare repository this provider created, configured
@@ -35,7 +35,7 @@
  * Nothing here runs until a live provider first needs the source, which is
  * before its first remote observation and after every local admission check. An
  * execution that replays a completed push reaches no provider at all: the
- * shared engine hands back the retained record, so no control repository is
+ * shared engine hands back the saved record, so no control repository is
  * built, no object graph is walked and no Git runs for the push.
  */
 
@@ -108,7 +108,7 @@ function* containedTree(directory: string, operation: string): Operation<void> {
       uncontained(
         operation,
         "its object database holds a symbolic link, so what native Git would read is not what " +
-          "this run retained",
+          "this run saved",
       );
     }
     if (info.isDirectory()) {
@@ -409,7 +409,7 @@ function* containedAlternates(
  * The object database this checkout publishes from, once it is contained.
  *
  * Three questions in one order, and the order is what makes each answerable.
- * The database has to be the retained Repository's own — a linked worktree
+ * The database has to be the saved Repository's own — a linked worktree
  * shares it, which is why one proof covers both kinds of checkout. It has to be
  * a real directory that resolves to itself, so the walk below is walking the
  * export rather than somewhere a link led. And then everything Git may traverse
@@ -421,13 +421,13 @@ function* containedObjectDatabase(checkout: GitCheckout, operation: string): Ope
   if ((yield* commonDirectory(checkout.git, checkout.directory)) !== administration) {
     uncontained(
       operation,
-      "the checkout it ran in does not share the retained repository's object database",
+      "the checkout it ran in does not share the saved repository's object database",
     );
   }
 
   const objects = `${administration}/objects`;
   if ((yield* entry(objects))?.isDirectory() !== true) {
-    uncontained(operation, "the retained repository holds no object database to publish from");
+    uncontained(operation, "the saved repository holds no object database to publish from");
   }
   if ((yield* until(realpath(objects))) !== objects) {
     uncontained(

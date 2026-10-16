@@ -262,7 +262,7 @@ function checkIntegrity(database: DatabaseSync, path: string): void {
  * Version 1 declares no foreign key, so this can only ever report nothing on a
  * container whose schema has just been recognized as version 1's. It is asked
  * anyway because it costs one statement and because the reference invariants
- * that *can* fail — an event naming a root nobody retained, a root naming
+ * that *can* fail — an event naming a root nobody saved, a root naming
  * content nobody stored — are semantic rather than physical, and are checked
  * where the records themselves are parsed.
  */

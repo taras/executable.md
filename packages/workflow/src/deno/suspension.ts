@@ -29,7 +29,7 @@
  * binary installed. That name is composition: middleware may refuse it for its
  * descendants, and nothing it returns is an answer.
  *
- * What authorizes entry is the retained request at the caller's exact current
+ * What authorizes entry is the saved request at the caller's exact current
  * durable position. Another durable operation can reproduce that request and
  * arrive there — replay identity is a type and a name, both public — and when it
  * does, it is standing at the same validated wait rather than at one of its own.
@@ -69,7 +69,7 @@ import {
 } from "../suspension/answer.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
 import { WorkflowRequestError, WorkflowTransactionError } from "../storage/errors.ts";
-import { consumeRetainedAnswer, readRetainedAnswer } from "./answers.ts";
+import { consumeSavedAnswer, readSavedAnswer } from "./answers.ts";
 import type { WorkflowRunConnections } from "./connections.ts";
 import { hostConnections } from "./host-connections.ts";
 import { withEnlistedJournalRoute } from "./journal-route.ts";
@@ -83,7 +83,7 @@ export interface SuspensionNotice {
 
 export interface SuspensionControllerOptions {
   /**
-   * The run whose retained request at the caller's position admits a wait.
+   * The run whose saved request at the caller's position admits a wait.
    *
    * Read here rather than trusted from the caller: the identifier presented has
    * to be the one this run derives for the position immediately behind the
@@ -114,7 +114,7 @@ export interface SuspensionController {
  * Whether this execution is, right now, at the wait it says it is.
  *
  * What admits a wait is the *current* execution reaching its own request, not the
- * existence of a matching row. Retained history alone cannot decide this: on a
+ * existence of a matching row. Saved history alone cannot decide this: on a
  * resume the request from the previous execution is already in the journal, so
  * a caller that ran before replay reached it could present its identifier and be
  * believed. What separates the real wait from that is where the execution is.
@@ -167,21 +167,21 @@ function* atOwnRequest(
   if (found === undefined || found.type !== SUSPENSION_REQUEST || found.name !== suspension) {
     return NOT_AT_A_WAIT;
   }
-  // Parsed, not merely read. A retained description is journal data, and this
+  // Parsed, not merely read. A saved description is journal data, and this
   // one is reached through a public durable operation any document can publish,
   // so what it holds is a claim about a request rather than a request. Comparing
   // raw fields would let a row that could never have come from `suspendFor()` —
   // a `responseSchema` that is an array, say — admit a wait whose schema nothing
   // could later validate an answer against.
-  let retained: WorkflowSuspensionRequest;
+  let saved: WorkflowSuspensionRequest;
   try {
-    retained = parseSuspensionRequest({
+    saved = parseSuspensionRequest({
       request: found.request,
       responseSchema: found.responseSchema,
     });
   } catch (error) {
     return (
-      "the request retained at this position is not one a durable wait can be entered " +
+      "the request saved at this position is not one a durable wait can be entered " +
       `for: ${error instanceof Error ? error.message : String(error)}`
     );
   }
@@ -192,8 +192,8 @@ function* atOwnRequest(
       responseSchema: request.responseSchema,
     }) ===
     canonicalFingerprint({
-      request: retained.request,
-      responseSchema: retained.responseSchema,
+      request: saved.request,
+      responseSchema: saved.responseSchema,
     });
   return same ? undefined : NOT_AT_A_WAIT;
 }
@@ -225,10 +225,10 @@ export function createSuspensionController(
 
     own<T>(operation: Operation<T>): Operation<T> {
       return scoped(function* () {
-        // The run's retained delivery state is this host's, so the answer
+        // The run's saved delivery state is this host's, so the answer
         // provider is installed only where this host's registry is. A
         // controller running without one enters waits and never claims: an
-        // execution with no way to reach retained state has no answers.
+        // execution with no way to reach saved state has no answers.
         const connections = yield* hostConnections();
         if (connections !== undefined) {
           yield* useSuspensionAnswerProvider(answerProvider(options.database, connections));
@@ -284,7 +284,7 @@ export function createSuspensionController(
 }
 
 /**
- * The owner of one run's retained delivery state.
+ * The owner of one run's saved delivery state.
  *
  * Two facts have to move together and only this host can move them: the answer
  * stops being pending, and the journal gains the event that says the wait ended.
@@ -312,7 +312,7 @@ function answerProvider(
       const pending = yield* scoped(function* () {
         yield* connection.lock.hold();
         return readTransaction(connection.database, () =>
-          readRetainedAnswer(connection.database, publication.suspensionId),
+          readSavedAnswer(connection.database, publication.suspensionId),
         );
       });
       if (pending === undefined || pending.state !== "pending") {
@@ -335,16 +335,16 @@ function answerProvider(
         // have been claimed by another execution, and the publication that
         // commits with the consumption has to be of the value that consumption
         // took.
-        const retained = readRetainedAnswer(writable.database, publication.suspensionId);
-        if (retained === undefined || retained.state !== "pending") {
+        const saved = readSavedAnswer(writable.database, publication.suspensionId);
+        if (saved === undefined || saved.state !== "pending") {
           throw new WorkflowRequestError(
-            `the answer retained for ${publication.suspensionId} was consumed by another ` +
+            `the answer saved for ${publication.suspensionId} was consumed by another ` +
               "execution before this one could publish it.",
           );
         }
-        if (retained.requestFingerprint !== suspensionRequestFingerprint(publication.request)) {
+        if (saved.requestFingerprint !== suspensionRequestFingerprint(publication.request)) {
           throw new WorkflowRequestError(
-            `the answer retained for ${publication.suspensionId} was delivered against a ` +
+            `the answer saved for ${publication.suspensionId} was delivered against a ` +
               "different request, so it is not an answer to the wait this execution reached.",
           );
         }
@@ -353,22 +353,18 @@ function answerProvider(
           database,
           transaction,
           token,
-          publication.publish(retained.answer),
+          publication.publish(saved.answer),
         );
 
         if (
-          !consumeRetainedAnswer(
-            writable.database,
-            publication.suspensionId,
-            new Date().toISOString(),
-          )
+          !consumeSavedAnswer(writable.database, publication.suspensionId, new Date().toISOString())
         ) {
           throw new WorkflowRequestError(
-            `the answer retained for ${publication.suspensionId} could not be consumed, so its ` +
+            `the answer saved for ${publication.suspensionId} could not be consumed, so its ` +
               "publication is discarded with this transaction.",
           );
         }
-        return retained.answer;
+        return saved.answer;
       });
       if (!claimed.ok) {
         throw claimed.error;

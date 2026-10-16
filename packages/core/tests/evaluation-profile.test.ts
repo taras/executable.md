@@ -143,7 +143,7 @@ describe("protected route projection", () => {
     }
   });
 
-  it("revokes retained lookup, body, projection and narrowing operations at teardown", function* () {
+  it("revokes saved lookup, body, projection and narrowing operations at teardown", function* () {
     const owner = installation();
     owner.activate();
     const original = owner.protected.get("Admitted")?.fn;

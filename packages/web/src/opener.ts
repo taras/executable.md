@@ -36,7 +36,7 @@ export const FormOpener: Api<FormOpenerApi> = createApi<FormOpenerApi>("FormOpen
   *open(url: string): Operation<void> {
     const { os } = yield* platform();
     const command = openCommand(os, url);
-    // Retained on purpose: a browser command that fails explains itself in the
+    // Saved on purpose: a browser command that fails explains itself in the
     // error this throws, and there is no reader watching it live.
     const result = yield* exec({ command, retain: true });
     const stderr = result.stderr?.trim() ?? "";

@@ -16,7 +16,7 @@
  * one.
  *
  * Where that checkout lives is the installed provider's. A workflow run holds it
- * inside the run's own retained Workspace; an ordinary `xmd run` holds it under
+ * inside the run's own saved Workspace; an ordinary `xmd run` holds it under
  * the managed root on the caller's filesystem, protected for the execution by an
  * advisory lock.
  *

@@ -4,7 +4,7 @@
  * A `<Git.Commit>` has to know *something* about the checkout it commits in —
  * which repository it belongs to, which directory holds it, what its initial
  * branch was called. It must not know how that checkout came to exist. A
- * workflow run's checkout is a row in a database, restored from a retained
+ * workflow run's checkout is a row in a database, restored from a saved
  * Workspace under a WorkflowRun the document must never be able to name; an
  * ordinary run's checkout is a directory on the caller's own filesystem, held
  * open by an advisory lock the provider owns. The components are the same
@@ -17,7 +17,7 @@
  * provider can read. Every operation authenticates the selection it was handed
  * against private state before it touches Git or a service, so a selection that
  * was copied, replaced or reconstructed can misname a target and cause a
- * refusal — it cannot grant access to one. That is the same rule the retained
+ * refusal — it cannot grant access to one. That is the same rule the saved
  * Repository context has always followed, restated for a value two profiles
  * share.
  *
@@ -36,7 +36,7 @@ import { parseObjectFormat, type GitObjectFormat, type RepositoryRecord } from "
  * A repository named without publishing where it came from.
  *
  * The locator is present as a fingerprint alone, so a credential that slipped
- * into a URL is not repeated here, in retained Push JSON, or in the evidence a
+ * into a URL is not repeated here, in saved Push JSON, or in the evidence a
  * `<PullRequest>` binds. Everything else is a fact about the repository itself:
  * the commit it was selected at, the branch it started on, and the algorithm it
  * names its objects with.
@@ -87,7 +87,7 @@ export interface RepositorySelection {
   readonly checkoutPath: string;
 }
 
-/** The retained record, filtered to the identity a selection carries. */
+/** The saved record, filtered to the identity a selection carries. */
 export function filteredRepositoryIdentity(record: RepositoryRecord): RepositoryIdentity {
   return Object.freeze({
     name: record.name,

@@ -31,7 +31,7 @@ import { join } from "node:path";
 import {
   agentIdentityComponents,
   installAgentComponents,
-  retainedSource,
+  savedSource,
   useNormalizedOutput,
 } from "@executablemd/core";
 import type {
@@ -238,7 +238,7 @@ function* runDocument(options: RunOptions = {}): Operation<CommandRun> {
       }
       const execution = yield* executeInstalled(
         {
-          ...retainedSource(PLAN_COMMAND_IDENTITY, source),
+          ...savedSource(PLAN_COMMAND_IDENTITY, source),
           stream: new InMemoryStream(),
           includes: [],
           secretDetection: true,
@@ -573,7 +573,7 @@ describe("the packaged plan command document", () => {
         yield* useSyntax(harness.symbols);
         const execution = yield* executeInstalled(
           {
-            ...retainedSource(PLAN_COMMAND_IDENTITY, source),
+            ...savedSource(PLAN_COMMAND_IDENTITY, source),
             stream: new InMemoryStream(),
             includes: [],
             secretDetection: true,
@@ -849,7 +849,7 @@ describe("Tier PI — read-only information requests", () => {
   });
 
   it("PI2, PI12: findings reach the next turn, and default progress says only how many", function* () {
-    const files = recordedFiles({ "notes.md": "the retained note\n" });
+    const files = recordedFiles({ "notes.md": "the saved note\n" });
     const run = yield* runDocument({
       turns: [{ reply: COMPOSED }, { reply: CANDIDATE }],
       generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
@@ -865,7 +865,7 @@ describe("Tier PI — read-only information requests", () => {
     // three bindings are in it, gathered by one `<Json>` the candidate chose
     // the shape of rather than by anything collecting observations for it.
     const followUp = run.prompts[1] ?? "";
-    expect(followUp).toContain("the retained note");
+    expect(followUp).toContain("the saved note");
     expect(followUp).toContain("notes.md");
     expect(followUp).toContain("Available in this evaluation");
     expect(followUp).toContain("They are context for writing the Plan");
@@ -875,12 +875,12 @@ describe("Tier PI — read-only information requests", () => {
     const progress = run.progress.join("");
     expect(progress).toContain("Inspecting XMD information");
     expect(progress).toContain("Information request 1 of 8");
-    expect(progress).not.toContain("the retained note");
+    expect(progress).not.toContain("the saved note");
     expect(progress).not.toContain("<Glob");
   });
 
   it("PI12: verbose adds the complete request and findings, after they settle", function* () {
-    const files = recordedFiles({ "notes.md": "the retained note\n" });
+    const files = recordedFiles({ "notes.md": "the saved note\n" });
     const run = yield* runDocument({
       turns: [{ reply: COMPOSED }, { reply: CANDIDATE }],
       generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
@@ -891,7 +891,7 @@ describe("Tier PI — read-only information requests", () => {
     const progress = run.progress.join("");
     expect(progress).toContain("XMD information request");
     expect(progress).toContain("XMD information returned");
-    expect(progress).toContain("the retained note");
+    expect(progress).toContain("the saved note");
     // The request is shown before its findings, and both after the phase that
     // announced them.
     expect(progress.indexOf("XMD information request")).toBeLessThan(
@@ -900,7 +900,7 @@ describe("Tier PI — read-only information requests", () => {
   });
 
   it("PI10: a refused request is one safe retry, and names no host detail", function* () {
-    const files = recordedFiles({ "notes.md": "the retained note\n" });
+    const files = recordedFiles({ "notes.md": "the saved note\n" });
     const run = yield* runDocument({
       // A paired `<File>` write under a read-only selection: refused whole,
       // before any read.
@@ -918,7 +918,7 @@ describe("Tier PI — read-only information requests", () => {
   });
 
   it("PI7: successes and refusals share one budget, and the ninth is not evaluated", function* () {
-    const files = recordedFiles({ "notes.md": "the retained note\n", "ninth.md": "unreached\n" });
+    const files = recordedFiles({ "notes.md": "the saved note\n", "ninth.md": "unreached\n" });
     // Alternating: a request that succeeds, then one refused whole for writing.
     // Eight of them, so the budget is spent by two kinds of outcome rather than
     // by either alone.
@@ -952,7 +952,7 @@ describe("Tier PI — read-only information requests", () => {
   });
 
   it("PI7: requests interleave with the initial, repair and revision turns", function* () {
-    const files = recordedFiles({ "notes.md": "the retained note\n" });
+    const files = recordedFiles({ "notes.md": "the saved note\n" });
     const ask = { reply: '<Glob include={["notes.md"]} as="paths" />\n<Json value={paths} />\n' };
     const run = yield* runDocument({
       // One request at each of the three turns that can produce a Plan: the
@@ -1058,7 +1058,7 @@ describe("Tier PI — read-only information requests", () => {
   });
 
   it("PI2: an empty match renders as an empty array", function* () {
-    const files = recordedFiles({ "notes.md": "the retained note\n" });
+    const files = recordedFiles({ "notes.md": "the saved note\n" });
     const run = yield* runDocument({
       turns: [
         { reply: '<Glob include={["absent.md"]} as="paths" />\n<Json value={paths} />\n' },
@@ -1076,7 +1076,7 @@ describe("Tier PI — read-only information requests", () => {
   });
 
   it("PI4: a prohibited operation anywhere in the request refuses before any read", function* () {
-    const files = recordedFiles({ "notes.md": "the retained note\n" });
+    const files = recordedFiles({ "notes.md": "the saved note\n" });
     const run = yield* runDocument({
       // The admitted read is written first, and the prohibited write sits in
       // the branch the condition never takes. A refusal that happened
@@ -1095,12 +1095,12 @@ describe("Tier PI — read-only information requests", () => {
 
     expect(run.failure).toBe(undefined);
     expect(files.performed).toEqual([]);
-    expect(files.entries.get("notes.md")).toBe("the retained note\n");
+    expect(files.entries.get("notes.md")).toBe("the saved note\n");
     expect(run.prompts[1] ?? "").toContain("That request was refused");
   });
 
   it("PI6, PI12: nothing is disclosed or asked until the request has settled", function* () {
-    const files = recordedFiles({ "notes.md": "the retained note\n" });
+    const files = recordedFiles({ "notes.md": "the saved note\n" });
     const run = yield* runDocument({
       turns: [{ reply: COMPOSED }, { reply: CANDIDATE }],
       generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
@@ -1221,7 +1221,7 @@ describe("Tier PI — read-only information requests", () => {
   }
 
   it("PI6: findings and the following turn wait for cleanup to finish", function* () {
-    const files = recordedFiles({ "notes.md": "the retained note\n" });
+    const files = recordedFiles({ "notes.md": "the saved note\n" });
     const held = barrier();
     /** What the observer saw while cleanup was still held. */
     const whileHeld: { progress: string; prompts: number; performed: string[] } = {
@@ -1272,7 +1272,7 @@ describe("Tier PI — read-only information requests", () => {
     // Released: both happened, and the next turn carries the findings.
     expect(run.progress.join("")).toContain("XMD information returned");
     expect(run.prompts).toHaveLength(2);
-    expect(run.prompts[1] ?? "").toContain("the retained note");
+    expect(run.prompts[1] ?? "").toContain("the saved note");
     expect(run.reviews).toHaveLength(1);
   });
 
@@ -1299,7 +1299,7 @@ describe("Tier PI — read-only information requests", () => {
    * already-classified refusal and stays terminal.
    */
   it("PI6: a recoverable refusal is disclosed, then the following turn begins", function* () {
-    const files = recordedFiles({ "notes.md": "the retained note\n" });
+    const files = recordedFiles({ "notes.md": "the saved note\n" });
     const run = yield* runDocument({
       turns: [{ reply: '<File path="absent.md" as="gone" />\n' }, { reply: CANDIDATE }],
       generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
@@ -1319,7 +1319,7 @@ describe("Tier PI — read-only information requests", () => {
   });
 
   it("PI3: a titled draft is never evaluated", function* () {
-    const files = recordedFiles({ "notes.md": "the retained note\n" });
+    const files = recordedFiles({ "notes.md": "the saved note\n" });
     const run = yield* runDocument({
       turns: [{ reply: CANDIDATE }],
       generated: { File: ["self-closing"], Glob: ["self-closing"], Syntax: ["self-closing"] },
@@ -1363,7 +1363,7 @@ describe("Tier PI — the ordinary selection offers the question with the write"
   });
 
   it("EL3: a read-only information request that asks a question is refused whole", function* () {
-    const files = recordedFiles({ "notes.md": "the retained note\n" });
+    const files = recordedFiles({ "notes.md": "the saved note\n" });
     const asked: string[] = [];
     const run = yield* scoped(function* () {
       yield* Elicitation.around(

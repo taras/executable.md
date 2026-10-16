@@ -58,7 +58,7 @@ export type CompositionOutcome = { readonly kind: "created"; readonly record: Js
 /**
  * The transaction one composition effect works in.
  *
- * The two halves a retained checkout is made of, bound together: what the
+ * The two halves a saved checkout is made of, bound together: what the
  * effect writes and what names it. Assembled here rather than threaded through
  * every function, so no step can reach one without the other.
  */
@@ -187,8 +187,8 @@ function* compositionEffect(
 /**
  * The refusal a restored failure describes, or the protocol failure it is.
  *
- * A retained refusal carries a word, and a word outside the vocabulary this
- * build speaks is not a refusal it may rebuild — it is a retained result this
+ * A saved refusal carries a word, and a word outside the vocabulary this
+ * build speaks is not a refusal it may rebuild — it is a saved result this
  * version cannot read, which is fatal rather than something to approximate.
  */
 function refusal(kind: RefusalKind, name: string, reason: string): Error {

@@ -32,7 +32,7 @@ import {
   normalizeLabel,
   parseDocumentTargetFailure,
   outlineDocument,
-  retainedRanges,
+  savedRanges,
   selectTarget,
 } from "../src/document-targets.ts";
 import { scanComponentSpans } from "../src/scanner.ts";
@@ -51,7 +51,7 @@ function catalog(body: string): readonly string[] {
 function project(body: string, selector: string): string {
   const found = outline(body);
   const entry = selectTarget(found, selector);
-  return retainedRanges(found, entry)
+  return savedRanges(found, entry)
     .map((range) => body.slice(range.start, range.end))
     .join("");
 }
@@ -551,7 +551,7 @@ describe("Tier DT — projection", () => {
     expect(projected).not.toContain("other body");
   });
 
-  it("DT37: retained headings and the sole title stay in the projection", function* () {
+  it("DT37: saved headings and the sole title stay in the projection", function* () {
     const projected = project(SECTIONS, "Test/Node");
     expect(projected).toContain("# Title");
     expect(projected).toContain("intro");
@@ -559,7 +559,7 @@ describe("Tier DT — projection", () => {
     expect(projected).toContain("test intro");
   });
 
-  it("DT38: with several outermost headings none is retained by default", function* () {
+  it("DT38: with several outermost headings none is saved by default", function* () {
     const body = ["pre", "", "# A", "", "a body", "", "# B", "", "b body", ""].join("\n");
     expect(project(body, "B")).toBe(["pre", "", "# B", "", "b body", ""].join("\n"));
   });
@@ -591,7 +591,7 @@ describe("Tier DT — projection", () => {
  * A document may open at a deeper level than the one supplying its title. The
  * shallowest heading is then not the first, and anchoring the preamble to it
  * puts an earlier addressable section inside the preamble — where it is
- * retained, rendered, and executed by every other target, while still being a
+ * saved, rendered, and executed by every other target, while still being a
  * target in its own right.
  */
 describe("Tier DT — preamble boundary", () => {
@@ -622,11 +622,11 @@ describe("Tier DT — preamble boundary", () => {
 
   it("DT65: the earlier section remains independently addressable", function* () {
     // Its subtree runs to the next heading, so the blank line separating them
-    // is retained exactly as authored.
+    // is saved exactly as authored.
     expect(project(OPENS_DEEP, "Before")).toBe(["## Before", "", "before body", "", ""].join("\n"));
   });
 
-  it("DT66: real preamble text before the first heading is still retained", function* () {
+  it("DT66: real preamble text before the first heading is still saved", function* () {
     const withPreamble = `preamble text\n\n${OPENS_DEEP}`;
     expect(project(withPreamble, "After")).toBe(
       ["preamble text", "", "# Title", "", "## After", "", "after body", ""].join("\n"),
@@ -639,7 +639,7 @@ describe("Tier DT — projected parsing", () => {
     return yield* parseRootMarkdownDefinition("__root__", "doc.md", body, selector);
   }
 
-  it("DT40: a retained element keeps the offset and line it was authored at", function* () {
+  it("DT40: a saved element keeps the offset and line it was authored at", function* () {
     const body = [
       "# Title",
       "",

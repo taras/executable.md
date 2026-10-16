@@ -7,7 +7,7 @@ another one.
 
 ```bash
 xmd repl                                  # a fresh execution with an empty draft
-xmd repl 'xmd://repl/<execution>/entries' # reopen exactly that retained history
+xmd repl 'xmd://repl/<execution>/entries' # reopen exactly that saved history
 xmd repl --deny-all                       # the same, answering every agent request with no
 ```
 
@@ -155,12 +155,12 @@ reading an earlier position is refused, and refusing it starts nothing.
 ## What a later entry starts from
 
 The root values an earlier entry durably published are what the next one begins
-with. For each name it is the last value any earlier entry retained, in Journal
+with. For each name it is the last value any earlier entry saved, in Journal
 order, and the values are the entry's own to change — they behave like values
 authored earlier in the same environment, and a later export replaces one
 through the ordinary rules.
 
-What survives is what was retained. An entry that failed, and one whose
+What survives is what was saved. An entry that failed, and one whose
 cancellation the file records, each settle their entry: they hand on everything
 they published before that, hand on nothing they never durably published, and
 let the next entry start. The reserved `props` namespace belongs to each entry's
@@ -186,7 +186,7 @@ answer, the same History positions and the same terminal output.
 
 Nothing is re-run to do it. No component source is read, no `eval` block is
 compiled, and nobody is asked anything: everything on that screen was
-reconstructed from the location and the retained events. Settled entries are
+reconstructed from the location and the saved events. Settled entries are
 projected and never performed again; only a final entry the file shows as
 unfinished is given back to the engine to continue. A location naming a history
 this version cannot read, or naming an entry its selected prefix never admitted,
@@ -254,7 +254,7 @@ frame can place, with its earlier and later controls — and the way to the othe
 surface — staying put while the rows move beneath them. What the window is not
 showing is not drawn, not focusable and reaches no pointer.
 
-## Permission: a live request, and a retained audit
+## Permission: a live request, and a saved audit
 
 A turn waiting for permission says so on its own row, and that is all arriving
 does: nothing moves, nothing takes focus, and nothing else stops. Activate it and
@@ -271,7 +271,7 @@ way the drawer closes only when the request is settled — a screen that closed
 first would be claiming an answer nobody gave — and focus returns to the turn
 that was waiting.
 
-A retained audit is inert. What the history holds is what was granted, read and
+A saved audit is inert. What the history holds is what was granted, read and
 never answered again — a recorded request offers no control, and a cold process
 shows the audit without offering to decide anything. Ending the command answers
 nothing: a torn-down process does not fabricate a denial, a selection or a
@@ -282,7 +282,7 @@ cancelled audit on the person's behalf.
 A drawer shows as much of what it holds as the frame has room for, and its
 earlier and later controls reach the rest. That is true of all five readings a
 drawer can show: the question being asked, a pending permission request, a
-History position, a binding's retained value and a recorded answer. A retained
+History position, a binding's saved value and a recorded answer. A saved
 value is as long as whatever produced it — a compiler's reason, a whole JSON
 document — so a drawer that described all of it at once would have its tail
 placed nowhere, which is the one part you opened the drawer to read.
@@ -333,7 +333,7 @@ deliberately cleared is present and empty; one nobody touched is absent.
 
 ## Cold Agent reconstruction
 
-A cold process over a retained location shows the Agent work the history holds:
+A cold process over a saved location shows the Agent work the history holds:
 the turns, their conversations, their text, how each ended, the questions that
 were asked and the answers that were given, the program a generated fragment
 admitted and what it wrote.
@@ -345,7 +345,7 @@ one the history already describes — and the program that Component returned is
 scope of its own beneath it, owning the questions the program asked, which carry
 a place in the generated source and no path at all. A turn whose provider failed or was cancelled
 restores with the text it had streamed and the status it ended with, as terminal
-retained state — never as queued, streaming or reconnecting.
+saved state — never as queued, streaming or reconnecting.
 
 No provider is reached to do it, no adapter is materialized, and nothing is
 appended: the history file is byte-identical before and after a cold run.
@@ -452,7 +452,7 @@ and a kind per position, and nothing of what any of them holds.
 
 The map and the content are one reading, taken from one acknowledged array and
 carried together through the frame. Nothing on this screen pairs a prefix with
-a rail the file no longer has: a record retained while the terminal is being
+a rail the file no longer has: a record saved while the terminal is being
 measured changes the next reading, not half of this one. Where that reading
 cannot be built at all, because the file holds a record this process can no
 longer read, the whole screen is the refusal — not a rail standing beside a
@@ -503,7 +503,7 @@ a prefix of the row you read at a larger one and nothing moves under your hand.
 Every row says what it has room to say. A row is as wide as the region the frame
 measured for it, and so is its text: a name nobody bounded — a prompt, a root, a
 tool call — is shortened with an ellipsis so that what the row is *about* stays
-on it. A turn keeps its state, a retained grant keeps its outcome, an entry keeps
+on it. A turn keeps its state, a saved grant keeps its outcome, an entry keeps
 its outcome, and where a row is too narrow even for that, the fact survives and
 the name keeps whatever is left in front of it. What the row shows is shortened;
 what the product holds is not, and the whole of it is still in the record, the
@@ -550,13 +550,13 @@ renderer cuts loses its last fact with nothing to say that it is missing.
 side cannot answer it alone: a root close is recorded the moment a document
 settles, while the task that produced it is still coming down, and a submission
 taken in that window has nowhere to go. So there is a state between "settled" and
-"ready" — the close is retained, the entry's task has not been joined, and no
+"ready" — the close is saved, the entry's task has not been joined, and no
 successor may start yet. It resolves without anybody typing: when the teardown
 finishes, the row says the next entry may start.
 
 The states a person can tell apart: no entry yet; an entry running; an entry
 waiting for an answer; an entry waiting for a permission; an entry whose close is
-retained while its teardown finishes; an entry admitted that never reached an
+saved while its teardown finishes; an entry admitted that never reached an
 outcome, which no successor may follow; and a settled execution ready for the next
 entry. A frozen position is its own state and says so before any of them.
 
@@ -588,7 +588,7 @@ running, not what is waiting, not what could be paused — because a prefix is a
 reading of the file and the head is not part of it. The draft belongs to no
 position and is unchanged.
 
-None of this is retained. The status, the guidance and the emphasis are computed
+None of this is saved. The status, the guidance and the emphasis are computed
 on the way to a frame from the resolved view; they are in no location member and
 no record, and replay neither produces nor consumes them. A cold reopen shows the
 same state because the file and the location say the same things, not because
@@ -600,7 +600,7 @@ Every row of this screen is drawn as the thing it is. What a run produced stands
 ahead of the facts about the events that produced it; an entry that closed `ok`,
 one that closed `err` and one still running are three different readings rather
 than three spellings of the same one; a question nobody has answered yet reads as
-waiting; and a retained position reads as history until you return to the head.
+waiting; and a saved position reads as history until you return to the head.
 A drawer says which kind of reading it is showing before it says which one — a
 binding, a recorded answer, a permission request — and separates what a field is
 called from what it means from the value you are editing. Whatever acts carries
@@ -663,7 +663,7 @@ questions at once are two waiting elements rather than one screen that is busy.
 All of it is this process's, and none of it is written down. A cold process
 reconstructs none of it, a reading frozen at an earlier position shows none of
 it, and an entry that finishes takes its own with it. Source that is still on
-the screen and a record the history retained prove only that something was
+the screen and a record the history saved prove only that something was
 written and something was recorded — never that anything is running now.
 
 ## One entry, read as output and then source
@@ -680,10 +680,10 @@ A reading belongs to an entry; with nothing selected it is the last entry the
 prefix admitted, which is what a one-entry execution has always shown.
 
 Output says which of four things is true, and never two of them. Text still
-arriving is `Output · live`. The retained final result replaces it once and the
+arriving is `Output · live`. The saved final result replaces it once and the
 label becomes `Output`. A root that settled having rendered nothing reads `No
 rendered output.` and then the outcome it closed with, and a recorded reason
-beside it. A prefix that retained no output for its entry reads `No entry
+beside it. A prefix that saved no output for its entry reads `No entry
 output recorded at this checkpoint.` — never text borrowed from a later
 position or from a run still going.
 
@@ -709,7 +709,7 @@ twice, makes several *calls* of it at one position. Each is its own reading, in
 its own group, in the order they were observed: showing only the last would say
 the earlier ones never happened, and one badge for all of them would say several
 calls were one. An element nothing was observed of is read once, unobserved. Source nothing has been observed in gets the rail that means
-exactly that, and acquires no phase from retained syntax.
+exactly that, and acquires no phase from saved syntax.
 
 An `<Evaluate>` that admitted a generated fragment shows that fragment where its
 producer was written. The enclosure bytes stay exactly as authored and only what
@@ -749,7 +749,7 @@ A region with no room for even one grapheme is the frame refusal that already
 recovers on resize. It is never a clip: shortening somebody's source would be
 this screen editing the content it exists to show.
 
-## What is retained, and what is not
+## What is saved, and what is not
 
 Each execution is one file of serialized ordinary `DurableEvent`s — the same
 records any other XMD run writes. There is no manifest, no cache, no materialized
@@ -767,7 +767,7 @@ internals, rendered cells or this process's overlay.
 
 ### The files an entry wrote in the checkout you are standing in
 
-Start the REPL inside a Git checkout and an entry's file work is retained too,
+Start the REPL inside a Git checkout and an entry's file work is saved too,
 under the ordinary records above and no record type of its own. Four things are
 kept: a self-closing `<File path="…" as="…" />` text read; a paired
 `<File path="…">…</File>` write, after its content has expanded; a self-closing
@@ -791,18 +791,18 @@ be recorded, and a continuation then does that one operation again. Work that
 *was* recorded before you left is answered from the record, so an edit somebody
 made in the meantime survives the continuation untouched.
 
-A retained read is the same rule, which is worth saying plainly because its
+A saved read is the same rule, which is worth saying plainly because its
 answer is a value you can see. The binding a completed read produced is the text
 it read when it ran: a question showing that binding still shows it after the
 file has changed, because nothing re-reads the file to answer an operation that
 is already done. Type a *new* entry that reads the same path and it reads what
-is there now. What is retained is each operation, not a value the session
+is there now. What is saved is each operation, not a value the session
 remembers for a path.
 
 Any of the four anywhere else — beside the document, in a temporary directory,
 in any directory that is not inside the checkout the entry started in — is
-ordinary file work, is retained by nothing here, and happens again if the entry
-is continued. That includes a read: what is retained is a read *inside* the
+ordinary file work, is saved by nothing here, and happens again if the entry
+is continued. That includes a read: what is saved is a read *inside* the
 checkout. Searches and temporary directories are ordinary throughout, wherever
 they point. The lexical path rules and the permission a `<File>` already answers
 to are unchanged, and they are not checkout validation: a path this run may not
@@ -828,16 +828,16 @@ looks for a repository twice.
 
 ## What the head says the execution is doing
 
-Seven states and no eighth, in one precedence, each a fact about retained
+Seven states and no eighth, in one precedence, each a fact about saved
 records and about work this process actually owns:
 
 | | Reading | When |
 | --- | --- | --- |
-| 1 | `HEAD · SETTLING` | an outcome is retained and the entry's work is still coming down |
+| 1 | `HEAD · SETTLING` | an outcome is saved and the entry's work is still coming down |
 | 2 | `HEAD · EXPANSION PAUSED` | no outcome, and the controller is paused |
 | 3 | `HEAD · PAUSING EXPANSION` | no outcome, and it is pausing |
 | 4 | `HEAD · LIVE` | work this process owns, and none of the above |
-| 5 | `HEAD · EMPTY` | nothing retained and nothing owned |
+| 5 | `HEAD · EMPTY` | nothing saved and nothing owned |
 | 6 | `HEAD · SETTLED` | no owned work, and the latest entry has an outcome |
 | 7 | `HEAD · UNFINISHED` | no owned work, and it has none |
 
@@ -845,7 +845,7 @@ Owned work means every resource the entry acquired is still standing — its
 outer Agent attachment and its consumers included. A body that returned and a
 root Close that was recorded are both earlier than that, so neither of them
 says an entry has finished; `SETTLING` is the window between them, and it is
-the one a reader watching a run end is actually in. A retained success, a
+the one a reader watching a run end is actually in. A saved success, a
 failure and a cancellation all become a neutral `SETTLED`: which of them it
 was belongs to the reading, not to the head. An entry with no outcome and
 nothing holding it is `UNFINISHED` — stopped, never an inferred pause.
@@ -882,7 +882,7 @@ text. No second name for the entry appears in a record: which history an entry
 may continue is the range it was given. Reading is not owning: a settled
 history, a frozen position and a refused location prepare nothing, look for no
 checkout and hold nothing. A host that registers no recording runs the same
-file work with nothing retained, which is what Node and Bun do.
+file work with nothing saved, which is what Node and Bun do.
 
 Components receive immutable view data and answer with a typed semantic action.
 They hold no events, no history, no session, no repository and no host operation,
@@ -934,7 +934,7 @@ schedules no timer.
 - The REPL runs where a terminal is: it is not available over a pipe, and help
   acquires no terminal or filesystem capability. Whether there is a terminal is
   settled before a history exists, so a piped invocation leaves nothing behind.
-- A location is resolved against the retained history before anything replays. A
+- A location is resolved against the saved history before anything replays. A
   route naming a scope or a drawer the file does not hold is refused without the
   execution being started, so a typo cannot cause a record.
 - A waiting question's drawer cannot be reopened from a URL. A Journal records

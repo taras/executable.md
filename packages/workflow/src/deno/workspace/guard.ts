@@ -1,7 +1,7 @@
 /**
  * Revoke callback-owned Workspace capabilities before later publication work.
  * The transaction remains open after a mutation or inspection callback returns;
- * retained filesystem, storage and savepoint views must not reach that live window.
+ * saved filesystem, storage and savepoint views must not reach that live window.
  * One gate revokes every projection of the callback's argument together.
  *
  * Operation-returning members check both when called and when yielded, preventing

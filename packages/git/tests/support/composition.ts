@@ -18,11 +18,11 @@ import { Git } from "../../src/composition/git-api.ts";
 import { collect, execute, INLINE_SOURCE_PATH, inlineSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import { retainedWorkflowInstallation } from "../../../workflow/src/run.ts";
+import { savedWorkflowInstallation } from "../../../workflow/src/run.ts";
 import { GIT_HOST_EFFECT } from "../../src/git-host/effect.ts";
 import type { Json } from "@executablemd/durable-streams";
 import type { Yield } from "@executablemd/durable-streams";
-import { readRetainedValues, selectYields } from "@executablemd/test-support/journal";
+import { readSavedValues, selectYields } from "@executablemd/test-support/journal";
 import {
   type GitHostReconciliationRecord,
   parseGitHostReconciliationRecord,
@@ -68,7 +68,7 @@ import { type WorkflowRun, type WorkflowRunRecord } from "@executablemd/workflow
  * Asked of the Plugin value rather than assembled here, so what these cases
  * exercise is the same contribution a command gets — one Plugin value, and an
  * admission that derives this execution's identities from this execution's own
- * retained history.
+ * saved history.
  */
 export function* gitPluginAdmissions(): Operation<ExecutionInstallation> {
   const install = gitPlugin.install;
@@ -198,7 +198,7 @@ export function runDocument(
  * The same attachment `runDocument()` makes, plus the workflow-run installation
  * a Git-host effect needs: external identity is the run and the expansion, and
  * a document execution that is not associated with a run has no first half of
- * that pair. The run's three members come from its own retained record, exactly
+ * that pair. The run's three members come from its own saved record, exactly
  * as the CLI supplies them.
  *
  * `around` runs inside the attachment and outside the execution, which is where
@@ -223,7 +223,7 @@ export function runWorkflowDocument(
         return yield* around(function* () {
           return yield* collect(
             yield* executeInstalled({ ...inlineSource(source), stream: database.journal }, [
-              retainedWorkflowInstallation(retainedRunValue(database.record)),
+              savedWorkflowInstallation(savedRunValue(database.record)),
               git,
             ]),
           );
@@ -258,7 +258,7 @@ export function* gitHostEvents(database: WorkflowRunDatabase): Operation<Yield[]
   return selectYields(events, [GIT_HOST_EFFECT]).map((selected) => selected.event);
 }
 
-/** What one Git-host effect settled as, and what it retained when it settled `ok`. */
+/** What one Git-host effect settled as, and what it saved when it settled `ok`. */
 export interface GitHostOutcomeRecord {
   readonly status: string;
   readonly name: string;
@@ -268,7 +268,7 @@ export interface GitHostOutcomeRecord {
 
 export function* gitHostOutcomes(database: WorkflowRunDatabase): Operation<GitHostOutcomeRecord[]> {
   const events = yield* database.journal.readAll();
-  return readRetainedValues(events, GIT_HOST_EFFECT, parseGitHostReconciliationRecord).map(
+  return readSavedValues(events, GIT_HOST_EFFECT, parseGitHostReconciliationRecord).map(
     (outcome) => ({
       status: outcome.status,
       name: outcome.status === "err" ? (outcome.error.name ?? "") : "",
@@ -329,7 +329,7 @@ export function* gitEvents(database: WorkflowRunDatabase): Operation<Yield[]> {
   );
 }
 
-/** What one Git operation settled as, and what it retained when it settled `ok`. */
+/** What one Git operation settled as, and what it saved when it settled `ok`. */
 export interface GitOutcomeRecord {
   readonly status: string;
   readonly name: string;
@@ -357,9 +357,7 @@ export function* gitOutcomes(database: WorkflowRunDatabase): Operation<GitOutcom
   });
 }
 
-export function* retainedRepositories(
-  database: WorkflowRunDatabase,
-): Operation<StoredRepository[]> {
+export function* savedRepositories(database: WorkflowRunDatabase): Operation<StoredRepository[]> {
   const read = yield* transactWorkspaceRoots(database, function* (workspace) {
     return createWorkspaceMetadata(workspace.storage).readRepositories();
   });
@@ -369,7 +367,7 @@ export function* retainedRepositories(
   return read.value;
 }
 
-export function* retainedWorktrees(
+export function* savedWorktrees(
   database: WorkflowRunDatabase,
   repositoryName: string,
 ): Operation<WorktreeRecord[]> {
@@ -450,10 +448,10 @@ export function* workspaceTree(
 }
 
 /**
- * What the index of one retained checkout holds staged, as native Git reads it.
+ * What the index of one saved checkout holds staged, as native Git reads it.
  *
  * The direct observation staging verification needs. Index trees say *that*
- * something changed; this says *what*, by exporting the retained family into a
+ * something changed; this says *what*, by exporting the saved family into a
  * disposable host tree — the same way the provider does — and asking Git.
  */
 export function* stagedPaths(
@@ -468,7 +466,7 @@ export function* stagedPaths(
   });
 }
 
-/** Run commands with one retained checkout exported the way the provider does. */
+/** Run commands with one saved checkout exported the way the provider does. */
 export function* inCheckout<T>(
   database: WorkflowRunDatabase,
   workspacePath: string,
@@ -513,7 +511,7 @@ export function* inCheckout<T>(
 }
 
 /**
- * What one retained checkout's own Git configuration holds, key by key.
+ * What one saved checkout's own Git configuration holds, key by key.
  *
  * An absent key answers `undefined` rather than failing, which is the whole
  * point when a suite is proving that upstream tracking was never established:
@@ -566,7 +564,7 @@ export function* checkoutConfig(
 }
 
 /**
- * The commit one retained checkout is on, read out of the object itself.
+ * The commit one saved checkout is on, read out of the object itself.
  *
  * `cat-file commit` rather than a pretty format: what message verification
  * checks is the bytes in the object, and reading them through the same
@@ -766,9 +764,9 @@ export function* removeWorkspacePath(database: WorkflowRunDatabase, path: string
 }
 
 /**
- * Put one file into a retained checkout, with the mode a host would see.
+ * Put one file into a saved checkout, with the mode a host would see.
  *
- * The retained-checkout surface a document reaches through `<File>`, plus the
+ * The saved-checkout surface a document reaches through `<File>`, plus the
  * one thing that component does not write: an executable bit. A hook is a
  * program only when it has one, so a suite that wants to prove a hook cannot run
  * has to be able to install one that could.
@@ -792,12 +790,12 @@ export function* writeCheckoutFile(
 }
 
 /**
- * The retained run value a record installs under, in its own version's shape.
+ * The saved run value a record installs under, in its own version's shape.
  *
  * A Git record installs the base and pinned commit it retains; a source-bundle
  * record installs its bundle hash and exact target and invents neither.
  */
-function retainedRunValue(record: WorkflowRunRecord): WorkflowRun {
+function savedRunValue(record: WorkflowRunRecord): WorkflowRun {
   {
     return {
       runId: record.runId,

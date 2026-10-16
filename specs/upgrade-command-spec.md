@@ -490,7 +490,7 @@ protects can exist:
   would have teardown delete a stranger's file.
 
 Filesystem work goes through `@effectionx/fs` — `lstat` and `rm` here — and
-`until` is retained only for the asynchronous primitives that package does not
+`until` is saved only for the asynchronous primitives that package does not
 provide: `open`, `rename`, `chmod` and the writable-mode `access`.
 
 ## Private state

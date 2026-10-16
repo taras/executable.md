@@ -3,16 +3,16 @@
  *
  * Delivery reaches a run's file the same way storage does — the SHA-256 of the
  * public run id beneath the authorized root — and then does the least a durable
- * answer can be retained with. It takes no executor lock, so a run somebody is
+ * answer can be saved with. It takes no executor lock, so a run somebody is
  * about to resume, or is resuming right now, can still be answered; what serializes
  * the write is the connection and SQLite, not lifecycle ownership.
  *
  * ## Everything is checked before anything is written
  *
- * The run has to be `suspended`, its stop reason has to name a retained
+ * The run has to be `suspended`, its stop reason has to name a saved
  * `suspension_request` event, and that event has to be the wait the caller
  * named. The value is then judged against the response schema that request
- * retained, and scanned for credentials. Only after all of that does a
+ * saved, and scanned for credentials. Only after all of that does a
  * transaction open — and it asks the same questions again, inside the
  * transaction, because everything above it was read from a snapshot somebody
  * else could have moved on from.
@@ -54,7 +54,7 @@ import {
   WorkflowStorageError,
 } from "../storage/errors.ts";
 import { canonicalJson, type WorkflowRunRecord } from "../storage/record.ts";
-import { insertPendingAnswer, readRetainedAnswer } from "./answers.ts";
+import { insertPendingAnswer, readSavedAnswer } from "./answers.ts";
 import type { RunConnection, RunTransaction, WorkflowRunConnections } from "./connections.ts";
 import { useWorkflowRunConnections } from "./connections.ts";
 import { readRunRow } from "./database.ts";
@@ -100,8 +100,8 @@ interface CheckedDelivery {
   readonly secretDetection: boolean;
 }
 
-/** The wait a run is at, read from what it retained. */
-interface RetainedWait {
+/** The wait a run is at, read from what it saved. */
+interface SavedWait {
   readonly record: WorkflowRunRecord;
   readonly requestEventId: string;
   readonly request: WorkflowSuspensionRequest;
@@ -129,12 +129,12 @@ function* deliverAnswer(
 
   const connection = yield* connections.at(path);
 
-  const waiting = yield* scoped(function* (): Operation<Result<RetainedWait>> {
+  const waiting = yield* scoped(function* (): Operation<Result<SavedWait>> {
     yield* connection.lock.hold();
     try {
       return Ok(
         readTransaction(connection.database, () =>
-          retainedWait(connection, path, runId, suspensionId),
+          savedWait(connection, path, runId, suspensionId),
         ),
       );
     } catch (error) {
@@ -172,16 +172,16 @@ function* deliverAnswer(
  *
  * Recognition first, so a file that is not this run's version-1 database is
  * refused as itself. Then the run's own account of why it stopped: a status of
- * `suspended` whose stop reason names a retained request event. Anything else —
+ * `suspended` whose stop reason names a saved request event. Anything else —
  * a completed run, a cancelled one, a run stopped for a different reason, a
  * request event for another wait — is a run this value does not answer.
  */
-function retainedWait(
+function savedWait(
   connection: RunConnection,
   path: string,
   runId: string,
   suspensionId: string,
-): RetainedWait {
+): SavedWait {
   const { database } = connection;
   verifySchema(database, path, connection.dofs);
   const record = readRunRow(database, path);
@@ -219,7 +219,7 @@ function retainedWait(
     );
   }
 
-  // Parsed rather than read: the retained description is reached through a
+  // Parsed rather than read: the saved description is reached through a
   // public durable operation, so what it holds is a claim about a request until
   // this boundary has walked it — and a schema nothing could validate against
   // must not be the schema a value is judged by.
@@ -228,10 +228,10 @@ function retainedWait(
     responseSchema: event.description.responseSchema,
   });
 
-  const retained = readRetainedAnswer(database, suspensionId);
-  if (retained !== undefined) {
+  const saved = readSavedAnswer(database, suspensionId);
+  if (saved !== undefined) {
     throw new WorkflowAnswerDeliveryError(
-      retained.state === "pending"
+      saved.state === "pending"
         ? `workflow run ${runId} already has an answer waiting for ${suspensionId}. One value ` +
             "ends one wait; resume the run to deliver it."
         : `the wait ${suspensionId} in workflow run ${runId} has already been answered.`,
@@ -247,7 +247,7 @@ function retainedWait(
 }
 
 /**
- * The value, judged by the schema the wait retained.
+ * The value, judged by the schema the wait saved.
  *
  * The same compilation `<Elicit>` uses, so what a document may receive here is
  * exactly what it may receive there. The refusal names where the value went
@@ -255,7 +255,7 @@ function retainedWait(
  * publish it in a place nothing filters.
  */
 function* judgeAnswer(
-  waiting: RetainedWait,
+  waiting: SavedWait,
   suspensionId: string,
   value: Json,
 ): Operation<Result<void>> {
@@ -266,7 +266,7 @@ function* judgeAnswer(
   } catch (error) {
     return Err(
       new WorkflowAnswerDeliveryError(
-        `the response schema retained for ${suspensionId} cannot judge an answer: ` +
+        `the response schema saved for ${suspensionId} cannot judge an answer: ` +
           (error instanceof Error ? error.message : String(error)),
       ),
     );
@@ -282,16 +282,16 @@ function* judgeAnswer(
   return Err(
     new WorkflowAnswerDeliveryError(
       `the value offered to ${suspensionId} does not satisfy the response schema that wait ` +
-        `retained: ${described}.`,
+        `saved: ${described}.`,
     ),
   );
 }
 
 /**
- * Cross the same gate a durable event crosses, before anything is retained.
+ * Cross the same gate a durable event crosses, before anything is saved.
  *
  * Secret detection is attached to journal persistence, and this value is
- * heading for both retained state and a journal event — so both are scanned,
+ * heading for both saved state and a journal event — so both are scanned,
  * in the framing each will have. A credential that reached a run's file has
  * already leaked, whatever the resume that would have published it does next.
  *
@@ -299,7 +299,7 @@ function* judgeAnswer(
  * fingerprints mean nothing outside this call and are not reported.
  */
 function* scanDelivery(
-  waiting: RetainedWait,
+  waiting: SavedWait,
   suspensionId: string,
   value: Json,
 ): Operation<Result<void>> {
@@ -319,7 +319,7 @@ function* scanDelivery(
     } catch (error) {
       return Err(
         new WorkflowAnswerDeliveryError(
-          "secret detection could not scan this answer, so it was not retained: " +
+          "secret detection could not scan this answer, so it was not saved: " +
             (error instanceof Error ? error.message : String(error)),
         ),
       );
@@ -362,7 +362,7 @@ function describeDetection(findings: readonly SecretFinding[]): string {
     .filter((description, index, all) => all.indexOf(description) === index)
     .join(", ");
   return (
-    `${detected.name}: this answer was not retained because secret detection matched it: ` +
+    `${detected.name}: this answer was not saved because secret detection matched it: ` +
     `${where}. Neither the value nor the match is recorded. Disable detection for this ` +
     "delivery with --no-secret-detection only when the value is known not to be a credential."
   );
@@ -394,10 +394,10 @@ function retain(
     throw error;
   }
   try {
-    const waiting = retainedWait(connection, path, runId, suspensionId);
+    const waiting = savedWait(connection, path, runId, suspensionId);
     if (waiting.fingerprint !== fingerprint) {
       throw new WorkflowAnswerDeliveryError(
-        `the request retained for ${suspensionId} changed while this answer was being judged, ` +
+        `the request saved for ${suspensionId} changed while this answer was being judged, ` +
           "so the value was judged against a schema this run no longer waits on.",
       );
     }
@@ -474,7 +474,7 @@ function checkDelivery(offered: WorkflowAnswerDelivery): Result<CheckedDelivery>
   if (value === undefined) {
     return Err(
       new WorkflowRequestError(
-        "an answer is retained in this run's storage, so it must be JSON this run can store.",
+        "an answer is saved in this run's storage, so it must be JSON this run can store.",
       ),
     );
   }

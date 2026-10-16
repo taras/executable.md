@@ -9,7 +9,7 @@
  * closure §10.2 describes, and disposes it with that invocation.
  *
  * There is no provider registry and no negotiation. One adapter is selected by
- * the retained locator, and a locator this adapter does not recognize is
+ * the saved locator, and a locator this adapter does not recognize is
  * answered as an unsupported effect kind before anything is sent — which is
  * exactly what a plain Git server that supports pushing and nothing else says.
  *
@@ -622,7 +622,7 @@ export function nonEmpty(value: unknown): string | undefined {
  * It reads the eleven facts a snapshot holds plus the two a snapshot does not:
  * which repository the head lives in, and which the base does. A number is a
  * document's own word and a listing is filtered by a name, so neither proves
- * that what came back belongs to the repository this run retained — the
+ * that what came back belongs to the repository this run saved — the
  * payload's own `full_name`s are what prove it.
  *
  * State is read rather than required. A closed pull request is a fact this

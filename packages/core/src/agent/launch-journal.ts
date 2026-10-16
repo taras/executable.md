@@ -3,9 +3,9 @@
  * §Durability and replay).
  *
  * One launch is one `agent_session_launch` effect type, named from the
- * expansion identity `<Session.Launch>` derived, with one retained record per
+ * expansion identity `<Session.Launch>` derived, with one saved record per
  * phase the launch completed. Phases are separate durable operations because
- * the preparation has to be retained *before* ACP ownership is released: a
+ * the preparation has to be saved *before* ACP ownership is released: a
  * launch interrupted between detach and spawn has to resume against the
  * provider session it already prepared, and a record written only when the
  * whole launch settles would describe nothing at all.
@@ -16,9 +16,9 @@
  *
  * The one exception is the materialization turn, and it is not an exception to
  * that reasoning: it is a model turn, sent to an agent session, and it is
- * retained as an ordinary `agent_prompt` because that is what it is. What must
+ * saved as an ordinary `agent_prompt` because that is what it is. What must
  * never be re-run is the sending, and `agent_prompt` is the durable operation
- * that already guarantees that — which is the whole reason the turn is retained
+ * that already guarantees that — which is the whole reason the turn is saved
  * as a prompt first and as the `materialized` phase second.
  */
 
@@ -50,7 +50,7 @@ import type { PermissionMode } from "./agent-api.ts";
 const AGENT_SESSION_LAUNCH = "agent_session_launch";
 
 /**
- * Everything the engine owns about a launch request, retained in the
+ * Everything the engine owns about a launch request, saved in the
  * preparation effect's description.
  *
  * The rendered instructions are the effect's `input`; the rest describes the
@@ -158,7 +158,7 @@ function exactMembers(value: Record<string, unknown>, members: readonly string[]
 }
 
 /**
- * Read a retained build binding strictly.
+ * Read a saved build binding strictly.
  *
  * The member set is exact rather than minimal, because a binding is compared
  * for equality: a member this build ignores is a fact the writer thought was
@@ -207,10 +207,10 @@ function serializeBinding(binding: ExecutableBuildBindingV1): Json {
 const PLAN_MEMBERS = ["promptVersion", "requestId", "prompt"];
 
 /**
- * Read a retained materialization plan strictly.
+ * Read a saved materialization plan strictly.
  *
  * Exact members, like a build binding and for the same reason: the plan is what
- * a resumed launch checks the retained turn against, and a member this build
+ * a resumed launch checks the saved turn against, and a member this build
  * ignores is one the writer thought identified the turn.
  */
 function materializationPlan(value: unknown): MaterializationPlan | undefined {
@@ -273,7 +273,7 @@ function serializePrepared(record: PreparedLaunchRecord): Json {
 }
 
 /**
- * Read a retained preparation strictly.
+ * Read a saved preparation strictly.
  *
  * Exported from this internal module so the strictness can be asserted
  * directly. It is not part of the package's public surface: `packages/core/mod.ts`
@@ -712,14 +712,14 @@ function materializedFromPrompt(
 /**
  * What a launch retains when it cannot tell whether the turn was already spent.
  *
- * The preparation is retained immediately before the turn is sent, so a run that
+ * The preparation is saved immediately before the turn is sent, so a run that
  * replays `prepared` and then finds no outcome for the turn is looking at a run
  * that reached the sending point and never recorded what happened there. Nothing
  * reachable from here separates a turn that was never sent from one the backend
  * accepted and the interrupted run never saw — and sending now, if it is the
  * second, spends a turn in someone's conversation to learn that.
  *
- * So the launch stops. This is retained rather than raised bare, so every later
+ * So the launch stops. This is saved rather than raised bare, so every later
  * replay says the same thing without reconsidering it.
  */
 function unrecoverable(plan: MaterializationPlan): MaterializedLaunchRecord {
@@ -748,7 +748,7 @@ function unrecoverable(plan: MaterializationPlan): MaterializedLaunchRecord {
  * second, which is the whole reason the prompt is appended first.
  *
  * `preparedThisRun` says whether this run is the one that prepared the session,
- * rather than a resume reading a preparation an earlier run retained. It decides
+ * rather than a resume reading a preparation an earlier run saved. It decides
  * the one thing a resume must not decide for itself: reaching the live path of a
  * turn whose preparation replayed means an earlier run already stood where this
  * one is standing, so this run refuses instead of sending.

@@ -10,7 +10,7 @@
  *
  * The grammar is fixed rather than declared, because the parser this CLI
  * declares its commands with passes an option it does not recognize through to
- * the command. Here that would mean starting an agent — and an unretained
+ * the command. Here that would mean starting an agent — and an unsaved
  * conversation in someone's history — for a command line that was already
  * wrong.
  */

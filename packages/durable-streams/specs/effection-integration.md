@@ -704,7 +704,7 @@ it returns/throws immediately. For `cancelled`, it uses `yield* suspend()`
 (see §8.4).
 
 **The same terminal policy as the root.** Normal return, ordinary error, and
-cancellation all check the child's retained subtree before a `Close`. A stale
+cancellation all check the child's saved subtree before a `Close`. A stale
 input, divergence, terminal divergence, or journal persistence failure
 suppresses the child close and propagates to the root without becoming a root
 close.
@@ -923,7 +923,7 @@ Implemented in `run.ts`. Key implementation details beyond the
 original design: short-circuits on existing Close event (DEC-016),
 checks terminal replay alignment before either successful or exceptional
 closure, and emits `Close(err)` only for an ordinary workflow failure after the
-whole retained coroutine tree is aligned. Durability and persistence failures
+whole saved coroutine tree is aligned. Durability and persistence failures
 never become terminal events.
 
 The entry point creates a scope, builds the replay index, sets up the
@@ -963,15 +963,15 @@ Key details:
   means no cast is needed at the `scope.run()` call site.
 
 - **Subtree alignment.** The root claims its own identity, and every durable
-  child claims its identity before using a retained `Close`. Before root
-  termination, the index rejects unconsumed yields and retained completed
+  child claims its identity before using a saved `Close`. Before root
+  termination, the index rejects unconsumed yields and saved completed
   children that the current definition never claimed.
 
 - **Exceptional terminal divergence check.** Before an ordinary error becomes
   `Close(err)`, checks the same subtree state. Unaligned entries produce
   `TerminalDivergenceError`, with the ordinary error as its cause, and leave the
-  retained stream unchanged. An already-active durability failure is preserved
-  even if it consumed the last retained yield.
+  saved stream unchanged. An already-active durability failure is preserved
+  even if it consumed the last saved yield.
 
 - **Backing persistence is outside workflow outcomes.** Every backing append
   failure records a shared `DurablePersistenceError` before it reaches root or
@@ -1289,8 +1289,8 @@ All cases from §6.3 are implemented and tested (DEC-008):
    `ContinuePastCloseDivergenceError`. Tested in divergence test 14.
 
 4. **Completed child is abandoned.** Each child identity is claimed before its
-   retained `Close` is restored. Root and child termination scan the whole
-   retained subtree, so a completed child absent from the current definition
+   saved `Close` is restored. Root and child termination scan the whole
+   saved subtree, so a completed child absent from the current definition
    raises terminal divergence and appends no `Close`.
 
 The same checks run at child termination. The terminal errors carry consumed

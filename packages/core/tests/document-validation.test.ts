@@ -34,7 +34,7 @@ import {
   documentValidationCodeRank,
   inlineSource,
   registerComponents,
-  retainedSource,
+  savedSource,
   validateDocument,
 } from "../mod.ts";
 import type {
@@ -450,7 +450,7 @@ describe("Tier DV: recursive Markdown sources", () => {
     ].join("\n");
 
     const { result, seen } = yield* validating(
-      retainedSource("components/Foo.md", shared, { target: "Chosen" }),
+      savedSource("components/Foo.md", shared, { target: "Chosen" }),
       { tree: { "components/Foo.md": shared }, includes: ["components"] },
     );
 
@@ -473,7 +473,7 @@ describe("Tier DV: recursive Markdown sources", () => {
     // scanning it again.
     expect(names(result)).toEqual(["Foo", "Foo", "If", "Output"]);
 
-    // One read, two views: the retained bytes answered both parses, and nothing
+    // One read, two views: the saved bytes answered both parses, and nothing
     // the document wrote was executed to find any of this out.
     expect(seen.reads).toEqual([]);
     expect(seen.effects).toEqual([]);
@@ -485,18 +485,18 @@ describe("Tier DV: recursive Markdown sources", () => {
     // The root is untargeted, so its body is the whole file and it *is* this
     // path's full-definition view. A second scan of that view would show up as
     // a second `Foo` record.
-    const retained = yield* validating(retainedSource("components/Foo.md", body), {
+    const saved = yield* validating(savedSource("components/Foo.md", body), {
       tree: { "components/Foo.md": body },
       includes: ["components"],
     });
 
-    expect(names(retained.result)).toEqual(["Foo"]);
-    expect(retained.result.outcome).toBe("valid");
-    expect(named(retained.result, "Foo").origin).toEqual({
+    expect(names(saved.result)).toEqual(["Foo"]);
+    expect(saved.result.outcome).toBe("valid");
+    expect(named(saved.result, "Foo").origin).toEqual({
       kind: "repository",
       path: "components/Foo.md",
     });
-    expect(retained.seen.reads).toEqual([]);
+    expect(saved.seen.reads).toEqual([]);
 
     // Read from a path, the same identity is read exactly once: the invocation
     // finds the root already in the source cache.

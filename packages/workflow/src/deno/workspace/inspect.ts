@@ -1,5 +1,5 @@
 /**
- * Read authenticated retained Workspace state without a durable effect, journal
+ * Read authenticated saved Workspace state without a durable effect, journal
  * entry or root publication. The transaction ends with the callback, before later
  * host work such as a Git subprocess.
  *
@@ -9,7 +9,7 @@
  * start.
  *
  * An optional historical root is materialized in a rollback-only savepoint. Every
- * exit, including failure and cancellation, restores the current root, retained
+ * exit, including failure and cancellation, restores the current root, saved
  * roots, rows and journal; no other observer sees the historical root selected.
  */
 
@@ -39,7 +39,7 @@ export interface WorkflowWorkspaceSnapshot {
 /** Which root an inspection reads. */
 export interface WorkflowWorkspaceReadOptions {
   /**
-   * The retained root to read, or the current one when omitted.
+   * The saved root to read, or the current one when omitted.
    *
    * Named rather than searched for: a root this run does not retain is refused
    * by the same restoration that a resumed run is held to, and the root the
@@ -75,7 +75,7 @@ export function* readWorkflowWorkspace<T>(
       if (wanted === undefined || wanted === (yield* workspace.currentRoot())) {
         return yield* read();
       }
-      return yield* workspace.readRetainedRoot(wanted, read);
+      return yield* workspace.readSavedRoot(wanted, read);
     } finally {
       gate.revoke();
     }

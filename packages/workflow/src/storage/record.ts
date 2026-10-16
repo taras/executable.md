@@ -42,7 +42,7 @@ export type WorkflowRunStatus =
   | "failed"
   | "cancelled";
 
-/** Every retained status, in the order the specification lists them. */
+/** Every saved status, in the order the specification lists them. */
 export const WORKFLOW_RUN_STATUSES: readonly WorkflowRunStatus[] = Object.freeze([
   "running",
   "suspended",
@@ -58,16 +58,16 @@ export const WORKFLOW_RUN_STATUSES: readonly WorkflowRunStatus[] = Object.freeze
  * A host reason carries a categorical code the host assigns. A journal reason
  * points at an event that already crossed the secret filter. Neither shape can
  * hold an arbitrary exception message, because a message that reached storage
- * this way would be retained history nothing had filtered.
+ * this way would be saved history nothing had filtered.
  */
 export type WorkflowStopReason =
   | { readonly kind: "host"; readonly code: string }
   | { readonly kind: "journal"; readonly eventId: string };
 
 /**
- * One workflow run's retained metadata.
+ * One workflow run's saved metadata.
  *
- * No `base` and no pinned commit. A run starts from exact retained bytes rather
+ * No `base` and no pinned commit. A run starts from exact saved bytes rather
  * than from a repository state, so a member naming one would be an assertion
  * about a repository this run never had — read back by anything comparing
  * identity as though the run had named it.
@@ -86,7 +86,7 @@ export interface WorkflowRunRecord {
  * Where this host can fetch the definition from, as of now.
  *
  * Replaceable, excluded from identity, and never a credential. A host
- * reauthorizes before using it rather than treating a retained locator as
+ * reauthorizes before using it rather than treating a saved locator as
  * permission it already has.
  */
 export interface DefinitionRetrieval {
@@ -121,8 +121,8 @@ export interface StoredRunState {
  * The run id a value names.
  *
  * One rule, because a run id is one thing wherever it turns up. A caller's
- * argument and a retained `run_id` column are checked against exactly this, so
- * an id no request could ever address cannot be retained and then read back as
+ * argument and a saved `run_id` column are checked against exactly this, so
+ * an id no request could ever address cannot be saved and then read back as
  * though it addressed something. What differs is only how each side reports a
  * refusal, which is what `fail` decides: a caller asked for something
  * impossible, and storage holds something that does not parse.
@@ -136,7 +136,7 @@ export function parseRunId(value: unknown, path: string, fail: Fail): string {
   }
   if (value.includes("\u0000")) {
     throw fail(
-      "a run id cannot contain a NUL: a retained id is compared as text up to one, so two " +
+      "a run id cannot contain a NUL: a saved id is compared as text up to one, so two " +
         "ids that differ only past it would address the same run",
       path,
     );

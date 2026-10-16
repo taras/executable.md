@@ -99,7 +99,7 @@ export class DocumentationIndexError extends Error {
  *
  * Its own error because it is the author's mistake rather than the build's: a
  * misspelling, or a component that is not on this profile. It refuses the whole
- * lookup, so nothing is rendered and nothing is retained.
+ * lookup, so nothing is rendered and nothing is saved.
  */
 export class UnknownComponentError extends Error {
   override name = "UnknownComponentError";

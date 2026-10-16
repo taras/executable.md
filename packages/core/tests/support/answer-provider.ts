@@ -181,7 +181,7 @@ function alternatingAnswer(
  *
  * It answers the capture and settles. That is what a provider is *for*: the
  * profile resolves its name once, before the root import, and seals what it
- * retained — so a fragment runs the sealed snapshot and the provider has
+ * saved — so a fragment runs the sealed snapshot and the provider has
  * nothing left to supply. It still observes every later import and delegates,
  * which is the most a handler may do to a generated one.
  *
@@ -205,7 +205,7 @@ export function answerProvider(
         if (asked !== name) {
           return yield* next();
         }
-        // Retained *per invocation*, which is what a row keeping a stale one
+        // Saved *per invocation*, which is what a row keeping a stale one
         // is keeping: the installation is never handed over, so there is no
         // stable object for a provider to hold instead.
         options.retain?.push(request);

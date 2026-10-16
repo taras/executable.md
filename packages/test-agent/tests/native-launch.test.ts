@@ -194,7 +194,7 @@ describe(
       const nativeSessionId = run.sessions.at(-1)!.nativeSessionId;
       expect(nativeSessionId.startsWith("native-")).toBe(true);
       expect(run.launches[0]?.command).toEqual(["xmd-test-agent-ui", "--resume", nativeSessionId]);
-      // And the retained record names that same identity.
+      // And the saved record names that same identity.
       expect(preparedRecords(run.events)[0]?.nativeSessionId).toBe(nativeSessionId);
     });
 
@@ -242,7 +242,7 @@ describe(
       expect(run.result.ok).toBe(true);
       // Reattaching re-establishes the session rather than reusing the handle
       // that predates the handoff, and it lands on the provider-native state the
-      // launch retained.
+      // launch saved.
       const launched = preparedRecords(run.events)[0]?.nativeSessionId;
       expect(launched).toBeDefined();
       expect(run.sessions.at(-1)?.nativeSessionId).toBe(launched);

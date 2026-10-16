@@ -2,7 +2,7 @@
  * Tier WFX — what a killed `xmd workflow start` leaves, and what a resume does
  * with it.
  *
- * The point of a retained workflow is that losing the host is survivable, so
+ * The point of a saved workflow is that losing the host is survivable, so
  * this is made of real processes and a real `SIGKILL`. Nothing runs after the
  * signal — no cleanup, no commit, no rollback — and what the next process finds
  * is whatever the last committed transaction left.
@@ -161,7 +161,7 @@ function committedEffects(path: string): Operation<FileEffect[]> {
   });
 }
 
-/** The run's retained status, as a second connection sees it. */
+/** The run's saved status, as a second connection sees it. */
 function committedStatus(path: string): Operation<string> {
   return readRunDatabase(path, (database) => {
     const row = database.prepare("SELECT status FROM workflow_run WHERE id = 1").get();

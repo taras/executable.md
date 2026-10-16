@@ -355,7 +355,7 @@ const REQUEST_MEMBERS = ["runId", "definition", "sourceSnapshot", "props"];
  * The run id a caller named, whichever operation they called.
  *
  * `create` and `lookup` address the same runs by the same rule, so they check
- * it in the same place — and it is the same rule a retained `run_id` is read
+ * it in the same place — and it is the same rule a saved `run_id` is read
  * back through, so an id no request could address cannot be stored and then
  * answered for. Nothing here assumes the argument is a string: a host built
  * without types, or one that read the id out of a file, can hand over anything

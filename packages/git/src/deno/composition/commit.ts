@@ -16,7 +16,7 @@
  * different tree, or whose message is not byte-for-byte what was composed, is
  * not this invocation's commit, and nothing is imported or published for it.
  *
- * The message is never retained. What is kept is a digest of its exact bytes and
+ * The message is never saved. What is kept is a digest of its exact bytes and
  * how many of them there were, which is what makes the read-back a proof and
  * keeps authored prose out of the run's own history.
  */
@@ -69,7 +69,7 @@ export interface GitCommitMessageEvidence {
  * UTF-8, because that is what Git receives and what a byte length has to be
  * counted in for the two to describe the same thing. Derived once, from the
  * admitted bytes, and then compared against everything: what Git read back, and
- * what a retained result records.
+ * what a saved result records.
  */
 export function gitCommitMessageEvidence(message: string): GitCommitMessageEvidence {
   const bytes = new TextEncoder().encode(message);
@@ -144,7 +144,7 @@ export function* performCommit(
   /**
    * Who this commit is by, when it is not the fixed workflow identity.
    *
-   * Absent for a workflow run, whose retained Git state must not depend on
+   * Absent for a workflow run, whose saved Git state must not depend on
    * whose machine it was made on. Present for an ordinary run, where the commit
    * lands in the caller's own checkout.
    */

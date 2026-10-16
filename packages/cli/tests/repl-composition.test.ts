@@ -501,8 +501,8 @@ describe("REPL composition: a description is issued, not written", () => {
     const definition = readComponent(Panel);
 
     // Every record and list the handles retain, walked.
-    for (const retained of reachableFrom([described, definition])) {
-      expect(Object.isFrozen(retained)).toBe(true);
+    for (const saved of reachableFrom([described, definition])) {
+      expect(Object.isFrozen(saved)).toBe(true);
     }
     expect(Object.isFrozen(described)).toBe(true);
     expect(Object.isFrozen(definition)).toBe(true);

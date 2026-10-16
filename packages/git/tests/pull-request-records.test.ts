@@ -2,7 +2,7 @@
  * Tier U — what a pull-request record is, and what authorizes one.
  *
  * Two invariants are checked here and neither needs a Git host, a database or a
- * document. The first is that the retained shapes are exact: a record is read
+ * document. The first is that the saved shapes are exact: a record is read
  * back for the request that produced it, and a value carrying more, fewer or
  * different members than the contract declares describes something else. The
  * second is the admission scan — the closed reading of this run's own journal

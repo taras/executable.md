@@ -8,14 +8,14 @@
  * retain the value, correlated to the exact wait it answers, so the next
  * explicit resume finds it.
  *
- * ## Why the value is checked before it is retained
+ * ## Why the value is checked before it is saved
  *
- * The wait retained a response schema, and that schema is the whole description
+ * The wait saved a response schema, and that schema is the whole description
  * of what may end it. A value that does not satisfy it could never be given to
  * the document, so retaining it would leave a run holding an answer it can
  * never use — and a later resume would fail at a point far from the delivery
  * that caused it. The same reasoning puts secret detection here: a credential
- * that reaches retained state has already leaked, whatever the resume does
+ * that reaches saved state has already leaked, whatever the resume does
  * next.
  *
  * ## Installing a provider
@@ -34,15 +34,15 @@ import type { Operation, Result } from "effection";
 import type { Json } from "@executablemd/core";
 import { WorkflowStorageError } from "../storage/errors.ts";
 
-/** One typed value offered to one retained durable wait. */
+/** One typed value offered to one saved durable wait. */
 export interface WorkflowAnswerDelivery {
   /** The public id of the run that is waiting. */
   readonly runId: string;
   /** The wait this value answers, as the run derived it. */
   readonly suspensionId: string;
-  /** The value itself, still to be judged against the retained response schema. */
+  /** The value itself, still to be judged against the saved response schema. */
   readonly value: Json;
-  /** Whether the retained state crosses the secret gate before it is written. */
+  /** Whether the saved state crosses the secret gate before it is written. */
   readonly secretDetection: boolean;
 }
 
@@ -58,7 +58,7 @@ export interface WorkflowAnswerRetention {
  * The rejected value is never carried on the error, and neither is anything a
  * secret scan matched: a diagnostic that quoted either would publish, in a
  * place nothing filters, exactly what the refusal exists to keep out of
- * retained state.
+ * saved state.
  */
 export class WorkflowAnswerDeliveryError extends WorkflowStorageError {
   override name = "WorkflowAnswerDeliveryError";

@@ -191,7 +191,7 @@ describe("F1 — the bounded language is exact", () => {
       expect(Object.isFrozen(field)).toBe(true);
     }
     expect(Object.isFrozen(form.condition)).toBe(true);
-    // Nothing the caller owns was retained or frozen on its behalf.
+    // Nothing the caller owns was saved or frozen on its behalf.
     expect(Object.isFrozen(PLAN_SCHEMA)).toBe(false);
   });
 
@@ -1126,7 +1126,7 @@ describe("F3 — complete content and reachable navigation", () => {
 });
 
 describe("F3 — focus returns to the invocation, not to where the drawer came from", () => {
-  // The retained row focus lands on exists only once an answer is recorded, so
+  // The saved row focus lands on exists only once an answer is recorded, so
   // the model here is a real execution's journal rather than a shape written by
   // this test.
   beforeAll(() => useTempFileCompiler());
@@ -1150,7 +1150,7 @@ describe("F3 — focus returns to the invocation, not to where the drawer came f
     const appended = elicitAppends(holder);
 
     // An answer this test did not cause, carrying the same value the one under
-    // test will carry. What excludes it is that it was already retained, not
+    // test will carry. What excludes it is that it was already saved, not
     // that it looks different.
     const first = yield* waiting(session, "the first question");
     expect(first.message).toContain("First");
@@ -1214,13 +1214,13 @@ describe("F3 — focus returns to the invocation, not to where the drawer came f
     expect(third.submit({ decision: "Stop" }).kind).toBe("answered");
     yield* appended(3);
 
-    const retained = answers(session.model);
-    expect(retained).toHaveLength(3);
-    const caused = retained[1];
-    const before = retained[0];
-    const newest = retained[2];
+    const saved = answers(session.model);
+    expect(saved).toHaveLength(3);
+    const caused = saved[1];
+    const before = saved[0];
+    const newest = saved[2];
     if (caused === undefined || before === undefined || newest === undefined) {
-      throw new Error("the entry retained three answers");
+      throw new Error("the entry saved three answers");
     }
     // The one it did not cause has the same answer; the newest one is somebody
     // else's. Identity here is both, or neither would be enough.
@@ -1266,7 +1266,7 @@ describe("F3 — focus returns to the invocation, not to where the drawer came f
   });
 
   it("F3: closing without answering moves focus to the invocation still asking", function* () {
-    const recorded = yield* retained();
+    const recorded = yield* saved();
     const asked = yield* askingFor(CONFIRM_SCHEMA);
     const live = asking(asked.question);
     const open = withScope(opened(live), recorded.scope);
@@ -1295,7 +1295,7 @@ describe("F3 — focus returns to the invocation, not to where the drawer came f
   });
 
   it("F3: without the claim the drawer going leaves focus on an unrelated control", function* () {
-    const recorded = yield* retained();
+    const recorded = yield* saved();
     const asked = yield* askingFor(CONFIRM_SCHEMA);
     const live = asking(asked.question);
     const open = withScope(opened(live), recorded.scope);
@@ -1320,7 +1320,7 @@ describe("F3 — focus returns to the invocation, not to where the drawer came f
 });
 
 /** One real journal with an answer in it, and the scope that shows it. */
-function* retained(): Operation<{
+function* saved(): Operation<{
   readonly model: ReplModel;
   readonly scope: string;
   readonly marker: string;
@@ -1484,7 +1484,7 @@ function elicitAppends(holder: ReplExecution): (count: number) => Operation<void
   };
 }
 
-/** Every answer the entry has retained, in the order they were recorded. */
+/** Every answer the entry has saved, in the order they were recorded. */
 function answers(model: ReplModel): readonly ReplElicitation[] {
   const found: ReplElicitation[] = [];
   const walk = (scope: ReplScope): void => {
@@ -1630,7 +1630,7 @@ describe("F3 — every placed modal control is in the ring", () => {
     const tree = yield* useReplTree<ReplAction>();
     // A real one-entry history under it, so the row names the entry the question
     // belongs to rather than a readiness with no entry in it.
-    const recorded = yield* retained();
+    const recorded = yield* saved();
     // One window action first. The drawer's top rule and side inset are part of
     // its measured rectangle, so at 72x20 the content window is one row shorter
     // than this form's rows and `[submit]` is in the next one. Advanced through
@@ -1744,7 +1744,7 @@ describe("F2 — an invalid answer is not a lifecycle refusal", () => {
     // — is reachable inside the drawer's window rather than past the end of it.
     const asked = yield* askingFor(CONFIRM_SCHEMA);
     const live = asking(asked.question);
-    const recorded = yield* retained();
+    const recorded = yield* saved();
 
     // What the schema said about one field, carried where the reducer carries it.
     const invalid = Object.freeze({
@@ -1787,7 +1787,7 @@ describe("F2 — an invalid answer is not a lifecycle refusal", () => {
   });
 });
 
-describe("F3 — the drawers that show a retained reading (#875 R1)", () => {
+describe("F3 — the drawers that show a saved reading (#875 R1)", () => {
   /** A value long enough that no drawer can show all of it at once. */
   const LONG_VALUE = Object.freeze(
     Array.from({ length: 60 }, (_unused, at) => `line-${String(at).padStart(2, "0")}`),
@@ -1986,7 +1986,7 @@ describe("F3 — the drawers that show a retained reading (#875 R1)", () => {
     expect(rows).toContain(`drawer:value:${LONG_VALUE.length - 1}`);
   });
 
-  it("TL3: scrolling a retained reading changes that offset and nothing else", function* () {
+  it("TL3: scrolling a saved reading changes that offset and nothing else", function* () {
     const engine = yield* useReplRenderer(NARROW);
     const model = twoScopes();
     const before = openBinding("entry-1", "plan");
@@ -2170,7 +2170,7 @@ describe("F3 — a narrow frame offers no inspection control (#875 R1)", () => {
   }
 
   it("TL11: a recorded binding and answer are in a wide frame and in no part of a narrow one", function* () {
-    const recorded = yield* retained();
+    const recorded = yield* saved();
     const live = asking(undefined);
     const state = withScope(initialState("frames"), recorded.scope);
 
@@ -2223,7 +2223,7 @@ describe("F3 — a narrow frame offers no inspection control (#875 R1)", () => {
   });
 
   it("TL11: dismissing a recorded answer at a narrow size lands focus on a drawn control", function* () {
-    const recorded = yield* retained();
+    const recorded = yield* saved();
     const live = asking(undefined);
     // The drawer a wider window opened, still open after the window narrowed.
     const open = Object.freeze({

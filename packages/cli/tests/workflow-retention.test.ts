@@ -2,7 +2,7 @@
  * Tier FG — what a workflow run retains (§3.6).
  *
  * A workflow owns its journal and names none, so retention cannot be read off a
- * `--journal` pathname: its process results are part of the run's retained
+ * `--journal` pathname: its process results are part of the run's saved
  * history, which is what a resumed procedure reads back instead of running the
  * command again. The record is asserted, because displayed output is identical
  * either way.
@@ -100,7 +100,7 @@ describe("Tier FG — workflow retention", () => {
   /**
    * A workflow names no `--journal`: it owns its stream. A run that read the
    * absent pathname as "keep nothing" would leave every process result in the
-   * retained history empty, and a resume would read back a command it can no
+   * saved history empty, and a resume would read back a command it can no
    * longer see the output of.
    */
   it("FG22: a workflow run retains its process results without naming a journal", function* () {
@@ -129,21 +129,21 @@ describe("Tier FG — workflow retention", () => {
  * start of the same bytes under the same logical name is the same run wherever
  * on this machine those bytes now happen to sit.
  */
-describe("Tier FG — retained source", () => {
-  /** A line only the retained document says, so a replay of it is visible. */
-  const RETAINED_LINE = "this line is the retained source";
-  const RETAINED = [
-    "# Retained",
+describe("Tier FG — saved source", () => {
+  /** A line only the saved document says, so a replay of it is visible. */
+  const SAVED_LINE = "this line is the saved source";
+  const SAVED = [
+    "# Saved",
     "",
-    RETAINED_LINE,
+    SAVED_LINE,
     "",
     "```bash exec",
-    `printf 'retained-output'`,
+    `printf 'saved-output'`,
     "```",
     "",
   ].join("\n");
 
-  function* startRetained(fixture: Fixture, id: string, at: string): Operation<void> {
+  function* startSaved(fixture: Fixture, id: string, at: string): Operation<void> {
     const started = yield* runCli(["workflow", "start", `--id=${id}`, at], {
       cwd: fixture.repository,
       env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
@@ -174,7 +174,7 @@ describe("Tier FG — retained source", () => {
     {
       name: "moved",
       *disturb(fixture: Fixture, at: string): Operation<void> {
-        yield* writeTextFile(join(fixture.repository, "flows/moved.md"), RETAINED);
+        yield* writeTextFile(join(fixture.repository, "flows/moved.md"), SAVED);
         yield* rm(at, { force: true });
       },
     },
@@ -189,34 +189,34 @@ describe("Tier FG — retained source", () => {
   it("FG40: an edited, moved or deleted original changes nothing about the run", function* () {
     for (const { name, disturb } of DISTURBANCES) {
       yield* useFixture(function* (fixture) {
-        const at = join(fixture.repository, "flows/retained.md");
-        yield* writeTextFile(at, RETAINED);
-        yield* startRetained(fixture, `retained-${name}`, at);
+        const at = join(fixture.repository, "flows/saved.md");
+        yield* writeTextFile(at, SAVED);
+        yield* startSaved(fixture, `saved-${name}`, at);
 
         yield* disturb(fixture, at);
 
-        const resumed = yield* resume(fixture, `retained-${name}`);
+        const resumed = yield* resume(fixture, `saved-${name}`);
         expect({ name, code: resumed.code }).toEqual({ name, code: 0 });
-        // The retained document, rendered from the run rather than from a file
+        // The saved document, rendered from the run rather than from a file
         // that no longer says it — or no longer exists at all.
-        expect(resumed.stdout).toContain(RETAINED_LINE);
+        expect(resumed.stdout).toContain(SAVED_LINE);
         expect(resumed.stdout).not.toContain("Something else entirely");
-        // And the command's own retained result, which is what a replay reads
+        // And the command's own saved result, which is what a replay reads
         // back instead of running it again.
-        expect(committedExec(workflowRunPath(fixture.runs, `retained-${name}`)).stdout).toBe(
-          "retained-output",
+        expect(committedExec(workflowRunPath(fixture.runs, `saved-${name}`)).stdout).toBe(
+          "saved-output",
         );
       });
     }
   });
 
-  it("FG43: a damaged retained source refuses, and never falls back to the file", function* () {
+  it("FG43: a damaged saved source refuses, and never falls back to the file", function* () {
     yield* useFixture(function* (fixture) {
       const at = join(fixture.repository, "flows/fallback.md");
-      yield* writeTextFile(at, RETAINED);
-      yield* startRetained(fixture, "fallback-1", at);
+      yield* writeTextFile(at, SAVED);
+      yield* startSaved(fixture, "fallback-1", at);
 
-      // The run's own retained content stops describing itself. The file it was
+      // The run's own saved content stops describing itself. The file it was
       // started from is untouched and still says exactly what it always said —
       // which is the whole point: a resume that read it would succeed, and a
       // resume that must not read it refuses.
@@ -234,25 +234,25 @@ describe("Tier FG — retained source", () => {
       } finally {
         database.close();
       }
-      expect(yield* readTextFile(at)).toBe(RETAINED);
+      expect(yield* readTextFile(at)).toBe(SAVED);
 
       const resumed = yield* resume(fixture, "fallback-1");
       expect(resumed.code).toBe(1);
       expect(resumed.stderr).toContain("disagrees with its own descriptor");
-      expect(resumed.stdout).not.toContain(RETAINED_LINE);
+      expect(resumed.stdout).not.toContain(SAVED_LINE);
     });
   });
 
   it("FG42: another entrypoint, or other bytes, is another run and conflicts", function* () {
     yield* useFixture(function* (fixture) {
-      yield* writeTextFile(join(fixture.repository, "flows/named.md"), RETAINED);
-      yield* startRetained(fixture, "named-1", join(fixture.repository, "flows/named.md"));
+      yield* writeTextFile(join(fixture.repository, "flows/named.md"), SAVED);
+      yield* startSaved(fixture, "named-1", join(fixture.repository, "flows/named.md"));
 
       const environment = { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs };
 
       // The same bytes under a different logical name: a different definition,
       // because source positions and later relative references use the name.
-      yield* writeTextFile(join(fixture.repository, "flows/renamed.md"), RETAINED);
+      yield* writeTextFile(join(fixture.repository, "flows/renamed.md"), SAVED);
       const renamed = yield* runCli(
         ["workflow", "start", "--id=named-1", join(fixture.repository, "flows/renamed.md")],
         { cwd: fixture.repository, env: environment },
@@ -261,7 +261,7 @@ describe("Tier FG — retained source", () => {
       expect(renamed.stderr).toContain("definition");
 
       // The same name over different bytes: also a different definition.
-      yield* writeTextFile(join(fixture.home, "named.md"), `${RETAINED}\nand one more line\n`);
+      yield* writeTextFile(join(fixture.home, "named.md"), `${SAVED}\nand one more line\n`);
       const changed = yield* runCli(
         ["workflow", "start", "--id=named-1", join(fixture.home, "named.md")],
         { cwd: fixture.repository, env: environment },

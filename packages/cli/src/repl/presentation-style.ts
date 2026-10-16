@@ -74,7 +74,7 @@ export type ReplPresentationRole =
   | "field-value"
   /** The line the next entry is typed on. */
   | "draft"
-  /** A retained position, and the band that holds them. */
+  /** A saved position, and the band that holds them. */
   | "history"
   /** The rail beside a reading, saying which region an element occupies. */
   | "rail-pending"
@@ -105,7 +105,7 @@ export type ReplPresentationRole =
  * One row's presentation facts, as the reading settles them.
  *
  * `selected` is what the resolved route is pointing at; `inspected` is whether
- * this reading is a retained position rather than the live head. Both are facts
+ * this reading is a saved position rather than the live head. Both are facts
  * about the model, so both survive focus moving away.
  */
 export interface ReplRowStyle {
@@ -170,7 +170,7 @@ export const REPL_PALETTE = Object.freeze({
   focus: 0x7fd3e8,
   /** Behind a selected row, for the whole width the frame measured it at. */
   selectedSurface: 0x122026,
-  /** A retained reading, and the band that holds the positions. */
+  /** A saved reading, and the band that holds the positions. */
   historical: 0xc9a86a,
   historySurface: 0x08090b,
   draftSurface: 0x0a0d0f,
@@ -230,7 +230,7 @@ export const REPL_PALETTE = Object.freeze({
   historyMinorEarlier: 0x7fd3e8,
   historyEntryLater: 0x5d666e,
   historyMinorLater: 0x4e565d,
-  /** The retained position being read: its diamond, junction and caption. */
+  /** The saved position being read: its diamond, junction and caption. */
   historySelected: 0xc9a86a,
   /** The head, when this process is running something. */
   historyHeadLive: 0x7fd3e8,
@@ -269,7 +269,7 @@ export function textStyleOf(style: ReplRowStyle, focused: boolean): ReplTextStyl
  * The foreground one run of a row's text takes.
  *
  * The run's own role decides the colour and the weight; the row it belongs to
- * decides whether a retained reading is being marked, which is a fact about the
+ * decides whether a saved reading is being marked, which is a fact about the
  * row rather than about any of its characters.
  */
 export function runStyleOf(
@@ -321,7 +321,7 @@ export function terminalColour(colour: number): number {
 }
 
 function colourOf(role: ReplPresentationRole, inspected: boolean): number {
-  // A retained reading is marked on the two rows that say which reading it is,
+  // A saved reading is marked on the two rows that say which reading it is,
   // and nowhere else: accenting every source line of a historical prefix would
   // say the document had changed rather than that the position had.
   if (inspected && (role === "status" || role === "history")) {

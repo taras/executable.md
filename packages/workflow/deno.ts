@@ -39,7 +39,7 @@ export type {
 } from "./src/lifecycle/execution.ts";
 export type { WorkflowLifecycleOptions } from "./src/deno/lifecycle.ts";
 /**
- * The closure a retained definition returns.
+ * The closure a saved definition returns.
  *
  * Published here rather than from the package root because these describe what
  * this adapter retains: a closure is checked against DOFS and SQLite rows. The
@@ -47,7 +47,7 @@ export type { WorkflowLifecycleOptions } from "./src/deno/lifecycle.ts";
  * from any entrypoint.
  */
 export { gitBlobIdentity } from "./src/deno/artifact/source.ts";
-export type { RetainedDefinitionSources, RetainedSource } from "./src/lifecycle/source.ts";
+export type { SavedDefinitionSources, SavedSource } from "./src/lifecycle/source.ts";
 export type { DetachedXmdArtifact, VerifiedXmdArtifact } from "./src/deno/artifact/types.ts";
 export {
   hashRunId,
@@ -92,7 +92,7 @@ export type {
  *
  * The other half of the same boundary, for work that exports a checkout or
  * proves a record still describes what is there. It journals nothing, publishes
- * nothing, and can write neither bytes nor rows; a retained root is
+ * nothing, and can write neither bytes nor rows; a saved root is
  * materialized inside a rollback-only savepoint this package owns and is always
  * taken back.
  */
@@ -172,7 +172,7 @@ export { transactAgentSessions } from "./src/deno/workspace/private.ts";
 export type { AgentSessions } from "./src/deno/workspace/agent-sessions.ts";
 export { createWorkflowPromptPublisher } from "./src/deno/agent-publication.ts";
 export type {
-  RetainedSessionKey,
+  SavedSessionKey,
   WorkflowPromptPublisherOptions,
 } from "./src/deno/agent-publication.ts";
 export { transactAgentPromptCheckpoints } from "./src/deno/workspace/private.ts";

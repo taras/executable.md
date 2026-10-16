@@ -17,7 +17,7 @@
  * the mask changes what is *seen*, never where anything *is*.
  *
  * Projection retains original source ranges rather than a rebuilt document. Each
- * retained range is scanned with its own origin, so every retained element keeps
+ * saved range is scanned with its own origin, so every saved element keeps
  * the offset and line it was authored at — which is what keeps expansion
  * identifiers equal between a full run and a targeted one.
  */
@@ -72,7 +72,7 @@ interface OutlineHeading {
 export interface DocumentOutline {
   readonly headings: readonly OutlineHeading[];
   readonly entries: readonly DocumentTarget[];
-  /** Canonical encoded fragments in source order, duplicates retained. */
+  /** Canonical encoded fragments in source order, duplicates saved. */
   readonly targets: readonly string[];
   /** The same entries, in the same order, each with its own description. */
   readonly targetInfo: readonly DocumentTargetInfo[];
@@ -110,7 +110,7 @@ const DOCUMENT_TARGET_FAILURE = "executablemd.document-target-failure";
  * Why one requested selector did not name exactly one section, as data.
  *
  * Frozen and rebuilt from validated parts wherever it crosses a boundary. The
- * selector is retained because reproducing an ordinary failed execution needs
+ * selector is saved because reproducing an ordinary failed execution needs
  * to say what was asked for — it is sanitized invocation metadata, never
  * identity, and it never stands in for an exact target.
  */
@@ -236,7 +236,7 @@ function consistentOutcome(fields: TargetFailureFields): boolean {
  * combination of kind, selector, matches and catalog that no selection could
  * have produced are all "not this shape" rather than a throw.
  *
- * Nothing the candidate owns is retained. Every entry is read once and copied
+ * Nothing the candidate owns is saved. Every entry is read once and copied
  * into a fresh array, so a list that is mutated afterwards — or reached through
  * a Proxy that is later revoked — cannot change what comes back.
  */
@@ -946,7 +946,7 @@ function overlapsComponent(heading: RawHeading, spans: readonly ComponentSpan[])
  * nearest preceding heading with a smaller depth — so skipped depths are
  * ordinary. "Outermost" is the smallest depth present, not `h1`.
  *
- * A single outermost heading is the document's title: it is retained in every
+ * A single outermost heading is the document's title: it is saved in every
  * projection and takes no level in any path, which is why a document that opens
  * with one title still addresses its sections by their own names.
  */
@@ -1083,7 +1083,7 @@ function directPrefixEnd(outline: DocumentOutline, index: number): number {
  * gaps between them and are never scanned, which is what keeps their
  * components, resources, and code blocks from running at all.
  */
-export function retainedRanges(
+export function savedRanges(
   outline: DocumentOutline,
   entry: DocumentTarget,
 ): readonly SourceRange[] {
@@ -1108,14 +1108,14 @@ export function retainedRanges(
     end: subtreeEnd(outline, entry.heading),
   });
 
-  const retained: SourceRange[] = [];
+  const saved: SourceRange[] = [];
   let consumed = 0;
   for (const range of ranges) {
     const start = Math.max(range.start, consumed);
     if (start < range.end) {
-      retained.push({ start, end: range.end });
+      saved.push({ start, end: range.end });
       consumed = range.end;
     }
   }
-  return retained;
+  return saved;
 }

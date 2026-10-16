@@ -168,7 +168,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
 
         if (persist) {
           // Persist mode: run the compiled block inside the eval scope
-          // so spawned resources are retained in the persistent EvalScope.
+          // so spawned resources are saved in the persistent EvalScope.
           const scope = yield* evalScope;
           if (!scope) {
             throw new Error(

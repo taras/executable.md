@@ -161,7 +161,7 @@ export interface ReplFitGeometry {
  * cheaper comparison that is already cheap.
  */
 export interface ReplFitStore {
-  /** The geometry retained for these exact inputs, or none. */
+  /** The geometry saved for these exact inputs, or none. */
   held(
     lines: readonly ReplReadingLine[],
     room: number,
@@ -315,9 +315,9 @@ export function* prepareReading(
   room: number,
   store?: ReplFitStore,
 ): Operation<Result<ReplPreparedReading>> {
-  const retained = store?.held(lines, room, size);
-  if (retained !== undefined) {
-    return Ok(decorate(lines, retained));
+  const saved = store?.held(lines, room, size);
+  if (saved !== undefined) {
+    return Ok(decorate(lines, saved));
   }
   const measured = yield* fitGeometry(renderer, size, lines, room);
   if (!measured.ok) {

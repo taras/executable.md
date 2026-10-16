@@ -496,7 +496,7 @@ function withPrompt(
 describe("REPL model: the Agent conversations it projects", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("M1: projects each retained Prompt as one turn owned by its exact scope", function* () {
+  it("M1: projects each saved Prompt as one turn owned by its exact scope", function* () {
     const events = yield* agentReferenceEvents();
     const model = projected(events);
 
@@ -514,7 +514,7 @@ describe("REPL model: the Agent conversations it projects", () => {
       "planner",
     ]);
     // Every turn belongs to the one scope whose source it was written in, at
-    // the exact position the record retained.
+    // the exact position the record saved.
     expect(model.turns.map((turn) => turn.scope)).toEqual([
       ENTRY_SCOPE,
       ENTRY_SCOPE,
@@ -633,7 +633,7 @@ describe("REPL model: the Agent conversations it projects", () => {
     }
   });
 
-  it("M3: one retained turn is one object, however it is reached", function* () {
+  it("M3: one saved turn is one object, however it is reached", function* () {
     const events = yield* agentReferenceEvents();
     const model = projected(events);
     const built = model.turns[2];
@@ -888,14 +888,14 @@ function planJournal(
 }
 
 describe("REPL model: the declared sources it owns", () => {
-  it("M3: a declared component's retained origin and bytes become its scope", function* () {
+  it("M3: a declared component's saved origin and bytes become its scope", function* () {
     const model = projected(planJournal());
     const entry = only(model);
     if (entry === undefined) {
       throw new Error("the journal admits one entry");
     }
 
-    // The scope the import created, under the origin the record retained — the
+    // The scope the import created, under the origin the record saved — the
     // path every effect inside that component is recorded at — holding the exact
     // bytes the record carried.
     const plan = child(entry, "Plan-1");

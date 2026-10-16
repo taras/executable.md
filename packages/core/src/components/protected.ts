@@ -42,7 +42,7 @@
  * win selection here. `Component.importComponent` middleware composes around the
  * import exactly as it composes around any other: it may observe it, delegate it
  * and refuse it by throwing, and what it cannot do is answer one — the answer is
- * verified at the call site against core's own retained copy, and core's copy is
+ * verified at the call site against core's own saved copy, and core's copy is
  * what is invoked.
  *
  * Protection is not permission to do anything, and it is not a second

@@ -9,8 +9,8 @@
  * A slot is therefore a readable stem and a digest of the whole identity. The
  * digest is what makes placement collision-free — two distinct identities have
  * distinct slots even when their stems collapse to the same characters — and the
- * stem is what makes a retained path legible to somebody reading the database.
- * Neither half is parsed back: the retained `checkout_path` column is the
+ * stem is what makes a saved path legible to somebody reading the database.
+ * Neither half is parsed back: the saved `checkout_path` column is the
  * record of where a checkout is, and this is only how the first one was
  * chosen.
  */
@@ -38,7 +38,7 @@ export function repositoryCheckoutPath(name: string): string {
  *
  * A linked worktree inside the repository it belongs to would be walked by that
  * repository's own status and search, and importing one tree would then import
- * the other. Keeping them siblings makes each retained tree exactly one
+ * the other. Keeping them siblings makes each saved tree exactly one
  * checkout.
  */
 export function worktreeCheckoutPath(repositoryName: string, name: string): string {

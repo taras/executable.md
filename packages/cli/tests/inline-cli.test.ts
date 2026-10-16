@@ -233,7 +233,7 @@ describe(
     });
 
     it("IE18: running an inline document leaves the directory as it was", function* () {
-      // The distinct fault this retained row catches: inline execution must
+      // The distinct fault this saved row catches: inline execution must
       // not add any top-level filesystem entry — a file, a directory, or a
       // symlink. readdir() observes every entry kind; the Markdown suite's
       // <Glob> observes only regular files, so this row stays a focused

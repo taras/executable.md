@@ -24,23 +24,23 @@ export function createAcpxSessionStore(stateDir: string): AcpxSessionStore {
 }
 
 /** What a store still holds for one session key. */
-export interface AcpxRetainedSession {
+export interface AcpxSavedSession {
   readonly agentCommand: string;
   /** The provider-native session identity, when the adapter asserted one. */
   readonly agentSessionId?: string;
 }
 
 /** The session this store retains under `sessionKey`, creating nothing. */
-export function* retainedSession(
+export function* savedSession(
   store: AcpxSessionStore,
   sessionKey: string,
-): Operation<AcpxRetainedSession | undefined> {
+): Operation<AcpxSavedSession | undefined> {
   const record = yield* until(store.load(sessionKey));
   if (!record) {
     return undefined;
   }
-  const retained: AcpxRetainedSession = { agentCommand: record.agentCommand };
+  const saved: AcpxSavedSession = { agentCommand: record.agentCommand };
   return record.agentSessionId === undefined
-    ? retained
-    : { ...retained, agentSessionId: record.agentSessionId };
+    ? saved
+    : { ...saved, agentSessionId: record.agentSessionId };
 }

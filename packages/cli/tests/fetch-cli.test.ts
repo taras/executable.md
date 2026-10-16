@@ -158,14 +158,14 @@ describe("Tier FT — diagnostic retention of a Fetch", () => {
     expect(event?.result?.status).toBe("ok");
     const value = event?.result?.value;
     if (value === null || typeof value !== "object") {
-      throw new Error("the retained Fetch result is not an object");
+      throw new Error("the saved Fetch result is not an object");
     }
-    const retained: Record<string, unknown> = { ...value };
-    expect(retained.status).toBe(200);
-    expect(retained.body).toBe('{"greeting":"hello"}');
-    const headers = retained.headers;
+    const saved: Record<string, unknown> = { ...value };
+    expect(saved.status).toBe(200);
+    expect(saved.body).toBe('{"greeting":"hello"}');
+    const headers = saved.headers;
     if (headers === null || typeof headers !== "object") {
-      throw new Error("the retained Fetch response carries no header object");
+      throw new Error("the saved Fetch response carries no header object");
     }
     const named: Record<string, unknown> = { ...headers };
     expect(named["content-type"]).toBe("application/json");

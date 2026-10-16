@@ -2,7 +2,7 @@
  * Tier WF — what a `<Repository>` replays, refuses and leaves behind.
  *
  * Every replay here happens after the remote has been deleted, so what
- * continues the run is what the run retained or nothing does. The discriminating
+ * continues the run is what the run saved or nothing does. The discriminating
  * observations are the Git subcommands a run issued — a replay that clones did
  * the work again — and the composition events in the journal, which say whether
  * an effect was appended a second time. Rendered text proves neither: an
@@ -45,8 +45,8 @@ import {
   raised,
   removeWorkspacePath,
   replaceWorkspaceTree,
-  retainedRepositories,
-  retainedWorktrees,
+  savedRepositories,
+  savedWorktrees,
   runDocument,
   subcommands,
   survivingRoots,
@@ -80,8 +80,8 @@ describe("workflow Repository replay", () => {
 
       const before = (yield* compositionEvents(database)).length;
       expect(before).toBe(2);
-      const [repository] = yield* retainedRepositories(database);
-      const [worktree] = yield* retainedWorktrees(database, "project");
+      const [repository] = yield* savedRepositories(database);
+      const [worktree] = yield* savedWorktrees(database, "project");
 
       dropRootClose(runPath(root, "release-1.4"));
       // Nothing outside the run's database survives: no remote to clone from,
@@ -106,8 +106,8 @@ describe("workflow Repository replay", () => {
         "worktree:implementation",
       ]);
 
-      const [repositoryAgain] = yield* retainedRepositories(database);
-      const [worktreeAgain] = yield* retainedWorktrees(database, "project");
+      const [repositoryAgain] = yield* savedRepositories(database);
+      const [worktreeAgain] = yield* savedWorktrees(database, "project");
       expect(repositoryAgain?.record).toEqual(repository?.record);
       expect(worktreeAgain).toEqual(worktree);
       expect(yield* survivingRoots(counting.counters)).toEqual([]);
@@ -139,14 +139,14 @@ describe("workflow Repository replay", () => {
     });
   });
 
-  it("fails closed when the retained checkout is gone", function* () {
+  it("fails closed when the saved checkout is gone", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
       yield* runDocument(database, source(remote.locator));
-      const [repository] = yield* retainedRepositories(database);
+      const [repository] = yield* savedRepositories(database);
 
       dropRootClose(runPath(root, "release-1.4"));
       yield* removeWorkspacePath(database, repository?.record.checkoutPath ?? "");
@@ -166,7 +166,7 @@ describe("workflow Repository replay", () => {
     });
   });
 
-  it("fails closed when the retained record no longer matches", function* () {
+  it("fails closed when the saved record no longer matches", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
 
@@ -198,7 +198,7 @@ describe("workflow Repository replay", () => {
     yield* withStorage(root, function* () {
       const database = yield* createRun();
       yield* runDocument(database, source(remote.locator));
-      const [repository] = yield* retainedRepositories(database);
+      const [repository] = yield* savedRepositories(database);
 
       dropRootClose(runPath(root, "release-1.4"));
       yield* removeWorkspacePath(database, repository?.record.checkoutPath ?? "");
@@ -252,7 +252,7 @@ describe("workflow Repository effect transaction", () => {
         expect(subcommands(counting.counters)).toContain("clone");
 
         // Nothing crossed the boundary. No metadata, no new root, no event.
-        expect(yield* retainedRepositories(database)).toHaveLength(0);
+        expect(yield* savedRepositories(database)).toHaveLength(0);
         expect(committedCompositionEvents(path)).toBe(events);
         expect(committedRoot(path)).toBe(rootBefore);
         expect(yield* survivingRoots(counting.counters)).toEqual([]);
@@ -316,7 +316,7 @@ describe("workflow Repository effect transaction", () => {
         yield* task.halt();
       });
 
-      expect(yield* retainedRepositories(database)).toHaveLength(0);
+      expect(yield* savedRepositories(database)).toHaveLength(0);
       expect(committedCompositionEvents(path)).toBe(events);
       expect(committedRoot(path)).toBe(rootBefore);
       const surviving: string[] = [];
@@ -367,7 +367,7 @@ describe("workflow Repository refusal durability", () => {
       expect(String(failure)).toContain("does not name a commit");
       expect(rendered).not.toContain("later sibling marker");
 
-      // And retained as a failure. This is the claim the plan makes: the run's
+      // And saved as a failure. This is the claim the plan makes: the run's
       // own history says the operation did not succeed.
       const results = yield* compositionResults(database);
       expect(results).toHaveLength(2);
@@ -386,8 +386,8 @@ describe("workflow Repository refusal durability", () => {
       expect(publishedRoots(path)).toBe(1);
       expect(committedRoot(path)).toBe(latestRoot(path));
 
-      // And it retained nothing of its own.
-      expect(yield* retainedRepositories(database)).toHaveLength(1);
+      // And it saved nothing of its own.
+      expect(yield* savedRepositories(database)).toHaveLength(1);
     });
   });
 
@@ -417,12 +417,12 @@ describe("workflow Repository refusal durability", () => {
       expect(rendered).toContain("later sibling marker");
 
       // Printing changed what the document reports and nothing about what was
-      // retained: one failed effect, no root published, no row.
+      // saved: one failed effect, no root published, no row.
       const results = yield* compositionResults(database);
       expect(results).toHaveLength(1);
       expect(results[0]?.status).toBe("err");
       expect(publishedRoots(path)).toBe(0);
-      expect(yield* retainedRepositories(database)).toHaveLength(0);
+      expect(yield* savedRepositories(database)).toHaveLength(0);
     });
   });
 
@@ -461,7 +461,7 @@ describe("workflow Repository refusal durability", () => {
   });
 });
 
-describe("workflow Repository retained integrity", () => {
+describe("workflow Repository saved integrity", () => {
   it("refuses to join a traversal-shaped path to a materialization root", function* () {
     const root = yield* useStorageRoot();
     const host = join(yield* useStorageRoot(), "materialization");
@@ -471,7 +471,7 @@ describe("workflow Repository retained integrity", () => {
       const escaped = join(host, "..", "..", "etc");
 
       // Straight at the join itself, because this is the one operation that
-      // turns a retained string into a host location. Every route that reads a
+      // turns a saved string into a host location. Every route that reads a
       // damaged row is refused somewhere, but only this proves the refusal is
       // containment rather than some earlier check happening to notice.
       const attempted = yield* transactWorkspaceRoots(database, function* (workspace) {
@@ -492,7 +492,7 @@ describe("workflow Repository retained integrity", () => {
     });
   });
 
-  it("refuses a traversal-shaped retained path before any host work", function* () {
+  it("refuses a traversal-shaped saved path before any host work", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
     const path = runPath(root, "release-1.4");
@@ -501,7 +501,7 @@ describe("workflow Repository retained integrity", () => {
       const database = yield* createRun();
       yield* runDocument(database, `<Repository name="project" url="${remote.locator}" />`);
 
-      // A retained path that is not the one this identity's placement gives it.
+      // A saved path that is not the one this identity's placement gives it.
       // Concatenated with a materialization root it would name a directory
       // outside the run's own tree entirely.
       dropRootClose(path);
@@ -523,7 +523,7 @@ describe("workflow Repository retained integrity", () => {
         ),
       );
 
-      // Damaged retained state, not a refusal: fatal, and `<PrintErrors>` does
+      // Damaged saved state, not a refusal: fatal, and `<PrintErrors>` does
       // not get to downgrade it.
       const stale = causedBy(failure, isStale);
       expect(stale).toBeInstanceOf(RepositoryStaleStateError);
@@ -536,7 +536,7 @@ describe("workflow Repository retained integrity", () => {
     });
   });
 
-  it("detects a mutated retained locator before children and later siblings", function* () {
+  it("detects a mutated saved locator before children and later siblings", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
     const other = yield* useBareRemote({
@@ -588,14 +588,14 @@ describe("workflow Repository retained integrity", () => {
 /**
  * Substituting one repository's checkout for another's.
  *
- * The bytes at a retained path are not the run's word by the time they are read
+ * The bytes at a saved path are not the run's word by the time they are read
  * back. A valid checkout of a different repository is a perfectly readable Git
  * repository, so attachment that asked only "can Git read this" accepted one
- * identity's retained history against another identity's content: the document
+ * identity's saved history against another identity's content: the document
  * carried on restoring recorded reads that no longer described what was there,
  * and every later live effect ran against the substitute.
  *
- * Each of these builds a real, valid checkout that differs from the retained one
+ * Each of these builds a real, valid checkout that differs from the saved one
  * in exactly one dimension of creation identity, so a passing test says which
  * check caught it rather than that something did.
  */
@@ -620,7 +620,7 @@ describe("workflow Repository substituted checkouts", () => {
       ].join("\n");
 
       yield* runDocument(database, document);
-      const [before] = yield* retainedRepositories(database);
+      const [before] = yield* savedRepositories(database);
       const checkout = before?.record.checkoutPath ?? "";
 
       const counting = countingHost();
@@ -661,8 +661,8 @@ describe("workflow Repository substituted checkouts", () => {
       expect(subcommands(counting.counters)).not.toContain("checkout");
       expect(subcommands(counting.counters)).not.toContain("worktree");
 
-      // The retained record and the frontier are exactly what they were.
-      const [after] = yield* retainedRepositories(database);
+      // The saved record and the frontier are exactly what they were.
+      const [after] = yield* savedRepositories(database);
       expect(after).toEqual(before);
       expect(committedRoot(runPath(root, "release-1.4"))).toBe(frontier);
       expect(committedCompositionEvents(runPath(root, "release-1.4"))).toBe(events);
@@ -682,7 +682,7 @@ describe("workflow Repository substituted checkouts", () => {
       const database = yield* createRun();
       const document = `<Repository name="project" url="${a.locator}" as="repository" />`;
       yield* runDocument(database, document);
-      const [before] = yield* retainedRepositories(database);
+      const [before] = yield* savedRepositories(database);
       const checkout = before?.record.checkoutPath ?? "";
 
       // B's content, carrying A's locator as its origin. The url matches and the
@@ -701,7 +701,7 @@ describe("workflow Repository substituted checkouts", () => {
       );
       expect(failure?.message).toContain("the commit it was created at is not in the checkout");
       expect(subcommands(counting.counters)).not.toContain("clone");
-      expect(yield* retainedRepositories(database)).toEqual([before]);
+      expect(yield* savedRepositories(database)).toEqual([before]);
     });
   });
 
@@ -715,7 +715,7 @@ describe("workflow Repository substituted checkouts", () => {
       const database = yield* createRun();
       const document = `<Repository name="project" url="${a.locator}" as="repository" />`;
       yield* runDocument(database, document);
-      const [before] = yield* retainedRepositories(database);
+      const [before] = yield* savedRepositories(database);
       expect(before?.record.objectFormat).toBe("sha1");
       const checkout = before?.record.checkoutPath ?? "";
 
@@ -756,7 +756,7 @@ describe("workflow Repository substituted checkouts", () => {
       const database = yield* createRun();
       const document = `<Repository name="project" url="${a.locator}" as="repository" />`;
       yield* runDocument(database, document);
-      const [before] = yield* retainedRepositories(database);
+      const [before] = yield* savedRepositories(database);
       const checkout = before?.record.checkoutPath ?? "";
 
       // What #294 will do: the same repository, on another branch, at another

@@ -47,7 +47,7 @@ const GITDIR_PREFIX = "gitdir: ";
  * The subtraction the module is built on only works in one direction for free.
  * Removing a root from an absolute path always leaves something; prepending a
  * root to an arbitrary string does not always land beneath it, and a Workspace
- * path that arrived from a retained row is not this provider's own word — a
+ * path that arrived from a saved row is not this provider's own word — a
  * database somebody edited can hold `/../../etc`, and concatenation would walk
  * out of the disposable tree and into the host.
  *
@@ -57,7 +57,7 @@ const GITDIR_PREFIX = "gitdir: ";
 function hostPath(root: string, workspacePath: string): string {
   if (canonicalWorkspacePath(workspacePath) === undefined) {
     throw new RepositoryStaleStateError(
-      "a retained checkout",
+      "a saved checkout",
       "the Workspace path it recorded does not name one place beneath the Workspace root",
     );
   }
@@ -133,7 +133,7 @@ function* exportEntry(
 }
 
 /**
- * Export one retained checkout into `<root><workspacePath>`, parents included.
+ * Export one saved checkout into `<root><workspacePath>`, parents included.
  *
  * ## Why the root is not an ordinary entry
  *
@@ -149,7 +149,7 @@ function* exportEntry(
  * state the database does not hold — which is exactly the guarantee the
  * Workspace exists to make.
  *
- * So the root must be a real retained directory, and the export must land where
+ * So the root must be a real saved directory, and the export must land where
  * it was aimed. Both are decided here, before Git runs and before any
  * administration path is rewritten, because either one is what the next step
  * would trust.
@@ -168,7 +168,7 @@ export function* exportTree(
     throw new RepositoryStaleStateError(
       subject,
       "what the Workspace holds at the path it recorded is not a directory, so the checkout " +
-        "this run would operate on is not the one it retained",
+        "this run would operate on is not the one it saved",
     );
   }
 
@@ -344,7 +344,7 @@ function* worktreePointer(worktreeHostPath: string, subject: string): Operation<
     refuse(
       subject,
       "the `.git` in the worktree it holds is not a real file, so the administration native " +
-        "Git would follow is not the one this run retained",
+        "Git would follow is not the one this run saved",
     );
   }
   return pointer;
@@ -364,15 +364,15 @@ function* pointerValue(file: string): Operation<string> {
 }
 
 /**
- * The Workspace path a retained pointer names, once it names one at all.
+ * The Workspace path a saved pointer names, once it names one at all.
  *
- * A retained pointer holds a Workspace path, because that is what
+ * A saved pointer holds a Workspace path, because that is what
  * canonicalization left there. Relative, empty, dot-segmented and
  * traversal-shaped values are all refused rather than resolved: each of them
  * names an administration directory somewhere other than where this run put one,
  * and prefixing a root onto it would produce a path that leaves the export.
  */
-function* retainedPointer(file: string, subject: string): Operation<string> {
+function* savedPointer(file: string, subject: string): Operation<string> {
   const value = canonicalWorkspacePath(yield* pointerValue(file));
   if (value === undefined) {
     refuse(
@@ -400,7 +400,7 @@ function* agreedPair(
   subject: string,
 ): Operation<void> {
   const pointer = yield* worktreePointer(worktreeHostPath, subject);
-  const named = `${root}${yield* retainedPointer(pointer, subject)}`;
+  const named = `${root}${yield* savedPointer(pointer, subject)}`;
   const slot = [...control.slots.values()].find((candidate) => candidate === named);
   if (slot === undefined) {
     refuse(
@@ -410,12 +410,12 @@ function* agreedPair(
   }
   // Unconditional: every slot reaching here has been proven to hold a real
   // pointer, so there is no absence for a comparison to be skipped over.
-  if (`${root}${yield* retainedPointer(`${slot}/gitdir`, subject)}` !== pointer) {
+  if (`${root}${yield* savedPointer(`${slot}/gitdir`, subject)}` !== pointer) {
     refuse(subject, "its administration directory names a different worktree");
   }
 }
 
-/** Put a materialization root back in front of every retained administration path. */
+/** Put a materialization root back in front of every saved administration path. */
 /**
  * Every administration file a rewrite may touch, and nothing else.
  *
@@ -448,7 +448,7 @@ export function* localizeAdministration(
   }
 
   for (const file of yield* administrationFiles(control, worktreeHostPaths, subject)) {
-    const value = yield* retainedPointer(file, subject);
+    const value = yield* savedPointer(file, subject);
     const content = yield* readTextFile(file);
     yield* writeTextFile(
       file,
@@ -460,7 +460,7 @@ export function* localizeAdministration(
 /**
  * Take the materialization root back out of every administration path.
  *
- * What is left is a Workspace path, which is what may be retained. A value that
+ * What is left is a Workspace path, which is what may be saved. A value that
  * does not begin with the root is refused rather than left alone: Git wrote an
  * administration path this provider did not predict, and retaining it would keep
  * a host path — or a pointer to somewhere else entirely — in the run.
@@ -482,8 +482,8 @@ export function* canonicalizeAdministration(
           "run materialized it in",
       );
     }
-    const retained = canonicalWorkspacePath(value.slice(root.length));
-    if (retained === undefined) {
+    const saved = canonicalWorkspacePath(value.slice(root.length));
+    if (saved === undefined) {
       refuse(
         subject,
         "a linked-worktree administration pointer does not name one place beneath the " +
@@ -493,7 +493,7 @@ export function* canonicalizeAdministration(
     const content = yield* readTextFile(file);
     yield* writeTextFile(
       file,
-      rewriteLine(content, () => retained),
+      rewriteLine(content, () => saved),
     );
   }
 }

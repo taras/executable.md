@@ -50,7 +50,7 @@ export interface ExecutionEnvironment {
    * middleware has run.
    *
    * For a name this execution fixed, it verifies the answer that came back and
-   * returns the execution's own retained definition instead. An unrelated open
+   * returns the execution's own saved definition instead. An unrelated open
    * import keeps whatever the public chain answered.
    */
   readonly componentResolution?: ComponentResolution;
@@ -147,9 +147,9 @@ export interface ExecutionEnvironment {
    */
   readonly evaluationProfile?: EvaluationProfile;
   /**
-   * Routes a selected definition to the implementation this execution retained.
+   * Routes a selected definition to the implementation this execution saved.
    *
-   * `<Syntax />` and `<Evaluate />` run core's own retained bodies rather than a
+   * `<Syntax />` and `<Evaluate />` run core's own saved bodies rather than a
    * repository file, a registration, or anything import middleware substituted.
    * Generated XMD receives a narrower route than the document does, and every
    * route becomes unusable at teardown, so an implementation kept past the run

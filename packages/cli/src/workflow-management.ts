@@ -3,7 +3,7 @@
  * `export` — everything a run's caller does without running it.
  *
  * `status` and `history` each take one of two sources. A run id addresses this
- * host's retained storage; `--artifact=<path.xmd>` addresses a sealed file,
+ * host's saved storage; `--artifact=<path.xmd>` addresses a sealed file,
  * which is completely verified before any of it is presented. The two answer
  * with the same lifecycle and history values, and the artifact forms add which
  * artifact answered and the boundary it was sealed at.
@@ -21,7 +21,7 @@
  *
  * ## Two projections of one answer
  *
- * `--json` is the contract. It writes the retained values structurally — every
+ * `--json` is the contract. It writes the saved values structurally — every
  * event, its exact id, its associated Workspace root and its optional authored
  * source — so a caller parsing it sees what the run holds rather than a
  * rendering of it. Human output is a presentation over the same values: it may
@@ -193,7 +193,7 @@ function json(value: unknown): string {
 
 /**
  * Which file answered, which artifact it holds, and the boundary it was sealed
- * at — above the same rendering a retained run gets.
+ * at — above the same rendering a saved run gets.
  *
  * The path is here and only here. It is where this caller found the evidence,
  * which is a fact about the invocation rather than about the artifact, so it
@@ -211,10 +211,10 @@ function renderArtifact(path: string, artifact: WorkflowArtifactIdentity): strin
 }
 
 /**
- * The lines every snapshot has, and the retrieval line only a retained run does.
+ * The lines every snapshot has, and the retrieval line only a saved run does.
  *
  * `retrieval` arrives as its own argument rather than off the snapshot, because
- * it is not a member of the shared inspection shape: a retained run has one and
+ * it is not a member of the shared inspection shape: a saved run has one and
  * an artifact has none, and reading it from the value would make this renderer
  * expect a member half its callers cannot supply.
  */
@@ -283,12 +283,12 @@ function renderList(snapshots: readonly WorkflowLifecycleSnapshot[]): string {
 }
 
 /**
- * The retained events, and — when the caller asked — whether each is a
+ * The saved events, and — when the caller asked — whether each is a
  * checkpoint a fork may select.
  *
  * `--forkable` adds two columns and removes nothing: a caller reading history
  * to choose a checkpoint needs to see the events it cannot select as much as
- * the ones it can. The columns carry stable codes and retained event ids and
+ * the ones it can. The columns carry stable codes and saved event ids and
  * nothing else, so an unforkable Agent turn says `agent-state-unavailable`
  * rather than repeating what the provider said about the session.
  */

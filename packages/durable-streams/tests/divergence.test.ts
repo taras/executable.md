@@ -493,7 +493,7 @@ describe("divergence detection", () => {
     expect(executions).toBe(0);
   });
 
-  it("early return names the first unreached retained yield", function* () {
+  it("early return names the first unreached saved yield", function* () {
     const events: DurableEvent[] = [
       {
         type: "yield",
@@ -535,7 +535,7 @@ describe("divergence detection", () => {
     expect(stream.snapshot()).toEqual(before);
   });
 
-  it("ordinary failure names the first unreached retained yield and keeps its cause", function* () {
+  it("ordinary failure names the first unreached saved yield and keeps its cause", function* () {
     const original = new Error("current workflow failed");
     const events: DurableEvent[] = [
       {
@@ -574,7 +574,7 @@ describe("divergence detection", () => {
     expect(stream.snapshot()).toEqual(events);
   });
 
-  it("a malformed retained source keeps the existing diagnostic wording", function* () {
+  it("a malformed saved source keeps the existing diagnostic wording", function* () {
     const events: DurableEvent[] = [
       {
         type: "yield",
@@ -684,7 +684,7 @@ describe("divergence detection", () => {
     }
   });
 
-  it("a terminal diagnostic omits a retained source missing its offset", function* () {
+  it("a terminal diagnostic omits a saved source missing its offset", function* () {
     const events: DurableEvent[] = [
       {
         type: "yield",
@@ -724,7 +724,7 @@ describe("divergence detection", () => {
     }
   });
 
-  it("a terminal diagnostic omits a retained source with an extra member", function* () {
+  it("a terminal diagnostic omits a saved source with an extra member", function* () {
     const original = new Error("current workflow failed");
     const events: DurableEvent[] = [
       {

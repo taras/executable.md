@@ -21,6 +21,6 @@ it addresses a different context: the document it would have replaced comes out
 unwrapped.
 
 `structural.mjs` declares structural syntax and no Markdown component at all. It
-is what proves the retained catalog carries both arms: its construct has to be
+is what proves the saved catalog carries both arms: its construct has to be
 describable by `xmd syntax` and acceptable to Plan validation, not only
 expandable by a run.

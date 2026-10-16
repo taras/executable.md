@@ -30,7 +30,7 @@ import type { IdentityProvenance } from "@executablemd/core";
  * same build. None of it reaches a document.
  */
 export interface NativeBinding {
-  /** The command whose build is observed, bound and retained. */
+  /** The command whose build is observed, bound and saved. */
   command: string;
   /** The arguments that ask that exact file its version. */
   versionArgs?: readonly string[];
@@ -71,10 +71,10 @@ export interface NativeBinding {
 /**
  * Claude reports `2.1.241 (Claude Code)`.
  *
- * The whole line is retained rather than the number alone, because the number
+ * The whole line is saved rather than the number alone, because the number
  * alone is not a build: the same version string from a different product would
  * compare equal. Anything that does not look like this is unrecognized, and an
- * unrecognized build is refused rather than retained under a guess.
+ * unrecognized build is refused rather than saved under a guess.
  *
  * Exactly one line may match. Zero is an output this adapter does not
  * recognize; two or more is output it cannot read as one answer, and taking
@@ -96,10 +96,10 @@ function claudeVersion(output: string): string | undefined {
  *
  * What is admitted is that shape, not that release: another canonical version
  * passes here. Exactness belongs to the session instead — the string accepted
- * here becomes its retained executable binding, and a later build that differs
+ * here becomes its saved executable binding, and a later build that differs
  * refuses against that binding rather than against a constant written down here.
  *
- * The product word is retained with the number for the same reason Claude's
+ * The product word is saved with the number for the same reason Claude's
  * whole line is: a bare semver from another tool compares equal. The one-line
  * rule is the same as well, and so is the silence about what did not match.
  */

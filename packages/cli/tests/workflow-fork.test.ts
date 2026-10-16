@@ -86,7 +86,7 @@ const DIVERGENT = [
 
 /**
  * A document that declares a property and writes it, so what a fork inherited
- * is visible in what it did rather than only in what it retained.
+ * is visible in what it did rather than only in what it saved.
  */
 const PROPPED = [
   "---",
@@ -304,13 +304,13 @@ function* history(fixture: Fixture, runId: string): Operation<HistoryRow[]> {
   return JSON.parse(answered.stdout);
 }
 
-/** The retained row for one durable operation type, which the fork selects. */
+/** The saved row for one durable operation type, which the fork selects. */
 function at(entries: readonly HistoryRow[], type: string): HistoryRow {
   const row = entries.find(
     (entry) => entry.event.type === "yield" && entry.event.description?.type === type,
   );
   if (row === undefined) {
-    throw new Error(`no retained ${type} event: ${entries.map(named).join(", ")}`);
+    throw new Error(`no saved ${type} event: ${entries.map(named).join(", ")}`);
   }
   return row;
 }
@@ -383,7 +383,7 @@ function killedFork(
 }
 
 /**
- * Every retained event id, read straight from the fork's own database.
+ * Every saved event id, read straight from the fork's own database.
  *
  * Synchronous because the condition it feeds is: `when()` polls a predicate
  * that cannot suspend, and an absent, half-written or uncommitted database is
@@ -511,7 +511,7 @@ describe("Tier WFF — xmd workflow fork", () => {
     });
   });
 
-  it("WFF3: the fork owns its inherited prefix and its own retained source", function* () {
+  it("WFF3: the fork owns its inherited prefix and its own saved source", function* () {
     yield* useFixture({ [DEFINITION]: SOURCE }, function* (fixture) {
       {
         yield* xmd(fixture, ["workflow", "start", "--id=source-1", DEFINITION]).expect();
@@ -556,8 +556,8 @@ describe("Tier WFF — xmd workflow fork", () => {
         expect(resumed.stderr).toContain("workflow status: completed");
         // The corrected document is what the fork retains, and the source's is
         // not. Read from the fork's own journal rather than from what was
-        // rendered, because a command's output is retained history rather than
-        // displayed text — and it is the retained history a reload of either
+        // rendered, because a command's output is saved history rather than
+        // displayed text — and it is the saved history a reload of either
         // deleted file would have changed.
         expect(committedExec(workflowRunPath(fixture.runs, "fork-1")).stdout).toBe("corrected\n");
       }
@@ -683,7 +683,7 @@ describe("Tier WFF — xmd workflow fork", () => {
       yield* commit(fixture, { [DEFINITION]: PROPPED_CORRECTED }, "corrected");
 
       // The property is not restated. A corrected definition is still a run of
-      // the same procedure, and the source retained what it was started with.
+      // the same procedure, and the source saved what it was started with.
       const inheriting = yield* xmd(fixture, [
         "workflow",
         "fork",
@@ -726,7 +726,7 @@ describe("Tier WFF — xmd workflow fork", () => {
       ]).join();
       expect(conflicting.code).toBe(1);
       expect(conflicting.stderr).toContain("props");
-      // The value that conflicts is retained history and is not repeated back.
+      // The value that conflicts is saved history and is not repeated back.
       expect(conflicting.stderr).not.toContain("nightly");
       expect(props(yield* snapshot(fixture, "fork-overridden"))).toEqual({ channel: "beta" });
 
@@ -894,7 +894,7 @@ describe("Tier WFF — xmd workflow fork", () => {
     });
   });
 
-  it("WFF7: history forkability is stable, cumulative and free of retained values", function* () {
+  it("WFF7: history forkability is stable, cumulative and free of saved values", function* () {
     yield* useFixture({ [DEFINITION]: SOURCE }, function* (fixture) {
       yield* xmd(fixture, ["workflow", "start", "--id=source-1", DEFINITION]).expect();
 
@@ -923,7 +923,7 @@ describe("Tier WFF — xmd workflow fork", () => {
       const rows = human.stdout.split("\n").filter((line) => line.includes("yes"));
       expect(rows.length).toBeGreaterThan(0);
 
-      // Which checkpoints are *not* forkable is decided from retained event
+      // Which checkpoints are *not* forkable is decided from saved event
       // types, and a history holding one is not something this fixture can
       // produce on purpose. Tier WFK exercises every blocker directly.
     });

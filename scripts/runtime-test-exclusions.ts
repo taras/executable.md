@@ -224,7 +224,7 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
   {
     path: "packages/git/tests/github-workflow-activation.test.ts",
     reason:
-      "assembles the real ordinary-run profile and executes a retained source-bundle run through the real Workflow host; both reach Workflow's storage adapter and so `node:sqlite` — absent from Bun and behind --experimental-sqlite on Node 22. What is lost is only the assembled-profile reading: the adapters' own activation ordering, and every refusal before configuration, are proven portably in github-activation.test.ts, which runs on all three runtimes",
+      "assembles the real ordinary-run profile and executes a saved source-bundle run through the real Workflow host; both reach Workflow's storage adapter and so `node:sqlite` — absent from Bun and behind --experimental-sqlite on Node 22. What is lost is only the assembled-profile reading: the adapters' own activation ordering, and every refusal before configuration, are proven portably in github-activation.test.ts, which runs on all three runtimes",
     issue: DERIVED_SCOPE,
   },
   {
@@ -260,7 +260,7 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
   {
     path: "packages/git/tests/repository-storage.test.ts",
     reason:
-      "clones local bare repositories with a real `git` into the Deno DOFS Workspace and reads the retained node:sqlite rows back; the provider is the Deno one by design",
+      "clones local bare repositories with a real `git` into the Deno DOFS Workspace and reads the saved node:sqlite rows back; the provider is the Deno one by design",
     issue: "https://github.com/taras/executable.md/issues/293",
   },
   {
@@ -272,7 +272,7 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
   {
     path: "packages/git/tests/repository-materialization.test.ts",
     reason:
-      "exports retained checkouts to host directories and links their roots at external clones, against a real node:sqlite WorkflowRun database",
+      "exports saved checkouts to host directories and links their roots at external clones, against a real node:sqlite WorkflowRun database",
     issue: "https://github.com/taras/executable.md/issues/293",
   },
   {
@@ -284,7 +284,7 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
   {
     path: "packages/git/tests/worktree-replay.test.ts",
     reason:
-      "substitutes a Worktree's retained checkout through the Deno DOFS Workspace and reads it back with a real `git`; node:sqlite remains behind --experimental-sqlite on Node 22",
+      "substitutes a Worktree's saved checkout through the Deno DOFS Workspace and reads it back with a real `git`; node:sqlite remains behind --experimental-sqlite on Node 22",
     issue: "https://github.com/taras/executable.md/issues/293",
   },
   {
@@ -356,7 +356,7 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
   {
     path: "packages/git/tests/pull-request-read.test.ts",
     reason:
-      "drives the three evidence reads against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real `git` subprocess, and replays one from the retained journal; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
+      "drives the three evidence reads against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real `git` subprocess, and replays one from the saved journal; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/576",
   },
   {
@@ -434,7 +434,7 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
   {
     path: "packages/cli/tests/workflow-retention.test.ts",
     reason:
-      "reads what `xmd workflow start` retained from its node:sqlite run store, which only the Deno entrypoints open; the portable half of the same contract is packages/cli/tests/process-retention.test.ts",
+      "reads what `xmd workflow start` saved from its node:sqlite run store, which only the Deno entrypoints open; the portable half of the same contract is packages/cli/tests/process-retention.test.ts",
     issue: "https://github.com/taras/executable.md/issues/366",
   },
   {
@@ -458,7 +458,7 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
   {
     path: "packages/workflow/tests/workflow-agent-checkpoints.test.ts",
     reason:
-      "publishes real Prompts into a real node:sqlite WorkflowRun database and reads the retained association back through the Deno storage adapter, including a legacy-shape fixture it edits with node:sqlite directly; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
+      "publishes real Prompts into a real node:sqlite WorkflowRun database and reads the saved association back through the Deno storage adapter, including a legacy-shape fixture it edits with node:sqlite directly; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/367",
   },
   {
@@ -677,13 +677,13 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
-    path: "packages/git/tests/retained-repository-local.test.ts",
+    path: "packages/git/tests/saved-repository-local.test.ts",
     reason:
-      "the subject is a REPL entry's native repository host: it discovers a real checkout with a `git` subprocess and records what a real filesystem answered. The record format and the admission are provider-neutral and are proven on every runtime by packages/git/tests/retained-repository-records.test.ts",
+      "the subject is a REPL entry's native repository host: it discovers a real checkout with a `git` subprocess and records what a real filesystem answered. The record format and the admission are provider-neutral and are proven on every runtime by packages/git/tests/saved-repository-records.test.ts",
     issue: DERIVED_SCOPE,
   },
   {
-    path: "packages/git/tests/retained-repository-lifecycle.test.ts",
+    path: "packages/git/tests/saved-repository-lifecycle.test.ts",
     reason:
       "holds a shared Git directory under a kernel-released exclusive advisory lock taken through the Deno runtime, and spawns a second Deno process to prove the cross-process half; Node and Bun expose no equivalent",
     issue: DERIVED_SCOPE,

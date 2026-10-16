@@ -159,7 +159,7 @@ const TOKEN_KIND = "wfi-canary-kind-8f2a1c";
 const TOKEN_VALUE = "wfi-canary-value-4d7b6e";
 
 /**
- * Give a run a retained Prompt checkpoint, the way a run with an Agent has one.
+ * Give a run a saved Prompt checkpoint, the way a run with an Agent has one.
  *
  * Planted rather than earned: what an adapter puts on a response is proven
  * elsewhere, and this suite is asking a different question — whether a run
@@ -345,7 +345,7 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
     );
   });
 
-  it("WFI3: history JSON holds every retained event, its root and its authored source", function* () {
+  it("WFI3: history JSON holds every saved event, its root and its authored source", function* () {
     yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
       yield* xmd(fixture, ["workflow", "start", "--id=release-1", "flows/release.md"]).expect();
 
@@ -361,10 +361,10 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
       }
 
       // The command block was written on the fifth line of the definition, and
-      // history says so from what the event retained.
+      // history says so from what the event saved.
       const command = entries.find((entry) => entry.event.description?.type === "exec");
       expect(command?.source).toEqual({
-        // The authored position is inside the retained source, so it is named
+        // The authored position is inside the saved source, so it is named
         // by the logical path that source has in the bundle.
         path: "release.md",
         offset: RELEASE.indexOf("```bash exec"),
@@ -398,7 +398,7 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
     yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
       yield* xmd(fixture, ["workflow", "start", "--id=partial-1", "flows/release.md"]).expect();
 
-      // The retained shape a suspended or interrupted run has: durable events
+      // The saved shape a suspended or interrupted run has: durable events
       // and no root Close. Neither status is reachable from this slice's
       // commands, so the row is removed directly rather than left untested.
       const database = new DatabaseSync(workflowRunPath(fixture.runs, "partial-1"));
@@ -435,7 +435,7 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
     });
   });
 
-  it("WFI12: a retained Prompt checkpoint reaches no status or history output", function* () {
+  it("WFI12: a saved Prompt checkpoint reaches no status or history output", function* () {
     yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
       yield* xmd(fixture, ["workflow", "start", "--id=release-1", "flows/release.md"]).expect();
       const path = workflowRunPath(fixture.runs, "release-1");
@@ -637,16 +637,16 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
 });
 
 /**
- * Tier WFI — inspecting a sealed artifact instead of a retained run.
+ * Tier WFI — inspecting a sealed artifact instead of a saved run.
  *
  * The artifact under test is produced by the real `workflow export` command, so
  * what these cases inspect is one the lifecycle selected out of a run that
  * really executed — not a snapshot handed to the private writer. Story 2's XE7
- * already proves every retained family reaches the file, and Story 1's C1–C9
+ * already proves every saved family reaches the file, and Story 1's C1–C9
  * already proves recognition is total; neither is rebuilt here.
  *
  * What is new is that an artifact answers the *same* questions a run answers.
- * So the discriminating comparison is field-for-field against the retained
+ * So the discriminating comparison is field-for-field against the saved
  * answers captured from the same run before it was exported, rather than a
  * shape check on the artifact's own output.
  */
@@ -674,7 +674,7 @@ function* entries(directory: string): Operation<string[]> {
   return (yield* readdir(directory)).sort();
 }
 
-/** One run, its retained answers, and the artifact exported from it. */
+/** One run, its saved answers, and the artifact exported from it. */
 interface Exported {
   readonly artifact: string;
   readonly status: unknown;
@@ -697,7 +697,7 @@ function* exported(fixture: Fixture, runId: string, name: string): Operation<Exp
 }
 
 describe("Tier WFI — xmd workflow status and history over a sealed artifact", () => {
-  it("I1: an artifact answers the retained questions, and says which artifact it is", function* () {
+  it("I1: an artifact answers the saved questions, and says which artifact it is", function* () {
     yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
       const run = yield* exported(fixture, "release-1", "evidence.xmd");
 
@@ -714,7 +714,7 @@ describe("Tier WFI — xmd workflow status and history over a sealed artifact", 
       // because where a definition can be fetched from now is a permission
       // belonging to the machine that exported rather than a fact about the run.
       const { artifact: identity, ...lifecycle } = projected;
-      const { retrieval: _retained, ...expected } = run.status as Record<string, unknown>;
+      const { retrieval: _saved, ...expected } = run.status as Record<string, unknown>;
       expect(lifecycle).toEqual(expected);
       expect(identity.identity).toMatch(/^[0-9a-f]{64}$/);
       expect(identity.frontier.sourceRunId).toBe("release-1");
@@ -746,7 +746,7 @@ describe("Tier WFI — xmd workflow status and history over a sealed artifact", 
       expect(JSON.parse(forkable.stdout)).toEqual(envelope);
 
       // Human output names the file, the artifact and the boundary, above the
-      // same rendering a retained run gets.
+      // same rendering a saved run gets.
       const human = yield* xmd(fixture, [
         "workflow",
         "status",
@@ -774,7 +774,7 @@ describe("Tier WFI — xmd workflow status and history over a sealed artifact", 
 
       // The two facts coincide in every ordinary run: an effect publishes a
       // root and then appends its result against it, so the last event's root
-      // is the current pointer. They are still two retained facts, and a
+      // is the current pointer. They are still two saved facts, and a
       // projection that read one as the other would be right by accident. So
       // the run is edited from outside XMD to make them differ — the only way
       // to tell the two projections apart at all.
@@ -803,11 +803,11 @@ describe("Tier WFI — xmd workflow status and history over a sealed artifact", 
       // A fixture that could not arrange the divergence would prove nothing.
       expect(earlier).toBeDefined();
 
-      const retained = JSON.parse(
+      const saved = JSON.parse(
         (yield* xmd(fixture, ["workflow", "status", "release-1", "--json"]).expect()).stdout,
       );
-      expect(retained.journalFrontier.workspaceRootId).toBe(earlier);
-      expect(retained.currentWorkspaceRootId).not.toBe(earlier);
+      expect(saved.journalFrontier.workspaceRootId).toBe(earlier);
+      expect(saved.currentWorkspaceRootId).not.toBe(earlier);
 
       const artifact = join(fixture.repository, "diverged.xmd");
       yield* xmd(fixture, ["workflow", "export", "release-1", `--output=${artifact}`]).expect();
@@ -816,13 +816,11 @@ describe("Tier WFI — xmd workflow status and history over a sealed artifact", 
           .stdout,
       );
 
-      expect(projected.journalFrontier).toEqual(retained.journalFrontier);
-      expect(projected.currentWorkspaceRootId).toBe(retained.currentWorkspaceRootId);
+      expect(projected.journalFrontier).toEqual(saved.journalFrontier);
+      expect(projected.currentWorkspaceRootId).toBe(saved.currentWorkspaceRootId);
       // The artifact's own frontier still names the current pointer, which is
       // the other of the two facts.
-      expect(projected.artifact.frontier.currentWorkspaceRootId).toBe(
-        retained.currentWorkspaceRootId,
-      );
+      expect(projected.artifact.frontier.currentWorkspaceRootId).toBe(saved.currentWorkspaceRootId);
     });
   });
 
@@ -922,7 +920,7 @@ describe("Tier WFI — xmd workflow status and history over a sealed artifact", 
 
       // The same answers, with no run store to answer from.
       const { artifact: _identity, ...lifecycle } = JSON.parse(status.stdout);
-      const { retrieval: _retained, ...expected } = run.status as Record<string, unknown>;
+      const { retrieval: _saved, ...expected } = run.status as Record<string, unknown>;
       expect(lifecycle).toEqual(expected);
       expect(JSON.parse(history.stdout).entries).toEqual(run.history);
 
@@ -1084,7 +1082,7 @@ describe("Tier WFI — xmd workflow status and history over a sealed artifact", 
       const entries = JSON.parse(historyJson.stdout).entries;
       expect(entries.length).toBe(finalizedArtifact().journal.length);
       // The intrinsic classification is the one already delivered: an Agent
-      // turn is unforkable, and retained portability evidence does not change
+      // turn is unforkable, and saved portability evidence does not change
       // that here.
       expect(forkable.stdout).toContain("agent-state-unavailable");
       expect(JSON.parse(forkableJson.stdout).entries.length).toBe(entries.length);

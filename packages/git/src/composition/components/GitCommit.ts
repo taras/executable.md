@@ -9,7 +9,7 @@
  * The message prop, rendered content or both supply the message; both place the
  * prop first and content one blank line later. Canonicalization changes line
  * endings to LF, removes trailing whitespace and adds one final newline, preserving
- * leading and interior text. Git receives those bytes verbatim; the retained digest
+ * leading and interior text. Git receives those bytes verbatim; the saved digest
  * and byte length describe them. The component renders nothing and requires `as`.
  */
 
@@ -118,7 +118,7 @@ function composed(text: string, source: GitCommitMessageSource): ComposedCommitM
  *
  * Applied wherever a request enters rather than only where a document writes
  * one: the Api is public, and a caller reaching it directly commits the same
- * bytes under the same retained digest.
+ * bytes under the same saved digest.
  *
  * An unpaired surrogate is refused rather than replaced. The way to Git is
  * UTF-8, and encoding one produces U+FFFD, so what was committed would differ

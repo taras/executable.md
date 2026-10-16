@@ -242,7 +242,7 @@ describe("Tier AC — agent components", () => {
   });
 
   // The composition the whole component exists for, black box: a value bound by
-  // `<Let>`, rendered by `<Json>`, consumed and retained by `<Prompt>`. Import
+  // `<Let>`, rendered by `<Json>`, consumed and saved by `<Prompt>`. Import
   // graphs cannot prove authored syntax, so the exact bytes are pinned here.
   it("AC21: <Prompt> sends and retains exactly what <Json> rendered", function* () {
     const stub = createStubProvider();

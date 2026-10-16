@@ -11,7 +11,7 @@
  * call outside the checkout is ordinary filesystem behavior and is recorded by
  * nothing here, because giving it a record would place it in a checkout it is not in.
  * Globs, path checks and temporary directories are recorded nowhere: a read is
- * retained because a document binds its text and a continuation has to offer
+ * saved because a document binds its text and a continuation has to offer
  * the same binding, and those three bind nothing.
  *
  * ## Identity is the request, and position is the journal's
@@ -39,7 +39,7 @@
  * provider reported, so a continuation reconstructs the same `Result` the live
  * call returned.
  *
- * Nothing else is retained — no native exception, no credential, no directory
+ * Nothing else is saved — no native exception, no credential, no directory
  * listing, no bytes read from another file and no handle.
  */
 
@@ -365,7 +365,7 @@ function parseRefusal(value: unknown): Result<never> | undefined {
 function failureData(error: Error): FilesErrorData {
   const data = failureOf(error);
   if (data === undefined) {
-    throw new TypeError("a retained refusal carries no ordinary Files failure data");
+    throw new TypeError("a saved refusal carries no ordinary Files failure data");
   }
   return data;
 }

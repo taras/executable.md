@@ -131,7 +131,7 @@ import type {
   ExecutionDeclarationCatalog,
   ExpansionHandler,
   ExpansionRequest,
-  RetainedInstallation,
+  SavedInstallation,
 } from "./execution-declarations.ts";
 import { documentationOf } from "./components/documentation.ts";
 import { registerComponents } from "./components/registration.ts";
@@ -248,18 +248,18 @@ type DurableSelection =
   /**
    * A component the workflow definition is closed over.
    *
-   * The exact pinned source is retained, as a repository selection retains what
+   * The exact pinned source is saved, as a repository selection retains what
    * it read, so a replay reconstructs the component from the record instead of
    * resolving a name again. `path` is the canonical repository-relative path of
    * the blob, never the declaration a root document wrote, and the hash is the
-   * blob's own object id — which is what a trusted host verifies the retained
+   * blob's own object id — which is what a trusted host verifies the saved
    * selection against before any of it is replayed.
    */
   | { kind: "workflow"; path: string; sourceHash: string; content: string }
   /**
    * Exact Markdown this execution declares.
    *
-   * The origin, the digest and the bytes are all retained, because what a
+   * The origin, the digest and the bytes are all saved, because what a
    * replay has to be sure of is that the run it is continuing was expanding
    * *this* asset. A build that ships different bytes under the same name, or a
    * host that no longer declares it, refuses rather than continuing somebody
@@ -274,7 +274,7 @@ type DurableSelection =
        * Whether the host declared this component's rendering to be source.
        *
        * Closed: present only as `true`, and absent means the ordinary prose
-       * disposition. It is retained because it decides how the bytes this
+       * disposition. It is saved because it decides how the bytes this
        * component produces are published — a continuation that resumed under a
        * different answer would present a program as prose, or prose as a
        * program, from the same origin and the same digest.
@@ -284,7 +284,7 @@ type DurableSelection =
   /**
    * A component only the declaration that carries it may write.
    *
-   * Nothing else is retained: the implementation is built from an identity
+   * Nothing else is saved: the implementation is built from an identity
    * authenticator this execution minted and is reachable from nowhere, so a
    * replay reconstructs it the same way the live run did — by being inside the
    * same declaration's body when it asks.
@@ -293,7 +293,7 @@ type DurableSelection =
   /**
    * A component canonical core protects.
    *
-   * Nothing but the kind is retained. The name is already the record's identity,
+   * Nothing but the kind is saved. The name is already the record's identity,
    * and what the name resolves to is core's own table rather than anything a
    * host, a registry or a checkout supplies — so a replay reconstructs it the
    * way the live run did, by asking the copy of core that is running.
@@ -779,7 +779,7 @@ function* resolveImportUnrecorded(
 const UNPUBLISHED_ANSWER =
   "a host selected a name for generated use, and the implementation the import chain answered " +
   "with is neither canonical resolution's own answer nor one a provider published. A fragment " +
-  "runs the implementation its execution retained, or it runs none.";
+  "runs the implementation its execution saved, or it runs none.";
 
 /**
  * Resolve every name this host selected, once, before public execution policy,
@@ -1186,10 +1186,10 @@ function describeSelection(selection: SelectionOutcome): string {
  * the execution, reachable through no context and replaceable by nothing.
  *
  * It runs where a journal first becomes readable, so it is ahead of everything
- * a wrong answer could reach: public guard policy, any retained Yield reaching
- * execution, a retained Close being reused, authored work, and any append.
+ * a wrong answer could reach: public guard policy, any saved Yield reaching
+ * execution, a saved Close being reused, authored work, and any append.
  *
- * It also owns the retained snapshot. The events it validates are the events it
+ * It also owns the saved snapshot. The events it validates are the events it
  * returns, so the identity and settlement it decided on are what every later
  * phase observes rather than a second reading of the backend's own objects.
  *
@@ -1214,22 +1214,20 @@ function guardedJournal(
       // is a compile-time claim: without this an admission could splice, reorder
       // or empty the history in place, and every later admission, root-history
       // validation and the replay itself would consume what it left behind.
-      // The events themselves are the retained graph's own, already sealed.
-      const retained: readonly DurableEvent[] = Object.freeze(
-        retainEvents(yield* stream.readAll()),
-      );
+      // The events themselves are the saved graph's own, already sealed.
+      const saved: readonly DurableEvent[] = Object.freeze(retainEvents(yield* stream.readAll()));
       // What the trusted host required of this history, on that exact snapshot,
       // in the order it was captured and stopping at the first refusal. Ahead of
       // root-history admission, ReplayGuard, terminal reuse, authored work and
       // any append.
       for (const admission of admissions) {
-        yield* admission(retained);
+        yield* admission(saved);
       }
-      admitRootHistory(retained, root, coroutineId);
+      admitRootHistory(saved, root, coroutineId);
       // The same objects the admissions were held to. `readAll` is declared
       // mutable by the protocol, so this is a fresh array over the identical
       // sealed events rather than a second reading of the backend.
-      return [...retained];
+      return [...saved];
     },
     append: (event: DurableEvent) => stream.append(event),
   };
@@ -1240,18 +1238,18 @@ function guardedJournal(
  * Decide whether this run may replay the history it was handed.
  *
  * Synchronous and total over journal-provided values: every way the history can
- * refuse to be read is the one fixed diagnostic, and the retained events it
+ * refuse to be read is the one fixed diagnostic, and the saved events it
  * reads are the ones the caller keeps.
  */
 function admitRootHistory(
-  retained: readonly DurableEvent[],
+  saved: readonly DurableEvent[],
   root: RootDocumentSource,
   coroutineId: CoroutineId,
 ): void {
   const imports: Yield[] = [];
   let terminal = false;
-  for (const event of retained) {
-    // The retained history has already settled every discriminator, so one that
+  for (const event of saved) {
+    // The saved history has already settled every discriminator, so one that
     // still refuses is a history this run cannot describe — not an event to
     // skip past on the way to reusing a terminal result.
     const kind = attempt(() => event.type);
@@ -1266,7 +1264,7 @@ function admitRootHistory(
       // describes a run that never happened, whichever coroutine the Close
       // claims to belong to.
       //
-      // Its result is recognized here as well as its coroutine. The retained
+      // Its result is recognized here as well as its coroutine. The saved
       // history has already settled both, and forcing them now is what makes a
       // refusal this run's fixed diagnostic rather than a failure surfacing
       // later, out of some other phase's hands.
@@ -1299,7 +1297,7 @@ function admitRootHistory(
       // No import at all. The one history this describes rather than
       // contradicts is one whose terminal core wrote before importing anything,
       // and said so.
-      admitPreRootTerminal(retained, root, coroutineId);
+      admitPreRootTerminal(saved, root, coroutineId);
     } else if (imports.length !== 1 || owned.length !== 1) {
       throw new Error(UNREADABLE_ROOT_RECORD);
     }
@@ -1549,11 +1547,11 @@ function preRootTerminal(
  * arbitrary recorded failure does not become reusable by having no import.
  */
 function admitPreRootTerminal(
-  retained: readonly DurableEvent[],
+  saved: readonly DurableEvent[],
   root: RootDocumentSource,
   coroutineId: CoroutineId,
 ): void {
-  const closes = retained.filter((event) => attempt(() => event.type) === "close");
+  const closes = saved.filter((event) => attempt(() => event.type) === "close");
   if (closes.length !== 1) {
     throw new Error(UNREADABLE_ROOT_RECORD);
   }
@@ -1575,7 +1573,7 @@ function admitPreRootTerminal(
   }
 }
 
-/** Whether a retained event is recognizably the root import. */
+/** Whether a saved event is recognizably the root import. */
 function isRootImport(event: DurableEvent): boolean {
   return (
     attempt(
@@ -1656,7 +1654,7 @@ function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
  * Run one command and report what it settled to.
  *
  * The context is an argument rather than something read back from the scope:
- * a bound command is executed against the context canonical core retained, so
+ * a bound command is executed against the context canonical core saved, so
  * public `codeBlock` middleware cannot change which command runs, weaken the
  * routing that keeps its channels off the reader's terminal, or decide whether
  * this execution is bound at all. `bound` is the same fact, held the same way —
@@ -1712,8 +1710,8 @@ function* execTerminal(
           liveStderr = kept.boundStderr ?? "";
           return {
             exitCode: execResult.exitCode,
-            ...(kept.retainedStdout === undefined ? {} : { stdout: kept.retainedStdout }),
-            ...(kept.retainedStderr === undefined ? {} : { stderr: kept.retainedStderr }),
+            ...(kept.savedStdout === undefined ? {} : { stdout: kept.savedStdout }),
+            ...(kept.savedStderr === undefined ? {} : { stderr: kept.savedStderr }),
           } as unknown as Json;
         },
       )) as unknown as ProcessOutcome;
@@ -1721,7 +1719,7 @@ function* execTerminal(
       return {
         // A capture's binding comes from the record when there is one and from
         // the region's own live buffer when there is not. That is what lets a
-        // journaled run resume: replay never runs the child, so the retained
+        // journaled run resume: replay never runs the child, so the saved
         // stdout — and only stdout, never stderr — is the binding. Forwarded
         // bytes reached the reader already and are never rendered again.
         output: captured ? (result.stdout ?? live) : "",
@@ -2126,7 +2124,7 @@ function* documentWorkflow(
   // JavaScriptCore under Bun replace the object's prototype and drop the name,
   // while Deno keeps it as an own property. A record read back from a journal
   // can hold that name, because `JSON.parse` makes it an own property, so the
-  // same retained value would become a different environment on different
+  // same saved value would become a different environment on different
   // runtimes.
   for (const [name, value] of Object.entries(initialBindings)) {
     Object.defineProperty(rootEnv.values, name, {
@@ -2158,7 +2156,7 @@ function* documentWorkflow(
 
   // The root binding environment is installed as scope-local middleware
   // around the entire loop so all segments share it. Resources spawned by
-  // `persist` blocks are retained in the eval scope until expansion
+  // `persist` blocks are saved in the eval scope until expansion
   // completes, then torn down.
   // No frame for the root document itself: every element the root's body holds
   // carries that document's path in its own source position, so two roots are
@@ -2197,7 +2195,7 @@ function* documentWorkflow(
       // belongs to the result here, so a host that prints the result on its own
       // stdout shows a command's stdout on the stream it leaves free — that is
       // a decision about the host's streams, taken downstream of the per-exec
-      // boundary, and it does not change the channel already retained.
+      // boundary, and it does not change the channel already saved.
       return yield* runValueRoot(
         root,
         root.returns as ReturnsSchema,
@@ -2290,7 +2288,7 @@ function* documentWorkflow(
   });
 
   // The catch is outside the `yield*`, not inside the scope: the expansion's
-  // teardown — the invocation being dismantled, retained work, and whatever
+  // teardown — the invocation being dismantled, saved work, and whatever
   // aggregate the platform builds from a body failure and a teardown failure
   // together — finishes as this returns. Describing the failure any earlier
   // would describe an error whose account of itself is not complete yet.
@@ -2423,7 +2421,7 @@ interface ComponentAssembly {
  * the bundle, the declarations, the protected tier and the identity domains are
  * established first, because resolving a selected name goes through all of them;
  * then the contextual selection is read and validated whole; then each selected
- * name is resolved once and its implementation and metadata retained together.
+ * name is resolved once and its implementation and metadata saved together.
  *
  * A policy that runs afterwards may still modify or refuse its document
  * request, and its registry, import or selection replacement cannot replace or
@@ -2439,7 +2437,7 @@ function* assembleComponents(
   options: ExecuteOptions,
   bundles: readonly WorkflowComponentBundle[],
   identityComponents: readonly IdentityComponent[],
-  installed: readonly RetainedInstallation[],
+  installed: readonly SavedInstallation[],
   documentation: readonly DocumentationContribution[],
   canonicalImports: CanonicalImports,
   lifetime: EvaluationLifetime,
@@ -2847,7 +2845,7 @@ function* executeDocument(
           // expansion rather than through this operation's return value.
           *applyBoundModifiers([_modifiers, request], _next) {
             // The delegated array is inspectable data and nothing more: what
-            // runs is the chain the request retained.
+            // runs is the chain the request saved.
             yield* claimBoundExec(request, (authored, context) => {
               const chain = composeBoundExecChain(authored, context, registry, boundChain);
               return chain() as unknown as Operation<CodeBlockResult>;
@@ -2998,14 +2996,14 @@ function* executeDocument(
 }
 
 /**
- * What an installation requires of the retained history, decided inside the
+ * What an installation requires of the saved history, decided inside the
  * execution's own journal read.
  *
- * Refusal-only: it throws or it returns. It is handed the exact retained
+ * Refusal-only: it throws or it returns. It is handed the exact saved
  * snapshot and hands nothing back, so it cannot substitute a history, and it
  * never receives a `next` to decline.
  */
-export type JournalAdmission = (retained: readonly DurableEvent[]) => Operation<void>;
+export type JournalAdmission = (saved: readonly DurableEvent[]) => Operation<void>;
 
 /**
  * What a trusted host attaches to one execution.
@@ -3017,7 +3015,7 @@ export type JournalAdmission = (retained: readonly DurableEvent[]) => Operation<
  */
 export interface ExecutionInstallation {
   /**
-   * Retained-history requirements, copied into an execution-owned collection
+   * Saved-history requirements, copied into an execution-owned collection
    * that installed code cannot observe, add to or remove from.
    */
   readonly admissions?: readonly JournalAdmission[];
@@ -3052,7 +3050,7 @@ export interface ExecutionInstallation {
   /**
    * What this installation records inside the durable root.
    *
-   * Invoked after retained-history admission and before any public document
+   * Invoked after saved-history admission and before any public document
    * policy or the root import. A handler cannot prevent it, and cannot observe
    * the run before it exists.
    */
@@ -3409,9 +3407,9 @@ function reconcile(document: Result<Json> | undefined, teardown: Error | undefin
  * identity and an effect decide which implementation a continuation admits, so
  * a reading taken later — or a nested object left live for the factory to be
  * handed — would be a grant this declaration never made. What the validator
- * answers with is what is retained, and what the forms are built from.
+ * answers with is what is saved, and what the forms are built from.
  */
-function retainedIdentityComponent(component: IdentityComponent): IdentityComponent {
+function savedIdentityComponent(component: IdentityComponent): IdentityComponent {
   const name = component.name;
   // Read before the metadata, so the forms the offer is held against are the
   // forms this execution accepts the component in.
@@ -3438,11 +3436,11 @@ function retainedIdentityComponent(component: IdentityComponent): IdentityCompon
  * forms or its prose from inside `install()` has rewritten nothing.
  *
  * Capture reads the discriminant once and refuses an unknown kind before any
- * other member is read. A known kind is retained with its arm's copied members,
- * so the branch and the retained declaration cannot disagree if a later read
+ * other member is read. A known kind is saved with its arm's copied members,
+ * so the branch and the saved declaration cannot disagree if a later read
  * would return a different kind.
  */
-function retainedDeclaration(declaration: ExecutionDeclaration): ExecutionDeclaration {
+function savedDeclaration(declaration: ExecutionDeclaration): ExecutionDeclaration {
   // Read once, before any other member of this value is read, and used for both
   // the branch and the copy. Everything below is a statement *about* one arm or
   // the other, so reading one of those from a value that named neither would be
@@ -3458,9 +3456,9 @@ function retainedDeclaration(declaration: ExecutionDeclaration): ExecutionDeclar
       kind,
       name: declaration.name,
       origin: declaration.origin,
-      forms: retainedList(declaration.forms),
+      forms: savedList(declaration.forms),
       props: detachedSchema(declaration.props),
-      syntax: retainedList(declaration.syntax),
+      syntax: savedList(declaration.syntax),
       description: declaration.description,
       context: declaration.context,
       parent: declaration.parent,
@@ -3477,7 +3475,7 @@ function retainedDeclaration(declaration: ExecutionDeclaration): ExecutionDeclar
     ...(declaration.returns === undefined ? {} : { returns: detachedSchema(declaration.returns) }),
     ...(declaration.privates === undefined
       ? {}
-      : { privates: Object.freeze([...declaration.privates].map(retainedIdentityComponent)) }),
+      : { privates: Object.freeze([...declaration.privates].map(savedIdentityComponent)) }),
     ...(declaration.exact === undefined ? {} : { exact: declaration.exact }),
   });
 }
@@ -3490,7 +3488,7 @@ function retainedDeclaration(declaration: ExecutionDeclaration): ExecutionDeclar
  * was written and is refused there as the malformed declaration it is, rather
  * than failing here as whatever the copy happened to throw.
  */
-function retainedList<Member>(value: readonly Member[]): readonly Member[] {
+function savedList<Member>(value: readonly Member[]): readonly Member[] {
   return Array.isArray(value) ? Object.freeze([...value]) : value;
 }
 
@@ -3584,7 +3582,7 @@ function* invoke(
   // its own values rather than over an array a host still holds.
   const identityComponents = Object.freeze(
     installations.flatMap((installation) =>
-      [...(installation.components ?? [])].map(retainedIdentityComponent),
+      [...(installation.components ?? [])].map(savedIdentityComponent),
     ),
   );
 
@@ -3604,9 +3602,7 @@ function* invoke(
       const bound: ExpansionHandler | undefined =
         expand === undefined ? undefined : expand.bind(installation);
       return Object.freeze({
-        declarations: Object.freeze(
-          [...(installation.declarations ?? [])].map(retainedDeclaration),
-        ),
+        declarations: Object.freeze([...(installation.declarations ?? [])].map(savedDeclaration)),
         ...(bound === undefined ? {} : { expand: bound }),
       });
     }),
@@ -3634,7 +3630,7 @@ function* invoke(
   // The lifetime every captured generated implementation is held to, opened
   // and armed before a single `install()` runs — so what a capture retains is
   // revoked however the execution ends, including when it is halted partway
-  // through assembly. A fragment body, a handler or a retained callback that
+  // through assembly. A fragment body, a handler or a saved callback that
   // reaches one afterwards refuses rather than acting on a filesystem the run
   // no longer holds a transaction for.
   const lifetime = evaluationLifetime();
@@ -3710,7 +3706,7 @@ function* invoke(
   // callbacks have assembled the host, and before the public policy below. A
   // policy that replaces a registration, imports a different body or supplies a
   // broader selection afterwards changes neither the vocabulary nor the
-  // implementations this retained.
+  // implementations this saved.
   const assembly = yield* assembleComponents(
     options,
     bundles,
@@ -3777,7 +3773,7 @@ export function executeObserved(
  * Invocation input, and only that. It is not an `ExecutionInstallation`, a
  * Context, a component, a middleware answer, a document prop or a durable
  * record, because each of those is something a running document can name, reach
- * or be asked about — and what an earlier execution retained is none of a
+ * or be asked about — and what an earlier execution saved is none of a
  * document's business to discover. It crosses once, as the third argument of one
  * call, and nothing published anywhere describes it afterwards.
  *
@@ -3805,7 +3801,7 @@ export interface ExecutionInitialization {
 }
 
 /**
- * Nothing retained.
+ * Nothing saved.
  *
  * Frozen because it is *shared* — every ordinary run reads this one object — and
  * for no other reason. A record a host actually supplies is copied and left
@@ -3851,7 +3847,7 @@ function initialRootBindings(
     if (name === ROOT_PROPS_BINDING) {
       throw new Error(
         "an initial root binding may not be named `props`. Each execution's props namespace is " +
-          "the one its own root validated, so a retained value of that name is not something a " +
+          "the one its own root validated, so a saved value of that name is not something a " +
           "later execution inherits.",
       );
     }

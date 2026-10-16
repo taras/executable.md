@@ -3,7 +3,7 @@
  *
  * A `<Prompt>` is durable work: it returns only once its provider turn has
  * settled and its ordinary `agent_prompt` record has appended, and that record
- * is the only retained truth about it. Between those two moments there is a
+ * is the only saved truth about it. Between those two moments there is a
  * turn nobody can read — queued, then streaming, then finished but unpublished
  * — and a REPL that showed nothing until the append would show nothing for the
  * whole of the interesting part.
@@ -12,7 +12,7 @@
  * `Agent.requestPermission()` inside the execution, publishes an immutable
  * reading of each turn as the provider's own events go past, and removes that
  * reading at the exact moment the durable record replaces it. Nothing here is
- * retained, nothing here is a Core Api member, and nothing here is visible to a
+ * saved, nothing here is a Core Api member, and nothing here is visible to a
  * document.
  *
  * ## The observer must not become the consumer
@@ -181,7 +181,7 @@ export interface ReplAgentReading {
    * Every Prompt this process observed, live or since published.
    *
    * In observation order. A reader presents these rather than concatenating the
-   * live turns with the retained ones, because a turn that has published is
+   * live turns with the saved ones, because a turn that has published is
    * still in the same place it was.
    */
   readonly slots: readonly ReplAgentSlot[];
@@ -787,7 +787,7 @@ export function useReplAgent(
             // the caller's one transition, and transfers exactly this turn's slot.
             yield* publication.append();
           } catch (error) {
-            // Nothing was retained, so nothing may still be shown as though it is
+            // Nothing was saved, so nothing may still be shown as though it is
             // about to be. The turn this publication began is taken down and the
             // removal announced before the failure travels on — otherwise a
             // terminal overlay outlives the record it was waiting for. Its slot

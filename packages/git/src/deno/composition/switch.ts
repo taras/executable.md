@@ -9,7 +9,7 @@
  * branch is created from the supplied base, or from where the checkout already
  * is when there is none — never from a remote asked again.
  *
- * The retained result keeps both halves of that: what the document asked for,
+ * The saved result keeps both halves of that: what the document asked for,
  * and the commit the branch actually started from. `null` in `resolvedBase` is
  * itself the evidence that the branch already existed.
  */
@@ -46,7 +46,7 @@ export const WORKSPACE_GIT_SWITCH = "workspace_git_switch";
  * The expansion makes two elements different effects and one element the same
  * effect across replays; the configuration fingerprint makes a document edited
  * to name another branch, base or checkout diverge rather than replaying the
- * previous one's retained result. Durable identity is type and name, so the
+ * previous one's saved result. Durable identity is type and name, so the
  * fingerprint belongs in the name rather than beside it.
  */
 function* describeSwitch(admitted: GitSwitchRequest): Operation<EffectDescription> {

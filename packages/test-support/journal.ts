@@ -3,7 +3,7 @@
  *
  * These are pure projections over an array. They open no database, own no
  * effect vocabulary beyond the four replay-bookkeeping types below, and parse
- * a retained record only through the parser the package that defines that
+ * a saved record only through the parser the package that defines that
  * record supplies. A suite that needs a different selection asks for it by
  * effect type rather than redefining what this repository calls bookkeeping.
  */
@@ -17,11 +17,11 @@ export interface SelectedYield {
   readonly event: Yield;
 }
 
-/** What a package that owns a record type does with a retained value. */
-export type RetainedRecordParser<T> = (value: unknown) => T | undefined;
+/** What a package that owns a record type does with a saved value. */
+export type SavedRecordParser<T> = (value: unknown) => T | undefined;
 
-/** What one selected effect settled as, and what it retained when it settled. */
-export type RetainedOutcome<T> =
+/** What one selected effect settled as, and what it saved when it settled. */
+export type SavedOutcome<T> =
   | {
       readonly position: number;
       readonly effect: string;
@@ -91,37 +91,37 @@ export function effectSequence(events: readonly DurableEvent[]): readonly string
 /**
  * What each Yield of this effect type settled as, parsing `result.value`.
  *
- * The layout a Git-host reconciliation record is retained in: the record is
+ * The layout a Git-host reconciliation record is saved in: the record is
  * the result value itself.
  */
-export function readRetainedValues<T>(
+export function readSavedValues<T>(
   events: readonly DurableEvent[],
   effect: string,
-  parse: RetainedRecordParser<T>,
-): readonly RetainedOutcome<T>[] {
+  parse: SavedRecordParser<T>,
+): readonly SavedOutcome<T>[] {
   return read(events, effect, parse, (value) => value);
 }
 
 /**
  * What each Yield of this effect type settled as, parsing `result.value.record`.
  *
- * The layout a Workspace composition or Git envelope is retained in: the
+ * The layout a Workspace composition or Git envelope is saved in: the
  * record is a member of the result value.
  */
-export function readRetainedRecords<T>(
+export function readSavedRecords<T>(
   events: readonly DurableEvent[],
   effect: string,
-  parse: RetainedRecordParser<T>,
-): readonly RetainedOutcome<T>[] {
+  parse: SavedRecordParser<T>,
+): readonly SavedOutcome<T>[] {
   return read(events, effect, parse, nestedRecord);
 }
 
 function read<T>(
   events: readonly DurableEvent[],
   effect: string,
-  parse: RetainedRecordParser<T>,
-  retained: (value: Json) => unknown,
-): readonly RetainedOutcome<T>[] {
+  parse: SavedRecordParser<T>,
+  saved: (value: Json) => unknown,
+): readonly SavedOutcome<T>[] {
   return selectYields(events, [effect]).map((selected) => {
     const { position } = selected;
     const result = selected.event.result;
@@ -131,12 +131,10 @@ function read<T>(
     if (result.status === "err") {
       return { position, effect, status: result.status, error: result.error };
     }
-    const value = result.value === undefined ? undefined : retained(result.value);
+    const value = result.value === undefined ? undefined : saved(result.value);
     const record = value === undefined ? undefined : parse(value);
     if (record === undefined) {
-      throw new Error(
-        `the value retained at ${position} ${effect} is not a record its parser reads`,
-      );
+      throw new Error(`the value saved at ${position} ${effect} is not a record its parser reads`);
     }
     return { position, effect, status: result.status, record };
   });

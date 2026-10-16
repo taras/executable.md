@@ -344,9 +344,9 @@ describe(
   "Tier PR — the xmd plan command lifecycle",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
-    it("PS4: plan help states the retained grammar and both compositions", function* () {
+    it("PS4: plan help states the saved grammar and both compositions", function* () {
       yield* useWorkingDirectory(function* (dir) {
-        // Every retained option beside `--help`: help is still help, and none
+        // Every saved option beside `--help`: help is still help, and none
         // of them turns it into a refusal.
         const { code, stdout, stderr } = yield* runCli(
           [
@@ -881,7 +881,7 @@ describe(
             materializations.push(harness.fake.ensured[0]?.materialization);
             // Neither invocation ran the program it produced: the file that
             // program writes is nowhere, and the failure it ends in never
-            // happened. The retained Plan artifact is not an execution record.
+            // happened. The saved Plan artifact is not an execution record.
             expect(`${invocation}: ${(yield* until(readdir(dir))).join()}`).toBe(`${invocation}: `);
           });
         }
@@ -1138,13 +1138,13 @@ describe(
       yield* refusedEarly([REQUEST, "--trace"], "unrecognized option for xmd plan: --trace");
     });
 
-    it("PO7: a retained option written where the journal path goes refuses before any phase", function* () {
+    it("PO7: a saved option written where the journal path goes refuses before any phase", function* () {
       // `refusedEarly` carries an agent name nothing resolves and an isolated
       // `HOME`, so reaching the catalog, the provider or a session placement
       // would each leave a trace. None of them does — and neither does the
       // filesystem: the switch that was about to become a filename is not one.
       //
-      // Every retained spelling that reaches this command's own grammar. Help
+      // Every saved spelling that reaches this command's own grammar. Help
       // is not among them and is the case after next: it is lifted out of the
       // command line before any command's grammar runs.
       for (const swallowed of [
@@ -1300,7 +1300,7 @@ describe(
         expect(events.length).toBeGreaterThan(answered.entries);
         expect(events.at(-1)?.type).toBe("close");
         // It records authorship and no later program run. The approved source
-        // is *in* the file, because a draft is retained content — what is not
+        // is *in* the file, because a draft is saved content — what is not
         // there is any effect of running it: no execution event, and none of
         // the file the program writes.
         expect(yield* until(readdir(dir))).toEqual(["authorship.jsonl"]);

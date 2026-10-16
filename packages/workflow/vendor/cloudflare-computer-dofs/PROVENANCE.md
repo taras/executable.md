@@ -1,6 +1,6 @@
 # Cloudflare Computer DOFS provenance
 
-This directory contains the production source closure used by Executable Markdown's local retained Workspace provider.
+This directory contains the production source closure used by Executable Markdown's local saved Workspace provider.
 
 - Repository: `https://github.com/cloudflare/computer`
 - Commit: `63d363632e558f7e077794988d36ed75017c2a62`

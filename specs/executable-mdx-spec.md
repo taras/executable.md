@@ -10,7 +10,7 @@
 
 Use this specification for authored syntax, interfaces and conformance. Start
 with [a document running](../architecture.md#a-document-running) for ordinary
-execution, retained workflows and replay; the [architecture reading map](../architecture.md#reading-this-architecture)
+execution, saved workflows and replay; the [architecture reading map](../architecture.md#reading-this-architecture)
 routes implementation questions to their owning rules.
 
 An executable MDX document is a markdown file containing embedded JSX
@@ -1082,7 +1082,7 @@ deno task build
 existing programmatic caller is unchanged. The path that starts a run states it;
 no shared runner infers it from whether a journal pathname was named.
 
-| Invocation | Live routing | Retained result |
+| Invocation | Live routing | Saved result |
 | --- | --- | --- |
 | `xmd run`, `xmd test` | as the table above | exit status only |
 | `xmd run --journal <path>` | unchanged | exit status, stdout, and stderr — diagnostic persistence of what the configured execution environment forwarded |
@@ -1091,31 +1091,31 @@ no shared runner infers it from whether a journal pathname was named.
 
 `xmd run --journal` writes diagnostic history; `xmd run` has no command or
 option that reopens that file as continuation input. Runtime replay semantics
-still govern a retained stream supplied programmatically — by an embedder, a
-test, or a future retained execution host — but they do not imply a public CLI
+still govern a saved stream supplied programmatically — by an embedder, a
+test, or a future saved execution host — but they do not imply a public CLI
 resume UX. `xmd workflow resume` is the current public continuation command and
-belongs to its separate retained workflow host.
+belongs to its separate saved workflow host.
 
 A workflow names no journal — it owns one — and retains durably within the
 environment it authorized, because its process results are part of the run's
-retained history: a resumed procedure reads back
+saved history: a resumed procedure reads back
 what a command printed rather than running it again to find out.
 
-Where nothing is retained the run never builds the complete strings: the Process
+Where nothing is saved the run never builds the complete strings: the Process
 operation accumulates only when the caller asked it to. The exceptions are the
 two buffers a document asks for on its own account — a structural capture's,
 which has the capture's scope and holds received stdout alone, and a bound
-block's, which has the expansion's and holds both received channels. Where output is retained it is kept in addition to the routing the
+block's, which has the expansion's and holds both received channels. Where output is saved it is kept in addition to the routing the
 document chose — including for `silent` and captured blocks, because a display
 policy does not weaken an audit record. Silencing output for the host's terminal
 likewise leaves the record intact: not showing something and not knowing it are
 different decisions.
 
-Retained output crosses the pre-persistence secret gate, which examines what the
+Saved output crosses the pre-persistence secret gate, which examines what the
 boundary received — after enclosing middleware, not before. A host may therefore
 redact a credential upstream so that it never reaches the gate, and a host that
 introduces credential-shaped text upstream is refused like any other run that
-would persist one. Output that is not retained is never accumulated for a
+would persist one. Output that is not saved is never accumulated for a
 scanner to inspect.
 
 **Binding.** An ordinary `exec` block forwards both channels and raises on a
@@ -1173,8 +1173,8 @@ request canonical execution issues and claims. The request retains the authored
 modifiers and the block context as they stood when it was issued. Middleware
 composes around the operation exactly as it does around an ordinary block — it
 may observe the request, refuse it by throwing, and delegate it — while
-canonical execution authorizes and composes the retained chain, runs it against
-the retained context, and reports the outcome to the expansion that issued the
+canonical execution authorizes and composes the saved chain, runs it against
+the saved context, and reports the outcome to the expansion that issued the
 request. The delegated modifier array is inspectable data and decides nothing,
 in-place edits to it after issue decide nothing, and the command a `codeBlock`
 handler answers with is not the command that runs. A request that was not issued
@@ -1222,7 +1222,7 @@ nothing about the result. Each received channel decodes independently, so a
 character split across two chunks survives interleaving with the other channel.
 `Process.join()` may settle before the stdout and stderr pumps and their stdio
 middleware finish, so output a child writes as the pumps settle may not be
-received at all and may therefore be missing from what is retained or captured.
+received at all and may therefore be missing from what is saved or captured.
 effectionx #244 owns that limitation, and nothing here claims pump-complete tail
 delivery or retention until it is integrated.
 
@@ -1329,7 +1329,7 @@ accepts.
 `silent` displays neither channel. A non-zero exit is still a failure: `silent`
 hides what the command printed, not whether it worked. It does not weaken a
 record either — with `--journal`, a silent block's stdout and stderr are
-retained exactly.
+saved exactly.
 
 **`silent timeout[30s] exec`** — `exec` journals the command result. `timeout`
 cancels the block if it overruns. `silent` displays nothing. The journal entry
@@ -1731,15 +1731,15 @@ them against live names before constructing its durable effect. An invalid eval
 is document validation: it never becomes a `DurableEffect` and appends no eval
 `Yield`. A valid partial replay performs the same validation before yielding an
 effect, so a diagnostic from the original run leaves later recorded effects
-aligned. If retained history instead contains a successful eval `Yield` that the
+aligned. If saved history instead contains a successful eval `Yield` that the
 current definition no longer yields, the existing replay guard, divergence and
 stale-input rules reject that incompatible history; validation never consumes
 the recorded result or substitutes an unjournaled error. If collision handling
 terminates the document before another durable effect is reached, the durable
 root detects the unaligned eval `Yield` before writing `Close(err)`, raises
 `TerminalDivergenceError` with the collision as its cause, and leaves the
-retained journal unchanged. Root and child termination apply this check to the
-whole retained coroutine subtree, including completed children the current
+saved journal unchanged. Root and child termination apply this check to the
+whole saved coroutine subtree, including completed children the current
 definition never claimed. A compatible definition can still replay it.
 `ephemeral eval`
 validates its exports against durable names before execution; it may atomically
@@ -1814,7 +1814,7 @@ Leaving an invocation runs one destructor with three ordered stages:
 
 1. halt the content scope, to completion — everything projected content created;
 2. halt the body — the resources the component itself acquired;
-3. halt the invocation scope — whatever `persist` and `daemon` retained.
+3. halt the invocation scope — whatever `persist` and `daemon` saved.
 
 Each stage finishes before the next begins, so projected content has stopped
 before the component releases anything of its own, whichever order the component
@@ -1839,7 +1839,7 @@ Nested invocations tear down leaf-first: a component inside projected content
 has its own boundary beneath the content scope, so halting that scope dismantles
 the whole subtree first. Sibling invocations share nothing.
 
-#### Retained resources
+#### Saved resources
 
 A component whose result is only useful while something stays alive — a
 directory a later sibling still has to read, a server a later block still has
@@ -1876,7 +1876,7 @@ returns its value; there is no accessor for either, and a component cannot
 inspect or install anything on its caller.
 
 Retaining delays release; it does not opt out of it. The site is an ordinary
-scope, so a retained resource is torn down with it — leaf-first, on success,
+scope, so a saved resource is torn down with it — leaf-first, on success,
 failure, and cancellation alike.
 
 Every invocation answers `retain()` for itself. One with no site to retain into
@@ -1889,12 +1889,12 @@ scope with no relationship to the call site.
 
 `retain()` is an operation of TypeScript component execution. A component runs
 in full on every execution, which is what makes invocation-site lifetime
-meaningful: each execution re-establishes what it retained, and each execution's
+meaningful: each execution re-establishes what it saved, and each execution's
 site scope releases it.
 
 An eval block does not. Its execution is durable — a replay restores the block's
 exported values from the journal without entering the executor — so a block that
-retained a resource would, on replay, produce a restored value naming a resource
+saved a resource would, on replay, produce a restored value naming a resource
 nothing re-created. Eval execution therefore installs a provider that refuses
 `retain()`; a block that needs a resource to outlive it belongs in a TypeScript
 component. Making eval retention replay-safe is a durability question this
@@ -1919,7 +1919,7 @@ processor. Instead:
 2. `evalFactory` reads `persistent` after compiling the block
 3. When true, only the **compiled VM block** (`fn(env.values)`) runs
    inside `evalScope.eval()` — not the entire modifier chain
-4. Resources spawned during that execution are retained until the
+4. Resources spawned during that execution are saved until the
    invocation's eval scope is destroyed, when the invocation completes
 
 ### 4.5 Eval journal entries
@@ -1999,14 +1999,14 @@ run but are absent from the diagnostic trace.
 | `packages/cli/src/{deno,node,bun,compiled}.ts` | Entrypoints — each installs matching `API.Env` and `API.Service` adapters, then calls `runXmd` |
 | `packages/workflow/src/service-denial.ts` | `useWorkflowServiceDenial()`, the non-delegating provider `xmd workflow` installs in every start and resume scope |
 | `packages/cli/src/workflow.ts` | the runtime-neutral `xmd workflow` lifecycle: grammar, run opening, execution records, statuses and exit codes |
-| `packages/cli/src/workflow-definition.ts` | establishing an immutable definition from a working-tree path, and loading a retained one again |
+| `packages/cli/src/workflow-definition.ts` | establishing an immutable definition from a working-tree path, and loading a saved one again |
 | `packages/cli/src/deno-workflow.ts` | the Deno run store and Workspace attachment; Node and Bun install the refusing host instead |
 | `packages/workflow/src/deno/workspace/files.ts` | the transaction-bound `API.Files` provider — one durable Workspace effect per document read, write, directory ensure and search |
 | `packages/workflow/src/deno/workspace/host.ts` | `withWorkflowWorkspace()` — the run's effect coordinator, logical cwd `/`, and Files provider installed together inside one execution |
 | `packages/workflow/src/generated-observations.ts` | `evaluateGeneratedFragment()` — the workflow policy adapter over `evaluateGeneratedXmd()`, returning its rendered text directly as `Operation<string>`; `GeneratedObservation` remains the read-table entry type, not an output envelope |
 | `packages/workflow/src/journal.ts` | the `workflow_run` record, canonical-record recognition, and the refusals that name differing fields without their values |
-| `packages/workflow/src/run.ts` | `retainedWorkflowInstallation()` and `getWorkflowRun()` — associating one execution with a run already created, as the `ExecutionInstallation` a trusted host passes to `executeInstalled()`, contributing a mandatory run-identity admission and the `prepare` hook that reopens the run inside the durable root. The association resolves no revision and imports no Git feature, and a run retains the bytes it executes, so nothing afterwards reaches a repository for its Markdown |
-| `packages/workflow/src/bundle.ts` | `workflowBundleInstallation()` — the `ExecutionInstallation` that closes one execution over a workflow's component bundle, carrying the pinned execution view and the admission that holds every retained component import to it |
+| `packages/workflow/src/run.ts` | `savedWorkflowInstallation()` and `getWorkflowRun()` — associating one execution with a run already created, as the `ExecutionInstallation` a trusted host passes to `executeInstalled()`, contributing a mandatory run-identity admission and the `prepare` hook that reopens the run inside the durable root. The association resolves no revision and imports no Git feature, and a run retains the bytes it executes, so nothing afterwards reaches a repository for its Markdown |
+| `packages/workflow/src/bundle.ts` | `workflowBundleInstallation()` — the `ExecutionInstallation` that closes one execution over a workflow's component bundle, carrying the pinned execution view and the admission that holds every saved component import to it |
 | `packages/cli/src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
 
 Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
@@ -2583,7 +2583,7 @@ is ordinary recovery:
   not execute through *normal continuation*; structured concurrency guarantees
   ownership and teardown, it does not forbid error recovery.
 - recovery keeps the enclosing invocation alive. Work owned by the failed
-  projection unwinds with its scope, while resources deliberately retained to
+  projection unwinds with its scope, while resources deliberately saved to
   invocation lifetime stay owned by the invocation until it exits (§4.4).
 - a caught failure is finished with. The engine does not reassert it, and it
   never reaches the component's consumer boundary.
@@ -2767,7 +2767,7 @@ It is **self-closing only** and declares one optional prop, `names`: a non-empty
 array of unique component-name strings. A paired spelling, any other prop, an
 empty list, a duplicate, a non-string member and a name this site has no
 component for are each refused before the symbols are read, so a refusal
-produces no partial text and no successful retained result.
+produces no partial text and no successful saved result.
 
 **The named form renders documentation.** `<Syntax names={["Elicit", "File"]} />`
 renders each selected component's symbol metadata followed by the long-form
@@ -2960,7 +2960,7 @@ the symbol origin kind `protected`, carrying the canonical core origin — never
 as a reserved registration, which is a *host's* claim under a name and can be
 absent, replaced or refused where this cannot. A workflow-bundle member is
 reported under the kind `workflow`, carrying its canonical logical path **and**
-the retained source's own hash, so it stays distinguishable from a repository
+the saved source's own hash, so it stays distinguishable from a repository
 candidate, which is whatever that path holds now. Both kinds are
 additions, so the symbols are **version 2**: a version-1 reader was promised a
 closed set of origins, and neither emitting an unknown kind nor reusing a
@@ -2982,7 +2982,7 @@ durable boundary is rebuilt without its class and without any non-enumerable
 property, so a refusal recorded as a failure would come back on replay meaning
 less than it meant live.
 
-The component interprets that value only after publication succeeds. A retained
+The component interprets that value only after publication succeeds. A saved
 refusal is therefore classified identically on a live run and on a replay, and a
 publication failure — the append, the journal, the secret gate — prevents
 interpretation entirely and remains terminal rather than becoming a refusal of
@@ -3018,7 +3018,7 @@ one of them.
 
 The bundle tier exists only inside a workflow run, and such a run searches no
 repository directories at all — so a declared name resolves to the exact
-retained source and to nothing beside it in a mutable checkout. Core's
+saved source and to nothing beside it in a mutable checkout. Core's
 own components stay available underneath, and a bundle may claim neither
 structural syntax, a name core supplies, nor a name the host reserved: those
 collisions are refused before the root document is imported. Ordinary
@@ -3116,7 +3116,7 @@ not from a component the declaration imported, and not from middleware.
 
 **The offer is what admits the import, and it is spent where it was made.** What a private
 import may invoke is the object canonical core's own resolver produced *inside
-that ask*. An answer retained from another import authorizes nothing, however
+that ask*. An answer saved from another import authorizes nothing, however
 exactly it describes the same private component: eligibility belongs to the
 authored occurrence, not to the name, so a handler that delegates a legitimate
 private import and keeps what came back cannot hand it to a later site.
@@ -3479,7 +3479,7 @@ observation and delegation are unchanged.
 
 **Which imports are closed is a property of the name, not of the execution.** A
 component bundle closes every import a workflow run makes, including one that
-resolved to a core default underneath it: a run is a run *of* those retained
+resolved to a core default underneath it: a run is a run *of* those saved
 sources,
 and a name resolving outside it is what the bundle exists to prevent. A declared
 Markdown component closes only the names it declares — the component itself and
@@ -4146,7 +4146,7 @@ function* durableImportComponent(
 
 A component the workflow definition is closed over records its own shape. The
 path it records is the one that definition retains it under — a logical path
-inside the bundle — so an authored position inside a retained component names
+inside the bundle — so an authored position inside a saved component names
 it by the same path the run does:
 
 ```json
@@ -4183,13 +4183,13 @@ captures both *which file was found* (path) and *what was in it* (content); a
 registration entry captures the origin that named it, because a function cannot
 be serialized and the implementation is looked up again on replay. A workflow
 entry captures the canonical logical path — never the `./Name.md` a root
-document wrote — the source's own hash and the exact retained source. Replay
+document wrote — the source's own hash and the exact saved source. Replay
 reconstructs the component from its own record without resolving a name or
 reading a file. Nothing else is added: no checkout path, locator, timestamp,
 provider or generated identity.
 
 The trusted host that installed the bundle contributes a journal admission that
-holds every retained component import to it before public document policy or the
+holds every saved component import to it before public document policy or the
 root import. A recorded import that names a component the bundle does not
 declare, records a declared name as anything other than a bundled component,
 holds a different path, hash or source, or is a repository selection other than
@@ -4401,10 +4401,10 @@ exposes no body. Names, structural copies and independent wrappers confer no
 permission. Neither route nor projection operations appear on public host,
 profile, document, middleware or generated-request inputs. Another loaded copy
 cannot observe or inject them. Routes and descendants close with their owner;
-retained operations fail after closure, and one execution cannot authorize
+saved operations fail after closure, and one execution cannot authorize
 another. Durable admission retains existing stable identities, forms, source,
 profile inputs and results only. Replay reconstructs callable routing from the
-current execution's verified answers, never from a retained function or route.
+current execution's verified answers, never from a saved function or route.
 
 **`allow` narrows; it never grants.** It names an effect *class* — `read` or
 `write` — and the class resolves to the selected spellings whose owners offer
@@ -4495,7 +4495,7 @@ What stays contextual is the interaction and only the interaction. The pinned
 body reaches the Elicitation Api lexically in scope where the fragment runs, so
 the host, an enclosing `<Answers>` region or the established missing-provider
 refusal owns how a person is asked — exactly as for an authored `<Elicit>`. Its
-validated answer is retained by the ordinary `elicit` durable operation, may drive
+validated answer is saved by the ordinary `elicit` durable operation, may drive
 a following write through ordinary bindings, and is restored on replay without
 contacting a provider. The `generated_xmd` record keeps the identity the
 admitted spelling runs under, the spelling itself, and nothing about the answer.
@@ -4551,13 +4551,13 @@ an ordinary captured read reporting `Err`. It is not on a missing, duplicate,
 revoked or malformed profile; a missing or broken protected route or Syntax
 reference; a Files provider that throws or answers with malformed infrastructure
 data rather than an ordinary `Err`; durability divergence, stale source or
-permission, or unreadable retained data; persistence, journal or
+permission, or unreadable saved data; persistence, journal or
 secret-publication failure; unexpected runtime failure; teardown failure; or
 outer cancellation. The tag is per throw site rather than per error class, so a
 `GeneratedXmdError` is not by itself such a marker and no consumer may read one
 by matching its message.
 
-**A refusal that must survive replay is retained as a value, not as an error.** A
+**A refusal that must survive replay is saved as a value, not as an error.** A
 failure crossing a durable boundary is rebuilt without its class and without any
 non-enumerable property, so a classification applied to the error is lost on
 replay. Where a refusal is recorded — canonical `<Syntax>` selection is the case
@@ -4622,9 +4622,9 @@ An admission is therefore addressed by the element it was made for rather than
 taken in the order preflight recorded it. An untaken alternative and a
 zero-iteration body consume nothing; repeated invocations of one authored
 element reuse that element's own admitted identity and form; and two elements
-sharing a name cannot take one another's admissions. The retained record is
+sharing a name cannot take one another's admissions. The saved record is
 unchanged — a continuation re-derives the addressing by preflighting the
-retained source, which yields the same elements in the same places.
+saved source, which yields the same elements in the same places.
 
 Binding ownership is stated per region. A component's children do not escape to
 later siblings, and a component's own `as` becomes visible only to later
@@ -4654,7 +4654,7 @@ construct that gives them meaning, so reaching one directly is a stray element,
 and `<Break>` requires a lexically enclosing `<Loop>`.
 
 Admission records are unchanged. Constructs keep their exact spelling and
-nesting in the retained source, never join the retained list of named component
+nesting in the saved source, never join the saved list of named component
 identities, and the record version is unchanged. A historical refusal remains a
 refusal on replay; only a fresh invocation obtains the new admission decision.
 
@@ -4662,7 +4662,7 @@ Generated expression props are declarative data expressions. Their recursive
 grammar admits null, string and boolean literals; finite JSON numbers;
 identifiers naming current fragment-local bindings; arrays; objects; and object
 shorthand for a binding. A JSON number may include a leading minus directly
-attached to its numeric literal. Core recognizes that form from the retained
+attached to its numeric literal. Core recognizes that form from the saved
 authored expression and requires the resulting number to be finite, so `-1` is
 data while `1e999` and `-1e999` refuse. The leading minus is part of the admitted
 numeric grammar, not general unary evaluation: `+1`, `-note`, `!note`,
@@ -4676,7 +4676,7 @@ ordinary trusted-document `new Function()` path. An unbound identifier fails as
 an ordinary binding error before the consuming component runs. The rule belongs
 to generated data composition, not to Json.
 
-**Each Evaluate occurrence owns its retained work.** Its admission and effects
+**Each Evaluate occurrence owns its saved work.** Its admission and effects
 cannot be consumed by another occurrence or reassigned through caller-controlled
 state. Completed effects are ordinary history as soon as they commit; a later
 refusal, failure or cancellation does not roll them back. Partial continuation
@@ -4751,7 +4751,7 @@ canonical path of heading labels that reaches it. Selecting one executes:
 2. the direct content of every ancestor needed to reach the target; and
 3. the selected heading's complete subtree.
 
-Sibling subtrees do not execute. Retained headings stay in the projected body,
+Sibling subtrees do not execute. Saved headings stay in the projected body,
 so the projection reads as a document rather than as an excerpt.
 
 ##### Which headings are targets
@@ -4774,7 +4774,7 @@ present in the root flow, which need not be `h1`.
 
 When the document has exactly one outermost heading, that heading is the
 document **title**: it takes no level in any target path, it is no target
-itself, and its heading and direct content are retained in every projection
+itself, and its heading and direct content are saved in every projection
 beneath it. When the document has more than one outermost heading, each of them
 takes a path level. A document with no addressable heading has an empty
 catalog.
@@ -4792,7 +4792,7 @@ addressable.
 
 A label is the statically rendered Markdown text of the heading: formatting and
 link destinations are removed, while visible text, inline-code text, and image
-alternative text are retained. The result is normalized to NFC, every run of
+alternative text are saved. The result is normalized to NFC, every run of
 Unicode whitespace collapses to one ASCII space, leading and trailing
 whitespace is trimmed, and case is preserved. There are no generated slugs,
 suffixes, case folding, or punctuation removal.
@@ -4863,15 +4863,15 @@ Source ranges are defined against the original, unprojected body:
 - the **selected subtree** runs from the selected heading's start to the next
   heading of equal or smaller depth, or to the body end.
 
-The projected body is the preamble, each retained ancestor's direct content in
+The projected body is the preamble, each saved ancestor's direct content in
 order, and the selected subtree. For a sole outermost title, the title is the
-first retained ancestor even though it takes no level in the path.
+first saved ancestor even though it takes no level in the path.
 
-Each retained range is scanned separately, under the origin that range has in
+Each saved range is scanned separately, under the origin that range has in
 the original file — its path, its offset, and its line. The ranges are not
 concatenated and rescanned: skipped source must not renumber what follows it,
-because a retained element's source position is what its expansion identifier
-is derived from. A retained element therefore carries the same expansion ID in
+because a saved element's source position is what its expansion identifier
+is derived from. A saved element therefore carries the same expansion ID in
 a targeted run as in a full one, and two targets that retain it agree with each
 other. The target string takes no part in expansion identity; a run's own
 identity is what distinguishes the effects of two target runs.
@@ -4879,7 +4879,7 @@ identity is what distinguishes the effects of two target runs.
 Frontmatter, root props, `returns`, the return mode, and `<Output>` behavior are
 unchanged and apply to the projected body. Structural validation applies to the
 projected body too: an invalid skipped sibling is irrelevant, while an invalid
-retained range fails before any authored effect in the projection runs.
+saved range fails before any authored effect in the projection runs.
 
 ##### Failure timing and durable identity
 
@@ -4895,8 +4895,8 @@ target is workflow-definition identity, and identity may not be decided by
 anything a document, a component, or an enclosing scope can replace — a public
 replay guard installed further out may decline to delegate, which is what
 composable policy is for. The check therefore lives inside the journal the
-execution hands to `durableRun`: it reads the retained history once, owns the
-retained snapshot every later phase observes, validates the recorded selection
+execution hands to `durableRun`: it reads the saved history once, owns the
+saved snapshot every later phase observes, validates the recorded selection
 and the required root-import structure against it, and passes that same snapshot
 on. It is also a trusted journal-provenance wrapping site. Provenance is not
 transitive, so a wrapper is unproven unless its wrapping site carries the source
@@ -4906,27 +4906,27 @@ before any document code exists and it delegates every append to the exact
 stream it was handed — and it transfers only the witness that source already
 has, establishing none.
 
-It runs ahead of public guard policy, of any retained event reaching execution,
-of a retained terminal result being reused, of authored work, and of any append.
+It runs ahead of public guard policy, of any saved event reaching execution,
+of a saved terminal result being reused, of authored work, and of any append.
 The snapshot it owns covers **every** event that participates in admission,
 indexing, or terminal reuse — a recorded completion as much as a recorded effect
 — so a completion cannot belong to one coroutine while admission asks and to
 another while the run reuses it, and cannot carry one result while admission
 accepts it and another while the run consumes it. A recorded completion's result
-is detached as the history is retained, and recognized during admission, so
+is detached as the history is saved, and recognized during admission, so
 nothing the backend still owns reaches a later phase.
 
 That snapshot is also immutable to public policy. Guard `check`, `admit`, and
-`decide` receive an isolated copy rather than the retained events, so a handler
+`decide` receive an isolated copy rather than the saved events, so a handler
 cannot rewrite a recorded target, the recorded content, a selection failure, an
 effect description, or a result after admission accepted it. What a document
 finally receives is a third thing again: a fresh mutable copy taken from the
-retained history at consumption, so a resumed binding is still ordinary JSON its own
+saved history at consumption, so a resumed binding is still ordinary JSON its own
 continuation writes to. Public `ReplayGuard` policy remains composable and may short-circuit
 other public guards; it cannot suppress this.
 
 Reusing a recorded terminal result additionally requires exactly one
-recognizable root import in the retained history, belonging to the coroutine
+recognizable root import in the saved history, belonging to the coroutine
 whose terminal result is being reused. Reusing that result means standing behind
 the selection its root import established; a history that recorded none,
 recorded two, or recorded one belonging to another coroutine establishes nothing
@@ -5043,7 +5043,7 @@ function isCanonicalDocumentTarget(target: string): boolean;
 canonical target by the round-trip rule above: it is definitive on that
 question, so a consumer outside this package validates a target it holds by
 asking rather than by restating the rule. A stored workflow definition uses it
-on the exact target it retained, because identity two packages define separately
+on the exact target it saved, because identity two packages define separately
 is identity they can disagree about. It takes no leading `#` — that delimiter
 belongs to a document reference, not to a target.
 
@@ -5106,7 +5106,7 @@ terminal result can be reused. The same failing selector replays its own
 failure; any difference in outcome, including a different selector that fails
 the same way, is stale input. No authored effect runs in either case.
 
-The recorded selector is sanitized invocation metadata, retained only so an
+The recorded selector is sanitized invocation metadata, saved only so an
 ordinary failed execution can be reproduced. It never occupies the exact-target
 field and never reaches a workflow definition.
 
@@ -5166,7 +5166,7 @@ a journal is pushed to by the iteration that resumes on it.
 
 "Read once" spans the phases, not one accessor. The guard validates a recorded
 selection and the replay path then projects it, and those observe one settled
-value: the check phase is handed the retained Yields rather than the stream's
+value: the check phase is handed the saved Yields rather than the stream's
 own events, and the stream is consulted at most once. Otherwise a source that
 answered differently between validation and consumption would have the guard
 approve one recorded target while the run executed another — exact-target
@@ -5183,14 +5183,14 @@ A root import whose recorded result is not `ok` is left alone: a root can fail
 for reasons that are not about selection, and those failures are not this
 protocol's to interpret.
 
-A replay that reuses **retained terminal history** must first establish exactly
+A replay that reuses **saved terminal history** must first establish exactly
 one recognizable root import. Reusing a recorded terminal result means standing
 behind the selection its root import established, and a history that recorded
 none — or recorded two — establishes nothing to stand behind; the per-event
 check has nothing to object to, so the refusal belongs to the history as a
 whole. A missing, duplicated, or unreadable required root import fails with the
 same fixed cause-free diagnostic, executes no authored work, appends nothing,
-and never returns the retained terminal result. A journal with no retained
+and never returns the saved terminal result. A journal with no saved
 terminal result is unaffected: it replays what it has and continues live, so a
 root import it does not contain is one this run performs.
 
@@ -5220,7 +5220,7 @@ encoding nor label normalization applies to prose.
 
 **A description describes; it never identifies.** It takes no part in a target
 path, a selector match, a projection, an execution, failure data, a workflow
-definition identity, retained history, or a replay decision.
+definition identity, saved history, or a replay decision.
 
 ##### The command line addresses a document
 
@@ -5249,7 +5249,7 @@ Targets in README.md
 ```
 
 Each row is `formatDocumentReference(path, target)`, in source order, duplicates
-retained, so a duplicate canonical path appears twice with its own description.
+saved, so a duplicate canonical path appears twice with its own description.
 A section that states no description is listed all the same, because it is still
 selectable. There is no unqualified whole-document row. A targetless file, an inline document and a
 document read from standard input have no target section at all — neither
@@ -5410,7 +5410,7 @@ invocation-directory resolution, and `#` as document text — are owned by the
 checked-in Markdown suite at
 `packages/cli/tests/document-suites/inline/Inline.test.md`, whose children run
 through the production run host; the tier launcher runs it once per runtime
-corpus. The retained IE rows in `inline-cli.test.ts` prove argv, environment,
+corpus. The saved IE rows in `inline-cli.test.ts` prove argv, environment,
 help, value-root process routing, and that inline execution adds no top-level
 filesystem entry — a file, a directory, or a symlink — which only `readdir()`
 observes in every entry kind.
@@ -5709,7 +5709,7 @@ dispatcher admits. It admits a call when every one of these holds:
   kept from a sibling, from a finished element, or from a concurrent invocation
   of the same component answers nothing;
 - canonical resolution selected **this** dispatcher for the import that led
-  here, so a dispatcher a handler retained and answered with reaches no body.
+  here, so a dispatcher a handler saved and answered with reaches no body.
 
 Otherwise it raises the refusal the component declared — the component's own
 error, so moving the decision ahead of the body does not change whose failure it
@@ -5961,7 +5961,7 @@ above, so per-segment expansion produces stable diagnostic identifiers.
 
 Where a component (or the root) declares `<Output>`, this same rewriting drives
 each of its regions, but only the content of declared output regions is
-retained; content outside them executes for its effects without rendering, and
+saved; content outside them executes for its effects without rendering, and
 the first error produced while executing that non-rendered documentation stops
 the body immediately (§6.9).
 
@@ -6545,7 +6545,7 @@ under its own contract and is unaffected (§5.3).
 
 Nothing durable records the absence. Prop resolution writes no journal entry, so
 a replay expands the invocation again and reconstructs the same validated prop
-set, and no resolved prop, validated prop, retained event or restored prop holds
+set, and no resolved prop, validated prop, saved event or restored prop holds
 `undefined`.
 
 A **capture** is the exception. A registration (§5.3) may declare props the
@@ -6924,7 +6924,7 @@ terms as `<If>`.
 **Neither construct is durable state.** They append no journal event. A partial
 replay rebuilds the selection through ordinary expansion and restores completed
 effects in the chosen case from their own records, continuing live at the next
-effect; a completed replay returns the retained result without expanding
+effect; a completed replay returns the saved result without expanding
 anything.
 
 #### `<Loop>` bounded repetition directive
@@ -7171,7 +7171,7 @@ the `<All>`, in an environment of its own, with its own eval scope. A binding it
 makes, a binding it rebinds and a resource it retains stay available to that
 child's own later work, and reach neither a sibling nor the work after
 `</All>`. Children do not communicate through bindings, and `<All>` takes no
-`as` and produces no value. A retained resource is released when its child ends.
+`as` and produces no value. A saved resource is released when its child ends.
 
 **Output.** Each child expands into a private buffer. After every child
 succeeds, `<All>` emits their renderings in authored order; before that it emits
@@ -7193,7 +7193,7 @@ join — a close holding only text could not say what its bytes were, and a
 replayed child's source would be published as prose. A complete replay runs no
 spawned work and rebuilds the output from those closes; a partial replay
 restores the children that closed and resumes only the unrecorded ones, under
-the same identities. A retained close that does not read as that exact shape —
+the same identities. A saved close that does not read as that exact shape —
 not a list, a member that is not a run, a run missing or exceeding its two
 members — fails the run rather than contributing part of a document. Inserting, removing or reordering spawns is a definition
 change and follows the ordinary divergence contract.
@@ -7203,7 +7203,7 @@ fails the `<All>`, cancels every unfinished sibling and waits for all of them to
 finish tearing down. No child output is emitted, durable records acknowledged
 before the failure stay durable, and interrupted work is never recorded as
 complete. Cancelling the document cancels and joins every child; no task,
-subscription, retained resource or output buffer survives its spawn.
+subscription, saved resource or output buffer survives its spawn.
 
 **Control flow.** `<Spawn>` is a boundary. A `<Return>` inside one cannot select
 a value owned outside the `<All>`, and a `<Break>` inside one cannot exit a
@@ -7534,7 +7534,7 @@ not suppress any of these actions.
 
 A function component that fails fails the operation it is part of, like any
 other Effection work. Its invocation is dismantled first — projected content,
-then the component's own resources, then anything it retained — so the failure
+then the component's own resources, then anything it saved — so the failure
 that leaves the boundary accounts for the body and its teardown together. An
 `Error` propagates by identity, keeping its type and `cause`; a thrown non-Error
 becomes an `Error` carrying the original value as its `cause`. Later siblings do
@@ -7985,7 +7985,7 @@ the body before this message can be produced for it.
 
 Selection appends no durable event. A partial replay replays completed effects
 and reconstructs the same ownership while re-executing the authored selection; a
-completed document replay reuses the retained terminal result without expanding
+completed document replay reuses the saved terminal result without expanding
 the body.
 
 **Selection is the engine's, not the document's.** A document's own eval block
@@ -8863,7 +8863,7 @@ may journal what its filesystem provider was asked to do, and one does: the
 interactive `xmd repl` retains the reads and writes an entry performed in the
 ambient checkout it was started in, so a partial continuation of that entry
 answers a completed one from what it produced instead of reading or writing
-again (`specs/repl-spec.md`). A retained read answers with the exact text it
+again (`specs/repl-spec.md`). A saved read answers with the exact text it
 read, so the binding its `as` prop produced is the recorded text rather than
 whatever the file says at continuation time; a read the entry had not reached is
 new work and reads the file as it is then.
@@ -9022,7 +9022,7 @@ same answer.
 
 Under a workflow run the deletion is one durable effect. A completed replay
 restores its recorded outcome and removes nothing a second time, even where the
-path exists again; a partial replay continues live from the retained Workspace
+path exists again; a partial replay continues live from the saved Workspace
 frontier and performs the first unrecorded deletion once.
 
 Under the interactive `xmd repl` the three mutation replays differ again, and
@@ -9030,7 +9030,7 @@ only where the entry is standing in a Git checkout. The host retains what its
 provider answered, so continuing an interrupted entry answers a completed
 deletion from its record and removes nothing — including where the path exists
 again, because nothing is compared with the live filesystem
-(`specs/repl-spec.md`). Outside that checkout nothing is retained and the
+(`specs/repl-spec.md`). Outside that checkout nothing is saved and the
 `xmd run` rules above apply as written. The component is the same component in
 all three: form dispatch, failed-child behavior, containment, the atomic native
 semantics, the printed and fatal failure split, and generated admission are
@@ -9052,7 +9052,7 @@ as a write, under `https://executable.md/components/file/delete`, and that is
 the identity a continuation is compared against. A write-enabled fragment
 therefore removes one file by writing this component, and it is this component
 that runs: an admitted deletion crosses `API.Files` into the run's
-transaction-bound provider and is retained by the ordinary `workspace_file`
+transaction-bound provider and is saved by the ordinary `workspace_file`
 effect described above. The evaluator collects nothing from it and invents no
 receipt, so a fragment that only deletes renders nothing unless it authors
 output around the deletion.
@@ -9416,7 +9416,7 @@ Api; what it does not do is write an `elicit` record. The host's provider
 suspends the run (§6.17), and a durable wait cannot sit inside another durable
 operation: the request would be published in the same coroutine ahead of the
 `elicit` entry that never settles, and the resumed execution would replay that
-coroutine and find the wrong entry waiting. So the answer is retained by the
+coroutine and find the wrong entry waiting. So the answer is saved by the
 suspension protocol instead, once rather than twice, and it is claimed at the
 durable position that published the request. Two questions in one procedure sit
 at two positions, which is the identity the question fingerprint provides
@@ -9645,14 +9645,14 @@ The workflow execution assigns an opaque suspension ID from the run and durable
 coroutine position. It publishes one ordinary `suspension_request` Yield whose
 description contains that ID, request and schema. The existing secret gate sees
 the complete event before persistence. A successful result says the request was
-retained; it does not say the wait has an answer.
+saved; it does not say the wait has an answer.
 
 A stable contextual route lets the operation reach the workflow executor when
 the component and binary loaded separate copies of the workflow package. The
 route carries a notice rather than an answer. Middleware may refuse or
 suppress a descendant's route, but a value it returns cannot make an unanswered
 `suspendFor()` continue. The executor accepts the notice only when the matching
-retained request is at the execution's exact current durable position.
+saved request is at the execution's exact current durable position.
 
 With no delivered input, the operation remains pending while the trusted host
 halts the document execution. It raises no document error and returns no value.
@@ -9665,7 +9665,7 @@ nothing and append nothing. With no input, the same suspension ID releases the
 new executor again without duplicating the request.
 
 With a schema-validated input, the operation publishes one separate durable
-`suspension_answer` Yield before returning that value. Only retained delivery
+`suspension_answer` Yield before returning that value. Only saved delivery
 state can make it do so; the value a contextual handler returns never publishes an
 answer. Consuming that state and appending the answer are one database
 transaction, so an interruption cannot consume an answer the journal does not
@@ -9682,7 +9682,7 @@ live interaction and its validated answer is the one durable effect. Under
 `xmd workflow` it is the same mechanism reached from the same element: the host
 installs an Elicitation provider that calls `suspendFor()` with the rendered
 message as the request and the compiled schema as the response schema, so the
-retained request is what the person was asked and the delivered answer is judged
+saved request is what the person was asked and the delivered answer is judged
 against the schema the document compiled. `xmd workflow answer` recompiles that
 schema through the same preparation `<Elicit>` used, so one compiler decides
 both ends. The host chooses no answer and the document chooses no transport.
@@ -9690,8 +9690,8 @@ both ends. The host chooses no answer and the document chooses no transport.
 Any other public Elicitation middleware sits where `<Answers>` sits: it may
 answer the question or refuse it, and in both cases the run it affects is a run
 that never suspended. None of them continues a suspended one — that takes a run
-whose status is `suspended`, whose stop reason names the retained request, a
-value that satisfies the retained response schema and the secret gate, and a
+whose status is `suspended`, whose stop reason names the saved request, a
+value that satisfies the saved response schema and the secret gate, and a
 resume claiming it at the exact position that published it.
 
 ### 6.18 Reading over HTTP: `<Fetch>`
@@ -9745,7 +9745,7 @@ An explicit `timeout` outranks the contextual `Config.timeoutFetch` default; wit
 neither, the request carries no bound of its own and the run's own deadline is
 what stops it.
 
-#### What is retained, and what is bound
+#### What is saved, and what is bound
 
 The normalized request is what the durable effect carries as its input:
 
@@ -9760,7 +9760,7 @@ The normalized request is what the durable effect carries as its input:
 
 It has exactly those fields, and `timeout` only when one was effective. No
 credential store, provider identity, live header object, response handle, or
-host metadata is part of it, and the authored timeout spelling is not retained
+host metadata is part of it, and the authored timeout spelling is not saved
 beside the milliseconds it meant.
 
 A settled response is exactly:
@@ -9824,7 +9824,7 @@ performs no request, which is substitution rather than reach.
 other name (§5.3). That shadow is not core's identity: it acquires no permission
 from the name, and its own requests cross the same host ceiling.
 
-A header a document writes is retained data rather than an authentication
+A header a document writes is saved data rather than an authentication
 mechanism. The component exposes no environment variable, host token, or
 credential storage, and a credential written into a header crosses the secret
 gate like everything else.
@@ -10022,8 +10022,8 @@ root does not — even under `--verbose`.
 
 It opens no scope, acquires no resource, holds no capability and has no durable
 effect of its own, and contextual verbosity takes no part in durable identity,
-authorization, replay admission, retained-effect ownership or journal identity.
-Its skipped body is absence, not a retained decision. Replay of a completed root
+authorization, replay admission, saved-effect ownership or journal identity.
+Its skipped body is absence, not a saved decision. Replay of a completed root
 is unchanged, and a live or partial expansion reads the value that applies to
 that execution.
 
@@ -10124,7 +10124,7 @@ leaves no managed root behind:
   the same number of times, and a later run starts with a new identity, empty
   evidence and a new request.
 
-The **retained provider** is what a workflow host installs inside its Workspace
+The **saved provider** is what a workflow host installs inside its Workspace
 attachment. Its operations are durable effects keyed by the WorkflowRun, so a
 completed one restores from the journal without contacting anything.
 
@@ -10163,7 +10163,7 @@ fails — is withheld from the output stream in full; earlier cleared chunks
 remain observable and become the stream's partial close value. Withholding
 decides nothing about the run: the journal gate is still what
 rejects, and the rejected event stays absent. A replayed execution restores
-its retained output without rescanning it — the journal it replays crossed the
+its saved output without rescanning it — the journal it replays crossed the
 gate when it was written.
 
 Findings and scanner failures carry positions and rule identities, never the
@@ -10237,7 +10237,7 @@ and cannot describe and run a document under different identities.
 ```typescript
 const fromFile = { path: "hello.md" };
 const inline = inlineSource("# Hello");
-const piped = retainedSource("<stdin>", "# Hello");
+const piped = savedSource("<stdin>", "# Hello");
 ```
 
 Supplied text reports the stable identity `<eval>`: `inlineSource` attaches it,
@@ -10250,7 +10250,7 @@ durable root import, so the journal holds it and a replay restores it without
 reading anything.
 
 Text a caller piped in reports `<stdin>` on exactly those terms, through the
-retained form: origin and source travel together, the origin is what positions
+saved form: origin and source travel together, the origin is what positions
 and diagnostics carry, and the exact bytes are what the root binding and the
 durable root import retain. That pair is already the identity of a supplied
 root, so two different programs piped into two runs are two different roots
@@ -10313,7 +10313,7 @@ what it declares — without executing the document or creating a journal:
   the two apart.
 - `targets` — every document target the root addresses, as canonical encoded
   fragments without the document path or a leading `#`, in document order,
-  duplicates retained (§5.4).
+  duplicates saved (§5.4).
 - `targetInfo` — the same targets, in the same order and with the same
   duplicates, each as a `DocumentTargetInfo` carrying its `target` and, when the
   section states one, its `description` (§5.4). Informational and additive:
@@ -10512,7 +10512,7 @@ same terms it is run on.
 
 **The durable protocol is unchanged.** There is no Plugin event, no Plugin-set
 identity and no generic Plugin record; the root-import and declaration records
-are byte-identical. A Plugin that must refuse an incompatible retained history
+are byte-identical. A Plugin that must refuse an incompatible saved history
 supplies a `JournalAdmission`.
 
 ### The document expansion
@@ -10544,7 +10544,7 @@ cause-free `DocumentProtocolError`. A chain that returns without ever reaching
 the terminal fails the same way. A refused delegation consumes neither the
 request nor the expansion, so a handler may recover and delegate a valid one.
 
-A refusal stops later work and is retained as the root's terminal outcome.
+A refusal stops later work and is saved as the root's terminal outcome.
 Already completed preparation effects remain history; a second delegation starts
 no second expansion. The [document-expansion contract](../architecture.md#capability-backed-document-expansion)
 defines refusal ordering and complete-terminal admission.
@@ -10565,7 +10565,7 @@ mutates and rethrows its error object. Completion reports a fresh
 `DocumentProtocolError`; [core's private refusal provenance](../architecture.md#capability-backed-document-expansion)
 never relies on the object's current members.
 
-An identical root source and target may replay a retained pre-import failure
+An identical root source and target may replay a saved pre-import failure
 without preparation, policy, import, authored work or append. A changed root or
 an unreadable binding refuses. Partial history restores completed preparation
 effects and continues live. Reuse requires the
@@ -10576,7 +10576,7 @@ not a copied binding on an otherwise invalid result.
 Terminal acceptance stores a **detached** structural copy of the accepted props:
 objects and arrays are recursively copied and frozen, `"__proto__"` is carried
 as an ordinary data member rather than assigned, and no container the caller
-still holds is retained. A value that is not JSON, and an object that resists
+still holds is saved. A value that is not JSON, and an object that resists
 being read, are refused as a `DocumentProtocolError` built at the boundary
 rather than rethrown, so neither a hostile trap's message nor the value that
 produced it reaches the caller.
@@ -10615,12 +10615,12 @@ the trusted durable work a host performs inside the durable root. Its property
 is read exactly once and captured by value before any `install()` runs, and the
 collection is copied and frozen, so replacing or removing it afterwards changes
 nothing. Preparations run in installation order, stopping at the first
-refusal, **after** retained-history admission and **before** any public
+refusal, **after** saved-history admission and **before** any public
 `Execution.document` policy, the root import and every authored effect. On a
 completed terminal replay the durable root is already settled and no
 preparation runs; on a live or partial continuation they run and record
 through the ordinary durable protocol, so an effect an earlier preparation
-completed is restored from its retained record rather than performed again.
+completed is restored from its saved record rather than performed again.
 
 ### The workflow component bundle
 
@@ -10951,7 +10951,7 @@ and the commands differ:
 - a workflow execution initializes none at all, because its Workspace
   attachment owns repositories for the run;
 - `xmd repl` initializes none either. What an entry does to files in the ambient
-  checkout it was started in is retained by the entry's own recording, which the
+  checkout it was started in is saved by the entry's own recording, which the
   selected REPL host registers rather than this Plugin
   ([the REPL](./repl-spec.md)).
 
@@ -11252,8 +11252,8 @@ fragment's own scanned positions.
 | Sample LLM call | `sample` | `sample:{command_preview}` | Only when `sample` modifier is used; Sample Api middleware determines behavior |
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 | Read over HTTP | `fetch` | `fetch:{expansion id}` | Normalized request in `description.input`; status, detached headers and text body in the result (§6.18) |
-| Admit generated XMD | `generated_xmd` | `generated:{fragment id}` | The canonical class selection, retained roots, selected root, every selected entry as a name, identity and admitted forms, and the exact request policy in `description.input`; the admitted source, that same policy, and the identity and form of each element the fragment named in the result (workflow-workspace-spec §8.4) |
-| Read the symbols | `syntax_symbols` | `syntax_symbols:{expansion id}` | One per authored `<Syntax />` occurrence. The payload is closed on exactly one member: `{ symbols: string }`, the rendered Markdown the component returned, or `{ refused: non-empty string }`, a named selection canonical core refused. Both are durable values, interpreted only after publication succeeds, so a retained refusal is classified identically live and on replay while a publication failure prevents interpretation and stays terminal. A continuation restores from the record without consulting the filesystem, registry, bundle, host or lexical reference again; existing `{ symbols }` histories remain readable, a missing, additional, mistyped, empty or simultaneous member is stale input and refuses before output or binding, and a cancelled read completes teardown and commits nothing (§5.3.1) |
+| Admit generated XMD | `generated_xmd` | `generated:{fragment id}` | The canonical class selection, saved roots, selected root, every selected entry as a name, identity and admitted forms, and the exact request policy in `description.input`; the admitted source, that same policy, and the identity and form of each element the fragment named in the result (workflow-workspace-spec §8.4) |
+| Read the symbols | `syntax_symbols` | `syntax_symbols:{expansion id}` | One per authored `<Syntax />` occurrence. The payload is closed on exactly one member: `{ symbols: string }`, the rendered Markdown the component returned, or `{ refused: non-empty string }`, a named selection canonical core refused. Both are durable values, interpreted only after publication succeeds, so a saved refusal is classified identically live and on replay while a publication failure prevents interpretation and stays terminal. A continuation restores from the record without consulting the filesystem, registry, bundle, host or lexical reference again; existing `{ symbols }` histories remain readable, a missing, additional, mistyped, empty or simultaneous member is stale input and refuses before output or binding, and a cancelled read completes teardown and commits nothing (§5.3.1) |
 
 ### 10.2 Example journal for a multi-component document
 
@@ -11479,7 +11479,7 @@ visible warning blocks, gather into a separate error report).
 | EU5 | `null` | A nullable prop receives `null` as an own value, beside an absence in the same document |
 | EU6 | Failure | An expression that throws is still the positioned expression-prop failure; EP13/EP15 keep the unbound name and EP14 the non-serializable root |
 | EU7 | Nested | One object member and one array entry take native `JSON.stringify` normalization — dropped and `null` |
-| EU8 | Durability and replay | The retained record holds no `undefined` and no record of prop resolution; a partial replay reconstructs the same props through ordinary expansion, and a completed one reuses its terminal result and imports nothing again |
+| EU8 | Durability and replay | The saved record holds no `undefined` and no record of prop resolution; a partial replay reconstructs the same props through ordinary expansion, and a completed one reuses its terminal result and imports nothing again |
 | CP8 | The function-component path | The same rule reaches a function component's props, while the capture beside it is handed the exact `undefined` |
 
 ### Tier D — Code execution and modifier middleware
@@ -11523,7 +11523,7 @@ visible warning blocks, gather into a separate error report).
 | FG6 | `silent` with a journal | Displays neither channel; the record keeps both |
 | FG7 | Non-zero exit | Earlier output survives, the next block never starts, no `<Output>` |
 | FG8 | Cancellation | Child and forwarding stop; nothing arrives afterwards |
-| FG9 | An emission during acquisition | The per-exec wrapper is already active; retained exactly, displayed once |
+| FG9 | An emission during acquisition | The per-exec wrapper is already active; saved exactly, displayed once |
 | FG10 | A same-name Context | Cannot suppress a record the host asked for |
 | FG11 | A same-name Context | Cannot make a transient run retain output |
 | FG12 | Capture without a journal | Binds its stdout, retains nothing, and the next block forwards again |
@@ -11536,13 +11536,13 @@ visible warning blocks, gather into a separate error report).
 | FG16c | Quiet subprocess output | Hidden from the host, still reported to its caller |
 | FG17 | A resumed journaled capture | Rebuilds its binding without running the child again |
 | FG18 | A chunk held up in downstream middleware | Cannot take the other channel's bytes with it |
-| FG19 | Enclosing middleware that transforms the bytes | What it forwards is what is displayed and retained |
+| FG19 | Enclosing middleware that transforms the bytes | What it forwards is what is displayed and saved |
 | FG23 | Handlers above and below the boundary | The one above decides the record; the one below decides nothing about it |
 | FG24 | An upstream redaction | Captured, journaled and replayed as the safe text; the original is nowhere, and replay starts no child |
-| FG25 | Upstream consumption | Displayed and retained nowhere; exit status and the other channel are unaffected |
-| FG26 | An upstream redirect | Reclassifies the channel the run records; retained stdout is empty |
+| FG25 | Upstream consumption | Displayed and saved nowhere; exit status and the other channel are unaffected |
+| FG26 | An upstream redirect | Reclassifies the channel the run records; saved stdout is empty |
 | FG27 | A nonzero `exec as="name"` | Binds status and both channels, displays and renders neither, the run goes on, and the record still keeps the status alone |
-| FG28 | A resumed retained bound block | Rebuilds the same binding fields from the record without starting the command again |
+| FG28 | A resumed saved bound block | Rebuilds the same binding fields from the record without starting the command again |
 | FG29 | A command that cannot start | Fails as any block does and binds nothing |
 | FG30 | A bound block that times out | The timeout still wins as a failure; nothing is bound |
 | FG31 | A refused annotation or modifier | `silent`, a non-`exec` terminal, an unquoted, duplicated, non-trailing or invalid name — refused, and no process starts |
@@ -11751,9 +11751,9 @@ visible warning blocks, gather into a separate error report).
 | L3 | Persist resource lifetime matches component | Resource is observably gone once the invocation completes, while the document still runs |
 | L4 | Persistent flag scoped to chain | `persistent` is `true` only during the persist-wrapped chain |
 | L5 | Multiple persist blocks in one component | Each retains its own resources independently |
-| L6 | Persist on repeated run | Resource is created and retained again for the current component lifetime |
+| L6 | Persist on repeated run | Resource is created and saved again for the current component lifetime |
 | L7 | Persist flag does not leak to sibling blocks | Non-persist block after persist block → flag is false |
-| L8 | Projected persist stops before the component's own | A projected `persist` resource stops ahead of one the component retained *after* projecting: `start:projected, start:own, stop:projected, stop:own` |
+| L8 | Projected persist stops before the component's own | A projected `persist` resource stops ahead of one the component saved *after* projecting: `start:projected, start:own, stop:projected, stop:own` |
 
 ### Tier M — Timeout modifier
 
@@ -11778,8 +11778,8 @@ visible warning blocks, gather into a separate error report).
 | # | Test | Verify |
 |---|------|--------|
 | O1 | Eval scope created before durableRun | `resource(useEvalScope())` runs in outer scope, not inside durable execution |
-| O2 | Eval scope destroyed on document completion | All retained resources cleaned up when expansion finishes |
-| O3 | Invocation scope destroyed with the invocation | A resource retained by a component stops when it completes, while the document keeps running |
+| O2 | Eval scope destroyed on document completion | All saved resources cleaned up when expansion finishes |
+| O3 | Invocation scope destroyed with the invocation | A resource saved by a component stops when it completes, while the document keeps running |
 | O4 | Component resource live during projection | A resource a TypeScript component acquires directly is running while its projected content executes |
 | O5 | Projected content stops first | `start:own, start:projected, stop:projected, stop:own` — no `ephemeral()`, `scoped()` or wrapper in the component |
 | O6 | Ordering is the boundary's | Same order when the resource is acquired after the first projection: `start:projected, start:own, stop:projected, stop:own` |
@@ -12393,7 +12393,7 @@ component that observes one at an authored site.
 | SYN6 | The origin selection reports | Selection answers `{ kind: "protected", origin: "@executablemd/core" }` — its own kind, not a reserved registration |
 | SYN11–SYN15 | The import chain | Middleware that answers, substitutes, mutates, redirects, delegates twice or reuses another import's definition cannot run a replacement; ordinary delegation reaches canonical `<Syntax>`; a deliberate middleware refusal stays a refusal; document-authored context and a look-alike reference change nothing |
 | SYN16–SYN18 | The site described | An ordinary run reports its own includes and registry; a workflow root reports its bundle without importing or running a member; a declared Markdown component's body reports the site it inherited |
-| SYN20–SYN22 | The record kept | Continuation restores the retained symbols after the environment moves and rediscovers nothing; missing, additional and wrong-typed payloads refuse before output or binding; a cancelled read completes teardown and commits nothing |
+| SYN20–SYN22 | The record kept | Continuation restores the saved symbols after the environment moves and rediscovers nothing; missing, additional and wrong-typed payloads refuse before output or binding; a cancelled read completes teardown and commits nothing |
 | SYN23, SYN25b | Never permission | Symbols naming a component neither register, resolve nor authorize it; a fixed narrower reference answers with exactly the symbols it was handed and adds nothing — the seam `<Evaluate>` installs through |
 | SYN24 | One description | Inspection and validation describe the component identically, from one declaration |
 | SYN26 | Another loaded copy | A protected implementation built by a second loaded copy answers for nothing in the active execution |
@@ -12401,7 +12401,7 @@ component that observes one at an authored site.
 | SYN28 | Pinned provenance | A workflow-bundle component is reported at its path *and* blob object id, under the `workflow` origin kind, and stays in the user-provided category |
 | SYN29 | The named form | Selected entries render their metadata and documentation once each in symbol order, not request order, with nothing else of the symbols; `as` binds identical text |
 | SYN30 | Availability and absence | Each entry states whether it is available in the current evaluation; a selected entry with no authored documentation renders its metadata and says so |
-| SYN31 | Atomic refusal | An unknown name, an empty list, a duplicate, a non-string member, a non-array value and an undeclared prop each refuse with no successful retained result |
+| SYN31 | Atomic refusal | An unknown name, an empty list, a duplicate, a non-string member, a non-array value and an undeclared prop each refuse with no successful saved result |
 | SYN39 | Named retention | The occurrence retains its final rendered text, a continuation restores it without rereading documentation or rebuilding the symbols, and a corrupted record refuses |
 | SYN25c | The narrowing seam | A narrowed reference reports the narrowed vocabulary bare, documents the enclosing symbols by name, and marks each entry's availability truthfully in both directions |
 | SYN32–SYN34 | Parsing one file | Bundle prose, a section per level-two heading with deeper headings kept inside it, a fenced heading read as the example it is, and a refusal for a duplicate section or a heading that is not a component name |
@@ -12445,13 +12445,13 @@ through the captured capability because there is no other way to reach it.
 | FE11 | Completed Plan work and completed fragment effects replay without repetition. |
 | FE12 | Hostile or malformed durable records fail closed before effects. |
 | FE13 | Declared-component private closures and producer-private capabilities remain unavailable. |
-| FE14 | Middleware answer A is retained by the publication its provider made on that exact object; continuation with B, offered under another identity by its own declaration, refuses before A or B runs; unchanged A resumes. |
+| FE14 | Middleware answer A is saved by the publication its provider made on that exact object; continuation with B, offered under another identity by its own declaration, refuses before A or B runs; unchanged A resumes. |
 | FE15 | Provider registrations disappear at teardown; a losing or cancelled resolution's publication cannot later execute. |
 | FE16 | Repeated Evaluate occurrences cannot consume one another's records. |
 | FE17 | Actual cancellation stops active work, waits for cleanup, and records no false success. |
 | FE18 | One closed current record shape, marked as itself; a record an earlier build wrote is refused as unreadable history before the admission it would have restored performs anything. |
 | FE19 | Canonical `text` produces identical output across fresh workflow executions without warnings; `source` and `program` refuse before fragment effects under every profile. |
-| FE20 | Exact trusted Fetch limits are retained and narrowed; missing or changed limits refuse before requests. |
+| FE20 | Exact trusted Fetch limits are saved and narrowed; missing or changed limits refuse before requests. |
 | FE21 | Ordinary and workflow hosts exercise the same fragment evaluator rather than separate semantic implementations. |
 | FE22 | `xmd plan` output remains ordinary text usable at the command boundary and acquires no special complete-root type. |
 | FE23 | An evaluation lacking write permission refuses the write before effects, including when the write component appears in trusted symbols. **Receives the Evaluate clause of #758's SY21**; the half that stays in #759 is that symbols text alone registers, resolves and authorizes nothing. |
@@ -12464,7 +12464,7 @@ through the captured capability because there is no other way to reach it.
 | FE30 | A trusted nested-run or evaluation-host layering control enters the same declarative package bootstrap through inherited and local layers. The child keeps the package registration and renders the same named documentation as the single-bootstrap control; Evaluate still admits only the identity selected by `allow`. A non-identical owner/component overlap refuses before child root or fragment effects. This receives #765's SYN25l.5 rather than creating a second collector in Evaluate. |
 | FE31 | One fragment binds File and protected Syntax results locally and explicitly renders a chosen object through Json. Nested literal arrays and objects, binding shorthand, finite JSON numbers and a directly attached leading minus such as `<Json value={-1} />` work in scalar, array and object positions. `1e999`, `-1e999`, `+1`, `-note`, `!note`, `typeof note`, an unbound identifier, call, operator, spread, computed property, template or global reference is refused before any earlier effect. |
 | FE32 | Generated admission and effect events follow ordinary persist-before-resume publication. A later refusal, failure, cancellation or interruption retains completed effects, and continuation resumes at the occurrence's first unrecorded effect; Evaluate adds no staging or rollback. |
-| FE33 | Each Evaluate occurrence retains its admission and generated effects under identities belonging to that occurrence; two occurrences cannot consume one another's retained work, and no caller-controlled context, stream, replay cursor, coroutine identifier or durable owner participates. A projected body installs observable structured cleanup, and later parent work proves that cleanup completed before it began. No distinct child cursor, child `Close`, staging, rollback, provisional publication or second settlement protocol is required. |
+| FE33 | Each Evaluate occurrence retains its admission and generated effects under identities belonging to that occurrence; two occurrences cannot consume one another's saved work, and no caller-controlled context, stream, replay cursor, coroutine identifier or durable owner participates. A projected body installs observable structured cleanup, and later parent work proves that cleanup completed before it began. No distinct child cursor, child `Close`, staging, rollback, provisional publication or second settlement protocol is required. |
 | FE35 | A fragment composes admitted reads with `<Let>`, `<Each>`, `<If>`/`<Else>` and `<Switch>`/`<Case>` under ordinary rules, performing exactly the reads the taken paths name. A prohibited component in an untaken `<Else>` arm or an unreached `<Case>` refuses the whole fragment with zero reads, and the refusal names the selected permission rather than the branch. An `<Each>` item binding does not escape its body while `<Each as>` does, and a binding the body itself makes cannot be read after the construct. Neither arm of an `<If>` nor either `<Case>` of a `<Switch>` can read a binding another alternative produces; each such refusal performs no read. A `<Loop>` holding a valid `<Break>` and a `<PrintErrors>` region around an admitted read completes, proving those constructs reach their own handlers rather than a generic structural refusal. A prohibited component inside a paired `<Answer>`'s template children, and one in the ordinary `<Answers>` body, are each refused before any effect. An untaken self-closing `<File />` before a selected paired `<File>` write does not surrender its admission to that write: the write performs, the read does not, and the untaken file is unchanged. A two-item `<Each>` around one `<File />` performs the read twice with no import refusal, an empty iteration consumes no admission, and a continuation cut between the two repeated effects restores the completed one and resumes at the second. An executable fence and an interpolated caller binding stay refused inside a construct. An ill-formed construct, one the generated root gives no context for, a stray branch and a `<Break>` outside every `<Loop>` are refused as structural mistakes rather than as withheld components. |
 | FE34 | One fragment binds Glob, File and canonical Syntax and renders chosen findings through Json; an unmatched search binds `[]`. A search written without `as`, a paired search, and a paired `<File>` under a `read` selection each refuse before any operation. An unusable pattern refuses with the ordinary sentence before the search, and a provider failure becomes one safe sentence naming no path. The search reaches the installed `API.Files` provider and the contextual working directory, so one middleware around the document sees the fragment's request and a transformation it makes is what the provider performs. Bare generated Syntax reports the composition table plus the selected read vocabulary and not the unselected writing spellings; named Syntax describes a component that stays unavailable. Canonical Syntax resolves at core's own identity, and a middleware replacement of that answer refuses. Selecting `<Evaluate>` refuses at capture, because its declaration offers no generated form. `xmd run` and a `host="run"` child of `xmd test` offer the same selection. |
 
@@ -12537,8 +12537,8 @@ every refusal is proven by the phase tripwires that stayed at zero.
 
 | # | Test | Verify |
 |---|------|--------|
-| PS1–PS3 | Fixed grammar | One request preserved byte for byte and a second positional refused; every retained option accepted before and after it; every `--run` spelling answered with the migration, and every other removed option — both short aliases and the aggregate and generated property names included — answered with the one refusal that names `xmd run`, before any symbols, Agent, session, review or filesystem activity, and before `--help` can short-circuit the dispatch in either order; a name that merely begins like a property option keeps the generic unknown-option refusal; a first token of `prompt` refused in preflight rather than read as a document path, with `xmd run ./prompt` still executing a document of that name |
-| PS4/PS5 | Help | The complete `xmd plan --help` output and the program summary carry only the retained grammar, both explicit compositions and the journal warning, and no removed option appears in either; `xmd run --help` still exposes every option it configures |
+| PS1–PS3 | Fixed grammar | One request preserved byte for byte and a second positional refused; every saved option accepted before and after it; every `--run` spelling answered with the migration, and every other removed option — both short aliases and the aggregate and generated property names included — answered with the one refusal that names `xmd run`, before any symbols, Agent, session, review or filesystem activity, and before `--help` can short-circuit the dispatch in either order; a name that merely begins like a property option keeps the generic unknown-option refusal; a first token of `prompt` refused in preflight rather than read as a document path, with `xmd run ./prompt` still executing a document of that name |
+| PS4/PS5 | Help | The complete `xmd plan --help` output and the program summary carry only the saved grammar, both explicit compositions and the journal warning, and no removed option appears in either; `xmd run --help` still exposes every option it configures |
 | C2–C3 | The packaged adapter and Component | The command executes the checked-in Markdown value root under `<plan-command>`, which invokes the packaged `<Plan>` Component, and the turn text is that Component's own words; generation, repair, review, revision, approval, stopping, exhaustion and the final explanation are Markdown under visible headings, every Plan-producing turn states the complete Plan requirements for itself, `<Prompt>` stays one turn, and what a person reads says each thing once however many rounds it took |
 | C4–C6 | Session and ceiling | One enclosing Session carries every turn, defaults differ per invocation and `--session` supplies the exact override; the Plan writer profile gives the assistant an empty host-owned directory, no MCP servers, no native tools and a private strict denial no command line reaches; a draft is data throughout, and no draft effect ever happens |
 | C7–C9 | Classification, bounds and presentation | Draft defects return structured facts, and a root declaring required properties is not one of them; one base draft plus three repairs, and ten presentations with no revision on the last; arbitrary source cannot close `<CodeBlock>`, the review schemas expose exactly the friendly choices for each round and state, and stopping, exhaustion and the explanation ending each reach their own authored `<Fail>` |
@@ -12560,7 +12560,7 @@ rather than restating.
 |---|------|--------|
 | PO1–PO3 | Phases and counters | Each phase precedes the work it names, and one reaches the operator while a turn is still blocked; the repair and attempt ordinals come from the loop bounds and stop at them; Stop and exhaustion announce themselves and keep their exact endings |
 | PO4/PO5 | Surface and disclosure | Neither ordinary `<Plan>` form announces anything or expands a progress body; default progress holds no request, draft, diagnostic, feedback or approved source, and verbose adds exactly the two blocks, in phase order |
-| PO6/PO7 | Channels and grammar | A non-terminal stderr receives normalized Markdown and a stated terminal receives it rendered, while stdout and `--output` stay byte-identical; `--verbose` and `--journal` work on either side of the request, help carries them and the journal warning, and the short aliases, every removed spelling and a retained option that reaches this grammar written where the journal path goes all refuse before any work, while `--help` keeps its ordinary precedence |
+| PO6/PO7 | Channels and grammar | A non-terminal stderr receives normalized Markdown and a stated terminal receives it rendered, while stdout and `--output` stay byte-identical; `--verbose` and `--journal` work on either side of the request, help carries them and the journal warning, and the short aliases, every removed spelling and a saved option that reaches this grammar written where the journal path goes all refuse before any work, while `--help` keeps its ordinary precedence |
 | PO8/PO9/PO16 | The journal file | No `--journal` writes no file; one creates the path before the symbols and the first turn, parses as the existing JSONL in commit order, ends terminally and holds no program execution; an existing path and an uncreatable one each report their exact refusal and reach nothing; and an ordinary failure — where no append failed — leaves a wholly parseable file with no partial trailing record |
 | PO10–PO12 | The secret and persistence boundaries | A secret in a draft or in a failed check's findings reaches neither the progress nor the file while the earlier prefix stays readable, and the same values without it are shown and recorded; a refused entry reports the exact journal-write diagnostic and preserves what committed |
 | PO13–PO15 | Failure and ordering | A progress destination that fails cancels the live turn, waits for every owned teardown and delivers nothing; every existing ending keeps its order and no phase claims delivery; the packaged adapter says nothing of its own and the symbols are observed once, through public `<Syntax />`, while continuation restores that observation without rebuilding it |
@@ -12597,7 +12597,7 @@ Provider-neutral, and portable across every runtime. Defined in §5.3 and §8.1.
 | WB15 | Ordinary execution | `execute()` installs no catalog: a handler still answers an import |
 | WB16/WB17/WB18 | Journal shape | One selection per import holding exactly `kind`, `path`, `sourceHash` and `content`; an exact replay reconstructs from the record and resolves nothing; an unreadable record is one fixed diagnostic |
 
-### Tier WBA — Holding retained history to the bundle
+### Tier WBA — Holding saved history to the bundle
 
 Provider-neutral, and portable across every runtime. Defined in §5.3.
 
@@ -12692,11 +12692,11 @@ Provider-neutral, and portable across every runtime. Defined in
 | WD25/WD26 | Bundle round trip | A descriptor closed over no bundle writes no `components` member; a bundled one round-trips a sorted five-entry array unchanged |
 | WD27 | Bundle hashes | A source hash is held to the length and case the descriptor's own object format requires |
 | WD28/WD29 | Canonical bundle | Sorted by name, one entry per name, non-empty; each entry closed and naming a repository-relative POSIX Markdown path |
-| WD30 | Retained descriptors still read | A descriptor stored before the member existed parses, means "closed over no components", and serializes back byte for byte; a written member naming no bundle is refused |
+| WD30 | Saved descriptors still read | A descriptor stored before the member existed parses, means "closed over no components", and serializes back byte for byte; a written member naming no bundle is refused |
 | WD31 | No echo | A refusal never quotes a component's name, path or hash |
 | WD32/WD33/WD34/WD35 | Bundle identity | The same bundle is the same run; a changed name, path, hash or set conflicts as `definition`; a run closed over a bundle is never one closed over none; what a run accumulates still takes no part |
 
-### Tier WS — Retained workflow runs
+### Tier WS — Saved workflow runs
 
 Runs against the production Deno adapter, on real files. Defined in
 [Workflow runs](./workflow-spec.md) §9.
@@ -12721,9 +12721,9 @@ Runs against the production Deno adapter, on real files. Defined in
 | WS23–WS26 | Values a record cannot use | A descriptor that describes nothing, an empty identity or base, a timestamp that is not an instant or names a day that never happened, a stored stop time, an empty journal identity, and props that are not an object are refused without quoting what they held |
 | WS24d | A number too large to hold | A 64-bit stored value reaches a parser instead of escaping as an error quoting it |
 | WS27 | Damage | A scribbled page is reported as damage, and the file stays where it is |
-| WS33a–WS33c | Version 1 amended for answers | Version 1 declares the retained answer table and creates it empty; the shape before it is refused unchanged as an incomplete pre-release; an answer table rebuilt without its constraints is damage rather than a row to read |
+| WS33a–WS33c | Version 1 amended for answers | Version 1 declares the saved answer table and creates it empty; the shape before it is refused unchanged as an incomplete pre-release; an answer table rebuilt without its constraints is damage rather than a row to read |
 
-### Tier WJ — The retained journal and caller-owned transactions
+### Tier WJ — The saved journal and caller-owned transactions
 
 Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 
@@ -12776,13 +12776,13 @@ Defined in [Workflow runs](./workflow-spec.md) §9.5–§9.6.
 | DLC12 | Workspace replay | Replayed Workspace operations require no live provider |
 | DLC13 | Runtime-neutral boundary | No module of the shared coordination surface names a storage, connection, savepoint or transaction-token type outside its own prose, reads a host global, or loads a module only one host can resolve. Host globals (`process`, `Deno`, `Bun`, `Buffer`, `globalThis`, `navigator`, `__dirname`, `__filename`) are recognized as parsed identifier references, so a word containing one and a property of that name are not crossings, while cross-runtime Web APIs such as `crypto` are never crossings. Module loading is read from parsed syntax — static imports and re-exports, `import type`, type-position `import()`, dynamic `import()`, `import =` and `require()` — with quoted and no-substitution template specifiers decoded, so comments and strings that merely contain import syntax load nothing. A destination the surface computes cannot be shown not to be a host module and is refused. Host schemes (`node:`, `bun:`, `deno:`, `cloudflare:`, `workerd:`), whole path segments naming any runtime this repository builds an entry point for (`deno`, `node`, `bun`, `compiled`, `cloudflare`, `workerd`), vendored sources and host process modules are classified by shape rather than by an enumerated list |
 | DLC14 | Provider infrastructure failure | A selected coordinator activates one first failure by identity and fences later execution and publication |
-| DLC15 | One-shot Workspace invocation | A provider can use the execution-owned invocation capability only during its original call; retained execution, publication and failure operations are refused after completion |
-| DLC16 | Loaded-copy Workspace selection | A provider installed by one physical package copy coordinates one operation created by another copy exactly once without sharing a capability through context or a module registry; substituted selection and retained handles remain fail-closed |
+| DLC15 | One-shot Workspace invocation | A provider can use the execution-owned invocation capability only during its original call; saved execution, publication and failure operations are refused after completion |
+| DLC16 | Loaded-copy Workspace selection | A provider installed by one physical package copy coordinates one operation created by another copy exactly once without sharing a capability through context or a module registry; substituted selection and saved handles remain fail-closed |
 | DLC17 | Forged contextual completion | A same-named invocation middleware that returns a forged successful response reaches no provider, executor or publication; fail-stop prevents Yield and Close persistence and fences later durable work |
 | DLC18 | Missing-provider phase refusal | No same-named invocation middleware or execution capability is reached when provider selection is missing |
 | DLC19 | Authoritative published result | Middleware that delegates and replaces the returned response cannot replace the exact Result recorded by the execution-owned publication |
 | DLC20 | Post-completion isolation | Throwing, suppressing or delegating twice after authoritative completion cannot alter the result or repeat provider, execution or publication work |
-| DLC21 | Retained continuation refusal | A contextual continuation retained beyond its original live invocation is stale and cannot repeat execution or publication |
+| DLC21 | Saved continuation refusal | A contextual continuation saved beyond its original live invocation is stale and cannot repeat execution or publication |
 | DLC22 | Minimum-priority invocation isolation | An enclosing same-named minimum-priority handler receives no invocation capability or operational phase and cannot acknowledge publication without delegation |
 | DLC23 | Minimum-priority failure isolation | A minimum-priority collision cannot replace first-failure activation; the exact execution-owned failure remains authoritative and no event persists |
 
@@ -12801,10 +12801,10 @@ workspaces](./workflow-workspace-spec.md) §13.
 | WAC6 | Cancellation | Cancellation before mutation, during mutation and during child teardown publishes no state or event |
 | WAC7 | Infrastructure fail-stop | A caught provider infrastructure failure retains identity, rolls back everything and prevents later Workspace and ordinary durable execution |
 | WAC8 | Concurrency isolation | A second same-run handle waits cooperatively without enlisting while a different run remains usable inside the outer transaction scope |
-| WAC9 | Replay | A retained Workspace Yield bypasses the Deno coordinator and mutation completely |
+| WAC9 | Replay | A saved Workspace Yield bypasses the Deno coordinator and mutation completely |
 | WAC10 | Effect admission | Exact proof executors work; missing, symbol-forged, foreign, closed and stale handles are refused before savepoint SQL or mutation |
 | WAC11 | Journal provenance | The selected raw journal and explicitly preserved trusted wrappers of it, nested, publish and commit; an in-memory stream, another run's journal, copied properties, the former symbol name, a custom look-alike, an ordinary guard and a wrapper another loaded copy tried to prove are refused before savepoint, mutation or publication |
-| WAC12 | Post-publication rollback | A transaction-owner failure after the routed append rolls mutation, retained root, pointer and event back and fences later work |
+| WAC12 | Post-publication rollback | A transaction-owner failure after the routed append rolls mutation, saved root, pointer and event back and fences later work |
 | WAC13 | Pre-commit cancellation | Cancellation after routed publication but before commit retains no mutation, root, pointer, Yield or Close |
 | WAC14 | DOFS continuation lifetime | The proof adapter uses only pinned synchronous byte operations; cancellation before a call performs no mutation, cancellation after it rolls back, mutation teardown precedes savepoint rollback, and the connection remains usable |
 | WAC15 | Mutation teardown failure | Child-teardown failure rolls the mutation and outer transaction back, activates that infrastructure failure and fences later work |
@@ -12813,15 +12813,15 @@ workspaces](./workflow-workspace-spec.md) §13.
 | WAC18 | Savepoint SQL failure | Actual savepoint create, rollback and release refusals poison the coordinated outer transaction and publish nothing |
 | WAC19 | Middleware publication isolation | Enclosing default-order Workspace middleware receives only provider selection and cannot replace publication with a no-op; mutation, root, pointer and one filtered Yield still commit together |
 | WAC20 | Middleware failure isolation | Enclosing Workspace middleware cannot replace failure activation; provider infrastructure failure rolls back all state, retains exact identity and fences later effects |
-| WAC21 | Selection refusal | A substituted or foreign provider selection is rejected before transaction or savepoint work and leaves no mutation, retained root, pointer change, Yield or Close |
-| WAC22 | Minimum-priority publication isolation | A minimum-priority same-named handler cannot observe or acknowledge publication; the real mutation, retained root, current pointer and filtered Yield commit together |
+| WAC21 | Selection refusal | A substituted or foreign provider selection is rejected before transaction or savepoint work and leaves no mutation, saved root, pointer change, Yield or Close |
+| WAC22 | Minimum-priority publication isolation | A minimum-priority same-named handler cannot observe or acknowledge publication; the real mutation, saved root, current pointer and filtered Yield commit together |
 | WAC23 | Minimum-priority failure isolation | A minimum-priority same-named handler cannot replace infrastructure-failure activation; the exact first failure rolls back mutation, roots and journal and fences later work |
-| WAC24 | Real host crash | A `SIGKILL` while the mutation, immutable root, current-root pointer and routed journal row are written and uncommitted leaves a second connection seeing only the baseline, and a fresh process recovers the baseline filesystem, root, retained counts and journal exactly |
+| WAC24 | Real host crash | A `SIGKILL` while the mutation, immutable root, current-root pointer and routed journal row are written and uncommitted leaves a second connection seeing only the baseline, and a fresh process recovers the baseline filesystem, root, saved counts and journal exactly |
 | WAC25 | Committed restart | A second process reopens a run whose Workspace effects committed in a process that has ended, observes the same filesystem, current root, ordered events, event identities and event-to-root associations, and performs no recorded effect again |
-| WAC26 | Historical reconstruction | A fresh process selects an older event's root through the adapter-private materializer, invalidates the authoritative negative resolution, rebuilds its exact topology, bytes, modes, hardlinks and symbolic links from that root's retained DOFS content, and resnapshots to the selected identity |
+| WAC26 | Historical reconstruction | A fresh process selects an older event's root through the adapter-private materializer, invalidates the authoritative negative resolution, rebuilds its exact topology, bytes, modes, hardlinks and symbolic links from that root's saved DOFS content, and resnapshots to the selected identity |
 | WAC27 | Storage-view commit | A row written through the mutation's storage view and its filesystem bytes commit together against the root its journal event names ([workspace-effect-transaction.test.ts](../packages/workflow/tests/workspace-effect-transaction.test.ts)) |
 | WAC28 | Storage-view rollback | A refused mutation rolls back its storage-view row and filesystem bytes, retains no new root and records its failed Yield against the baseline root ([workspace-effect-transaction.test.ts](../packages/workflow/tests/workspace-effect-transaction.test.ts)) |
-| WAC29 | Mutation capability lifetime | Storage, filesystem and savepoint capabilities retained by a completed mutation refuse even while its enclosing transaction remains open before commit ([workspace-effect-transaction.test.ts](../packages/workflow/tests/workspace-effect-transaction.test.ts)) |
+| WAC29 | Mutation capability lifetime | Storage, filesystem and savepoint capabilities saved by a completed mutation refuse even while its enclosing transaction remains open before commit ([workspace-effect-transaction.test.ts](../packages/workflow/tests/workspace-effect-transaction.test.ts)) |
 
 ### Tier WTX — WorkflowRun savepoints and transaction ownership
 
@@ -12840,14 +12840,14 @@ Defined in [Workflow runs](./workflow-spec.md) §9.6.
 | WTX9 | Lease and generation fences | Closed leases and stale connection generations cannot recover private handles |
 | WTX10 | Savepoint rollback cache coherence | A failed mutation restores the file and both authoritative caches before the caller continues and commits the outer transaction |
 
-### Tier WRR — Immutable retained Workspace roots
+### Tier WRR — Immutable saved Workspace roots
 
 Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 
 | # | Test | Verify |
 |---|------|--------|
 | WRR1 | Canonical empty root | Fresh complete-v1 storage retains the exact root-only canonical manifest and its content-addressed identity |
-| WRR2 | Complete canonical topology | Paths, metadata, symlinks and deterministic hardlinks form canonical bytes; DOFS manifests and blobs are retained exactly without copied file bytes |
+| WRR2 | Complete canonical topology | Paths, metadata, symlinks and deterministic hardlinks form canonical bytes; DOFS manifests and blobs are saved exactly without copied file bytes |
 | WRR3 | Mutation-derived roots | Create, overwrite, delete, rename, directory, mode, symlink and hardlink changes produce the corresponding immutable roots |
 | WRR4 | Historical restoration | An older root restores exact topology and content, resnapshots to its identity and clears authoritative negative caches |
 | WRR5 | Restoration rollback | A restoration failure rolls back its savepoint and preserves the prior live frontier and current-root pointer |
@@ -12856,7 +12856,7 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | WRR8 | Teardown before validation | Child cleanup finishes before final live/current validation, and a stale capture cannot commit |
 | WRR9 | No unsafe garbage collection | The production closure neither exposes nor invokes Cloudflare DOFS garbage collection |
 | WRR10/WRR10b | Outer rollback cache coherence | Failure and cancellation after an uncommitted removal and negative lookup roll back and invalidate both authoritative DOFS caches |
-| WRR11 | Historical file size | Every historical file entry's declared size agrees with its retained DOFS manifest during read-only recognition |
+| WRR11 | Historical file size | Every historical file entry's declared size agrees with its saved DOFS manifest during read-only recognition |
 
 ### Tier DT — Document target symbols, selectors, and projection
 
@@ -12881,8 +12881,8 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | DT33/DT48 | Canonical exactness | A level is canonical only through decode, normalize and re-encode — NFD, tabs, uncollapsed or edge whitespace, lowercase escapes, empty levels and raw operators are refused |
 | DT49 | Raw `#` | A raw `#` is never a literal selector character; `%23` addresses a heading containing one |
 | DT50/DT51 | Formatter totality | A path that cannot encode losslessly — NUL, an unpaired surrogate — is refused, and every formatted reference parses back to what it named |
-| DT34–DT39 | Projection | Preamble, ancestor direct content and the selected subtree are retained; siblings are absent; a non-leaf keeps its descendants; a sole title stays |
-| DT40–DT43 | Positions | A retained element keeps its authored offset and line, CRLF included; frontmatter, props and return mode survive; the untargeted parse still scans the whole body |
+| DT34–DT39 | Projection | Preamble, ancestor direct content and the selected subtree are saved; siblings are absent; a non-leaf keeps its descendants; a sole title stays |
+| DT40–DT43 | Positions | A saved element keeps its authored offset and line, CRLF included; frontmatter, props and return mode survive; the untargeted parse still scans the whole body |
 | DT44–DT47 | Inspection | The symbols report without selecting; a glob resolves to the exact target; an unresolvable target fails inspection; the failure's data is frozen and rebuilt |
 | DT67–DT78 | Descriptions | The first direct static paragraph describes its section, past blank lines and comment-only HTML, kept whole with formatting reduced and whitespace collapsed; a fence, component, list, quote or child heading first leaves no description and later prose is not reached; an interpolation or an inline component omits the paragraph whole rather than as a static prefix |
 | DT79/DT80 | Structured symbols | `targetInfo` carries the same targets, order and duplicates as `targets`, each with its own description, on the unselected path and beside an unchanged exact `target` on the selected one |
@@ -12899,10 +12899,10 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | # | Test | Verify |
 |---|------|--------|
 | TX1–TX3 | Selection | Only the preamble, ancestors and subtree expand; a skipped sibling's components and code blocks never run; a non-leaf expands its descendants |
-| TX4/TX5 | Identity | A retained element keeps the expansion ID it has in a full run, and two targets retaining it agree |
+| TX4/TX5 | Identity | A saved element keeps the expansion ID it has in a full run, and two targets retaining it agree |
 | TX6 | Sources | A file root and an inline root behave identically |
 | TX7–TX9 | Root values | Root props, frontmatter interpolation, a declared `returns`, and `<Output>` apply to the projected body |
-| TX10/TX11 | Structure | An invalid skipped sibling is irrelevant; an invalid retained range fails before any authored effect |
+| TX10/TX11 | Structure | An invalid skipped sibling is irrelevant; an invalid saved range fails before any authored effect |
 | TX12–TX14 | Failure timing | An unmatched or ambiguous target runs no authored effect and is structurally recognizable; inspection resolves without expanding a component |
 | TX15/TX16 | Recording | The journal records the exact target, never the glob, and an untargeted run records no target member |
 | TX17 | Compatibility | A different selector naming the same section replays |
@@ -12913,27 +12913,27 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | TX28–TX32 | Malformed records | Starting from a valid failed-selection journal and corrupting only the record: a missing or non-array symbols, an unknown kind, extra record or failure data, symbols or target the recorded document does not derive, and inconsistent kind/matches data are each refused before completed-Close reuse, resumed with the failing selector and with a valid one, expanding nothing and appending nothing |
 | TX33 | Not vacuous | An uncorrupted record still replays its recorded failure |
 | TX34–TX37 | Totality, inside the value | Recorded markdown whose frontmatter no parser accepts, an unreadable member, a record refusing key enumeration, and a value that is not a record at all each become the one fixed diagnostic — cause-free, carrying no planted value, expanding nothing and appending nothing |
-| DT63–DT66 | Preamble boundary | A section before the title is addressable and is not preamble; selecting a later section neither renders nor executes it; it stays independently addressable; real preamble text before the first heading is still retained |
+| DT63–DT66 | Preamble boundary | A section before the title is addressable and is not preamble; selecting a later section neither renders nor executes it; it stays independently addressable; real preamble text before the first heading is still saved |
 | TX44/TX45 | Preamble execution | Selecting the later section runs no component of the earlier one, which still runs when it is the target |
 | TX46 | Nested substitution | A nested `target` accessor answering Alpha then Beta cannot substitute a section: Alpha alone executes, the member is read once, and the appended Close describes Alpha |
 | TX47–TX50 | Terminal history | Targeted and untargeted completed journals with the root import removed, and one with it duplicated, are refused before terminal reuse; an intact journal still replays |
 | TX51–TX56 | Identity ownership | A completed or partial Alpha journal resumed as Beta is refused with an enclosing `check` handler that never delegates, with the equivalent `admit` handler, and with a same-name guard from another loaded copy; same-target replay and ordinary guard composition are the controls |
 | TX57–TX60 | Terminal binding | A root import on a child coroutine, a valid one plus a root-named child event, none at all, and two on the terminal coroutine each refuse before terminal reuse |
 | TX61 | Detached but mutable | A partial replay restores a binding from the journal and the live continuation writes to it, matching the complete run exactly |
-| TX68 | Shifting terminal coroutine | A Close that moves from a child to the root returns nothing: the fixed diagnostic, no retained output, nothing expanded, nothing appended, the coroutine asked once |
+| TX68 | Shifting terminal coroutine | A Close that moves from a child to the root returns nothing: the fixed diagnostic, no saved output, nothing expanded, nothing appended, the coroutine asked once |
 | TX69–TX71 | Post-admission replacement | Public guard policy rewriting the backend's own terminal result does not change what replay returns; a terminal result that refuses is the fixed diagnostic, read once, with nothing expanded and nothing appended; the intact control replays |
 | TX64–TX67 | Validation order | An unresolvable target outranks an invalid schema on inspection, live execution, and replay; a resolvable target lets the schema failure be reported; the control runs |
 | TX43 | One read across phases | Two valid recorded selections behind one accessor — Alpha then Beta — resume as Alpha: Alpha's section executes, Beta's never does, the source is read once, and the appended Close describes the Alpha execution |
 | TX38–TX41 | Totality, on the envelope | A result that refuses to be read, a value that refuses to be read, a settlement that refuses to be read, and a successful result with no value are each malformed rather than unrelated — the fixed cause-free diagnostic, no recorded terminal result reused, no planted text anywhere, nothing expanded and nothing appended, for the original failing selector and for a different selector that would otherwise succeed |
 | TX42 | Ordinary failed settlement | A root import recorded as failed for non-selection reasons is left alone by this protocol |
-### Tier RR — Retained workflow-run installation
+### Tier RR — Saved workflow-run installation
 
 Defined in [Workflow runs](./workflow-spec.md) §3.1.
 
 | # | Test | Verify |
 |---|------|--------|
-| RR1 | Exact record | The retained run is recorded verbatim; no identifier is allocated and Git is never consulted |
-| RR2/RR3 | Restoration | A truncated and a completed journal each restore the retained run without recording it again |
+| RR1 | Exact record | The saved run is recorded verbatim; no identifier is allocated and Git is never consulted |
+| RR2/RR3 | Restoration | A truncated and a completed journal each restore the saved run without recording it again |
 | RR4 | A different run id | Refused as `StaleInputError` naming the field, never either value, and the root document does not expand |
 | RR5 | A different bundle or target | Refused on the same terms as RR4, naming `bundleHash` or `targetPath` rather than either value |
 | RR6 | A malformed record | Refused rather than coerced, without quoting what the journal held |
@@ -12948,7 +12948,7 @@ Defined in [Workflow runs](./workflow-spec.md) §3.1.
 | RR15 | Failed establishment in a truncated history | A recorded `workflow_run` failure fails closed rather than replaying its planted text for a run storage already describes |
 | RR16 | What a refusal retains | Inspecting the whole error object — not only its message — finds no immutable run-identity values or planted description members; historical `base` and `pinnedCommit` input is not reintroduced as run identity |
 | RR17 | Suppressed or reordered `Execution` policy | A handler that hands the durable run a different stream — the package's own descriptor or one built elsewhere, registered before or after the workflow installation — cannot make another run's journal replay |
-| RR18 | One retained snapshot | A journal whose recorded value shifts between reads is settled once: identity admission, guard observation and replay are handed the same objects, and the second answer is never reached |
+| RR18 | One saved snapshot | A journal whose recorded value shifts between reads is settled once: identity admission, guard observation and replay are handed the same objects, and the second answer is never reached |
 | RR20 | A hostile recorded value | A value whose `ownKeys`, `getOwnPropertyDescriptor` or getter refuses, and one whose classification refuses, each become the same fixed refusal — nothing reused, executed, emitted or appended, and the whole error object carries none of the planted text |
 | RR21 | A duplicate canonical record | Two entries under the canonical run identity are refused in every settlement combination — successful+successful, successful+failed, failed+successful, failed+failed — because the record is written once and a second entry describes a second run however it ended |
 
@@ -12982,8 +12982,8 @@ Defined in [Workflow runs](./workflow-spec.md) §10.
 | WF22 | Cancelled deletion | A halt between the removal and the commit publishes no outcome and moves no root; the continuation, which has no record of it, performs and records the deletion exactly once |
 | WF23 | Atomic directory ensure | A recursive creation, its one `workspace_file` outcome and the resulting current Workspace root become visible together; content begins only after that commit |
 | WF24 | Directory refusal rollback | A target or intermediate non-directory rolls its savepoint back, publishes only the sanitized refusal against the unchanged root and begins no content; neither a partial parent nor host detail survives |
-| WF25 | Existing directory and retained root | Ensuring an existing populated directory preserves its contents and commits a successful effect whose resulting root is the run's authoritative current root |
-| WF26 | Directory replay and cancellation | Completed replay restores the recorded success and retained root without creating again; cancellation before commit publishes no effect or root, while cancellation of later content leaves the committed directory and restores the enclosing cwd |
+| WF25 | Existing directory and saved root | Ensuring an existing populated directory preserves its contents and commits a successful effect whose resulting root is the run's authoritative current root |
+| WF26 | Directory replay and cancellation | Completed replay restores the recorded success and saved root without creating again; cancellation before commit publishes no effect or root, while cancellation of later content leaves the committed directory and restores the enclosing cwd |
 | WF27 | A denied write | The live performer publishes the ordinary sanitized `permission-denied` refusal in the phase it stopped at, the current root and the Workspace are the ones it started with, and a read in the same run is still permitted — the class each operation asked for is what decided it |
 | WF28 | A completed effect under a narrower policy | Replay restores the recorded outcome, asks no permission at all and enters no performer, and appends no journal event |
 | WF29 | Unrecorded work | After an interrupted run, the continuation's one unrecorded write asks current policy and is refused, while the recorded write ahead of it neither asks nor reaches the filesystem |
@@ -13005,13 +13005,13 @@ Defined in §8.1.
 | EP9 | A superseded request | Delegating a request a later `withOptions()` replaced fails |
 | EP10 | Another loaded copy | Middleware installed through an independently constructed descriptor of the Api's name inspects, transforms and delegates |
 | EP11 | Capture precedes installation | Admissions are copied before `install()` runs |
-| EP12 | Every admission, in order | Each captured admission runs, in capture order, on the retained history |
+| EP12 | Every admission, in order | Each captured admission runs, in capture order, on the saved history |
 | EP13 | One refusal stops everything | A refusing admission prevents every later admission, `ReplayGuard`, terminal reuse, preparation, `Execution.document`, authored work and any append |
 | EP14 | No ambient channel | Rebuilding the obsolete `executablemd.core.journal-admission` context and setting it to `[]`, before and during the invocation, removes no captured admission |
 | EP15 | Precedence over an existing failure | A completion policy is not consulted when the document already failed, and cannot replace its failure |
 | EP16 | Additive against a success | A completion policy still turns a successful document into a failure |
 | EP17 | First failure wins | With two policies, the first to report a failure is the result and the second is never consulted |
-| EP18 | An immutable history | An admission that tries to set `length`, replace an index, delete a member, reverse or splice the retained history is ineffective or refused; the next admission sees the original, the completed replay stays completed, and nothing is appended |
+| EP18 | An immutable history | An admission that tries to set `length`, replace an index, delete a member, reverse or splice the saved history is ineffective or refused; the next admission sees the original, the completed replay stays completed, and nothing is appended |
 | EP19 | A nested live foreign request | A nested invocation handed its caller's still-live request is refused as another execution's; both invocations then settle on their own |
 | EP20 | Concurrent live requests | Two invocations held at a barrier until both requests exist and neither is consumed each refuse the other's, and each still runs its own document |
 | EP21 | The exported default | Calling `Execution.operations.execute` directly with a live request refuses and consumes nothing; the request still settles its own invocation |
@@ -13048,9 +13048,9 @@ Defined in §8.1.
 | DP17 | Cancellation | Cancelling while document policy is suspended keeps structured teardown: finalizers run exactly once and the result is a cancellation, not an ordinary policy failure |
 | DP18 | Capture precedes installation | `prepare` is read exactly once, by value, before any `install()` runs; replacing it from inside `install()` changes nothing |
 | DP19 | Every preparation, in order | Each captured preparation runs, in installation order |
-| DP20 | A refusal keeps what was prepared | A refusing preparation stops every later preparation, all document policy, the root import and authored work; the durable effect the first preparation completed stays retained, and the journal holds exactly that Yield and the terminal recording the refusal. Resuming that history with only the terminal removed re-enters the first preparation, restores its effect with no executor call, refuses again, runs nothing later, and leaves the retained Yield singular |
+| DP20 | A refusal keeps what was prepared | A refusing preparation stops every later preparation, all document policy, the root import and authored work; the durable effect the first preparation completed stays saved, and the journal holds exactly that Yield and the terminal recording the refusal. Resuming that history with only the terminal removed re-enters the first preparation, restores its effect with no executor call, refuses again, runs nothing later, and leaves the saved Yield singular |
 | DP21 | Admission, then preparation | Admission runs before preparation, which runs before document policy and the root import |
-| DP22 | Replay of durable preparation | A completed terminal replay enters no preparation and executes no effect and appends nothing; a partial continuation re-enters preparation and restores its effect from the retained Yield without calling the executor again |
+| DP22 | Replay of durable preparation | A completed terminal replay enters no preparation and executes no effect and appends nothing; a partial continuation re-enters preparation and restores its effect from the saved Yield without calling the executor again |
 | DP23 | Replaying a pre-root refusal | An identical execution reads the recorded refusal back, entering no preparation, no policy, no import and no authored work, and appending nothing |
 | DP24 | A different root document | A pre-root terminal is refused for a different inline source, a different target, and a different path, before terminal reuse |
 | DP25 | Binding data that fails closed | A terminal whose binding is missing, not an object, `null`, short a member, carrying an extra member, mistyped, or duplicated by a second recorded completion is never reusable |
@@ -13069,7 +13069,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §3.
 | WFC2 | Reuse | A compatible reuse of an explicit id addresses the same run; an incompatible one is refused, publishes no status and leaves the stored run as it was |
 | WFC3 | Properties | Generated `--props-*` arguments and their help come from the pinned definition; every property form is refused on `resume` |
 | WFC4 | Pinned bytes | An uncommitted working-tree edit does not reach the run: the committed document executes |
-| WFC5 | Resume | A resume names only a run and finds its definition through retained metadata; a document argument is refused |
+| WFC5 | Resume | A resume names only a run and finds its definition through saved metadata; a document argument is refused |
 | WFC6 | Failure | A failing document exits 1 and retains `failed`; a compatible reuse replays that failure. The component search path is empty, so a component beside the definition never resolves |
 | WFC7 | Storage | A missing run and an unreadable database are reported without a status line, and the database is left byte-identical |
 | WFC8 | Grammar | A missing or unknown subcommand, a missing target, a third argument, `--id` on resume, an agent option and an inline document are each refused |
@@ -13080,7 +13080,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §3.
 | WFC15/WFC16 | Establishment | A declared component the commit does not hold, one that is not Markdown the engine can read, and one that names a directory each refuse before a run id is reported |
 | WFC17 | Bundle reuse | A compatible reuse addresses the same run; a committed change to one component refuses as `definition`, publishes no status, exposes no source or path, and leaves the history byte-identical |
 | WFC18 | Resume from the tree | A resume reaches every stage after the root and every component are deleted from the checkout |
-| WFC19 | Unreachable bundle | A resume whose retained repository is gone is refused, publishes no status, and leaves the lifecycle records exactly as they were |
+| WFC19 | Unreachable bundle | A resume whose saved repository is gone is refused, publishes no status, and leaves the lifecycle records exactly as they were |
 
 ### Tier WLI — Immutable lifecycle inspection
 
@@ -13093,25 +13093,25 @@ the production Deno adapter, on real run files.
 | WLI2 | An absent run | Reported as absent, and no database is created by having looked |
 | WLI3 | Reading changes nothing | `status`, `list` and `history` leave every byte, row and file mode as they found them |
 | WLI4 | List order and namespace | Newest update first, and only the `<hash>.sqlite` namespace is enumerated |
-| WLI5/WLI5b/WLI5c | One bad candidate fails the list | A foreign candidate, a healthy database at another run's name, and a retained id no reader can see each fail the whole request rather than returning the healthy subset |
-| WLI6 | History is what was retained | Every event with its exact id, Workspace root and authored source |
+| WLI5/WLI5b/WLI5c | One bad candidate fails the list | A foreign candidate, a healthy database at another run's name, and a saved id no reader can see each fail the whole request rather than returning the healthy subset |
+| WLI6 | History is what was saved | Every event with its exact id, Workspace root and authored source |
 | WLI7 | An unparseable source | A present source position that does not parse makes that entry unreadable rather than the run |
 | WLI8 | Inspection reaches nothing | A partial run is inspected without reaching storage, Git or the journal |
 | WLI9 | Ids are not patterns | An id holding `*` or `?` addresses exactly its own run |
 | WLI10 | A crashed run reports its committed state | A run whose host was killed mid-transaction reports the state it committed — not the record change, deletions or insertions that transaction held — and its database and journal are byte-for-byte what the crash left, still refusing a direct read-only reader with `SQLITE_READONLY_ROLLBACK` |
 | WLI11 | Discovery is still complete | A healthy run and two crashed ones are listed together in the order the same runs were answered in while all three were readable, which is still newest update first with the run id breaking ties; at most one private copy exists at a time |
 | WLI12 | The pair is copied under coordination | A real second process opening the same database through the production registry cannot finish its first read while inspection holds coordination with the pair copied; and an owner that recovers the source first is read as an ordinary run, with nothing copied |
-| WLI13 | Recognition survives recovery | Four crashed candidates — an undeclared schema object, a run under another run's name, a retained row that is not the timestamp its column claims, and a current Workspace root the run does not retain — each answer after recovery with the identical refusal, class and message the same damage produces while the candidate is still readable; none is folded into the recovery refusal, none quotes a retained value or the removed copy, and each still fails the whole list |
+| WLI13 | Recognition survives recovery | Four crashed candidates — an undeclared schema object, a run under another run's name, a saved row that is not the timestamp its column claims, and a current Workspace root the run does not retain — each answer after recovery with the identical refusal, class and message the same damage produces while the candidate is still readable; none is folded into the recovery refusal, none quotes a saved value or the removed copy, and each still fails the whole list |
 | WLI14 | Only the exact condition recovers | `SQLITE_READONLY_ROLLBACK` alone enters recovery; the primary readonly code and every other extended readonly code — including ones carrying the identical message — do not |
-| WLI15 | A recovery that cannot finish | A sidecar that cannot be opened, a scratch directory gone before the copy, and a copy that is not a database each refuse with the typed inspection-recovery error, an undefined `scratchPath`, no residue, no SQLite wording and no cause, and fail a list whole. Cancellation with successful cleanup stays Effection control flow and leaves no copy. A real removal refusal is the authoritative outcome however the call is ending — answered, cancelled before the answer, or cancelled after it while the removal itself is suspended — carrying the retained database and the directory that remains, which is really there. Every branch leaves the retained pair byte-identical and still hot |
+| WLI15 | A recovery that cannot finish | A sidecar that cannot be opened, a scratch directory gone before the copy, and a copy that is not a database each refuse with the typed inspection-recovery error, an undefined `scratchPath`, no residue, no SQLite wording and no cause, and fail a list whole. Cancellation with successful cleanup stays Effection control flow and leaves no copy. A real removal refusal is the authoritative outcome however the call is ending — answered, cancelled before the answer, or cancelled after it while the removal itself is suspended — carrying the saved database and the directory that remains, which is really there. Every branch leaves the saved pair byte-identical and still hot |
 | WLI17 | An open connection owns the pair | A write-capable connection opened while the run was healthy keeps the pair when a later crash leaves a hot journal: inspection creates no copy and the journal survives untouched while that connection is open, and only closing it lets inspection recover a copy and answer |
-| WLI16 | The common path costs nothing, and recovery buys no ownership | A clean run is read directly, creating no private copy, no coordination sidecar and no recovery step. A crashed one recovers under refusing storage and Git probes without reaching either, takes no executor-lock sidecar, receives nothing from recovery coordination, and leaves the retained pair byte-identical |
+| WLI16 | The common path costs nothing, and recovery buys no ownership | A clean run is read directly, creating no private copy, no coordination sidecar and no recovery step. A crashed one recovers under refusing storage and Git probes without reaching either, takes no executor-lock sidecar, receives nothing from recovery coordination, and leaves the saved pair byte-identical |
 
 ### Tier WFI — What a run hands to canonical core
 
 | # | Test | Verify |
 |---|------|--------|
-| WFI1 | One installation, one execution | A run reaches core as exactly one `ExecutionInstallation` carrying its retained-run admission and its `prepare` hook, through exactly one execution — not an `executeInstalled()` followed by an `execute()` |
+| WFI1 | One installation, one execution | A run reaches core as exactly one `ExecutionInstallation` carrying its saved-run admission and its `prepare` hook, through exactly one execution — not an `executeInstalled()` followed by an `execute()` |
 | WFI2 | Completed replay attaches nothing | A live pass attaches the run's Workspace; a completed replay of the same journal attaches none |
 | WFI3 | Terminal resume refusal | A `failed` or `cancelled` run refuses `resume` with exit 1, and the substituted Git Api — which records every operation — is never invoked: no definition is retrieved, no Workspace attached, no executor run, no status line published, and status, stop reason, definition, props, retrieval metadata, every document-execution record and every journal entry under its own id remain structurally unchanged |
 | WFI4 | Admission controls | `completed` and `interrupted` runs are both admitted and both reach the executor; only the completed one is spared a Workspace |
@@ -13140,7 +13140,7 @@ remote and a real `git`.
 | WGP4 | What cannot be proved | A destination naming a commit the authenticated source cannot read conflicts without fetching it and without asking about its ancestry; an ancestry proof that answers neither ancestry nor divergence is a boundary failure that publishes no outcome and moves nothing |
 | WGP5 | Preserved classifications | An unreachable observation is still temporary unavailability and an undecidable one is still ambiguity, and neither performs |
 | WGP6 | An uncertain completion | A push that lands while reporting failure earns exactly one more observation, is accepted only because the destination equals the commit, and mutates the remote no further; a killed process's publication is adopted by the next execution |
-| WGP7 | What an advance never does | No force, force-with-lease, upstream establishment, reset, merge, rebase, fetch, checkout mutation or second push attempt, in the command trace or the retained checkout configuration |
+| WGP7 | What an advance never does | No force, force-with-lease, upstream establishment, reset, merge, rebase, fetch, checkout mutation or second push attempt, in the command trace or the saved checkout configuration |
 | WGP8 | Pull-request evidence | A numbered `<PullRequest>` update accepts this iteration's Push record even after an earlier publication of the same branch; the run's last relevant publication decides, so a history holding only an earlier one, and one whose last record names another commit, are both conflicting without the Git host being contacted |
 | WGP9 | Compatibility | An `ancestor`/`performed` record and the two shapes written before relations existed all replay without reaching `init`, `ls-remote`, `merge-base`, `fetch` or `push`; a relation beside a proven absence, an unknown relation, an undeclared pre-state member, an adoption carrying a relation and a performance over an unattested predecessor each fail the replay closed |
 | WGP10 | Resuming a branch published twice | A run that publishes A, commits B and publishes B resumes after only its root `Close` is removed: both Push records restore in order with their own source commits, the run stays at B, and no `init`, `ls-remote`, `merge-base`, `fetch` or `push` runs — each completed Push names its request from the Workspace root its own journal event was appended against, and reading that root publishes nothing and moves no frontier |
@@ -13153,14 +13153,14 @@ against the production Deno adapter, on real run files.
 
 | # | Test | Verify |
 |---|------|--------|
-| WAD1 | Correlation | A value is retained only for the exact wait it names; a wait this run is not at, and a run that holds no such wait, are refused with nothing written |
-| WAD2 | The retained schema judges | Every value the response schema refuses is refused before persistence, and a value it describes still goes in afterwards |
+| WAD1 | Correlation | A value is saved only for the exact wait it names; a wait this run is not at, and a run that holds no such wait, are refused with nothing written |
+| WAD2 | The saved schema judges | Every value the response schema refuses is refused before persistence, and a value it describes still goes in afterwards |
 | WAD3 | The secret gate | A credential-shaped answer is refused with neither the value nor the match in the diagnostic; `--no-secret-detection` retains the same value |
-| WAD4 | Delivery is not execution | Status, stop reason, document-execution records and retained history are byte-for-byte what the suspension left |
+| WAD4 | Delivery is not execution | Status, stop reason, document-execution records and saved history are byte-for-byte what the suspension left |
 | WAD5 | No executor lock | A delivery succeeds while a live workflow executor holds the run's lock |
 | WAD6/WAD7/WAD8 | Refusals | A duplicate, an answer already spent, a completed run, a cancelled run and a run nothing is stored for are each refused, and none of them writes |
 | WAD9 | The resume spends it | One `suspension_answer` event naming the wait, the pending state consumed, and `suspendFor()` returning the delivered value |
-| WAD10 | Replay | A later resume restores the answer from its retained event, reaching no live controller, publishing no second event and consuming nothing again |
+| WAD10 | Replay | A later resume restores the answer from its saved event, reaching no live controller, publishing no second event and consuming nothing again |
 | WAD11/WAD12 | One transaction | A journal insertion that fails, and a consumption that fails, each leave the answer pending and no answer event; the next resume publishes exactly one |
 
 ### Tier WAP — The strict workflow Agent profile
@@ -13177,9 +13177,9 @@ Defined in [ACP client](./acp-client-spec.md) §The workflow Agent profile.
 | WAP6 | Nothing echoed | No tool title, raw input, path or command reaches the failure message or its stack |
 | WAP7 | Sibling Sessions | Two `<Session name="review">` sites in one document place two engine identities the middleware cannot touch while its rename reaches the provider; a placement kept from the first site and routed for the second refuses before the provider places anything |
 | WAP8 | Placement only | A fresh `<Session>` under this profile ensures nothing, opens no handle, writes no provider record and retains nothing; the host is asked to place and is not asked to retain |
-| WAP9 | Retention follows acceptance | Nothing is retained until the backend accepts the session's first turn, and the ordered log is ensure, turn start, adapter acceptance, the provider's asserting save, then the host's retention — with the mapping absent at every earlier point |
+| WAP9 | Retention follows acceptance | Nothing is saved until the backend accepts the session's first turn, and the ordered log is ensure, turn start, adapter acceptance, the provider's asserting save, then the host's retention — with the mapping absent at every earlier point |
 
-### Tier WSL — Retained workflow Agent sessions
+### Tier WSL — Saved workflow Agent sessions
 
 Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.5.
 
@@ -13191,7 +13191,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.5.
 | WSL9 | An unaccepted first turn | A first turn the backend never accepted leaves the construction route standing, the provider record non-asserting, no mapping, and no identity on the `Session` the document holds; the same value retried creates fresh backend state and establishes once |
 | WSL10 | Promotion order | The provider's asserting record is saved before the host is asked to retain anything, so an interruption between them leaves exactly one canonical assertion for the next attachment to reconcile and commit |
 | WSL4 | Refusals | A missing assertion, a different value, a different kind, a changed agent, a changed provider, a changed policy and more than one assertion each refuse |
-| WSL5 | Reattachment | A matching assertion reattaches the retained mapping unchanged |
+| WSL5 | Reattachment | A matching assertion reattaches the saved mapping unchanged |
 | WSL6 | The run's transaction | The mapping commits in the run's own transaction and reads back per Session site; a transaction that fails commits none |
 | WSL7 | Directories | Owning the sidecar allocates none of it; every attachment gets an empty directory, and neither it nor the host directory outlives the attachment |
 | WSL8 | Deletion | Deletion reports and removes both categories, and a live run keeps them |
@@ -13213,13 +13213,13 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 
 | # | Test | Verify |
 |---|------|--------|
-| GXC1 | The selection | The trusted composition table is present under every selection. Omitting `allow` and stating `read` produce one identical retained policy; a mixed selection is retained in canonical class order, with composition before the read and write classes and the selected names in canonical order inside each |
-| GXC2 | Unstateable policy | An empty selection, one class twice, a selected class with no table or an empty one, and composition/effect tables holding one name with overlapping forms or distinct definitions each fail before the candidate is parsed — with a deliberately unparseable candidate, no `generated_xmd` record and nothing of the candidate retained |
-| GXC3–GXC4 | Name and form | A self-closing and a paired `<File>` in one fragment resolve to the read and the write identity and are retained with their forms; the opposite form under a single-class selection is refused with no read and no write |
+| GXC1 | The selection | The trusted composition table is present under every selection. Omitting `allow` and stating `read` produce one identical saved policy; a mixed selection is saved in canonical class order, with composition before the read and write classes and the selected names in canonical order inside each |
+| GXC2 | Unstateable policy | An empty selection, one class twice, a selected class with no table or an empty one, and composition/effect tables holding one name with overlapping forms or distinct definitions each fail before the candidate is parsed — with a deliberately unparseable candidate, no `generated_xmd` record and nothing of the candidate saved |
+| GXC3–GXC4 | Name and form | A self-closing and a paired `<File>` in one fragment resolve to the read and the write identity and are saved with their forms; the opposite form under a single-class selection is refused with no read and no write |
 | GXC5–GXC6 | Admission | No admitted name — `<File>` in either form, the versioned paired `<Dir>` or the self-closing `<File.Delete>` — is answered by a same-name repository component, the dotted one included; and Git push, pull request, issue, repository, glob and an executable block are outside the tables whatever the selection |
 | GXC7 | Ordinary composition | A write-only fragment renders nothing unless it authors output; a mixed fragment binds a read locally and renders exactly the value it explicitly selects |
 | GXC8 | Preflight | An unadmitted sibling after an admitted write, an unadmitted child under an admitted parent, and an unadmitted form after an admitted write each perform no write at all |
-| GXC10 | The form at the invocation | An admitted read still performs exactly its read and an admitted write still performs exactly its write, under a `Component.hasContent` handler outside the generated expansion that lies consistently *and* under one answering `[false, true]` / `[true, false]` — with the retained identity and form unmoved, the read's ordinary binding/output behavior intact, and the file bytes proving which effect ran. An admitted read beside each of them reports the chain's answer and consumes exactly one, so every case proves the handler installed and answering before it proves the element ignored it — an inert handler, and an element that consulted the chain and took the next answer, both fail. An invocation the evaluator did not receive is refused with no provider call, and a handler that observes and delegates leaves both forms running through their ordinary providers |
+| GXC10 | The form at the invocation | An admitted read still performs exactly its read and an admitted write still performs exactly its write, under a `Component.hasContent` handler outside the generated expansion that lies consistently *and* under one answering `[false, true]` / `[true, false]` — with the saved identity and form unmoved, the read's ordinary binding/output behavior intact, and the file bytes proving which effect ran. An admitted read beside each of them reports the chain's answer and consumes exactly one, so every case proves the handler installed and answering before it proves the element ignored it — an inert handler, and an element that consulted the chain and took the next answer, both fail. An invocation the evaluator did not receive is refused with no provider call, and a handler that observes and delegates leaves both forms running through their ordinary providers |
 | GXC9 | Continuation | A widened class selection, a widened admitted form, a replaced write identity and an added write identity each refuse the continuation and write nothing; the unchanged policy resumes and performs the write; and a read-only admission survives a changed write selection it never reached |
 
 ### Tier GX — Generated continuation in the owning expansion
@@ -13228,16 +13228,16 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §§8.4 and 9.
 
 | # | Test | Verify |
 |---|------|--------|
-| GX15–GX16 | Retained decision | A partial replay restores the admission and performs no second request; a completed replay restores the root result and repeats no observation |
-| GX18a–GX18b | The offered sequence | Admission, the nested generated read or durable write, a later parent durable marker and the root import are one exactly ordered offered sequence; a partial continuation stating the original roots plus one new retained root, with that new root current, offers the same sequence, and the live Fetch/write/marker executors each ran once across both executions |
+| GX15–GX16 | Saved decision | A partial replay restores the admission and performs no second request; a completed replay restores the root result and repeats no observation |
+| GX18a–GX18b | The offered sequence | Admission, the nested generated read or durable write, a later parent durable marker and the root import are one exactly ordered offered sequence; a partial continuation stating the original roots plus one new saved root, with that new root current, offers the same sequence, and the live Fetch/write/marker executors each ran once across both executions |
 | GX18c–GX18d | Controls | An empty and a rendered-only fragment preserve output across partial replay and invent no nested durable effect |
-| GX22, GX22b | Progression | The run's own root addition with the added root current, and standing on another root it already retained, each resume and reach the generated component |
+| GX22, GX22b | Progression | The run's own root addition with the added root current, and standing on another root it already saved, each resume and reach the generated component |
 | GX22c–GX22d | Root loss | Losing a non-selected admission root and losing the admission's selected root each refuse with the fixed diagnostic before the component runs, the live component count unchanged |
 | GX14b–GX14c | One ceiling per entry | Two admitted reads each perform exactly their own admitted request, and neither entry's limit admits the other's: the run keys its ceiling table by the entry itself rather than by anything describing one |
 | FE18/GX21z | The current record restores | The record this build writes resumes against the entry it was admitted under and performs the work it authorized once; the same URL behind an updated implementation resumes, because between executions that is a newer build of the component the admission named rather than a changed grant; and a recorded refusal replays as the refusal it recorded |
 | FE18/GX21y | One closed record shape | The untagged #369 record and the tagged structural-identity record are each refused as unreadable history. So are a marker this build does not have, legacy top-level roots, an unknown policy, row, result or named member, a row with no form, an unknown form, effect or kind, and an identity that is relative, a look-alike origin, a structural record, an array or null — each with the admitted read never reaching the provider, against the current record as the positive control |
 | EP18–EP20 | One name, one implementation | A name selected in both spellings is resolved by one lookup and captured as one shared definition and schema, each spelling reading its own identity and effect off that definition and landing in the table its owner offers it for; an answer offering no generated use of a selected spelling refuses at capture rather than letting a selection describe a grant the implementation lacks; and both spellings offered as reads land in the read table together. In `evaluation-profile.test.ts` |
-| GOM1–GOM4 | The owner states what its spellings are offered as | A registration's generated map survives registration copied and frozen; an omitted or empty map registers and offers no spelling; a relative, look-alike or non-URL identity, an unknown effect, a key that is not an authored form, a malformed value, a non-map and a spelling the declaration does not accept each refuse, and a refused batch installs nothing. The shipped owners state exactly the owner table, `<File>`'s two spellings differ on one definition, `<Json>` stays composition and `<Evaluate>` offers nothing. A shared fixed definition is frozen through its nested metadata, so a fresh read sees the original contract. A component a host declares to an execution keeps its offer through capture: the built implementation runs the spelling it offered under the URL and effect the admission retained, the offer is read exactly once so an accessor's later reading reaches neither construction nor the journal, an offer replaced from inside `install()` replaces nothing, and an unusable one refuses the execution before an implementation is built, a provider is asked or anything is written down. In `generated-owner-metadata.test.ts` |
+| GOM1–GOM4 | The owner states what its spellings are offered as | A registration's generated map survives registration copied and frozen; an omitted or empty map registers and offers no spelling; a relative, look-alike or non-URL identity, an unknown effect, a key that is not an authored form, a malformed value, a non-map and a spelling the declaration does not accept each refuse, and a refused batch installs nothing. The shipped owners state exactly the owner table, `<File>`'s two spellings differ on one definition, `<Json>` stays composition and `<Evaluate>` offers nothing. A shared fixed definition is frozen through its nested metadata, so a fresh read sees the original contract. A component a host declares to an execution keeps its offer through capture: the built implementation runs the spelling it offered under the URL and effect the admission saved, the offer is read exactly once so an accessor's later reading reaches neither construction nor the journal, an offer replaced from inside `install()` replaces nothing, and an unusable one refuses the execution before an implementation is built, a provider is asked or anything is written down. In `generated-owner-metadata.test.ts` |
 
 ### Tier WGAC — Generated `<File>` effects and the `<Evaluate>` boundary
 
@@ -13249,17 +13249,17 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 | WGAC13 | The deletion entry | The pinned `<File.Delete>` entry is admitted for the self-closing form alone, under `https://executable.md/components/file/delete` as a write, and carries the exact definition object core holds rather than one shaped like it |
 | WGAC2 | Preflight | A paired `<File>` — empty or not — and an unadmitted component anywhere in a mixed fragment each perform zero reads and zero writes, and nothing of the source reaches the record |
 | WGAC3 | Closed schema | `<Evaluate>` refuses content, refuses every prop but `source` and `allow`, and refuses a missing `source` |
-| WGAC4 | Host-owned roots | The stated ceiling is the run's retained roots and the root it is on, following the run as it moves, in a deterministic order; generated source cannot reach the component even while it is live |
+| WGAC4 | Host-owned roots | The stated ceiling is the run's saved roots and the root it is on, following the run as it moves, in a deterministic order; generated source cannot reach the component even while it is live |
 | WGAC5 | Host-owned requests | An empty ceiling admits no `<Fetch>` at all, an exact one admits only the request it names, and neither performs anything else |
 | WGAC6 | Distinct sites | Two `<Evaluate>` sites keep distinct durable names under a component that rebinds what a component can |
 | WGAC7 | The import boundary | Through public `importComponent` middleware: calling the implementation with an invocation it built, with the first site's routed at the second, with a live content-bearing parent's routed into the sites inside it, by keeping the declared implementation and running it at another element's invocation, and by keeping one attachment's implementation — with that attachment's whole registration record answered for the name inside a second, simultaneously live attachment — and running it at the second attachment's own `<Evaluate>` site, are each refused. Nothing is admitted and no request performed under an identity the author did not write at that site, and neither run's database receives a record the other's expansion named: a redirected registry answer carries behavior, never the claimant this execution delivered. Honest delegation, forwarding the genuine invocation, admits each site under its own name, nested or not; and an interrupted run resumes into each site's own record — a completed read restores and the first interrupted request runs |
 | WGAC8 | Ordinary output | Evaluate emits exactly what the generated fragment renders. Bound component results emit nothing unless the fragment explicitly renders them, and no read is copied into an implicit result collection |
-| WGAC9 | The class selection | Exact core Json remains available from the trusted composition table. An empty, repeated, unknown or non-array `allow` is refused before any admission; `read`, `write` and both in either order are admitted and retained in canonical order; omitting it retains exactly composition plus read, and the writing spellings are not in that policy at all |
-| WGAC10 | The standard writing spellings | An admitted paired `<File>` beneath a generated `<Dir>` first recursively creates the directory through one ordinary `workspace_file` effect, then lands the file at the nested logical path through another; the retained policy holds all three standard rows with their spellings, in the canonical order the selection is admitted in — paired `<Dir>` under `https://executable.md/components/dir/ensure`, core's paired `<File>` under `.../file/write`, then core's self-closing `<File.Delete>` under `.../file/delete`, each as a `write` — and a `<Git.Push>` and a self-closing `<File />` are each refused under the same selection with no effect |
-| WGAC14 | The admitted deletion | A write-only fragment holding one self-closing `<File.Delete>` removes the file from the run's own Workspace, read back through the run's own transaction; it performs exactly one further `workspace_file` effect, whose outcome is `{ kind: "deleted" }`; it is retained under `@executablemd/core#File.Delete` in the self-closing form; and it renders no synthetic receipt |
-| WGAC15 | Preflight covers the deletion | A fragment placing an admitted `<File.Delete>` first and an executable code block second is refused for the block — the class proving the deletion was admitted, since a refusal names no name — and the file remains with no deletion effect performed or retained |
+| WGAC9 | The class selection | Exact core Json remains available from the trusted composition table. An empty, repeated, unknown or non-array `allow` is refused before any admission; `read`, `write` and both in either order are admitted and saved in canonical order; omitting it retains exactly composition plus read, and the writing spellings are not in that policy at all |
+| WGAC10 | The standard writing spellings | An admitted paired `<File>` beneath a generated `<Dir>` first recursively creates the directory through one ordinary `workspace_file` effect, then lands the file at the nested logical path through another; the saved policy holds all three standard rows with their spellings, in the canonical order the selection is admitted in — paired `<Dir>` under `https://executable.md/components/dir/ensure`, core's paired `<File>` under `.../file/write`, then core's self-closing `<File.Delete>` under `.../file/delete`, each as a `write` — and a `<Git.Push>` and a self-closing `<File />` are each refused under the same selection with no effect |
+| WGAC14 | The admitted deletion | A write-only fragment holding one self-closing `<File.Delete>` removes the file from the run's own Workspace, read back through the run's own transaction; it performs exactly one further `workspace_file` effect, whose outcome is `{ kind: "deleted" }`; it is saved under `@executablemd/core#File.Delete` in the self-closing form; and it renders no synthetic receipt |
+| WGAC15 | Preflight covers the deletion | A fragment placing an admitted `<File.Delete>` first and an executable code block second is refused for the block — the class proving the deletion was admitted, since a refusal names no name — and the file remains with no deletion effect performed or saved |
 | WGAC11 | Explicit composition | A fragment binds read results locally, composes selected values through Json, and renders no value or mutation receipt it did not explicitly render |
-| WGAC12 | Committed mutations | A completed replay of a write-enabled document journals nothing new, performs no second mutation, and leaves the retained content |
+| WGAC12 | Committed mutations | A completed replay of a write-enabled document journals nothing new, performs no second mutation, and leaves the saved content |
 | WGAC16 | Bundled continuation | `<Evaluate>` inside a committed bundled Markdown component, then a parent `<File>` write and the real `<Elicit>` outside it, for a generated read and a generated write alike: the real start suspends holding the exactly ordered `generated_xmd → nested workspace_file → parent workspace_file → suspension_request` subsequence; answer delivery and the completed resume leave the journal counts, that subsequence, the Workspace root-publication count and the authoritative current root unchanged; and the delivered value reaches the document after the wait. `API.Files` component calls are not evidence here — re-expansion legitimately enters that boundary before the durable effect restores |
 | WGAC18 | A generated question is the host's to offer | This host's generated selection names no question, so a fragment writing `<Elicit>` under `allow={["write"]}` is refused for a component it did not offer, with nothing asked and nothing performed; a host that offers the name admits the same fragment. A host whose own replacement answers for `Elicit` and offers no generated use of the paired form refuses setup rather than reaching core's default |
 | WGAC17 | Directory mutation permission | `allow={["write"]}` admits the paired `<Dir>` under the identity core's own declaration offers it as, and intentionally authorizes its persistent recursive creation; a continuation retaining another identity for that spelling refuses before generated execution and creates nothing, without publishing which identity moved, while an unchanged current admission replays without a second ensure |
@@ -13273,12 +13273,12 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
 | WAL1 | The loop | Two observations then a proposal across three turns in one provider session, each observation reaching the next turn, with no Workspace or caller path in provider setup |
 | WAL2 | Completed replay | The same document over its own journal restores identical output, journals nothing new, and never enters the provider |
 | WAL3 | Partial replay | An interrupted run resumes, asks only for the turn it never finished, repeats no committed observation or read, and reattaches the same session |
-| WAL4 | Exhaustion | Reaching the authored bound fails at the document's own final gate, with every completed turn and admission retained |
+| WAL4 | Exhaustion | Reaching the authored bound fails at the document's own final gate, with every completed turn and admission saved |
 | WAL5 | Inert proposal | A mutation-shaped proposal comes back exactly, is admitted nowhere, and performs no file effect |
-| WAL6 | Denied tool | A denied native tool becomes the retained Prompt failure, carrying nothing the request named |
+| WAL6 | Denied tool | A denied native tool becomes the saved Prompt failure, carrying nothing the request named |
 | WAL7 | No Agent | A workflow naming no Agent enters no runtime and allocates no provider-session sidecar |
 | WAL8 | ACP-only Claude | The profile states both ordinary-run native capability sets empty, so an agent `xmd run` would own machine-wide is served here over ACP alone. A provider handed a coordinator, a route store and an executable observer under those empty sets reaches none of them for a Claude prompt |
-| WAL8 | An observed response reaches the next turn | An admitted `<Fetch>`'s complete retained response — name, status, headers and body — is rendered into the next `<Prompt>` with `<Json>`, and a completed replay restores it without asking the server or the agent again |
+| WAL8 | An observed response reaches the next turn | An admitted `<Fetch>`'s complete saved response — name, status, headers and body — is rendered into the next `<Prompt>` with `<Json>`, and a completed replay restores it without asking the server or the agent again |
 | WAL9 | Authored approval | The same proposal under the production profile: the approved branch reaches `<Evaluate allow={["write"]}>`, records one admission naming both write identities and the class, and leaves the change where an ordinary read in the run's Workspace finds it; the refused branch never expands the element, so no admission and no file effect exist |
 
 ### Tier WFX — A killed run resumes from its frontier
@@ -13307,25 +13307,25 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
 | IS5 | Compiled binary, end to end | The guide's lifetime narrative, run by `xmd test` with no JavaScript in the document |
 | IS6 | Contextual, and composable | The operation stays exported, delegable and overridable, and both it and `invocation.hasContent()` stay observation — cross-copy readable, and neither an effect permission. What decides an effect-selecting branch is engine-owned invocation-form dispatch (§5.6), which no handler and no object a caller passes takes part in |
 
-### Tier RT — Retained resources
+### Tier RT — Saved resources
 
 | # | Test | Verify |
 |---|------|--------|
 | RT1 | Captured value reaches a sibling | `as` binds the value and a downstream sibling resolves it while the resource is still live |
-| RT2 | Outlives the child invocation | A later sibling invocation starts and stops entirely inside the window where the retained resource is alive |
-| RT3 | Released on site success | `start:retained, stop:retained` when the site scope completes normally |
+| RT2 | Outlives the child invocation | A later sibling invocation starts and stops entirely inside the window where the saved resource is alive |
+| RT3 | Released on site success | `start:saved, stop:saved` when the site scope completes normally |
 | RT4 | Released on site error | The failure propagates and the resource is still released |
 | RT5 | Released on site cancellation | Halting the site scope while the resource is live releases it |
-| RT6 | Nested sites unwind leaf-first | A resource retained inside a component's content stops before that component's own |
+| RT6 | Nested sites unwind leaf-first | A resource saved inside a component's content stops before that component's own |
 | RT7 | Retention is opt-in | A component that does not call `retain()` keeps invocation lifetime |
 | RT8 | No invocation-site scope | `retain()` reports the missing scope instead of falling back to invocation lifetime |
 | RT8b | Missing site is authoritative | An inherited `retain` provider never answers for an invocation that has no site of its own |
-| RT9 | Root retention | A resource retained at the root outlives every later sibling in the document |
-| RT10 | Halting mid-expansion | Halting while a later block suspends still releases what an earlier element retained |
-| RT15 | Retention under partial replay | The durable effect replays while the retained resource is re-established on each execution that runs |
+| RT9 | Root retention | A resource saved at the root outlives every later sibling in the document |
+| RT10 | Halting mid-expansion | Halting while a later block suspends still releases what an earlier element saved |
+| RT15 | Retention under partial replay | The durable effect replays while the saved resource is re-established on each execution that runs |
 | RT16 | Eval cannot retain | An eval block's `retain()` is refused, and the block produces no value |
 | RT17 | Compiled binary, end to end | The guide's standalone scenario: the resource is still live for a later sibling, with no JavaScript in the document |
-| RT18 | Site isolation | A factory that sets a context value and installs middleware: the resource is retained, and a later sibling still observes the caller's own |
+| RT18 | Site isolation | A factory that sets a context value and installs middleware: the resource is saved, and a later sibling still observes the caller's own |
 
 ### Tier P — Eval binding interpolation
 
@@ -13370,7 +13370,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
 | R5 | Durable export collides with a service | Live execution and valid partial replay diagnose the block before constructing an eval effect; a later durable effect executes or restores in alignment, and no eval `Yield` appears |
 | R6 | Ephemeral export collides with durable state | The block is rejected before execution and publishes no partial export |
 | R7 | Ephemeral update of a live binding | A later ephemeral block may atomically replace an existing live name |
-| R8 | Incompatible retained eval history | Genuine history from an earlier component definition fails fatally before restoring its now-incompatible eval result; effect-level mismatch and immediate root termination both append neither replacement `Yield` nor root `Close`, leave the retained prefix byte-for-byte unchanged, and permit the compatible definition to replay it |
+| R8 | Incompatible saved eval history | Genuine history from an earlier component definition fails fatally before restoring its now-incompatible eval result; effect-level mismatch and immediate root termination both append neither replacement `Yield` nor root `Close`, leave the saved prefix byte-for-byte unchanged, and permit the compatible definition to replay it |
 | R9 | `when` accessible in eval block | `yield* when(fn)` retries until fn succeeds |
 | R10 | `when` retries on throw | Inner function throws twice, then succeeds → `when` resolves |
 | R11 | `when` propagates timeout | Inner function never succeeds → `when` throws after limit |
@@ -13396,7 +13396,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
 | S15 | Incremental ordinary stdout | Unterminated and chunk-split ordinary bytes are forwarded before teardown, byte for byte |
 | S16 | Incremental handshake records | A split handshake is suppressed, duplicate supervision remains active, and invalid candidates are bounded and suppressed |
 | S17 | Service teardown failures | A lone observable process teardown failure becomes `ServiceTeardownError`; an active execution failure remains first in the invocation aggregate |
-| S18 | Projected failure cleanup | A prompt projected-content failure tears down both retained real services and starts neither again |
+| S18 | Projected failure cleanup | A prompt projected-content failure tears down both saved real services and starts neither again |
 | S19 | Compiled-binary attached-service ping-pong | A smoke document attaches two real services, closes both endpoints into ephemeral middleware, journals only the ordinary filtered `Sample` result and completes `ping→pong→ping` |
 
 ### Tier EO — eval output() function
@@ -13545,7 +13545,7 @@ Identifiers match `packages/core/tests/switch.test.ts` one to one.
 | SW56 | Projection | A `<Switch>` through `<Content />` reads the caller's bindings |
 | SW57 | Journal | Only the selected case's eval entry reaches the journal |
 | SW58 | Partial replay | From a journal prefix without the root Close, the selected effect restores, selection is rebuilt, the run continues at the next live effect and the output is reproduced |
-| SW59 | Completed replay | The retained result is returned with no selector, matcher, import or block |
+| SW59 | Completed replay | The saved result is returned with no selector, matcher, import or block |
 
 The shared entrypoints carry the rest: `syntax-symbols.test.ts` SY4b and SY5b
 freeze both symbol entries and prove no repository file or registration can
@@ -13831,7 +13831,7 @@ subject.
 | FT1 | Refusal before transport | Mutating and unknown methods, a lowercase `get`, a relative or non-HTTP URL, a body, an unknown prop, a missing URL, a non-string header value, and two spellings of one name each refuse with request count zero |
 | FT2–FT4 | The normalized request | GET by default, HEAD verbatim, lowercase header names in lexicographic order with values untouched |
 | FT5–FT9 | The bound | Accepted spellings reach the provider as milliseconds; every rejected class costs no request; an explicit prop outranks `Config.timeoutFetch`; no bound at all is an absent field |
-| FT10–FT13 | The retained response | One canonical JSON value, identical in the binding and the journal; a provider that rewrites its headers afterwards changes neither; a provider that cannot enumerate them is refused |
+| FT10–FT13 | The saved response | One canonical JSON value, identical in the binding and the journal; a provider that rewrites its headers afterwards changes neither; a provider that cannot enumerate them is refused |
 | FT14 | Bodies | GET reads once, HEAD not at all — including when a body read would fail |
 | FT15–FT17 | What a status means | A captured non-2xx is data and the document carries on; an uncaptured 2xx renders nothing; an uncaptured non-2xx records the response and stops later executable work |
 | FT18–FT20 | The binding seam | `hasBinding()` answers for the invocation that asked — siblings, a nested invocation inside its caller, and two invocations live at once |
@@ -13860,7 +13860,7 @@ Defined in §5.6, with the selection rule in §5.3.
 | CIV8 | No borrowed implementation | An implementation kept from one declared component, called at an invocation of another with that invocation's genuine issuance, is refused |
 | CIV9 | No borrowed execution | An implementation kept from one execution, called at another execution's own invocation of the same component, is refused |
 | CIV10 | No transplanted record | The same, with the first execution's whole registration record answered for that name inside the second: still refused |
-| CIV11 | No shadowed registration | With `<Nest><Probe /></Nest>` authored in a fixture, the declared implementation is retained at its own site and run at a site whose name a nested registration shadowed: refused, and the case fails if identity is restored by authored-name equality |
+| CIV11 | No shadowed registration | With `<Nest><Probe /></Nest>` authored in a fixture, the declared implementation is saved at its own site and run at a site whose name a nested registration shadowed: refused, and the case fails if identity is restored by authored-name equality |
 | CIV12 | No concurrent frame | An issuance belonging to another live invocation of the same component, in a frame of its own, is refused in this one |
 | CIV13 | No refused registration | A declared component whose registration is refused leaves a claimant that answers for nothing |
 | CIV14 | Lifetime | An issuance the engine has ended names nothing, claimed in its own frame |
@@ -13935,8 +13935,8 @@ what they observe is what a person's terminal would show.
 | DM52 | A mark this engine did not make is nothing | A segment carrying the disposition as a field is not exact, whoever supplied it; expansion also rebuilds text segments, so such a field never reaches emission in the first place |
 | DM53 | The record is not reachable by name | A component that builds a context with the record's name and writes to it publishes prose |
 | DM54 | A spawned child's source is still source | A declared exact component rendered inside `<All>`/`<Spawn>` keeps its bytes unpresented, and a prose sibling stays prose |
-| DM55 | A replayed child restores what its bytes were | Each child's retained close holds its ordered `{ text, exact }` runs, and replaying that history reproduces the live output with the same provenance |
-| DM56 | A close that will not read fails the run | A retained child close that is not a list of runs, or holds a member that is not one, refuses atomically and publishes nothing |
+| DM55 | A replayed child restores what its bytes were | Each child's saved close holds its ordered `{ text, exact }` runs, and replaying that history reproduces the live output with the same provenance |
+| DM56 | A close that will not read fails the run | A saved child close that is not a list of runs, or holds a member that is not one, refuses atomically and publishes nothing |
 
 ### Tier MDK — Declaring exact Markdown with `Markdown({…})` (§5.3)
 
@@ -14007,7 +14007,7 @@ Plugin is the run it always was.
 | PL1 | The value | `Plugin(input)` returns the value it was given and adds no identity, version or capability; a Plugin with no `install` installs nothing |
 | PL2 | Module admission | An object with a non-empty `name` and an absent or callable `install` is admitted; a non-object, a missing, empty or non-string name, and a non-callable `install` each refuse naming the specifier and the member that failed |
 | PL2a | Admission returns the value | What comes back is the admitted object itself: members outside the contract survive, `install` is the same function the module exported, and calling it through admission gives it the receiver its own module gave it |
-| PL3 | The flag grammar | Both spellings are read in occurrence order, only those tokens are removed, the scan stops at `--`, the original argv is retained frozen, and a missing or option-shaped value refuses before anything loads |
+| PL3 | The flag grammar | Both spellings are read in occurrence order, only those tokens are removed, the scan stops at `--`, the original argv is saved frozen, and a missing or option-shaped value refuses before anything loads |
 | PL4 | The command a Plugin is told | Each public command reports its own name — `repl` included — and the shorthand document form reports `run`; help, `--version` and the internal worker mode install no Plugin and load no module |
 | PL5 | Order composes | The bundled Plugin comes first where the command's profile carries it, then the repeated `--plugin` occurrences in written order; the first Plugin installed is the outermost `Document` wrapper, and reversing the selection reverses the composition behind the prefix |
 | PL6 | One name, one Plugin | Two selections claiming one Plugin name refuse before the first `install()` runs, whichever modules they came from |
@@ -14063,10 +14063,10 @@ user's own `~/.xmd/repositories`.
 | ORC6c | Context boundaries | Repository and Worktree bodies observe their checkout; `<Dir>` content observes the ensured directory; the enclosing cwd is restored after success, printed failure and cancellation |
 | ORC6d | Repository remains selected | Entering a directory inside a selected checkout changes only cwd; every Repository identity member and provider selection remains unchanged |
 | ORC6e | Host persistence | An ordinary host-created directory persists after successful, failed and cancelled content, and no teardown deletion occurs |
-| ORC6f | Workflow atomic ensure | Recursive creation, one durable `workspace_file` success and the resulting Workspace root commit together before content; the root retained by the effect is the authoritative current root |
+| ORC6f | Workflow atomic ensure | Recursive creation, one durable `workspace_file` success and the resulting Workspace root commit together before content; the root saved by the effect is the authoritative current root |
 | ORC6g | Workflow refusal rollback | A target or intermediate non-directory rolls back its mutation savepoint, publishes a sanitized refusal against the unchanged root, creates no partial parent and begins no content |
-| ORC6h | Workflow replay and cancellation | Completed replay restores the recorded success and retained root without ensuring again; cancellation before commit publishes neither, while later content cancellation preserves the committed directory and restores cwd |
-| ORC6i | Generated write permission | `allow={["write"]}` admits the paired `<Dir>` under `https://executable.md/components/dir/ensure` and authorizes persistent recursive creation; a retained entry naming another identity for that spelling refuses before generated execution and mutation |
+| ORC6h | Workflow replay and cancellation | Completed replay restores the recorded success and saved root without ensuring again; cancellation before commit publishes neither, while later content cancellation preserves the committed directory and restores cwd |
+| ORC6i | Generated write permission | `allow={["write"]}` admits the paired `<Dir>` under `https://executable.md/components/dir/ensure` and authorizes persistent recursive creation; a saved entry naming another identity for that spelling refuses before generated execution and mutation |
 | ORC7 | Session placement | A Session launched in a managed Worktree receives that Git root and a distinct worktree session key; `.git`-file discovery remains the boundary |
 | ORC8 | Persistent lifecycle | Managed paths, metadata and working files survive normal completion, authored failure and cancellation; no teardown Git or delete command occurs |
 | ORC9 | Compatible reuse | A second invocation with the same immutable request reuses the same path and preserves a moved branch and a later commit while revalidating owner, origin, object format and creation commit |
@@ -14080,7 +14080,7 @@ user's own `~/.xmd/repositories`.
 | ORC17 | Live PullRequests | Configured reviews, comments and checks reads, and a Push-authorized upsert, run under ordinary Deno; the read ceiling and the local evidence check both precede credential and network access |
 | ORC18 | The journal is diagnostic | The same fixture without and with `--journal` performs the same live operations once per invocation; the trace is newly created and never consumed as continuation or evidence |
 | ORC19 | Nested run profile | An isolated `host="run"` child receives the declarations and a fresh provider; its evidence and locks reach neither its parent nor a sibling |
-| ORC20 | Retained workflow regression | Repository and Worktree replay, transactional Git, Push and pull-request history evidence, Issue effects, forks and completed replay keep their records, identities, provider call counts and native-launch refusal unchanged; directory ensure adds only its own `workspace_file` event and resulting retained root |
+| ORC20 | Saved workflow regression | Repository and Worktree replay, transactional Git, Push and pull-request history evidence, Issue effects, forks and completed replay keep their records, identities, provider call counts and native-launch refusal unchanged; directory ensure adds only its own `workspace_file` event and resulting saved root |
 | ORC21 | Compiled binary | A compiled smoke creates a root-level ambient Worktree, runs a command there, proves `.git` is a file and the checkout persists after exit; a second gated process proves lock refusal and release |
 
 
@@ -14215,4 +14215,4 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 100 | `<Let>` → `<Json>` → `<Parse>` is the explicit JSON direction | A document names a value, renders it as text, and validates text back into a value at three boundaries a reader can see. `{binding}` interpolation keeps its ordinary string coercion — there is no hidden JSON conversion — and `<Json>` takes no `indent`, `pretty`, replacer, sorting, canonicalization or newline option, so nothing about the format has to be agreed on per invocation. A file that must end in a newline authors that newline at the point it is written, rather than buying an option every other caller then has to reason about |
 | 101 | A capture is delivered from the authored expression | The scanner resolves a `{…}` prop whose text reads as JSON, but it runs before a name resolves and so cannot know the prop is a capture. Keeping the authored text beside the reading lets expansion decide with the selected definition in hand: a captured prop gets what its expression produced, every other prop gets the reading it always had, and an overriding repository file is an ordinary component either way. Without it `value={undefined}` reached a capturing component as `null`, which is the projection a capture exists to avoid |
 | 102 | A successful `undefined` omits an ordinary prop | Absence is the fact an author has to be able to state: an optional identity that a preceding result will supply is not there yet, and there is no value that means "not there" — `null` is a value, and a second element written for the other case duplicates the invocation. The omission is decided in the one resolver both component kinds pass through, before validation, so the schema answers it: optional stays unset, a `default` applies, a required prop fails as missing. It stops at the root and at that boundary — nested members keep native `JSON.stringify` normalization, failures stay failures, and captures and `<Let>` keep binding the exact value — and it puts `undefined` nowhere durable, because a prop that was never there is nothing to record |
-| 103 | Protected `<Evaluate>` and an authored loop, not hidden `<Prompt>` behavior | A workflow Agent's request/result exchange is written in the document: `<Loop max>` owns the bound, `<Parse>` and `<If>` own the branch, and `<Evaluate text={…} />` is where a generated fragment is admitted and performed. `<Prompt>` stays exactly one durable turn, with no hidden retry, schema repair or observation loop inside it, and the Agent Api gains no second operation. A component rather than a new execution primitive, because the operation needs a name a trusted document can write and a schema a reader can check. Canonical core supplies [protected Evaluate](#532-evaluate-the-protected-evaluation-component); the host offers its generated selection, read and resolved before public execution policy. Protection fixes the implementation and grants no permission; every ceiling comes from that captured selection and the declarations that own the implementations it named. Exhaustion is therefore the document's own failure, stated where the bound is, with the turns that produced it retained |
+| 103 | Protected `<Evaluate>` and an authored loop, not hidden `<Prompt>` behavior | A workflow Agent's request/result exchange is written in the document: `<Loop max>` owns the bound, `<Parse>` and `<If>` own the branch, and `<Evaluate text={…} />` is where a generated fragment is admitted and performed. `<Prompt>` stays exactly one durable turn, with no hidden retry, schema repair or observation loop inside it, and the Agent Api gains no second operation. A component rather than a new execution primitive, because the operation needs a name a trusted document can write and a schema a reader can check. Canonical core supplies [protected Evaluate](#532-evaluate-the-protected-evaluation-component); the host offers its generated selection, read and resolved before public execution policy. Protection fixes the implementation and grants no permission; every ceiling comes from that captured selection and the declarations that own the implementations it named. Exhaustion is therefore the document's own failure, stated where the bound is, with the turns that produced it saved |

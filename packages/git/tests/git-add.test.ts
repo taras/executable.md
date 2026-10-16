@@ -3,7 +3,7 @@
  *
  * What is under test is staging that survives in the run's own Workspace: which
  * pathspecs Git received, which checkout received them, and which directory it
- * read them relative to. The discriminating observation is the retained
+ * read them relative to. The discriminating observation is the saved
  * checkout's index, read back through a disposable export the way the provider
  * reads it — an index-tree digest says something changed, and only the index
  * says what.
@@ -53,8 +53,8 @@ import {
   gitOutcomes,
   raised,
   removeWorkspacePath,
-  retainedRepositories,
-  retainedWorktrees,
+  savedRepositories,
+  savedWorktrees,
   runDocument,
   stagedPaths,
   subcommands,
@@ -112,15 +112,15 @@ function document(locator: string, ...lines: string[]): string {
   return [`<Repository name="project" url="${locator}">`, ...lines, "</Repository>"].join("\n");
 }
 
-/** What a retained result is read back for. */
+/** What a saved result is read back for. */
 function* expectation(
   database: WorkflowRunDatabase,
   paths: readonly string[],
   within = "",
 ): Operation<GitAddExpectation> {
-  const [repository] = yield* retainedRepositories(database);
+  const [repository] = yield* savedRepositories(database);
   if (repository === undefined) {
-    throw new Error("the run retained no repository to read a result against");
+    throw new Error("the run saved no repository to read a result against");
   }
   return {
     repository: repository.record,
@@ -157,11 +157,11 @@ function runForged(
   });
 }
 
-/** The primary checkout's Workspace path, once this run has retained one. */
+/** The primary checkout's Workspace path, once this run has saved one. */
 function* checkout(database: WorkflowRunDatabase): Operation<string> {
-  const [repository] = yield* retainedRepositories(database);
+  const [repository] = yield* savedRepositories(database);
   if (repository === undefined) {
-    throw new Error("the run retained no repository");
+    throw new Error("the run saved no repository");
   }
   return repository.record.checkoutPath;
 }
@@ -194,17 +194,14 @@ describe("workflow Git.Add staging", () => {
 
       const [outcome] = yield* gitOutcomes(database);
       expect(outcome?.status).toBe("ok");
-      const retained = parseGitAddResult(
-        outcome?.record,
-        yield* expectation(database, ["added.txt"]),
-      );
-      expect(retained?.paths).toEqual(["added.txt"]);
-      expect(retained?.checkout.worktreeName).toBe(null);
+      const saved = parseGitAddResult(outcome?.record, yield* expectation(database, ["added.txt"]));
+      expect(saved?.paths).toEqual(["added.txt"]);
+      expect(saved?.checkout.worktreeName).toBe(null);
       // Staging moves the index and nothing else.
-      expect(retained?.before.branch).toBe(retained?.after.branch);
-      expect(retained?.before.commit).toBe(retained?.after.commit);
-      expect(retained?.before.headTree).toBe(retained?.after.headTree);
-      expect(retained?.before.indexTree).not.toBe(retained?.after.indexTree);
+      expect(saved?.before.branch).toBe(saved?.after.branch);
+      expect(saved?.before.commit).toBe(saved?.after.commit);
+      expect(saved?.before.headTree).toBe(saved?.after.headTree);
+      expect(saved?.before.indexTree).not.toBe(saved?.after.indexTree);
     });
   });
 
@@ -234,9 +231,9 @@ describe("workflow Git.Add staging", () => {
         "which.txt",
       ]);
       const [outcome] = yield* gitOutcomes(database);
-      const retained = parseGitAddResult(outcome?.record, yield* expectation(database, paths));
+      const saved = parseGitAddResult(outcome?.record, yield* expectation(database, paths));
       // What the document wrote, not what Git made of it.
-      expect(retained?.paths).toEqual(paths);
+      expect(saved?.paths).toEqual(paths);
     });
   });
 
@@ -263,12 +260,12 @@ describe("workflow Git.Add staging", () => {
         );
         expect(yield* stagedPaths(database, yield* checkout(database))).toEqual(["added.txt"]);
         const [outcome] = yield* gitOutcomes(database);
-        const retained = parseGitAddResult(
+        const saved = parseGitAddResult(
           outcome?.record,
           yield* expectation(database, ["added.txt"]),
         );
-        expect(retained?.paths).toEqual(["added.txt"]);
-        trees.push(String(retained?.after.indexTree));
+        expect(saved?.paths).toEqual(["added.txt"]);
+        trees.push(String(saved?.after.indexTree));
       }
       expect(trees[0]).toBe(trees[1]);
     });
@@ -282,7 +279,7 @@ describe("workflow Git.Add staging", () => {
     // executions of one run. The first execution's staging fails, which retains
     // nothing and leaves the run partial; the Workspace fixture then removes the
     // file, and the identical document runs again — which is also what "the
-    // operation may run again from the previous retained root" means.
+    // operation may run again from the previous saved root" means.
     const source = document(
       remote.locator,
       `<File path="which.txt">`,
@@ -373,13 +370,13 @@ describe("workflow Git.Add staging", () => {
       // the directory is untouched.
       expect(yield* stagedPaths(nested, yield* checkout(nested))).toEqual(["nested/note.md"]);
       const [outcome] = yield* gitOutcomes(nested);
-      const retained = parseGitAddResult(
+      const saved = parseGitAddResult(
         outcome?.record,
         yield* expectation(nested, ["."], "/nested"),
       );
-      expect(retained?.paths).toEqual(["."]);
+      expect(saved?.paths).toEqual(["."]);
       // The checkout is the Repository's; the directory is where Git ran.
-      expect(retained?.checkout.checkoutPath).toBe(yield* checkout(nested));
+      expect(saved?.checkout.checkoutPath).toBe(yield* checkout(nested));
 
       // The same document at the checkout root stages both, which is what makes
       // the reading above a claim about the working directory.
@@ -481,7 +478,7 @@ describe("workflow Git.Add selection", () => {
         ),
       );
 
-      const [worktree] = yield* retainedWorktrees(database, "project");
+      const [worktree] = yield* savedWorktrees(database, "project");
       expect(yield* stagedPaths(database, String(worktree?.checkoutPath))).toEqual(["added.txt"]);
       // The Repository's own checkout staged nothing.
       expect(yield* stagedPaths(database, yield* checkout(database))).toEqual([]);
@@ -518,7 +515,7 @@ describe("workflow Git.Add selection", () => {
         ),
       );
 
-      const [worktree] = yield* retainedWorktrees(database, "project");
+      const [worktree] = yield* savedWorktrees(database, "project");
       expect(yield* stagedPaths(database, String(worktree?.checkoutPath))).toEqual([
         "nested/note.md",
       ]);
@@ -559,11 +556,11 @@ describe("workflow Git.Add selection", () => {
     ].join("\n");
 
     yield* withStorage(root, function* () {
-      const unretained = yield* createRun({ runId: "ghost" });
+      const unsaved = yield* createRun({ runId: "ghost" });
       const counting = countingHost();
-      const ghost = yield* raised(runForged(unretained, FORGED, source, countingOptions(counting)));
+      const ghost = yield* raised(runForged(unsaved, FORGED, source, countingOptions(counting)));
       expect(causedBy(ghost, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
-      expect(yield* gitEvents(unretained)).toHaveLength(0);
+      expect(yield* gitEvents(unsaved)).toHaveLength(0);
 
       // A real name carrying a substituted member is refused for the member.
       const substituted = yield* createRun({ runId: "substituted" });
@@ -571,7 +568,7 @@ describe("workflow Git.Add selection", () => {
         runForged(substituted, { ...FORGED, name: "project" }, source, countingOptions(counting)),
       );
       expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
-      expect(yield* retainedRepositories(substituted)).toHaveLength(1);
+      expect(yield* savedRepositories(substituted)).toHaveLength(1);
       expect(yield* gitEvents(substituted)).toHaveLength(0);
       expect(subcommands(counting.counters)).not.toContain("add");
     });
@@ -789,7 +786,7 @@ describe("workflow Git.Add refusals", () => {
  * A JavaScript string is UTF-16 code units, and an unpaired surrogate is one a
  * document can write. The way to Git is UTF-8 — a process argument list — and
  * encoding an unpaired surrogate there replaces it with U+FFFD, so Git would
- * receive a different string from the one the run retained. The checkout below
+ * receive a different string from the one the run saved. The checkout below
  * really holds a U+FFFD-named file, which is what makes the substitution
  * observable rather than theoretical: it would have been staged.
  */
@@ -907,11 +904,8 @@ describe("workflow Git.Add pathspec text", () => {
       expect(yield* stagedPaths(database, yield* checkout(database))).toEqual([REPLACEMENT]);
       const [outcome] = yield* gitOutcomes(database);
       expect(outcome?.status).toBe("ok");
-      const retained = parseGitAddResult(
-        outcome?.record,
-        yield* expectation(database, [REPLACEMENT]),
-      );
-      expect(retained?.paths).toEqual([REPLACEMENT]);
+      const saved = parseGitAddResult(outcome?.record, yield* expectation(database, [REPLACEMENT]));
+      expect(saved?.paths).toEqual([REPLACEMENT]);
     });
   });
 });
@@ -1010,19 +1004,19 @@ describe("workflow Git.Add request ownership", () => {
       // sitting right there, untouched.
       expect(yield* stagedPaths(database, yield* checkout(database))).toEqual(["original.txt"]);
 
-      // The retained result and the effect's own identity say the same thing.
+      // The saved result and the effect's own identity say the same thing.
       const [outcome] = yield* gitOutcomes(database);
       expect(outcome?.status).toBe("ok");
-      const retained = parseGitAddResult(
+      const saved = parseGitAddResult(
         outcome?.record,
         yield* expectation(database, ["original.txt"]),
       );
-      expect(retained?.paths).toEqual(["original.txt"]);
+      expect(saved?.paths).toEqual(["original.txt"]);
 
-      const [repository] = yield* retainedRepositories(database);
+      const [repository] = yield* savedRepositories(database);
       const record = repository?.record;
       if (record === undefined) {
-        throw new Error("the run retained no repository");
+        throw new Error("the run saved no repository");
       }
       const [event] = yield* gitEvents(database);
       expect(event?.type === "yield" ? event.description.configuration : undefined).toBe(

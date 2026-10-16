@@ -92,7 +92,7 @@ const SHORT_ALIASES: ReadonlyMap<string, string> = new Map([
   ["-j", `${JOURNAL_OPTION} <path>`],
 ]);
 
-/** What a short alias of a retained authorship option is answered with. */
+/** What a short alias of a saved authorship option is answered with. */
 export function shortAliasRefusal(option: string): string {
   return `unrecognized option for xmd plan: ${option} — write \`${SHORT_ALIASES.get(option)}\``;
 }
@@ -150,11 +150,11 @@ function optionName(token: string): string {
  *
  * Asked only where a value option would otherwise swallow the token after it.
  * A removed spelling is already refused where it stands, and a bare `-` is a
- * file called `-` rather than an option, so what is left is the retained
+ * file called `-` rather than an option, so what is left is the saved
  * grammar: the tokens that mean something here and therefore cannot also be a
  * caller's filename.
  */
-function namesRetainedOption(token: string): boolean {
+function namesSavedOption(token: string): boolean {
   if (!token.startsWith("-") || token === "-") {
     return false;
   }
@@ -311,7 +311,7 @@ export function scanPlanArgs(args: readonly string[]): PlanScan {
       const separated = equals === -1 && VALUE.has(name) && next !== undefined ? next : undefined;
       if (separated !== undefined) {
         // A removed option is refused where it stands, including where a
-        // retained option would otherwise swallow it: `--include --run` names
+        // saved option would otherwise swallow it: `--include --run` names
         // a directory nobody has, and reading it as one is how a removed
         // spelling survives.
         const swallowed = tokenRemoval(separated);
@@ -340,7 +340,7 @@ export function scanPlanArgs(args: readonly string[]): PlanScan {
         // — silently, because a path is a path.
         const value =
           equals === -1
-            ? separated !== undefined && namesRetainedOption(separated)
+            ? separated !== undefined && namesSavedOption(separated)
               ? undefined
               : separated
             : token.slice(equals + 1);

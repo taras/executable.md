@@ -20,7 +20,7 @@ import { runDoc } from "./helpers.ts";
 describe("<Test> as a function component", () => {
   beforeAll(() => useTempFileCompiler());
 
-  /** An eval block whose retained work fails while the test is dismantled. */
+  /** An eval block whose saved work fails while the test is dismantled. */
   const FAILING_CLEANUP = [
     "```js persist eval",
     'yield* spawn(function* () { try { yield* suspend(); } finally { throw new Error("cleanup exploded"); } });',

@@ -139,7 +139,7 @@ function exactly(value: Record<string, unknown>, members: readonly string[]): bo
  * boundary, so it is unknown state and fails closed like any other.
  */
 /**
- * Read a retained build binding strictly.
+ * Read a saved build binding strictly.
  *
  * The member set is exact rather than minimal, because a binding is compared
  * for equality: a member this build ignores is a fact the writer thought was

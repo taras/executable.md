@@ -68,7 +68,7 @@ import {
   inspectDocument,
   agentIdentityComponents,
   installAgentComponents,
-  retainedSource,
+  savedSource,
   rootSourcePath,
   useNormalizedOutput,
   useTerminalOutput,
@@ -300,10 +300,10 @@ const runConfig = object({
 const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive terminal.";
 
 /**
- * `xmd repl` — one entry, one terminal, one retained history.
+ * `xmd repl` — one entry, one terminal, one saved history.
  *
  * The optional positional is a location this command printed earlier. With one,
- * the command reopens exactly that retained history and selects exactly what the
+ * the command reopens exactly that saved history and selects exactly what the
  * location names; with none, it starts a fresh execution with an empty draft.
  *
  * The entry a person types may run Agent work, so this command configures the
@@ -317,7 +317,7 @@ const replConfig = object({
   location: {
     description:
       "a location this REPL printed earlier — `xmd://repl/<execution>/<surface>...` — to reopen " +
-      "that retained history and the exact view it names",
+      "that saved history and the exact view it names",
     ...field(z.string().optional(), cli.argument()),
   },
   ...agentFields,
@@ -477,7 +477,7 @@ const AGENT_DESCRIPTION = "Report the model and effort choices an agent advertis
  *
  * It answers the one thing the option list cannot: asking costs a conversation
  * in the agent's own history. Nothing is said in it and nothing of this run is
- * retained, but a provider that keeps its sessions keeps that one.
+ * saved, but a provider that keeps its sessions keeps that one.
  */
 const AGENT_OPTIONS_HELP = [
   "Inspecting an agent reads the choices it advertises for a session, so xmd",
@@ -584,7 +584,7 @@ const REPL_HELP = [
   "  An execution admits exactly one entry. The screen always shows a location",
   "  of the form xmd://repl/<execution>/<surface>..., and when the command ends it",
   "  prints the whole xmd repl <location> that reopens the one it ended at. Running",
-  "  it reopens the same retained history and selects the same view — in this",
+  "  it reopens the same saved history and selects the same view — in this",
   "  process or another one, from the history file alone.",
 ].join("\n");
 
@@ -1074,7 +1074,7 @@ interface DocumentConfig {
   /**
    * The journal this execution reads and appends, when the caller owns one.
    *
-   * A workflow run does: its journal is the run's retained history, and
+   * A workflow run does: its journal is the run's saved history, and
    * replacing it with a fresh stream would make every execution a first one.
    * `xmd run` supplies none and gets the empty stream below.
    */
@@ -1144,7 +1144,7 @@ export interface DocumentMode {
   /**
    * What this command's Plugins declared and installed.
    *
-   * The retained assembly, never a second installation. The Plugin values
+   * The saved assembly, never a second installation. The Plugin values
    * travel with it so an isolated nested run can install them again in its own
    * scope, which is the one place a second installation is correct.
    */
@@ -1823,7 +1823,7 @@ interface PropsPhase {
    * The immutable definition a `workflow start` established, when it did.
    *
    * Established here rather than later because the props a run is created with
-   * are the ones the *retained* document declares: binding against one reading
+   * are the ones the *saved* document declares: binding against one reading
    * of the file and then executing another would let help and parsing describe
    * a document that is not the one running.
    */
@@ -2087,7 +2087,7 @@ function* preparePropsPhase(
     if (!input.ok) {
       return { args: fixed, bindings: [], error: STANDARD_INPUT_FAILURE };
     }
-    root = retainedSource(STANDARD_INPUT_PATH, input.value);
+    root = savedSource(STANDARD_INPUT_PATH, input.value);
   } else if (first !== undefined) {
     const reference = readReference(first);
     if (!reference.ok) {
@@ -2164,9 +2164,9 @@ function exactRoot(root: RootDocumentSource, target: string | undefined): RootDo
  * `--props-*` arguments are exactly `xmd run`'s for that document. A `fork`
  * reads the same way, from the definition it names as its third argument: the
  * fork is a run of that document, so its props are that document's — merged
- * over what the source retained, which happens later, once the run store can be
+ * over what the source saved, which happens later, once the run store can be
  * read. `resume` declares nothing at all: its props are the ones the run
- * retained, and any spelling that would supply new ones is refused rather than
+ * saved, and any spelling that would supply new ones is refused rather than
  * ignored.
  */
 function* prepareWorkflowProps(
@@ -2219,7 +2219,7 @@ function* prepareWorkflowProps(
         workflow,
         error:
           `unrecognized option for xmd workflow ${action}: ${stray} — document properties ` +
-          "belong to the start that created the run, whose props it retained",
+          "belong to the start that created the run, whose props it saved",
       };
     }
     return { args, bindings: [], workflow };
@@ -2235,7 +2235,7 @@ function* prepareWorkflowProps(
   }
 
   const { definition } = established.value;
-  const root = retainedSource(definition.entrypoint, established.value.source, {
+  const root = savedSource(definition.entrypoint, established.value.source, {
     ...(definition.targetPath === undefined ? {} : { target: definition.targetPath }),
   });
   try {
@@ -3211,7 +3211,7 @@ function* dispatch(
               established: propsPhase.established,
               props: props.value ?? {},
               // What the *candidate* declares. A fork merges the properties its
-              // source retained under its own, and the result is held to the
+              // source saved under its own, and the result is held to the
               // document that is about to run.
               propsSchema: propsPhase.propsSchema ?? {},
             };
@@ -3232,7 +3232,7 @@ function* dispatch(
               secretDetection: request.secretDetection,
               stream: execution.stream,
               // A workflow owns its journal, so its process results are part of
-              // the run's retained history: a resumed procedure reads back what
+              // the run's saved history: a resumed procedure reads back what
               // its commands printed rather than re-running them to find out.
               // It names no `--journal`, which is exactly why this is stated
               // here and never derived from that pathname.
@@ -3410,7 +3410,7 @@ function* runCommand(
   const helpRequest = takeHelpFlag(evalFlags.rest);
 
   // Before the props phase, because that phase establishes a workflow start's
-  // definition in order to read what the *retained* document declares. On a
+  // definition in order to read what the *saved* document declares. On a
   // host without workflow support the first thing a caller would otherwise see
   // is a refusal about their document, which is not the reason the command is
   // not going to run. Help is exempt: the grammar is the same everywhere, and

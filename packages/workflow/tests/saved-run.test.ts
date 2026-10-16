@@ -4,12 +4,12 @@
  * A live execution could be the thing that decides what the run is, allocating
  * an identifier and establishing a definition as it goes. A workflow host has
  * already done both by the time a document runs — storage answered with the run
- * id, and the definition was established from the bytes it retained — so
+ * id, and the definition was established from the bytes it saved — so
  * nothing is left to decide, and a journal that records a different run is not
  * this run's journal.
  *
  * Every test here replaces `Git` with a provider that fails when it is
- * consulted, so "the retained installation asks Git nothing" is asserted rather
+ * consulted, so "the saved installation asks Git nothing" is asserted rather
  * than assumed.
  */
 
@@ -37,13 +37,13 @@ import {
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionRequest } from "@executablemd/core";
 import { GitQuery } from "@executablemd/git/api";
-import { getWorkflowRun, retainedWorkflowInstallation } from "../src/run.ts";
+import { getWorkflowRun, savedWorkflowInstallation } from "../src/run.ts";
 import type { WorkflowRun } from "../src/run.ts";
 
 const COMMIT = "9fceb02d0ae598e95dc970b74767f19372d61af8";
 const OTHER_COMMIT = "1111111111111111111111111111111111111111";
 
-const RETAINED: WorkflowRun = Object.freeze({
+const SAVED: WorkflowRun = Object.freeze({
   runId: "release-1.4",
   bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 });
@@ -83,7 +83,7 @@ interface Attempt {
 }
 
 /**
- * Run `<Probe />` under a retained installation, watching everything a refusal
+ * Run `<Probe />` under a saved installation, watching everything a refusal
  * has to prevent.
  *
  * `seen` is non-empty only if the document expanded; `emitted` is non-empty only
@@ -91,7 +91,7 @@ interface Attempt {
  * policy it wants to prove cannot widen the boundary — installed *outside* the
  * workflow installation, which is the position a suppressing handler wants.
  */
-function runRetained(
+function runSaved(
   run: WorkflowRun,
   stream: DurableStream,
   install: Operation<void> = ok(),
@@ -103,7 +103,7 @@ function runRetained(
     yield* useForbiddenGit();
     yield* useProbe(seen);
     yield* install;
-    const workflow = retainedWorkflowInstallation(run);
+    const workflow = savedWorkflowInstallation(run);
     yield* after;
     yield* DocumentOutput.around({
       *output([text], next) {
@@ -237,7 +237,7 @@ function useForeignStreamHijack(raw: DurableStream): Operation<void> {
  *
  * The run id shifts on the second read of the recorded value, which is what a
  * backend handing out live objects can do. Admission and replay must therefore
- * be reading one retained snapshot rather than each taking their own look —
+ * be reading one saved snapshot rather than each taking their own look —
  * otherwise a history admitted as one run is replayed as another.
  */
 function shiftingJournal(events: readonly DurableEvent[], reads: string[]): DurableStream {
@@ -251,7 +251,7 @@ function shiftingJournal(events: readonly DurableEvent[], reads: string[]): Dura
       get result(): Result {
         const runId = reads.length === 0 ? "release-1.4" : "release-1.5";
         reads.push(runId);
-        return { status: "ok", value: { runId, bundleHash: RETAINED.bundleHash } };
+        return { status: "ok", value: { runId, bundleHash: SAVED.bundleHash } };
       },
     };
   };
@@ -333,13 +333,13 @@ function completedWith(
   );
 }
 
-describe("Tier RR — retained workflow runs", () => {
-  it("RR1: records exactly the retained run, without allocating or resolving", function* () {
+describe("Tier RR — saved workflow runs", () => {
+  it("RR1: records exactly the saved run, without allocating or resolving", function* () {
     const stream = new InMemoryStream();
-    const attempt = yield* runRetained(RETAINED, stream);
+    const attempt = yield* runSaved(SAVED, stream);
 
     expect(attempt.thrown).toBeUndefined();
-    expect(attempt.seen).toEqual([RETAINED]);
+    expect(attempt.seen).toEqual([SAVED]);
     expect(recordedRun(stream)).toEqual({
       runId: "release-1.4",
       bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -347,24 +347,24 @@ describe("Tier RR — retained workflow runs", () => {
     expect(workflowEvents(stream)).toHaveLength(1);
   });
 
-  it("RR2: restores the retained run from a truncated journal without recording again", function* () {
+  it("RR2: restores the saved run from a truncated journal without recording again", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
     const resumed = partial(first);
-    const attempt = yield* runRetained(RETAINED, resumed);
+    const attempt = yield* runSaved(SAVED, resumed);
 
     expect(attempt.thrown).toBeUndefined();
-    expect(attempt.seen).toEqual([RETAINED]);
+    expect(attempt.seen).toEqual([SAVED]);
     expect(workflowEvents(resumed)).toHaveLength(1);
   });
 
-  it("RR3: restores the retained run from a completed journal", function* () {
+  it("RR3: restores the saved run from a completed journal", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
     const replayed = new InMemoryStream(first.snapshot());
-    const attempt = yield* runRetained(RETAINED, replayed);
+    const attempt = yield* runSaved(SAVED, replayed);
 
     expect(attempt.thrown).toBeUndefined();
     expect(workflowEvents(replayed)).toHaveLength(1);
@@ -372,9 +372,9 @@ describe("Tier RR — retained workflow runs", () => {
 
   it("RR4: refuses a journal recording a different run id", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
-    const attempt = yield* runRetained({ ...RETAINED, runId: "release-1.5" }, partial(first));
+    const attempt = yield* runSaved({ ...SAVED, runId: "release-1.5" }, partial(first));
 
     expect(attempt.thrown).toBeInstanceOf(StaleInputError);
     const message = attempt.thrown instanceof Error ? attempt.thrown.message : "";
@@ -387,23 +387,20 @@ describe("Tier RR — retained workflow runs", () => {
 
   it("RR5: refuses a journal recording a different bundle or target", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
-    const bundle = yield* runRetained(
-      { ...RETAINED, bundleHash: "ab".padEnd(64, "0") },
-      partial(first),
-    );
+    const bundle = yield* runSaved({ ...SAVED, bundleHash: "ab".padEnd(64, "0") }, partial(first));
     expect(bundle.thrown).toBeInstanceOf(StaleInputError);
     expect(bundle.thrown instanceof Error ? bundle.thrown.message : "").toContain("bundleHash");
 
-    const targeted = yield* runRetained({ ...RETAINED, targetPath: "Release" }, partial(first));
+    const targeted = yield* runSaved({ ...SAVED, targetPath: "Release" }, partial(first));
     expect(targeted.thrown).toBeInstanceOf(StaleInputError);
     expect(targeted.thrown instanceof Error ? targeted.thrown.message : "").toContain("targetPath");
   });
 
   it("RR6: refuses a record that does not describe a workflow run at all", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
     const damaged = new InMemoryStream(
       partial(first)
@@ -415,7 +412,7 @@ describe("Tier RR — retained workflow runs", () => {
         ),
     );
 
-    const attempt = yield* runRetained(RETAINED, damaged);
+    const attempt = yield* runSaved(SAVED, damaged);
     expect(attempt.thrown).toBeInstanceOf(StaleInputError);
   });
 
@@ -425,7 +422,7 @@ describe("Tier RR — retained workflow runs", () => {
   // would answer for history that never identified this run.
   it("RR8: refuses a completed journal that does not record exactly one run", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
     const cases: Array<{ says: string; stream: InMemoryStream }> = [
       { says: "no successful workflow run", stream: completedWith(first, () => []) },
@@ -443,7 +440,7 @@ describe("Tier RR — retained workflow runs", () => {
 
     for (const refused of cases) {
       const before = refused.stream.snapshot().length;
-      const attempt = yield* runRetained(RETAINED, refused.stream);
+      const attempt = yield* runSaved(SAVED, refused.stream);
 
       expect(attempt.thrown).toBeInstanceOf(StaleInputError);
       expect(attempt.thrown instanceof Error ? attempt.thrown.message : "").toContain(refused.says);
@@ -456,15 +453,15 @@ describe("Tier RR — retained workflow runs", () => {
 
   it("RR9: refuses a completed journal recording another run, or an unreadable one", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
     const completed = () => new InMemoryStream(first.snapshot());
 
-    const foreign = yield* runRetained({ ...RETAINED, runId: "release-1.5" }, completed());
+    const foreign = yield* runSaved({ ...SAVED, runId: "release-1.5" }, completed());
     expect(foreign.thrown).toBeInstanceOf(StaleInputError);
     expect(foreign.thrown instanceof Error ? foreign.thrown.message : "").toContain("runId");
 
-    const damaged = yield* runRetained(
-      RETAINED,
+    const damaged = yield* runSaved(
+      SAVED,
       completedWith(first, (event) => [
         { ...event, result: { status: "ok", value: { runId: 7 } } },
       ]),
@@ -478,14 +475,14 @@ describe("Tier RR — retained workflow runs", () => {
   // recorded root result back to run-b. Identity is not policy, so it does not.
   it("RR10: refuses another run's completed journal beneath a suppressing guard", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
     for (const phase of ["check", "admit", "decide"] as const) {
       const completed = new InMemoryStream(first.snapshot());
       const before = completed.snapshot().length;
 
-      const attempt = yield* runRetained(
-        { ...RETAINED, runId: "release-1.5" },
+      const attempt = yield* runSaved(
+        { ...SAVED, runId: "release-1.5" },
         completed,
         useSuppressingGuard(phase),
       );
@@ -500,13 +497,13 @@ describe("Tier RR — retained workflow runs", () => {
 
   it("RR11: refuses it beneath a same-named guard this suite built itself", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
     const completed = new InMemoryStream(first.snapshot());
     const before = completed.snapshot().length;
 
-    const attempt = yield* runRetained(
-      { ...RETAINED, runId: "release-1.5" },
+    const attempt = yield* runSaved(
+      { ...SAVED, runId: "release-1.5" },
       completed,
       useForeignGuard(),
     );
@@ -519,11 +516,11 @@ describe("Tier RR — retained workflow runs", () => {
 
   it("RR12: a valid completed journal still replays beneath a suppressing guard", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
     for (const phase of ["check", "admit", "decide"] as const) {
       const completed = new InMemoryStream(first.snapshot());
-      const attempt = yield* runRetained(RETAINED, completed, useSuppressingGuard(phase));
+      const attempt = yield* runSaved(SAVED, completed, useSuppressingGuard(phase));
 
       expect(attempt.thrown).toBeUndefined();
       // Zero live execution: the recorded result answered.
@@ -536,11 +533,11 @@ describe("Tier RR — retained workflow runs", () => {
   // let through, and it may still refuse — it simply cannot widen.
   it("RR13: a public guard still observes admitted history and may reject it", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
     const observed: string[] = [];
-    const watched = yield* runRetained(
-      RETAINED,
+    const watched = yield* runSaved(
+      SAVED,
       new InMemoryStream(first.snapshot()),
       ReplayGuard.around({
         *check([event], next) {
@@ -552,8 +549,8 @@ describe("Tier RR — retained workflow runs", () => {
     expect(watched.thrown).toBeUndefined();
     expect(observed).toContain("workflow_run");
 
-    const rejected = yield* runRetained(
-      RETAINED,
+    const rejected = yield* runSaved(
+      SAVED,
       new InMemoryStream(first.snapshot()),
       ReplayGuard.around({
         // deno-lint-ignore require-yield
@@ -573,7 +570,7 @@ describe("Tier RR — retained workflow runs", () => {
   // removing the genuine record and adding one of these would authorize reuse.
   it("RR14: refuses a record that is not the root coroutine's canonical one", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
     const counterfeits: Array<{ says: string; change: (event: Yield) => DurableEvent[] }> = [
       {
@@ -593,7 +590,7 @@ describe("Tier RR — retained workflow runs", () => {
             ...event,
             result: {
               status: "ok",
-              value: { ...RETAINED, executor: "someone-else" },
+              value: { ...SAVED, executor: "someone-else" },
             },
           },
         ],
@@ -603,7 +600,7 @@ describe("Tier RR — retained workflow runs", () => {
     for (const counterfeit of counterfeits) {
       const damaged = completedWith(first, counterfeit.change);
       const before = damaged.snapshot().length;
-      const attempt = yield* runRetained(RETAINED, damaged);
+      const attempt = yield* runSaved(SAVED, damaged);
 
       expect(attempt.thrown).toBeInstanceOf(StaleInputError);
       expect(attempt.seen).toEqual([]);
@@ -619,7 +616,7 @@ describe("Tier RR — retained workflow runs", () => {
   // establishment failure is not a licence to establish the run again.
   it("RR15: refuses a truncated journal whose run record failed", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
     const failed = new InMemoryStream(
       partial(first)
@@ -632,7 +629,7 @@ describe("Tier RR — retained workflow runs", () => {
     );
     const before = failed.snapshot().length;
 
-    const attempt = yield* runRetained(RETAINED, failed);
+    const attempt = yield* runSaved(SAVED, failed);
 
     expect(attempt.thrown).toBeInstanceOf(StaleInputError);
     expect(attempt.seen).toEqual([]);
@@ -645,10 +642,10 @@ describe("Tier RR — retained workflow runs", () => {
   // RR16: nothing about the run reaches the error object, only the message.
   it("RR16: a refusal retains no run id, base, pinned commit or planted member", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
-    const attempt = yield* runRetained(
-      { ...RETAINED, runId: "release-1.5" },
+    const attempt = yield* runSaved(
+      { ...SAVED, runId: "release-1.5" },
       new InMemoryStream(first.snapshot()),
     );
 
@@ -670,8 +667,8 @@ describe("Tier RR — retained workflow runs", () => {
   // built, after every handler has had its turn.
   it("RR17: refuses another run's journal however Execution middleware is ordered", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
-    const other = { ...RETAINED, runId: "release-1.5" };
+    yield* runSaved(SAVED, first);
+    const other = { ...SAVED, runId: "release-1.5" };
 
     const hijacks: Array<{ says: string; install: (raw: DurableStream) => Operation<void> }> = [
       { says: "the package's own descriptor", install: useStreamHijack },
@@ -684,7 +681,7 @@ describe("Tier RR — retained workflow runs", () => {
       for (const order of ["before", "after"] as const) {
         const raw = new InMemoryStream(first.snapshot());
         const handler = hijack.install(raw);
-        const attempt = yield* runRetained(
+        const attempt = yield* runSaved(
           other,
           new InMemoryStream(first.snapshot()),
           order === "before" ? handler : ok(),
@@ -702,16 +699,16 @@ describe("Tier RR — retained workflow runs", () => {
 
   // RR18: admission and replay read one history, not two. The journal below
   // answers differently on a second read; what makes that harmless is that the
-  // history is retained once, before anything is decided, and every phase is
+  // history is saved once, before anything is decided, and every phase is
   // handed those same objects.
-  it("RR18: identity, guard observation and replay consume one retained snapshot", function* () {
+  it("RR18: identity, guard observation and replay consume one saved snapshot", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
     const reads: string[] = [];
     const observed: Json[] = [];
-    const attempt = yield* runRetained(
-      RETAINED,
+    const attempt = yield* runSaved(
+      SAVED,
       shiftingJournal(first.snapshot(), reads),
       ReplayGuard.around({
         *check([event], next) {
@@ -724,7 +721,7 @@ describe("Tier RR — retained workflow runs", () => {
     );
 
     // The backend was asked once and never again, which is what makes the
-    // shift unreachable: the history is retained before anything is decided.
+    // shift unreachable: the history is saved before anything is decided.
     expect(reads).toEqual(["release-1.4"]);
     // Admission agreed with that settlement, so nothing was refused...
     expect(attempt.thrown).toBeUndefined();
@@ -742,7 +739,7 @@ describe("Tier RR — retained workflow runs", () => {
   // describe, not one to step past on the way to a record that does read.
   it("RR19: refuses a history holding an event that will not read", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
     const refusing: DurableEvent = {
       get type(): never {
@@ -751,7 +748,7 @@ describe("Tier RR — retained workflow runs", () => {
     } as unknown as DurableEvent;
 
     const watched = unreadableJournal([refusing, ...first.snapshot()]);
-    const attempt = yield* runRetained(RETAINED, watched.journal);
+    const attempt = yield* runSaved(SAVED, watched.journal);
 
     expect(attempt.thrown).toBeInstanceOf(Error);
     expect(attempt.seen).toEqual([]);
@@ -765,14 +762,14 @@ describe("Tier RR — retained workflow runs", () => {
   // the same fixed refusal, carrying none of its own text.
   it("RR20: a hostile recorded value becomes the fixed refusal and leaks nothing", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
     const hostile: Array<{ says: string; value: () => unknown }> = [
       {
         says: "ownKeys refuses",
         value: () =>
           new Proxy(
-            { ...RETAINED },
+            { ...SAVED },
             {
               ownKeys() {
                 throw new Error("PLANTED-OWNKEYS");
@@ -784,7 +781,7 @@ describe("Tier RR — retained workflow runs", () => {
         says: "getOwnPropertyDescriptor refuses",
         value: () =>
           new Proxy(
-            { ...RETAINED },
+            { ...SAVED },
             {
               getOwnPropertyDescriptor() {
                 throw new Error("PLANTED-DESCRIPTOR");
@@ -804,7 +801,7 @@ describe("Tier RR — retained workflow runs", () => {
       {
         says: "classification refuses",
         value: () => {
-          const revoked = Proxy.revocable({ ...RETAINED }, {});
+          const revoked = Proxy.revocable({ ...SAVED }, {});
           revoked.revoke();
           return revoked.proxy;
         },
@@ -822,7 +819,7 @@ describe("Tier RR — retained workflow runs", () => {
           ),
       );
 
-      const attempt = yield* runRetained(RETAINED, watched.journal);
+      const attempt = yield* runSaved(SAVED, watched.journal);
 
       expect(attempt.thrown).toBeInstanceOf(StaleInputError);
       // No terminal result reused, no document code, no output, no append.
@@ -848,7 +845,7 @@ describe("Tier RR — retained workflow runs", () => {
   // ended. A failure beside a success is two runs, not one run with a stumble.
   it("RR21: refuses a duplicate canonical record in every settlement combination", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
     const failure = (event: Yield): DurableEvent => ({
       ...event,
       result: { status: "err", error: { message: "planted-second-establishment" } },
@@ -867,7 +864,7 @@ describe("Tier RR — retained workflow runs", () => {
     for (const combination of combinations) {
       const journal = completedWith(first, combination.change);
       const before = journal.snapshot().length;
-      const attempt = yield* runRetained(RETAINED, journal);
+      const attempt = yield* runSaved(SAVED, journal);
 
       expect(attempt.thrown).toBeInstanceOf(StaleInputError);
       expect(attempt.thrown instanceof Error ? attempt.thrown.message : "").toContain("2");
@@ -879,10 +876,10 @@ describe("Tier RR — retained workflow runs", () => {
   });
 
   // RR22: the same totality on the other side of the boundary. A host hands the
-  // retained run over directly, so its members are read here rather than out of
+  // saved run over directly, so its members are read here rather than out of
   // a journal — and a member that refuses is a value identifying no run, which
   // is a sentence rather than the host's own exception.
-  it("RR22: refuses a retained run whose members refuse to be read", function* () {
+  it("RR22: refuses a saved run whose members refuse to be read", function* () {
     const hostile = {
       bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       get runId(): never {
@@ -892,7 +889,7 @@ describe("Tier RR — retained workflow runs", () => {
 
     const thrown = yield* scoped(function* () {
       try {
-        const workflow = retainedWorkflowInstallation(hostile as unknown as WorkflowRun);
+        const workflow = savedWorkflowInstallation(hostile as unknown as WorkflowRun);
         return undefined;
       } catch (error) {
         return error;
@@ -910,19 +907,19 @@ describe("Tier RR — retained workflow runs", () => {
   // something this version cannot account for.
   it("RR23: a definition target is not part of run identity", function* () {
     const first = new InMemoryStream();
-    yield* runRetained(RETAINED, first);
+    yield* runSaved(SAVED, first);
 
     const withTarget = completedWith(first, (event) => [
       {
         ...event,
         result: {
           status: "ok",
-          value: { ...RETAINED, targetPath: "Release/Publish" },
+          value: { ...SAVED, targetPath: "Release/Publish" },
         },
       },
     ]);
     const before = withTarget.snapshot().length;
-    const attempt = yield* runRetained(RETAINED, withTarget);
+    const attempt = yield* runSaved(SAVED, withTarget);
 
     expect(attempt.thrown).toBeInstanceOf(StaleInputError);
     expect(attempt.seen).toEqual([]);
@@ -935,7 +932,7 @@ describe("Tier RR — retained workflow runs", () => {
   it("RR7: refuses to install a run that identifies nothing", function* () {
     const empty = yield* scoped(function* () {
       try {
-        const workflow = retainedWorkflowInstallation({
+        const workflow = savedWorkflowInstallation({
           runId: "",
           bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         });
@@ -948,7 +945,7 @@ describe("Tier RR — retained workflow runs", () => {
 
     const unpinned = yield* scoped(function* () {
       try {
-        const workflow = retainedWorkflowInstallation({ runId: "r", bundleHash: "" });
+        const workflow = savedWorkflowInstallation({ runId: "r", bundleHash: "" });
         return undefined;
       } catch (error) {
         return error;

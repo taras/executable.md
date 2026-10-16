@@ -115,7 +115,7 @@ function lexicalReason(error: Error): FilesReason {
  *
  * A JSON value, because it is what the journal holds and what a replay hands
  * back. A refusal is carried as a phase and a reason rather than as a
- * serialized error, so nothing a filesystem said is retained and a restored
+ * serialized error, so nothing a filesystem said is saved and a restored
  * refusal is rebuilt from the same vocabulary a live one is.
  */
 type FileEffectOutcome<Phase extends string> =
@@ -795,7 +795,7 @@ export function workflowFilesHandler(database: WorkflowRunDatabase): WorkflowFil
      * Denied rather than emulated inside the Workspace: `<TempDir>` exists so a
      * document can hand a path to a tool the caller already has, and a logical
      * path is not one. Falling through to the host would give a run exactly the
-     * unretained, uncontained filesystem the boundary exists to keep it out of.
+     * unsaved, uncontained filesystem the boundary exists to keep it out of.
      */
     // deno-lint-ignore require-yield
     *temporaryDirectory(): Operation<Result<string>> {

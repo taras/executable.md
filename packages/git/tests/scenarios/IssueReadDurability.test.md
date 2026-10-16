@@ -1,7 +1,7 @@
 # Reading the same issue twice
 
 A read is a durable effect like any other. The second attempt of a run does not
-ask again — it answers from what the first retained, and it binds the same
+ask again — it answers from what the first saved, and it binds the same
 `IssueDetails` it bound the first time.
 
 <StagedAttempt index={0} as="first" />
@@ -32,9 +32,9 @@ nothing — two independent statements of the same thing.
 <AssertEquals actual={second.output} expected={first.output} />
 </Test>
 
-## What the run retained
+## What the run saved
 
-The retained Issue effect holds the normalized request, the normalized public
+The saved Issue effect holds the normalized request, the normalized public
 result and where this document wrote its `<Issue>`, and none of the things a
 provider knows that a document must never hold.
 
@@ -44,7 +44,7 @@ loaded; that is the run's business, and no Issue effect either causes it or can
 prevent it. The authored position is that same run-owned class: it names the
 run's own document and element, not the provider or the deployment.
 
-<Test name="the retained read holds nothing private to the provider or the host">
+<Test name="the saved read holds nothing private to the provider or the host">
 <IssueJournal as="journal" />
 <AssertEquals actual={journal.effects} expected={1} />
 <AssertEquals actual={journal.retains.credential} expected={false} />

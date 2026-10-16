@@ -2,7 +2,7 @@
  * What this package installs into one workflow run's Workspace.
  *
  * The block `@executablemd/workflow` used to hold: the Repository and Git
- * composition providers, the retained lifecycles for the two service-reaching
+ * composition providers, the saved lifecycles for the two service-reaching
  * vocabularies, the component registrations and the Git-host middleware this
  * platform can reach. It is the same sequence in the same order — a run that
  * attaches it gets the providers it always had, beneath the run's own effect
@@ -19,7 +19,7 @@
 
 import type { Operation } from "effection";
 import type { WorkflowWorkspaceAttachment } from "@executablemd/workflow/deno";
-import { useRetainedIssueOperations } from "../issue/effect.ts";
+import { useSavedIssueOperations } from "../issue/effect.ts";
 import { denoRepositoryHost } from "./composition/host.ts";
 import { denoGitHubSource } from "./composition/github-host.ts";
 import { useGitHubPullRequests } from "./composition/pull-request.ts";
@@ -32,8 +32,8 @@ import {
   type CompositionProviderOptions,
 } from "./composition/provider.ts";
 import {
-  useRetainedPullRequestOperations,
-  useRetainedPullRequestReads,
+  useSavedPullRequestOperations,
+  useSavedPullRequestReads,
 } from "./composition/pull-request-operations.ts";
 import { useGitHubIssues, type GitHubIssuesOptions } from "./issue/github.ts";
 
@@ -109,13 +109,13 @@ export function gitWorkspaceAttachment(
     // once a destination is its own, and passes an unauthorized one on to
     // `IssueApi`'s base — the same answer installing nothing used to give.
     yield* useGitHubIssues({ host: denoGitHubSource, ...options.gitHubIssues });
-    // The retained lifecycle for both service-reaching vocabularies, above
+    // The saved lifecycle for both service-reaching vocabularies, above
     // whichever transport middleware this host installed for them.
-    yield* useRetainedIssueOperations();
-    yield* useRetainedPullRequestOperations();
+    yield* useSavedIssueOperations();
+    yield* useSavedPullRequestOperations();
     // Durability for an admitted read, installed beside the transport rather
     // than above it: the adapter admits, this retains.
-    yield* useRetainedPullRequestReads();
+    yield* useSavedPullRequestReads();
     // Ordinary middleware, installed the way the Issue adapter is: it owns
     // the URLs it recognizes and delegates the rest.
     // Installed on every live or partial attachment, configured or not: the

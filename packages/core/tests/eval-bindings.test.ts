@@ -288,7 +288,7 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
     let raised: Error | undefined;
     try {
       yield* executeInstalled({ ...inlineSource("Read: {props}\n"), stream }, [watching(ran)], {
-        initialBindings: { props: "retained" },
+        initialBindings: { props: "saved" },
       });
     } catch (error) {
       raised = error instanceof Error ? error : new Error(String(error));
@@ -308,7 +308,7 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
       const ran: string[] = [];
       const record: Record<string, Json> = {};
       Object.defineProperty(record, name, {
-        value: "retained",
+        value: "saved",
         enumerable: true,
         writable: true,
         configurable: true,
@@ -345,10 +345,10 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
         "Value: {inherited} Other: {kept}",
         "",
       ].join("\n"),
-      { inherited: "retained", kept: "retained" },
+      { inherited: "saved", kept: "saved" },
     );
 
-    expect(output).toContain("Value: authored Other: retained");
+    expect(output).toContain("Value: authored Other: saved");
   });
 
   it("EB1: refuses input that is not JSON before any installation or document work", function* () {
@@ -364,7 +364,7 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
       malformed(undefined),
       // And the whole record being something other than a record.
       initialization([]),
-      initialization("retained"),
+      initialization("saved"),
       initialization(null),
     ]) {
       const stream = new InMemoryStream();
@@ -388,13 +388,13 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
     }
   });
 
-  it("EB1: a retained `__proto__` binding is installed as an ordinary name", function* () {
+  it("EB1: a saved `__proto__` binding is installed as an ordinary name", function* () {
     // Its own enumerable member, which is what `JSON.parse` produces and
     // therefore what a journal read back from a file can hold. Nothing here sets
     // a prototype: an object literal would have, which is why this is defined.
     const record: Record<string, Json> = {};
     Object.defineProperty(record, "__proto__", {
-      value: "retained",
+      value: "saved",
       enumerable: true,
       writable: true,
       configurable: true,
@@ -409,7 +409,7 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
 
     // The document read the name, rather than reading whatever the engine's
     // prototype setter left behind — which under some runtimes is nothing at all.
-    expect(output).toContain("Read: retained");
+    expect(output).toContain("Read: saved");
   });
 
   it("EB1: ordinary execute() inherits nothing, so the same document fails", function* () {
@@ -417,7 +417,7 @@ describe("Tier T5 — initial root bindings a trusted host supplies", () => {
     const source = "```js eval\nconst read = inherited;\n```\n";
 
     // The same bytes succeed through the host entrypoint.
-    const { output } = yield* inheriting(source, { inherited: "retained" });
+    const { output } = yield* inheriting(source, { inherited: "saved" });
     expect(output).not.toContain("ERROR");
 
     const result = yield* completion({ ...inlineSource(source), stream });

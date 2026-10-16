@@ -92,7 +92,7 @@ export default define.page(function Journal() {
 
       <h2>Replay does not rescan</h2>
       <p>
-        A replayed execution restores its retained output and history without
+        A replayed execution restores its saved output and history without
         scanning them again. The journal it replays already crossed the gate
         when it was written.
       </p>

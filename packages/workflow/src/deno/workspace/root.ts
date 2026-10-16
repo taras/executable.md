@@ -273,7 +273,7 @@ export function retainWorkspaceRoot(
       WORKSPACE_ROOT_FORMAT ||
     existing["manifest"] !== root.manifest
   ) {
-    corrupt(databasePath, "a retained Workspace root identity has different stored bytes");
+    corrupt(databasePath, "a saved Workspace root identity has different stored bytes");
   }
 
   requireReferenceSet(
@@ -307,7 +307,7 @@ export function loadWorkspaceRoot(
     "SELECT root_id, format_version, manifest FROM workspace_roots WHERE root_id = ?",
   ).get(rootId);
   if (row === undefined) {
-    corrupt(databasePath, "the selected Workspace root is not retained");
+    corrupt(databasePath, "the selected Workspace root is not saved");
   }
   return parseStoredRoot(database, row, databasePath);
 }
@@ -331,7 +331,7 @@ export function setCurrentWorkspaceRoot(
  * The set a generated-XMD admission states its as-of-admission basis over. A
  * continuation asks for that basis by membership, so ordering no longer decides
  * whether a resumed run holds its grant — it stays deterministic so the
- * retained record reads the same however SQLite would have ordered the rows,
+ * saved record reads the same however SQLite would have ordered the rows,
  * and `root_id` is the only stable ordering this table has, stable across
  * processes because it is content.
  *
@@ -339,7 +339,7 @@ export function setCurrentWorkspaceRoot(
  * that one answers a set membership question on a read-only connection, and this
  * one belongs to a live run.
  */
-export function retainedWorkspaceRoots(database: DatabaseSync): string[] {
+export function savedWorkspaceRoots(database: DatabaseSync): string[] {
   const roots: string[] = [];
   for (const row of reading(
     database,
@@ -373,16 +373,16 @@ export function verifyWorkspace(
   databasePath: string,
 ): void {
   validateDofsContentStore(database, databasePath);
-  const retained = new Map<string, StoredWorkspaceRoot>();
+  const saved = new Map<string, StoredWorkspaceRoot>();
   for (const row of reading(
     database,
     "SELECT root_id, format_version, manifest FROM workspace_roots ORDER BY root_id",
   ).all()) {
     const root = parseStoredRoot(database, row, databasePath);
-    if (retained.has(root.rootId)) {
-      corrupt(databasePath, "it contains a duplicate retained Workspace root");
+    if (saved.has(root.rootId)) {
+      corrupt(databasePath, "it contains a duplicate saved Workspace root");
     }
-    retained.set(root.rootId, root);
+    saved.set(root.rootId, root);
     requireReferenceSet(
       database,
       root.rootId,
@@ -400,24 +400,24 @@ export function verifyWorkspace(
       databasePath,
     );
   }
-  if (retained.size === 0) {
-    corrupt(databasePath, "it contains no retained Workspace root");
+  if (saved.size === 0) {
+    corrupt(databasePath, "it contains no saved Workspace root");
   }
 
-  const unretainedJournalRoots = reading(
+  const unsavedJournalRoots = reading(
     database,
     `SELECT COUNT(*) AS count
          FROM journal_events AS event
          LEFT JOIN workspace_roots AS root ON root.root_id = event.workspace_root_id
         WHERE root.root_id IS NULL`,
   ).get();
-  if (integer(unretainedJournalRoots?.["count"], databasePath, "journal root count") !== 0) {
-    corrupt(databasePath, "a journal event names a Workspace root that is not retained");
+  if (integer(unsavedJournalRoots?.["count"], databasePath, "journal root count") !== 0) {
+    corrupt(databasePath, "a journal event names a Workspace root that is not saved");
   }
 
   const current = currentWorkspaceRoot(database, databasePath);
-  if (!retained.has(current)) {
-    corrupt(databasePath, "its current Workspace root is not retained");
+  if (!saved.has(current)) {
+    corrupt(databasePath, "its current Workspace root is not saved");
   }
   const live = snapshotWorkspace(database, dofs, databasePath, false);
   if (live.rootId !== current) {
@@ -436,7 +436,7 @@ export function readDofsManifest(
     "SELECT hash, size, encoded, last_seen FROM vfs_manifests WHERE hash = ?",
   ).get(hashBytes);
   if (row === undefined) {
-    corrupt(databasePath, "a retained Workspace root names a missing DOFS manifest");
+    corrupt(databasePath, "a saved Workspace root names a missing DOFS manifest");
   }
   if (toHex(bytes(row["hash"], databasePath, "DOFS manifest hash")) !== hash) {
     corrupt(databasePath, "a DOFS manifest row carries the wrong identity");
@@ -501,12 +501,12 @@ function parseStoredRoot(
     format !== WORKSPACE_ROOT_FORMAT ||
     typeof manifest !== "string"
   ) {
-    corrupt(databasePath, "one of its retained Workspace roots is malformed");
+    corrupt(databasePath, "one of its saved Workspace roots is malformed");
   }
   const parsed = parseWorkspaceManifest(manifest, databasePath);
   const root = rootFromManifest(database, manifest, parsed, databasePath);
   if (root.rootId !== rootId) {
-    corrupt(databasePath, "one of its retained Workspace root identities does not match its bytes");
+    corrupt(databasePath, "one of its saved Workspace root identities does not match its bytes");
   }
   return root;
 }
@@ -526,7 +526,7 @@ function rootFromManifest(
         manifests.set(entry.manifest, manifest);
       }
       if (entry.size !== manifest.size) {
-        corrupt(databasePath, "a retained file size differs from its DOFS manifest");
+        corrupt(databasePath, "a saved file size differs from its DOFS manifest");
       }
     }
   }
@@ -561,7 +561,7 @@ function validateFile(
   let manifestHash = node.manifestHash;
   if (manifestHash === null) {
     if (!materializeMissingManifest) {
-      corrupt(databasePath, "a Workspace file has no retained DOFS manifest");
+      corrupt(databasePath, "a Workspace file has no saved DOFS manifest");
     }
     manifestHash = buildManifest(
       dofs,
@@ -608,7 +608,7 @@ function validateDofsContentStore(database: DatabaseSync, databasePath: string):
     );
   }
   if (count(database, "vfs_blob_bytes", databasePath) !== blobs.length) {
-    corrupt(databasePath, "the DOFS blob index and retained bytes are incomplete");
+    corrupt(databasePath, "the DOFS blob index and saved bytes are incomplete");
   }
 
   for (const row of reading(database, "SELECT hash FROM vfs_manifests ORDER BY hash").all()) {
@@ -685,7 +685,7 @@ function readNode(
     corrupt(databasePath, "a Workspace node revision is ahead of the filesystem revision");
   }
   if (row["mount_root"] !== null || row["stub_size"] !== null) {
-    corrupt(databasePath, "its retained Workspace contains unsupported mount bookkeeping");
+    corrupt(databasePath, "its saved Workspace contains unsupported mount bookkeeping");
   }
   const result: NodeRow = {
     inode: nonnegative(row["inode"], databasePath, "Workspace inode"),
@@ -798,7 +798,7 @@ function validateDofsBookkeeping(database: DatabaseSync, databasePath: string): 
     corrupt(databasePath, "its Workspace synchronization cursor is malformed");
   }
   if (count(database, "_vfs_mounts", databasePath) !== 0) {
-    corrupt(databasePath, "its retained Workspace contains an unsupported mount");
+    corrupt(databasePath, "its saved Workspace contains an unsupported mount");
   }
 
   for (const row of reading(
@@ -834,7 +834,7 @@ function requireReferenceSet(
     .map((row) => toHex(bytes(row[column], databasePath, `${table}.${column}`)))
     .sort(compareUtf8);
   if (!equalStrings(actual, expected)) {
-    corrupt(databasePath, `a retained Workspace root has an inexact ${table} reference set`);
+    corrupt(databasePath, `a saved Workspace root has an inexact ${table} reference set`);
   }
 }
 

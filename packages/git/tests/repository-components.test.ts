@@ -41,7 +41,7 @@ import {
   countingHost,
   countingOptions,
   raised,
-  retainedRepositories,
+  savedRepositories,
   runDocument,
   runWorkflowDocument,
 } from "./support/composition.ts";
@@ -80,12 +80,12 @@ describe("workflow Repository composition", () => {
 
       expect(String(output)).toContain("checkout: /repositories/project-");
 
-      const retained = yield* retainedRepositories(database);
-      expect(retained).toHaveLength(1);
-      expect(retained[0]?.record.name).toBe("project");
-      expect(retained[0]?.record.primaryBranch).toBe("main");
-      expect(retained[0]?.record.creationCommit).toBe(remote.heads.get("main"));
-      expect(retained[0]?.locator).toBe(remote.locator);
+      const saved = yield* savedRepositories(database);
+      expect(saved).toHaveLength(1);
+      expect(saved[0]?.record.name).toBe("project");
+      expect(saved[0]?.record.primaryBranch).toBe("main");
+      expect(saved[0]?.record.creationCommit).toBe(remote.heads.get("main"));
+      expect(saved[0]?.locator).toBe(remote.locator);
     });
   });
 
@@ -245,8 +245,8 @@ describe("workflow Repository composition", () => {
       );
 
       expect(String(output)).toContain("worktree: /worktrees/");
-      const retained = yield* retainedRepositories(database);
-      expect(retained[0]?.locator).toBe(remote.locator);
+      const saved = yield* savedRepositories(database);
+      expect(saved[0]?.locator).toBe(remote.locator);
     });
   });
 });
@@ -512,7 +512,7 @@ describe("workflow composition failure policy", () => {
       // components never offered it as one.
       expect(failure).not.toBe(undefined);
       expect(causedBy(failure, isRepositoryRefusal)).toBe(undefined);
-      expect(yield* retainedRepositories(database)).toHaveLength(0);
+      expect(yield* savedRepositories(database)).toHaveLength(0);
     });
   });
 

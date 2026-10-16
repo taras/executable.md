@@ -649,15 +649,15 @@ describe("replay guard", () => {
  *
  * The unit rows above prove repeated access through one `YieldEntry` is cached.
  * They cannot prove the property that matters, which spans two phases: a guard
- * validates a retained result in the check phase, and the replay path consumes
+ * validates a saved result in the check phase, and the replay path consumes
  * it afterwards. If those are two reads of the stream's own event, a source
  * answering differently between them has the guard approve one value while
  * execution uses another, and nothing downstream can detect it.
  *
- * The journal here is partial — no Close — so replay consumes the retained
+ * The journal here is partial — no Close — so replay consumes the saved
  * Yield and then continues live, which is the shape that reaches both phases.
  */
-describe("durableRun — one retained result across check and replay", () => {
+describe("durableRun — one saved result across check and replay", () => {
   it("hands the check phase and replay the same first answer", function* () {
     const answers: Json[] = ["first", "second"];
     const reads = { count: 0 };
@@ -724,14 +724,14 @@ describe("durableRun — one retained result across check and replay", () => {
  * validates one tree and replay consumes another, with nothing in between able
  * to notice.
  */
-/** One member of a retained JSON object, when it really is one. */
+/** One member of a saved JSON object, when it really is one. */
 function member(value: Json | undefined, key: string): Json | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value[key]
     : undefined;
 }
 
-describe("durableRun — a retained result detaches completely", () => {
+describe("durableRun — a saved result detaches completely", () => {
   it("a nested accessor is read once and cannot answer twice", function* () {
     const answers = ["first", "second"];
     const reads = { count: 0 };
@@ -858,11 +858,11 @@ describe("durableRun — a retained result detaches completely", () => {
  *
  * A replay guard is composable policy. Composition means reading, annotating,
  * and passing along; it must not mean editing the history the execution already
- * validated. Given the retained events themselves, a guard could rename effect
+ * validated. Given the saved events themselves, a guard could rename effect
  * A to B and have a workflow asking for B consume A's result, without B ever
  * running.
  */
-describe("replay guard — observation is isolated from the retained history", () => {
+describe("replay guard — observation is isolated from the saved history", () => {
   function journal(): DurableEvent[] {
     return [
       {
@@ -967,7 +967,7 @@ describe("replay guard — observation is isolated from the retained history", (
     const entry = index.peekYield("root");
     expect(entry).toBeDefined();
 
-    // Whatever a caller does with what the index hands back, the retained
+    // Whatever a caller does with what the index hands back, the saved
     // answer is unchanged.
     try {
       Object.assign(entry!.description, { name: "B" });
@@ -996,15 +996,15 @@ describe("replay guard — observation is isolated from the retained history", (
 });
 
 /**
- * Every Result shape is retained history; every consumer value is a copy.
+ * Every Result shape is saved history; every consumer value is a copy.
  *
  * The distinction has to hold for all four settlements, not only the one that
  * carries data. A `Result<void>` left writable is an envelope a public
  * observation could add a value to before replay reads it, and a completed run
- * that hands back the retained value itself gives a caller a frozen object
+ * that hands back the saved value itself gives a caller a frozen object
  * where the live run gave ordinary JSON.
  */
-describe("retained history — every settlement, and its consumer copy", () => {
+describe("saved history — every settlement, and its consumer copy", () => {
   function completed(value: Json): DurableEvent[] {
     return [{ type: "close", coroutineId: "root", result: { status: "ok", value } }];
   }
@@ -1062,7 +1062,7 @@ describe("retained history — every settlement, and its consumer copy", () => {
     expect(second).toEqual({ count: 1 });
   });
 
-  it("a retained ok-without-value settlement is frozen through", function* () {
+  it("a saved ok-without-value settlement is frozen through", function* () {
     const index = new ReplayIndex(
       retainEvents([
         {
@@ -1083,7 +1083,7 @@ describe("retained history — every settlement, and its consumer copy", () => {
     expect(index.peekYield("root")?.result).toEqual({ status: "ok" });
   });
 
-  it("a retained void Close settlement is frozen through", function* () {
+  it("a saved void Close settlement is frozen through", function* () {
     const index = new ReplayIndex(
       retainEvents([{ type: "close", coroutineId: "root", result: { status: "ok" } }]),
     );

@@ -248,7 +248,7 @@ requirements.
 A finding has a **structural consequence** only when it changes one or more of:
 
 - what is authorized to execute;
-- which durable identity or retained history is accepted;
+- which durable identity or saved history is accepted;
 - what durable state is committed, published, or journaled;
 - whether replay can resume the intended run;
 - ownership of a transaction, resource, invocation, or lifecycle;

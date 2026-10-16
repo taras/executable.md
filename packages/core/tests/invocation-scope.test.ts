@@ -29,7 +29,7 @@ import {
 
 describe("Tier O — Eval scope hierarchy", () => {
   // O3: the invocation's eval scope dies with the invocation, not the document.
-  it("O3: a resource retained by a component invocation stops when it completes", function* () {
+  it("O3: a resource saved by a component invocation stops when it completes", function* () {
     const timeline: string[] = [];
     const definitions = { Holder: markdown("Holder", "```sh watch exec\nown\n```\n\nbody") };
 

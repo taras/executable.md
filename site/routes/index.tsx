@@ -690,7 +690,7 @@ export default define.page(function Home({ url }) {
                 <p style={P_MEASURED}>
                   <Term>--journal</Term>{" "}
                   writes a JSONL trace of what ran and where it stopped. It is
-                  for this run, not retained workflow history.
+                  for this run, not saved workflow history.
                 </p>
               </Step>
 

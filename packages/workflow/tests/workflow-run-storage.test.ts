@@ -1,5 +1,5 @@
 /**
- * Tier WS — retained workflow runs, through the production Deno adapter.
+ * Tier WS — saved workflow runs, through the production Deno adapter.
  *
  * Nothing here is a stand-in. Every test writes a real SQLite file into a real
  * directory and reads it back, because what is being checked is what survives a
@@ -1157,7 +1157,7 @@ describe("Tier WS — refusing what is not this run's database", () => {
     expect(yield* until(readFile(path))).toEqual(before);
   });
 
-  it("WS22c: partial DOFS and retained-root initialization are corruption and stay unchanged", function* () {
+  it("WS22c: partial DOFS and saved-root initialization are corruption and stay unchanged", function* () {
     const root = yield* useStorageRoot();
     const partials: Array<[string, (database: DatabaseSync) => void]> = [
       [
@@ -1307,7 +1307,7 @@ describe("Tier WS — refusing what is not this run's database", () => {
           throw settled.error;
         }
 
-        // Deliberately impossible retained state: no supported transition
+        // Deliberately impossible saved state: no supported transition
         // writes a stop time that is not a time, so the row is edited directly.
         tamper(runPath(root, "bad-stop-time"), (raw) => {
           raw.prepare("UPDATE document_executions SET stopped_at = 'whenever'").run();
@@ -1605,7 +1605,7 @@ describe("Tier WS — version 1 amended in place", () => {
     initializeShapeWithout(database, [...AMENDED_TABLES, ...ANSWER_TABLES, ...FORK_TABLES]);
   }
 
-  /** The shape complete before retained answer delivery joined version 1. */
+  /** The shape complete before saved answer delivery joined version 1. */
   function initializePreAnswerVersionOne(database: DatabaseSync): void {
     initializeShapeWithout(database, [...ANSWER_TABLES, ...FORK_TABLES]);
   }
@@ -1701,7 +1701,7 @@ describe("Tier WS — version 1 amended in place", () => {
     expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
   });
 
-  it("WS23d: a malformed retained row is reported rather than repaired", function* () {
+  it("WS23d: a malformed saved row is reported rather than repaired", function* () {
     const database = new DatabaseSync(":memory:");
     try {
       // The constraints version 1 declares refuse these values outright, so the
@@ -1735,7 +1735,7 @@ describe("Tier WS — version 1 amended in place", () => {
     }
   });
 
-  it("WS33a: version 1 declares the retained answer table", function* () {
+  it("WS33a: version 1 declares the saved answer table", function* () {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
       yield* createRun();
@@ -1753,7 +1753,7 @@ describe("Tier WS — version 1 amended in place", () => {
     }
   });
 
-  it("WS33b: the shape before retained delivery is refused unchanged", function* () {
+  it("WS33b: the shape before saved delivery is refused unchanged", function* () {
     const root = yield* useStorageRoot();
     const path = runPath(root, "release-1.4");
     tamper(path, initializePreAnswerVersionOne);
@@ -1840,7 +1840,7 @@ describe("Tier WS — version 1 amended in place", () => {
 /**
  * The Git record a lookup answered with, narrowed rather than asserted.
  *
- * The retained record is a closed union now, and the base these cases assert
+ * The saved record is a closed union now, and the base these cases assert
  * about is a member only the Git one has.
  */
 function gitRecord(record: WorkflowRunRecord): WorkflowRunRecord {

@@ -209,7 +209,7 @@ function* storageDigest(path: string): Operation<Record<string, string>> {
   return digests;
 }
 
-/** Every retained evidence read this run holds. */
+/** Every saved evidence read this run holds. */
 function* reads(database: WorkflowRunDatabase): Operation<DurableEvent[]> {
   const events: DurableEvent[] = yield* database.journal.readAll();
   return events.filter(
@@ -693,7 +693,7 @@ describe("Tier PRR — pull-request evidence", () => {
     expect((yield* read(unknownStatusState, "checks")).state).toBe("protocol-invalid");
   });
 
-  it("PRR9: a pending review with no submission is retained, not refused", function* () {
+  it("PRR9: a pending review with no submission is saved, not refused", function* () {
     const host = server({
       [REVIEWS]: {
         body: JSON.stringify([
@@ -1238,9 +1238,9 @@ describe("Tier PRR — pull-request evidence", () => {
 
       // Three effects, one per collection: completing one manufactures neither
       // of the others.
-      const retained = yield* reads(database);
-      expect(retained).toHaveLength(3);
-      const kinds = retained.map((event) =>
+      const saved = yield* reads(database);
+      expect(saved).toHaveLength(3);
+      const kinds = saved.map((event) =>
         event.type === "yield" && isJsonObject(event.description.input)
           ? event.description.input.kind
           : undefined,
@@ -1273,9 +1273,9 @@ describe("Tier PRR — pull-request evidence", () => {
         reading(host, [SUBJECT_REPO]),
       );
 
-      const retained = yield* reads(database);
-      expect(retained).toHaveLength(4);
-      const inputs = retained.map((event) =>
+      const saved = yield* reads(database);
+      expect(saved).toHaveLength(4);
+      const inputs = saved.map((event) =>
         event.type === "yield" && isJsonObject(event.description.input)
           ? event.description.input
           : {},
@@ -1296,7 +1296,7 @@ describe("Tier PRR — pull-request evidence", () => {
       expect(inputs.map((input) => input.provider)).toEqual([null, null, null, "github"]);
 
       // And each is a different effect: four reads, four names.
-      const names = retained.map((event) =>
+      const names = saved.map((event) =>
         event.type === "yield" ? String(event.description.name) : "",
       );
       expect(new Set(names).size).toBe(4);
@@ -1354,9 +1354,9 @@ describe("Tier PRR — pull-request evidence", () => {
       const refused = yield* raised(runWorkflowDocument(database, document, reading(failing)));
       expect(String(refused)).toContain("did not answer with the complete collection");
 
-      const retained = yield* reads(database);
-      expect(retained).toHaveLength(1);
-      const outcome = retained[0]?.result;
+      const saved = yield* reads(database);
+      expect(saved).toHaveLength(1);
+      const outcome = saved[0]?.result;
       expect(outcome?.status).toBe("err");
       expect(outcome && "value" in outcome).toBe(false);
     });
@@ -1444,9 +1444,9 @@ describe("Tier PRR — pull-request evidence", () => {
 
       expect(sessions).toEqual(["open", "close"]);
 
-      const retained = yield* reads(database);
-      expect(retained.every((event) => event.result?.status !== "ok")).toBe(true);
-      expect(JSON.stringify(retained)).not.toContain('"items"');
+      const saved = yield* reads(database);
+      expect(saved.every((event) => event.result?.status !== "ok")).toBe(true);
+      expect(JSON.stringify(saved)).not.toContain('"items"');
 
       const working = server({
         [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },

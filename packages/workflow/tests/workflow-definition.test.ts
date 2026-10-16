@@ -7,7 +7,7 @@
  *
  * Two properties are checked throughout. A shape is closed, so a member nobody
  * declared is a parse failure rather than a field silently dropped. And a
- * failure never quotes the value it refused, because these values are retained
+ * failure never quotes the value it refused, because these values are saved
  * history and an error travels to logs and terminals.
  */
 
@@ -45,7 +45,7 @@ const SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 /** The root this suite's representative descriptor is a run of. */
 const WD_ROOT = "workflows/release.md";
 
-/** A distinct source hash per retained path, so a swap is visible. */
+/** A distinct source hash per saved path, so a swap is visible. */
 function digest(nth: number): string {
   return `${nth}`.repeat(2).padEnd(64, "0");
 }
@@ -60,7 +60,7 @@ const BUNDLE = [
 ];
 
 /**
- * Every retained source, canonical: one entry per path, in the UTF-8 byte order
+ * Every saved source, canonical: one entry per path, in the UTF-8 byte order
  * of those paths, with the root among them.
  */
 const WD_SOURCES = [
@@ -255,7 +255,7 @@ describe("Tier WD — compatible reuse", () => {
       "props",
     ]);
 
-    // A run is its retained bytes, so every way of being a run of something
+    // A run is its saved bytes, so every way of being a run of something
     // else is a different descriptor rather than a different repository state.
     for (const changed of [
       parsed({ bundleHash: SHA256.replace("e", "a") }),
@@ -297,7 +297,7 @@ describe("Tier WD — compatible reuse", () => {
  * Every target form this suite exercises, and whether a descriptor may carry it.
  *
  * Canonical encoding escapes everything outside RFC 3986's unreserved set, so
- * a heading holding `/`, `*`, `#`, `%`, or a space is retained as an escape and
+ * a heading holding `/`, `*`, `#`, `%`, or a space is saved as an escape and
  * cannot be read back as hierarchy or operator syntax.
  */
 const CANONICAL_TARGETS = [
@@ -433,7 +433,7 @@ describe("Tier WD — a definition's exact document target", () => {
  *
  * The bundle is a member of the one descriptor rather than a version past it.
  * Absent, it identifies a run closed over no components — which is what every
- * definition retained before bundles existed is. Present, it is the exact set
+ * definition saved before bundles existed is. Present, it is the exact set
  * the root may resolve, and it is identity: canonical, one entry per name,
  * sorted by name, each holding the blob's own object id under the descriptor's
  * own format.
@@ -1036,7 +1036,7 @@ describe("Tier WD — the snapshot a source bundle is created from", () => {
     expect(accepted.ok).toBe(true);
   });
 
-  it("WD52: a retained source reads as UTF-8 strictly, and without normalization", function* () {
+  it("WD52: a saved source reads as UTF-8 strictly, and without normalization", function* () {
     const text = decodeSourceText(EMOJI_BYTES);
     expect(text.ok && text.value).toBe(EMOJI_TEXT);
     expect(decodeSourceText(LIGATURE_BYTES).ok).toBe(true);

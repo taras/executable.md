@@ -289,7 +289,7 @@ describe("Tier FG — foreground execution", () => {
 
   /**
    * The adapter starts forwarding while it acquires the child, and publishes
-   * its retained observations through Signals, which drop a send nobody has
+   * its saved observations through Signals, which drop a send nobody has
    * subscribed to yet. A run that began retaining after acquisition would keep
    * a record missing its first bytes — silently, and only sometimes. The child
    * here writes before this case can possibly have subscribed to anything.
@@ -389,7 +389,7 @@ describe("Tier FG — foreground execution", () => {
     expect(run.seen.stdout).not.toContain("bound");
     // stderr stays diagnostic and reaches the reader.
     expect(run.seen.stderr).toContain("loud");
-    // And nothing at all was retained.
+    // And nothing at all was saved.
     expect(outcome?.stdout).toBe(undefined);
     expect(outcome?.stderr).toBe(undefined);
     // The block after the region is an ordinary foreground block again.
@@ -422,8 +422,8 @@ describe("Tier FG — foreground execution", () => {
     expect(seen.stdout).toBe("from-stdout\n");
     expect(seen.stderr).toBe("from-stderr\n");
     // And recorded on the operation each was received on.
-    expect(kept?.retainedStdout).toBe("from-stdout\n");
-    expect(kept?.retainedStderr).toBe("from-stderr\n");
+    expect(kept?.savedStdout).toBe("from-stdout\n");
+    expect(kept?.savedStderr).toBe("from-stderr\n");
   });
 
   /**
@@ -443,11 +443,11 @@ describe("Tier FG — foreground execution", () => {
       kept = finished();
     });
 
-    expect(kept?.retainedStdout).toBe("€");
-    expect(kept?.retainedStderr).toBe("x");
+    expect(kept?.savedStdout).toBe("€");
+    expect(kept?.savedStderr).toBe("x");
   });
 
-  it("FG15: a journaled capture agrees byte for byte with what it retained", function* () {
+  it("FG15: a journaled capture agrees byte for byte with what it saved", function* () {
     const euro = new TextEncoder().encode("€");
     let kept: ForegroundOutput | undefined;
 
@@ -461,8 +461,8 @@ describe("Tier FG — foreground execution", () => {
 
     // The same bytes, decoded once and handed to both.
     expect(kept?.captured).toBe("€");
-    expect(kept?.retainedStdout).toBe("€");
-    expect(kept?.retainedStderr).toBe("diagnostic");
+    expect(kept?.savedStdout).toBe("€");
+    expect(kept?.savedStderr).toBe("diagnostic");
   });
 
   /**
@@ -572,8 +572,8 @@ describe("Tier FG — foreground execution", () => {
     expect(seen.stdout).toBe("out");
     expect(seen.stderr).toBe("err");
     // And the record names the channel each was received on.
-    expect(kept?.retainedStdout).toBe("out");
-    expect(kept?.retainedStderr).toBe("err");
+    expect(kept?.savedStdout).toBe("out");
+    expect(kept?.savedStderr).toBe("err");
   });
 
   /**
@@ -582,7 +582,7 @@ describe("Tier FG — foreground execution", () => {
    * ownership of its own child processes. What it forwards is what the run
    * has: the boundary keeps the transformed text, not the bytes behind it.
    */
-  it("FG19: transformed bytes an enclosing middleware forwards are what is retained", function* () {
+  it("FG19: transformed bytes an enclosing middleware forwards are what is saved", function* () {
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     let transformed = 0;
@@ -612,8 +612,8 @@ describe("Tier FG — foreground execution", () => {
     // What it forwarded is what was displayed and what was kept.
     expect(seen.stdout).toBe("OUT");
     expect(seen.stderr).toBe("err");
-    expect(kept?.retainedStdout).toBe("OUT");
-    expect(kept?.retainedStderr).toBe("err");
+    expect(kept?.savedStdout).toBe("OUT");
+    expect(kept?.savedStderr).toBe("err");
   });
 
   /**
@@ -625,7 +625,7 @@ describe("Tier FG — foreground execution", () => {
    * are all of this kind — and it decides what a reader sees and nothing else.
    * Reversing either half is the defect this holds shut.
    */
-  it("FG23: what is retained is set upstream of the boundary and is untouchable below it", function* () {
+  it("FG23: what is saved is set upstream of the boundary and is untouchable below it", function* () {
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     let above = 0;
@@ -672,11 +672,11 @@ describe("Tier FG — foreground execution", () => {
     expect(above).toBe(1);
     expect(below).toBe(2);
     // The one above decided the record.
-    expect(upstream.retainedStdout).toBe("rewritten");
-    expect(upstream.retainedStderr).toBe("err");
+    expect(upstream.savedStdout).toBe("rewritten");
+    expect(upstream.savedStderr).toBe("err");
     // The one below decided nothing about it.
-    expect(downstream.retainedStdout).toBe("original");
-    expect(downstream.retainedStderr).toBe("err");
+    expect(downstream.savedStdout).toBe("original");
+    expect(downstream.savedStderr).toBe("err");
   });
 
   /**
@@ -761,7 +761,7 @@ describe("Tier FG — foreground execution", () => {
    * status does not travel through the stdio chain and is unaffected, and the
    * channel the handler left alone arrives as the command emitted it.
    */
-  it("FG25: stdout consumed upstream of the boundary is displayed and retained nowhere", function* () {
+  it("FG25: stdout consumed upstream of the boundary is displayed and saved nowhere", function* () {
     const source = ["```bash exec", "echo swallowed; echo kept >&2", "```", ""].join("\n");
 
     let consumed = 0;
@@ -779,7 +779,7 @@ describe("Tier FG — foreground execution", () => {
     const kept = execOutcome(run.stream);
 
     expect(consumed).toBeGreaterThan(0);
-    // Nothing displayed, nothing retained, and no trace in the record.
+    // Nothing displayed, nothing saved, and no trace in the record.
     expect(run.seen.stdout).toBe("");
     expect(kept?.stdout).toBe("");
     expect(JSON.stringify(kept)).not.toContain("swallowed");
@@ -819,12 +819,12 @@ describe("Tier FG — foreground execution", () => {
 
     expect(redirects).toBe(1);
     // Nothing arrived on stdout, so nothing is recorded there.
-    expect(kept?.retainedStdout).toBe("");
+    expect(kept?.savedStdout).toBe("");
     expect(seen.stdout).toBe("");
     // Both texts arrived on stderr, and both are recorded there.
-    expect(kept?.retainedStderr).toContain("out");
-    expect(kept?.retainedStderr).toContain("err");
-    expect(kept?.retainedStderr?.length).toBe("outerr".length);
+    expect(kept?.savedStderr).toContain("out");
+    expect(kept?.savedStderr).toContain("err");
+    expect(kept?.savedStderr?.length).toBe("outerr".length);
     expect(seen.stderr).toContain("out");
     expect(seen.stderr).toContain("err");
   });
@@ -889,7 +889,7 @@ describe("Tier FG — bound command results", () => {
     expect(outcome?.stderr).toBe(undefined);
   });
 
-  it("FG28: a resumed retained run rebuilds the same binding without running again", function* () {
+  it("FG28: a resumed saved run rebuilds the same binding without running again", function* () {
     const source = [
       '```bash exec as="probe"',
       "printf recorded-out; printf recorded-err >&2; exit 3",
@@ -1363,7 +1363,7 @@ describe("Tier FG — bound command results", () => {
   /**
    * `Component.codeBlock` is how an ordinary block's terminal learns what to
    * run, and it composes publicly. A bound command is executed against the
-   * context canonical core retained, so a handler answering with another block
+   * context canonical core saved, so a handler answering with another block
    * changes neither which command runs nor whether its channels stay off the
    * reader's terminal.
    */
@@ -1400,7 +1400,7 @@ describe("Tier FG — bound command results", () => {
     // The authored command ran and its outcome is what was bound.
     expect(bound.output).toContain("[5|authored]");
     expect(bound.output).not.toContain("hijacked");
-    // Routing is the retained one too: neither channel reached the reader.
+    // Routing is the saved one too: neither channel reached the reader.
     expect(bound.seen.stdout).toBe("");
     expect(bound.seen.stderr).toBe("");
 

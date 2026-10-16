@@ -214,7 +214,7 @@ token, coerce its value, or read it as a second positional. An option's name is
 read up to its first `=`, so every valued spelling arrives under the name it was
 written as; a removed option consumes no following token and inspects no
 candidate schema. It is refused wherever it stands — before the request, after
-it, beside a retained option, and in the place a retained option's value would
+it, beside a saved option, and in the place a saved option's value would
 otherwise have swallowed it.
 
 **Including beside `--help`.** `--help` is lifted out of the command line before
@@ -767,7 +767,7 @@ reaches neither verbose output nor a following Agent Prompt. Secret or scanner
 failure is terminal.
 
 *Continuation is ordinary.* [Generated-work ownership](../architecture.md#agent-permissions-and-generated-xmd)
-keeps each occurrence's retained work separate. A completed request replays
+keeps each occurrence's saved work separate. A completed request replays
 without another Agent
 turn, Syntax lookup, File read or Glob traversal; a partial continuation
 restores completed effects and resumes at the first unrecorded one. Requests add
@@ -895,7 +895,7 @@ about command output. Neither surface starts a ninth evaluation or another turn.
 
 **Stale continuation:**
 
-> Plan authorship cannot resume because retained XMD information does not match
+> Plan authorship cannot resume because saved XMD information does not match
 > the current request or evaluation policy. Start a new Plan authorship instead
 > of continuing this one.
 
@@ -1224,10 +1224,10 @@ neither observation never interpreted what it wrote.
 
 | # | Criterion | Required observation |
 | --- | --- | --- |
-| PS1 | Fixed grammar | Every retained option is accepted before and after the request, one request is preserved byte for byte, and a second positional is refused with the approved sentence |
+| PS1 | Fixed grammar | Every saved option is accepted before and after the request, one request is preserved byte for byte, and a second positional is refused with the approved sentence |
 | PS2 | The removed switch | Bare, valued, repeated, before-request, after-request and value-position `--run` forms all return the exact migration text, before any symbols, Agent, session, review, filesystem or document activity |
 | PS3 | The removed options | One representative of every other removed class, both short aliases, and the aggregate and generated property names return the exact generic refusal before authorship, ahead of the shared timeout and secret-detection grammar checks; a name that merely begins like a property option keeps the generic unknown-option refusal |
-| PS4 | Help | The complete `xmd plan --help` output and the program summary contain only the retained grammar and both explicit compositions; no removed option appears anywhere in either. Help beside every retained option is still help; help beside a removed one, in either order, is that option's refusal |
+| PS4 | Help | The complete `xmd plan --help` output and the program summary contain only the saved grammar and both explicit compositions; no removed option appears anywhere in either. Help beside every saved option is still help; help beside a removed one, in either order, is that option's refusal |
 | PS5 | Run is unchanged | `xmd run --help` still exposes its execution, prop, permission, timeout, presentation, journal and secret-detection options |
 | PS6 | Stdout | Approval without `--output` writes the exact source once, with no wrapper and no added newline, and a source-named effect and runtime failure both stay inert |
 | PS7 | The artifact | Approval with `--output` writes the same exact bytes, keeps stdout empty, creates the path only after authorship teardown and structural validation, and refuses an existing path without changing it |
@@ -1243,7 +1243,7 @@ neither observation never interpreted what it wrote.
 | PO4 | The ordinary surface is silent | A bare `<Plan>` emits only exact approved source, a captured `<Plan as>` binds the same bytes and emits nothing, and neither expands a progress body whatever verbosity the declaration carries |
 | PO5 | Disclosure | Default progress excludes the request, the drafts, the diagnostics, the feedback and every Agent, provider and tool output; verbose adds every cleared draft and each invalid check's exact structured JSON, in phase order, and nothing else |
 | PO6 | Channels | A non-terminal stderr receives normalized Markdown, a stated terminal receives it rendered, and stdout and `--output` stay byte-identical exact source in both |
-| PO7 | The two options | `--verbose` and `--journal` are accepted on either side of the request, help contains them and the journal warning, and `-V`, `-j`, `--trace` and every removed spelling refuse before the symbols or a session exists; a retained option that reaches this command's grammar, written where the journal path goes, is that option rather than a filename and refuses before any symbols, session, provider, filesystem or artifact work — while `--help` and `-h` keep their ordinary precedence and answer with help, creating no journal and beginning no authorship |
+| PO7 | The two options | `--verbose` and `--journal` are accepted on either side of the request, help contains them and the journal warning, and `-V`, `-j`, `--trace` and every removed spelling refuse before the symbols or a session exists; a saved option that reaches this command's grammar, written where the journal path goes, is that option rather than a filename and refuses before any symbols, session, provider, filesystem or artifact work — while `--help` and `-h` keep their ordinary precedence and answer with help, creating no journal and beginning no authorship |
 | PO8 | The journal file | With no `--journal` no file appears; with one, the path exists before the symbols and the first turn, a successful trace parses as the existing JSONL events in commit order and ends terminally, and it holds no program-execution event |
 | PO9 | Journal refusals | A pre-existing journal is byte-identical and refuses with the exact copy before any symbols, session, turn, review or artifact work; a path that cannot be created reports the other exact copy |
 | PO10 | A secret in a draft | It reaches neither the progress nor the journal, the earlier prefix stays readable, teardown completes, and no source or artifact is delivered — while the same draft without it is displayed and recorded |

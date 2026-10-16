@@ -27,7 +27,7 @@ import {
   agentIdentityComponents,
   collect,
   installAgentComponents,
-  retainedSource,
+  savedSource,
   useNormalizedOutput,
 } from "@executablemd/core";
 import type { Json, SyntaxSymbols } from "@executablemd/core";
@@ -198,7 +198,7 @@ function* runDocument(options: {
       }
       const execution = yield* executeInstalled(
         {
-          ...retainedSource(ROOT, options.source),
+          ...savedSource(ROOT, options.source),
           stream,
           includes: [...(options.includes ?? [])],
           ...(options.props === undefined ? {} : { props: options.props }),
@@ -320,7 +320,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       });
 
       expect(run.failure).toBe(undefined);
-      // The retained catalog is what the first turn was built from, and it is
+      // The saved catalog is what the first turn was built from, and it is
       // there exactly once — a second copy would mean the Component both bound
       // it and emitted it.
       const first = run.harness.fake.prompts[0] ?? "";
@@ -531,7 +531,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
     it("PI4: an embedded Plan reads through the document host's own profile", function* () {
       yield* useWorkingDirectory(function* () {
-        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const files = recordedFiles({ "notes.md": "the saved note\n" });
         const run = yield* runDocument({
           source: SOURCE,
           harness: yield* asking(yield* planWriterRoot()),
@@ -618,7 +618,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
      */
     it("PI21: a read restriction denies the request and becomes one safe retry", function* () {
       yield* useWorkingDirectory(function* () {
-        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const files = recordedFiles({ "notes.md": "the saved note\n" });
         const run = yield* runDocument({
           source: SOURCE,
           harness: yield* asking(yield* planWriterRoot()),
@@ -739,7 +739,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
      */
     it("PI26: a throwing Files provider ends authorship with no retry turn", function* () {
       yield* useWorkingDirectory(function* () {
-        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const files = recordedFiles({ "notes.md": "the saved note\n" });
         const run = yield* runDocument({
           source: SOURCE,
           harness: yield* reading_(yield* planWriterRoot()),
@@ -780,7 +780,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         let joined = false;
 
         const files = recordedFiles(
-          { "notes.md": "the retained note\n" },
+          { "notes.md": "the saved note\n" },
           {
             *hold(path) {
               if (path !== "notes.md") {
@@ -850,7 +850,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
      */
     it("PI28: a Plan outside the narrower region uses the restored allowance", function* () {
       yield* useWorkingDirectory(function* () {
-        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const files = recordedFiles({ "notes.md": "the saved note\n" });
         const harness = yield* planDeclarationHarness({
           surface: "component",
           planWriterRoot: yield* planWriterRoot(),
@@ -904,13 +904,13 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         // Inside the region: refused, and the refusal is what the next turn got.
         expect(prompts[1] ?? "").toContain("That request was refused");
         // Outside it: performed, and the findings are what the next turn got.
-        expect(prompts[3] ?? "").toContain("the retained note");
+        expect(prompts[3] ?? "").toContain("the saved note");
       });
     });
 
     it("PI12: an embedded request emits no command progress into the document", function* () {
       yield* useWorkingDirectory(function* () {
-        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const files = recordedFiles({ "notes.md": "the saved note\n" });
         const run = yield* runDocument({
           source: SOURCE,
           harness: yield* asking(yield* planWriterRoot()),
@@ -945,7 +945,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
     it("PI4: a prohibited operation in the request refuses with no effect", function* () {
       yield* useWorkingDirectory(function* () {
-        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const files = recordedFiles({ "notes.md": "the saved note\n" });
         const harness = yield* planDeclarationHarness({
           surface: "component",
           planWriterRoot: yield* planWriterRoot(),
@@ -970,14 +970,14 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
         expect(run.failure).toBe(undefined);
         expect(files.performed).toEqual([]);
-        expect(files.entries.get("notes.md")).toBe("the retained note\n");
+        expect(files.entries.get("notes.md")).toBe("the saved note\n");
       });
     });
 
     it("PI8: a completed request replays with every live reader tripped", function* () {
       yield* useWorkingDirectory(function* () {
         const first = new InMemoryStream();
-        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const files = recordedFiles({ "notes.md": "the saved note\n" });
         const one = yield* runDocument({
           source: SOURCE,
           harness: yield* asking(yield* planWriterRoot()),
@@ -992,7 +992,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         // The complete history, close included. Every live reader is a
         // tripwire: a turn asked again shows in the prompts, a review in the
         // reviews, and a search in this recorder.
-        const tripwire = recordedFiles({ "notes.md": "the retained note\n" });
+        const tripwire = recordedFiles({ "notes.md": "the saved note\n" });
         const two = yield* runDocument({
           source: SOURCE,
           reviews: [],
@@ -1012,7 +1012,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     it("PI8: a partial continuation resumes at the first unrecorded effect", function* () {
       yield* useWorkingDirectory(function* () {
         const first = new InMemoryStream();
-        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const files = recordedFiles({ "notes.md": "the saved note\n" });
         const one = yield* runDocument({
           source: SOURCE,
           harness: yield* asking(yield* planWriterRoot()),
@@ -1027,7 +1027,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         // reaches the request again. The Agent turns and the review are durable
         // and restore; `<Glob>` records no durable effect of its own, so it
         // traverses again — the accepted rule rather than repeated history.
-        const resumed = recordedFiles({ "notes.md": "the retained note\n" });
+        const resumed = recordedFiles({ "notes.md": "the saved note\n" });
         const two = yield* runDocument({
           source: SOURCE,
           reviews: [],
@@ -1044,15 +1044,15 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       });
     });
 
-    it("PI8: a retained selection refusal restores without asking the provider again", function* () {
+    it("PI8: a saved selection refusal restores without asking the provider again", function* () {
       yield* useWorkingDirectory(function* () {
         // The defect this replaces: the refusal was noticed in a closure inside
         // the durable executor. On replay the executor is skipped, so the
-        // closure was unset and the retained refusal came back carrying no
+        // closure was unset and the saved refusal came back carrying no
         // classification — the same request was recoverable live and terminal
         // after a partial continuation.
         const first = new InMemoryStream();
-        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const files = recordedFiles({ "notes.md": "the saved note\n" });
         const harness = yield* planDeclarationHarness({
           surface: "component",
           planWriterRoot: yield* planWriterRoot(),
@@ -1084,14 +1084,14 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
           source: SOURCE,
           reviews: [],
           generated: reading(),
-          files: recordedFiles({ "notes.md": "the retained note\n" }),
+          files: recordedFiles({ "notes.md": "the saved note\n" }),
           stream: yield* continuing(first),
           harness: yield* planDeclarationHarness({
             surface: "component",
             planWriterRoot: yield* planWriterRoot(),
             *symbols() {
               catalogs += 1;
-              throw new Error("a retained syntax selection was asked live");
+              throw new Error("a saved syntax selection was asked live");
             },
           }),
         });
@@ -1110,7 +1110,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       yield* useWorkingDirectory(function* () {
         // The instruction arrives through props, which is what can actually
         // differ on a continuation: PC23 settles that a changed authored body
-        // is never expanded, because the retained root replays instead.
+        // is never expanded, because the saved root replays instead.
         const source = [
           "---",
           "props:",
@@ -1128,7 +1128,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
         const root = yield* planWriterRoot();
         const first = new InMemoryStream();
-        const files = recordedFiles({ "notes.md": "the retained note\n" });
+        const files = recordedFiles({ "notes.md": "the saved note\n" });
         const one = yield* runDocument({
           source,
           props: { request: "Write a program." },
@@ -1143,9 +1143,9 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         expect(files.performed).toEqual(["glob notes.md"]);
 
         // A partial history, so expansion re-enters the Component rather than
-        // replaying its retained root whole — which is where the frozen inputs
-        // compare the instruction the retained authorship was made for.
-        const changed = recordedFiles({ "notes.md": "the retained note\n" });
+        // replaying its saved root whole — which is where the frozen inputs
+        // compare the instruction the saved authorship was made for.
+        const changed = recordedFiles({ "notes.md": "the saved note\n" });
         const two = yield* runDocument({
           source,
           props: { request: "Write something else." },
@@ -1159,7 +1159,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
         expect(two.failure).toContain("stale input");
         expect(two.failure).toContain("none was written for the new instructions");
         // Refused in the frozen inputs: before a turn, a review, or a single
-        // read of the request the retained history answered.
+        // read of the request the saved history answered.
         expect(changed.performed).toEqual([]);
         expect(two.harness.fake.prompts).toEqual([]);
         expect(two.harness.reviews).toEqual([]);
@@ -1221,7 +1221,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       }
 
       const validation = yield* validateDocument({
-        ...retainedSource(ROOT, '<CheckDraft source="x" as="check" />\n'),
+        ...savedSource(ROOT, '<CheckDraft source="x" as="check" />\n'),
         includes: [dir],
         declarations: [yield* planComponentDescription()],
       });
@@ -1488,13 +1488,13 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
   });
 
   /**
-   * The Plan artifact a run retained, or nothing when it retained none.
+   * The Plan artifact a run saved, or nothing when it saved none.
    *
    * Read from the journal rather than from the binding, because retention is what
    * a continuation reads and an ending that produced no Plan must leave nothing
    * there for one to find.
    */
-  function* retainedArtifact(stream: InMemoryStream): Operation<Json | undefined> {
+  function* savedArtifact(stream: InMemoryStream): Operation<Json | undefined> {
     for (const event of yield* stream.readAll()) {
       if (event.type !== "yield" || !event.description.name.startsWith("plan:artifact:")) {
         continue;
@@ -1507,7 +1507,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
   }
 
   /**
-   * The same history, with one Plan record's retained value replaced.
+   * The same history, with one Plan record's saved value replaced.
    *
    * A continuation reads what the journal holds, and what it holds is not
    * guaranteed to be what this version wrote — a record can be truncated, edited,
@@ -1673,7 +1673,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     });
   });
 
-  it("PC20: the retained artifact carries the approved bytes and their digest", function* () {
+  it("PC20: the saved artifact carries the approved bytes and their digest", function* () {
     yield* useWorkingDirectory(function* () {
       const stream = new InMemoryStream();
       const run = yield* runDocument({
@@ -1685,10 +1685,10 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       });
 
       expect(run.failure).toBe(undefined);
-      // Retained before either form could publish the bytes: all five members,
+      // Saved before either form could publish the bytes: all five members,
       // and exactly those five. A sixth would be something a later reader has
       // to account for, and a missing one is a record that cannot be read.
-      const artifact = Object(yield* retainedArtifact(stream));
+      const artifact = Object(yield* savedArtifact(stream));
       expect(Object.keys(artifact).sort()).toEqual([
         "admission",
         "digest",
@@ -1719,8 +1719,8 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       expect(run.failure).toBe("Plan authorship stopped at your request. No Plan was returned.");
       expect(run.output).not.toContain("got:");
       expect(run.emitted).not.toContain("# Say hello");
-      // Nothing retained, so nothing a later evaluation could restore.
-      expect(yield* retainedArtifact(stream)).toBe(undefined);
+      // Nothing saved, so nothing a later evaluation could restore.
+      expect(yield* savedArtifact(stream)).toBe(undefined);
     });
   });
 
@@ -1760,9 +1760,9 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     });
   });
 
-  it("PC23: a continuation replays the retained root, so a changed body never runs", function* () {
+  it("PC23: a continuation replays the saved root, so a changed body never runs", function* () {
     yield* useWorkingDirectory(function* () {
-      // The retained-root negative control the story names. A continuation runs
+      // The saved-root negative control the story names. A continuation runs
       // the root the journal kept, so a changed authored body is never expanded
       // and is not the changed-instruction case below.
       const first = new InMemoryStream();
@@ -1834,7 +1834,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
       expect(two.failure).toContain("stale input");
       expect(two.failure).toContain("none was written for the new instructions");
-      // Neither the retained Plan nor a newly authored one.
+      // Neither the saved Plan nor a newly authored one.
       expect(two.output).not.toContain("# Say hello");
       expect(two.output).not.toContain("got:");
       // Refused in the frozen inputs: before a turn, a review, a check or a
@@ -1846,7 +1846,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     });
   });
 
-  it("PC25: a retained inputs record this version cannot read produces nothing", function* () {
+  it("PC25: a saved inputs record this version cannot read produces nothing", function* () {
     yield* useWorkingDirectory(function* () {
       // Three ways a record stops being one: a member gone, a member added, and
       // a member of the wrong type. Each is refused with the same fixed
@@ -1879,13 +1879,13 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
       // The record is canonical core's, not Plan's: the packaged Component
       // writes the same public `<Syntax />` any document writes, so what a
       // continuation restores is a `syntax_symbols` reference rather than
-      // anything this host retained.
+      // anything this host saved.
       const reference = (yield* approved.readAll()).find(
         (event) => event.type === "yield" && event.description.type === "syntax_symbols",
       );
       expect(reference?.type).toBe("yield");
       if (reference?.type !== "yield" || reference.result.status !== "ok") {
-        throw new Error("the approved run retained no syntax record");
+        throw new Error("the approved run saved no syntax record");
       }
       const value = Object(reference.result.value);
       expect(Object.keys(value)).toEqual(["symbols"]);
@@ -1905,7 +1905,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
 
       for (const [, replace] of cases) {
         const run = yield* continued(yield* tampered(approved, "syntax_symbols:", replace));
-        expect(run.failure).toContain("retained <Syntax /> text is not a record");
+        expect(run.failure).toContain("saved <Syntax /> text is not a record");
         expect(run.output).not.toContain("got:");
         expect(run.output).not.toContain("# Say hello");
         expect(run.harness.fake.prompts).toEqual([]);
@@ -1914,7 +1914,7 @@ describe("Tier PC — <Plan> in an ordinary document", () => {
     });
   });
 
-  it("PC26: a retained artifact this version cannot read produces nothing", function* () {
+  it("PC26: a saved artifact this version cannot read produces nothing", function* () {
     yield* useWorkingDirectory(function* () {
       const cases: [string, (value: Json) => Json][] = [
         [
@@ -2095,8 +2095,8 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
 
   it("FE22: the approved bytes are inert text `<Evaluate>` then runs", function* () {
     yield* useWorkingDirectory(function* (dir) {
-      yield* writeTextFile(join(dir, "notes.md"), "the retained note");
-      const files = recordedFiles({ "notes.md": "the retained note" });
+      yield* writeTextFile(join(dir, "notes.md"), "the saved note");
+      const files = recordedFiles({ "notes.md": "the saved note" });
       // What the agent approves is a program. `<Plan>` hands it back as a
       // string and performs none of it.
       const PROGRAM = `# Read the note\n\n<File path="notes.md" />\n`;
@@ -2122,13 +2122,13 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
       expect(files.performed).toEqual(["read notes.md"]);
       // And `<Evaluate>` did run it, so the row is not passing because nothing
       // happened at all.
-      expect(run.output).toContain("the retained note");
+      expect(run.output).toContain("the saved note");
     });
   });
 
   it("FE22: an approved program is not run when no `<Evaluate>` is written", function* () {
     yield* useWorkingDirectory(function* () {
-      const files = recordedFiles({ "notes.md": "the retained note" });
+      const files = recordedFiles({ "notes.md": "the saved note" });
       const run = yield* runDocument({
         source: ['<Plan as="approved">Write a program.</Plan>', "", "done", ""].join("\n"),
         reply: `# Read the note\n\n<File path="notes.md" />\n`,
@@ -2147,7 +2147,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
 
   it("FE8: a Plan inside `<Evaluate>` is told the admitted vocabulary alone", function* () {
     yield* useWorkingDirectory(function* () {
-      const files = recordedFiles({ "notes.md": "the retained note" });
+      const files = recordedFiles({ "notes.md": "the saved note" });
       const seen: string[] = [];
 
       const run = yield* scoped(function* () {
@@ -2202,7 +2202,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
 
   it("FE8: a fragment naming the wide-only component refuses with no operation", function* () {
     yield* useWorkingDirectory(function* () {
-      const files = recordedFiles({ "notes.md": "the retained note" });
+      const files = recordedFiles({ "notes.md": "the saved note" });
       const seen: string[] = [];
 
       const run = yield* scoped(function* () {
@@ -2232,7 +2232,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
 
   it("FE9: a deferred Plan keeps its own site's wider vocabulary", function* () {
     yield* useWorkingDirectory(function* () {
-      const files = recordedFiles({ "notes.md": "the retained note" });
+      const files = recordedFiles({ "notes.md": "the saved note" });
       const seen: string[] = [];
 
       const run = yield* scoped(function* () {
@@ -2282,7 +2282,7 @@ describe("Tier FE — Plan produces text, Evaluate runs it", () => {
 
   it("FE9: a later narrower Evaluate refuses text the wider site allowed", function* () {
     yield* useWorkingDirectory(function* () {
-      const files = recordedFiles({ "notes.md": "the retained note" });
+      const files = recordedFiles({ "notes.md": "the saved note" });
       // The agent, told the document's own vocabulary, writes something a
       // fragment may not contain. The narrower `<Evaluate>` refuses it before
       // any effect rather than running part of it.

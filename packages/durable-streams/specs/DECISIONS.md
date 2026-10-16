@@ -140,7 +140,7 @@ Updated before completion of every phase and committed at the end of each phase.
 - **Phase:** 0 (Scaffolding)
 - **Date:** 2026-02-28
 - **Context:** Spec §6.2-6.3 defines divergence at effect matching and at every
-  terminal boundary: return with retained effects, failure with retained
+  terminal boundary: return with saved effects, failure with saved
   effects, and continuation past a recorded close.
 - **Options considered:**
   1. Single DivergenceError class with a `kind` field
@@ -154,8 +154,8 @@ Updated before completion of every phase and committed at the end of each phase.
   terminal divergence carries consumed/total counts and may retain the active
   execution failure as its cause. The common terminal base keeps the existing
   early-return API compatible while covering exceptional termination honestly.
-- **Consequences:** No root or child `Close` is appended while its retained
-  subtree is unaligned. Reaching a completed child claims its retained subtree;
+- **Consequences:** No root or child `Close` is appended while its saved
+  subtree is unaligned. Reaching a completed child claims its saved subtree;
   abandoning that child is terminal divergence. Error handling uses
   `instanceof` rather than matching names.
 

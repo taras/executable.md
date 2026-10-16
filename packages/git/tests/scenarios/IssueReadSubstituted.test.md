@@ -1,4 +1,4 @@
-# A substituted answer is not retained, and not replayed
+# A substituted answer is not saved, and not replayed
 
 Two attempts of one run, both reading issue 1 from a tracker that answers with
 issue 99.
@@ -25,14 +25,14 @@ without asking anybody, and it would restore it under the URL of issue 1.
 <AssertNotMatch actual={second.output} expected={/elsewhere/} />
 </Test>
 
-## And what the run retained was the refusal
+## And what the run saved was the refusal
 
 The refusal is journaled, so the second attempt restored it instead of asking
-again. That is the discriminating fact: had the substituted answer been retained
+again. That is the discriminating fact: had the substituted answer been saved
 as this read's outcome, the replay would have bound issue 99 and succeeded
 without a request. It refused, with the same words, having sent nothing.
 
-<Test name="the retained record is the refusal, not the substituted answer">
+<Test name="the saved record is the refusal, not the substituted answer">
 <IssueJournal as="journal" />
 <AssertEquals actual={journal.effects} expected={1} />
 <AssertEquals actual={second.calls} expected={0} />
@@ -45,7 +45,7 @@ without a request. It refused, with the same words, having sent nothing.
 <AssertEquals actual={sent.paths} expected={["/repos/octo/project/issues/1"]} />
 </Test>
 
-<Test name="the retained record holds nothing private to the provider or the host">
+<Test name="the saved record holds nothing private to the provider or the host">
 <IssueJournal as="journal" />
 <AssertEquals actual={journal.retains.payload} expected={false} />
 <AssertEquals actual={journal.retains.providerId} expected={false} />

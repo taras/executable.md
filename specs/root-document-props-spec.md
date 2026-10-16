@@ -402,7 +402,7 @@ a raw `%` begins escape syntax wherever it appears, so `pct%zz.md` is refused as
 a malformed reference and written `pct%25zz.md` instead.
 
 Props are unaffected by the selection, because they are the document's. The
-frontmatter that declares them is retained by every projection, so the same
+frontmatter that declares them is saved by every projection, so the same
 options, environment variables, defaults, requirements, and `--help` section
 apply — the declaring document is named by its path, and interpolation resolves
 against the projected body. A required property is still required when only one

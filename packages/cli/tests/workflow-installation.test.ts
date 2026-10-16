@@ -34,7 +34,7 @@ import { GitQuery } from "@executablemd/git/api";
 import type { WorkflowRunDatabase, WorkflowRunStatus } from "@executablemd/workflow";
 import { runWorkflow } from "../src/workflow.ts";
 import type { WorkflowExecution, WorkflowHost, WorkflowRequest } from "../src/workflow.ts";
-import { retainedSource } from "../../workflow/tests/support/storage.ts";
+import { savedSource } from "../../workflow/tests/support/storage.ts";
 
 /**
  * The fixture repository, answered through the Git Api itself.
@@ -288,7 +288,7 @@ describe("Tier WFI — what a run hands to canonical core", () => {
     const execution = seen[0];
     expect(execution).toBeDefined();
     // The run's own installation carries both halves of the contract: the
-    // mandatory retained-history admission core applies inside its own journal
+    // mandatory saved-history admission core applies inside its own journal
     // read, and the durable preparation core invokes inside the durable root.
     // It is the only one that prepares — the others contribute admissions and
     // nothing that runs inside the durable root.
@@ -568,7 +568,7 @@ describe("Tier WFI — what a run hands to canonical core", () => {
     }
   });
 
-  it("WFI7: an interruption that was retained keeps the ordinary outcome", function* () {
+  it("WFI7: an interruption that was saved keeps the ordinary outcome", function* () {
     const attempted: string[] = [];
     const reported: string[] = [];
     const running = withResolvers<void>();
@@ -629,7 +629,7 @@ function* startedRun(root: string): Operation<Started> {
   const contents = "recorded\n";
   const objectId = (yield* git(repository, ["rev-parse", "HEAD:workflow.md"])).trim();
   const objectFormat = (yield* git(repository, ["rev-parse", "--show-object-format"])).trim();
-  const retained = yield* retainedSource("workflow.md", contents);
+  const saved = yield* savedSource("workflow.md", contents);
 
   return yield* scoped(function* () {
     // The same substituted boundary the cases install. Beginning a version-1
@@ -651,8 +651,8 @@ function* startedRun(root: string): Operation<Started> {
       runId,
       action: "start",
       creation: {
-        definition: retained.definition,
-        sourceSnapshot: retained.sourceSnapshot,
+        definition: saved.definition,
+        sourceSnapshot: saved.sourceSnapshot,
         props: {},
         retrieval: { kind: "local-checkout", checkout: repository },
       },

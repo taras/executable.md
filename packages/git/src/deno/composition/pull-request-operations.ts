@@ -66,7 +66,7 @@ import { parseJsonValue } from "@executablemd/workflow";
 import { getWorkflowRun } from "@executablemd/workflow";
 import { gitOperationFingerprint } from "./operations.ts";
 
-/** The durable effect type one evidence read is retained under. */
+/** The durable effect type one evidence read is saved under. */
 export const PULL_REQUEST_READ = "pull_request_read";
 
 /** Which element a refusal names, by the collection it was reading. */
@@ -78,7 +78,7 @@ const ELEMENT: Readonly<Record<PullRequestReadKind, string>> = Object.freeze({
 
 function* describeRead(request: PullRequestReadRequest): Operation<EffectDescription> {
   const expansion = yield* getExpansion();
-  // The run is in the retained request, and deliberately not in this
+  // The run is in the saved request, and deliberately not in this
   // fingerprint. A fork is a different run reaching the same position with the
   // same question, and a name that carried the run would make every inherited
   // read a different effect — which is to say, unforkable. What the name has to
@@ -100,7 +100,7 @@ function* describeRead(request: PullRequestReadRequest): Operation<EffectDescrip
 }
 
 /**
- * Retain one admitted read, or restore what is already retained.
+ * Retain one admitted read, or restore what is already saved.
  *
  * Reached only through `PullRequestReadExecution`, after a transport has
  * matched the request, admitted it against the host ceiling and validated the
@@ -142,7 +142,7 @@ function retainDurableRead(
           new PullRequestReadError(
             "protocol",
             element,
-            `what this run retained for it is not a value it can carry: ${reason} at ${path}.`,
+            `what this run saved for it is not a value it can carry: ${reason} at ${path}.`,
           ),
       ),
     );
@@ -150,7 +150,7 @@ function retainDurableRead(
       throw new PullRequestReadError(
         "protocol",
         element,
-        "what this run retained for it is not the evidence that read produces.",
+        "what this run saved for it is not the evidence that read produces.",
       );
     }
     return result;
@@ -164,7 +164,7 @@ function retainDurableRead(
  * needs come from context it has and the adapter does not, which is the whole
  * reason the boundary exists.
  */
-export function useRetainedPullRequestReads(): Operation<void> {
+export function useSavedPullRequestReads(): Operation<void> {
   return PullRequestReadExecution.around(
     {
       *perform([admitted, transport]): Operation<PullRequestReadResult> {
@@ -180,8 +180,8 @@ export function useRetainedPullRequestReads(): Operation<void> {
   );
 }
 
-/** Install the retained pull-request lifecycle for the current scope and below. */
-export function useRetainedPullRequestOperations(): Operation<void> {
+/** Install the saved pull-request lifecycle for the current scope and below. */
+export function useSavedPullRequestOperations(): Operation<void> {
   return PullRequestOperations.around(
     {
       // Straight through, so the adapter beneath decides when a read is

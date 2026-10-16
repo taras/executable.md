@@ -24,7 +24,7 @@
  * ```
  *
  * `{ symbols }` is a successful rendering; `{ refused }` is a named selection
- * this component refused, retained as a value rather than as a failure so that a
+ * this component refused, saved as a value rather than as a failure so that a
  * continuation reaches the same refusal it reached live. Either way a
  * continuation answers from the record without consulting the filesystem, the
  * registry, the bundle or the host again.
@@ -59,7 +59,7 @@ import { registerComponents } from "../src/components/registration.ts";
 import type { ComponentRegistration } from "../src/components/registration.ts";
 import { selectComponent } from "../src/components/select.ts";
 import { installedBundle } from "../src/components/bundle.ts";
-import { retainedSource } from "../src/root-source.ts";
+import { savedSource } from "../src/root-source.ts";
 import { renderSyntaxMarkdown } from "../src/syntax-markdown.ts";
 import { syntaxReference, rootSyntaxReference } from "../src/syntax-reference.ts";
 import type { SyntaxReference } from "../src/syntax-reference.ts";
@@ -211,7 +211,7 @@ function run(
   return scoped(function* () {
     return yield* collect(
       yield* executeInstalled(
-        { ...retainedSource(ROOT_PATH, source), stream, includes: [...includes] },
+        { ...savedSource(ROOT_PATH, source), stream, includes: [...includes] },
         [...installations],
       ),
     );
@@ -228,7 +228,7 @@ function* refusal(operation: Operation<unknown>): Operation<string> {
   throw new Error("expected the operation to be refused");
 }
 
-/** Every retained syntax record, in order. */
+/** Every saved syntax record, in order. */
 function syntaxReads(events: readonly DurableEvent[]): DurableEvent[] {
   return events.filter(
     (event) => event.type === "yield" && event.description.type === "syntax_symbols",
@@ -242,7 +242,7 @@ function syntaxReads(events: readonly DurableEvent[]): DurableEvent[] {
  * says what happened. What must not exist is a *successful* record: that is the
  * thing a continuation would restore and hand back as the symbols.
  */
-function retained(events: readonly DurableEvent[]): DurableEvent[] {
+function saved(events: readonly DurableEvent[]): DurableEvent[] {
   return syntaxReads(events).filter(
     (event) => event.type === "yield" && event.result.status === "ok",
   );
@@ -260,7 +260,7 @@ function* continuing(stream: InMemoryStream): Operation<InMemoryStream> {
   return partial;
 }
 
-/** The same history with one retained reference replaced. */
+/** The same history with one saved reference replaced. */
 function* tampered(
   stream: InMemoryStream,
   replace: (value: Json) => Json,
@@ -501,7 +501,7 @@ describe("Tier SYN — the named form", () => {
           return yield* collect(
             yield* executeInstalled(
               {
-                ...retainedSource(ROOT_PATH, "<Wrapper />\n"),
+                ...savedSource(ROOT_PATH, "<Wrapper />\n"),
                 stream: new InMemoryStream(),
                 includes: [dir],
               },
@@ -546,7 +546,7 @@ describe("Tier SYN — the named form", () => {
         return yield* collect(
           yield* executeReadingAssetsWith(
             {
-              ...retainedSource(ROOT_PATH, '<Syntax names={["Elicit"]} />\n'),
+              ...savedSource(ROOT_PATH, '<Syntax names={["Elicit"]} />\n'),
               stream,
               includes: [],
             },
@@ -569,7 +569,7 @@ describe("Tier SYN — the named form", () => {
     // occurrence claimed an identity and no durable operation opened: there is
     // no record for a continuation to restore, successful or otherwise.
     expect(syntaxReads(events)).toHaveLength(0);
-    expect(retained(events)).toHaveLength(0);
+    expect(saved(events)).toHaveLength(0);
   });
 
   it("SYN25g: collection snapshots a contribution by value", function* () {
@@ -1037,7 +1037,7 @@ describe("Tier SYN — the named form", () => {
     const inheritedLookups: string[] = [];
     const localLookups: string[] = [];
     const observed: unknown[] = [];
-    const retained: ComponentAnswerRequest[] = [];
+    const saved: ComponentAnswerRequest[] = [];
 
     // The inherited layer's entry into the bootstrap: documentation, a
     // registration, and the package's provider — which observes and delegates,
@@ -1070,7 +1070,7 @@ describe("Tier SYN — the named form", () => {
               answerProvider("Open", answer.definition, {
                 origin: "test://layer",
                 lookups: localLookups,
-                retain: retained,
+                retain: saved,
               }),
             ],
           };
@@ -1106,7 +1106,7 @@ describe("Tier SYN — the named form", () => {
     // Teardown is the execution's, not the layer's: the request the local
     // bootstrap's handler was given states nothing once the child run is over,
     // and the enclosing layers are still standing.
-    const held = retained[0];
+    const held = saved[0];
     if (held === undefined) {
       throw new Error("the local provider was never asked");
     }
@@ -1288,7 +1288,7 @@ describe("Tier SYN — the named form", () => {
         return yield* collect(
           yield* executeReadingAssetsWith(
             {
-              ...retainedSource(ROOT_PATH, '<Syntax names={["Elicit"]} />\n'),
+              ...savedSource(ROOT_PATH, '<Syntax names={["Elicit"]} />\n'),
               stream,
               includes: [],
             },
@@ -1355,7 +1355,7 @@ describe("Tier SYN — the named form", () => {
     expect(both).toContain("### `<Marker1>`");
     expect(both).toContain("### `<Marker2>`");
 
-    // A continuation restores the retained text without asking again.
+    // A continuation restores the saved text without asking again.
     calls.count = 0;
     const resumed = String(
       yield* run('<Syntax names={["Marker1"]} />\n', [moving], yield* continuing(stream)),
@@ -1371,7 +1371,7 @@ describe("Tier SYN — the named form", () => {
 
     // Exactly what was rendered, not the compact list: the record is the
     // occurrence's final text whichever form produced it.
-    const records = retained(yield* stream.readAll());
+    const records = saved(yield* stream.readAll());
     expect(records).toHaveLength(1);
     const record = records[0];
     const value =
@@ -1400,14 +1400,14 @@ describe("Tier SYN — the named form", () => {
     const unknown = yield* refusal(run('<Syntax names={["Nonexistent"]} />\n', [], stream));
     expect(unknown).toContain("Nonexistent");
 
-    // The refusal is *retained*, and retained as a refusal. This is the one
+    // The refusal is *saved*, and saved as a refusal. This is the one
     // record that is not the symbols: an error crossing the durable boundary is
     // rebuilt without its class, so a refusal that has to mean the same thing
     // on a replay has to be a value the record distinguishes rather than a
     // failure the reader re-derives.
-    const [record] = retained(yield* stream.readAll());
+    const [record] = saved(yield* stream.readAll());
     if (record?.type !== "yield" || record.result.status !== "ok") {
-      throw new Error("the refusal retained no record");
+      throw new Error("the refusal saved no record");
     }
     expect(Object.keys(Object(record.result.value))).toEqual(["refused"]);
     // Nothing is handed back as the symbols: a continuation reaches the same
@@ -1429,7 +1429,7 @@ describe("Tier SYN — the named form", () => {
       const each = new InMemoryStream();
       const message = yield* refusal(run(`${written}\n`, [], each));
       expect([written, message.length > 0]).toEqual([written, true]);
-      expect([written, retained(yield* each.readAll()).length]).toEqual([written, 0]);
+      expect([written, saved(yield* each.readAll()).length]).toEqual([written, 0]);
     }
   });
 });
@@ -1818,7 +1818,7 @@ describe("Tier SYN — the site the symbols describe", () => {
     const symbols = yield* scoped(function* () {
       yield* executeInstalled(
         {
-          ...retainedSource(ROOT_PATH, "<Syntax />\n"),
+          ...savedSource(ROOT_PATH, "<Syntax />\n"),
           stream: new InMemoryStream(),
           includes: [],
         },
@@ -1935,7 +1935,7 @@ describe("Tier SYN — the record one occurrence keeps", () => {
     yield* run("<Syntax />\n", [stating(symbolsOf("Marker")).installation], stream);
     const [reference] = syntaxReads(yield* stream.readAll());
     if (reference?.type !== "yield" || reference.result.status !== "ok") {
-      throw new Error("the run retained no syntax record");
+      throw new Error("the run saved no syntax record");
     }
     const value = Object(reference.result.value);
     expect(Object.keys(value)).toEqual(["symbols"]);
@@ -1970,7 +1970,7 @@ describe("Tier SYN — the record one occurrence keeps", () => {
     ).toContain("### `<After>`");
   });
 
-  it("SYN21: a missing, extra or wrong-typed retained payload refuses before output or binding", function* () {
+  it("SYN21: a missing, extra or wrong-typed saved payload refuses before output or binding", function* () {
     const cases: [string, (value: Json) => Json][] = [
       ["the member is missing", () => ({})],
       ["an unknown member was added", (value) => ({ ...Object(value), extra: true })],
@@ -2076,12 +2076,12 @@ describe("Tier SYN — reference never permits", () => {
     // Validation reads the same declaration, so a paired spelling is invalid
     // before anything runs and the self-closing one is valid.
     const bad = yield* validateDocumentStructure({
-      ...retainedSource("<eval>", "<Syntax>content</Syntax>\n"),
+      ...savedSource("<eval>", "<Syntax>content</Syntax>\n"),
       includes: [],
     });
     expect(bad.diagnostics.some((issue) => issue.code === "invocation-form-invalid")).toBe(true);
     const good = yield* validateDocumentStructure({
-      ...retainedSource("<eval>", "<Syntax />\n"),
+      ...savedSource("<eval>", "<Syntax />\n"),
       includes: [],
     });
     expect(good.diagnostics).toEqual([]);
@@ -2300,7 +2300,7 @@ describe("Tier SYN — reference never permits", () => {
     const output = String(
       yield* collect(
         yield* execute({
-          ...retainedSource(ROOT_PATH, "<Syntax />\n"),
+          ...savedSource(ROOT_PATH, "<Syntax />\n"),
           stream: new InMemoryStream(),
           includes: [],
         }),

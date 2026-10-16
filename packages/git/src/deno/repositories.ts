@@ -8,7 +8,7 @@
  * inside the Workspace filesystem, and a later Git operation moves them by
  * publishing a new Workspace root rather than by touching anything here.
  *
- * The locator is retained beside the record rather than inside it. Deciding
+ * The locator is saved beside the record rather than inside it. Deciding
  * whether a reused name asks for the same repository needs the bytes; the
  * journal and the document need only the fingerprint, and a URL that turned out
  * to carry a credential is then one column rather than one history.
@@ -197,8 +197,8 @@ export function insertWorktree(storage: WorkflowWorkspaceStorage, record: Worktr
 /**
  * The metadata one Workspace transaction may read and write.
  *
- * Handed to a mutation beside the filesystem, so retained Git identity and
- * retained Git bytes move together inside one transaction. It is the provider's
+ * Handed to a mutation beside the filesystem, so saved Git identity and
+ * saved Git bytes move together inside one transaction. It is the provider's
  * surface and not a document's: a component reaches it only by asking the
  * composition provider to perform an effect.
  */

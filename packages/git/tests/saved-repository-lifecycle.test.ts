@@ -43,15 +43,15 @@ import { executeInstalled } from "@executablemd/core/host";
 import { useAdvisoryLock } from "@executablemd/workflow/deno";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import { gitSession } from "../src/deno/composition/git.ts";
-import { useReplRepositoryRecording } from "../src/deno/retained-repository/provider.ts";
-import { admitReplRepositoryHistory } from "../src/retained-repository/admission.ts";
+import { useReplRepositoryRecording } from "../src/deno/saved-repository/provider.ts";
+import { admitReplRepositoryHistory } from "../src/saved-repository/admission.ts";
 import {
   CommonDirectoryLeaseError,
   useCommonDirectoryLease,
-} from "../src/deno/retained-repository/leases.ts";
+} from "../src/deno/saved-repository/leases.ts";
 import { commonDirectoryLock } from "../src/deno/run-composition/placement.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
-import { REPL_REPOSITORY_LOCAL } from "../src/retained-repository/records.ts";
+import { REPL_REPOSITORY_LOCAL } from "../src/saved-repository/records.ts";
 
 /** Let every ready task run, so "reached its wait" is about turns. */
 function* settled(turns = 8): Operation<void> {
@@ -210,7 +210,7 @@ function entry(
       output = String(
         yield* collect(
           yield* executeInstalled({ path, stream }, [
-            { admissions: [(retained) => admitReplRepositoryHistory(retained)] },
+            { admissions: [(saved) => admitReplRepositoryHistory(saved)] },
           ]),
         ),
       );
@@ -374,7 +374,7 @@ describe("an entry's hold on the checkout it is working in", () => {
       expect(read.refusal).toBe(undefined);
       expect(reading.reads).toEqual(["held.md"]);
       expect(String(read.output)).toContain("held");
-      // And it is retained, so a continuation answers it without looking.
+      // And it is saved, so a continuation answers it without looking.
       expect(localRecords(read.events)).toBe(1);
       // No descriptor at all: the lease is about one entry at a time changing a
       // repository, and this one only looked.

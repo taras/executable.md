@@ -7,7 +7,7 @@
  * about lifetime and ownership.
  *
  * A workflow run's checkouts are rows in its own database, restored from
- * retained history under a WorkflowRun the document must never be able to name.
+ * saved history under a WorkflowRun the document must never be able to name.
  * An ordinary run's checkouts are directories: the one the person is standing
  * in, and the ones under the managed root, each held for the execution by an
  * advisory lock and each surviving it. Nothing is journaled, nothing replays,
@@ -370,7 +370,7 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
           invocation_.workingDirectory,
           "<Git.Add>",
         );
-        // Admitted where a request enters, exactly as the retained provider
+        // Admitted where a request enters, exactly as the saved provider
         // admits it: the Api is public, and a caller reaching it directly is
         // subject to the same boundary.
         return yield* liveAdd(

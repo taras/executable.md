@@ -173,7 +173,7 @@ describe("Tier SR — the construction route", () => {
       // V1 is the released unbound form. A binding is a member that format
       // does not have, and an extra member is state this build cannot account
       // for — which is what keeps a V1 record from being read as a V2 one.
-      ["a retained build binding", { ...good, executableBinding: BUILD }],
+      ["a saved build binding", { ...good, executableBinding: BUILD }],
       ["an executable path", { ...good, executablePath: "/usr/local/bin/claude" }],
       // The suspended branch's shape was never a released compatibility
       // boundary, so it is unknown state like any other.

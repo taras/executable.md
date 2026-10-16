@@ -65,7 +65,7 @@ export function useSessionRouteStore(): AgentSessionRouteStore | undefined {
  * How this host observes which build of an agent executable it would run.
  *
  * Built here, beside the coordinator, and handed straight to the provider. It
- * is not a contextual Api: executable validation decides which retained history
+ * is not a contextual Api: executable validation decides which saved history
  * may be accepted, and a decision document middleware could replace could point
  * the observation at one binary while the run spawns another.
  */

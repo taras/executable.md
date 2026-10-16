@@ -533,15 +533,15 @@ describe("default-on secret detection", () => {
       expect(Object.values(policy).some((value) => typeof value === "function")).toBe(false);
     });
 
-    it("rejects a description retained from an earlier execution", function* () {
-      const retained = yield* observedPolicy(false);
+    it("rejects a description saved from an earlier execution", function* () {
+      const saved = yield* observedPolicy(false);
 
       // Replaying a genuine public value from a disabled run into a later
       // enabled one is what a brand alone would not stop, which is why the
       // private policy never escapes in the first place.
       const error = yield* rejection(
         runObserving(CLEAN, new InMemoryStream(), undefined, function* () {
-          yield* Counterfeit.set(retained);
+          yield* Counterfeit.set(saved);
           return yield* secretPolicy();
         }),
       );
@@ -598,7 +598,7 @@ describe("default-on secret detection", () => {
   });
 
   /**
-   * The gate scans what a run retained, and a run retains what reached its
+   * The gate scans what a run saved, and a run retains what reached its
    * per-exec boundary — after any middleware enclosing the execution, which is
    * the host's own trusted preprocessing (#441). Both directions follow from
    * that one fact, and both matter: a host may keep a credential out of the
@@ -649,7 +649,7 @@ describe("default-on secret detection", () => {
       const result = yield* yield* execute({ ...inlineSource(LEAKING), stream: backend });
 
       expect(injections).toBeGreaterThan(0);
-      // The gate reads the retained text, not the command's, so it catches it.
+      // The gate reads the saved text, not the command's, so it catches it.
       expect(reportsRejection(result)).toBe(true);
       expect(persistedText(backend)).not.toContain(CANARY);
     });
@@ -725,12 +725,12 @@ describe("default-on secret detection", () => {
       expect(error.message).not.toContain(CANARY);
     });
 
-    it("leaves no retained value able to scan after the execution ends", function* () {
+    it("leaves no saved value able to scan after the execution ends", function* () {
       const backend = new InMemoryStream();
 
-      const retained = yield* runObserving(CLEAN, backend, undefined, secretPolicy);
+      const saved = yield* runObserving(CLEAN, backend, undefined, secretPolicy);
 
-      expect(Reflect.ownKeys(retained)).toEqual(["enabled"]);
+      expect(Reflect.ownKeys(saved)).toEqual(["enabled"]);
       const error = yield* rejection(scanSecrets(CANARY));
       expect(error.message).not.toContain(CANARY);
     });
@@ -790,13 +790,13 @@ describe("default-on secret detection", () => {
 
     it("leaves nothing usable behind when an execution is halted", function* () {
       const reached = withResolvers<void>();
-      let retained: SecretPolicy | undefined;
+      let saved: SecretPolicy | undefined;
       let deferred: Operation<SecretFinding[]> | undefined;
 
       yield* scoped(function* () {
         yield* Execution.around({
           *document([props], next) {
-            retained = yield* secretPolicy();
+            saved = yield* secretPolicy();
             deferred = scanSecrets(CANARY);
             reached.resolve();
             return yield* next(props);
@@ -808,8 +808,8 @@ describe("default-on secret detection", () => {
         yield* reached.operation;
       });
 
-      expect(retained).toEqual({ enabled: true });
-      expect(Reflect.ownKeys(retained ?? {})).toEqual(["enabled"]);
+      expect(saved).toEqual({ enabled: true });
+      expect(Reflect.ownKeys(saved ?? {})).toEqual(["enabled"]);
       const error = yield* rejection(deferred ?? scanSecrets(CANARY));
       expect(error.name).toBe("SecretPolicyUnavailableError");
     });

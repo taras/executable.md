@@ -531,7 +531,7 @@ describe("the reading one entry is shown as", () => {
       expect(reading.output.lines.map((one) => one.text)).toEqual(["partial outp"]);
     });
 
-    it("replaces it with the retained result, once, unlabelled", function* () {
+    it("replaces it with the saved result, once, unlabelled", function* () {
       const reading = entryReading({
         entry: entryOf("hello\n", { terminal: settled("ok", "hello"), settled: true }),
         lifecycle: NO_LIFECYCLE,

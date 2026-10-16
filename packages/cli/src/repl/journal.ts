@@ -44,35 +44,35 @@ export class ReplJournalError extends Error {
 }
 
 /**
- * An append-only stream that says when a record has actually been retained.
+ * An append-only stream that says when a record has actually been saved.
  *
  * The interface rather than the class, so a test injects an in-memory one and
  * the same corpus runs under all three runtimes without an operator's
  * filesystem being part of what is under test.
  */
-export interface RetainedStream extends DurableStream {
-  /** Called after each append has been retained, with what was retained. */
+export interface SavedStream extends DurableStream {
+  /** Called after each append has been saved, with what was saved. */
   onAppend: ((event: DurableEvent) => void) | null;
 }
 
 /**
- * One execution's retained stream.
+ * One execution's saved stream.
  *
  * The events are held in memory because this process is the only writer: what is
  * in hand is what the file holds. An append reaches the file first and is only
  * then acknowledged — remembered and announced — so nothing downstream ever sees
  * a record that a crash would have lost.
  */
-export class RetainedReplStream implements RetainedStream {
+export class SavedReplStream implements SavedStream {
   readonly path: string;
   private events: DurableEvent[];
 
   /** Called after each append has reached the file, with what reached it. */
   onAppend: ((event: DurableEvent) => void) | null = null;
 
-  constructor(path: string, retained: readonly DurableEvent[] = []) {
+  constructor(path: string, saved: readonly DurableEvent[] = []) {
     this.path = path;
-    this.events = retained.map(clone);
+    this.events = saved.map(clone);
   }
 
   // deno-lint-ignore require-yield
@@ -93,7 +93,7 @@ export class RetainedReplStream implements RetainedStream {
 /** One execution the REPL can show: an opaque name and the stream behind it. */
 export interface ReplExecution {
   readonly id: string;
-  readonly stream: RetainedStream;
+  readonly stream: SavedStream;
 }
 
 /**
@@ -156,7 +156,7 @@ export function* createExecutionFile(root: string, execution: string): Operation
     throw new ReplJournalError("this execution's history could not be created.", { cause: error });
   }
 
-  return { id: execution, stream: new RetainedReplStream(path) };
+  return { id: execution, stream: new SavedReplStream(path) };
 }
 
 /**
@@ -176,7 +176,7 @@ export function* openExecutionFile(root: string, execution: string): Operation<R
     throw new ReplJournalError("this execution's history is not a file.");
   }
 
-  return { id: execution, stream: new RetainedReplStream(path, yield* readRecords(path)) };
+  return { id: execution, stream: new SavedReplStream(path, yield* readRecords(path)) };
 }
 
 /**

@@ -312,7 +312,7 @@ describe("durable fail-stop boundary", () => {
   });
 
   it("fences replay consumption and live execution after a caught divergence", function* () {
-    const retained: DurableEvent[] = [
+    const saved: DurableEvent[] = [
       {
         type: "yield",
         coroutineId: "root",
@@ -326,7 +326,7 @@ describe("durable fail-stop boundary", () => {
         result: { status: "ok", value: "two" },
       },
     ];
-    const stream = new InMemoryStream(retained);
+    const stream = new InMemoryStream(saved);
     const before = eventBytes(stream.snapshot());
     let replayDecisions = 0;
     let laterExecutions = 0;

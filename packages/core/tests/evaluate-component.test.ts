@@ -30,7 +30,7 @@ import { registerComponents } from "../src/components/registration.ts";
 import { useSyntax } from "../host.ts";
 import { Elicitation } from "../src/elicitation-api.ts";
 import type { ElicitationRequest } from "../src/elicitation-api.ts";
-import { retainedSource } from "../src/root-source.ts";
+import { savedSource } from "../src/root-source.ts";
 import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
 import type { RecordedFiles } from "./support/fragment-files.ts";
 import { answerProvider, implementation, offering } from "./support/answer-provider.ts";
@@ -56,7 +56,7 @@ function independentWrapper(answer: FunctionComponentDefinition): FunctionCompon
 function syntaxProfile(
   options: {
     transform?: (answer: FunctionComponentDefinition) => FunctionComponentDefinition;
-    retained?: FunctionComponentDefinition[];
+    saved?: FunctionComponentDefinition[];
   } = {},
 ): ExecutionInstallation {
   let captured = false;
@@ -75,7 +75,7 @@ function syntaxProfile(
               if (answer.kind !== "function") {
                 throw new Error("expected canonical Syntax");
               }
-              options.retained?.push(answer);
+              options.saved?.push(answer);
               return options.transform?.(answer) ?? answer;
             }
             return answer;
@@ -145,13 +145,13 @@ describe("protected generated component answers", () => {
     const rendered = String(result);
     expect(rendered).toContain("**Available in this evaluation:** yes");
     expect(rendered).toContain("**Available in this evaluation:** no");
-    const retained = (yield* stream.readAll()).filter(
+    const saved = (yield* stream.readAll()).filter(
       (event) => event.type === "yield" && event.description.type === "syntax_symbols",
     );
-    expect(retained).toHaveLength(1);
-    // The one retained reading is the text the fragment rendered, rather than a
+    expect(saved).toHaveLength(1);
+    // The one saved reading is the text the fragment rendered, rather than a
     // second reading taken to fill a result the evaluator no longer builds.
-    const symbols = retained[0];
+    const symbols = saved[0];
     const value =
       symbols?.type === "yield" && symbols.result.status === "ok"
         ? symbols.result.value
@@ -381,11 +381,11 @@ describe("protected generated component answers", () => {
     ).toBe(false);
   });
 
-  it("rebuilds routes on continuation and cannot resurrect a retained callable", function* () {
+  it("rebuilds routes on continuation and cannot resurrect a saved callable", function* () {
     const source = `<Evaluate text={'<Syntax names={["File"]} />'} as="answer" />\n<Json value={answer} />`;
     const stream = new InMemoryStream();
-    const retained: FunctionComponentDefinition[] = [];
-    const original = yield* run(source, [syntaxProfile({ retained })], stream);
+    const saved: FunctionComponentDefinition[] = [];
+    const original = yield* run(source, [syntaxProfile({ saved })], stream);
     const events = yield* stream.readAll();
     const admission = events.findIndex(
       (event) => event.type === "yield" && event.description.type === "generated_xmd",
@@ -394,9 +394,9 @@ describe("protected generated component answers", () => {
     const partial = events.slice(0, admission + 1);
     expect(yield* run(source, [syntaxProfile()], new InMemoryStream(partial))).toEqual(original);
     expect(yield* run(source, [syntaxProfile()], new InMemoryStream(events))).toEqual(original);
-    const held = retained[0];
+    const held = saved[0];
     if (held === undefined || typeof held.fn !== "function") {
-      throw new Error("no delegated answer was retained");
+      throw new Error("no delegated answer was saved");
     }
     expect(yield* refusal(held.fn({}, { hasContent: () => false }))).toContain("canonical core");
     expect(
@@ -424,7 +424,7 @@ describe("protected generated component answers", () => {
 
 const ROOT_PATH = "evaluate.md";
 
-const NOTE = "the retained note\n";
+const NOTE = "the saved note\n";
 
 /** A read-only selection over one recorder. */
 function reading(files: RecordedFiles): ExecutionInstallation {
@@ -457,7 +457,7 @@ function run(
 ): Operation<Json> {
   return scoped(function* () {
     return yield* collect(
-      yield* executeInstalled({ ...retainedSource(ROOT_PATH, source), stream }, [...installations]),
+      yield* executeInstalled({ ...savedSource(ROOT_PATH, source), stream }, [...installations]),
     );
   });
 }
@@ -489,7 +489,7 @@ describe("Tier FE — a program the document holds", () => {
     );
 
     const rendered = String(output);
-    expect(rendered).toContain("the retained note");
+    expect(rendered).toContain("the saved note");
     expect(rendered).toContain("the other note");
     // Through the captured operations, in the order the fragment wrote them.
     expect(files.performed).toEqual(["read notes.md", "read other.md"]);
@@ -565,13 +565,13 @@ describe("Tier FE — a fragment reaches the captured operations and nothing els
     expect(files.performed).toEqual([]);
   });
 
-  it("FE13: an operation retained past its execution refuses rather than acting", function* () {
+  it("FE13: an operation saved past its execution refuses rather than acting", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
     yield* run(`<Evaluate text={'<File path="notes.md" />\\n'} />\n`, [reading(files)]);
     const during = [...files.performed];
 
     // The execution has ended. Whatever a fragment body, a handler or a
-    // retained callback still holds is bound to operations this execution
+    // saved callback still holds is bound to operations this execution
     // revoked at teardown.
     expect(during).toEqual(["read notes.md"]);
     expect(files.performed).toEqual(during);
@@ -580,10 +580,10 @@ describe("Tier FE — a fragment reaches the captured operations and nothing els
 
 describe("Tier FE — the paired form produces its own program", () => {
   it("FE2: the exact bytes the producer rendered are the admitted source", function* () {
-    // Not "contains" and not "after trimming": the retained admission is a
+    // Not "contains" and not "after trimming": the saved admission is a
     // decision about one exact fragment, and a continuation is held to those
     // bytes. A projection that trimmed, re-indented or normalised newlines
-    // would make the retained text disagree with what the producer wrote.
+    // would make the saved text disagree with what the producer wrote.
     const PROGRAM = `\n<File path="notes.md" />\n\n<File path="other.md" />\n`;
     const files = recordedFiles({ "notes.md": NOTE, "other.md": "the other note\n" });
     const stream = new InMemoryStream();
@@ -643,7 +643,7 @@ describe("Tier FE — the paired form produces its own program", () => {
     });
 
     expect(rendered).toEqual(["produced"]);
-    expect(String(output)).toContain("the retained note");
+    expect(String(output)).toContain("the saved note");
     expect(files.performed).toEqual(["read notes.md"]);
   });
 
@@ -678,7 +678,7 @@ describe("Tier FE — the paired form produces its own program", () => {
     // One chain, two payloads, in the order the two sites ran.
     expect(crossed).toEqual(["producer-input.md", "notes.md"]);
     expect(files.performed).toEqual(["read notes.md"]);
-    expect(String(output)).toContain("the retained note");
+    expect(String(output)).toContain("the saved note");
   });
 
   it("FE2: a producer that fails stops the evaluation before any fragment work", function* () {
@@ -937,7 +937,7 @@ describe("Tier FE — the paired form produces its own program", () => {
     expect(intercepted).toContain("content");
     // The projection is not: the program is what the producer rendered, and the
     // substituted path was never read.
-    expect(String(output)).toContain("the retained note");
+    expect(String(output)).toContain("the saved note");
     expect(files.performed).toEqual(["read notes.md"]);
     expect(files.performed).not.toContain("read substituted.md");
   });
@@ -1048,7 +1048,7 @@ describe("Tier FE — an execution with no selection has no evaluation", () => {
       [reading(files), reading(files)],
     );
 
-    expect(String(output)).toContain("the retained note");
+    expect(String(output)).toContain("the saved note");
     expect(files.performed).toEqual(["read notes.md"]);
   });
 
@@ -1071,7 +1071,7 @@ describe("Tier FE — an execution with no selection has no evaluation", () => {
       [reading(files)],
     );
 
-    expect(String(output)).toContain("the retained note");
+    expect(String(output)).toContain("the saved note");
     expect(files.performed).toEqual(["read notes.md"]);
   });
 });
@@ -1109,7 +1109,7 @@ describe("Tier FE — what the element itself may say", () => {
     const unbound = yield* run(`<Evaluate text={'<File path="notes.md" />\\n'} />\n\nbetween\n`, [
       reading(loose),
     ]);
-    expect(String(unbound)).toContain("the retained note");
+    expect(String(unbound)).toContain("the saved note");
     expect(String(unbound)).toContain("between");
     expect(loose.performed).toEqual(["read notes.md"]);
 
@@ -1122,7 +1122,7 @@ describe("Tier FE — what the element itself may say", () => {
       [reading(captured)],
     );
     expect(String(bound)).toContain("between");
-    expect(String(bound)).not.toContain("the retained note");
+    expect(String(bound)).not.toContain("the saved note");
     expect(captured.performed).toEqual(["read notes.md"]);
 
     // And an ordinary structural capture around it sees exactly the text the
@@ -1133,7 +1133,7 @@ describe("Tier FE — what the element itself may say", () => {
         `<Json value={findings} />\n`,
       [reading(surrounded)],
     );
-    expect(String(held)).toContain("the retained note");
+    expect(String(held)).toContain("the saved note");
     expect(surrounded.performed).toEqual(["read notes.md"]);
   });
 });
@@ -1176,7 +1176,7 @@ describe("Tier FE — one occurrence, one durable decision", () => {
 
     const second = recordedFiles({ "notes.md": NOTE });
     yield* run(source, [reading(second)], new InMemoryStream(partial));
-    // The retained admission was restored rather than made again, and the read
+    // The saved admission was restored rather than made again, and the read
     // it authorized ran on this attempt.
     expect(second.performed).toEqual(["read notes.md"]);
   });
@@ -1184,7 +1184,7 @@ describe("Tier FE — one occurrence, one durable decision", () => {
   it("FE10: a continuation offering different text refuses before any effect", function* () {
     // The document is byte-identical across both attempts, so the occurrence
     // identity — and therefore the durable name — is the same. What differs is
-    // the program the producer rendered, which is exactly the case a retained
+    // the program the producer rendered, which is exactly the case a saved
     // admission has to refuse: a decision was made about one fragment, and the
     // run is now holding another.
     const DOCUMENT = `<Evaluate>\n<Program />\n</Evaluate>\n`;
@@ -1227,7 +1227,7 @@ describe("Tier FE — one occurrence, one durable decision", () => {
     );
 
     expect(failed).toContain("the exact text it was made about");
-    // Nothing was performed: neither the retained fragment nor the offered one.
+    // Nothing was performed: neither the saved fragment nor the offered one.
     expect(second.performed).toEqual([]);
   });
 
@@ -1276,12 +1276,12 @@ describe("Tier FE — one occurrence, one durable decision", () => {
     // it holds now says something else, so a re-read would be visible in the
     // output rather than merely in the count.
     expect(second.performed).toEqual([]);
-    expect(String(replayed)).toContain("the retained note");
+    expect(String(replayed)).toContain("the saved note");
     expect(String(replayed)).not.toContain("must not read");
     expect(String(replayed)).toBe(String(original));
   });
 
-  it("FE12: a retained record this version cannot read fails closed", function* () {
+  it("FE12: a saved record this version cannot read fails closed", function* () {
     const files = recordedFiles({ "notes.md": NOTE });
     const stream = new InMemoryStream();
     const source = `<Evaluate text={'<File path="notes.md" />\\n'} />\n`;
@@ -1462,7 +1462,7 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
     );
 
     const rendered = String(output);
-    expect(rendered).toContain("the retained note");
+    expect(rendered).toContain("the saved note");
     expect(rendered).not.toContain("not taken");
     // One admitted read, reached through the constructs rather than around them.
     expect(files.performed).toEqual(["read notes.md"]);
@@ -1534,7 +1534,7 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
     // Each of these has its own handler rather than falling through to the
     // generic structural refusal: the loop ran, the break ended it after one
     // pass, and the region rendered the read it wrapped.
-    expect(String(output)).toContain("the retained note");
+    expect(String(output)).toContain("the saved note");
     expect(files.performed).toEqual(["read notes.md"]);
   });
 
@@ -1635,7 +1635,7 @@ describe("Tier FE35 — structural constructs in a generated fragment", () => {
     // Two iterations of one element: the second import finds the same plan
     // rather than an exhausted queue.
     expect(files.performed).toEqual(["read notes.md", "read notes.md"]);
-    expect(String(output)).toContain("the retained note");
+    expect(String(output)).toContain("the saved note");
   });
 
   it("FE35: a zero-iteration occurrence consumes no plan", function* () {
@@ -1714,10 +1714,10 @@ describe("Tier FE34 — the shared read profile", () => {
 
     const rendered = String(output);
     expect(rendered).toContain("notes.md");
-    expect(rendered).toContain("the retained note");
+    expect(rendered).toContain("the saved note");
     // The vocabulary was bound rather than rendered, so nothing about it
     // reaches the caller: the fragment renders exactly what it chose to. That
-    // the occurrence ran at all is the retained reading, not the output.
+    // the occurrence ran at all is the saved reading, not the output.
     expect(rendered).not.toContain("Available in this evaluation");
     expect(
       (yield* stream.readAll()).filter(
@@ -2168,7 +2168,7 @@ describe("Tier FE34 — the shared read profile", () => {
  * execution resolves that name once — before the root import, through the
  * complete ordinary chain — takes the definition the provider published on the
  * exact final answer, holds each admitted spelling to what that definition
- * offers, and seals what it retained.
+ * offers, and seals what it saved.
  *
  * So the rows here are about the two ways that could be weaker than it looks:
  * an answer nobody published, and an answer that stopped being the thing that
@@ -2199,8 +2199,8 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
     );
   }
 
-  /** The row one admission retained for the name it admitted. */
-  function retainedRow(event: DurableEvent): Json {
+  /** The row one admission saved for the name it admitted. */
+  function savedRow(event: DurableEvent): Json {
     const result = event.type === "yield" ? event.result : undefined;
     if (result === undefined || result.status !== "ok" || !isRecord(result.value)) {
       throw new Error("the admission recorded no result");
@@ -2247,7 +2247,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
     // admitted it, and what kind of thing answered for the name: an answer the
     // chain resolved is a different grant from an operation core supplies the
     // body for, even under the same URL.
-    expect(retainedRow(admission)).toEqual({
+    expect(savedRow(admission)).toEqual({
       name: "Open",
       form: "self-closing",
       identity: "https://executable.md/components/open/read",
@@ -2377,7 +2377,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
     const B = implementation("Open", "B ran");
     const stream = new InMemoryStream();
 
-    // A provider settles at the capture: the profile sealed what it retained,
+    // A provider settles at the capture: the profile sealed what it saved,
     // and a fragment runs that snapshot. One that keeps answering is answering
     // a *generated* import, which only canonical execution answers — so the
     // witness refuses it rather than letting a live provider substitute into an
@@ -2540,7 +2540,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
     // answers the unchanged A, whose declaration offers the identity the
     // admission was made over; the outer one delegates to it and then answers
     // with its own published B, whose declaration offers that spelling under a
-    // different URL. So capture seals B — and then the *retained* policy
+    // different URL. So capture seals B — and then the *saved* policy
     // refuses, because the admission was made over one URL and this run states
     // another behind the same name.
     const resumedA = implementation("Open", "A ran");
@@ -2581,7 +2581,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
     const resumed = implementation("Open", "A ran");
     const output = yield* run(OPEN, [backed(resumed)], new InMemoryStream(partial));
 
-    // The retained admission was restored rather than made again, and the body
+    // The saved admission was restored rather than made again, and the body
     // it authorized ran on this attempt — once.
     expect(String(output)).toContain("A ran");
     expect(resumed.invoked).toEqual(["A ran"]);
@@ -2641,7 +2641,7 @@ describe("Tier FE14 — the chain answers, and the answer is held to what it off
     );
 
     expect(lookups).toEqual([]);
-    expect(String(output)).toContain("the retained note");
+    expect(String(output)).toContain("the saved note");
   });
 });
 
@@ -3022,7 +3022,7 @@ describe("Tier FE36 — canonical `<Elicit>` is a write a person answers", () =>
     expect(requests).toEqual([]);
     expect(second.performed).toEqual([]);
     expect(String(replayed)).toBe(String(first));
-    // And the retained history is the one it started from.
+    // And the saved history is the one it started from.
     expect(yield* replayStream.readAll()).toEqual(complete);
   });
 });

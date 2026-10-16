@@ -61,7 +61,7 @@ export default define.page(function GettingStarted({ url }) {
             </span>
           </span>
           <span style="font-size:0.84375rem;line-height:1.55;color:var(--body);">
-            Runs a document in a retained Workspace, so an interrupted workflow
+            Runs a document in a saved Workspace, so an interrupted workflow
             resumes from its journal frontier instead of starting again.
             Unsupported operations fail explicitly instead of falling back to
             the host. Available through the Deno entrypoint and the compiled

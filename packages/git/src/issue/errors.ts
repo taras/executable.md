@@ -61,7 +61,7 @@ export class IssueProtocolError extends Error {
 
   constructor(condition: string) {
     super(
-      `${condition}. The answer is refused rather than retained: a value this boundary ` +
+      `${condition}. The answer is refused rather than saved: a value this boundary ` +
         "cannot read is not an outcome, and its content is withheld.",
     );
   }

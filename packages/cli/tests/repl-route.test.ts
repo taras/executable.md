@@ -453,7 +453,7 @@ describe("REPL route: resolving against one model", () => {
  * Two halves again. The grammar has to spell one more query member without
  * moving any of the ones that were canonical before it, and has to keep the new
  * drawer on the one surface that has it. Resolution has to answer a filter from
- * what the *selected prefix* retained, plus — only at the live head — what the
+ * what the *selected prefix* saved, plus — only at the live head — what the
  * process says it has started, and has to refuse anything else rather than
  * showing an empty list.
  */
@@ -490,7 +490,7 @@ describe("REPL route: a live question's drawer belongs to one place", () => {
     ).toContain("frozen at an earlier position");
 
     // Cold, with no process holding a question: a Journal records answers, never a
-    // question that is still waiting, so nothing retained can establish this.
+    // question that is still waiting, so nothing saved can establish this.
     expect(unresolved(model, `xmd://repl/${EXECUTION}/entries/entry-1/+elicit`)).toContain(
       "nothing is being asked",
     );
@@ -590,7 +590,7 @@ describe("REPL route: the conversation filter", () => {
 describe("REPL route: resolving a conversation", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("R2: resolves a retained conversation to the exact group the model holds", function* () {
+  it("R2: resolves a saved conversation to the exact group the model holds", function* () {
     const events = yield* agentReferenceEvents();
     const model = projected(events);
 
@@ -610,7 +610,7 @@ describe("REPL route: resolving a conversation", () => {
     const started = `xmd://repl/${EXECUTION}/sessions?session=stub%3Aplanning`;
 
     // Nothing has settled in it yet, so no history holds it and there is no
-    // retained group to point at — but the process running it can say it exists.
+    // saved group to point at — but the process running it can say it exists.
     expect(unresolved(model, started)).toContain("no conversation stub:planning");
     const live = resolved(model, started, holding({ sessions: ["stub:planning"] }));
     expect(live.session).toBe(undefined);
@@ -622,17 +622,17 @@ describe("REPL route: resolving a conversation", () => {
     );
   });
 
-  it("R2: a historical prefix answers from its own retained groups and ignores the head", function* () {
+  it("R2: a historical prefix answers from its own saved groups and ignores the head", function* () {
     const events = yield* agentReferenceEvents();
     const head = projected(events);
     const early = head.turns[0].marker;
     const historical = projected(events, early);
 
-    const retained = resolved(
+    const saved = resolved(
       historical,
       `xmd://repl/${EXECUTION}/sessions?at=${early}&session=stub%3Areview`,
     );
-    expect(retained.session).toBe(historical.sessions[0]);
+    expect(saved.session).toBe(historical.sessions[0]);
 
     // The build conversation had not started at this position. It is in the
     // head and in this process, and neither may answer for the past.

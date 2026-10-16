@@ -19,7 +19,7 @@ import { DurableContext } from "./context.ts";
 import { activeDurabilityFailure, appendDurableEvent } from "./durability.ts";
 import { EarlyReturnDivergenceError, TerminalDivergenceError } from "./errors.ts";
 import { ReplayGuard } from "./replay-guard.ts";
-import { consumable, observeEvent } from "./retained.ts";
+import { consumable, observeEvent } from "./saved.ts";
 import { ReplayIndex } from "./replay-index.ts";
 import { deserializeError, serializeError } from "./serialize.ts";
 import type { DurableStream } from "./stream.ts";
@@ -38,7 +38,7 @@ function unalignedReplay(replayIndex: ReplayIndex, coroutineId: string) {
  * results for the decide phase.
  *
  * The events come from the index rather than from the stream, so a guard reads
- * the same retained result the replay path will use. Handing over the stream's
+ * the same saved result the replay path will use. Handing over the stream's
  * own events instead would make validation and consumption two separate reads,
  * and a source that answered differently between them could have a guard
  * approve one result while execution used another.
@@ -46,8 +46,8 @@ function unalignedReplay(replayIndex: ReplayIndex, coroutineId: string) {
  * See replay-guard-spec.md §5.5.
  */
 function* runCheckPhase(replayIndex: ReplayIndex, scope: Scope): Operation<void> {
-  for (const event of replayIndex.retainedYields()) {
-    // An isolated observation, not the retained event. Guards compose by
+  for (const event of replayIndex.savedYields()) {
+    // An isolated observation, not the saved event. Guards compose by
     // reading and passing along; what composition must not become is the power
     // to edit a history the execution already validated.
     const observed = observeEvent(event);
@@ -75,7 +75,7 @@ export interface DurableRunOptions {
  * 3. Runs the workflow — replayed effects resolve synchronously from
  *    the index; live effects execute and persist before resuming.
  * 4. On completion, appends a Close event to the stream.
- * 5. Before any Close, rejects durability failures and retained coroutine
+ * 5. Before any Close, rejects durability failures and saved coroutine
  *    history the current definition did not align with.
  *
  * Returns the workflow's result value.
@@ -115,14 +115,14 @@ export function* durableRun<T extends WorkflowValue>(
   // See replay-guard-spec.md §5.5.
   yield* runCheckPhase(replayIndex, scope);
 
-  // The retained history has been offered in full and nothing has been reused
+  // The saved history has been offered in full and nothing has been reused
   // yet. A guard that requires something of the history as a whole — that an
   // event it validates is present, and present once — refuses here, before the
   // recorded terminal result below can answer for history nobody validated.
   yield* ReplayGuard.invoke(scope, "admit", [
     {
       coroutineId,
-      yields: replayIndex.retainedYields().flatMap((event) => {
+      yields: replayIndex.savedYields().flatMap((event) => {
         const observed = observeEvent(event);
         return observed.type === "yield" ? [observed] : [];
       }),
@@ -137,7 +137,7 @@ export function* durableRun<T extends WorkflowValue>(
     const closeEvent = replayIndex.getClose(coroutineId)!;
     if (closeEvent.result.status === "ok") {
       // A fresh consumer copy, exactly as a replayed Yield's result is. The
-      // retained settlement is frozen so policy cannot rewrite it; what a
+      // saved settlement is frozen so policy cannot rewrite it; what a
       // caller receives from a completed run is ordinary data it may hold and
       // change, and changing it cannot reach the next replay.
       const settled = consumable(closeEvent.result);

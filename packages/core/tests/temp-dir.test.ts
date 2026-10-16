@@ -378,9 +378,9 @@ describe("Tier TD — TempDir", () => {
     expect(output.split("PRESENT")[0]).not.toContain("xmd-tempdir-");
   });
 
-  // TD11: retained is not permanent. The path is recorded outside the
+  // TD11: saved is not permanent. The path is recorded outside the
   // directory so it can still be named after the execution that owned it ends.
-  it("TD11: a retained directory is removed when the document scope closes", function* () {
+  it("TD11: a saved directory is removed when the document scope closes", function* () {
     const dir = yield* useFixture();
     yield* writeDocument(
       dir,

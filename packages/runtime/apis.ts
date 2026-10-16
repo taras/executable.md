@@ -296,7 +296,7 @@ function* run(options: {
 }): Operation<ProcessOutcome> {
   return yield* scoped(function* () {
     // Before acquisition, so a chunk written while the child is being started
-    // is retained rather than raced for.
+    // is saved rather than raced for.
     const kept = options.retain ? yield* retaining() : undefined;
 
     const child = yield* processExec(options.command, {
@@ -339,9 +339,9 @@ function* withTimeout<T>(
 /**
  * What a finished child process reports.
  *
- * `stdout` and `stderr` are the text a caller asked to be retained. A caller
+ * `stdout` and `stderr` are the text a caller asked to be saved. A caller
  * that asked for none gets `undefined` rather than an empty string: nothing was
- * accumulated, and "no output" and "not retained" are different answers.
+ * accumulated, and "no output" and "not saved" are different answers.
  */
 export interface ProcessOutcome {
   exitCode: number;

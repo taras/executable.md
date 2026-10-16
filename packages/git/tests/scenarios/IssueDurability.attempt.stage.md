@@ -1,7 +1,7 @@
 # An attempt that filed an issue and journaled that it had
 
 The first attempt of the durability scenario. Nothing goes wrong here: the
-tracker accepts the create, the answer gets back, and the result is retained
+tracker accepts the create, the answer gets back, and the result is saved
 under this run.
 
 <StagedRun id="run-296-issue" />

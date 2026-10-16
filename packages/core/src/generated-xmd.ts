@@ -24,8 +24,8 @@
  * thrown out of it: a thrown one is serialized into the journal with its
  * message and its stack.
  *
- * The line is admission. Before it, nothing of the candidate is retained, so a
- * refusal carries none of it. After it the exact source is retained on purpose,
+ * The line is admission. Before it, nothing of the candidate is saved, so a
+ * refusal carries none of it. After it the exact source is saved on purpose,
  * so an ordinary expansion diagnostic quoting the fragment discloses nothing
  * the journal does not already hold.
  *
@@ -65,9 +65,9 @@
  * ## A resumed run is held to the selection it was admitted under
  *
  * Durable replay matches an effect by its type and name; what a description
- * carries is stored, never compared. So the retained admission carries the
+ * carries is stored, never compared. So the saved admission carries the
  * normalized policy in its **result** as well as in the event input, and a
- * continuation checks that retained policy against the one this run states
+ * continuation checks that saved policy against the one this run states
  * before a single generated component is invoked or a single effect is
  * performed. Every term compares whole and exactly: a changed class selection,
  * a changed identity behind the same name, and a changed admitted form are
@@ -78,7 +78,7 @@
  * What is deliberately absent is everything live. Which destination an admitted
  * `<Fetch />` may reach, and what timeout it resolves, are decided where the
  * request is performed — by the effective `Permissions` and `Config` of the
- * scope that performs it — so a continuation held to a retained copy of either
+ * scope that performs it — so a continuation held to a saved copy of either
  * would refuse a run whose configuration legitimately moved.
  *
  * That is also why the walk lives inside the admission's live executor. A
@@ -92,13 +92,13 @@
  * exact source, the identity and form of each element the fragment named, and
  * the normalized policy; a refusal carries the construct class and nothing
  * else. Either way it commits before the first generated effect, and the
- * effects themselves are retained by their own durable records — `fetch` for
+ * effects themselves are saved by their own durable records — `fetch` for
  * `<Fetch>`, the Workspace file effect for `<File>` — so a replay restores both
  * without asking anyone anything a second time.
  *
  * An identity in that record is the URL the declaration that owns the
  * implementation offers that spelling under — `https://executable.md/components/file/read`
- * for `<File />` and `.../file/write` for `<File>…</File>` — retained beside
+ * for `<File />` and `.../file/write` for `<File>…</File>` — saved beside
  * what kind of thing answered for the name and which effect table admitted it.
  * One component, one definition, one identity per form, all of them stated
  * where the implementation is. A record written by an earlier build holds a
@@ -224,24 +224,24 @@ const CONSTRUCT: Record<Construct, string> = {
  * refusal must not publish.
  */
 const CEILING =
-  "a generated fragment was admitted under a selection this run no longer states. A retained " +
+  "a generated fragment was admitted under a selection this run no longer states. A saved " +
   "admission resumes only under the exact effect classes, identities and forms it was admitted " +
   "with.";
 
-const UNREADABLE = "the retained generated-XMD admission record cannot be read as one.";
+const UNREADABLE = "the saved generated-XMD admission record cannot be read as one.";
 
 /**
  * What a resumed run is refused with when the text it now offers is not the
  * text that was admitted.
  *
- * The admission is a decision about one exact fragment. Expanding the retained
+ * The admission is a decision about one exact fragment. Expanding the saved
  * copy while the caller holds a different one would run something nobody
  * admitted *this* run for — the earlier behavior, which silently preferred the
- * retained text and let a changed candidate pass unnoticed. Naming neither
+ * saved text and let a changed candidate pass unnoticed. Naming neither
  * fragment, because both are generated text.
  */
 const STALE_TEXT =
-  "a generated fragment was admitted for text this run no longer offers. A retained admission " +
+  "a generated fragment was admitted for text this run no longer offers. A saved admission " +
   "resumes only for the exact text it was made about.";
 
 /**
@@ -303,7 +303,7 @@ export type GeneratedEffectClass = "read" | "write";
  * Whether canonical core supplies the body behind an admitted name, or the
  * ordinary import chain answered for it.
  *
- * Retained beside the identity, because the two are different grants even under
+ * Saved beside the identity, because the two are different grants even under
  * one URL: the first cannot be composed around and the second was resolved
  * through middleware, so a record that confused them would compare a fragment's
  * admission equal to an admission it never had.
@@ -314,20 +314,20 @@ export type GeneratedImplementation = "capability" | "component-answer";
 const IMPLEMENTATIONS: readonly GeneratedImplementation[] = ["capability", "component-answer"];
 
 /**
- * Whether the row this run states is the one a retained row was admitted under.
+ * Whether the row this run states is the one a saved row was admitted under.
  *
  * Member by member: the URL the spelling runs under, the spelling itself, what
  * kind of thing answered for the name, and which effect table admitted it. A
  * changed URL, a form added, an implementation resolved another way and a read
  * moved into the write table are each a different grant.
  */
-function sameRow(retained: RetainedEntry, current: RetainedEntry): boolean {
+function sameRow(saved: SavedEntry, current: SavedEntry): boolean {
   return (
-    retained.name === current.name &&
-    retained.form === current.form &&
-    retained.identity === current.identity &&
-    retained.kind === current.kind &&
-    retained.effect === current.effect
+    saved.name === current.name &&
+    saved.form === current.form &&
+    saved.identity === current.identity &&
+    saved.kind === current.kind &&
+    saved.effect === current.effect
   );
 }
 
@@ -343,7 +343,7 @@ export type GeneratedComponentForm = "self-closing" | "paired" | "either";
 /** The two forms an element is actually written in. */
 type AuthoredForm = "self-closing" | "paired";
 
-/** Canonical order, everywhere a class or a form is compared or retained. */
+/** Canonical order, everywhere a class or a form is compared or saved. */
 const EFFECT_CLASSES: readonly GeneratedEffectClass[] = ["read", "write"];
 const AUTHORED_FORMS: readonly AuthoredForm[] = ["self-closing", "paired"];
 
@@ -431,7 +431,7 @@ export function pinnedFetch(): GeneratedObservation {
  * exists rather than a caller reaching for the definition itself and hoping.
  * The identity the admission retains is the one core's declaration offers that
  * spelling under, so a run that later admitted the paired form would be stating
- * a different policy and a retained admission would refuse it.
+ * a different policy and a saved admission would refuse it.
  *
  * An admitted read invokes the ordinary `<File>` component and therefore the
  * installed Files provider, which under a workflow run is the transaction-bound
@@ -518,7 +518,7 @@ export function pinnedComponent(
  * first.
  *
  * A mutation contributes nothing to the evaluator's result. What it did is
- * retained by its own ordinary durable effect, which is the authoritative
+ * saved by its own ordinary durable effect, which is the authoritative
  * account of it.
  */
 export interface GeneratedMutation {
@@ -566,7 +566,7 @@ export function pinnedFileWrite(): GeneratedMutation {
  * therefore the installed Files provider, which under a workflow run is the
  * transaction-bound one, so the removal crosses the run's ordinary effect
  * transaction rather than a path of the evaluator's own. What it did is
- * retained by the `workspace_file` effect it publishes there, and the evaluator
+ * saved by the `workspace_file` effect it publishes there, and the evaluator
  * invents no receipt beside it: a deletion renders nothing unless the fragment
  * authors output around it.
  */
@@ -621,7 +621,7 @@ export interface GeneratedXmdRequest {
  * One admitted identity, normalized out of the class table it came from.
  *
  * A composition entry, a read entry and a mutation entry differ in what selects
- * them; everything the preflight and the retained policy do with them is the
+ * them; everything the preflight and the saved policy do with them is the
  * same, and this is that shape.
  */
 interface Entry {
@@ -656,10 +656,10 @@ interface Entry {
  *
  * One row per name and form rather than per entry, because the identity and the
  * effect belong to the spelling: a reader comparing two admissions sees exactly
- * which spelling of which name moved, and the table a row came from is retained
+ * which spelling of which name moved, and the table a row came from is saved
  * beside it rather than inferred from where it sits.
  */
-interface RetainedEntry {
+interface SavedEntry {
   readonly name: string;
   readonly form: AuthoredForm;
   readonly identity: string;
@@ -668,7 +668,7 @@ interface RetainedEntry {
 }
 
 /** One element the fragment actually named, as the run retains it. */
-interface RetainedInvocation {
+interface SavedInvocation {
   readonly name: string;
   readonly identity: string;
   readonly form: AuthoredForm;
@@ -690,15 +690,15 @@ interface Policy {
    * Every admitted spelling, in the order the selection resolved them:
    * composition first, then the read table, then the write table.
    */
-  readonly allowed: readonly RetainedEntry[];
+  readonly allowed: readonly SavedEntry[];
 }
 
 /** The decision this run recorded, restored from its own durable record. */
-type RetainedAdmission =
+type SavedAdmission =
   | {
       readonly decision: "admitted";
       readonly source: string;
-      readonly named: readonly RetainedInvocation[];
+      readonly named: readonly SavedInvocation[];
       readonly policy: Policy;
     }
   | { readonly decision: "refused"; readonly construct: Construct };
@@ -948,7 +948,7 @@ function selectedEntries(
   const entries: Entry[] = [];
   // One kept reading per definition object, so a name admitted for two
   // spellings stays one component with one implementation.
-  const retained = new Map<FunctionComponentDefinition, AdmittedDefinition>();
+  const saved = new Map<FunctionComponentDefinition, AdmittedDefinition>();
   // Before either effect table and under every selection: composition is not a
   // class `allow` chooses between, so its entries are in the policy the same
   // way whatever the caller asked for, and in one canonical position.
@@ -976,7 +976,7 @@ function selectedEntries(
       // own declaration does not accept, is refused before the admission record
       // and before any body, and a member that answers differently on a second
       // reading never gets one.
-      const admitted = admitOffered(observation.name, observation.definition, retained);
+      const admitted = admitOffered(observation.name, observation.definition, saved);
       // The spellings this component is offered to observe in, narrowed by the
       // host where it constrained the entry to the self-closing one. Derived
       // rather than assumed: a component offering one reading spelling admits
@@ -1002,7 +1002,7 @@ function selectedEntries(
       );
     }
     for (const mutation of mutations) {
-      const admitted = admitOffered(mutation.name, mutation.definition, retained);
+      const admitted = admitOffered(mutation.name, mutation.definition, saved);
       const forms = authoredForms(mutation.form);
       entries.push({
         name: mutation.name,
@@ -1056,9 +1056,9 @@ interface AdmittedDefinition {
 function admitOffered(
   name: string,
   definition: FunctionComponentDefinition,
-  retained: Map<FunctionComponentDefinition, AdmittedDefinition>,
+  saved: Map<FunctionComponentDefinition, AdmittedDefinition>,
 ): AdmittedDefinition {
-  const held = retained.get(definition);
+  const held = saved.get(definition);
   if (held !== undefined) {
     return held;
   }
@@ -1088,7 +1088,7 @@ function admitOffered(
     }),
     generated,
   });
-  retained.set(definition, admitted);
+  saved.set(definition, admitted);
   return admitted;
 }
 
@@ -1163,7 +1163,7 @@ function offeredIdentities(
  * definitions: an import is asked for by name, so a name resolves to exactly
  * one implementation and the form chooses only which identity that
  * implementation ran as. Either ambiguity is a malformed host table, refused
- * before anything is retained rather than settled by whichever entry was listed
+ * before anything is saved rather than settled by whichever entry was listed
  * first.
  */
 function admitted(entries: readonly Entry[]): Map<string, Entry[]> {
@@ -1232,10 +1232,10 @@ function sameStrings(one: readonly string[], other: readonly string[]): boolean 
 
 /** The selected rows this run states, in the order the selection resolved them. */
 function currentPolicy(allow: readonly GeneratedEffectClass[], entries: readonly Entry[]): Policy {
-  const allowed: RetainedEntry[] = [];
+  const allowed: SavedEntry[] = [];
   for (const entry of entries) {
     // One row per admitted spelling, in canonical form order within the entry,
-    // so the retained table says which spelling of which name was admitted as
+    // so the saved table says which spelling of which name was admitted as
     // what rather than leaving the effect to be inferred from a position.
     for (const form of AUTHORED_FORMS.filter((candidate) => entry.forms.includes(candidate))) {
       const identity = entry.identities.get(form);
@@ -1290,7 +1290,7 @@ function policyRecord(policy: Policy): JsonObject {
 /**
  * Whether an object carries exactly these members and nothing else.
  *
- * Every retained shape below is closed, which is a stronger requirement than
+ * Every saved shape below is closed, which is a stronger requirement than
  * "the members it needs are present and well-typed". A record carrying an
  * extra member was written by something this build does not know the rules of,
  * and reading the members it recognizes would be admitting a grant on terms it
@@ -1358,7 +1358,7 @@ function readClasses(value: Json): GeneratedEffectClass[] | undefined {
 }
 
 /**
- * One retained identity: the URL string the spelling ran under.
+ * One saved identity: the URL string the spelling ran under.
  *
  * A string in the accepted namespace and nothing else. An object — the
  * structural identity an earlier build wrote — a relative reference, a URL
@@ -1373,15 +1373,15 @@ function readIdentity(value: Json | undefined): string | undefined {
 }
 
 /** The effect table one row was admitted from. */
-function readEffect(value: Json | undefined): RetainedEntry["effect"] | undefined {
+function readEffect(value: Json | undefined): SavedEntry["effect"] | undefined {
   return value === "composition" ? "composition" : EFFECT_CLASSES.find((known) => known === value);
 }
 
-function readAllowed(value: Json): RetainedEntry[] | undefined {
+function readAllowed(value: Json): SavedEntry[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const allowed: RetainedEntry[] = [];
+  const allowed: SavedEntry[] = [];
   for (const entry of value) {
     if (!isJsonObject(entry) || !exactly(entry, ["name", "form", "identity", "kind", "effect"])) {
       return undefined;
@@ -1405,11 +1405,11 @@ function readAllowed(value: Json): RetainedEntry[] | undefined {
   return allowed;
 }
 
-function readNamed(value: Json): RetainedInvocation[] | undefined {
+function readNamed(value: Json): SavedInvocation[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const named: RetainedInvocation[] = [];
+  const named: SavedInvocation[] = [];
   for (const entry of value) {
     if (!isJsonObject(entry) || !exactly(entry, ["name", "identity", "form"])) {
       return undefined;
@@ -1426,7 +1426,7 @@ function readNamed(value: Json): RetainedInvocation[] | undefined {
 }
 
 /**
- * Whether a resumed run still holds the grant the retained admission was made
+ * Whether a resumed run still holds the grant the saved admission was made
  * under.
  *
  * Every term compares whole and exactly, in order: a widened class selection,
@@ -1436,21 +1436,21 @@ function readNamed(value: Json): RetainedInvocation[] | undefined {
  * precisely the one that comparing the *fragment* against the *current* policy
  * would wave through.
  */
-function policyHolds(retained: Policy, current: Policy): boolean {
-  if (!sameStrings(retained.allow, current.allow)) {
+function policyHolds(saved: Policy, current: Policy): boolean {
+  if (!sameStrings(saved.allow, current.allow)) {
     return false;
   }
-  if (retained.allowed.length !== current.allowed.length) {
+  if (saved.allowed.length !== current.allowed.length) {
     return false;
   }
-  return retained.allowed.every((entry, index) => {
+  return saved.allowed.every((entry, index) => {
     const here = current.allowed[index];
     return here !== undefined && sameRow(entry, here);
   });
 }
 
 /** One element the fragment named, and the entry preflight selected for it. */
-interface Planned extends RetainedInvocation {
+interface Planned extends SavedInvocation {
   readonly entry: Entry;
 }
 
@@ -2001,7 +2001,7 @@ function* persistAdmission(
  * and a record somebody else wrote is not an admission because it happens to
  * have the right keys.
  */
-function readAdmission(value: Json): RetainedAdmission | undefined {
+function readAdmission(value: Json): SavedAdmission | undefined {
   if (!isJsonObject(value)) {
     return undefined;
   }
@@ -2032,14 +2032,14 @@ function readAdmission(value: Json): RetainedAdmission | undefined {
     return undefined;
   }
   const invocations = readNamed(value.named);
-  const retained = readPolicy(value.policy);
-  if (invocations === undefined || retained === undefined) {
+  const saved = readPolicy(value.policy);
+  if (invocations === undefined || saved === undefined) {
     return undefined;
   }
-  return { decision, source, named: invocations, policy: retained };
+  return { decision, source, named: invocations, policy: saved };
 }
 
-/** Whether a retained string names one of the construct classes this version has. */
+/** Whether a saved string names one of the construct classes this version has. */
 function isConstruct(value: string): value is Construct {
   return Object.hasOwn(CONSTRUCT, value);
 }
@@ -2175,7 +2175,7 @@ export function* evaluateProtectedGeneratedXmd(
     );
   }
   // Before a single component is invoked or a single effect is performed: a
-  // retained admission is a grant whose selected spellings, identities,
+  // saved admission is a grant whose selected spellings, identities,
   // effects and classes must be stated exactly again. A run that moved any of
   // them is asking for a different grant.
   if (!policyHolds(decided.policy, policy)) {
@@ -2184,12 +2184,12 @@ export function* evaluateProtectedGeneratedXmd(
   // And for the exact text, on the same terms as the selection. An admission is
   // a decision about one fragment; a caller now holding a different one is
   // asking for a decision that was never made, so it refuses here rather than
-  // quietly expanding the retained copy in its place.
+  // quietly expanding the saved copy in its place.
   if (decided.source !== request.source) {
     throw new GeneratedXmdError(STALE_TEXT);
   }
 
-  // The retained source is what expands, so a continuation runs exactly the
+  // The saved source is what expands, so a continuation runs exactly the
   // bytes this run admitted rather than a caller's copy of them.
   const restored = yield* preflight(request.id, decided.source, table);
   return yield* expand(request.id, restored.segments, restored.named, componentRouting, syntax);

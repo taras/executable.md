@@ -379,7 +379,7 @@ export default define.page(function Components() {
       <p>
         Retaining also delays release rather than opting out of it. The
         invocation site is an ordinary scope, so when it finishes, fails, or is
-        cancelled, everything retained into it is torn down, innermost first.
+        cancelled, everything saved into it is torn down, innermost first.
         Nothing escapes structured concurrency and nothing needs an explicit
         release.
       </p>
@@ -387,7 +387,7 @@ export default define.page(function Components() {
         <code>retain()</code> belongs to TypeScript components. An{" "}
         <code>eval</code>{" "}
         block is durable — a replay restores its values without running it — so
-        a resource retained from one would have nothing to re-establish it, and
+        a resource saved from one would have nothing to re-establish it, and
         the call is refused rather than silently succeeding.
       </p>
 

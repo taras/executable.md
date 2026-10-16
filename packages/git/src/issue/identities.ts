@@ -22,11 +22,11 @@
  *
  * The reasoning about *why* the table is built where it is belongs to
  * `git-host/identities.ts` and holds identically here: every obvious way of
- * carrying the answer is replaceable, so it is built once in the retained-run
+ * carrying the answer is replaceable, so it is built once in the saved-run
  * installation's admission, inside core's own trusted journal read, and
  * published beside the run where every physical copy of this package reads it.
  * What makes a wrong answer safe is what happens to it: on replay the record
- * consumed is held to the request being made, and a request named by a retained
+ * consumed is held to the request being made, and a request named by a saved
  * record that reaches live execution performs nothing at all.
  */
 
@@ -36,8 +36,8 @@ import { ISSUE_EFFECT } from "./effect-type.ts";
 import { parseIssueRequest } from "./records.ts";
 import type { IssueRequest } from "./records.ts";
 
-/** One retained record's identity, and what it was a record of. */
-export interface RetainedIssueIdentity {
+/** One saved record's identity, and what it was a record of. */
+export interface SavedIssueIdentity {
   readonly runId: string;
   /** The request it answers for, with the run it was written under left out. */
   readonly asked: string;
@@ -47,15 +47,13 @@ export interface RetainedIssueIdentity {
 /**
  * The identities one admitted history holds, in the order it holds them.
  *
- * Built by the retained-run installation's admission, from the snapshot
+ * Built by the saved-run installation's admission, from the snapshot
  * canonical core admitted, and published where every physical copy of this
  * package reads it.
  */
-export function retainedIssueIdentities(
-  retained: readonly DurableEvent[],
-): RetainedIssueIdentity[] {
-  const identities: RetainedIssueIdentity[] = [];
-  for (const event of retained) {
+export function savedIssueIdentities(saved: readonly DurableEvent[]): SavedIssueIdentity[] {
+  const identities: SavedIssueIdentity[] = [];
+  for (const event of saved) {
     const request = requestOf(event);
     if (request === undefined) {
       continue;
@@ -71,20 +69,20 @@ export function retainedIssueIdentities(
  * Called when a call has run live: replay has left the prefix, and a later
  * record must not be borrowed by whatever happens next.
  */
-export function exhaustRetainedIssueIdentities(held: RetainedIssueIdentity[] | undefined): void {
+export function exhaustSavedIssueIdentities(held: SavedIssueIdentity[] | undefined): void {
   if (held !== undefined) {
     exhaust(held);
   }
 }
 
 /**
- * Take the identity of the retained record at the next unconsumed position,
+ * Take the identity of the saved record at the next unconsumed position,
  * when that record asks exactly what this request asks.
  *
  * Nothing is the ordinary answer, and it is what every live position gives.
  */
-export function claimRetainedIssueIdentity(
-  held: RetainedIssueIdentity[] | undefined,
+export function claimSavedIssueIdentity(
+  held: SavedIssueIdentity[] | undefined,
   request: IssueRequest,
 ): string | undefined {
   if (held === undefined) {
@@ -102,7 +100,7 @@ export function claimRetainedIssueIdentity(
   return next.runId;
 }
 
-function exhaust(held: RetainedIssueIdentity[]): void {
+function exhaust(held: SavedIssueIdentity[]): void {
   for (const identity of held) {
     identity.claimed = true;
   }

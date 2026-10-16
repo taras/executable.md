@@ -15,14 +15,14 @@
  *
  * ## Three steps, and each means only what it says
  *
- * **Refusal first.** A request that cannot be retained, or a schema that is not
+ * **Refusal first.** A request that cannot be saved, or a schema that is not
  * an object, is refused before anything is published — a durable event nothing
  * can act on would be worse than no wait at all.
  *
  * **Publication next.** One ordinary durable Yield retains the suspension ID,
  * the request and the response schema. It crosses the same secret gate as every
  * other event and receives the same Workspace-root association. A successful
- * Yield means the request was retained. It does not mean the wait ended, and it
+ * Yield means the request was saved. It does not mean the wait ended, and it
  * does not authorize anything.
  *
  * **Admission last, and it is the request at this position.** The controller is
@@ -30,7 +30,7 @@
  * loaded copy of this package finds the controller the running binary installed.
  * That route is composition rather than admission: middleware may refuse it, but
  * no value it returns is an answer and none of them makes this operation
- * continue. What authorizes the wait is the retained request at the exact
+ * continue. What authorizes the wait is the saved request at the exact
  * position this operation just published from.
  *
  * ## Why replay reaches the same wait
@@ -57,7 +57,7 @@ import {
   type WorkflowSuspensionRequest,
 } from "./api.ts";
 
-/** The effect type one durable wait's request is retained under. */
+/** The effect type one durable wait's request is saved under. */
 export const SUSPENSION_REQUEST = "suspension_request";
 
 /**
@@ -88,13 +88,13 @@ function describeSuspension(id: string, request: WorkflowSuspensionRequest): Eff
 }
 
 /**
- * Retain the request, or restore the one a previous execution retained.
+ * Retain the request, or restore the one a previous execution saved.
  *
  * A `Workflow` of its own so the durable yield lives where a durable yield
  * belongs; `suspendFor()` is an ordinary operation around it.
  */
 function* publishRequest(id: string, parsed: WorkflowSuspensionRequest): Workflow<void> {
-  // The retained value is the suspension ID, and the yield's own result is
+  // The saved value is the suspension ID, and the yield's own result is
   // discarded: what this step establishes is that the request is in the
   // journal, not what it evaluated to.
   yield createDurableOperation<string>(describeSuspension(id, parsed), function* () {
@@ -129,13 +129,13 @@ export function* suspendFor(request: WorkflowSuspensionRequest): Operation<Json>
  *
  * A durable operation of its own, directly behind the request, so an execution
  * that already received its answer replays it instead of asking again. Its live
- * path reaches the public route only when nothing is retained to answer with,
+ * path reaches the public route only when nothing is saved to answer with,
  * and returns only what was published — which is why returning at all means the
  * wait is over.
  */
 function* publishAnswer(id: string, parsed: WorkflowSuspensionRequest): Workflow<Json> {
   // The protocol hands back what the journal held, which is `unknown` until it
-  // has been walked. A retained answer reaches the document, so it is parsed
+  // has been walked. A saved answer reaches the document, so it is parsed
   // here rather than asserted — the same boundary every restored value passes.
   const restored: unknown = yield suspensionAnswerEffect(id, parsed, () =>
     WorkflowSuspension.operations.enter(id, parsed),

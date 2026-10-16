@@ -13,7 +13,7 @@
  *
  * The declaration is authored beside the root and read from beside it: each
  * path is resolved against the root's own directory, read as bytes, and
- * retained with the run. So the whole procedure — root and components — is one
+ * saved with the run. So the whole procedure — root and components — is one
  * immutable set of bytes from the moment the run becomes durable, and a working
  * tree with uncommitted edits runs what it says rather than what its last
  * commit said.
@@ -23,7 +23,7 @@
  * bundle, and the source hash of the bytes that were read. The **execution**
  * view is the same entries plus that source as text, which is what canonical
  * core resolves the names against. Because the hash is identity, changing what
- * a component says changes the definition rather than changing what a retained
+ * a component says changes the definition rather than changing what a saved
  * definition executes.
  */
 

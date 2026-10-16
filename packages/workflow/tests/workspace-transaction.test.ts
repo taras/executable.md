@@ -342,28 +342,26 @@ describe("Tier WTX — unified WorkflowRun savepoints", () => {
   it("WTX10: savepoint rollback restores cache coherence before outer commit", function* () {
     const root = yield* useStorageRoot();
     const runId = "savepoint-cache";
-    let retainedRoot = "";
+    let savedRoot = "";
 
     yield* withStorage(root, function* () {
       const database = yield* createRun({ runId });
       const initialized = yield* database.transact(function* (transaction) {
         return yield* withPrivateWorkspaceTransaction(database, transaction, function* (workspace) {
-          yield* workspace.filesystem.writeFile("/kept.txt", "known retained bytes");
+          yield* workspace.filesystem.writeFile("/kept.txt", "known saved bytes");
           const root = yield* workspace.capture({ publish: true });
-          expect(yield* workspace.filesystem.readTextFile("/kept.txt")).toBe(
-            "known retained bytes",
-          );
+          expect(yield* workspace.filesystem.readTextFile("/kept.txt")).toBe("known saved bytes");
           return root.rootId;
         });
       });
       if (!initialized.ok) {
         throw initialized.error;
       }
-      retainedRoot = initialized.value;
+      savedRoot = initialized.value;
 
       const committed = yield* database.transact(function* (transaction) {
         yield* withPrivateWorkspaceTransaction(database, transaction, function* (workspace) {
-          expect(yield* workspace.currentRoot()).toBe(retainedRoot);
+          expect(yield* workspace.currentRoot()).toBe(savedRoot);
           const failure = yield* raised(
             savepoint(
               (function* () {
@@ -376,10 +374,8 @@ describe("Tier WTX — unified WorkflowRun savepoints", () => {
             ),
           );
           expect(failure).toBeInstanceOf(Error);
-          expect(yield* workspace.filesystem.readTextFile("/kept.txt")).toBe(
-            "known retained bytes",
-          );
-          expect(yield* workspace.currentRoot()).toBe(retainedRoot);
+          expect(yield* workspace.filesystem.readTextFile("/kept.txt")).toBe("known saved bytes");
+          expect(yield* workspace.currentRoot()).toBe(savedRoot);
         });
         yield* transaction.journal.append(yielded("savepoint-cache-rollback"));
       });
@@ -398,7 +394,7 @@ describe("Tier WTX — unified WorkflowRun savepoints", () => {
       if (!next.ok) {
         throw next.error;
       }
-      expect(next.value).toEqual({ content: "known retained bytes", root: retainedRoot });
+      expect(next.value).toEqual({ content: "known saved bytes", root: savedRoot });
       expect(names(yield* database.journal.readAll())).toEqual(["savepoint-cache-rollback"]);
     });
 
@@ -408,7 +404,7 @@ describe("Tier WTX — unified WorkflowRun savepoints", () => {
         .prepare("SELECT workspace_root_id FROM journal_events ORDER BY sequence")
         .all();
       expect(rows).toHaveLength(1);
-      expect(rows[0]?.["workspace_root_id"]).toBe(retainedRoot);
+      expect(rows[0]?.["workspace_root_id"]).toBe(savedRoot);
     } finally {
       database.close();
     }

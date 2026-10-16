@@ -5,7 +5,7 @@
  * content this is a wrapper, so the resource belongs to the invocation and is
  * released when the wrapping finishes; written self-closing there is nothing
  * to wrap and the handle is for the caller to use afterwards, so the resource
- * is retained at the invocation site instead.
+ * is saved at the invocation site instead.
  */
 
 import { content, hasContent, retain } from "@executablemd/core";

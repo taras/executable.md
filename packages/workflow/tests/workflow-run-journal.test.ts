@@ -1,5 +1,5 @@
 /**
- * Tier WJ — the retained journal, and the transaction a caller can hold.
+ * Tier WJ — the saved journal, and the transaction a caller can hold.
  *
  * Two boundaries are under test and they are easy to confuse. The journal
  * boundary is ordering and identity: events go in filtered, come back in the
@@ -198,7 +198,7 @@ describe("Tier WJ — appending and replaying the journal", () => {
     expect(serializeDurableEvent(stored[0])).toBe(serializeDurableEvent(event));
   });
 
-  it("WJ2b: every ordinary journal append records the current retained root", function* () {
+  it("WJ2b: every ordinary journal append records the current saved root", function* () {
     const root = yield* useStorageRoot();
     const path = runPath(root, "release-1.4");
 
@@ -404,7 +404,7 @@ describe("Tier WJ — what reaches SQLite", () => {
     expect(seen.events).toEqual([]);
   });
 
-  it("WJ5e: a retained-manifest FK failure stays a storage failure", function* () {
+  it("WJ5e: a saved-manifest FK failure stays a storage failure", function* () {
     const root = yield* useStorageRoot();
     const path = runPath(root, "release-1.4");
 
@@ -1585,7 +1585,7 @@ describe("Tier WJ — surviving a process", () => {
     expect(second.code).toBe(0);
 
     // Every durable operation ran once. The second process restored their
-    // results from the retained journal instead of performing them again.
+    // results from the saved journal instead of performing them again.
     expect(yield* readTextFile(marker)).toBe("first\nsecond\nthird\n");
 
     const before = JSON.parse(first.out);
@@ -1610,7 +1610,7 @@ describe("Tier WJ — surviving a process", () => {
  *
  * The record is one closed union now. A reader accepts either member's exact
  * set in any key order and no other, and the ordinary serializer writes one
- * spelling per version — which is what keeps a retained version-1 record byte
+ * spelling per version — which is what keeps a saved version-1 record byte
  * for byte what it always was while version 2 invents no Git field.
  */
 describe("Tier WJ — the source-bundle run record", () => {
@@ -1640,7 +1640,7 @@ describe("Tier WJ — the source-bundle run record", () => {
 
     for (const refused of [
       // Members this shape does not declare, including the ones a record
-      // retained under an older format carried. A run read loosely would be a
+      // saved under an older format carried. A run read loosely would be a
       // run this build cannot account for.
       { runId: "r" },
       { runId: "r", bundleHash: BUNDLE_HASH, base: "main" },

@@ -36,32 +36,32 @@ export interface InlineRootDocument {
  * inside that object. Text and identity travel together, as they do for an
  * inline document, so nothing can execute one document while reporting another.
  *
- * `retained` is what keeps supplied text from travelling under an identity
+ * `saved` is what keeps supplied text from travelling under an identity
  * nobody vouched for. An inline document is branded by its path — there is only
- * one `<eval>` — but a retained document's path is an ordinary one, so without
+ * one `<eval>` — but a saved document's path is an ordinary one, so without
  * this member `{ path, source }` would type-check for any path at all and the
  * engine would report a document as having come from a file it never read.
  * Constructing one is therefore a deliberate act, the way `inlineSource()` is.
  */
-export interface RetainedRootDocument {
+export interface SavedRootDocument {
   readonly path: string;
   readonly source: string;
-  readonly retained: true;
+  readonly saved: true;
   /** The requested target selector, still encoded and possibly a glob. */
   readonly target?: string;
 }
 
 /** Where a root document's text comes from: a path, or supplied text. */
-export type RootDocumentSource = FileRootDocument | InlineRootDocument | RetainedRootDocument;
+export type RootDocumentSource = FileRootDocument | InlineRootDocument | SavedRootDocument;
 
 /** Supplied text as a root document reported by the path it came from. */
-export function retainedSource(
+export function savedSource(
   path: string,
   source: string,
   options?: { readonly target?: string },
-): RetainedRootDocument {
+): SavedRootDocument {
   const target = options?.target;
-  return { path, source, retained: true, ...(target === undefined ? {} : { target }) };
+  return { path, source, saved: true, ...(target === undefined ? {} : { target }) };
 }
 
 /** Supplied text as a root document carrying the `<eval>` identity. */

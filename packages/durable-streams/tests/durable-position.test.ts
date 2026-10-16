@@ -4,7 +4,7 @@
  * A position exists so that an operation with no name of its own can still be
  * the same operation next time. Everything asserted here is that sameness: the
  * index a coroutine reaches at one point in a procedure is the index it reaches
- * there on replay, on a live suffix continuing past retained history, and
+ * there on replay, on a live suffix continuing past saved history, and
  * inside a child that counts its own.
  *
  * The discriminating observation is a *live suffix after a replayed prefix*. A
@@ -82,16 +82,16 @@ describe("Tier DP — durable coroutine position", () => {
       })(),
     );
 
-    // The same procedure against retained history that stops part-way: the
+    // The same procedure against saved history that stops part-way: the
     // first two effects replay and the third runs live. This is the case a
     // position taken from replay's cursor gets wrong — the cursor stops
-    // advancing where retained history ends, so the live suffix would repeat
+    // advancing where saved history ends, so the live suffix would repeat
     // an index the prefix already used.
-    const retained: DurableEvent[] = (yield* first.readAll()).filter(
+    const saved: DurableEvent[] = (yield* first.readAll()).filter(
       (event) => event.type !== "close",
     );
     const partial = new InMemoryStream(
-      retained.filter((event) => {
+      saved.filter((event) => {
         const description = Reflect.get(Object(event), "description");
         return Reflect.get(Object(description), "name") !== "third";
       }),

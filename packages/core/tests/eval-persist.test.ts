@@ -192,7 +192,7 @@ describe("Tier T6 — persist modifier", () => {
 
   // L8: a persist block the caller projected into a component anchors in the
   // content scope, so it stops ahead of a persist resource the component
-  // retained for itself — even though the component retained that one after
+  // saved for itself — even though the component saved that one after
   // projecting, which is the order a single scope would release in reverse.
   it("L8: a projected persist resource stops before the component's own", function* () {
     const stream = new InMemoryStream();

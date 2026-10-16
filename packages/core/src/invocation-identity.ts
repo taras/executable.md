@@ -3,7 +3,7 @@
  * (architecture.md, *Capability-backed invocation identity*).
  *
  * A component that names a durable operation after its own invocation is
- * asserting ownership: the name decides which retained record a replay
+ * asserting ownership: the name decides which saved record a replay
  * restores, so two invocations arriving at one name each replay the other's
  * work, and an implementation running under somebody else's identity commits
  * against its own storage under their expansion. Code Rule 15 says such a
@@ -290,7 +290,7 @@ interface ComponentRoutingInstallation extends ComponentRouting {
 
 function createComponentRouting(): ComponentRoutingInstallation {
   // One liveness flag for the execution's whole route and every route narrowed
-  // from it: teardown revokes the lot at once. A retained route still holds its
+  // from it: teardown revokes the lot at once. A saved route still holds its
   // WeakMap, so liveness rather than reachability is what invalidates it.
   let live = true;
   interface Entry {
@@ -623,7 +623,7 @@ export function isFormDispatcher(fn: unknown): boolean {
  * - the issuance is still live, and its frame is the one running now, so an
  *   invocation kept from a sibling or a finished element answers nothing here;
  * - canonical resolution selected *this* dispatcher for the import that led
- *   here, so a dispatcher a handler retained and answered with reaches no body.
+ *   here, so a dispatcher a handler saved and answered with reaches no body.
  *
  * Built by whichever copy of core is performing the execution — canonical
  * definition construction calls this, never the component module — so a

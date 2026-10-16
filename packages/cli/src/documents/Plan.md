@@ -694,7 +694,7 @@ The coding agent produced this draft:
 
 Only an approved Plan leaves this workflow, and only after the whole authorship
 frame above has been taken down. Its exact source is checked once more as
-structure — every declaration, resolution and form it uses — and retained
+structure — every declaration, resolution and form it uses — and saved
 together with the prompt it was written for, so asking again restores these
 exact bytes instead of writing a second Plan.
 

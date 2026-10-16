@@ -456,7 +456,7 @@ class ValidationState {
    *
    * A path is bytes; what those bytes *mean* depends on who asked. Reading is
    * shared here so that a file reaches the walk once however many views of it
-   * the document needs, and so that a retained root's supplied text is what a
+   * the document needs, and so that a saved root's supplied text is what a
    * component selecting its path sees rather than whatever is on disk now.
    */
   readonly #contents = new Map<string, string>();

@@ -1090,13 +1090,13 @@ describe("Tier EP — the execution protocol", () => {
     // A descriptor the caller keeps and edits after the invocation started:
     // only the callback it held at the start may run.
     yield* scoped(function* () {
-      const retained: InvocationObservers = { observed: () => seen.push("observed:A") };
+      const saved: InvocationObservers = { observed: () => seen.push("observed:A") };
       const replaced = yield* executeObserved(
         { ...inlineSource(DOC), stream: new InMemoryStream() },
         [],
-        retained,
+        saved,
       );
-      retained.observed = () => seen.push("observed:B");
+      saved.observed = () => seen.push("observed:B");
       yield* replaced;
     });
 
@@ -1199,14 +1199,14 @@ describe("Tier EP — the execution protocol", () => {
     expect(order).toEqual(["install"]);
   });
 
-  it("EP12: every captured admission runs, in order, on the retained history", function* () {
+  it("EP12: every captured admission runs, in order, on the saved history", function* () {
     const order: string[] = [];
     const seen: number[] = [];
     const admission = (name: string): JournalAdmission =>
       // deno-lint-ignore require-yield
-      function* (retained) {
+      function* (saved) {
         order.push(name);
-        seen.push(retained.length);
+        seen.push(saved.length);
       };
 
     yield* scoped(function* () {
@@ -1265,12 +1265,12 @@ describe("Tier EP — the execution protocol", () => {
   // reflective route that ignores it — and every one has to be ineffective or
   // throw, with the next admission still seeing the original history.
   it("EP18: an admission cannot change the history anyone else reads", function* () {
-    const attempts: Array<{ says: string; edit: (retained: readonly DurableEvent[]) => void }> = [
-      { says: "length", edit: (retained) => void Reflect.set(retained, "length", 0) },
-      { says: "indexed replacement", edit: (retained) => void Reflect.set(retained, 0, undefined) },
-      { says: "deletion", edit: (retained) => void Reflect.deleteProperty(retained, 0) },
-      { says: "reverse", edit: (retained) => void [...[]].reverse.call(retained) },
-      { says: "splice", edit: (retained) => void [...[]].splice.call(retained, 0, 99) },
+    const attempts: Array<{ says: string; edit: (saved: readonly DurableEvent[]) => void }> = [
+      { says: "length", edit: (saved) => void Reflect.set(saved, "length", 0) },
+      { says: "indexed replacement", edit: (saved) => void Reflect.set(saved, 0, undefined) },
+      { says: "deletion", edit: (saved) => void Reflect.deleteProperty(saved, 0) },
+      { says: "reverse", edit: (saved) => void [...[]].reverse.call(saved) },
+      { says: "splice", edit: (saved) => void [...[]].splice.call(saved, 0, 99) },
     ];
 
     // One completed journal, replayed once per attempt.
@@ -1293,18 +1293,18 @@ describe("Tier EP — the execution protocol", () => {
             {
               admissions: [
                 // deno-lint-ignore require-yield
-                function* (retained) {
-                  observed.push(retained.length);
+                function* (saved) {
+                  observed.push(saved.length);
                   // Ineffective or throwing — either is a refusal to edit.
                   try {
-                    attempt.edit(retained);
+                    attempt.edit(saved);
                   } catch {
                     // A frozen array throws in strict mode; that is the point.
                   }
                 },
                 // deno-lint-ignore require-yield
-                function* (retained) {
-                  observed.push(retained.length);
+                function* (saved) {
+                  observed.push(saved.length);
                 },
               ],
             },
@@ -1503,7 +1503,7 @@ describe("Tier DP — the document protocol", () => {
     ];
   }
 
-  /** Every retained event's type and, for a Yield, what it was. */
+  /** Every saved event's type and, for a Yield, what it was. */
   function shape(stream: InMemoryStream): string[] {
     return stream
       .snapshot()
@@ -2289,7 +2289,7 @@ describe("Tier DP — the document protocol", () => {
       expect(order).toEqual(["refused"]);
       expect(expanded).toEqual([]);
       // The complete journal: the first preparation's durable effect is
-      // retained, the root records the refusal, and no later phase happened.
+      // saved, the root records the refusal, and no later phase happened.
       expect(shape(journal)).toEqual(["yield:test_preparation(first)", "close:root"]);
 
       // Resume that exact history with only the terminal removed. The first
@@ -2335,7 +2335,7 @@ describe("Tier DP — the document protocol", () => {
       expect(resumeExecuted).toEqual([]);
       expect(resumeOrder).toEqual(["refused"]);
       expect(resumeExpanded).toEqual([]);
-      // The retained Yield is still singular, and a fresh terminal records the
+      // The saved Yield is still singular, and a fresh terminal records the
       // refusal the resumed run reached.
       expect(shape(resumeJournal)).toEqual(["yield:test_preparation(first)", "close:root"]);
     });
@@ -2404,7 +2404,7 @@ describe("Tier DP — the document protocol", () => {
       expect(replayJournal.snapshot().length).toEqual(recorded.length);
 
       // Partial continuation: the root never closed, so the body runs again —
-      // and the preparation's effect is restored from its retained Yield
+      // and the preparation's effect is restored from its saved Yield
       // instead of being performed a second time.
       const truncated = recorded.filter(
         (event) => !(event.type === "close" && event.coroutineId === "root"),

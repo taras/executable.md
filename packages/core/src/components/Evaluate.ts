@@ -62,7 +62,7 @@
  * Evaluate is itself an ordinary text component here. Unbound it emits what the
  * fragment rendered; under `as` the engine binds that text and suppresses the
  * output, by the same rule that governs every other component. An admitted
- * write puts nothing here — what it did is retained by its own ordinary durable
+ * write puts nothing here — what it did is saved by its own ordinary durable
  * effect, which is the authoritative account of it.
  *
  * It is deliberately not wrapped in `printErrors`. A refused or failed
@@ -386,7 +386,7 @@ function selectedTables(
  * Every selected entry is an answer the import chain resolved, because that is
  * the one way a selected name reaches an implementation now. It travels with
  * the entry rather than being inferred at the record, so a reader comparing two
- * admissions reads what each row was retained as.
+ * admissions reads what each row was saved as.
  */
 function implementation(entry: CapturedEntry): GeneratedImplementation {
   return entry.kind === "component-answer" ? "component-answer" : "capability";

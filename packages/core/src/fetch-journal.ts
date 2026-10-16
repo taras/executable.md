@@ -6,7 +6,7 @@
  * complete. Committing the status and headers first and failing on the body
  * would publish a success for a response nobody has.
  *
- * The retained input is the normalized request itself rather than a digest of
+ * The saved input is the normalized request itself rather than a digest of
  * it, because that request is what a reader of the history needs in order to
  * know what was asked. Identity is the effect's `type` and `name` as always —
  * the name being this expansion's, which the same document derives again on

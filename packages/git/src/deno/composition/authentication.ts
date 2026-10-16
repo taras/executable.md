@@ -1,13 +1,13 @@
 /**
  * The authentication one live provider invocation borrows from its host.
  *
- * A workflow's retained state says which repository an effect belongs to. It
+ * A workflow's saved state says which repository an effect belongs to. It
  * does not, and must not, say who this run is: an identity is a live property of
  * the machine the run is standing on, and a run resumed a week later on another
  * machine authenticates as whoever is there then. So nothing here is durable. A
  * session is opened for one provider invocation, shared by that invocation's
  * observations and its mutation, and disposed with it — a completed replay
- * restores its retained result without reaching this module at all.
+ * restores its saved result without reaching this module at all.
  *
  * ## The adapter owns the credential, and owns it narrowly
  *
@@ -16,7 +16,7 @@
  * not do is let one out. The value reaches nothing but the private environment
  * of this invocation's own Git children, through a helper this provider wrote,
  * and it is not in an argument, a URL, a configuration file, a launcher, the
- * ambient environment, a context, the Workspace, a journal, retained identity,
+ * ambient environment, a context, the Workspace, a journal, saved identity,
  * rendered output, a diagnostic or a failure cause.
  *
  * Acquisition asks the invoking user's ordinary helper chain once, about one
@@ -233,13 +233,13 @@ export function sshCommand(home: string | undefined, agent: string | undefined):
 function pinned(ssh: string, lease: readonly string[]): readonly string[] {
   // The lease's own words, verbatim: it states a whole `-c` pair, because what
   // it installs is one helper and nothing else. Nothing the invoking user or a
-  // retained repository configured is copied here.
+  // saved repository configured is copied here.
   return [
     "-c",
     `core.sshCommand=${ssh}`,
     // A redirect is a destination this run never authorized, and Git will carry
     // a credential it already holds across one to the same host — so the
-    // helper's exact-locator refusal is not enough on its own. The retained
+    // helper's exact-locator refusal is not enough on its own. The saved
     // locator is where this goes, or it does not go.
     "-c",
     "http.followRedirects=false",
@@ -259,7 +259,7 @@ export interface CredentialRequest {
 /**
  * What one live provider invocation holds instead of a bare credential.
  *
- * The value is retained lexically by the adapter, for this invocation only. A
+ * The value is saved lexically by the adapter, for this invocation only. A
  * caller can ask whether an identity was proved and whether the transport
  * rejected it, and can attach the invocation to a command — the credential
  * itself reaches nothing but the private environment of that command's own
@@ -401,7 +401,7 @@ export interface GitAuthenticationOptions {
  * were asked about. A helper may rewrite those, and an answer about somewhere
  * else has authorized nothing.
  *
- * What comes back is retained lexically here, for this invocation, and reaches
+ * What comes back is saved lexically here, for this invocation, and reaches
  * nothing but the private environment of this invocation's own Git children.
  */
 export function denoCredentialBroker(

@@ -26,7 +26,7 @@
  *    observation-gathering happens. Results are cached in middleware closures.
  *
  * 2. **admit** (after every check, before terminal reuse): Runs once with the
- *    retained history as a whole. A guard that requires something of the
+ *    saved history as a whole. A guard that requires something of the
  *    history rather than of one event — that an event it validates is present,
  *    and present once — refuses here, because a per-event check has nothing to
  *    object to in a journal that omits the event. Default is a no-op.
@@ -48,7 +48,7 @@ import { createApi } from "effection/experimental";
 import type { CoroutineId, Yield } from "./types.ts";
 
 /**
- * The retained history a run is about to replay, offered once.
+ * The saved history a run is about to replay, offered once.
  *
  * A guard's per-event check can only speak about events a journal contains. A
  * journal missing something a guard requires offers it nothing to object to,
@@ -56,10 +56,10 @@ import type { CoroutineId, Yield } from "./types.ts";
  * that was never validated. This is where a guard says whether the history as a
  * whole may be replayed at all.
  */
-export interface RetainedHistory {
+export interface SavedHistory {
   /** The coroutine whose recorded terminal result is about to be reused. */
   readonly coroutineId: CoroutineId;
-  /** Every retained Yield, each owning the one cell for what it settled to. */
+  /** Every saved Yield, each owning the one cell for what it settled to. */
   readonly yields: readonly Yield[];
   /** Whether a recorded terminal result exists for that coroutine. */
   readonly terminal: boolean;
@@ -92,12 +92,12 @@ interface ReplayGuardApi {
   /** Phase 1: Check — gather observations before replay (I/O allowed). */
   check(event: Yield): Operation<void>;
   /**
-   * Phase 1b: Admit — the retained history has been offered in full, and a
+   * Phase 1b: Admit — the saved history has been offered in full, and a
    * recorded terminal result has not been reused yet. A guard that requires
    * something of the history as a whole — that an event it validates is
    * present at all, and present once — refuses here by throwing.
    */
-  admit(history: RetainedHistory): Operation<void>;
+  admit(history: SavedHistory): Operation<void>;
   /** Phase 2: Decide — return replay outcome (synchronous, pure). */
   decide(event: Yield): ReplayOutcome;
 }
@@ -112,7 +112,7 @@ function* defaultCheck(_event: Yield): Operation<void> {
 /**
  * Default admit — no-op. A history nobody objects to is replayed.
  */
-function* defaultAdmit(_history: RetainedHistory): Operation<void> {
+function* defaultAdmit(_history: SavedHistory): Operation<void> {
   // No requirement — pass through to next middleware or default.
 }
 

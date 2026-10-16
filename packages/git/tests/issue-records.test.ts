@@ -1,8 +1,8 @@
 /**
- * Tier WI — what a retained issue record is, and what names it.
+ * Tier WI — what a saved issue record is, and what names it.
  *
  * D1 lives here rather than in a scenario document, and the reason is that the
- * proof is compositional. "A changed request cannot consume the result retained
+ * proof is compositional. "A changed request cannot consume the result saved
  * for a different one" is three facts stacked:
  *
  * 1. the request fingerprint covers every member of the request — the canonical
@@ -138,7 +138,7 @@ describe("workflow Issue durable identity", () => {
     );
   });
 
-  it("reads a retained request back as the request it was", function* () {
+  it("reads a saved request back as the request it was", function* () {
     for (const request of [REQUEST, READ]) {
       const round = parseIssueRequest(issueRequestJson(request));
       expect(round).toEqual(request);
@@ -149,7 +149,7 @@ describe("workflow Issue durable identity", () => {
     // the other however much of the rest they share.
     expect(sameIssueRequest(REQUEST, { ...READ, url: TARGET })).toBe(false);
 
-    // A retained request carrying the other operation's members is not one this
+    // A saved request carrying the other operation's members is not one this
     // boundary wrote: an upsert's `issue` under a read's discriminator would
     // otherwise parse as a read that quietly dropped what it was asked to file.
     expect(parseIssueRequest({ ...Object(issueRequestJson(READ)), issue: ISSUE })).toBeUndefined();
@@ -157,7 +157,7 @@ describe("workflow Issue durable identity", () => {
       parseIssueRequest({ ...Object(issueRequestJson(REQUEST)), operation: "read" }),
     ).toBeUndefined();
 
-    // A retained request whose tags are out of order is not one this boundary
+    // A saved request whose tags are out of order is not one this boundary
     // wrote, and reading it as though it were would let two spellings of one
     // request answer for each other.
     expect(

@@ -11,7 +11,7 @@
  * ```
  *
  * Under `xmd run` that opens a form and blocks until somebody fills it in.
- * Under `xmd workflow` it publishes a retained request, settles the run
+ * Under `xmd workflow` it publishes a saved request, settles the run
  * `suspended`, and gives the executor lock back — so the process, the Workspace
  * attachment and the Agent processes need not stay alive while a person thinks.
  * `xmd workflow answer` retains the answer and `xmd workflow resume` continues.
@@ -45,7 +45,7 @@
  * A durable wait has to be the outermost durable thing at its position.
  * Anything enclosing it owns a journal slot the wait will occupy first. So the
  * workflow's `Elicit` does what core's does *minus the durable record*, and the
- * wait underneath it is retained by the suspension protocol rather than by the
+ * wait underneath it is saved by the suspension protocol rather than by the
  * elicitation journal. There is one record of the answer, not two.
  *
  * ## What still answers ahead of this
@@ -56,8 +56,8 @@
  * document. Any other public Elicitation middleware is in the same position: it
  * may answer the question or refuse it, and in both cases the run it affects is
  * a run that never suspended. None of them continues a suspended one. That
- * takes a run whose status is `suspended`, whose stop reason names the retained
- * request, an answer that passes the retained response schema and the secret
+ * takes a run whose status is `suspended`, whose stop reason names the saved
+ * request, an answer that passes the saved response schema and the secret
  * gate, and a later resume consuming it at the exact position that published it
  * — none of which is reachable from inside the execution.
  */
@@ -77,7 +77,7 @@ import { suspendFor } from "./suspend.ts";
 /** How this registration names itself, in a refusal and in the registry. */
 export const SUSPENSION_ORIGIN = "@executablemd/workflow/suspension";
 
-/** What a retained elicitation request calls itself. */
+/** What a saved elicitation request calls itself. */
 export const ELICITATION_REQUEST_KIND = "elicitation";
 
 /**
@@ -86,7 +86,7 @@ export const ELICITATION_REQUEST_KIND = "elicitation";
  * The three steps and their order are core's, and they matter for the same
  * reasons: the schema compiles first, so an unusable one fails before anybody
  * is asked; the content expands next, because the rendered message is what the
- * person is shown and what the retained request carries; the asking is last.
+ * person is shown and what the saved request carries; the asking is last.
  *
  * What is missing is deliberate. Core also fingerprints the question and
  * refuses a recorded answer given to a different one — a guard over its own

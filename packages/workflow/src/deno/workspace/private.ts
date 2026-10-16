@@ -56,7 +56,7 @@ export interface PrivateWorkspaceTransaction {
    */
   readonly agentSessions: AgentSessions;
   /**
-   * Which provider turn each retained Prompt was, inside this same
+   * Which provider turn each saved Prompt was, inside this same
    * transaction.
    *
    * Beside the session mapping for the same reason that sits beside the
@@ -86,20 +86,20 @@ export interface PrivateWorkspaceTransaction {
   publish(rootId: string): Operation<void>;
   restore(rootId: string, options?: RestoreWorkspaceRootOptions): Operation<StoredWorkspaceRoot>;
   /**
-   * Read the Workspace as one retained root held it, and leave it as it was.
+   * Read the Workspace as one saved root held it, and leave it as it was.
    *
    * Reading history rather than returning to it. A replayed effect sometimes
    * has to name what it asked for at the position it asked from, and the
    * Workspace has moved on since — so the root is materialized, `body` reads
    * it, and everything that materialization wrote is discarded. The current
-   * root, the retained roots, the metadata and the journal are what they were,
+   * root, the saved roots, the metadata and the journal are what they were,
    * on every path out: nothing here publishes, and there is no ordering in
    * which a caller observes the Workspace selected at the historical root.
    *
    * What `body` carries out of it is its own. An export writes host files
    * outside this database, and those are the point.
    */
-  readRetainedRoot<T>(rootId: string, body: () => Operation<T>): Operation<T>;
+  readSavedRoot<T>(rootId: string, body: () => Operation<T>): Operation<T>;
 }
 
 interface PrivateWorkspaceApi {
@@ -236,7 +236,7 @@ export function usePrivateWorkspace(
             return restoreWorkspaceRoot(connection, active, rootId, options);
           },
 
-          *readRetainedRoot<T>(rootId: string, body: () => Operation<T>): Operation<T> {
+          *readSavedRoot<T>(rootId: string, body: () => Operation<T>): Operation<T> {
             authorize();
             return yield* connection.savepoints.rollbackOnly(
               active,
@@ -289,7 +289,7 @@ export function* transactWorkspaceRoots<T>(
  *
  * The narrow half of the transaction above, and the only half a host installing
  * an Agent profile needs. The broad one hands out the authoritative filesystem,
- * retained Repository identity, root capture, publication and restoration; a
+ * saved Repository identity, root capture, publication and restoration; a
  * caller that only has to read and commit a session mapping should not be
  * holding any of that, and this is what it holds instead.
  */

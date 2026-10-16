@@ -25,7 +25,7 @@
  *   stored result without entering the durable body at all, so preparation is
  *   never reached and the admission is what restores the run.
  *
- * `retainedWorkflowInstallation(run)` is the same three states under a run that already
+ * `savedWorkflowInstallation(run)` is the same three states under a run that already
  * exists. A workflow host has created the storage record before anything
  * executes, so the live path records exactly the value it was given rather than
  * allocating an id and resolving a base, and every state requires the journal to
@@ -42,9 +42,9 @@
  * So this is an *installation* the trusted host hands to `executeInstalled()`,
  * and core owns the read. The admission is captured before any installation,
  * middleware or document code exists, and applied inside the same trusted
- * `readAll` that already holds a resumed run to its recorded root selection. That read happens before any middleware runs, on the retained
+ * `readAll` that already holds a resumed run to its recorded root selection. That read happens before any middleware runs, on the saved
  * snapshot every later phase consumes — ahead of public guard policy, of any
- * retained Yield reaching execution, of a retained `Close` being reused, of
+ * saved Yield reaching execution, of a saved `Close` being reused, of
  * authored work, and of any append. Public `ReplayGuard` handlers still observe
  * and may still reject the history this admits; none of them can widen it.
  *
@@ -71,7 +71,7 @@ import type {
 import type { ExecutionInstallation, JournalAdmission } from "@executablemd/core/host";
 import {
   admitWorkflowRunHistory,
-  retainedRunMismatch,
+  savedRunMismatch,
   describeWorkflowRun,
   malformedRecord,
   readWorkflowRun,
@@ -101,7 +101,7 @@ const CurrentWorkflowRun: Context<RunSlot | undefined> = createContext<RunSlot |
  * Where the run of one document execution is kept while it is running.
  *
  * A slot rather than the value itself, because the two places that decide the
- * run are on the wrong side of the scope that reads it. Retained-history
+ * run are on the wrong side of the scope that reads it. Saved-history
  * admission runs inside canonical core's own journal read, and preparation runs
  * inside the durable root; a context *set* from either would end with the
  * operation that set it, while the document that has to read it starts
@@ -187,7 +187,7 @@ function retaining(run: WorkflowRun): WorkflowRunPreparation {
     agree(recorded: WorkflowRun): WorkflowRun {
       const differing = differingFields(recorded, run);
       if (differing.length > 0) {
-        throw retainedRunMismatch(differing);
+        throw savedRunMismatch(differing);
       }
       return recorded;
     },
@@ -195,7 +195,7 @@ function retaining(run: WorkflowRun): WorkflowRunPreparation {
 }
 
 /**
- * Which terms of the retained run a recorded one disagrees with.
+ * Which terms of the saved run a recorded one disagrees with.
  *
  * Every term is compared, the exact target included: absent equals only absent,
  * which is what keeps a whole-document run distinct from a targeted one.
@@ -214,7 +214,7 @@ function differingFields(recorded: WorkflowRun, expected: WorkflowRun): string[]
  * One read, nothing else inside — the same narrowness the journal's own reads
  * are held to, for the same reason.
  */
-function readingRetainedValue<T>(read: () => T): T | undefined {
+function readingSavedValue<T>(read: () => T): T | undefined {
   try {
     return read();
   } catch {
@@ -238,7 +238,7 @@ function same(left: WorkflowRun, right: WorkflowRun): boolean {
 /**
  * Bring the run into being, inside the durable root.
  *
- * Canonical core invokes this after retained-history admission and before any
+ * Canonical core invokes this after saved-history admission and before any
  * public `Execution.document` policy, the root import, and every authored
  * effect — so the run exists before anything can observe it, and nothing a
  * handler does can prevent it, replace it, or reach the journal ahead of it.
@@ -273,7 +273,7 @@ function* prepare(preparation: WorkflowRunPreparation): Workflow<void> {
  * What this installation requires of the history a document execution replays.
  *
  * Contributed to core rather than wrapped around core. The comparison runs
- * inside the execution's own trusted journal read, on the retained snapshot
+ * inside the execution's own trusted journal read, on the saved snapshot
  * every later phase consumes — so no `ReplayGuard` handler that declines to
  * delegate, and no `Execution` handler that rebuilds the options a later one
  * produced, can suppress, replace or reorder it. By the time any middleware
@@ -284,11 +284,11 @@ function* prepare(preparation: WorkflowRunPreparation): Workflow<void> {
  * inside the execution where the run a recorded result belongs to is known.
  */
 function admits(preparation: WorkflowRunPreparation): JournalAdmission {
-  return function* (retained: readonly DurableEvent[]): Operation<void> {
+  return function* (saved: readonly DurableEvent[]): Operation<void> {
     // What the history is held to is decided by the captured `preparation`, and
     // by nothing that is read here. The slot is reached only afterwards, to
     // publish what was already admitted.
-    const admitted = admitWorkflowRunHistory(retained, preparation);
+    const admitted = admitWorkflowRunHistory(saved, preparation);
     if (admitted === undefined) {
       return;
     }
@@ -357,12 +357,12 @@ export function createWorkflowRunInstallation(
  *
  * Git is not consulted, and no identifier is generated.
  */
-export function retainedWorkflowInstallation(run: WorkflowRun): ExecutionInstallation {
-  return createWorkflowRunInstallation(retaining(retainedRun(run)));
+export function savedWorkflowInstallation(run: WorkflowRun): ExecutionInstallation {
+  return createWorkflowRunInstallation(retaining(savedRun(run)));
 }
 
 /**
- * The retained run as a frozen value of its own.
+ * The saved run as a frozen value of its own.
  *
  * Parsed rather than believed: it arrives from a storage record a host read
  * back, so a member that is missing or empty is a value that identifies no run
@@ -370,21 +370,21 @@ export function retainedWorkflowInstallation(run: WorkflowRun): ExecutionInstall
  * here, so a host handing over a wider record installs the run it describes
  * rather than being refused for carrying its own bookkeeping.
  */
-function retainedRun(run: WorkflowRun): WorkflowRun {
+function savedRun(run: WorkflowRun): WorkflowRun {
   // Named through the same total read as a journal value: a host that hands
   // over a record whose members refuse to be read has supplied a value that
   // identifies no run, which is the sentence below rather than its exception.
-  const parsed = readWorkflowRun(readingRetainedValue(() => workflowRunValue(run)));
+  const parsed = readWorkflowRun(readingSavedValue(() => workflowRunValue(run)));
   if (parsed === undefined || parsed.runId === "") {
     throw new Error(
-      "retainedWorkflowInstallation() needs a complete retained run: its id and its bundle hash. " +
+      "savedWorkflowInstallation() needs a complete saved run: its id and its bundle hash. " +
         "A run installed without them identifies no workflow run.",
     );
   }
   if (parsed.bundleHash === "") {
     throw new Error(
-      "retainedWorkflowInstallation() needs the retained run's bundle hash: an empty one pins the " +
-        "run to no retained source at all.",
+      "savedWorkflowInstallation() needs the saved run's bundle hash: an empty one pins the " +
+        "run to no saved source at all.",
     );
   }
   return parsed;

@@ -5,7 +5,7 @@ import { frontmatterFailure, parseFrontmatterPhased } from "./frontmatter.ts";
 import type { FrontmatterPhase } from "./frontmatter.ts";
 import { compilePropsSchema, compileReturnsSchema } from "./validate.ts";
 import { scanComponentSpans, scanSegments } from "./scanner.ts";
-import { findTarget, outlineDocument, retainedRanges, selectTarget } from "./document-targets.ts";
+import { findTarget, outlineDocument, savedRanges, selectTarget } from "./document-targets.ts";
 import type { DocumentOutline, DocumentTargetInfo } from "./document-targets.ts";
 
 import matter from "gray-matter";
@@ -265,9 +265,9 @@ export interface ParsedRootDocument {
  * selector the whole body is scanned exactly as an ordinary markdown component
  * is.
  *
- * A projection scans each retained range on its own, with the origin that range
+ * A projection scans each saved range on its own, with the origin that range
  * has in the original file, rather than scanning a concatenated string. Skipped
- * source therefore cannot renumber what follows it: a retained element keeps
+ * source therefore cannot renumber what follows it: a saved element keeps
  * the offset and line it was authored at, and with them its expansion ID.
  */
 export function* parseRootMarkdownDefinition(
@@ -342,7 +342,7 @@ export function* parseRootMarkdownDefinitionPhased(
   const bodySegments: Segment[] = [];
   try {
     const newlines = newlineCounts(body.content);
-    for (const range of retainedRanges(outline, entry)) {
+    for (const range of savedRanges(outline, entry)) {
       bodySegments.push(
         ...scanSegments(body.content.slice(range.start, range.end), {
           path,
@@ -362,7 +362,7 @@ export function* parseRootMarkdownDefinitionPhased(
   });
 }
 
-/** How many newlines precede each offset, so a retained range knows its line. */
+/** How many newlines precede each offset, so a saved range knows its line. */
 function newlineCounts(body: string): number[] {
   const counts = new Array<number>(body.length + 1);
   let seen = 0;

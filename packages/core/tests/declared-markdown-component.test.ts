@@ -59,7 +59,7 @@ import { installedBundle } from "../src/components/bundle.ts";
 import { inspectComponent, inspectSyntax } from "../src/inspect.ts";
 import { validateDocument, validateDocumentStructure } from "../src/document-validation.ts";
 import { registerComponents } from "../src/components/registration.ts";
-import { retainedSource } from "../src/root-source.ts";
+import { savedSource } from "../src/root-source.ts";
 import { DocumentOutput } from "../src/api.ts";
 import { useNormalizedOutput } from "../src/output/normalize.ts";
 import { useTerminalOutput } from "../src/output/terminal.ts";
@@ -248,7 +248,7 @@ function run(
   return scoped(function* () {
     return yield* collect(
       yield* executeInstalled(
-        { ...retainedSource(ROOT_PATH, source), stream, includes: [...includes] },
+        { ...savedSource(ROOT_PATH, source), stream, includes: [...includes] },
         [installation(declarations), ...extra],
       ),
     );
@@ -265,7 +265,7 @@ function* refusal(operation: Operation<unknown>): Operation<string> {
   throw new Error("expected the operation to be refused");
 }
 
-/** Whether one retained event is a component import. */
+/** Whether one saved event is a component import. */
 function isImport(event: DurableEvent): boolean {
   return event.type === "yield" && event.description.type === "import_component";
 }
@@ -857,7 +857,7 @@ describe("Tier DM — the private closure is lexical", () => {
                     }
                     if (kept === undefined) {
                       // Inside the declaration: an ordinary delegated import,
-                      // and the answer is retained rather than altered.
+                      // and the answer is saved rather than altered.
                       kept = yield* next(name, position);
                       return kept as never;
                     }
@@ -915,7 +915,7 @@ describe("Tier DM — the private closure is lexical", () => {
     }
 
     const validation = yield* validateDocument({
-      ...retainedSource(ROOT_PATH, '<Secret as="answer" />\n'),
+      ...savedSource(ROOT_PATH, '<Secret as="answer" />\n'),
       includes: [root],
       declarations,
     });
@@ -1052,7 +1052,7 @@ describe("Tier DM — the private closure is lexical", () => {
     expect(info.kind).toBe("unresolved");
 
     const validation = yield* validateDocument({
-      ...retainedSource(ROOT_PATH, '<Secret as="answer" />\n'),
+      ...savedSource(ROOT_PATH, '<Secret as="answer" />\n'),
       includes: [],
     });
     expect(validation.outcome).toBe("invalid");
@@ -1218,7 +1218,7 @@ describe("Tier DM — selection is journaled and replays", () => {
       scoped(function* () {
         return yield* collect(
           yield* execute({
-            ...retainedSource(ROOT_PATH, "<Policy />\n"),
+            ...savedSource(ROOT_PATH, "<Policy />\n"),
             stream: new InMemoryStream(),
             includes: [],
           }),
@@ -1269,7 +1269,7 @@ describe("Tier DM — describing the environment agrees with running in it", () 
 
   it("DM31: validation records the declared origin and checks its contract", function* () {
     const validation = yield* validateDocument({
-      ...retainedSource(ROOT_PATH, "<Policy />\n"),
+      ...savedSource(ROOT_PATH, "<Policy />\n"),
       includes: [],
       declarations,
     });
@@ -1298,7 +1298,7 @@ describe("Tier DM — describing the environment agrees with running in it", () 
     ].join("\n");
 
     const validation = yield* validateDocument({
-      ...retainedSource(ROOT_PATH, "<Policy />\n"),
+      ...savedSource(ROOT_PATH, "<Policy />\n"),
       includes: [],
       declarations: [declared(source)],
     });
@@ -1309,7 +1309,7 @@ describe("Tier DM — describing the environment agrees with running in it", () 
 
   it("DM33: a private name written outside its declaration is an unresolved component", function* () {
     const validation = yield* validateDocument({
-      ...retainedSource(ROOT_PATH, '<Secret as="answer" />\n'),
+      ...savedSource(ROOT_PATH, '<Secret as="answer" />\n'),
       includes: [],
       declarations,
     });
@@ -1337,7 +1337,7 @@ describe("Tier DM — structural validation is the same walk without the run's v
   ].join("\n");
 
   it("DM34: a root declaring required props is structurally valid with no values", function* () {
-    const source = { ...retainedSource(ROOT_PATH, REQUIRING_PROPS), includes: [] };
+    const source = { ...savedSource(ROOT_PATH, REQUIRING_PROPS), includes: [] };
 
     expect((yield* validateDocumentStructure(source)).outcome).toBe("valid");
     expect((yield* validateDocument(source)).outcome).toBe("invalid");
@@ -1345,7 +1345,7 @@ describe("Tier DM — structural validation is the same walk without the run's v
 
   it("DM35: structural validation still reports everything else the walk decides", function* () {
     const source = {
-      ...retainedSource(ROOT_PATH, `${REQUIRING_PROPS}<Missing />\n`),
+      ...savedSource(ROOT_PATH, `${REQUIRING_PROPS}<Missing />\n`),
       includes: [],
     };
 
@@ -1358,7 +1358,7 @@ describe("Tier DM — structural validation is the same walk without the run's v
   });
 
   it("DM36: structural validation answers the same version and shape", function* () {
-    const source = { ...retainedSource(ROOT_PATH, "Nothing to resolve.\n"), includes: [] };
+    const source = { ...savedSource(ROOT_PATH, "Nothing to resolve.\n"), includes: [] };
 
     expect(yield* validateDocumentStructure(source)).toEqual(yield* validateDocument(source));
   });
@@ -1406,7 +1406,7 @@ function* published(
     yield* collect(
       yield* executeInstalled(
         {
-          ...retainedSource(ROOT_PATH, source),
+          ...savedSource(ROOT_PATH, source),
           stream,
           includes: [],
         },
@@ -1437,7 +1437,7 @@ function answeringOpenName(definition: ImportedDefinition): ExecutionInstallatio
 }
 
 /**
- * The `{ text, exact }` runs one child's close retained, read rather than
+ * The `{ text, exact }` runs one child's close saved, read rather than
  * asserted.
  *
  * A row about what a durable value *is* cannot cast it into the shape it
@@ -1445,13 +1445,13 @@ function answeringOpenName(definition: ImportedDefinition): ExecutionInstallatio
  * what it found — instead of arriving at the expectation as a plausible shape
  * nobody checked.
  */
-function retainedRuns(event: DurableEvent): { text: string; exact: boolean }[] {
+function savedRuns(event: DurableEvent): { text: string; exact: boolean }[] {
   if (event.type !== "close" || event.result.status !== "ok") {
     return [];
   }
   const value = event.result.value;
   if (!Array.isArray(value)) {
-    throw new Error(`the close of ${event.coroutineId} retained no runs: ${JSON.stringify(value)}`);
+    throw new Error(`the close of ${event.coroutineId} saved no runs: ${JSON.stringify(value)}`);
   }
   return value.map((entry) => {
     if (typeof entry === "object" && entry !== null && !Array.isArray(entry)) {
@@ -1460,7 +1460,7 @@ function retainedRuns(event: DurableEvent): { text: string; exact: boolean }[] {
         return { text, exact };
       }
     }
-    throw new Error(`the close of ${event.coroutineId} retained ${JSON.stringify(entry)}`);
+    throw new Error(`the close of ${event.coroutineId} saved ${JSON.stringify(entry)}`);
   });
 }
 
@@ -1644,7 +1644,7 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
   it("DM55: a replayed child restores what its bytes were", function* () {
     // The disposition is a fact about what canonical expansion produced, and
     // the segments it marked do not survive the process. A replay therefore
-    // reads it from the child's own durable close — and a close that retained
+    // reads it from the child's own durable close — and a close that saved
     // only text could not answer at all.
     const source = [
       "<All>",
@@ -1672,10 +1672,10 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
       (event) => event.type === "close" && event.coroutineId.includes("."),
     );
     expect(children).toHaveLength(2);
-    // What each child retained says what its bytes were, not only what they
+    // What each child saved says what its bytes were, not only what they
     // said. Read as a set: children close in whatever order they finished, and
     // which one finished first is exactly what this must not depend on.
-    const runs = children.flatMap((event) => retainedRuns(event));
+    const runs = children.flatMap((event) => savedRuns(event));
     expect(runs.filter((run) => run.exact)).toEqual([{ text: PRESENTABLE, exact: true }]);
     expect(runs.some((run) => !run.exact && run.text.includes("ordinary prose"))).toBe(true);
 
@@ -1704,7 +1704,7 @@ describe("Tier DM — exact source is a provenance, not a field", () => {
       (event) => !(event.type === "close" && event.coroutineId === "root"),
     );
 
-    // Every way a retained close can stop being a list of runs: a value that is
+    // Every way a saved close can stop being a list of runs: a value that is
     // not a list, a member that is not a run, a member missing one of the two
     // things a run is, and a member carrying something else besides.
     const damaged: Json[] = [
@@ -1880,7 +1880,7 @@ describe("Tier MDK — the declaration states its kind", () => {
 
     // Validation resolves it rather than reporting it unresolved.
     const validation = yield* validateDocumentStructure({
-      ...retainedSource(ROOT_PATH, "<Policy />\n"),
+      ...savedSource(ROOT_PATH, "<Policy />\n"),
       includes: [],
       declarations,
     });
@@ -1972,7 +1972,7 @@ describe("Tier MDK — the declaration states its kind", () => {
         return yield* collect(
           yield* executeInstalled(
             {
-              ...retainedSource(ROOT_PATH, "<Policy />\n"),
+              ...savedSource(ROOT_PATH, "<Policy />\n"),
               stream: new InMemoryStream(),
               includes: [],
             },
@@ -2098,7 +2098,7 @@ function* refusedBeforeRoot(
     scoped(function* () {
       return yield* collect(
         yield* executeInstalled(
-          { ...retainedSource(ROOT_PATH, source), stream, includes: [] },
+          { ...savedSource(ROOT_PATH, source), stream, includes: [] },
           installations,
         ),
       );
@@ -2361,7 +2361,7 @@ describe("Tier ED — the catalog answers for the set", () => {
         scoped(function* () {
           return yield* collect(
             yield* executeInstalled(
-              { ...retainedSource(ROOT_PATH, "The root ran.\n"), stream, includes: [] },
+              { ...savedSource(ROOT_PATH, "The root ran.\n"), stream, includes: [] },
               [
                 { declarations: [hostile] },
                 {
@@ -2412,7 +2412,7 @@ describe("Tier ED — the catalog answers for the set", () => {
         scoped(function* () {
           return yield* collect(
             yield* executeInstalled(
-              { ...retainedSource(ROOT_PATH, "x\n"), stream: new InMemoryStream(), includes: [] },
+              { ...savedSource(ROOT_PATH, "x\n"), stream: new InMemoryStream(), includes: [] },
               [declaring([construct, panel()])],
             ),
           );
@@ -2437,7 +2437,7 @@ describe("Tier ED — the catalog answers for the set", () => {
         scoped(function* () {
           return yield* collect(
             yield* executeInstalled(
-              { ...retainedSource(ROOT_PATH, "x\n"), stream: new InMemoryStream(), includes: [] },
+              { ...savedSource(ROOT_PATH, "x\n"), stream: new InMemoryStream(), includes: [] },
               installations,
             ),
           );

@@ -3,7 +3,7 @@
  *
  * These tests inspect the run's database and the Git host together. A replayed
  * pull request must reach no host, read no credential and append no second
- * record; a retained record that no longer describes the invocation it was
+ * record; a saved record that no longer describes the invocation it was
  * recorded for must stop the run rather than be read around; a cancelled
  * creation must leave the journal exactly as it found it; and what public
  * routing middleware sees must be the frozen request and nothing that can
@@ -89,7 +89,7 @@ function unreachable(): GitHubAccess {
 }
 
 /**
- * Damage the one retained pull-request record, and refuse if it damaged none.
+ * Damage the one saved pull-request record, and refuse if it damaged none.
  *
  * A tamper that matched nothing leaves the run healthy, and a regression built
  * on one passes by replaying an undamaged record.
@@ -131,14 +131,14 @@ describe("workflow PullRequest durability", () => {
       const first = String(
         yield* runWorkflowDocument(database, published(...pullRequest()), run.options),
       );
-      const retained = yield* gitHostOutcomes(database);
-      expect(retained).toHaveLength(2);
+      const saved = yield* gitHostOutcomes(database);
+      expect(saved).toHaveLength(2);
 
       dropRootClose(path);
 
       // The pull request this run created is closed and retitled, and the base
       // branch moves, after the record commits. Creation evidence is what the
-      // run retained; none of this can change it.
+      // run saved; none of this can change it.
       const created = run.store.pullRequests[0];
       if (created !== undefined) {
         created.state = "closed";
@@ -156,10 +156,10 @@ describe("workflow PullRequest durability", () => {
       // The same evidence, from the journal, with no adapter selected, no
       // credential read and no request sent.
       expect(replayed).toBe(first);
-      expect(yield* gitHostOutcomes(database)).toEqual(retained);
+      expect(yield* gitHostOutcomes(database)).toEqual(saved);
       const effects = yield* gitHostEvents(database);
       expect(effects).toHaveLength(2);
-      // Each retained effect names its own authored element — the `<Git.Push>`
+      // Each saved effect names its own authored element — the `<Git.Push>`
       // and the `<PullRequest>` — as diagnostic data beside the identity the
       // replay above matched by type and name alone.
       const document = published(...pullRequest());
@@ -221,7 +221,7 @@ describe("workflow PullRequest durability", () => {
   ];
 
   for (const { name, damage } of DAMAGE) {
-    it(`fails a replay whose retained record ${name}`, function* () {
+    it(`fails a replay whose saved record ${name}`, function* () {
       const root = yield* useStorageRoot();
       const remote = yield* useBareRemote(REMOTE);
       const path = runPath(root, RUN);
@@ -266,7 +266,7 @@ describe("workflow PullRequest durability", () => {
   ];
 
   for (const { name, damage } of REKEYED) {
-    it(`fails a replay whose retained record ${name}`, function* () {
+    it(`fails a replay whose saved record ${name}`, function* () {
       const root = yield* useStorageRoot();
       const remote = yield* useBareRemote(REMOTE);
       const path = runPath(root, RUN);
@@ -292,7 +292,7 @@ describe("workflow PullRequest durability", () => {
     });
   }
 
-  it("fails a replay whose retained record answers a different request", function* () {
+  it("fails a replay whose saved record answers a different request", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
     const path = runPath(root, RUN);
@@ -362,7 +362,7 @@ describe("workflow PullRequest durability", () => {
     });
   });
 
-  it("fails a replay whose retained update had nothing to perform", function* () {
+  it("fails a replay whose saved update had nothing to perform", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
     const path = runPath(root, RUN);

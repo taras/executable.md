@@ -199,7 +199,7 @@ export interface AgentApi {
    *
    * This answers nothing. A return value is not evidence a launch happened, and
    * the invocation that issued the request ignores whatever comes back: the
-   * only thing that settles a launch is what it retained. Middleware may
+   * only thing that settles a launch is what it saved. Middleware may
    * inspect the request, narrow it with `with()`, refuse by throwing, or
    * delegate it onward.
    */

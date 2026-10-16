@@ -5,7 +5,7 @@
  * `IssueApi` is the transport surface — GitHub's middleware recognizes its own
  * URLs, holds a target to the host's ceiling, and normalizes what comes back.
  * This is the layer above it, and what it owns is *lifecycle*: whether one
- * question is asked once and retained, or asked once per run.
+ * question is asked once and saved, or asked once per run.
  *
  * The two profiles answer that differently, which is why the seam exists. A
  * workflow run wraps each operation in a durable effect keyed by its WorkflowRun
@@ -52,7 +52,7 @@ export class IssueOperationsProviderError extends Error {
   constructor(operation: string) {
     super(
       `no Issue provider is installed, so ${operation} cannot answer. The Deno and compiled ` +
-        "`xmd run` entrypoints install the ordinary one; a workflow host installs the retained " +
+        "`xmd run` entrypoints install the ordinary one; a workflow host installs the saved " +
         "one for a live or partial execution.",
     );
   }

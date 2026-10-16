@@ -3,16 +3,16 @@
  *
  * A source bundle's authoritative content lives in this database and nowhere
  * else. So writing it is one set of rows inside the creation transaction, and
- * reading it is a total re-derivation: every retained length, every source hash
+ * reading it is a total re-derivation: every saved length, every source hash
  * and the bundle hash itself are recomputed from the BLOBs before anything is
- * handed back. A retained identity nobody can reproduce is not evidence of the
+ * handed back. A saved identity nobody can reproduce is not evidence of the
  * definition it names.
  *
  * ## Missing and corrupt are different answers
  *
  * A manifest entry or a blob the store does not contain is absence: the run's
  * content is gone, and there is nothing here to repair. A path, a length, a
- * hash, a mapping or a bundle hash that disagrees is damage: what is retained
+ * hash, a mapping or a bundle hash that disagrees is damage: what is saved
  * is there and no longer describes itself. Operators act on the two
  * differently, and neither is repaired by falling back to the original file,
  * the optional provenance, or the legacy Git reader.
@@ -27,7 +27,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import { Err, Ok, type Operation, type Result } from "effection";
-import type { RetainedDefinitionSources, RetainedSource } from "../lifecycle/source.ts";
+import type { SavedDefinitionSources, SavedSource } from "../lifecycle/source.ts";
 import {
   WorkflowDefinitionCorruptError,
   WorkflowDefinitionSourceMissingError,
@@ -75,13 +75,13 @@ export function writeDefinitionSources(
   }
 }
 
-/** One retained manifest row, as SQLite hands it back. */
+/** One saved manifest row, as SQLite hands it back. */
 interface ManifestRow {
   readonly path: string;
   readonly sourceHash: string;
 }
 
-/** One retained blob, as SQLite hands it back. */
+/** One saved blob, as SQLite hands it back. */
 interface BlobRow {
   readonly sourceHash: string;
   readonly byteLength: number;
@@ -89,13 +89,13 @@ interface BlobRow {
 }
 
 /** Everything the source store holds, read inside the caller's transaction. */
-export interface RetainedSourceRows {
+export interface SavedSourceRows {
   readonly manifest: readonly ManifestRow[];
   readonly blobs: readonly BlobRow[];
 }
 
 /** Read the whole source store, without deciding anything about it yet. */
-export function readDefinitionSourceRows(database: DatabaseSync): RetainedSourceRows {
+export function readDefinitionSourceRows(database: DatabaseSync): SavedSourceRows {
   return {
     manifest: reading(database, SELECT_SOURCES)
       .all()
@@ -114,21 +114,21 @@ export function readDefinitionSourceRows(database: DatabaseSync): RetainedSource
 }
 
 /**
- * The retained source this descriptor names, re-derived from what is stored.
+ * The saved source this descriptor names, re-derived from what is stored.
  *
  * Every check the issue settles, in the order an operator can act on: the
  * manifest must be exactly the descriptor's entries, every referenced blob must
- * exist, both retained lengths must equal the content's own, recomputing each
+ * exist, both saved lengths must equal the content's own, recomputing each
  * blob's hash must produce its key, no blob may be unreferenced, and the bundle
- * hash must be what the retained manifest and mapping produce.
+ * hash must be what the saved manifest and mapping produce.
  *
  * Nothing partial is ever returned. A closure with one source missing is not a
  * smaller closure, it is a different definition.
  */
-export function* verifyRetainedSources(
+export function* verifySavedSources(
   definition: WorkflowDefinition,
-  rows: RetainedSourceRows,
-): Operation<Result<RetainedDefinitionSources>> {
+  rows: SavedSourceRows,
+): Operation<Result<SavedDefinitionSources>> {
   const stored = new Map(rows.manifest.map((row) => [row.path, row.sourceHash]));
   if (stored.size !== rows.manifest.length) {
     return Err(new WorkflowDefinitionCorruptError("it retains one logical path more than once"));
@@ -143,35 +143,31 @@ export function* verifyRetainedSources(
   }
 
   const referenced = new Set<string>();
-  const sources: RetainedSource[] = [];
+  const sources: SavedSource[] = [];
   for (const entry of definition.sources) {
-    const retainedHash = stored.get(entry.path);
-    if (retainedHash === undefined) {
+    const savedHash = stored.get(entry.path);
+    if (savedHash === undefined) {
       return Err(new WorkflowDefinitionSourceMissingError());
     }
-    if (retainedHash !== entry.sourceHash) {
+    if (savedHash !== entry.sourceHash) {
       return Err(
-        new WorkflowDefinitionCorruptError(
-          "a retained source names content the descriptor does not",
-        ),
+        new WorkflowDefinitionCorruptError("a saved source names content the descriptor does not"),
       );
     }
-    const blob = blobs.get(retainedHash);
+    const blob = blobs.get(savedHash);
     if (blob === undefined) {
       return Err(new WorkflowDefinitionSourceMissingError());
     }
-    referenced.add(retainedHash);
+    referenced.add(savedHash);
 
     if (blob.byteLength !== entry.byteLength || blob.content.byteLength !== entry.byteLength) {
       return Err(
-        new WorkflowDefinitionCorruptError("a retained source is not the length it declares"),
+        new WorkflowDefinitionCorruptError("a saved source is not the length it declares"),
       );
     }
     const recomputed = yield* sourceContentHash(blob.content);
     if (recomputed !== entry.sourceHash) {
-      return Err(
-        new WorkflowDefinitionCorruptError("a retained source is not the content it names"),
-      );
+      return Err(new WorkflowDefinitionCorruptError("a saved source is not the content it names"));
     }
     sources.push(Object.freeze({ path: entry.path, bytes: Uint8Array.from(blob.content) }));
   }

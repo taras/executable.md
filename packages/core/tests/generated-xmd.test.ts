@@ -14,9 +14,9 @@
  * middleware, and an answer mutated after delegation each fail before the
  * component is invoked.
  *
- * **What ran is retained.** The admitted source, the selected root, the pinned
+ * **What ran is saved.** The admitted source, the selected root, the pinned
  * identities and the exact request policy cross the journal's secret filter as
- * one event, and the observations are retained by their own ordinary effects.
+ * one event, and the observations are saved by their own ordinary effects.
  *
  * Every case that involves a request substitutes a provider at `API.Fetch` and
  * counts what that provider was asked to perform, separately from the rendered
@@ -44,7 +44,7 @@ import { Component, content, hasContent } from "../src/component-api.ts";
 import { pinnedJson } from "../src/generated-xmd.ts";
 import { fixedFilesystemDefinition } from "../src/components/fixed-filesystem.ts";
 import { collect } from "../src/collect.ts";
-import { retainedSource } from "../src/root-source.ts";
+import { savedSource } from "../src/root-source.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { SOURCE_POSITION_FIELD } from "../src/source-position.ts";
 import { useSecretScannerFactory } from "../src/secrets/policy.ts";
@@ -336,7 +336,7 @@ function evaluate(
     });
     const execution = yield* executeInstalled(
       {
-        ...retainedSource(ROOT_PATH, ROOT_SOURCE),
+        ...savedSource(ROOT_PATH, ROOT_SOURCE),
         stream,
         includes: [...(options.includes ?? [])],
       },
@@ -440,7 +440,7 @@ describe("Tier GX — the trusted-host seam", () => {
         decision: "admitted",
         source: "<Probe />\n",
         named: [{ name: "Probe", identity: PROBE_IDENTITY, form: "self-closing" }],
-        // Retained in the result as well as the input, because durable replay
+        // Saved in the result as well as the input, because durable replay
         // matches an effect by type and name and never compares a description.
         policy: {
           version: 4,
@@ -587,7 +587,7 @@ describe("Tier GX — the complete fragment is read first", () => {
 
     expect(attempt.failure).toContain("executable code block");
     expect(attempt.failure).not.toContain("leaked-fragment-text");
-    // The refusal is retained, so what it retains matters as much as what it
+    // The refusal is saved, so what it retains matters as much as what it
     // says: the class, and no part of the fragment that caused it.
     expect(persisted(attempt.events)).not.toContain("leaked-fragment-text");
     expect(persisted(attempt.events)).toContain('"construct":"block"');
@@ -851,7 +851,7 @@ describe("Tier GX — what the run keeps", () => {
 
     expect(attempt.failure).toBeDefined();
     expect(transport.performed.map((call) => call.url)).toEqual([URL_ONE, URL_TWO]);
-    // The admission and the first effect are both retained; the second is not.
+    // The admission and the first effect are both saved; the second is not.
     expect(admissions(attempt.events)).toHaveLength(1);
     expect(observations(attempt.events)).toHaveLength(1);
   });
@@ -891,7 +891,7 @@ describe("Tier GX — what the run keeps", () => {
         yield* collect(
           yield* executeInstalled(
             {
-              ...retainedSource(ROOT_PATH, ROOT_SOURCE),
+              ...savedSource(ROOT_PATH, ROOT_SOURCE),
               stream: holdingAfterFirst(blocked, reached),
             },
             [installation],
@@ -904,7 +904,7 @@ describe("Tier GX — what the run keeps", () => {
 
     const interrupted = yield* blocked.readAll();
     expect(admissions(interrupted)).toHaveLength(1);
-    // Exactly the completed one, retained through the halt.
+    // Exactly the completed one, saved through the halt.
     expect(observations(interrupted)).toHaveLength(1);
   });
 
@@ -932,7 +932,7 @@ describe("Tier GX — what the run keeps", () => {
         });
         yield* collect(
           yield* executeInstalled(
-            { ...retainedSource(ROOT_PATH, ROOT_SOURCE), stream: holding, includes: [] },
+            { ...savedSource(ROOT_PATH, ROOT_SOURCE), stream: holding, includes: [] },
             [installation],
           ),
         );
@@ -963,9 +963,9 @@ describe("Tier GX — what the run keeps", () => {
  * The admission, every durable effect the admitted fragment performs, and any
  * later durable effect of the owning operation are one offered sequence, in
  * authored order. A partial replay offers the same sequence: completed
- * generated effects restore from their retained records without entering
+ * generated effects restore from their saved records without entering
  * their providers, and the run continues to the later effect rather than
- * diverging at the first retained nested record.
+ * diverging at the first saved nested record.
  */
 describe("Tier GX — nested generated effects belong to the owning expansion", () => {
   beforeAll(() => useTempFileCompiler());
@@ -1053,7 +1053,7 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
     expect(again.failure).toBe(undefined);
     expect(again.output).toBe(first.output);
     // One live call each, across both executions: the completed read and the
-    // completed marker restore from their retained records.
+    // completed marker restore from their saved records.
     expect(transport.performed).toHaveLength(1);
     expect(executed).toEqual(["parent-marker"]);
     expect(offered(again.events)).toEqual([
@@ -1170,7 +1170,7 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
  * Preflight settled what a fragment may *name*; whether a request is well
  * formed at all is the component's own question, asked where the request is
  * made — after the admission has already been recorded, which is where the
- * exact source is retained on purpose. So there is no pre-admission refusal
+ * exact source is saved on purpose. So there is no pre-admission refusal
  * left to keep the candidate's text out of, and nothing here to assert about
  * one. What an admitted read may reach is proved against a live bound in
  * `shared-operation-permissions` Tier PRM, and `<Fetch>`'s own refusals are
@@ -1247,7 +1247,7 @@ describe("Tier GX — a resumed run is held to the selection it was admitted und
         });
         yield* collect(
           yield* executeInstalled(
-            { ...retainedSource(ROOT_PATH, ROOT_SOURCE), stream: holding, includes: [] },
+            { ...savedSource(ROOT_PATH, ROOT_SOURCE), stream: holding, includes: [] },
             [installation],
           ),
         );
@@ -1575,7 +1575,7 @@ describe("Tier GX — a resumed run is held to the selection it was admitted und
   }
 
   /**
-   * Every retained record this build refuses, and what is wrong with each.
+   * Every saved record this build refuses, and what is wrong with each.
    *
    * Their positive control is the current record above: every row here is a
    * record that would otherwise resume with one thing wrong, so a row that
@@ -1761,7 +1761,7 @@ describe("Tier GX — a resumed run is held to the selection it was admitted und
   ];
 
   for (const [what, admission] of HOSTILE) {
-    it(`FE18/GX21y: a retained record with ${what} refuses before any effect`, function* () {
+    it(`FE18/GX21y: a saved record with ${what} refuses before any effect`, function* () {
       const first = yield* evaluate(request("<Probe />\n", [probe()]));
 
       const performed: string[] = [];
@@ -1870,7 +1870,7 @@ describe("Tier GX — a resumed run is held to the selection it was admitted und
     expect(String(again.output ?? "")).not.toContain("an extra sentence");
   });
 
-  it("GX24b: an unsafe current source refuses rather than replaying the retained one", function* () {
+  it("GX24b: an unsafe current source refuses rather than replaying the saved one", function* () {
     const first = yield* evaluate(request("<Probe />\n", [probe()]));
 
     const performed: string[] = [];
@@ -1884,11 +1884,11 @@ describe("Tier GX — a resumed run is held to the selection it was admitted und
     expect(again.failure).toContain("no longer offers");
     expect(performed).toEqual([]);
     // Neither the block nor its text reaches the journal: the refusal happens
-    // before the fragment is walked, so the candidate is never retained.
+    // before the fragment is walked, so the candidate is never saved.
     expect(persisted(again.events)).not.toContain("unsafe-block-executed");
   });
 
-  it("GX24c: the unchanged text resumes from the retained copy", function* () {
+  it("GX24c: the unchanged text resumes from the saved copy", function* () {
     const first = yield* evaluate(request("<Probe />\n", [probe()]));
 
     // The positive control the two refusals above need: identical text still
@@ -1903,7 +1903,7 @@ describe("Tier GX — a resumed run is held to the selection it was admitted und
   });
 });
 
-describe("Tier GX — the secret gate covers what is retained", () => {
+describe("Tier GX — the secret gate covers what is saved", () => {
   beforeAll(() => useTempFileCompiler());
 
   const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -1940,7 +1940,7 @@ describe("Tier GX — the secret gate covers what is retained", () => {
     if (admission === undefined || observation === undefined) {
       throw new Error("the gate was not given both events");
     }
-    // The whole retained admission reaches the gate before it persists: the
+    // The whole saved admission reaches the gate before it persists: the
     // candidate's own request, the Workspace basis, and the URL the admitted
     // spelling runs under beside the effect table that admitted it.
     for (const marker of [
@@ -2035,7 +2035,7 @@ function* useWorkspaceFiles(root: string): Operation<Reads> {
 describe("Tier WGAC — the pinned read-only File", () => {
   it("WGAC1: a self-closing File reads through the ordinary Files provider", function* () {
     const root = yield* useWorkspace();
-    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+    yield* writeTextFile(join(root, "notes.md"), "the saved note\n");
 
     const attempt = yield* scoped(function* () {
       const reads = yield* useWorkspaceFiles(root);
@@ -2044,7 +2044,7 @@ describe("Tier WGAC — the pinned read-only File", () => {
     });
 
     expect(attempt.evaluated.failure).toBe(undefined);
-    expect(attempt.evaluated.output).toContain("the retained note");
+    expect(attempt.evaluated.output).toContain("the saved note");
     // The ordinary component, and therefore the installed provider — not a
     // second filesystem path of the evaluator's own.
     expect(attempt.reads).toEqual(["notes.md"]);
@@ -2052,7 +2052,7 @@ describe("Tier WGAC — the pinned read-only File", () => {
   });
 
   it("WGAC1: the read entry admits the reading spelling and nothing else", function* () {
-    // A retained admission resumes only under the identity the admitted
+    // A saved admission resumes only under the identity the admitted
     // spelling runs under, and `<File>`'s two spellings are offered under two
     // URLs: the reading form observes, the writing form mutates. So this entry
     // is the self-closing one, and a run that admitted the paired spelling
@@ -2068,7 +2068,7 @@ describe("Tier WGAC — the pinned read-only File", () => {
     const deletion = pinnedFileDelete();
 
     expect(deletion.name).toBe("File.Delete");
-    // What a retained admission is compared against, and what a continuation
+    // What a saved admission is compared against, and what a continuation
     // that selected the write table is held to: the URL core's own declaration
     // offers this spelling under, and the effect it offers it as.
     expect(deletion.definition.generated).toEqual({
@@ -2087,7 +2087,7 @@ describe("Tier WGAC — the pinned read-only File", () => {
 
   it("WGAC8: the result carries each observation's value, in order, beside the rendering", function* () {
     const root = yield* useWorkspace();
-    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+    yield* writeTextFile(join(root, "notes.md"), "the saved note\n");
     const transport = yield* useTransport(() => ({ status: 200, body: "answered" }));
 
     // One admitted read that renders its value, one that renders nothing at all:
@@ -2104,7 +2104,7 @@ describe("Tier WGAC — the pinned read-only File", () => {
     expect(attempt.failure).toBe(undefined);
     expect(transport.performed.map((call) => call.url)).toEqual([URL_ONE]);
 
-    // The identities live in the retained admission, which is where a run is
+    // The identities live in the saved admission, which is where a run is
     // held to them — not on the result, which would be a second copy of the
     // same fact.
     const admitted = admittedFragments(attempt.events)[0];
@@ -2119,13 +2119,13 @@ describe("Tier WGAC — the pinned read-only File", () => {
     // response reached the fragment and the fragment did not ask for it, so
     // nothing carries it outward. A fragment that wants it binds it and renders
     // it explicitly, which is what the composition tests below do.
-    expect(attempt.output).toContain("the retained note");
+    expect(attempt.output).toContain("the saved note");
     expect(attempt.output).not.toContain("answered");
   });
 
   it("WGAC2: a paired File anywhere in a mixed fragment performs no read and no write", function* () {
     const root = yield* useWorkspace();
-    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+    yield* writeTextFile(join(root, "notes.md"), "the saved note\n");
 
     const source =
       `<File path="notes.md" />\n\n` + `<File path="proposed.md">the agent wrote this</File>\n`;
@@ -2165,7 +2165,7 @@ describe("Tier WGAC — the pinned read-only File", () => {
 
   it("WGAC2: an unadmitted component after an admitted read performs zero reads", function* () {
     const root = yield* useWorkspace();
-    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+    yield* writeTextFile(join(root, "notes.md"), "the saved note\n");
 
     const source = `<File path="notes.md" />\n\n<Glob pattern="**/*" />\n`;
 
@@ -2264,7 +2264,7 @@ describe("Tier GXC — a selection is not a grant", () => {
     expect(omitted.failure).toBe(undefined);
     expect(explicit.failure).toBe(undefined);
     expect(explicit.output).toBe(omitted.output);
-    // The same retained policy, down to the class it normalized to: a document
+    // The same saved policy, down to the class it normalized to: a document
     // that says nothing and one that says `read` are held to one grant.
     expect(recordedPolicy(admittedFragments(explicit.events)[0])).toEqual(
       recordedPolicy(admittedFragments(omitted.events)[0]),
@@ -2274,7 +2274,7 @@ describe("Tier GXC — a selection is not a grant", () => {
     });
   });
 
-  it("GXC1b: a mixed selection is retained in canonical order", function* () {
+  it("GXC1b: a mixed selection is saved in canonical order", function* () {
     const attempt = yield* evaluate(
       selecting("<Probe />\n", [probe()], {
         allow: ["write", "read"],
@@ -2559,7 +2559,7 @@ describe("Tier GXC — a name is not a form", () => {
 
   it("GXC3: each form resolves to its own pinned identity", function* () {
     const root = yield* useWorkspace();
-    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+    yield* writeTextFile(join(root, "notes.md"), "the saved note\n");
 
     const attempt = yield* scoped(function* () {
       const files = yield* useWorkspaceFiles(root);
@@ -2610,7 +2610,7 @@ describe("Tier GXC — a name is not a form", () => {
   for (const [what, source, allow, diagnostic] of FORMS) {
     it(`GXC4: ${what} is refused with no effect`, function* () {
       const root = yield* useWorkspace();
-      yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+      yield* writeTextFile(join(root, "notes.md"), "the saved note\n");
 
       const attempt = yield* scoped(function* () {
         const files = yield* useWorkspaceFiles(root);
@@ -2627,7 +2627,7 @@ describe("Tier GXC — a name is not a form", () => {
       expect(attempt.files).toEqual([]);
       expect(refusals(attempt.evaluated.events)).toHaveLength(1);
       expect(admittedFragments(attempt.evaluated.events)).toHaveLength(0);
-      expect(yield* readTextFile(join(root, "notes.md"))).toBe("the retained note\n");
+      expect(yield* readTextFile(join(root, "notes.md"))).toBe("the saved note\n");
     });
   }
 
@@ -2640,7 +2640,7 @@ describe("Tier GXC — a name is not a form", () => {
     yield* ensureDir(join(workspace, "File"));
     yield* writeTextFile(join(workspace, "File", "Delete.md"), "the repository File.Delete ran.\n");
     const root = yield* useWorkspace();
-    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+    yield* writeTextFile(join(root, "notes.md"), "the saved note\n");
     yield* writeTextFile(join(root, "stale.md"), "the note an earlier step left\n");
 
     const attempt = yield* scoped(function* () {
@@ -2681,7 +2681,7 @@ describe("Tier GXC — a name is not a form", () => {
   for (const [what, element] of EXCLUDED) {
     it(`GXC6: ${what} is outside the write table`, function* () {
       const root = yield* useWorkspace();
-      yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+      yield* writeTextFile(join(root, "notes.md"), "the saved note\n");
 
       const attempt = yield* scoped(function* () {
         const files = yield* useWorkspaceFiles(root);
@@ -2740,7 +2740,7 @@ describe("Tier GXC — a write is not an observation", () => {
 
   it("GXC7: a mixed fragment renders the read's own output and no receipt for the write", function* () {
     const root = yield* useWorkspace();
-    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+    yield* writeTextFile(join(root, "notes.md"), "the saved note\n");
 
     const attempt = yield* scoped(function* () {
       yield* useWorkspaceFiles(root);
@@ -2756,7 +2756,7 @@ describe("Tier GXC — a write is not an observation", () => {
     expect(attempt.failure).toBe(undefined);
     // The read is written without `as`, so its own value is its ordinary
     // output; the write beside it renders nothing and adds no receipt.
-    expect(attempt.output).toContain("the retained note");
+    expect(attempt.output).toContain("the saved note");
     expect(attempt.output).not.toContain("proposed");
   });
 
@@ -2963,7 +2963,7 @@ describe("Tier GXC — the authored form survives the public content chain", () 
   for (const [what, script] of REPORTING) {
     it(`GXC10: an admitted read still reads under ${what}`, function* () {
       const root = yield* useWorkspace();
-      yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+      yield* writeTextFile(join(root, "notes.md"), "the saved note\n");
       const answered: boolean[] = [];
 
       const attempt = yield* scoped(function* () {
@@ -2986,11 +2986,11 @@ describe("Tier GXC — the authored form survives the public content chain", () 
       expect(String(attempt.evaluated.output)).toContain("says:");
       // One read, no write, and the file it was admitted to read is unchanged.
       expect(attempt.files).toEqual(["notes.md"]);
-      expect(yield* readTextFile(join(root, "notes.md"))).toBe("the retained note\n");
+      expect(yield* readTextFile(join(root, "notes.md"))).toBe("the saved note\n");
       // Both are written without `as`, so each contributes its ordinary output
       // in invocation order and nothing is collected beside them.
       expect(String(attempt.evaluated.output)).toContain(`says:${script[0]}`);
-      expect(String(attempt.evaluated.output)).toContain("the retained note");
+      expect(String(attempt.evaluated.output)).toContain("the saved note");
       // And the admission still names the identity and form it was granted for.
       expect(recordedNames(admittedFragments(attempt.evaluated.events)[0])).toEqual([
         {
@@ -3060,7 +3060,7 @@ describe("Tier GXC — the authored form survives the public content chain", () 
 
   it("GXC10: an invocation the evaluator did not receive is refused", function* () {
     const root = yield* useWorkspace();
-    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+    yield* writeTextFile(join(root, "notes.md"), "the saved note\n");
 
     const attempt = yield* scoped(function* () {
       const files = yield* useWorkspaceFiles(root);
@@ -3101,12 +3101,12 @@ describe("Tier GXC — the authored form survives the public content chain", () 
 
     expect(attempt.evaluated.failure).toBeDefined();
     expect(attempt.files).toEqual([]);
-    expect(yield* readTextFile(join(root, "notes.md"))).toBe("the retained note\n");
+    expect(yield* readTextFile(join(root, "notes.md"))).toBe("the saved note\n");
   });
 
   it("GXC10: an honest chain still runs both forms through ordinary providers", function* () {
     const root = yield* useWorkspace();
-    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+    yield* writeTextFile(join(root, "notes.md"), "the saved note\n");
 
     const attempt = yield* scoped(function* () {
       const files = yield* useWorkspaceFiles(root);
@@ -3152,7 +3152,7 @@ describe("Tier GXC — the authored form survives the public content chain", () 
 describe("Tier GS — generated work names its own admission", () => {
   beforeAll(() => useTempFileCompiler());
 
-  /** The position one recorded effect retained, exactly as the journal holds it. */
+  /** The position one recorded effect saved, exactly as the journal holds it. */
   function positionOf(events: DurableEvent[], type: string): Json | undefined {
     const found = events.find((event) => event.type === "yield" && event.description.type === type);
     if (found === undefined || found.type !== "yield") {

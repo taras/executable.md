@@ -43,21 +43,21 @@ export function responseRecord(response: FetchResponseRecord): JsonObject {
   };
 }
 
-/** Read a response back from what was retained, or from a replay. */
+/** Read a response back from what was saved, or from a replay. */
 export function parseResponseRecord(value: Json): FetchResponseRecord {
   if (!isJsonObject(value)) {
-    throw new FetchResponseError("a retained Fetch response must be a JSON object");
+    throw new FetchResponseError("a saved Fetch response must be a JSON object");
   }
   const { status, headers, body } = value;
   if (typeof status !== "number" || !isJsonObject(headers) || typeof body !== "string") {
     throw new FetchResponseError(
-      "a retained Fetch response must carry a numeric status, header object and text body",
+      "a saved Fetch response must carry a numeric status, header object and text body",
     );
   }
   const parsed: Record<string, string> = {};
   for (const [name, header] of Object.entries(headers)) {
     if (typeof header !== "string") {
-      throw new FetchResponseError(`retained Fetch response header "${name}" is not a string`);
+      throw new FetchResponseError(`saved Fetch response header "${name}" is not a string`);
     }
     parsed[name] = header;
   }
@@ -86,7 +86,7 @@ export function detachHeaders(headers: ResponseHeaders): Record<string, string> 
   if (typeof entries !== "function") {
     throw new FetchResponseError(
       "the Fetch provider cannot enumerate response headers, so the complete response " +
-        "cannot be retained. A substituted provider supplies `headers.entries()`.",
+        "cannot be saved. A substituted provider supplies `headers.entries()`.",
     );
   }
   const combined = new Map<string, string>();

@@ -116,7 +116,7 @@ not a summary of the implementation plan.
     only when both are accurate. If one reading promises different behavior,
     make the object or relationship explicit.
 16. **Use observable language for durable concepts.** Prefer “run and resume” or
-    another consequence over “retained” when storage is not necessary to
+    another consequence over “saved” when storage is not necessary to
     distinguish the work.
 17. **Use code formatting for literal product names.** Commands, components,
     props, and extensions use their authored spelling. Ordinary concepts remain
@@ -176,7 +176,7 @@ evidence rather than the transcript of how the design was discovered.
    the contract. Say **a** for an ordinary instance and **one** only when exact
    cardinality matters.
 8. **Describe workflow behavior through actions.** Prefer start, interrupt,
-   resume, fork, export, and **workflow run** over the adjective **retained**
+   resume, fork, export, and **workflow run** over the adjective **saved**
    when persistence is only an implementation consequence. Use retain or
    preserve when storage itself is the contract.
 9. **Define the relevant alternative.** A qualifier such as in-process,
@@ -317,7 +317,7 @@ Present exactly five things:
    or wording judgment, or ask for approval when none remains.
 
 Do not move to the next issue until the reader answers. Apply an accepted change
-immediately and verify the exact title, body, and labels GitHub retained. Apply
+immediately and verify the exact title, body, and labels GitHub saved. Apply
 an accepted Quest classification to both the `Quest:` prefix and `quest` label.
 Keep a visible count of completed entries.
 

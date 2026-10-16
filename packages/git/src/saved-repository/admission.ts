@@ -1,5 +1,5 @@
 /**
- * Whether one entry's retained history may be continued at all.
+ * Whether one entry's saved history may be continued at all.
  *
  * Two questions, and only two. **Integrity**: every record of this feature's
  * own types parses and is named by the request it carries. **Nothing else**: no
@@ -67,15 +67,15 @@ export class ReplRepositoryHistoryError extends StaleInputError {
 }
 
 /**
- * Hold this entry's retained history to what this host can read, or refuse.
+ * Hold this entry's saved history to what this host can read, or refuse.
  *
- * `retained` is the exact snapshot canonical execution admitted, which for an
+ * `saved` is the exact snapshot canonical execution admitted, which for an
  * entry is its own segment. Records of other features and of other durable
  * types are not this reader's business and are passed over; a record of *this*
  * feature's type that does not parse is, and refuses.
  */
-export function* admitReplRepositoryHistory(retained: readonly DurableEvent[]): Operation<void> {
-  for (const event of retained) {
+export function* admitReplRepositoryHistory(saved: readonly DurableEvent[]): Operation<void> {
+  for (const event of saved) {
     if (event.type !== "yield") {
       continue;
     }
@@ -142,7 +142,7 @@ function malformed(type: string): ReplRepositoryHistoryError {
 function changed(type: string): ReplRepositoryHistoryError {
   return refusal(
     "request-fingerprint",
-    `a retained ${type} carries a fingerprint that is not the digest of the request beside it, ` +
+    `a saved ${type} carries a fingerprint that is not the digest of the request beside it, ` +
       "so the request was changed after the work was saved and this history cannot say which of " +
       "the two the saved work belongs to.",
   );
@@ -151,7 +151,7 @@ function changed(type: string): ReplRepositoryHistoryError {
 function misnamed(type: string): ReplRepositoryHistoryError {
   return refusal(
     "request-fingerprint",
-    `a retained ${type} is journaled under a name that is not the name its own request ` +
+    `a saved ${type} is journaled under a name that is not the name its own request ` +
       "produces, so the record and the operation it claims to be do not match.",
   );
 }

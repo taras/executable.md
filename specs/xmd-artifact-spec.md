@@ -30,7 +30,7 @@ the same bytes. Continuing creates a new run with explicit lineage.
 xmd workflow export run_01J... --output=build-failure.xmd
 ```
 
-The command writes one XMD artifact containing the run's committed retained
+The command writes one XMD artifact containing the run's committed saved
 state at one artifact frontier. It reports:
 
 ```text
@@ -56,7 +56,7 @@ removed before it. A failure, a publication refusal, a cancellation or a cleanup
 failure up to that moment leaves no file at the requested target and reports
 failure. After it the artifact is never taken back. One private entry remains,
 holding the same content under a name nobody was told about; removing it is best
-effort, and a failure there is reported beside the success as a retained
+effort, and a failure there is reported beside the success as a saved
 leftover rather than instead of it. Reporting that nothing was published while
 the complete artifact sits at the requested path would be false, and taking the
 file back to make it true would destroy the evidence the caller asked for. This
@@ -66,7 +66,7 @@ named.
 
 ### 1.2 Inspect the file anywhere
 
-The existing inspection shapes accept either one retained run ID or one
+The existing inspection shapes accept either one saved run ID or one
 explicit artifact path:
 
 ```sh
@@ -78,14 +78,14 @@ xmd workflow history --artifact=build-failure.xmd --json
 ```
 
 The positional run ID and `--artifact` are mutually exclusive. `list` remains a
-list of live retained runs and accepts no artifact: a directory of downloaded
+list of live saved runs and accepts no artifact: a directory of downloaded
 files is not a run registry.
 
-Artifact status and history expose the same semantic fields as their retained-run
+Artifact status and history expose the same semantic fields as their saved-run
 forms, plus the artifact identity and artifact frontier. Human presentation may
 name the artifact path. JSON never makes that host path part of identity.
 
-Artifact status JSON is the retained-run snapshot with one added member:
+Artifact status JSON is the saved-run snapshot with one added member:
 
 ```jsonc
 {
@@ -100,23 +100,23 @@ Artifact status JSON is the retained-run snapshot with one added member:
 `retrieval` is absent, and absent as a fact: an artifact excludes where its
 definition could be fetched from now, because that is ownership belonging to the
 machine that exported rather than something true about the run. The shared
-inspection result declares the members both forms have, the retained-run result
+inspection result declares the members both forms have, the saved-run result
 alone declares `retrieval`, and the artifact result declares the artifact
 metadata — so an artifact snapshot has no such member to carry, rather than a
 member one projection happens to leave unset.
 
-Artifact history JSON is an envelope rather than the retained-run array, because
+Artifact history JSON is an envelope rather than the saved-run array, because
 the identity and the frontier have nowhere else to go — repeating them on every
 row would make one fact into many:
 
 ```jsonc
 {
   "artifact": { "identity": "…", "frontier": { /* … */ } },
-  "entries": [ /* exactly the retained-run history rows */ ]
+  "entries": [ /* exactly the saved-run history rows */ ]
 }
 ```
 
-Retained-run history JSON remains the bare array. Both forms always carry
+Saved-run history JSON remains the bare array. Both forms always carry
 forkability, so `--forkable` adds two human columns and changes no JSON value.
 
 Inspection opens the container read-only, executes no document, materializes no
@@ -151,7 +151,7 @@ copy into a destination run without making the artifact path retrieval state.
 
 For an artifact source, the definition argument is optional. When absent, the
 candidate definition is the artifact's workflow definition source. The new run
-copies it into its retained definition state, so later resume does not depend on
+copies it into its saved definition state, so later resume does not depend on
 the artifact path or on access to the original repository. When present, the
 candidate definition is resolved normally and the source run's normalized props
 remain the baseline under the workflow history-fork contract.
@@ -214,17 +214,17 @@ The frontier consists of one mutually consistent view of:
   lineage;
 - lifecycle status, stop reason and document-execution records;
 - the complete filtered journal through its last committed event;
-- every retained Workspace root and the current root association; and
-- every other XMD-owned retained record referenced by that state.
+- every saved Workspace root and the current root association; and
+- every other XMD-owned saved record referenced by that state.
 
 The status may be `running` when the prior host died without settling. Export
 does not repair or relabel it. If SQLite recovery is necessary, the provider
 copies the database and rollback journal under inspection recovery coordination
-and recovers only that private copy. The retained source remains unchanged.
+and recovers only that private copy. The saved source remains unchanged.
 
 Export performs no lifecycle transition, stale-execution settlement, replay,
 external reconciliation or document execution. Releasing the executor lock
-after export changes no retained state.
+after export changes no saved state.
 
 ### 2.3 Complete XMD-owned state
 
@@ -235,17 +235,17 @@ frontier and attempt a compatible history fork:
 - the artifact frontier and lifecycle snapshot;
 - the complete already-filtered journal, including event IDs, authored source,
   Workspace-root associations and inherited-event provenance;
-- every Workspace root, manifest, retained file byte, mode, symbolic-link
+- every Workspace root, manifest, saved file byte, mode, symbolic-link
   target, hardlink relationship and Repository/Worktree record the run retains;
 - suspension requests, delivered answers and answer-consumption state;
 - completed and interrupted external-effect requests, identities and filtered
-  outcomes already retained by the workflow contract;
-- workflow Agent session mappings and compatibility attributes already retained
+  outcomes already saved by the workflow contract;
+- workflow Agent session mappings and compatibility attributes already saved
   in the run database;
 - in a finalized artifact, one portability classification for every logical
-  Agent session that contributed a retained Prompt, and the opaque bundle bytes
+  Agent session that contributed a saved Prompt, and the opaque bundle bytes
   of each portable one (§2.5); and
-- the exact retained workflow definition source closure (§2.4).
+- the exact saved workflow definition source closure (§2.4).
 
 “Complete” is bounded by XMD ownership. The artifact does not claim to capture
 the state of the world around the run.
@@ -258,7 +258,7 @@ expanded.
 
 Export reads only the run's own source store. It reaches no repository and needs
 none, so a run exports after the file it was started from has been edited, moved
-or deleted. Every retained length and content hash is recomputed from the bytes
+or deleted. Every saved length and content hash is recomputed from the bytes
 the run holds, and so is the bundle hash over the resulting manifest and
 mapping; missing content and content that no longer describes itself are
 distinct refusals, and neither falls back to any other source.
@@ -274,12 +274,12 @@ Version 1 has two profiles, and a reader recognizes which one it is holding only
 after every container, manifest, content and artifact-identity gate has passed.
 
 **Merged legacy V1** holds neither Agent content kind. Its sessions may have
-contributed retained Prompts and carry no classification at all, and the reader
+contributed saved Prompts and carry no classification at all, and the reader
 preserves that absence: no record, token, bundle or marker is reconstructed for
 it.
 
 **Finalized Agent-aware V1** classifies every logical Agent session that
-contributed a retained Prompt, exactly once, as one of:
+contributed a saved Prompt, exactly once, as one of:
 
 - **portable** — the logical session key, session identity, provider, agent
   command and policy, the bundle kind and compatibility identifier, the source
@@ -287,29 +287,29 @@ contributed a retained Prompt, exactly once, as one of:
   ordered Prompt-event and checkpoint-token associations, and the bundle's byte
   length and lowercase SHA-256, beside the opaque bundle bytes themselves; or
 - **unavailable** — the same logical session and associations, and one reason.
-  `checkpoint-token-unavailable` means at least one retained Prompt did not
-  complete or has no retained association; it wins wherever it applies, because
-  missing retained evidence is intrinsic and no other host's capability can
-  repair it. `provider-capability-unavailable` means every retained Prompt
+  `checkpoint-token-unavailable` means at least one saved Prompt did not
+  complete or has no saved association; it wins wherever it applies, because
+  missing saved evidence is intrinsic and no other host's capability can
+  repair it. `provider-capability-unavailable` means every saved Prompt
   completed and the associations cover them exactly, and export had no declared
   compatible capture capability.
 
-The repeated session members must equal the retained Agent session mapping, and
+The repeated session members must equal the saved Agent session mapping, and
 a portable record's source provider session must equal that mapping's canonical
-assertion. The bundled identity is retained separately, because detached bytes
+assertion. The bundled identity is saved separately, because detached bytes
 may name a transported session rather than the live one they came from.
 
-Associations are in journal append order and each names one distinct retained
+Associations are in journal append order and each names one distinct saved
 `agent_prompt` whose Prompt record completed for that exact session. A portable
-record covers every retained Prompt of its session and has exactly one bundle
+record covers every saved Prompt of its session and has exactly one bundle
 under the same key, whose bytes match the declared length and hash. An
 unavailable record has none.
 
-A session that retained no Prompt has no classification and no bundle bytes. An
+A session that saved no Prompt has no classification and no bundle bytes. An
 artifact holding no Agent Prompt and neither Agent kind is valid, and legacy and
 finalized writers are deliberately indistinguishable for that inventory.
 
-A checkpoint token is opaque retained evidence about where a conversation
+A checkpoint token is opaque saved evidence about where a conversation
 reached, not control over the host that issued it, and is never derived from
 event position, transcript text, another token or a provider head. A bundle is
 opaque bytes that nothing scans or scrubs, and §3.1 applies to it in full.
@@ -323,7 +323,7 @@ corruption, and yields no projection.
 The artifact excludes:
 
 - credentials, authentication tokens, authentication helper output and
-  environment bindings — a provider checkpoint token retained under §2.5 is
+  environment bindings — a provider checkpoint token saved under §2.5 is
   evidence about a conversation rather than a way to reach a host, and is not
   one of these;
 - retrieval metadata and provider endpoints;
@@ -348,7 +348,7 @@ inside the Workspace. An XMD artifact may therefore contain source code,
 generated files or secrets that the workflow wrote into its Workspace.
 
 Export is a deliberate disclosure boundary. Operators treat the artifact with
-the confidentiality of the complete retained Workspace, not merely the
+the confidentiality of the complete saved Workspace, not merely the
 rendered log. The command states this in help and CI integrations do not publish
 an artifact more broadly than the source run's Workspace may be published.
 
@@ -368,7 +368,7 @@ session. Intrinsic forkability does not read it: an Agent turn is still
 `agent-state-unavailable`, and whether a destination can consume a particular
 bundle is decided by artifact-backed fork rather than by inspection.
 
-Completed external effects replay from their retained records and do not contact
+Completed external effects replay from their saved records and do not contact
 their providers. An interrupted or otherwise unsettled external effect is
 forkable only when the existing reconciliation contract establishes a safe
 continuation. A checkpoint that cannot establish it is
@@ -385,7 +385,7 @@ before any discoverable new run exists.
 ### 4.1 Canonical artifact manifest
 
 Every artifact carries one versioned artifact manifest. It canonically
-enumerates all semantic records and retained bytes in the artifact, including
+enumerates all semantic records and saved bytes in the artifact, including
 their kinds, logical identities, lengths and content hashes. Ordering and value
 encoding are part of the manifest version. Physical SQLite page order, free
 space, indexes and host path are not.
@@ -450,7 +450,7 @@ re-encoded. Content with no text meaning is `bytes`.
 
 #### 4.1.2 The version 1 inventory is closed
 
-Version 1 enumerates every XMD-owned semantic record and retained byte in these
+Version 1 enumerates every XMD-owned semantic record and saved byte in these
 groups, and admits nothing else:
 
 - the artifact frontier: the source run id, the final committed event id when
@@ -458,23 +458,23 @@ groups, and admits nothing else:
 - the workflow run record as `workflow-run`, carrying the storage definition
   and the `WorkflowRun`, without definition retrieval metadata, a `base` or a
   pinned commit;
-- every document-execution record, in its retained order;
+- every document-execution record, in its saved order;
 - the prior workflow-fork lineage, when the source run was itself a fork;
 - every journal row in append order: its event id, the exact filtered protocol
   record, its Workspace-root association, and its inherited provenance when it
   has one. The authored source position lives inside the record and is
-  validated from it rather than projected beside it, and so does every retained
+  validated from it rather than projected beside it, and so does every saved
   external-effect request, identity and filtered result;
-- every retained Workspace root, its exact canonical manifest bytes, and its
+- every saved Workspace root, its exact canonical manifest bytes, and its
   declared root-to-manifest and root-to-blob references;
-- every retained DOFS manifest record and its exact encoded bytes, and every
-  retained blob record and its exact bytes, that those roots require;
+- every saved DOFS manifest record and its exact encoded bytes, and every
+  saved blob record and its exact bytes, that those roots require;
 - every Workspace Repository and Worktree creation record, carrying the
   credential-free locator and the logical Workspace checkout path — never
   retrieval metadata or a host checkout path;
 - every suspension-answer record, with its request identity, its pending or
   consumed state, and its timestamps;
-- every retained workflow Agent session mapping and its compatibility
+- every saved workflow Agent session mapping and its compatibility
   attributes, without any provider-owned conversation store or session
   directory;
 - in a finalized artifact, one `agent-session-portability` record as
@@ -483,7 +483,7 @@ groups, and admits nothing else:
   key for every portable one (§2.5). Both take part in the manifest and the
   artifact identity; neither is a profile marker, and no other Agent
   portability kind exists; and
-- the workflow definition source closure, one pair per retained source:
+- the workflow definition source closure, one pair per saved source:
 
   - `definition-source-entry` is `canonical-json` under the canonical JSON string
     of the source's logical path, containing exactly the members `path`,
@@ -555,7 +555,7 @@ An XMD reader validates, in order:
 4. exact structural recognition with no undeclared schema objects;
 5. the artifact manifest and XMD artifact identity; and
 6. the workflow, journal, Workspace and definition invariants used for a live
-   retained snapshot.
+   saved snapshot.
 
 No status, history row or Workspace byte is returned before complete
 recognition succeeds. A foreign SQLite database, live run database, newer
@@ -580,15 +580,15 @@ Export refuses without producing the target when:
 - another workflow executor holds its lock;
 - a consistent committed frontier cannot be read;
 - the workflow definition source cannot be obtained and authenticated: the
-  retained manifest or content is missing, or disagrees with the descriptor;
-- any retained state required by the artifact manifest is unreadable;
+  saved manifest or content is missing, or disagrees with the descriptor;
+- any saved state required by the artifact manifest is unreadable;
 - the target exists, lacks the `.xmd` extension or cannot be published
   atomically; or
 - provider-private temporary cleanup fails before publication.
 
 Publication is the commit point. Cleanup of the one private entry that remains
 after it cannot invalidate or roll back the committed artifact: it is reported
-as a retained leftover beside a successful export.
+as a saved leftover beside a successful export.
 
 Inspection refuses without a partial result when recognition, manifest
 verification or §2.5 profile recognition fails. Profile recognition runs after
@@ -605,7 +605,7 @@ Fork refuses before creating discoverable run storage when:
   at the selected frontier.
 
 Diagnostics name the artifact path, categorical condition and non-secret
-identities needed to act. They do not quote retained file bytes, journal values,
+identities needed to act. They do not quote saved file bytes, journal values,
 credentials or retrieval metadata.
 
 ## 7. Structural acceptance checklist
@@ -616,7 +616,7 @@ Architecture review freezes these invariants before implementation:
    run ID.
 2. Export chooses one committed frontier while holding the source executor lock
    and leaves the source unchanged.
-3. The artifact contains the complete retained XMD state and authenticated
+3. The artifact contains the complete saved XMD state and authenticated
    workflow definition source closure required by this specification.
 4. Every reader validates the whole artifact manifest before returning a
    partial answer and never mutates or migrates the file.
@@ -639,7 +639,7 @@ Architecture review freezes these invariants before implementation:
 | Contract | Status at this design revision |
 | --- | --- |
 | XMD artifact terminology and structural boundary | specified in `architecture.md`; built |
-| `xmd workflow export` | specified; built, Deno provider only. A run exports from its own retained source, so export reaches no repository |
+| `xmd workflow export` | specified; built, Deno provider only. A run exports from its own saved source, so export reaches no repository |
 | the artifact format | specified; the manifest version, identity domain, closed inventory, source entry/content pairs and semantic verifier are built, Deno provider only |
 | artifact status/history and manifest verification | specified; built, Deno provider only. `inspectArtifact()` and `historyArtifact()` are sibling lifecycle operations, and history answers with an envelope |
 | version 1 Agent session portability evidence | specified; the two content kinds, the closed union and the complete post-identity profile verifier are built. Production export still emits merged-legacy V1, no provider bundle capture exists, and inspection carries none of it |

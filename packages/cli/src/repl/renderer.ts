@@ -75,7 +75,7 @@ export interface ReplTarget {
   readonly bounds: ReplBounds;
 }
 
-/** Where everything landed. Immutable, and retained with its frame. */
+/** Where everything landed. Immutable, and saved with its frame. */
 export interface ReplFrameMap {
   /** In draw order, so a later entry is drawn over an earlier one. */
   readonly targets: readonly ReplTarget[];

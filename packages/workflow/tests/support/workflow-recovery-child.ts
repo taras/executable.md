@@ -57,7 +57,7 @@ function hot(path: string): void {
     .get();
   const root = anchor?.["root"];
   if (typeof root !== "string") {
-    throw new Error("the run has no retained event to anchor uncommitted rows to");
+    throw new Error("the run has no saved event to anchor uncommitted rows to");
   }
 
   database.exec("BEGIN IMMEDIATE");

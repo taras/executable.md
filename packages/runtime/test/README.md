@@ -211,7 +211,7 @@ is a real consumer that reads it. A substituted provider that ignores it makes
 an authored `fetch(url).expect()` succeed on a 404.
 
 Count what the provider was asked to perform separately from what a document
-bound or a journal retained: those three can agree while the number of requests
+bound or a journal saved: those three can agree while the number of requests
 is wrong. Middleware that answers without delegating performs no request at all,
 which is substitution rather than reach.
 

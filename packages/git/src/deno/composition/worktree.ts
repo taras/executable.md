@@ -86,7 +86,7 @@ function* retainWorktree(
   repository: StoredRepository,
 ): Operation<Json> {
   const checkoutPath = worktreeCheckoutPath(request.repositoryName, request.name);
-  // Every retained path this effect will materialize, agreed before any of them
+  // Every saved path this effect will materialize, agreed before any of them
   // is joined to a host root: the repository's own, and each sibling's.
   const repositoryPath = agreedRepository(
     repository.record,
@@ -100,7 +100,7 @@ function* retainWorktree(
     const root = yield* host.useDirectory();
     const git = gitSession(host, root);
 
-    // Every retained worktree is materialized beside the repository, not only
+    // Every saved worktree is materialized beside the repository, not only
     // the one being added. Git decides what a repository's worktrees are by
     // reading `.git/worktrees` and checking that each still exists; a sibling
     // left unmaterialized would look abandoned, and the repository this effect
@@ -214,7 +214,7 @@ export function* prepareWorktreeAttachment(
     throw stale(subject, "checkout");
   }
 
-  // Every retained sibling is not needed here: reading HEAD does not consult
+  // Every saved sibling is not needed here: reading HEAD does not consult
   // `.git/worktrees`, and this worktree's own pair is what has to resolve.
   const repositoryDirectory = yield* exportTree(
     workspace.filesystem,
@@ -232,12 +232,12 @@ export function* prepareWorktreeAttachment(
  *
  * A worktree's identity is its Repository's identity and its own place inside
  * it, so the origin and the object format are read through the shared
- * administration — and *that* is the thing worth proving: the checkout retained
+ * administration — and *that* is the thing worth proving: the checkout saved
  * for this worktree has to be a worktree of the Repository this run says it
  * belongs to. Git answers that directly, because `--git-common-dir` resolves
  * through the administration pair to the repository the worktree is linked to.
  * A worktree of some other repository, or a whole repository of its own sitting
- * at the retained path, answers with a different directory.
+ * at the saved path, answers with a different directory.
  */
 export function* worktreeDisagreement(
   git: GitSession,

@@ -898,7 +898,7 @@ describe("Tier AF — Session configuration", () => {
     expect(trace.startedKeys).toEqual([["type", "agent", "session"]]);
   });
 
-  it("AF29: a setting nobody authored is retained as nothing at all", function* () {
+  it("AF29: a setting nobody authored is saved as nothing at all", function* () {
     const { result, events } = yield* runDoc(
       ['<Session name="review" model="gpt-5.4">', '<Prompt text="hi" />', "</Session>", ""].join(
         "\n",
@@ -1740,7 +1740,7 @@ describe("AFP — a publisher that never appends retains nothing", () => {
     // no journal holds.
     expect(result.ok).toBe(false);
     // And nothing durable describes the turn, so nothing can be presented as
-    // retained.
+    // saved.
     expect(
       events.filter((event) => event.type === "yield" && event.description.type === "agent_prompt"),
     ).toEqual([]);

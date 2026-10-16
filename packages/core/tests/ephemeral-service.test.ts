@@ -427,7 +427,7 @@ echo after-collision
     expect(lifecycle).toEqual({ starts: 2, stops: 2 });
   });
 
-  it("rejects incompatible retained component history through divergence", function* () {
+  it("rejects incompatible saved component history through divergence", function* () {
     const lifecycle = { starts: 0, stops: 0 };
     const executions: string[] = [];
     const history = new InMemoryStream();
@@ -447,16 +447,16 @@ echo after-provider
     // reader, and `executions` is the record that it ran (#441).
     expect(executions).toEqual(["echo after-provider"]);
 
-    const retained = withoutClose(history);
-    const before = retained.snapshot();
-    const beforeBytes = serialized(retained);
+    const saved = withoutClose(history);
+    const before = saved.snapshot();
+    const beforeBytes = serialized(saved);
     const replayExecutions: string[] = [];
     let failure: unknown;
     yield* scoped(function* () {
       yield* useTrackedExec(replayExecutions);
       yield* registerComponents([changingProvider(true)]);
       try {
-        yield* collect(yield* execute({ path: "doc.md", stream: retained }));
+        yield* collect(yield* execute({ path: "doc.md", stream: saved }));
       } catch (error) {
         failure = error;
       }
@@ -465,12 +465,12 @@ echo after-provider
     expect(failure).toBeInstanceOf(DivergenceError);
     expect(String(failure)).not.toContain("collides with a live binding");
     expect(replayExecutions).toEqual([]);
-    expect(retained.snapshot()).toEqual(before);
-    expect(serialized(retained)).toBe(beforeBytes);
+    expect(saved.snapshot()).toEqual(before);
+    expect(serialized(saved)).toBe(beforeBytes);
     expect(lifecycle).toEqual({ starts: 1, stops: 1 });
   });
 
-  it("rejects incompatible retained history when collision validation terminates the root", function* () {
+  it("rejects incompatible saved history when collision validation terminates the root", function* () {
     const lifecycle = { starts: 0, stops: 0 };
     const history = new InMemoryStream();
     yield* useServiceStub(Object.freeze({ hostname: SERVICE_HOSTNAME, port: 40_103 }), lifecycle);
@@ -480,14 +480,14 @@ echo after-provider
     yield* registerComponents([changingProvider(false)]);
     yield* collect(yield* execute({ path: "doc.md", stream: history }));
 
-    const retained = withoutClose(history);
-    const before = retained.snapshot();
-    const beforeBytes = serialized(retained);
+    const saved = withoutClose(history);
+    const before = saved.snapshot();
+    const beforeBytes = serialized(saved);
     let failure: unknown;
     yield* scoped(function* () {
       yield* registerComponents([changingProvider(true)]);
       try {
-        yield* collect(yield* execute({ path: "doc.md", stream: retained }));
+        yield* collect(yield* execute({ path: "doc.md", stream: saved }));
       } catch (error) {
         failure = error;
       }
@@ -499,18 +499,18 @@ echo after-provider
     }
     expect(failure.cause).toBeInstanceOf(LiveBindingCollisionError);
     expect(String(failure)).not.toContain("collides with a live binding");
-    expect(retained.snapshot()).toEqual(before);
-    expect(serialized(retained)).toBe(beforeBytes);
+    expect(saved.snapshot()).toEqual(before);
+    expect(serialized(saved)).toBe(beforeBytes);
     expect(lifecycle).toEqual({ starts: 1, stops: 1 });
 
-    yield* collect(yield* execute({ path: "doc.md", stream: retained }));
-    expect(retained.snapshot().slice(0, before.length)).toEqual(before);
+    yield* collect(yield* execute({ path: "doc.md", stream: saved }));
+    expect(saved.snapshot().slice(0, before.length)).toEqual(before);
     expect(
-      retained
+      saved
         .snapshot()
         .filter((event) => event.type === "yield" && event.description.type === "eval"),
     ).toHaveLength(1);
-    expect(retained.snapshot().at(-1)?.type).toBe("close");
+    expect(saved.snapshot().at(-1)?.type).toBe("close");
   });
 
   it("rejects ephemeral exports that collide with durable names before execution", function* () {

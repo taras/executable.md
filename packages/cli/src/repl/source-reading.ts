@@ -18,7 +18,7 @@
  * ## Static syntax is not execution
  *
  * `inspectSource` says where the executable elements of a text are written. It
- * says nothing about whether any of them ran: a retained prefix shows the same
+ * says nothing about whether any of them ran: a saved prefix shows the same
  * elements it always showed, and a cold process reconstructs no phase at all.
  * So an element acquires a phase only from an observation actually attributed
  * to it — matched on this entry, its lineage and its recorded source position —
@@ -166,11 +166,11 @@ function caption(key: string, section: ReplReadingSection): ReplReadingLine {
 /** What a reading is being built for. */
 export interface ReplReadingRequest {
   readonly entry: ReplEntry;
-  /** This session's observations, or an empty reading for a retained prefix. */
+  /** This session's observations, or an empty reading for a saved prefix. */
   readonly lifecycle: ReplLifecycleReading;
   /** Text a run still going has emitted, or empty. */
   readonly live: string;
-  /** Whether this reading is a retained position rather than the live head. */
+  /** Whether this reading is a saved position rather than the live head. */
   readonly inspected: boolean;
 }
 
@@ -193,7 +193,7 @@ export function entryReading(request: ReplReadingRequest): ReplReading {
  *
  * Four readings, and exactly one of them is true at a time. Live text is
  * labelled as live because it is still arriving and the reader must not take a
- * partial document for a finished one; a retained final result replaces it once
+ * partial document for a finished one; a saved final result replaces it once
  * and stops being labelled. A root that settled having rendered nothing is not
  * an absence of information — it is the outcome, which is said instead.
  */
@@ -580,7 +580,7 @@ class Build {
    * What has actually been observed of this element, or nothing.
    *
    * Matched on the entry's own lifecycle reading, the recorded source position
-   * and the fragment that position belongs to. A retained prefix has no
+   * and the fragment that position belongs to. A saved prefix has no
    * observations at all, so every element in it reads as unobserved — which is
    * the truth: static syntax does not prove execution.
    */

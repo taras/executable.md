@@ -34,7 +34,7 @@
  * `withWorkflowWorkspace()` is therefore the whole of what a host may install.
  * The pieces are not published separately: the Files provider alone would
  * resolve a document's paths against whatever working directory the host adapter
- * answers with, and a host path resolved that way is retained in the durable
+ * answers with, and a host path resolved that way is saved in the durable
  * effects a run replays from.
  */
 
@@ -79,7 +79,7 @@ export interface WorkflowWorkspaceOptions {
    * The further providers this host attaches to the run's Workspace.
    *
    * Where a feature outside this package installs what its own vocabulary
-   * needs — the Repository and Git providers, the retained lifecycles for a
+   * needs — the Repository and Git providers, the saved lifecycles for a
    * service-reaching effect, its component registrations. They are installed
    * here, in authored order, after the Files provider and the logical working
    * directory and before `<Elicit>`, because that is the position the run's own

@@ -43,8 +43,8 @@ import {
   raised,
   removeWorkspacePath,
   replaceWorkspaceTree,
-  retainedRepositories,
-  retainedWorktrees,
+  savedRepositories,
+  savedWorktrees,
   runDocument,
   subcommands,
   survivingRoots,
@@ -70,14 +70,14 @@ import {
 /**
  * Substituting one repository's checkout for another's.
  *
- * The bytes at a retained path are not the run's word by the time they are read
+ * The bytes at a saved path are not the run's word by the time they are read
  * back. A valid checkout of a different repository is a perfectly readable Git
  * repository, so attachment that asked only "can Git read this" accepted one
- * identity's retained history against another identity's content: the document
+ * identity's saved history against another identity's content: the document
  * carried on restoring recorded reads that no longer described what was there,
  * and every later live effect ran against the substitute.
  *
- * Each of these builds a real, valid checkout that differs from the retained one
+ * Each of these builds a real, valid checkout that differs from the saved one
  * in exactly one dimension of creation identity, so a passing test says which
  * check caught it rather than that something did.
  */
@@ -99,12 +99,12 @@ describe("workflow Worktree substituted checkouts", () => {
       ].join("\n");
 
       yield* runDocument(database, document);
-      const [worktreeBefore] = yield* retainedWorktrees(database, "project");
+      const [worktreeBefore] = yield* savedWorktrees(database, "project");
       const checkout = worktreeBefore?.checkoutPath ?? "";
 
       // A whole repository of its own, cloned from the same remote, standing
-      // where a linked worktree was retained. Its origin and object format both
-      // agree; what it is not is a worktree of the retained Repository.
+      // where a linked worktree was saved. Its origin and object format both
+      // agree; what it is not is a worktree of the saved Repository.
       const counting = countingHost();
       const staged = yield* substitute(counting.host, checkout, function* (target, home) {
         git(["clone", "--no-hardlinks", "--", a.locator, target], home, home);
@@ -122,7 +122,7 @@ describe("workflow Worktree substituted checkouts", () => {
       expect(String(rendered)).not.toContain("child marker");
       expect(subcommands(counting.counters)).not.toContain("clone");
       expect(subcommands(counting.counters)).not.toContain("worktree");
-      expect(yield* retainedWorktrees(database, "project")).toEqual([worktreeBefore]);
+      expect(yield* savedWorktrees(database, "project")).toEqual([worktreeBefore]);
     });
   });
 });

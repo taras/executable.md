@@ -13,12 +13,12 @@
  * providers that need no such turn go straight from `prepared` to `detached`,
  * and a launch on them still costs zero model turns.
  *
- * Each phase a provider completes is retained by the invocation that issued
+ * Each phase a provider completes is saved by the invocation that issued
  * the launch, through the coordinator core delivers to the selected provider.
  * The provider hands each phase's work over rather than performing it and
  * reporting afterwards, so a replay of that phase never runs the work again: a
  * resumed launch reuses the provider-native identity the first attempt
- * retained instead of creating a replacement session.
+ * saved instead of creating a replacement session.
  *
  * That is what keeps operational ownership with the launch invocation. Public
  * middleware composed around the Agent Api receives a request and may refuse
@@ -26,8 +26,8 @@
  * it returns settles nothing.
  *
  * `launched` is the live state between the spawn and the child's exit. It is
- * deliberately not a retained record: an interrupted native process leaves
- * `detached` as the last retained phase, and resuming reattaches the native UI
+ * deliberately not a saved record: an interrupted native process leaves
+ * `detached` as the last saved phase, and resuming reattaches the native UI
  * to that same provider session.
  */
 
@@ -54,13 +54,13 @@ export type InstructionReconciliation = "installed" | "resumed" | "replaced";
 /**
  * Why a launch stopped, in terms an author can act on.
  *
- * The class is stable and retained; the message is diagnostic. Neither
+ * The class is stable and saved; the message is diagnostic. Neither
  * carries provider credentials, adapter settings, executable paths, argv,
  * environment, temporary paths, or native transcript content.
  *
  * `directory-authority` means the launch could not use the directory it was
  * asked for. It keeps that spelling because it is a serialized durable value: a
- * retained record written by an earlier build is parsed by an exact match, so
+ * saved record written by an earlier build is parsed by an exact match, so
  * renaming it would stop those records from replaying.
  */
 export type LaunchFailureClass =
@@ -118,7 +118,7 @@ export interface LaunchFailure {
  *   supplied it unchanged. Nothing the provider says can replace it, which is
  *   the property that lets a native UI be handed a session to create.
  *
- * Retained rather than inferred, because the two are indistinguishable after
+ * Saved rather than inferred, because the two are indistinguishable after
  * the fact: a returned identity and a supplied one are both just a string in
  * the record.
  */
@@ -132,7 +132,7 @@ export type IdentityProvenance = "provider-returned" | "client-allocated";
  * identity and disagree silently about what it names, so a session whose build
  * cannot be reproduced is refused rather than resumed.
  *
- * What is retained is deliberately not a path: a path says where a build was,
+ * What is saved is deliberately not a path: a path says where a build was,
  * which stops being true, while a version and a digest say which build it was,
  * which does not. That also keeps the record free of host layout.
  */
@@ -148,7 +148,7 @@ export interface ExecutableBuildBindingV1 {
 /**
  * Whether two bindings name the same build.
  *
- * Equality is over what was retained, so the same build reached through a
+ * Equality is over what was saved, so the same build reached through a
  * different path is compatible and a different build at the same path is not.
  */
 export function sameExecutableBuild(
@@ -171,7 +171,7 @@ export function sameExecutableBuild(
  * Exactly one XMD-owned turn closes that gap, and it is planned in the
  * preparation rather than decided later: the version says which exact prompt
  * will be sent, and the request id is fixed here so a replay that finds the
- * turn already retained is looking for the same turn rather than a new one.
+ * turn already saved is looking for the same turn rather than a new one.
  *
  * Present only for a provider that needs it, and only for a conversation this
  * launch created. Nothing else acquires a turn by being launched.
@@ -182,7 +182,7 @@ export interface MaterializationPlan {
   /** The request id the turn runs under, immutable once `prepared` is kept. */
   readonly requestId: string;
   /**
-   * The exact text that will be sent, retained before it is sent.
+   * The exact text that will be sent, saved before it is sent.
    *
    * A version names a prompt; this is the prompt. Keeping the bytes with the
    * plan is what lets a reader of the journal see what an XMD-owned turn said
@@ -195,7 +195,7 @@ export interface MaterializationPlan {
  * What the provider reported about what the materialization turn cost.
  *
  * Every field is optional and a missing one means the provider reported
- * nothing, which is displayed and retained as exactly that. Nothing here reads
+ * nothing, which is displayed and saved as exactly that. Nothing here reads
  * absence as zero: a turn whose token count was never reported is not a free
  * turn, and saying so would be inventing an observation.
  */
@@ -213,7 +213,7 @@ export interface MaterializationUsage {
 /**
  * The turn that made a fresh conversation openable, and what it cost.
  *
- * Retained as its own phase because it sits between two facts that must not be
+ * Saved as its own phase because it sits between two facts that must not be
  * confused: the session exists (`prepared`) and ACP has let go of it
  * (`detached`). A launch interrupted after the turn must never spend a second
  * one, and the only thing that can say the first was spent is a record of it.
@@ -221,7 +221,7 @@ export interface MaterializationUsage {
  * `turn` is the provider's own name for the completed turn, carried across
  * unchanged. It is the evidence the exchange reached the backend rather than
  * merely being written to a socket, and it is the same checkpoint the durable
- * prompt retained — which is what lets this record be rebuilt from that prompt
+ * prompt saved — which is what lets this record be rebuilt from that prompt
  * when a run stopped between the two.
  */
 export interface MaterializedLaunchRecord {
@@ -242,14 +242,14 @@ export interface MaterializedLaunchRecord {
   /** How long the turn took, in milliseconds. Absent when no turn was run. */
   durationMs?: number;
   usage: MaterializationUsage;
-  /** The assistant's full response text, retained and displayed unabridged. */
+  /** The assistant's full response text, saved and displayed unabridged. */
   response: string;
   stopReason?: string;
   failure?: LaunchFailure;
 }
 
 /**
- * What one provider retained about the session it prepared.
+ * What one provider saved about the session it prepared.
  *
  * `nativeSessionId` is asserted by the provider. An ACP session id, an ACPX
  * record id, and a provider-native session id are three different identities,
@@ -261,7 +261,7 @@ export interface MaterializedLaunchRecord {
  * so rather than asserting a name nothing would resume, and the accepted turn
  * asserts the identity instead.
  *
- * `instructions` is the prepared text itself, and it is retained beside its
+ * `instructions` is the prepared text itself, and it is saved beside its
  * digest — the execution's secret gate runs before this record persists, so
  * prepared text carrying a credential-shaped value never reaches the journal
  * and never reaches a native UI either.
@@ -276,7 +276,7 @@ export interface PreparedLaunchRecord {
   instructionChannel: string;
   instructionReconciliation: InstructionReconciliation;
   /**
-   * Retained rather than derived from the provider, because a client-allocated
+   * Saved rather than derived from the provider, because a client-allocated
    * identity a reader cannot tell from a returned one is an identity a replay
    * could silently replace.
    */
@@ -296,7 +296,7 @@ export interface PreparedLaunchRecord {
    * The one turn this launch owes before the native UI can open, when it owes
    * one. Absent means no turn is owed and none may be taken.
    *
-   * Retained with the preparation so the plan is fixed before anything is
+   * Saved with the preparation so the plan is fixed before anything is
    * spent: a replay reads which prompt and which request id the first attempt
    * committed to, rather than choosing them again.
    */

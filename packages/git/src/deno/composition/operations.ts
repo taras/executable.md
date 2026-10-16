@@ -12,7 +12,7 @@
  * A document says which checkout it means by where it writes the element: the
  * enclosing `<Repository>` supplies the record, the contextual working directory
  * supplies the place. Neither is trusted. The record is compared member for
- * member against the row this run retained under that name, every retained row
+ * member against the row this run saved under that name, every saved row
  * is held to the identity that names it, and the working directory has to be a
  * place inside one of the checkouts those rows carry.
  *
@@ -26,8 +26,8 @@
  * A checkout is what the operation belongs to; the working directory is where
  * inside it the element was written. `<Dir path="packages/core">` inside a
  * Repository still operates on that Repository — it is where Git runs, not what
- * Git runs on. So the two travel separately: identity comes from the retained
- * row, and the place is the retained checkout's own path with the rest of the
+ * Git runs on. So the two travel separately: identity comes from the saved
+ * row, and the place is the saved checkout's own path with the rest of the
  * directory joined onto it, proven to be a real directory inside the export
  * before any command is given it.
  *
@@ -42,7 +42,7 @@
  *
  * ## Verified before, evidence after
  *
- * Between materialization and native Git, the retained identity is proven
+ * Between materialization and native Git, the saved identity is proven
  * against what was exported: placement, origin, object format, creation commit,
  * and — for a linked worktree — that it really is a worktree of the Repository
  * it names. Then the checkout's branch, commit, HEAD tree and index tree are
@@ -101,7 +101,7 @@ import { worktreeDisagreement } from "./worktree.ts";
 /**
  * The digest one Git operation's durable identity is built from.
  *
- * Injective, because the values it covers include a whole retained record and a
+ * Injective, because the values it covers include a whole saved record and a
  * document's own strings, and durable identity is what decides whether a
  * recorded result may be handed back for an invocation. Two different
  * observations that digested alike would let a replay return a transition
@@ -124,7 +124,7 @@ import { worktreeDisagreement } from "./worktree.ts";
  * units the encoding writes.
  *
  * This is deliberately its own encoding rather than a change to
- * `fingerprintOf()`, whose digests are already part of retained Repository and
+ * `fingerprintOf()`, whose digests are already part of saved Repository and
  * Worktree identity in this run's history.
  */
 export function gitOperationFingerprint(values: readonly (string | null)[]): string {
@@ -172,10 +172,10 @@ export interface GitCheckout {
 }
 
 /**
- * Which retained checkout one operation runs in, and what travels with it.
+ * Which saved checkout one operation runs in, and what travels with it.
  *
  * Produced inside a Workspace transaction and consumed outside one, because the
- * two halves need different things: choosing a checkout reads retained rows,
+ * two halves need different things: choosing a checkout reads saved rows,
  * and working in it reads a host tree. Both local Git effects and Push select
  * this way, so the selection is a value rather than a step inside either.
  */
@@ -195,12 +195,12 @@ function refuseAdmission(operation: string, reason: string): never {
 }
 
 /**
- * Which retained checkout the observed Repository and working directory select.
+ * Which saved checkout the observed Repository and working directory select.
  *
  * Every row read here is held to the identity that names it before it is used
  * for anything, so a placement or a locator that no longer agrees is found
  * before a host path is joined and before Git exists in the story. The observed
- * record is then compared with the retained one member for member: a name can
+ * record is then compared with the saved one member for member: a name can
  * only be looked up, and looking one up is what a replaced context would rely
  * on.
  */
@@ -219,7 +219,7 @@ export function selectGitCheckout(
   if (!sameRepositoryRecord(stored.record, observed)) {
     refuseAdmission(
       operation,
-      "the Repository it observed is not the one this run retained under that name",
+      "the Repository it observed is not the one this run saved under that name",
     );
   }
 
@@ -294,7 +294,7 @@ export function* checkoutState(
 /**
  * The real directory inside the export the element was written in.
  *
- * Proven rather than assumed, at the one place the retained path and the host
+ * Proven rather than assumed, at the one place the saved path and the host
  * root are joined. The checkout root already resolves to itself; what is added
  * here is the rest of the working directory, which may name anything a checkout
  * contains — including a tracked symbolic link, which the operating system would
@@ -349,12 +349,12 @@ function* entry(path: string): Operation<Stats | undefined> {
 }
 
 /**
- * That the exported checkout is still the one the retained record names.
+ * That the exported checkout is still the one the saved record names.
  *
  * Creation identity, read back out of the bytes: where it came from, how it
  * names objects, the commit it was created at, and — for a linked worktree —
  * that it is a worktree of the Repository it belongs to. A disagreement is stale
- * retained state, which is fatal: nothing published, nothing repaired.
+ * saved state, which is fatal: nothing published, nothing repaired.
  */
 function* disagreement(
   git: GitSession,
@@ -373,7 +373,7 @@ function* disagreement(
   }
 }
 
-/** Where one retained Repository/Worktree family landed on the host. */
+/** Where one saved Repository/Worktree family landed on the host. */
 export interface ExportedCheckouts {
   readonly repositoryDirectory: string;
   /** The selected checkout's own directory: the Repository's, or a Worktree's. */
@@ -382,7 +382,7 @@ export interface ExportedCheckouts {
 }
 
 /**
- * Write the whole retained family into a host tree Git can be pointed at.
+ * Write the whole saved family into a host tree Git can be pointed at.
  *
  * The whole family, even when the operation runs in one checkout of it. Git
  * decides what a repository's worktrees are by reading its own record of them,
@@ -432,7 +432,7 @@ export function* exportCheckoutFamily(
 }
 
 /**
- * The exported checkout, once it is usable and once it is the retained one.
+ * The exported checkout, once it is usable and once it is the saved one.
  *
  * Three things in one order, and the order is the point. The administration is
  * localized first, because until it is, a linked worktree's pointers still name

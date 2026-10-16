@@ -39,7 +39,7 @@ import { execute } from "../src/execute.ts";
 import { executeInstalled } from "../host.ts";
 import type { ExecutionInstallation, WorkflowBundleComponent } from "../host.ts";
 import { registerComponents } from "../src/components/registration.ts";
-import { retainedSource } from "../src/root-source.ts";
+import { savedSource } from "../src/root-source.ts";
 import type { ComponentDefinition, FunctionComponentDefinition } from "../src/types.ts";
 
 const ROOT_PATH = "workflows/loop.md";
@@ -79,14 +79,14 @@ function* run(
   stream: InMemoryStream = new InMemoryStream(),
 ): Operation<Json> {
   return yield* collect(
-    yield* executeInstalled({ ...retainedSource(ROOT_PATH, source), stream, includes: [] }, [
+    yield* executeInstalled({ ...savedSource(ROOT_PATH, source), stream, includes: [] }, [
       installation(components),
       ...extra,
     ]),
   );
 }
 
-/** Whether one retained event is a component import. */
+/** Whether one saved event is a component import. */
 function isImport(event: DurableEvent): boolean {
   return event.type === "yield" && event.description.type === "import_component";
 }
@@ -126,7 +126,7 @@ function* attempted(
 ): Operation<{ readonly failure: string; readonly output: string }> {
   const execution = yield* executeInstalled(
     {
-      ...retainedSource(ROOT_PATH, source),
+      ...savedSource(ROOT_PATH, source),
       stream: new InMemoryStream(),
       includes: [],
     },
@@ -174,7 +174,7 @@ describe("Tier WB — a bundled name resolves to its pinned source", () => {
 
   // WB3's `<Parse>` is form-insensitive, so it cannot show this: a
   // form-sensitive core component's invocation is bound to the exact definition
-  // object expansion invokes, and under a bundle that object is the retained
+  // object expansion invokes, and under a bundle that object is the saved
   // copy closed authorization answers with — not the one the resolver produced.
   // A selection recorded against only the resolver's object leaves a genuine
   // bundled `<File />` refused as unselected.
@@ -502,7 +502,7 @@ describe("Tier WB — public import middleware cannot widen a bundle", () => {
       });
       return yield* collect(
         yield* execute({
-          ...retainedSource(ROOT_PATH, "<Anything />\n"),
+          ...savedSource(ROOT_PATH, "<Anything />\n"),
           stream: new InMemoryStream(),
           includes: [],
         }),

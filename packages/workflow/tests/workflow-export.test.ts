@@ -192,7 +192,7 @@ describe("exporting a workflow run", () => {
  * compared against the run's own live filesystem, walked path by path. The
  * definition is compared against the objects Git holds. The Repository and
  * Worktree rows are compared against the remote the run cloned and the commit
- * its own history records making. The retained history is compared against the
+ * its own history records making. The saved history is compared against the
  * journal the run committed.
  *
  * The awkward cases are deliberate: several Workspace roots rather than one, a
@@ -283,7 +283,7 @@ interface WorkspaceNode {
  * Every path the run's live Workspace holds, read through its own filesystem.
  *
  * The independent side of the Workspace comparison. This walks DOFS directly —
- * `lstat`, `readlink`, `readFile` — rather than reading the retained root
+ * `lstat`, `readlink`, `readFile` — rather than reading the saved root
  * manifests, which is the reader an export already uses: comparing a manifest
  * against itself would agree however wrong both were.
  */
@@ -327,7 +327,7 @@ function base64(content: Uint8Array): string {
   return Buffer.from(content).toString("base64");
 }
 
-/** The same description, taken from one retained Workspace root of an artifact. */
+/** The same description, taken from one saved Workspace root of an artifact. */
 function artifactWorkspace(
   artifact: VerifiedXmdArtifact,
   rootId: string,
@@ -356,7 +356,7 @@ function artifactWorkspace(
   return { nodes, entries };
 }
 
-/** One retained effect's durable description type, in journal order. */
+/** One saved effect's durable description type, in journal order. */
 function effectTypes(events: readonly DurableEvent[]): string[] {
   return events
     .filter((event) => event.type === "yield")
@@ -364,8 +364,8 @@ function effectTypes(events: readonly DurableEvent[]): string[] {
     .filter((type) => type.startsWith("workspace_"));
 }
 
-/** What the run's own history says one effect retained. */
-function retainedRecord(events: readonly DurableEvent[], type: string): Record<string, unknown> {
+/** What the run's own history says one effect saved. */
+function savedRecord(events: readonly DurableEvent[], type: string): Record<string, unknown> {
   const event = events.find((entry) => entry.type === "yield" && entry.description.type === type);
   if (event === undefined || event.result.status !== "ok") {
     throw new Error(`the run journaled no successful ${type}`);
@@ -374,7 +374,7 @@ function retainedRecord(events: readonly DurableEvent[], type: string): Record<s
 }
 
 describe("exporting a run that really ran", () => {
-  it("XE7 seals every retained family of one representative run", function* () {
+  it("XE7 seals every saved family of one representative run", function* () {
     const store = yield* useStorageRoot();
     // A remote with the entries a summary would lose: a committed symbolic
     // link and a file whose executable bit is content as far as Git is
@@ -537,15 +537,15 @@ describe("exporting a run that really ran", () => {
       requestedBranch: "review/1",
       requestedBase: null,
       // The commit this run's own history records making, a moment earlier.
-      creationCommit: retainedRecord(history, "workspace_git_commit")["commit"],
+      creationCommit: savedRecord(history, "workspace_git_commit")["commit"],
     });
     expect(artifact.worktrees[0]?.checkoutPath).toBe(
-      retainedRecord(history, "workspace_worktree")["checkoutPath"],
+      savedRecord(history, "workspace_worktree")["checkoutPath"],
     );
 
     const decode = (path: string): string | undefined => {
-      const retained = artifact.definition.sources.find((each) => each.path === path);
-      return retained === undefined ? undefined : new TextDecoder().decode(retained.bytes);
+      const saved = artifact.definition.sources.find((each) => each.path === path);
+      return saved === undefined ? undefined : new TextDecoder().decode(saved.bytes);
     };
 
     expect(artifact.definition.definition.entrypoint).toBe(repository.root.path);

@@ -25,7 +25,7 @@ import {
   collect,
   Elicitation,
   inlineSource,
-  retainedSource,
+  savedSource,
   useTempFileCompiler,
 } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
@@ -67,7 +67,7 @@ import { BOLD, REPL_PALETTE } from "../src/repl/presentation-style.ts";
 import {
   REFERENCE_ARCHIVE,
   REFERENCE_BOLD,
-  RETAINED,
+  SAVED,
   SEMANTIC,
   SURFACE,
   SYNTAX,
@@ -209,10 +209,7 @@ function* runEntry(
 function* runHostEntry(physical: DurableStream, path: string, source: string): Operation<void> {
   const view = new EntrySegmentStream(physical);
   try {
-    const execution = yield* executeInstalled(
-      { ...retainedSource(path, source), stream: view },
-      [],
-    );
+    const execution = yield* executeInstalled({ ...savedSource(path, source), stream: view }, []);
     yield* collect(execution);
   } catch {
     // As above: how far it got is the record the catalog reads.
@@ -378,7 +375,7 @@ function reading(
   focused?: string,
 ): ReplView {
   // The navigation a session would publish for this reading: every position
-  // the file retained, with the head it is standing at. Derived from the
+  // the file saved, with the head it is standing at. Derived from the
   // model here because these cases build the model directly rather than
   // running a session.
   const resolved = viewFor(
@@ -450,7 +447,7 @@ function within(inner: ReplBounds, outer: ReplBounds): boolean {
  * Before #881 PR 2 this was a transcript record row — a fact about the event
  * that produced the output beside it. The transcript now holds the entry's
  * reading, so the subordinate reading is taken from a row that still carries
- * it: what the frame says where it has nothing retained to list.
+ * it: what the frame says where it has nothing saved to list.
  */
 function metadataKey(observed: Observed): string {
   const key = observed.keys.find((one) => one === "sessions:empty");
@@ -600,7 +597,7 @@ describe("REPL presentation: what one row's cells say it is", () => {
     // row is.
     expect(inkOfSpan(grid, first, said).foreground).toBe(REPL_PALETTE.output);
     expect(inkOfSpan(grid, first, said).foreground).not.toBe(REPL_PALETTE.success);
-    // And it is labelled as the retained result rather than as live text.
+    // And it is labelled as the saved result rather than as live text.
     expect(textOf(grid, placed(observed, "reading:caption:output"))).toContain("Output");
     expect(textOf(grid, placed(observed, "reading:caption:output"))).not.toContain("live");
 
@@ -1165,11 +1162,11 @@ describe("REPL presentation: what a drawer says it is showing", () => {
 
   it("D1: a recorded answer says so, and keeps the origin it came from", function* () {
     // The reference entry, which asks a question and is answered — so this
-    // history really holds a retained answer to inspect.
+    // history really holds a saved answer to inspect.
     const model = projected(yield* referenceEvents());
     const recorded = model.entries.flatMap((entry) => entry.scope.elicitations)[0];
     if (recorded === undefined) {
-      throw new Error("this history retained no answer to inspect");
+      throw new Error("this history saved no answer to inspect");
     }
     const presenter = yield* usePresenter(WIDE);
     const state = openingDrawer(selecting(stateWith({}), "entry-1"), {
@@ -1233,7 +1230,7 @@ describe("REPL presentation: what a drawer says it is showing", () => {
     expect(textOf(grid, placed(observed, "drawer:open")).trim()).toBe("History");
     const marker = model.checkpoints[0];
     if (marker === undefined) {
-      throw new Error("this history retained no position");
+      throw new Error("this history saved no position");
     }
     const row = placed(observed, `drawer:marker:${marker.marker}`);
     expect(inkOf(grid, row).foreground).toBe(REPL_PALETTE.historical);
@@ -1266,7 +1263,7 @@ describe("REPL presentation: what a drawer says it is showing", () => {
     const model = projected(events);
     const marker = model.checkpoints[0];
     if (marker === undefined) {
-      throw new Error("this history retained no position");
+      throw new Error("this history saved no position");
     }
 
     const inspected = yield* scoped(function* (): Operation<CellStyle> {
@@ -1718,7 +1715,7 @@ describe("REPL presentation: focus marks the row without repainting it", () => {
     // the cue that survives colour being thrown away.
     const selected = placed(observed, "entry:entry-1");
     for (let x = selected.x; x < selected.x + selected.width; x += 1) {
-      expect(grid.styleAt(x, selected.y).background).toBe(RETAINED.selectedSurface);
+      expect(grid.styleAt(x, selected.y).background).toBe(SAVED.selectedSurface);
     }
     expect(textOf(grid, selected)).toContain("*");
     expect(inkOf(grid, selected).foreground).toBe(SEMANTIC.tick);
@@ -2080,7 +2077,7 @@ describe("REPL presentation: the surfaces a reading is drawn on", () => {
     // Every cell of the rectangle is the drawer's, the unused ones included.
     const own: readonly number[] = [
       SURFACE.drawer,
-      RETAINED.selectedSurface,
+      SAVED.selectedSurface,
       SURFACE.field,
       SURFACE.input,
     ];

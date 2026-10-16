@@ -2,7 +2,7 @@
  * Tier TX — targeted document execution and replay (spec §5.4, §6.11).
  *
  * A projected document is not a rendering exercise: what it must prove is that
- * a skipped sibling *did not run*, that a retained element kept the identity it
+ * a skipped sibling *did not run*, that a saved element kept the identity it
  * has in a full run, and that a journal recorded against one section cannot be
  * resumed as another.
  *
@@ -200,7 +200,7 @@ describe("Tier TX — targeted execution", () => {
     expect(seen.names).toContain("inner");
   });
 
-  it("TX4: a retained element keeps the expansion ID it has in a full run", function* () {
+  it("TX4: a saved element keeps the expansion ID it has in a full run", function* () {
     const whole: Probes = { names: [], ids: [] };
     const targeted: Probes = { names: [], ids: [] };
     yield* run(inlineSource(SECTIONS), new InMemoryStream(), whole);
@@ -218,7 +218,7 @@ describe("Tier TX — targeted execution", () => {
    * full run — and seeding identity with the target string would break all
    * three at once.
    */
-  it("TX5: two different targets agree on a shared retained element", function* () {
+  it("TX5: two different targets agree on a shared saved element", function* () {
     const alpha: Probes = { names: [], ids: [] };
     const beta: Probes = { names: [], ids: [] };
     yield* run(inlineSource(SECTIONS, { target: "Alpha" }), new InMemoryStream(), alpha);
@@ -353,7 +353,7 @@ describe("Tier TX — targeted execution", () => {
     expect(text).not.toContain("<Return> requires");
   });
 
-  it("TX11: an invalid structure in the retained range fails before any effect", function* () {
+  it("TX11: an invalid structure in the saved range fails before any effect", function* () {
     const body = [
       "# Title",
       "",
@@ -1048,7 +1048,7 @@ describe("Tier TX — one read across check and replay", () => {
    *
    * Without a Close there is no completed-run shortcut, so the run replays the
    * import and then continues live — which is the shape that lets the guard and
-   * the replay consumer both reach the same retained event.
+   * the replay consumer both reach the same saved event.
    */
   function* partialJournal(target: string): Operation<DurableEvent[]> {
     const stream = new InMemoryStream();
@@ -1188,7 +1188,7 @@ describe("Tier TX — preamble boundary", () => {
 });
 
 /**
- * Tier TX — a retained terminal result needs the import that produced it.
+ * Tier TX — a saved terminal result needs the import that produced it.
  *
  * `durableRun` reuses a recorded Close before replaying anything, and the check
  * phase only ever sees the Yields a journal actually contains. A journal whose
@@ -1225,7 +1225,7 @@ describe("Tier TX — a terminal journal without its root import", () => {
     expect((error as Error).message).toBe(UNREADABLE_RECORD);
     expect((error as Error).cause).toBe(undefined);
     expect(isDocumentTargetError(error)).toBe(false);
-    // Never the retained Close's own outcome.
+    // Never the saved Close's own outcome.
     expect((error as Error).message).not.toContain("alpha content");
     expect(seen.names).toEqual([]);
     expect(stream.snapshot().length).toBe(before);
@@ -1495,7 +1495,7 @@ describe("Tier TX — a terminal result needs its own root import", () => {
 });
 
 /**
- * Tier TX — a detached retained value is still ordinary JSON.
+ * Tier TX — a detached saved value is still ordinary JSON.
  *
  * Detaching protects the journal; it does not restrict the document. A
  * replayed value a document goes on to update must behave as it did when the
@@ -1528,7 +1528,7 @@ describe("Tier TX — detached values stay mutable", () => {
    * A genuine partial replay: the binding is restored from the journal and then
    * written to by an iteration that runs live.
    *
-   * The first eval block is retained, so `state` comes back detached from the
+   * The first eval block is saved, so `state` comes back detached from the
    * journal. The second is dropped along with the terminal result, so the
    * update runs for real. A detached member that is not writable fails here.
    */
@@ -1716,7 +1716,7 @@ describe("Tier TX — a shifting terminal coroutine", () => {
       throw new Error("the run completed instead of failing");
     });
 
-    // Never Alpha's retained output, and never a partial answer either.
+    // Never Alpha's saved output, and never a partial answer either.
     expect((error as Error).message).toBe(UNREADABLE_RECORD);
     expect((error as Error).cause).toBe(undefined);
     expect((error as Error).message).not.toContain("alpha content");
@@ -1879,16 +1879,16 @@ describe("Tier TX — a terminal result cannot be replaced after admission", () 
  * The execution-owned gate validates a history and replay consumes it. Between
  * those, public `ReplayGuard` policy runs — `check`, then `admit`, then `decide`
  * during replay — and it is code any enclosing scope may install. Handing it the
- * retained events themselves would let it rewrite the root selection, the
+ * saved events themselves would let it rewrite the root selection, the
  * recorded content, an effect description, or a result *after* admission had
  * accepted them, which is exactly the enforcement the private gate exists to keep
  * out of public hands.
  *
  * Recorded before the fix, resuming a partial Alpha journal as Alpha with
- * `check` rewriting the retained root-import target to Beta: the run executed
+ * `check` rewriting the saved root-import target to Beta: the run executed
  * the Beta projection.
  */
-describe("Tier TX — guards observe a copy, not the retained history", () => {
+describe("Tier TX — guards observe a copy, not the saved history", () => {
   /** A partial Alpha journal: the recorded import, no terminal result. */
   function* partialAlpha(): Operation<InMemoryStream> {
     const complete = new InMemoryStream();
@@ -1953,7 +1953,7 @@ describe("Tier TX — guards observe a copy, not the retained history", () => {
     }
   }
 
-  it("TX72: check cannot rewrite the retained root target", function* () {
+  it("TX72: check cannot rewrite the saved root target", function* () {
     const outcome = yield* resume(yield* partialAlpha(), function* () {
       yield* ReplayGuard.around({
         *check([event], next) {
@@ -1967,7 +1967,7 @@ describe("Tier TX — guards observe a copy, not the retained history", () => {
     expectAlphaOnly(outcome);
   });
 
-  it("TX73: admit cannot rewrite the retained root target", function* () {
+  it("TX73: admit cannot rewrite the saved root target", function* () {
     const outcome = yield* resume(yield* partialAlpha(), function* () {
       yield* ReplayGuard.around({
         *admit([history], next) {
@@ -1983,7 +1983,7 @@ describe("Tier TX — guards observe a copy, not the retained history", () => {
     expectAlphaOnly(outcome);
   });
 
-  it("TX74: decide cannot rewrite the retained root target", function* () {
+  it("TX74: decide cannot rewrite the saved root target", function* () {
     const outcome = yield* resume(yield* partialAlpha(), function* () {
       yield* ReplayGuard.around({
         decide([event], next) {

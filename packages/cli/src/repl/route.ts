@@ -142,10 +142,10 @@ export interface ReplSelection {
   /** The innermost selected scope, which is the entry when only it was named. */
   readonly scope: ReplScope | undefined;
   /**
-   * The retained conversation the filter names, when the history holds it.
+   * The saved conversation the filter names, when the history holds it.
    *
    * None where no filter was asked for, and none where the key names a live
-   * conversation that has settled nothing yet — there is no retained group to
+   * conversation that has settled nothing yet — there is no saved group to
    * point at until one of its turns is appended.
    */
   readonly session: ReplAgentSession | undefined;
@@ -428,7 +428,7 @@ export function resolveLocation(
  *
  * At the live head a key may be one this process has started and nothing has
  * settled yet, which no history holds and only the process can say. At a
- * historical position it may only be one that prefix retained: a conversation
+ * historical position it may only be one that prefix saved: a conversation
  * that started after the position a reader is looking at had not happened yet,
  * and answering with it would show the present as the past.
  *
@@ -443,9 +443,9 @@ function selectConversation(
   if (route.session === undefined) {
     return Ok(undefined);
   }
-  const retained = model.sessions.find((session) => session.sessionKey === route.session);
-  if (retained !== undefined) {
-    return Ok(retained);
+  const saved = model.sessions.find((session) => session.sessionKey === route.session);
+  if (saved !== undefined) {
+    return Ok(saved);
   }
   if (route.at === undefined && live.sessions.includes(route.session)) {
     return Ok(undefined);
@@ -502,7 +502,7 @@ function openDrawer(
     }
     if (!live.permission) {
       // The same reason a live question's drawer cannot be reopened: a request
-      // that is still waiting is not in any history, so every retained fact is
+      // that is still waiting is not in any history, so every saved fact is
       // consistent with none ever arriving. Only the process holding one — and
       // holding the exact one this drawer opens over — may say so.
       return Err(
@@ -561,7 +561,7 @@ function openDrawer(
       );
     }
     if (!live.elicit) {
-      // Nothing retained can establish this drawer. A waiting question is the
+      // Nothing saved can establish this drawer. A waiting question is the
       // one thing a Journal never holds — it records answers — so `settled`,
       // the recorded elicitations and every other fact in the model are all
       // consistent with no question ever arriving. A route resolved here

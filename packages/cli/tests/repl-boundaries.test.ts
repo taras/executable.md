@@ -297,7 +297,7 @@ describe("REPL boundaries: what production code cannot reach", () => {
   });
 
   it("S1: no REPL record type exists in production", function* () {
-    // Every retained line is an ordinary durable event. A record shape of this
+    // Every saved line is an ordinary durable event. A record shape of this
     // slice's own would be a second protocol nobody else can read.
     for (const path of yield* authored()) {
       const text = yield* code(path);

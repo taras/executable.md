@@ -259,9 +259,9 @@ interface ProviderOptions {
  * What the journal gives an incomplete replay back.
  *
  * The suffix is the whole question. A launch interrupted after preparing but
- * before detaching retained only `prepared`, so its replay runs detach live and
+ * before detaching saved only `prepared`, so its replay runs detach live and
  * native creation may never have begun. One interrupted after detaching
- * retained both, so the native process was already free to start and the replay
+ * saved both, so the native process was already free to start and the replay
  * may do nothing but resume.
  */
 interface Replay {
@@ -318,7 +318,7 @@ function traceCoordinator(trace: Trace): AgentLaunchCoordinator {
       throw new Error("this stub coordinator names no provider turn");
     },
     *perform(_request, phases) {
-      // A replay hands back what the journal retained rather than calling the
+      // A replay hands back what the journal saved rather than calling the
       // provider's live preparation, exactly as the real coordinator does when
       // the phase is already recorded.
       const replay = trace.replay;
@@ -453,13 +453,13 @@ function newTrace(): Trace {
   return trace;
 }
 
-/** The preparation a launch retained, refusing a trace that holds none. */
+/** The preparation a launch saved, refusing a trace that holds none. */
 function preparedOf(trace: Trace): PreparedLaunchRecord {
   const record = trace.records.find(
     (candidate): candidate is PreparedLaunchRecord => candidate.phase === "prepared",
   );
   if (!record) {
-    throw new Error("this launch retained no preparation");
+    throw new Error("this launch saved no preparation");
   }
   return record;
 }
@@ -532,7 +532,7 @@ function* configuredUse(trace: Trace, configuration: SessionConfiguration): Oper
   }
 }
 
-/** Run a launch and report the refusal it retained, if it retained one. */
+/** Run a launch and report the refusal it saved, if it saved one. */
 function* attempt(
   trace: Trace,
   instructions: string,
@@ -698,7 +698,7 @@ describe("Tier NL — native session launch", () => {
       yield* launch(INSTRUCTIONS);
 
       const nativeSessionId = `agent-session:${SESSION_KEY}`;
-      // Read off the retained preparation, because that is where the identity
+      // Read off the saved preparation, because that is where the identity
       // is authored: the public launch route answers nothing at all.
       const prepared = trace.records[0] as PreparedLaunchRecord;
       expect(prepared.nativeSessionId).toBe(nativeSessionId);
@@ -727,7 +727,7 @@ describe("Tier NL — native session launch", () => {
     });
   });
 
-  it("NL8: the retained record carries cwd, permissions and the instruction channel", function* () {
+  it("NL8: the saved record carries cwd, permissions and the instruction channel", function* () {
     const harness = createFakeRuntime();
     const trace = newTrace();
     yield* scoped(function* () {
@@ -1225,7 +1225,7 @@ describe("Tier NO — session ownership", () => {
         return yield* attempt(contenderTrace, INSTRUCTIONS);
       });
 
-      // Answered immediately, and retained as a refusal rather than raised:
+      // Answered immediately, and saved as a refusal rather than raised:
       // the reader is told what to do about it.
       expect(refusal?.class).toBe("session-busy");
       // The contender did no ACP work and started no child.
@@ -1477,7 +1477,7 @@ describe("Tier NO — session ownership", () => {
       );
       expect(harness.turns).toHaveLength(2);
       expect(harness.turns.map((turn) => turn.input.text)).toEqual(["first", "second"]);
-      // One retained identity, in the provider's own store: one record, no
+      // One saved identity, in the provider's own store: one record, no
       // longer awaiting materialization, asserting the conversation both turns
       // were spent in.
       expect([...store.records.keys()]).toEqual([SESSION_KEY]);
@@ -1991,7 +1991,7 @@ describe("Tier CN — client-allocated construction", () => {
     // The strict store raises; the launch surface turns that into the failure
     // the reader asked about. A session cannot be confirmed, so the launch
     // says so — rather than the error travelling past the launch and leaving
-    // it with no retained phase at all.
+    // it with no saved phase at all.
     const harness = createFakeRuntime();
     const trace = newTrace();
     const routes: AgentSessionRouteStore = {
@@ -2064,7 +2064,7 @@ describe("Tier CN — client-allocated construction", () => {
  * Tier CR — resuming a client-allocated launch that did not finish
  * (specs/native-agent-session-launch-spec.md §Replay).
  *
- * The retained phase is the whole answer. Core retains `detached` before it
+ * The saved phase is the whole answer. Core retains `detached` before it
  * invokes the exit phase, so a journal holding only `prepared` proves the
  * handoff never began and creation may still be owed. A journal that reached
  * `detached` may already have had a process start under this identity, so its
@@ -2088,8 +2088,8 @@ describe("Tier CR — client-allocated incomplete replay", () => {
     resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
   };
 
-  /** A retained prepared record, as an interrupted launch would have left one. */
-  function retained(overrides: Partial<PreparedLaunchRecord> = {}): PreparedLaunchRecord {
+  /** A saved prepared record, as an interrupted launch would have left one. */
+  function saved(overrides: Partial<PreparedLaunchRecord> = {}): PreparedLaunchRecord {
     return {
       phase: "prepared",
       agent: "claude",
@@ -2151,7 +2151,7 @@ describe("Tier CR — client-allocated incomplete replay", () => {
       adapters: { claude: ADAPTER },
       routeStore: routes,
     });
-    trace.replay = { prepared: retained(overrides), suffix };
+    trace.replay = { prepared: saved(overrides), suffix };
   }
 
   it("CR1: a detached replay resumes, and never falls back to creating", function* () {
@@ -2159,7 +2159,7 @@ describe("Tier CR — client-allocated incomplete replay", () => {
     const trace = newTrace();
     const routes = createMemorySessionRouteStore();
     yield* installReplay(harness, trace, routes, "prepared+detached");
-    yield* routes.publish(agreeing(retained()));
+    yield* routes.publish(agreeing(saved()));
 
     yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
 
@@ -2167,16 +2167,16 @@ describe("Tier CR — client-allocated incomplete replay", () => {
     expect(harness.ensureCalls).toEqual([]);
   });
 
-  it("CR2: a prepared-only replay creates under the retained identity", function* () {
+  it("CR2: a prepared-only replay creates under the saved identity", function* () {
     // The predecessor never detached, so nothing handed this session to a
     // native process and creation may still be owed. The identity is not
     // reallocated — a second one would be a second conversation — so the create
-    // argv carries the retained one, with a file this run wrote.
+    // argv carries the saved one, with a file this run wrote.
     const harness = createFakeRuntime();
     const trace = newTrace();
     const routes = createMemorySessionRouteStore();
     yield* installReplay(harness, trace, routes, "prepared");
-    yield* routes.publish(agreeing(retained()));
+    yield* routes.publish(agreeing(saved()));
 
     yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
 
@@ -2189,7 +2189,7 @@ describe("Tier CR — client-allocated incomplete replay", () => {
 
   it("CR3: one replay's live detach does not reach the next replay", function* () {
     // The two replays describe the same logical session and differ only in what
-    // their journals retained. If the first one's live detach outlived the
+    // their journals saved. If the first one's live detach outlived the
     // launch that observed it, the second — whose journal proves the session
     // was already handed over — would create a second conversation under an
     // identity that already names one.
@@ -2197,10 +2197,10 @@ describe("Tier CR — client-allocated incomplete replay", () => {
     const trace = newTrace();
     const routes = createMemorySessionRouteStore();
     yield* installReplay(harness, trace, routes, "prepared");
-    yield* routes.publish(agreeing(retained()));
+    yield* routes.publish(agreeing(saved()));
 
     yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
-    trace.replay = { prepared: retained(), suffix: "prepared+detached" };
+    trace.replay = { prepared: saved(), suffix: "prepared+detached" };
     yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
 
     expect(trace.launches.length).toBe(2);
@@ -2264,12 +2264,9 @@ describe("Tier CR — client-allocated incomplete replay", () => {
     // about to retain — writing down that the handoff began is itself advancing
     // the launch. For a detached replay it is the spawn.
     const other = "99999999-0000-0000-0000-000000000000";
-    const named = agreeing(retained()) as Extract<
-      AgentSessionRoute,
-      { schema: "session-route.v2" }
-    >;
+    const named = agreeing(saved()) as Extract<AgentSessionRoute, { schema: "session-route.v2" }>;
     // Each case is one way the journal and the route can describe different
-    // sessions: a route that says something else, or a retained record another
+    // sessions: a route that says something else, or a saved record another
     // provider wrote.
     const disagreements: [string, AgentSessionRoute | undefined, Partial<PreparedLaunchRecord>][] =
       [
@@ -2281,7 +2278,7 @@ describe("Tier CR — client-allocated incomplete replay", () => {
         // An agreeing ACPX route is not evidence that this provider owns the
         // session a different one prepared: that is two providers naming one
         // string.
-        ["a record another provider prepared", agreeing(retained()), { provider: "other" }],
+        ["a record another provider prepared", agreeing(saved()), { provider: "other" }],
       ];
 
     for (const suffix of ["prepared", "prepared+detached"] as const) {
@@ -3008,7 +3005,7 @@ describe("Tier CA — client-native attachment", () => {
   });
 
   it("CA6: a moved build is the same build", function* () {
-    // Equality is over what was retained — a version and a digest — so the same
+    // Equality is over what was saved — a version and a digest — so the same
     // bytes reached at another path attach exactly as they would have before.
     const observer = createFakeObserver({ path: "/elsewhere/bin/claude" });
     const space = yield* installAttachment(bound(), { observer: observer.observer });
@@ -3021,7 +3018,7 @@ describe("Tier CA — client-native attachment", () => {
     });
   });
 
-  it("CA7: retained provider arrangement that names something else refuses before ensure", function* () {
+  it("CA7: saved provider arrangement that names something else refuses before ensure", function* () {
     for (const [name, asserted] of [
       ["another conversation", "99999999-0000-0000-0000-000000000000"],
       ["no conversation at all", undefined],
@@ -3975,7 +3972,7 @@ describe("Tier LU — legacy unbound client-native", () => {
 
     yield* launch(INSTRUCTIONS);
 
-    // Exactly what the released contract does: the launcher name, the retained
+    // Exactly what the released contract does: the launcher name, the saved
     // identity, no build observed, and no binding invented for a session that
     // never recorded one.
     expect(trace.launches[0]!.command).toEqual(["claude", "--resume", ALLOCATED]);
@@ -4278,7 +4275,7 @@ describe("Tier BA — bound ACP-first construction", () => {
       expect(refusal?.class).toBe("executable-binding-refused");
     });
 
-    // Nothing was ensured, nothing was spawned, and the retained account is
+    // Nothing was ensured, nothing was spawned, and the saved account is
     // exactly what it was: a drifted run repairs no route.
     expect(drifted.ensureCalls).toEqual([]);
     expect(second.launches).toEqual([]);
@@ -4498,7 +4495,7 @@ describe("Tier MZ — the materialization turn", () => {
     expect(trace.notices[0]).toContain("codex-materialization.v1");
   });
 
-  it("MZ4: the assistant response is displayed whole, and retained whole", function* () {
+  it("MZ4: the assistant response is displayed whole, and saved whole", function* () {
     const harness = createFakeRuntime();
     const trace = newTrace();
     harness.script({
@@ -5032,7 +5029,7 @@ describe("Tier NC — configured native launch", () => {
       // One sequence, provider and launcher together: the session exists, the
       // model is applied, its effort choices are refreshed, the effort is
       // applied and verified, and only after all of that is the preparation
-      // retained, ACP let go of, and the native UI started.
+      // saved, ACP let go of, and the native UI started.
       expect(trace.order).toEqual([
         "ensure",
         "status",
@@ -5235,7 +5232,7 @@ describe("Tier NC — configured native launch", () => {
  * the one that happened.
  */
 describe("Tier NR — configured incomplete replay", () => {
-  function retainedConfigured(overrides: Partial<PreparedLaunchRecord> = {}): PreparedLaunchRecord {
+  function savedConfigured(overrides: Partial<PreparedLaunchRecord> = {}): PreparedLaunchRecord {
     return {
       phase: "prepared",
       agent: "claude",
@@ -5263,7 +5260,7 @@ describe("Tier NR — configured incomplete replay", () => {
     advertiseConfiguration(harness, trace);
     yield* scoped(function* () {
       yield* installLaunchStack(harness, trace);
-      trace.replay = { prepared: retainedConfigured(), suffix: "prepared" };
+      trace.replay = { prepared: savedConfigured(), suffix: "prepared" };
 
       yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
 
@@ -5321,7 +5318,7 @@ describe("Tier NR — configured incomplete replay", () => {
       });
       yield* routes.publish(BOUND_ACP_ROUTE);
       trace.replay = {
-        prepared: retainedConfigured({ executableBinding: OBSERVED_BUILD }),
+        prepared: savedConfigured({ executableBinding: OBSERVED_BUILD }),
         suffix: "prepared+detached",
       };
 
@@ -5383,7 +5380,7 @@ describe("Tier NR — configured incomplete replay", () => {
       });
       yield* routes.publish(BOUND_ACP_ROUTE);
       trace.replay = {
-        prepared: retainedConfigured({ executableBinding: OBSERVED_BUILD }),
+        prepared: savedConfigured({ executableBinding: OBSERVED_BUILD }),
         suffix: "prepared+detached",
       };
 
@@ -5435,7 +5432,7 @@ describe("Tier NR — configured incomplete replay", () => {
       });
       yield* routes.publish(BOUND_ACP_ROUTE);
       trace.replay = {
-        prepared: retainedConfigured({ executableBinding: OBSERVED_BUILD }),
+        prepared: savedConfigured({ executableBinding: OBSERVED_BUILD }),
         suffix: "prepared+detached",
       };
 
@@ -5493,7 +5490,7 @@ describe("Tier NR — configured incomplete replay", () => {
       // Written as a released record would have it: the member is not part of
       // this build's shape, so it is added beside the record rather than
       // through its type.
-      const released = { ...retainedConfigured({ configuration: undefined }), model: "gpt-5.4" };
+      const released = { ...savedConfigured({ configuration: undefined }), model: "gpt-5.4" };
       trace.replay = { prepared: released, suffix: "prepared+detached" };
 
       yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
@@ -5511,7 +5508,7 @@ describe("Tier NR — configured incomplete replay", () => {
     yield* scoped(function* () {
       yield* installLaunchStack(harness, trace);
       trace.replay = {
-        prepared: retainedConfigured({ configuration: undefined }),
+        prepared: savedConfigured({ configuration: undefined }),
         suffix: "prepared+detached",
       };
 
@@ -5534,7 +5531,7 @@ describe("Tier NR — configured incomplete replay", () => {
     ];
     yield* scoped(function* () {
       yield* installLaunchStack(harness, trace);
-      trace.replay = { prepared: retainedConfigured(), suffix: "prepared+detached" };
+      trace.replay = { prepared: savedConfigured(), suffix: "prepared+detached" };
 
       yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
 

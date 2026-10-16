@@ -16,7 +16,7 @@
  *
  * ## Transport, and only transport
  *
- * Nothing here is retained. What a read *costs* — whether it is performed once
+ * Nothing here is saved. What a read *costs* — whether it is performed once
  * and kept, or performed afresh every execution — is selected through
  * `PullRequestReadExecution`, whose base performs the transport and around
  * which a workflow run installs the policy that makes an admitted read durable.
@@ -259,7 +259,7 @@ function resolver(
 /**
  * Install GitHub pull-request reading for the current scope and below.
  *
- * Both profiles install exactly this. What a read *costs* — retained once, or
+ * Both profiles install exactly this. What a read *costs* — saved once, or
  * performed afresh every execution — is decided above it, at
  * `PullRequestOperations`; what is decided here is which URLs this host will
  * read at all and what a credential may see.
@@ -319,7 +319,7 @@ export function* useGitHubPullRequestReads(
       }
 
       // Admitted. Everything above decided whether this host may answer at all,
-      // and none of it is retained: a target outside the ceiling, or one this
+      // and none of it is saved: a target outside the ceiling, or one this
       // adapter cannot name, leaves no record of a question that was never
       // permitted.
       //

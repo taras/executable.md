@@ -226,13 +226,13 @@ in for an hour, so no launch path sends a discard. `installed`, `resumed` and
 refusal where a recreation would have been convenient; what it buys is that no
 launch destroys a conversation XMD does not own and cannot see.
 
-An empty cached transcript is not proof that a retained or previously handed-off
+An empty cached transcript is not proof that a saved or previously handed-off
 session has no conversation. Native UI turns are provider-owned and need not be
 mirrored into ACPX or XMD state. Relaunch therefore never silently keeps a stale
 layer, discards unobserved native history, substitutes a new provider session
-for retained continuity, or performs a bootstrap turn. A materialization turn is
+for saved continuity, or performs a bootstrap turn. A materialization turn is
 not a bootstrap turn: it runs only for a conversation this launch just created,
-carries no authored content, and never runs against a retained one.
+carries no authored content, and never runs against a saved one.
 
 The prepared text and filesystem permissions are different capabilities:
 
@@ -262,7 +262,7 @@ configured refuses before the provider prepares anything.
 The configured use remains valid only while the provider-installation owner
 that issued it is live. The launch provider reads it through the coordinator
 delivered directly to that installation; a same-named Context, sibling run,
-retained post-teardown value or another loaded Core copy cannot supply that
+saved post-teardown value or another loaded Core copy cannot supply that
 owner. Provider teardown invalidates lookup before a later launch can prepare
 anything. Placement completion and its registration state do not participate in
 launch admission: `AgentLaunchRequest` remains the launch's one-use identity.
@@ -398,7 +398,7 @@ coordinator and the route store. It resolves the launcher command through the
 host's real execution environment, canonicalizes the target, requires an
 executable regular file, hashes that target, and asks that same file its
 version. It is deliberately not a Context, contextual Api, Agent operation,
-component or middleware value: executable validation decides which retained
+component or middleware value: executable validation decides which saved
 history may be accepted, and a resolver document middleware could replace could
 point the observation at one binary while the run spawns another. A controlled
 test substitutes the whole observer through the same constructor seam.
@@ -467,7 +467,7 @@ the number because a bare semver from another tool compares equal to one from
 this one.
 
 What is exact is the session, not the release. The canonical string a
-preparation accepted becomes that session's retained executable binding, and
+preparation accepted becomes that session's saved executable binding, and
 every later create, resume, attachment and incomplete replay reobserves the live
 build and compares it against that binding before a process, an ensure or a
 turn. A build that no longer matches refuses without creating a substitute
@@ -530,7 +530,7 @@ that turn is accepted:
     materialization plan this launch owes.
 
     Once `prepared` is durable — and only then — the fixed materialization turn
-    is announced on the reserved terminal and executed. It is retained as an
+    is announced on the reserved terminal and executed. It is saved as an
     ordinary `agent_prompt` **first** and as `materialized` **second**, because
     the prompt says the turn was spent and the phase says the launch may go on.
     Only the backend's explicit acceptance of that turn promotes the provider
@@ -552,7 +552,7 @@ owner to release — what has to be settled first is which conversation this is:
     `executable-binding-refused`. A legacy unbound route is the exception: it
     observes nothing, resumes under the launcher name, and gains no binding.
     Whether an identity is needed at all is decided next. An existing compatible
-    `client-native` route already names this conversation, so its retained
+    `client-native` route already names this conversation, so its saved
     identity is adopted and **nothing is allocated** — a second candidate for a
     conversation that already exists is a value with nowhere to go. Only where
     no route names it yet does the adapter allocate one, inside ownership and
@@ -574,7 +574,7 @@ owner to release — what has to be settled first is which conversation this is:
     construction rather than by comparison. A refusal is not: it prepared no
     identity, so it retains the failure the authoritative winner produced
     without mirroring that route's identity or provenance — no session id, and
-    the weaker provenance claim, because nobody chose one. It is retained at
+    the weaker provenance claim, because nobody chose one. It is saved at
     `prepared` and reaches no private file, no detach and no spawn.
 12. The prepared instructions are written to a private mode-`0600` file. Detach
     still happens as a phase — it is the point after which a spawn may happen —
@@ -594,7 +594,7 @@ From there both rejoin:
     transcript persistence directly.
 16. When the child exits, XMD records its terminal outcome, removes the private
     file and its directory while ownership is still held, and releases the
-    foreground-terminal lease. The route and the retained phases stay: they are
+    foreground-terminal lease. The route and the saved phases stay: they are
     what the next invocation resumes from.
 17. Later Agent work depends on the route again. On an `acp-first` session it
     lazily reattaches through ACP to the same provider session. On a bound
@@ -628,7 +628,7 @@ this sequence, and every step happens while the coordinator holds the session:
    `executable-binding-refused`, and an agent this host has not advertised for
    attachment refuses with `unsupported-capability`.
 5. Reobserve the executable and compare the binding exactly.
-6. Inspect any retained ACP arrangement without creating one: absence may enter
+6. Inspect any saved ACP arrangement without creating one: absence may enter
    exact resume, because exact resume is the operation being attempted; a
    record must assert this route's identity and nothing else.
 7. Select the live runtime for `(resolved agent command, binding)` and give the
@@ -942,7 +942,7 @@ no longer execute or hold the foreground terminal, restores that terminal's
 state, and runs every provider finalizer. A process that ignores the initial
 interruption is terminated according to the host process adapter's bounded
 shutdown policy.
-The adapter attempts to collect the native exit status, but a runtime-retained
+The adapter attempts to collect the native exit status, but a runtime-saved
 defunct PID or a lost exit event is not live process ownership. After a fatal
 signal was accepted, or the process was already absent, bounded settlement may
 release the runtime handle without waiting for signal-zero reachability to
@@ -962,7 +962,7 @@ and lifecycle phases rather than the native conversation:
 prepared -> [materialization agent_prompt -> materialized]? -> detached -> launched -> exited
 ```
 
-`launched` is live-only and is never retained. The bracketed pair appears only
+`launched` is live-only and is never saved. The bracketed pair appears only
 where the adapter declared a materialization operation *and* this launch created
 the conversation; everywhere else neither the prompt nor the phase exists. They
 are two durable operations rather than one because they answer different
@@ -970,8 +970,8 @@ questions: the `agent_prompt` says the turn was spent, and `materialized` says
 the launch may go on. A run that stopped between them replays the first and
 rebuilds the second, which is why the prompt is appended first.
 
-Each phase the launch completes is one retained record under that identity,
-because the preparation has to be retained *before* anything of the session
+Each phase the launch completes is one saved record under that identity,
+because the preparation has to be saved *before* anything of the session
 moves — before ACP ownership is released where ACP holds it, and before a
 native process exists where the adapter named the session itself.
 A single record written when the whole launch settles would describe nothing at
@@ -979,16 +979,16 @@ all for the run that was interrupted between detach and spawn, which is exactly
 the run that must not create a replacement session.
 
 `launched` is the live state between the spawn and the child's exit, and is
-deliberately not retained: an interrupted native process leaves `detached` as
-the last retained phase, and resuming reattaches the native UI to that same
+deliberately not saved: an interrupted native process leaves `detached` as
+the last saved phase, and resuming reattaches the native UI to that same
 provider session.
 
-For a session XMD named, the retained phase is what decides the only safe
-continuation, because `detached` is retained before the exit phase is invoked:
+For a session XMD named, the saved phase is what decides the only safe
+continuation, because `detached` is saved before the exit phase is invoked:
 
 - **`prepared` only** — the handoff never began, so native creation may still be
-  owed. The replay creates under the same retained identity, from a new private
-  file holding the exact retained instructions. It allocates nothing and
+  owed. The replay creates under the same saved identity, from a new private
+  file holding the exact saved instructions. It allocates nothing and
   publishes no route.
 - **`detached`** — a process may already have started under this identity, so
   the replay resumes and never falls back to creating.
@@ -1017,19 +1017,19 @@ An **already-established** provider-returned session takes none of that path.
 Its identity is known, so `prepared` retains it, carries no materialization
 plan, and the launch spends no turn.
 
-- **`prepared` with an owed plan and no retained prompt outcome** — ambiguous.
-  The preparation is retained immediately before the turn is sent, so this is a
+- **`prepared` with an owed plan and no saved prompt outcome** — ambiguous.
+  The preparation is saved immediately before the turn is sent, so this is a
   run that reached the sending point and never recorded what happened there.
   Nothing reachable from the journal separates a turn that was never sent from
   one the backend accepted and the interrupted run never saw, and sending now,
   if it is the second, spends a turn in someone's conversation to find out. The
   replay stops and retains `session-recovery-required`. **It never sends another
   turn**, and every later replay says the same thing without reconsidering it.
-- **a retained materialization `agent_prompt` without `materialized`** — the
+- **a saved materialization `agent_prompt` without `materialized`** — the
   turn is already spent and its outcome is on the journal. The replay
   reconstructs the phase from that record, with no provider work and no second
   turn.
-- **a retained `materialized`, successful or failed** — replays as itself. A
+- **a saved `materialized`, successful or failed** — replays as itself. A
   failed one stays failed; it is not retried.
 - **`detached` or later** — a process may already have started, so the replay
   resumes and never falls back to creating.
@@ -1039,7 +1039,7 @@ plan, and the launch spends no turn.
 The materialization prompt and the authored instructions are separate
 throughout. The prompt is the adapter's own fixed bytes, interpolating nothing
 and carrying no authored content; the rendered `<Session.Launch>` body is
-retained with the preparation and is what governs the **first native user
+saved with the preparation and is what governs the **first native user
 turn**. Neither is ever substituted for the other, and the turn spent here
 cannot perform the task the body describes.
 
@@ -1058,7 +1058,7 @@ before its first live effect, and then requires the live build to equal that
 binding. Neither account repairs or republishes the other: a replay that
 found a disagreement has discovered that the session it was going to continue is
 not the session it prepared, and retains `identity-unavailable` without starting
-a child. Equal instructions may resume the retained identity; different
+a child. Equal instructions may resume the saved identity; different
 instructions retain `instructions-refused` and replace neither the layer, the
 route, the identity, nor any provider state.
 
@@ -1074,7 +1074,7 @@ file, mode `0600`, passed by path. The text appears in neither argv nor
 environment, and the file and its directory are removed on success, ordinary
 failure and cancellation alike, while coordinator ownership is still held.
 Every private setup or child-creation failure is normalized before it crosses a
-public or durable boundary: the retained class is `process-creation-failed` and
+public or durable boundary: the saved class is `process-creation-failed` and
 the message is fixed provider-owned text carrying no executable path,
 instruction-file path, argv, environment, raw host message, credential or
 provider-private state.
@@ -1086,12 +1086,12 @@ before the next live effect, and cross-checks the preparation against the exact
 request that was routed — instructions and digest, agent, requested session,
 cwd, the V1 empty additional-directory list, and permission mode. A record that
 changed what was asked would make the journal describe a launch nobody
-authored, so it is refused rather than retained.
+authored, so it is refused rather than saved.
 
 That is the coordination boundary. Middleware composed around the Agent Api may
 observe a launch or refuse one; it cannot author a phase, and a completion it
 returns settles nothing, because the route ignores returns and the result is
-derived from the retained records alone.
+derived from the saved records alone.
 
 At minimum the records retain:
 
@@ -1124,13 +1124,13 @@ and unfiltered CLI arguments do not enter the record.
 
 A completed replay restores the terminal outcome and contacts no provider,
 coordinator, terminal, or process. A partial replay reserves the terminal,
-acquires session ownership, verifies the retained request against the live one,
+acquires session ownership, verifies the saved request against the live one,
 reuses the recorded native session, and continues at the first incomplete phase. A partial replay whose native process
 was interrupted reattaches the native UI to that same session; it never creates
 a replacement or reconstructs state from a transcript.
 
 Those are operation/runtime replay semantics: they define how an execution
-behaves when an embedder, a test, or a future retained execution host supplies
+behaves when an embedder, a test, or a future saved execution host supplies
 the launch's durable history again. They do not create a public continuation
 command. Diagnostic persistence remains `xmd run --journal`, and the ordinary
 run command exposes no resume UX; only `xmd workflow resume` is a current public
@@ -1152,7 +1152,7 @@ Failure to configure instructions or the contextual cwd leaves ownership with
 ACP and does not spawn the native UI. Missing native-launch capability fails
 before detach. Detach failure also prevents spawn.
 
-Changing instructions on a retained session fails with `instructions-refused`
+Changing instructions on a saved session fails with `instructions-refused`
 whenever the provider cannot replace the layer in place while preserving
 identity and history. Nothing is discarded to make room for a layer, and an
 empty cached transcript authorizes nothing: a session an enclosing `<Session>`
@@ -1171,17 +1171,17 @@ environment, credential, instruction text or provider payload.
 
 An attachment that reaches the provider and cannot open the conversation the
 route names fails with `identity-unavailable`: missing provider history, an
-adapter that cannot resume by name, a retained provider arrangement asserting
+adapter that cannot resume by name, a saved provider arrangement asserting
 another conversation or none, and a returned identity that differs from the
 route's are one answer, and none of them creates a substitute conversation.
 
 A launch that cannot take ownership retains `session-busy` or
 `session-recovery-required` as its preparation and stops there. Both are
-retained rather than raised bare, so a replay resumes from the phase that
+saved rather than raised bare, so a replay resumes from the phase that
 actually happened, and both refuse before ACP ensure, detach, or spawn.
 
 If detach succeeds but process creation fails, the durable provider session
-remains the authoritative retained state. The launch fails and a later replay
+remains the authoritative saved state. The launch fails and a later replay
 uses that same identity.
 
 If the native UI mutates its session and then exits unsuccessfully, both facts
@@ -1284,7 +1284,7 @@ Focused tests prove:
 20. a `<Session>` or `<Prompt>` on a bound route supplies the route identity as
     the exact resume identity, delivers the observed path only to the matching
     child's transient environment, and refuses before ensure on a missing
-    attachment gate, a missing observer, build drift, a disagreeing retained
+    attachment gate, a missing observer, build drift, a disagreeing saved
     arrangement or a returned identity that is not the route's; and
 21. ACP runtimes are partitioned by resolved agent command and binding, a handle
     is closed by the partition that created it, the last close evicts a bound
@@ -1351,7 +1351,7 @@ history marker or a private path.
 
 A proof also removes what it created, and that is the harness's own act rather
 than anything the product does. Production keeps the construction route and the
-retained phases — a launch that deleted them would break the continuity claim 4
+saved phases — a launch that deleted them would break the continuity claim 4
 asserts. A proof reads those exact records for its own natural key, reduces them
 to filtered evidence, and only then removes those exact paths, together with its
 temporary project through the provider's own path-scoped purge. It never sweeps
@@ -1369,11 +1369,11 @@ records with their replay and secret scanning; the host-owned session
 coordinator and its crash-conservative ownership record; an invocation-owned
 native-launch capability in the ACPX provider;
 provider-native identity that is either asserted by the provider or allocated by
-the adapter before the provider exists, retained explicitly and never inferred;
+the adapter before the provider exists, saved explicitly and never inferred;
 a strict create-once construction route beside the coordinator's own records,
 in a released unbound form and a bound one; the host-owned executable observer
 and the build binding it produces; ACP attachment to a bound client-native
-session under its exact retained identity, through runtime partitions keyed by
+session under its exact saved identity, through runtime partitions keyed by
 agent command and build;
 an inherited foreground-terminal interactive child with cancellation and
 bounded reaping;
@@ -1401,7 +1401,7 @@ degrading:
   with `unsupported-capability` before anything of the session moves, and so is
   an attachment naming an agent advertised only for native launch.
 - **`Agent.AddDir` is unbuilt**, so a launch declares no additional roots. The
-  retained request says so explicitly — an empty ordered list — rather than
+  saved request says so explicitly — an empty ordered list — rather than
   omitting the fact, and no adapter maps a root it was never given. The ACP
   Client specification is the prerequisite owner for a future ordering and
   access-mode contract.
@@ -1425,10 +1425,10 @@ degrading:
   spawned. An unconfigured launch on either route is unchanged and reads no
   configuration at all. Middleware that routes a raw Session or no Session has
   selected that unchanged unconfigured path.
-- **An incomplete configured launch reapplies what it retained.** At its own
+- **An incomplete configured launch reapplies what it saved.** At its own
   first live phase — the detach for a launch that never handed over, the spawn
   for one that did — it reconciles its route and build, reattaches by the exact
-  retained identity, puts the retained configuration back into force, and
+  saved identity, puts the saved configuration back into force, and
   relinquishes ACP again without authoring a second detach.
 - **Released launch model members never become configuration.** A non-empty
   `requestedModel` or top-level observational `model` string is validated and
@@ -1469,7 +1469,7 @@ Implementation review checks these frozen invariants:
 6. Cancellation establishes that the native child can no longer execute or own
    the terminal before document continuation or teardown completion; a lost
    runtime exit event or defunct PID does not extend live ownership.
-7. Completed replay launches nothing; incomplete replay uses the same retained
+7. Completed replay launches nothing; incomplete replay uses the same saved
    provider session.
 8. Native conversation history remains provider-owned and is never
    reconstructed from XMD output.
@@ -1497,7 +1497,7 @@ Implementation review checks these frozen invariants:
     every later create, resume, attachment and incomplete replay reobserves and
     compares before a process, an ensure or a turn.
 19. The canonical executable path is live only: it enters no route, journal,
-    retained provider state, public result, diagnostic or global environment,
+    saved provider state, public result, diagnostic or global environment,
     and no partition that outlives its last handle.
 20. Attachment supplies the route's exact identity as the resume identity, and
     the provider's canonical assertion must equal it before the first turn.

@@ -1,7 +1,7 @@
 // A Plugin that declares structural syntax and nothing else — no Markdown
 // component anywhere in it.
 //
-// It exists because the retained catalog has two arms and only one of them used
+// It exists because the saved catalog has two arms and only one of them used
 // to reach `xmd syntax` and `<Plan>`'s validation. A construct a run expands but
 // a check has never heard of is the defect: a Plan would be refused for writing
 // syntax the run supplies.

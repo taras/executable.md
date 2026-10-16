@@ -27,8 +27,8 @@ export type {
 export { ReplayIndex } from "./replay-index.ts";
 // `retainEvents` is public because `@executablemd/core` owns its own journal
 // gate and must produce the stable history across the package boundary. The
-// retained classes and the detach helpers stay internal.
-export { retainEvents } from "./retained.ts";
+// saved classes and the detach helpers stay internal.
+export { retainEvents } from "./saved.ts";
 export type { YieldEntry } from "./replay-index.ts";
 
 // Stream interface
@@ -64,8 +64,8 @@ export type { DivergenceDecision, DivergenceInfo, DivergenceKind } from "./diver
 
 // ReplayGuard API — pluggable validation for replay staleness detection
 export { ReplayGuard } from "./replay-guard.ts";
-export type { ReplayOutcome, RetainedHistory } from "./replay-guard.ts";
-export type { AbandonedRetainedEntry, AbandonedRetainedHistory } from "./live-coordinator.ts";
+export type { ReplayOutcome, SavedHistory } from "./replay-guard.ts";
+export type { AbandonedSavedEntry, AbandonedSavedHistory } from "./live-coordinator.ts";
 
 // Context
 export { DurableContext } from "./context.ts";

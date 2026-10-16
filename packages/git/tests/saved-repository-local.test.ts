@@ -53,15 +53,15 @@ import { executeInstalled } from "@executablemd/core/host";
 import { collect, Elicitation } from "@executablemd/core";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import { gitSession } from "../src/deno/composition/git.ts";
-import { useReplRepositoryRecording } from "../src/deno/retained-repository/provider.ts";
-import { admitReplRepositoryHistory } from "../src/retained-repository/admission.ts";
+import { useReplRepositoryRecording } from "../src/deno/saved-repository/provider.ts";
+import { admitReplRepositoryHistory } from "../src/saved-repository/admission.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import {
   REPL_REPOSITORY_LOCAL,
   REPL_REPOSITORY_SELECTION,
   parseReplLocalRecord,
-} from "../src/retained-repository/records.ts";
-import type { ReplLocalValue } from "../src/retained-repository/records.ts";
+} from "../src/saved-repository/records.ts";
+import type { ReplLocalValue } from "../src/saved-repository/records.ts";
 
 interface Fixture {
   readonly root: string;
@@ -207,7 +207,7 @@ function run(
           yield* executeInstalled({ path, stream, includes: [fixture.root] }, [
             // What the Git Plugin contributes for `repl`, attached directly:
             // this suite assembles no command Plugins.
-            { admissions: [(retained) => admitReplRepositoryHistory(retained)] },
+            { admissions: [(saved) => admitReplRepositoryHistory(saved)] },
           ]),
         ),
       );

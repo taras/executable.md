@@ -134,7 +134,7 @@ describe("Tier WFH — workflow host boundary", () => {
         return;
       }
       expect(result.stderr).toContain(UNSUPPORTED);
-      // Refused before the store is created, so nothing was retained and no
+      // Refused before the store is created, so nothing was saved and no
       // delivery line was written.
       expect(result.stdout).not.toContain("workflow answer:");
       expect(yield* exists(fixture.runs)).toBe(false);

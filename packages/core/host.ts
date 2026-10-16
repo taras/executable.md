@@ -6,7 +6,7 @@
  * An installation carries the two things only a host may contribute, and both
  * are acts of infrastructure rather than of authoring:
  *
- * - **Admissions** constrain a retained history *before* it is replayed from.
+ * - **Admissions** constrain a saved history *before* it is replayed from.
  *   They decide what a journal must already say for this execution to be
  *   allowed to continue it.
  * - **Preparations** perform trusted durable work *inside* the durable root,
@@ -34,7 +34,7 @@
  *
  * Both stop at the first refusal, and a refusal stops only what has not
  * happened yet: durable effects an earlier preparation completed stay
- * retained and are not rolled back, and the durable root records the refusal as
+ * saved and are not rolled back, and the durable root records the refusal as
  * its own terminal. Because core binds such a terminal to the exact root source
  * and target it was about, an identical execution replays that failure instead
  * of finding a history it cannot read.
@@ -75,7 +75,7 @@ export { executeInstalled } from "./src/execute.ts";
  *
  * It is exported here and nowhere else. `execute()` does not take it, no
  * authoring export names it, and no installation carries it — a document that
- * could name what a previous execution retained could ask for it, and the only
+ * could name what a previous execution saved could ask for it, and the only
  * host with a predecessor to inherit from is the one that kept the journal.
  */
 export type {
@@ -102,7 +102,7 @@ export type {
   ComponentAnswerRequest,
 } from "./src/component-answers.ts";
 /**
- * The response shape a retained request answers with, and the detaching a host
+ * The response shape a saved request answers with, and the detaching a host
  * needs to read one.
  *
  * The record an authored `<Fetch>` retains, through the same code, so a
@@ -310,9 +310,9 @@ export type {
 } from "./src/test-harness.ts";
 
 /**
- * The durable Agent Prompt record, for a host that reads a retained journal.
+ * The durable Agent Prompt record, for a host that reads a saved journal.
  *
- * A sealed workflow artifact classifies each Agent session by what its retained
+ * A sealed workflow artifact classifies each Agent session by what its saved
  * Prompts say, and the only thing that can answer that is the parser the live
  * run already records through. A second reading of the same durable value would
  * be a second contract, so the parser and the effect type it belongs to cross

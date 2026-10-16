@@ -73,7 +73,7 @@ import {
  * The expansion is what makes two elements different effects and one element
  * the same effect across replays. The configuration fingerprint is what makes a
  * document edited to name another repository, base or branch diverge rather than
- * quietly replaying the previous one's retained checkout — durable identity is
+ * quietly replaying the previous one's saved checkout — durable identity is
  * type and name, so the fingerprint belongs in the name rather than beside it.
  * The locator reaches it only through its own fingerprint, so a credential that
  * was written into a URL is not in an effect description either.
@@ -176,7 +176,7 @@ export function* prepareRepositoryAttachment(
   if (stored === undefined || !sameRepositoryRecord(stored.record, record)) {
     throw stale(subject, "metadata");
   }
-  // Before the Workspace is read and long before Git runs: what is retained has
+  // Before the Workspace is read and long before Git runs: what is saved has
   // to still be this identity's own placement and this identity's own url.
   agreedStored(stored, subject);
   const checkoutPath = agreedRepository(record, subject).checkoutPath;
@@ -189,10 +189,10 @@ export function* prepareRepositoryAttachment(
 }
 
 /**
- * What the checkout at a retained path has to turn out to be, or what disagrees.
+ * What the checkout at a saved path has to turn out to be, or what disagrees.
  *
  * Readable is where this used to stop, and readable is a property of *any*
- * repository. A clone of an unrelated repository written over the retained path
+ * repository. A clone of an unrelated repository written over the saved path
  * is perfectly readable, so attachment that asked only that question accepted
  * one identity's history against another identity's bytes — and the document
  * carried on, restoring recorded reads that no longer describe what is there

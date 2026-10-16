@@ -11,7 +11,7 @@
  * ## Resolution happens once
  *
  * A base is resolved and a commit pinned when the Repository is first reached,
- * and the pin is what is retained. A remote whose default branch moves
+ * and the pin is what is saved. A remote whose default branch moves
  * afterwards changes nothing about this run: replay restores the commit rather
  * than asking again. That is why every resolution here reads a ref and returns
  * an object id — a name that could still be a name later is not an answer.
@@ -22,7 +22,7 @@
  * to mean anything against, so the provider always ends on a named branch. When
  * a supplied base is a tag or a bare commit rather than a branch, it creates one
  * with a deterministic provider-owned name and records that name, so the run's
- * retained identity says which branch the checkout was made on rather than
+ * saved identity says which branch the checkout was made on rather than
  * leaving a reader to infer it.
  */
 
@@ -139,7 +139,7 @@ export function* objectFormat(git: GitSession, directory: string): Operation<Git
  *
  * `--no-checkout` because the branch this checkout ends on has not been decided
  * yet, and `--no-hardlinks` because a local clone otherwise shares object files
- * with the remote: the retained tree has to be complete on its own, since the
+ * with the remote: the saved tree has to be complete on its own, since the
  * remote may be gone by the time the run resumes.
  */
 export function* clone(
@@ -577,7 +577,7 @@ export function* checkoutReadable(
  * `remote.origin.url` is what a clone writes and what this provider's clone
  * wrote. Reading it back is how the bytes in the Workspace are tied to the
  * identity the record assigns to them: a checkout of another repository sitting
- * at the retained path answers with another locator, and no amount of HEAD
+ * at the saved path answers with another locator, and no amount of HEAD
  * being readable would have said so.
  */
 export function* originLocator(git: GitSession, directory: string): Operation<string | undefined> {
@@ -598,8 +598,8 @@ export function* commitPresent(
  *
  * For a primary checkout this is its own `.git`; for a linked worktree it is
  * the repository the worktree is a worktree *of*. Comparing it with the place
- * the enclosing Repository was materialized is what proves a retained worktree
- * belongs to the retained Repository it names, rather than to some other
+ * the enclosing Repository was materialized is what proves a saved worktree
+ * belongs to the saved Repository it names, rather than to some other
  * repository whose administration happens to resolve.
  */
 export function* commonDirectory(
@@ -774,7 +774,7 @@ export function* readCommitMessage(
  * so `remote.origin.pushurl`, a `url.<base>.pushInsteadOf` rewrite, a
  * `pre-push` hook, a credential helper and `gpg.program` are all things a
  * pushed-from checkout could be asked to consult. Running the network operation
- * there would let retained document data choose where this run publishes, what
+ * there would let saved document data choose where this run publishes, what
  * signs it, and what else runs while it happens.
  *
  * So the transport runs in a repository this provider just created, whose
@@ -783,7 +783,7 @@ export function* readCommitMessage(
  * naming the selected checkout's own object database, which is what makes this
  * a different door onto the same objects rather than a second copy of them.
  *
- * The object format is the retained record's. An alternate whose objects are
+ * The object format is the saved record's. An alternate whose objects are
  * named by another algorithm is not a database this repository can read.
  */
 export function* initControlPlane(
@@ -827,7 +827,7 @@ export type RemoteRefObservation =
  * reached" — which is the one confusion that would let an unreachable host be
  * read as proven absence and performed against.
  *
- * The locator is the exact retained one and is given after `--`, so no
+ * The locator is the exact saved one and is given after `--`, so no
  * configured remote name, pushurl or rewrite takes part in where this looks.
  *
  * What comes back is lines a remote wrote, so it is parsed rather than read.

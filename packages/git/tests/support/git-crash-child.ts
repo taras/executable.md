@@ -1,7 +1,7 @@
 /**
  * The two processes a Git crash proof needs, and neither of them is the test.
  *
- * A `<Git.Switch>` mutates a retained checkout, publishes a Workspace root and
+ * A `<Git.Switch>` mutates a saved checkout, publishes a Workspace root and
  * appends its journal result inside one transaction. Whether those commit
  * together is decided by what happens when nothing gets to run: `SIGKILL`
  * performs no cleanup, no commit and no rollback, and the next connection to
@@ -60,7 +60,7 @@ import {
 } from "../../../workflow/src/deno/workspace/private.ts";
 import { createWorkspaceMetadata } from "../../src/deno/repositories.ts";
 import { executeInstalled } from "@executablemd/core/host";
-import { retainedWorkflowInstallation } from "../../../workflow/src/run.ts";
+import { savedWorkflowInstallation } from "../../../workflow/src/run.ts";
 import { denoRepositoryHost, useGitAuthentication } from "../../src/deno/composition/host.ts";
 import { denoGitAuthentication } from "../../src/deno/composition/authentication.ts";
 import type { GitInvocation, GitOutcome } from "../../src/deno/composition/host.ts";
@@ -246,7 +246,7 @@ function* pushCrash(
         yield* executeInstalled(
           { ...inlineSource(pushDocument(locator)), stream: database.journal },
           [
-            retainedWorkflowInstallation({
+            savedWorkflowInstallation({
               runId: record.runId,
               bundleHash: record.definition.bundleHash,
             }),

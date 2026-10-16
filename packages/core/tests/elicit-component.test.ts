@@ -572,7 +572,7 @@ describe("Elicit: durability", () => {
    * A host reading the history back — the REPL's read-only drawer is the one
    * this exists for (#848) — has to know which fields the person was shown, and
    * the provider that could have said so is not running any more. So the schema
-   * is retained where a position is retained: in the description, under its own
+   * is saved where a position is saved: in the description, under its own
    * namespaced field, where it cannot change what a replay matches.
    */
   it("retains the compiled schema in the description and the answer as the result", function* () {
@@ -776,7 +776,7 @@ function* withRecordedSource(
   );
 }
 
-/** Whether a recorded import retained the source it read. */
+/** Whether a recorded import saved the source it read. */
 function isRecordedContent(
   value: Json | undefined,
 ): value is { [key: string]: Json; content: string } {

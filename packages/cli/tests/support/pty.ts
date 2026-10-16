@@ -4,7 +4,7 @@
  * Copied rather than imported from `repl-exit-pty.test.ts`, which is where it
  * was written and which still owns its own copy. Two suites need a real
  * terminal for two different promises — one about leaving the screen, one about
- * what an entry retained in a checkout — and neither is a reason to move the
+ * what an entry saved in a checkout — and neither is a reason to move the
  * other's evidence. The duplication is deliberate and bounded: it is this file
  * and that one, and nothing else reaches for a pty.
  *

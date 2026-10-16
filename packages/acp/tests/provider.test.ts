@@ -980,7 +980,7 @@ describe("Tier SM — session placement and materialization", () => {
       const log = yield* installStrictProvider(harness);
       const session = yield* Agent.operations.session();
 
-      // Placed, and nothing retained: a key is occupied and no conversation is
+      // Placed, and nothing saved: a key is occupied and no conversation is
       // named, so the host has nothing to map yet.
       expect(log.places).toHaveLength(1);
       expect(log.established).toEqual([]);
@@ -1083,7 +1083,7 @@ describe("Tier SM — session placement and materialization", () => {
       yield* first;
       yield* second;
 
-      // One backend creation, one retained identity, and two turns in the
+      // One backend creation, one saved identity, and two turns in the
       // conversation it established.
       expect(harness.ensureCalls.filter((call) => call.materialization !== undefined)).toHaveLength(
         1,
@@ -1385,7 +1385,7 @@ const ACP_SESSION_ID = "acp-session-workflow";
 interface StrictHarness {
   /** Every placement the profile was asked for, in order. */
   places: AcpxSessionContext[];
-  /** Every identity the provider retained, in order. */
+  /** Every identity the provider saved, in order. */
   established: AcpxSessionIdentity[];
   /** Public permission decisions the authored policy was asked for. */
   consulted: number;
@@ -1488,7 +1488,7 @@ describe("Tier WAP — strict workflow Agent profile", () => {
     const harness = createFakeRuntime();
     yield* scoped(function* () {
       const log = yield* installStrictProvider(harness);
-      yield* collectPrompt("summarize the retained work");
+      yield* collectPrompt("summarize the saved work");
 
       const created = harness.createdOptions.find((options) => options.onPermissionRequest);
       expect(created?.cwd).toBe(HOST_DIR);
@@ -1648,7 +1648,7 @@ describe("Tier WAP — strict workflow Agent profile", () => {
     });
   });
 
-  it("WAP5: a retained session this host cannot continue refuses before ACPX is contacted", function* () {
+  it("WAP5: a saved session this host cannot continue refuses before ACPX is contacted", function* () {
     const harness = createFakeRuntime();
     const refusal = new Error("this run's Agent session was established under a different policy");
     yield* scoped(function* () {

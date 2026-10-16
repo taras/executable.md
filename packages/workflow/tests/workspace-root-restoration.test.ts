@@ -56,11 +56,11 @@ function* createCorruptionFixture(storage: string, runId: string): Operation<voi
     yield* setPrivateWorkspaceClock(database, () => 1_000);
     yield* capture(database, function* (workspace) {
       yield* workspace.filesystem.mkdir("/dir");
-      yield* workspace.filesystem.writeFile("/dir/file.txt", "first retained bytes", 0o640);
+      yield* workspace.filesystem.writeFile("/dir/file.txt", "first saved bytes", 0o640);
     });
     yield* setPrivateWorkspaceClock(database, () => 2_000);
     yield* capture(database, function* (workspace) {
-      yield* workspace.filesystem.writeFile("/dir/file.txt", "second retained bytes", 0o600);
+      yield* workspace.filesystem.writeFile("/dir/file.txt", "second saved bytes", 0o600);
     });
   });
 }
@@ -128,7 +128,7 @@ describe("Tier WRR — private Workspace root restoration", () => {
     });
 
     if (historical === undefined || later === undefined) {
-      throw new Error("the retained roots are unavailable");
+      throw new Error("the saved roots are unavailable");
     }
     const sqlite = new DatabaseSync(path);
     try {
@@ -140,7 +140,7 @@ describe("Tier WRR — private Workspace root restoration", () => {
         .prepare("SELECT blob_hash FROM workspace_root_blob_refs WHERE root_id = ?")
         .get(historical.rootId)?.["blob_hash"];
       if (!(historicalManifest instanceof Uint8Array) || !(historicalBlob instanceof Uint8Array)) {
-        throw new Error("the historical root has no retained content references");
+        throw new Error("the historical root has no saved content references");
       }
       expect(
         sqlite
@@ -247,7 +247,7 @@ describe("Tier WRR — private Workspace root restoration", () => {
     }
   });
 
-  it("WRR6: retained-root, content, topology, and live mismatches are read-only corruption", function* () {
+  it("WRR6: saved-root, content, topology, and live mismatches are read-only corruption", function* () {
     const storage = yield* useStorageRoot();
     const cases: Array<{ runId: string; damage(database: DatabaseSync): void }> = [
       {
@@ -383,7 +383,7 @@ describe("Tier WRR — private Workspace root restoration", () => {
     }
   });
 
-  it("WRR7: retained-root integer corruption is redacted, typed, and read-only", function* () {
+  it("WRR7: saved-root integer corruption is redacted, typed, and read-only", function* () {
     const storage = yield* useStorageRoot();
     const cases: Array<{ runId: string; damage(database: DatabaseSync): void }> = [
       {
@@ -557,7 +557,7 @@ describe("Tier WRR — private Workspace root restoration", () => {
     yield* withStorage(storage, function* () {
       const database = yield* createRun({ runId: "rollback-cache" });
       const baselineRoot = (yield* capture(database, function* (workspace) {
-        yield* workspace.filesystem.writeFile("/kept.txt", "known retained bytes");
+        yield* workspace.filesystem.writeFile("/kept.txt", "known saved bytes");
       })).rootId;
       yield* database.journal.append({
         type: "close",
@@ -585,7 +585,7 @@ describe("Tier WRR — private Workspace root restoration", () => {
           root: yield* workspace.currentRoot(),
         };
       });
-      expect(observed).toEqual({ content: "known retained bytes", root: baselineRoot });
+      expect(observed).toEqual({ content: "known saved bytes", root: baselineRoot });
       expect(yield* database.journal.readAll()).toEqual(baselineJournal);
     });
   });
@@ -596,7 +596,7 @@ describe("Tier WRR — private Workspace root restoration", () => {
     yield* withStorage(storage, function* () {
       const database = yield* createRun({ runId: "cancel-cache" });
       const baselineRoot = (yield* capture(database, function* (workspace) {
-        yield* workspace.filesystem.writeFile("/kept.txt", "known retained bytes");
+        yield* workspace.filesystem.writeFile("/kept.txt", "known saved bytes");
       })).rootId;
       yield* database.journal.append({
         type: "close",
@@ -629,12 +629,12 @@ describe("Tier WRR — private Workspace root restoration", () => {
           root: yield* workspace.currentRoot(),
         };
       });
-      expect(observed).toEqual({ content: "known retained bytes", root: baselineRoot });
+      expect(observed).toEqual({ content: "known saved bytes", root: baselineRoot });
       expect(yield* database.journal.readAll()).toEqual(baselineJournal);
     });
   });
 
-  it("WRR11: historical file sizes must agree with retained DOFS manifests", function* () {
+  it("WRR11: historical file sizes must agree with saved DOFS manifests", function* () {
     const storage = yield* useStorageRoot();
     const path = runPath(storage, "historical-size");
     let historicalRoot = "";

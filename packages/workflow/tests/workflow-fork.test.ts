@@ -1,9 +1,9 @@
 /**
  * Tier WFK — what a fork may inherit, decided before anything exists.
  *
- * Two questions, both answered from retained values alone: whether a checkpoint
+ * Two questions, both answered from saved values alone: whether a checkpoint
  * can be forked at all, and which events a fork that selects it takes with it.
- * Neither opens a database, so both are exercised here against retained shapes
+ * Neither opens a database, so both are exercised here against saved shapes
  * a run could hold rather than against a run that had to be produced.
  *
  * Nothing here opens a database, so this file runs under every runtime. The
@@ -33,7 +33,7 @@ import type { ForkCandidate } from "@executablemd/workflow";
 const ROOT_A = "a".repeat(64);
 const ROOT_B = "b".repeat(64);
 
-function retained(type: string, name = type, result: Json = null): DurableEvent {
+function saved(type: string, name = type, result: Json = null): DurableEvent {
   return {
     type: "yield",
     coroutineId: "root",
@@ -49,7 +49,7 @@ function closed(coroutineId: string): DurableEvent {
 /** One history, classified against the roots the run still holds. */
 function classify(
   events: readonly { id: string; event: DurableEvent; root?: string }[],
-  retainedRoots: readonly string[] = [ROOT_A, ROOT_B],
+  savedRoots: readonly string[] = [ROOT_A, ROOT_B],
 ) {
   return classifyForkability(
     events.map((entry) => ({
@@ -57,7 +57,7 @@ function classify(
       event: entry.event,
       workspaceRootId: entry.root ?? ROOT_A,
     })),
-    { retainedRoots: new Set(retainedRoots) },
+    { savedRoots: new Set(savedRoots) },
   );
 }
 
@@ -74,11 +74,11 @@ function candidates(
   }));
 }
 
-const RUN_RECORD = retained("workflow_run", "workflow_run", {
+const RUN_RECORD = saved("workflow_run", "workflow_run", {
   runId: "source-1",
   bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 });
-const ROOT_IMPORT = retained("import_component", "__root__", {
+const ROOT_IMPORT = saved("import_component", "__root__", {
   kind: "repository",
   path: "flows/release.md",
   content: "# Release\n",
@@ -89,8 +89,8 @@ describe("Tier WFK — forkability and fork selection", () => {
     const forkability = classify([
       { id: "e1", event: RUN_RECORD },
       { id: "e2", event: ROOT_IMPORT },
-      { id: "e3", event: retained("workspace_file", "write:x:/notes.md"), root: ROOT_B },
-      { id: "e4", event: retained("exec", "exec:echo hi"), root: ROOT_B },
+      { id: "e3", event: saved("workspace_file", "write:x:/notes.md"), root: ROOT_B },
+      { id: "e4", event: saved("exec", "exec:echo hi"), root: ROOT_B },
       { id: "e5", event: closed("root"), root: ROOT_B },
     ]);
 
@@ -102,9 +102,9 @@ describe("Tier WFK — forkability and fork selection", () => {
   it("WFK2: a blocker is cumulative and names the earliest event that introduced it", function* () {
     const forkability = classify([
       { id: "e1", event: RUN_RECORD },
-      { id: "e2", event: retained("agent_prompt", "prompt:1") },
-      { id: "e3", event: retained("exec", "exec:echo hi") },
-      { id: "e4", event: retained("agent_prompt", "prompt:2") },
+      { id: "e2", event: saved("agent_prompt", "prompt:1") },
+      { id: "e3", event: saved("exec", "exec:echo hi") },
+      { id: "e4", event: saved("agent_prompt", "prompt:2") },
     ]);
 
     expect(forkability[0]?.forkable).toBe(true);
@@ -116,15 +116,15 @@ describe("Tier WFK — forkability and fork selection", () => {
     }
   });
 
-  it("WFK3: each stable code has its own retained cause", function* () {
+  it("WFK3: each stable code has its own saved cause", function* () {
     const forkability = classify(
       [
         { id: "e1", event: RUN_RECORD },
         // A Git-host event holding no completed reconciliation record: the run
         // stopped without establishing what happened at the remote.
-        { id: "e2", event: retained("git_host_effect", "git-push:1") },
-        { id: "e3", event: retained("something_a_later_build_wrote", "whatever") },
-        { id: "e4", event: retained("exec", "exec:echo hi"), root: "c".repeat(64) },
+        { id: "e2", event: saved("git_host_effect", "git-push:1") },
+        { id: "e3", event: saved("something_a_later_build_wrote", "whatever") },
+        { id: "e4", event: saved("exec", "exec:echo hi"), root: "c".repeat(64) },
       ],
       [ROOT_A],
     );
@@ -141,7 +141,7 @@ describe("Tier WFK — forkability and fork selection", () => {
       { code: "unsupported-effect", eventId: "e3" },
       { code: "workspace-root-unavailable", eventId: "e4" },
     ]);
-    // Codes and event ids, and nothing a retained description held.
+    // Codes and event ids, and nothing a saved description held.
     for (const entry of forkability) {
       for (const blocker of entry.blockers) {
         expect(JSON.stringify(blocker)).not.toContain("git-push");
@@ -155,7 +155,7 @@ describe("Tier WFK — forkability and fork selection", () => {
     // type. A completed reconciliation record carries the pre-state, the
     // observations, the decision and the result, and replays without
     // contacting a provider at all.
-    const completed = retained("git_host_effect", "git-push:1", {
+    const completed = saved("git_host_effect", "git-push:1", {
       request: {
         identity: { runId: "source-1", expansionId: "x" },
         kind: "git-push",
@@ -171,7 +171,7 @@ describe("Tier WFK — forkability and fork selection", () => {
     const forkability = classify([
       { id: "e1", event: RUN_RECORD },
       { id: "e2", event: completed },
-      { id: "e3", event: retained("exec", "exec:echo hi") },
+      { id: "e3", event: saved("exec", "exec:echo hi") },
     ]);
 
     expect(forkability.map((entry) => entry.forkable)).toEqual([true, true, true]);
@@ -179,7 +179,7 @@ describe("Tier WFK — forkability and fork selection", () => {
 
     // A record that is nearly one is still not one: a member the shape does not
     // declare describes something else, and a fork does not guess at it.
-    const nearly = retained("git_host_effect", "git-push:2", {
+    const nearly = saved("git_host_effect", "git-push:2", {
       request: {
         identity: { runId: "source-1", expansionId: "y" },
         kind: "git-push",
@@ -201,7 +201,7 @@ describe("Tier WFK — forkability and fork selection", () => {
 
   it("WFK3c: a record this build cannot read in full is not a completed one", function* () {
     // The effect belongs to `@executablemd/git` now, so this module reads its
-    // retained rows as compatibility data. Reading them *totally* is what makes
+    // saved rows as compatibility data. Reading them *totally* is what makes
     // the answer safe: a value JSON cannot express is a record this build
     // cannot classify, and classifying it as completed would hand a fork a
     // prefix it cannot actually replay.
@@ -305,9 +305,9 @@ describe("Tier WFK — forkability and fork selection", () => {
     const history = candidates([
       { id: "e1", event: RUN_RECORD },
       { id: "e2", event: ROOT_IMPORT },
-      { id: "e3", event: retained("import_component", "File") },
-      { id: "e4", event: retained("workspace_file", "write:x:/notes.md"), root: ROOT_B },
-      { id: "e5", event: retained("exec", "exec:echo hi"), root: ROOT_B },
+      { id: "e3", event: saved("import_component", "File") },
+      { id: "e4", event: saved("workspace_file", "write:x:/notes.md"), root: ROOT_B },
+      { id: "e5", event: saved("exec", "exec:echo hi"), root: ROOT_B },
       { id: "e6", event: closed("root"), root: ROOT_B },
     ]);
 
@@ -335,11 +335,11 @@ describe("Tier WFK — forkability and fork selection", () => {
     expect(journal[3]).toEqual(history[3]?.event);
   });
 
-  it("WFK5: a checkpoint nobody retained, an outcome and a blocked prefix are refused", function* () {
+  it("WFK5: a checkpoint nobody saved, an outcome and a blocked prefix are refused", function* () {
     const history = candidates([
       { id: "e1", event: RUN_RECORD },
       { id: "e2", event: ROOT_IMPORT },
-      { id: "e3", event: retained("agent_prompt", "prompt:1") },
+      { id: "e3", event: saved("agent_prompt", "prompt:1") },
       { id: "e4", event: closed("root") },
     ]);
 

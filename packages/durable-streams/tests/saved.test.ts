@@ -1,5 +1,5 @@
 /**
- * Retained history — one settled answer per event, for every phase.
+ * Saved history — one settled answer per event, for every phase.
  *
  * A journal is data a backend supplies, and every phase of a replay reads the
  * same events: a consumer's own admission gate, the replay index, public guard
@@ -15,7 +15,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { detachJson, retainEvents } from "../retained.ts";
+import { detachJson, retainEvents } from "../saved.ts";
 import { ReplayIndex } from "../replay-index.ts";
 import type { DurableEvent, Json } from "../types.ts";
 
@@ -44,7 +44,7 @@ function retain(event: DurableEvent): DurableEvent {
   return retainEvents([event])[0]!;
 }
 
-describe("retained history — classification settles once", () => {
+describe("saved history — classification settles once", () => {
   it("an event that turns from Yield into Close stays a Yield", function* () {
     const { event, reads } = shifting(
       { type: ["yield", "close"] },
@@ -54,9 +54,9 @@ describe("retained history — classification settles once", () => {
         result: { status: "ok" },
       },
     );
-    const retained = retain(event);
-    expect(retained.type).toBe("yield");
-    expect(retained.type).toBe("yield");
+    const saved = retain(event);
+    expect(saved.type).toBe("yield");
+    expect(saved.type).toBe("yield");
     // Classified once; the wrapper never asks the source again.
     expect(reads["type"]).toBe(1);
   });
@@ -66,9 +66,9 @@ describe("retained history — classification settles once", () => {
       { type: ["close", "yield"] },
       { coroutineId: "root", result: { status: "ok", value: "kept" } },
     );
-    const retained = retain(event);
-    expect(retained.type).toBe("close");
-    expect(retained.type).toBe("close");
+    const saved = retain(event);
+    expect(saved.type).toBe("close");
+    expect(saved.type).toBe("close");
     expect(reads["type"]).toBe(1);
   });
 
@@ -82,8 +82,8 @@ describe("retained history — classification settles once", () => {
         throw new Error("the backend will not say what this event is");
       },
     });
-    const retained = retain(event as unknown as DurableEvent);
-    for (const read of [() => retained.type, () => retained.coroutineId, () => retained.result]) {
+    const saved = retain(event as unknown as DurableEvent);
+    for (const read of [() => saved.type, () => saved.coroutineId, () => saved.result]) {
       let caught: unknown;
       try {
         read();
@@ -98,17 +98,17 @@ describe("retained history — classification settles once", () => {
   });
 
   it("an event that is neither is refused rather than passed through", function* () {
-    const retained = retain({ type: "something-else" } as unknown as DurableEvent);
+    const saved = retain({ type: "something-else" } as unknown as DurableEvent);
     let caught: unknown;
     try {
-      void retained.type;
+      void saved.type;
     } catch (error) {
       caught = error;
     }
     expect(caught).toBeInstanceOf(TypeError);
   });
 
-  it("retaining an already-retained event returns it unchanged", function* () {
+  it("retaining an already-saved event returns it unchanged", function* () {
     const once = retain({
       type: "yield",
       coroutineId: "root",
@@ -119,20 +119,20 @@ describe("retained history — classification settles once", () => {
   });
 });
 
-describe("retained history — a Close settles once", () => {
+describe("saved history — a Close settles once", () => {
   it("a coroutine that moves from a child to the root stays the child's", function* () {
     const { event, reads } = shifting(
       { coroutineId: ["root.7", "root"] },
       { type: "close", result: { status: "ok", value: "alpha" } },
     );
-    const retained = retain(event);
-    expect(retained.coroutineId).toBe("root.7");
-    expect(retained.coroutineId).toBe("root.7");
+    const saved = retain(event);
+    expect(saved.coroutineId).toBe("root.7");
+    expect(saved.coroutineId).toBe("root.7");
     expect(reads["coroutineId"]).toBe(1);
 
     // And the index — the phase that decides whether a terminal result exists —
     // sees exactly what the first reader saw.
-    const index = new ReplayIndex([retained]);
+    const index = new ReplayIndex([saved]);
     expect(index.hasClose("root")).toBe(false);
     expect(index.hasClose("root.7")).toBe(true);
   });
@@ -157,9 +157,9 @@ describe("retained history — a Close settles once", () => {
       },
       { type: "close", coroutineId: "root" },
     );
-    const retained = retain(event);
-    expect(retained.result).toEqual({ status: "ok", value: "first" });
-    expect(retained.result).toEqual({ status: "ok", value: "first" });
+    const saved = retain(event);
+    expect(saved.result).toEqual({ status: "ok", value: "first" });
+    expect(saved.result).toEqual({ status: "ok", value: "first" });
     expect(reads["result"]).toBe(1);
   });
 
@@ -173,9 +173,9 @@ describe("retained history — a Close settles once", () => {
       },
       { type: "close", coroutineId: "root" },
     );
-    const retained = retain(event);
-    expect(retained.result).toEqual({ status: "err", error: { message: "first" } });
-    expect(retained.result).toEqual({ status: "err", error: { message: "first" } });
+    const saved = retain(event);
+    expect(saved.result).toEqual({ status: "err", error: { message: "first" } });
+    expect(saved.result).toEqual({ status: "err", error: { message: "first" } });
   });
 
   it("a terminal result that refuses and then answers stays refused", function* () {
@@ -191,11 +191,11 @@ describe("retained history — a Close settles once", () => {
         return { status: "ok", value: "answered later" };
       },
     });
-    const retained = retain(event as unknown as DurableEvent);
+    const saved = retain(event as unknown as DurableEvent);
     for (let attempt = 0; attempt < 3; attempt++) {
       let caught: unknown;
       try {
-        void retained.result;
+        void saved.result;
       } catch (error) {
         caught = error;
       }
@@ -207,7 +207,7 @@ describe("retained history — a Close settles once", () => {
   });
 
   /**
-   * Detached while the history is retained, not at a first later read.
+   * Detached while the history is saved, not at a first later read.
    *
    * Memoizing on first access closes repeated reads and leaves the interval
    * between a consumer's admission and terminal reuse open: nobody has touched
@@ -215,36 +215,36 @@ describe("retained history — a Close settles once", () => {
    */
   it("a terminal result is detached before anyone reads it", function* () {
     const value: Record<string, unknown> = { output: "original" };
-    const retained = retain({
+    const saved = retain({
       type: "close",
       coroutineId: "root",
       result: { status: "ok", value },
     } as unknown as DurableEvent);
 
-    // Mutated before the retained result has ever been read.
+    // Mutated before the saved result has ever been read.
     value["output"] = "planted after retention";
-    expect(retained.result).toEqual({ status: "ok", value: { output: "original" } });
+    expect(saved.result).toEqual({ status: "ok", value: { output: "original" } });
   });
 
   it("a terminal result is detached from the source", function* () {
     const value = { list: ["a"] };
-    const retained = retain({
+    const saved = retain({
       type: "close",
       coroutineId: "root",
       result: { status: "ok", value },
     } as unknown as DurableEvent);
-    const held = retained.result;
+    const held = saved.result;
     value.list.push("injected");
     expect(held).toEqual({ status: "ok", value: { list: ["a"] } });
   });
 
-  it("a cancelled terminal result is retained as itself", function* () {
-    const retained = retain({
+  it("a cancelled terminal result is saved as itself", function* () {
+    const saved = retain({
       type: "close",
       coroutineId: "root",
       result: { status: "cancelled" },
     } as unknown as DurableEvent);
-    expect(retained.result).toEqual({ status: "cancelled" });
+    expect(saved.result).toEqual({ status: "cancelled" });
   });
 
   it("the control — an intact history classifies and settles normally", function* () {
@@ -267,7 +267,7 @@ describe("retained history — a Close settles once", () => {
   });
 });
 
-describe("retained history — a Yield's identity settles once", () => {
+describe("saved history — a Yield's identity settles once", () => {
   const BASE = { result: { status: "ok", value: 1 } };
 
   it("a name that turns into __root__ is seen the same way by every phase", function* () {
@@ -280,14 +280,14 @@ describe("retained history — a Yield's identity settles once", () => {
       enumerable: true,
       get: Object.getOwnPropertyDescriptor(event, "name")!.get!,
     });
-    const retained = retain({
+    const saved = retain({
       type: "yield",
       coroutineId: "root",
       description,
       ...BASE,
     } as unknown as DurableEvent);
-    expect(retained.type === "yield" ? retained.description.name : undefined).toBe("unrelated");
-    expect(retained.type === "yield" ? retained.description.name : undefined).toBe("unrelated");
+    expect(saved.type === "yield" ? saved.description.name : undefined).toBe("unrelated");
+    expect(saved.type === "yield" ? saved.description.name : undefined).toBe("unrelated");
   });
 
   it("a name that turns away from __root__ keeps naming the root import", function* () {
@@ -300,14 +300,14 @@ describe("retained history — a Yield's identity settles once", () => {
       enumerable: true,
       get: Object.getOwnPropertyDescriptor(event, "name")!.get!,
     });
-    const retained = retain({
+    const saved = retain({
       type: "yield",
       coroutineId: "root",
       description,
       ...BASE,
     } as unknown as DurableEvent);
-    expect(retained.type === "yield" ? retained.description.name : undefined).toBe("__root__");
-    expect(retained.type === "yield" ? retained.description.name : undefined).toBe("__root__");
+    expect(saved.type === "yield" ? saved.description.name : undefined).toBe("__root__");
+    expect(saved.type === "yield" ? saved.description.name : undefined).toBe("__root__");
   });
 
   it("a shifting coroutine id settles once", function* () {
@@ -315,9 +315,9 @@ describe("retained history — a Yield's identity settles once", () => {
       { coroutineId: ["root", "root.3"] },
       { type: "yield", description: { type: "call", name: "work" }, ...BASE },
     );
-    const retained = retain(event);
-    expect(retained.coroutineId).toBe("root");
-    expect(retained.coroutineId).toBe("root");
+    const saved = retain(event);
+    expect(saved.coroutineId).toBe("root");
+    expect(saved.coroutineId).toBe("root");
     expect(reads["coroutineId"]).toBe(1);
   });
 
@@ -331,13 +331,13 @@ describe("retained history — a Yield's identity settles once", () => {
         return asked === 1 ? "stable" : "swapped";
       },
     });
-    const retained = retain({
+    const saved = retain({
       type: "yield",
       coroutineId: "root",
       description,
       ...BASE,
     } as unknown as DurableEvent);
-    const read = () => (retained.type === "yield" ? retained.description["marker"] : undefined);
+    const read = () => (saved.type === "yield" ? saved.description["marker"] : undefined);
     expect(read()).toBe("stable");
     expect(read()).toBe("stable");
     expect(asked).toBe(1);
@@ -357,11 +357,11 @@ describe("retained history — a Yield's identity settles once", () => {
         throw new Error("the backend will not say which coroutine this is");
       },
     });
-    const retained = retain(event as unknown as DurableEvent);
+    const saved = retain(event as unknown as DurableEvent);
     for (let attempt = 0; attempt < 3; attempt++) {
       let caught: unknown;
       try {
-        void retained.coroutineId;
+        void saved.coroutineId;
       } catch (error) {
         caught = error;
       }
@@ -395,8 +395,8 @@ describe("retained history — a Yield's identity settles once", () => {
   });
 });
 
-describe("retained history — detached values stay ordinary JSON", () => {
-  it("`__proto__` is retained as an own data member", function* () {
+describe("saved history — detached values stay ordinary JSON", () => {
+  it("`__proto__` is saved as an own data member", function* () {
     const source: Record<string, unknown> = {};
     Object.defineProperty(source, "__proto__", {
       value: { polluted: true },

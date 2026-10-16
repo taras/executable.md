@@ -327,7 +327,7 @@ describe(
         yield* ensureDir(home);
 
         const document = path.join(dir, "release.md");
-        yield* writeTextFile(document, "# Release\n\nretained by the run\n");
+        yield* writeTextFile(document, "# Release\n\nsaved by the run\n");
 
         const environment = { HOME: home, XMD_WORKFLOW_RUNS: runs };
         const started = yield* timebox<ProcessResult>(TIMEOUT, function* () {
@@ -341,7 +341,7 @@ describe(
           throw new Error("the compiled binary timed out starting a source-bundle run");
         }
         expect(started.value.code).toBe(0);
-        expect(started.value.stdout).toContain("retained by the run");
+        expect(started.value.stdout).toContain("saved by the run");
 
         // The document is gone. The run is not.
         yield* rm(document, { force: true });
@@ -357,7 +357,7 @@ describe(
           throw new Error("the compiled binary timed out resuming a source-bundle run");
         }
         expect(resumed.value.code).toBe(0);
-        expect(resumed.value.stdout).toContain("retained by the run");
+        expect(resumed.value.stdout).toContain("saved by the run");
       });
     });
   },

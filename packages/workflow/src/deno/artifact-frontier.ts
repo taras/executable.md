@@ -12,7 +12,7 @@
  * `readForkSource()` reads the prefix one checkpoint selects, because a fork
  * inherits history up to a point and writes its own beginning. An export
  * inherits nothing: it records what the run committed, so it reads every
- * journal row, every retained root, and every other XMD-owned record the run
+ * journal row, every saved root, and every other XMD-owned record the run
  * holds. The two are deliberately separate readers over the same tables rather
  * than one reader with a mode, because "up to this checkpoint" and "everything"
  * differ in what they are allowed to leave out.
@@ -33,19 +33,15 @@ import type { DetachedXmdArtifact, XmdArtifactJournalRow } from "./artifact/type
 import type { InheritedEventProvenance } from "../lifecycle/history.ts";
 import { WorkflowRequestError } from "../storage/errors.ts";
 import type { WorkflowRunRecord } from "../storage/record.ts";
-import { readAllRetainedAnswers } from "./answers.ts";
-import type { RetainedBlob, RetainedManifest } from "./fork-source.ts";
+import { readAllSavedAnswers } from "./answers.ts";
+import type { SavedBlob, SavedManifest } from "./fork-source.ts";
 import { readForkLineage } from "./fork-write.ts";
-import { readRepositories, readRetainedRows, readWorktrees } from "./fork-source.ts";
+import { readRepositories, readSavedRows, readWorktrees } from "./fork-source.ts";
 import { reading } from "./reading.ts";
 import { readDocumentExecution, readRetrieval } from "./rows.ts";
 import { readAllAgentSessions } from "./workspace/agent-sessions.ts";
 import { bytes, integer } from "./workspace/manifest.ts";
-import {
-  currentWorkspaceRoot,
-  loadWorkspaceRoot,
-  retainedWorkspaceRoots,
-} from "./workspace/root.ts";
+import { currentWorkspaceRoot, loadWorkspaceRoot, savedWorkspaceRoots } from "./workspace/root.ts";
 
 const SELECT_EXECUTIONS = "SELECT * FROM document_executions ORDER BY sequence ASC";
 
@@ -64,7 +60,7 @@ export function readExportFrontier(
   path: string,
 ): Omit<DetachedXmdArtifact, "definition"> {
   const journal = readExportJournal(database);
-  const roots = retainedWorkspaceRoots(database).map((rootId) =>
+  const roots = savedWorkspaceRoots(database).map((rootId) =>
     loadWorkspaceRoot(database, rootId, path),
   );
   const manifestHashes = new Set(roots.flatMap((root) => root.manifestHashes));
@@ -97,7 +93,7 @@ export function readExportFrontier(
     blobs: [...blobHashes].map((hash) => readBlob(database, hash, path)),
     repositories: readRepositories(database, path),
     worktrees: readWorktrees(database, path),
-    answers: readAllRetainedAnswers(database),
+    answers: readAllSavedAnswers(database),
     agentSessions: readAllAgentSessions(database),
   };
 }
@@ -119,13 +115,13 @@ function readLineageCreatedAt(database: DatabaseSync, path: string): string {
   const createdAt = row?.["created_at"];
   if (typeof createdAt !== "string") {
     throw new WorkflowRequestError(
-      `the fork lineage retained at ${path} does not say when it was created.`,
+      `the fork lineage saved at ${path} does not say when it was created.`,
     );
   }
   return createdAt;
 }
 
-function readManifest(database: DatabaseSync, hash: string, path: string): RetainedManifest {
+function readManifest(database: DatabaseSync, hash: string, path: string): SavedManifest {
   const row = reading(
     database,
     "SELECT hash, size, encoded, last_seen FROM vfs_manifests WHERE hex(hash) = upper(?)",
@@ -143,7 +139,7 @@ function readManifest(database: DatabaseSync, hash: string, path: string): Retai
   });
 }
 
-function readBlob(database: DatabaseSync, hash: string, path: string): RetainedBlob {
+function readBlob(database: DatabaseSync, hash: string, path: string): SavedBlob {
   const row = reading(
     database,
     `SELECT blob.hash AS hash, blob.size AS size, blob.last_seen AS last_seen,
@@ -196,7 +192,7 @@ function readExportJournal(database: DatabaseSync): XmdArtifactJournalRow[] {
     inherited.set(eventId, Object.freeze({ sourceRunId, sourceEventId }));
   }
 
-  return readRetainedRows(database).map((row) => {
+  return readSavedRows(database).map((row) => {
     const provenance = inherited.get(row.eventId);
     return provenance === undefined ? row : { ...row, inherited: provenance };
   });

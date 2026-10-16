@@ -169,7 +169,7 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
   const root = options.root ?? (yield* useReplRoot());
   const repository = replRepository(root);
 
-  // Opening a retained history reads and validates the whole file, and a file
+  // Opening a saved history reads and validates the whole file, and a file
   // that is not one raises. That is a location this command cannot show rather
   // than a failure of the command, so it becomes the refusal screen — with no
   // session, no provider and no observer ever created.
@@ -189,7 +189,7 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
   // The route, against what the file already holds — *before* anything replays.
   //
   // Opening a session starts or resumes the execution, and replay that gets
-  // past the retained prefix appends. A location naming a scope this history
+  // past the saved prefix appends. A location naming a scope this history
   // never had is a typo, and discovering it after replay has run means the typo
   // grew the file: the run happened, records landed, and the answer the person
   // gets is still that their URL was wrong. Everything the route names comes
@@ -221,12 +221,12 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
 }
 
 /**
- * Whether the retained history can answer everything this route names.
+ * Whether the saved history can answer everything this route names.
  *
  * Projected from the file as it stands rather than from a session, because a
  * session is the thing this is deciding whether to open. The prefix a route
  * selects, the scopes it walks and the drawers it opens are all answers the
- * retained records already hold.
+ * saved records already hold.
  */
 function* resolvable(execution: ReplExecution, state: ReplState): Operation<Result<void>> {
   const projected = projectRepl(yield* execution.stream.readAll(), state.route.at);

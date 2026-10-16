@@ -135,7 +135,7 @@ function committed(path: string): Record<string, unknown> {
   }
 }
 
-/** The retained roots an event never named, so restoration cannot borrow them. */
+/** The saved roots an event never named, so restoration cannot borrow them. */
 function manifestsOf(path: string, rootId: string): string[] {
   const sqlite = new DatabaseSync(path, { readOnly: true });
   try {
@@ -256,8 +256,8 @@ describe("Tier WAC — Workspace effects across a process boundary", () => {
       ready: true,
       content: CRASH_CONTENT,
       currentRoot: expect.any(String),
-      retainedRoots: 3,
-      currentRootRetained: 1,
+      savedRoots: 3,
+      currentRootSaved: 1,
       journalEventId: expect.any(String),
       journalRootId: during.announcement["currentRoot"],
       journalRows: baselineJournal.length + 1,
@@ -365,7 +365,7 @@ describe("Tier WAC — Workspace effects across a process boundary", () => {
     const later = journal[1].rootId;
     expect(historical).not.toBe(later);
 
-    // The retained content the older root needs is no longer reachable from
+    // The saved content the older root needs is no longer reachable from
     // the live frontier, so restoration has to come from what that root
     // retains rather than from anything still live.
     const retired = manifestsOf(path, historical).filter(
@@ -415,7 +415,7 @@ describe("Tier WAC — Workspace effects across a process boundary", () => {
     expect(committedAgain["currentRoot"]).toBe(first["currentRoot"]);
     expect(committedAgain["events"]).toEqual(first["events"]);
 
-    // Restoration published a root that was already retained; it created no
+    // Restoration published a root that was already saved; it created no
     // new one and lost no history.
     const after = committed(path);
     expect(after["roots"]).toBe(stored["roots"]);

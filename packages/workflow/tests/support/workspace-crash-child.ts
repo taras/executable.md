@@ -104,10 +104,10 @@ function* crash(root: string, runId: string): Operation<void> {
         ready: true,
         content: yield* live.readTextFile(CRASH_PATH),
         currentRoot,
-        retainedRoots: count(
+        savedRoots: count(
           sqlite.prepare("SELECT COUNT(*) AS count FROM workspace_roots").get()?.["count"],
         ),
-        currentRootRetained: count(
+        currentRootSaved: count(
           sqlite
             .prepare("SELECT COUNT(*) AS count FROM workspace_roots WHERE root_id = ?")
             .get(currentRoot)?.["count"],

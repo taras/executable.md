@@ -322,7 +322,7 @@ describe("Tier WFC — xmd workflow start and resume", () => {
         expect(failed.stderr).toContain("ComponentBesideTheDefinition");
         expect(failed.stderr).toContain("searched: ");
 
-        // A compatible reuse of retained failed history replays that failure
+        // A compatible reuse of saved failed history replays that failure
         // rather than retrying the work.
         const replayed = yield* xmd(fixture, [
           "workflow",
@@ -463,7 +463,7 @@ describe("Tier WFC — xmd workflow start and resume", () => {
         expect(refused.stderr).toContain(option.split("=")[0] ?? option);
       }
 
-      // A delivery writes retained state, so the secret gate is one of its own.
+      // A delivery writes saved state, so the secret gate is one of its own.
       const optedOut = yield* xmd(fixture, [
         "workflow",
         "answer",
@@ -629,7 +629,7 @@ describe("Tier WFC — xmd workflow start and resume", () => {
       expect(status.stdout).not.toContain("Pub*");
 
       // The document is taken away, and the resume still runs that section out
-      // of what the run retained rather than resolving the selector again.
+      // of what the run saved rather than resolving the selector again.
       yield* rm(join(fixture.repository, "flows/sections.md"), { force: true });
       const resumed = yield* xmd(fixture, ["workflow", "resume", "section-1"]).join();
       expect(resumed.code).toBe(0);
@@ -737,7 +737,7 @@ describe("Tier WFC — a workflow closed over a component bundle", () => {
     yield* useFixture(LOOP_FILES, function* (fixture) {
       // Every one of the six files says something else in the working tree by
       // the time the run starts, and that is what the run is of: the bundle is
-      // read from the directory the root lives in, and retained with it.
+      // read from the directory the root lives in, and saved with it.
       yield* editCheckout(fixture);
 
       const started = yield* xmd(fixture, ["workflow", "start", "flows/loop.md"]).join();
@@ -881,7 +881,7 @@ describe("Tier WFC — a workflow closed over a component bundle", () => {
       expect(reportedStatus(resumed.stderr)).toBe("completed");
       expect(resumed.stdout).toContain("implemented.");
 
-      // A completed run replays what it retained: the bundle was reconstructed
+      // A completed run replays what it saved: the bundle was reconstructed
       // and the history admitted, and then nothing was performed or appended.
       const after = yield* xmd(fixture, ["workflow", "history", "loop-3", "--json"]).join();
       expect(after.stdout).toBe(before.stdout);
@@ -1113,7 +1113,7 @@ describe("Tier WFX — what xmd workflow export refuses", () => {
     });
   });
 
-  it("WFX6: refuses when the run's own retained source no longer describes itself", function* () {
+  it("WFX6: refuses when the run's own saved source no longer describes itself", function* () {
     yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
       const started = yield* xmd(fixture, [
         "workflow",

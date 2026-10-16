@@ -54,7 +54,7 @@ import {
   agentIdentityComponents,
   content,
   DocumentOutput,
-  retainedSource,
+  savedSource,
   scanSecrets,
   SecretDetectedError,
   secretPolicy,
@@ -150,7 +150,7 @@ export function structuralValidation(
     scoped(function* (): Operation<DocumentValidation> {
       yield* useCommandComponents();
       return yield* validateDocumentStructure({
-        ...retainedSource(PLAN_IDENTITY, candidate),
+        ...savedSource(PLAN_IDENTITY, candidate),
         includes: [...includes],
         components: agentIdentityComponents(),
         // Whatever the installed Plugins declare travels with the profile, so a
@@ -242,7 +242,7 @@ export interface PlanComponentAssembly {
   /**
    * What the command's Plugins declared, when this surface has them.
    *
-   * The retained assembly, never a second installation: a `<Plan>` inside a run
+   * The saved assembly, never a second installation: a `<Plan>` inside a run
    * is checked against the vocabulary that run installed, and reinstalling here
    * would re-read every packaged asset to arrive at the same answer.
    */
@@ -266,7 +266,7 @@ const INPUTS_RETURNS = {
  * What the frozen inputs are given: the caller's optional session name and the
  * prompt this invocation is about.
  *
- * Only the prompt's digest is retained here. The vocabulary the Agent is shown
+ * Only the prompt's digest is saved here. The vocabulary the Agent is shown
  * is public `<Syntax />`'s, with a durable record of its own, so each protocol
  * can be read and reconciled independently.
  */
@@ -555,11 +555,11 @@ function planInputs(assembly: PlanComponentAssembly): IdentityComponent {
         });
 
         // A history is input, so it is parsed rather than trusted.
-        const retained = readInputs(frozen);
-        if (retained === undefined) {
+        const saved = readInputs(frozen);
+        if (saved === undefined) {
           throw new StaleInputError(UNREADABLE_INPUTS);
         }
-        if (retained.instruction !== instruction) {
+        if (saved.instruction !== instruction) {
           throw new StaleInputError(STALE);
         }
 
@@ -738,7 +738,7 @@ function planProgress(assembly: PlanComponentAssembly): IdentityComponent {
 /**
  * Answer about one draft, without executing a byte of it.
  *
- * Each assessment is retained under this expansion and the exact candidate it
+ * Each assessment is saved under this expansion and the exact candidate it
  * was about, so a continuation restores the answer the run gave rather than
  * re-deciding it against a working tree that has moved. The candidate itself
  * never reaches the description — only the digest that tells two drafts apart.
@@ -906,8 +906,8 @@ function* withholdSecrets(text: string): Operation<void> {
  * in — no trimming, no fence removal, no normalization, no added newline.
  */
 
-/** What the frozen inputs retained, or nothing when the record is not one. */
-interface RetainedInputs {
+/** What the frozen inputs saved, or nothing when the record is not one. */
+interface SavedInputs {
   readonly instruction: string;
 }
 
@@ -919,7 +919,7 @@ interface RetainedInputs {
  * version cannot read — not one to fill in a default for, because every default
  * here is a guess about what an earlier run actually asked.
  */
-function readInputs(value: Json): RetainedInputs | undefined {
+function readInputs(value: Json): SavedInputs | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
@@ -943,7 +943,7 @@ function readInputs(value: Json): RetainedInputs | undefined {
  * instead of what was actually wrong with their history.
  */
 const UNREADABLE_INPUTS =
-  "the retained Plan inputs cannot be read as Plan inputs, so no Plan source was produced.";
+  "the saved Plan inputs cannot be read as Plan inputs, so no Plan source was produced.";
 
 /**
  * What a continuation asking for a different Plan is refused with.
@@ -955,14 +955,14 @@ const UNREADABLE_INPUTS =
  * instead of a count of unreached journal entries.
  */
 const STALE =
-  "this Plan was written for different instructions, so the retained Plan is stale input. " +
+  "this Plan was written for different instructions, so the saved Plan is stale input. " +
   "No Plan source was produced, and none was written for the new instructions. Re-run from " +
   "the start rather than resuming a journal that answers a different question.";
 
 /**
  * The record one approved Plan leaves behind.
  *
- * Five facts, retained together because they are one answer: which invocation
+ * Five facts, saved together because they are one answer: which invocation
  * asked, which prompt it asked about, the exact bytes that were approved, their
  * digest, and that the structural admission succeeded. A continuation reads it
  * back as hostile data — a history is input, not a value this process left in
@@ -1004,7 +1004,7 @@ function readArtifact(value: Json): PlanArtifact | undefined {
 }
 
 const UNREADABLE_ARTIFACT =
-  "the retained Plan artifact cannot be read as one, so no Plan source was produced.";
+  "the saved Plan artifact cannot be read as one, so no Plan source was produced.";
 
 function admitPlan(validate: StructuralValidation): IdentityComponent {
   return {
@@ -1025,7 +1025,7 @@ function admitPlan(validate: StructuralValidation): IdentityComponent {
         // would be a different record for every draft, so a continuation whose
         // instructions moved would author a second Plan rather than meet the one
         // this site already has.
-        const retained = yield* durablePlanOperation<Json>(`plan:artifact:${id}`, function* () {
+        const saved = yield* durablePlanOperation<Json>(`plan:artifact:${id}`, function* () {
           const validation = yield* validate(candidate);
           if (validation.outcome === "invalid") {
             throw new Error(
@@ -1042,7 +1042,7 @@ function admitPlan(validate: StructuralValidation): IdentityComponent {
           };
         });
 
-        const artifact = readArtifact(retained);
+        const artifact = readArtifact(saved);
         if (artifact === undefined) {
           throw new StaleInputError(UNREADABLE_ARTIFACT);
         }

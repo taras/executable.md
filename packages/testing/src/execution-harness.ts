@@ -308,7 +308,7 @@ function* CollectJournal(): Operation<unknown> {
     state.configuration.collectJournal = true;
     return "";
   }
-  // Read-only, and only what the host already retained: observation never
+  // Read-only, and only what the host already saved: observation never
   // enabled retention, so there is nothing here to append to or replay from.
   return Object.freeze([...(state.settlement?.journal ?? [])]);
 }
@@ -498,7 +498,7 @@ function readProfile(
  * `<WorkflowRun>` — one real workflow run, in storage the test owns.
  *
  * The isolation is temporary ownership rather than simulated durability: the
- * start, the journal, the suspension, the retained result and the resume are
+ * start, the journal, the suspension, the saved result and the resume are
  * the production ones, kept somewhere that belongs to this scope and is removed
  * with it. Two scopes declaring the same public id are still two runs, because
  * the storage is per-scope and the id is only what the run calls itself.

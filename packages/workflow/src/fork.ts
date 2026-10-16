@@ -1,8 +1,8 @@
 /**
- * Which retained events a fork inherits, and what its own journal begins with.
+ * Which saved events a fork inherits, and what its own journal begins with.
  *
  * A fork is a new run whose history starts as somebody else's. `--at` names one
- * committed event of the source, and everything the source retained up to and
+ * committed event of the source, and everything the source saved up to and
  * including it becomes the fork's inherited prefix.
  *
  * ## Two head events are the fork's own
@@ -26,7 +26,7 @@
  *
  * ## Selection is total before anything is created
  *
- * A checkpoint nobody retained, a checkpoint whose prefix is not forkable, and
+ * A checkpoint nobody saved, a checkpoint whose prefix is not forkable, and
  * a checkpoint at the run's own outcome are all refused here, where refusing
  * costs nothing. The last of those is not a technicality: a run whose canonical
  * outcome is inside the prefix has nothing left to continue, and a fork of it
@@ -51,7 +51,7 @@ const ROOT_COROUTINE = "root";
 const IMPORT_COMPONENT = "import_component";
 const ROOT_DOCUMENT = "__root__";
 
-/** One retained row, as fork selection reads it. */
+/** One saved row, as fork selection reads it. */
 export interface ForkCandidate {
   readonly eventId: string;
   readonly event: DurableEvent;
@@ -59,9 +59,9 @@ export interface ForkCandidate {
   readonly forkability: Forkability;
 }
 
-/** What one checkpoint selects out of a source run's retained history. */
+/** What one checkpoint selects out of a source run's saved history. */
 export interface ForkSelection {
-  /** The events the fork inherits, in retained order, without the source's own record. */
+  /** The events the fork inherits, in saved order, without the source's own record. */
   readonly inherited: readonly ForkCandidate[];
   /** The Workspace root the checkpoint event was written against. */
   readonly checkpointWorkspaceRootId: string;
@@ -81,7 +81,7 @@ export function selectForkPrefix(
   if (at === -1) {
     return Err(
       new WorkflowRequestError(
-        `no retained event of this run is ${JSON.stringify(checkpointEventId)}. ` +
+        `no saved event of this run is ${JSON.stringify(checkpointEventId)}. ` +
           "`xmd workflow history <run-id> --forkable` lists the checkpoints a fork may select.",
       ),
     );
@@ -89,7 +89,7 @@ export function selectForkPrefix(
 
   const checkpoint = candidates[at];
   if (checkpoint === undefined) {
-    return Err(new WorkflowRequestError("the selected checkpoint is not a retained event"));
+    return Err(new WorkflowRequestError("the selected checkpoint is not a saved event"));
   }
 
   if (isRootOutcome(checkpoint.event)) {

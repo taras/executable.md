@@ -30,8 +30,8 @@ import { Err, Ok, type Operation, type Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { type JsonObject, parseJsonValue } from "../../storage/members.ts";
 import type { DocumentExecutionRecord, WorkflowRunRecord } from "../../storage/record.ts";
-import type { RetainedAnswer } from "../answers.ts";
-import type { RetainedBlob, RetainedManifest } from "../fork-source.ts";
+import type { SavedAnswer } from "../answers.ts";
+import type { SavedBlob, SavedManifest } from "../fork-source.ts";
 import type { AgentSessionRecord } from "../workspace/agent-sessions.ts";
 import type { StoredWorkspaceRoot } from "../workspace/manifest.ts";
 import {
@@ -73,7 +73,7 @@ import {
   type XmdArtifactEncoding,
   type XmdArtifactJournalRow,
 } from "./types.ts";
-import type { RetainedDefinitionSources } from "../../lifecycle/source.ts";
+import type { SavedDefinitionSources } from "../../lifecycle/source.ts";
 import type { WorkflowDefinition } from "../../storage/source-bundle.ts";
 
 const SELECT_HEADER_VERSION = "SELECT artifact_version FROM xmd_artifact_header WHERE id = 1";
@@ -126,8 +126,8 @@ interface SealedContent {
  * Everything the rest of recognition needs is in memory before this returns, so
  * no later gate is reading through a handle and nothing a caller could observe
  * outlives the file being open. It is also what lets the semantic pass be an
- * operation: judging a retained answer means compiling the schema its wait
- * retained, and that cannot happen inside a synchronous SQLite transaction.
+ * operation: judging a saved answer means compiling the schema its wait
+ * saved, and that cannot happen inside a synchronous SQLite transaction.
  */
 function detach(path: string): SealedContent {
   let database: DatabaseSync;
@@ -248,7 +248,7 @@ function* recognized(sealed: SealedContent, path: string): Operation<VerifiedXmd
   }
 
   // Gate 10: which of version 1's two profiles this is, and whether a finalized
-  // one classifies every session that retained a Prompt. Absent evidence is
+  // one classifies every session that saved a Prompt. Absent evidence is
   // merged legacy V1 and nothing is synthesized for it.
   const evidence = decodeXmdArtifactAgentEvidence(agent, path);
   if (evidence !== undefined) {
@@ -514,7 +514,7 @@ function frozenRoot(root: StoredWorkspaceRoot): StoredWorkspaceRoot {
   });
 }
 
-function frozenManifest(manifest: RetainedManifest): RetainedManifest {
+function frozenManifest(manifest: SavedManifest): SavedManifest {
   const hash = sealedBytes(manifest.hash);
   const encoded = sealedBytes(manifest.encoded);
   return Object.freeze({
@@ -529,7 +529,7 @@ function frozenManifest(manifest: RetainedManifest): RetainedManifest {
   });
 }
 
-function frozenBlob(blob: RetainedBlob): RetainedBlob {
+function frozenBlob(blob: SavedBlob): SavedBlob {
   const hash = sealedBytes(blob.hash);
   const content = sealedBytes(blob.content);
   return Object.freeze({
@@ -544,7 +544,7 @@ function frozenBlob(blob: RetainedBlob): RetainedBlob {
   });
 }
 
-function frozenAnswer(answer: RetainedAnswer): RetainedAnswer {
+function frozenAnswer(answer: SavedAnswer): SavedAnswer {
   return Object.freeze({ ...answer, answer: frozenJson(answer.answer) });
 }
 
@@ -557,7 +557,7 @@ function frozenAgentSession(session: AgentSessionRecord): AgentSessionRecord {
  *
  * Descriptors and their nested identities and associations are frozen; a
  * bundle's bytes cannot be, so they go behind the same copy-returning accessor
- * every other byte leaf uses. A caller holding retained checkpoint evidence
+ * every other byte leaf uses. A caller holding saved checkpoint evidence
  * must not be able to edit it into evidence about something else.
  */
 function frozenAgentEvidence(evidence: XmdArtifactAgentEvidence): XmdArtifactAgentEvidence {
@@ -611,7 +611,7 @@ function frozenPortability(record: XmdArtifactAgentPortability): XmdArtifactAgen
   });
 }
 
-function frozenClosure(sources: RetainedDefinitionSources): RetainedDefinitionSources {
+function frozenClosure(sources: SavedDefinitionSources): SavedDefinitionSources {
   // Byte leaves behind an accessor, on the same terms as every other byte
   // member here: the sealed array stays in the closure and each read answers
   // with a copy, so evidence a caller received is evidence it cannot edit.
@@ -636,7 +636,7 @@ function frozenClosure(sources: RetainedDefinitionSources): RetainedDefinitionSo
  *
  * Members are defined rather than assigned: `object[key] = value` reaches
  * `Object.prototype`'s setter for `__proto__`, which one runtime honours and
- * another does not, so a retained value declaring that name would come back
+ * another does not, so a saved value declaring that name would come back
  * differently depending on where it was read.
  */
 function frozenJson(value: Json): Json {

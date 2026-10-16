@@ -17,14 +17,14 @@ outlives any one of them.
 A run has one definition: the exact source bytes chosen when it starts.
 
 A **source-bundle** definition is the exact bytes themselves, addressed by
-portable logical paths and retained with the run. A file outside a repository,
+portable logical paths and saved with the run. A file outside a repository,
 an untracked file and a file edited since its last commit are all ordinary
 starts, and the run executes what each said at the moment it began. Editing,
 moving or deleting the original afterwards changes nothing about the run.
 
 The definition has one closed shape, with no `version` or `kind` member
 (§9.1). Older development shapes are refused; no migration or legacy reader
-exists. Creation, resume, fork and export read the run's retained source rather
+exists. Creation, resume, fork and export read the run's saved source rather
 than asking a host to fetch its definition.
 
 For the execution and replay model, read [A document running](../architecture.md#a-document-running).
@@ -33,15 +33,15 @@ owns lifecycle commands and the authored workflow environment.
 
 ```ts
 import { executeInstalled } from "@executablemd/core/host";
-import { getWorkflowRun, retainedWorkflowInstallation } from "@executablemd/workflow";
+import { getWorkflowRun, savedWorkflowInstallation } from "@executablemd/workflow";
 
 const execution = yield* executeInstalled(
   { path: "./workflow.md", stream },
-  [retainedWorkflowInstallation(run)],
+  [savedWorkflowInstallation(run)],
 );
 ```
 
-The package owns `WorkflowRun`, `retainedWorkflowInstallation()`,
+The package owns `WorkflowRun`, `savedWorkflowInstallation()`,
 `getWorkflowRun()` and the source-bundle identity primitives. It depends on
 `@executablemd/core`, `@executablemd/durable-streams` and
 `@executablemd/runtime`. Core never imports workflow, and workflow never imports
@@ -75,19 +75,19 @@ interface WorkflowRun {
 random IDs by default; an authorized local caller may [select an ID](workflow-workspace-spec.md#33-callers-may-select-a-run-id).
 A programmatic host supplies its ID through its own preparation (§3). `bundleHash` is the identity of the bytes the run retains, and
 `targetPath` is the exact section it runs, when it runs one. There is no base
-and no pinned commit: a run starts from exact retained bytes rather than from a
+and no pinned commit: a run starts from exact saved bytes rather than from a
 repository state, so a member naming one would be a claim about a repository the
 run never had.
 
 The shape is closed, and reading it is exact. A value carrying that member set
 in any key order is a run; a value carrying it with something extra — including
-the members a record retained under an older format carried — is not a run read
+the members a record saved under an older format carried — is not a run read
 loosely and is refused. Ordinary serialization writes `runId`, `bundleHash`,
 then `targetPath` when present. Object-member order is presentation: a
 canonical-JSON container sorts these keys under its own rule without changing
 the value.
 
-The retained effect description records
+The saved effect description records
 `{ type: "workflow_run", name: "workflow_run", bundleHash }` and invents no Git
 field. Divergence detection compares only the type and the name, so the members
 past them are for a reader.
@@ -105,7 +105,7 @@ workspace or continuation capability.
 ## 3. Where the run is prepared
 
 A trusted host supplies one of two preparations. For a run already created
-by the lifecycle, `retainedWorkflowInstallation(run)` records that exact run.
+by the lifecycle, `savedWorkflowInstallation(run)` records that exact run.
 A programmatic host instead supplies `WorkflowRunPreparation.allocate()` to
 `createWorkflowRunInstallation(preparation)` and decides how to allocate its
 run and obtain its inputs.
@@ -115,10 +115,10 @@ The host passes it to `executeInstalled()`, where it contributes two things:
 
 - **an admission**, which canonical core captures before any installation,
   middleware or document code exists and applies inside its own trusted journal
-  read, on the retained snapshot every later phase consumes; and
+  read, on the saved snapshot every later phase consumes; and
 - **a `prepare` hook** — a `DurablePreparation`, the trusted durable
   preparation canonical core invokes *inside the durable root*, after
-  retained-history admission and before any public `Execution.document` policy,
+  saved-history admission and before any public `Execution.document` policy,
   the root import and every authored effect.
 
 No public middleware settles workflow-run state. `Execution.execute`,
@@ -138,14 +138,14 @@ executions and neither sees the other's run.
 
 ### 3.1 Installing a run that already exists
 
-A host that keeps runs in retained storage (§9) has decided what the run is
+A host that keeps runs in saved storage (§9) has decided what the run is
 before anything executes: the lifecycle transition answered with the run id and
-with the definition it retained. There is nothing left for the execution to
+with the definition it saved. There is nothing left for the execution to
 allocate or resolve, and a run id an execution invented could not agree with the
 record storage already holds.
 
 ```ts
-yield* executeInstalled(options, [retainedWorkflowInstallation(run)]);
+yield* executeInstalled(options, [savedWorkflowInstallation(run)]);
 ```
 
 `run` is the closed `WorkflowRun` value the record retains.
@@ -159,9 +159,9 @@ it.
 
 A journal recording a different run is refused as `StaleInputError`, naming
 the differing fields and never their values. Run IDs and targets can contain
-external text, just as retained props can. A serialized journal value missing a
+external text, just as saved props can. A serialized journal value missing a
 required member or carrying any extra member identifies no run and is refused.
-The host input is a separate boundary: the retained installation projects the
+The host input is a separate boundary: the saved installation projects the
 named run fields from a possibly wider record, then validates them. Missing,
 unreadable or empty required fields are refused before document execution.
 
@@ -206,7 +206,7 @@ that stream's journal-provenance witness onto itself without establishing one.
 
 What a history is held to is the run the installation supplied.
 
-`retainedWorkflowInstallation(run)` requires `runId`, `bundleHash` and the exact
+`savedWorkflowInstallation(run)` requires `runId`, `bundleHash` and the exact
 target to match, and requires the record to be *there*: a host created the run
 before anything executed, so a non-empty history carrying no successful
 record — none at all, or only one that failed — is not this run's history.
@@ -234,13 +234,13 @@ history may carry **at most one** entry under the canonical run identity — the
 record is written before the root document is imported, so a second entry
 describes a second run, *however either of them settled*. Two successful
 records, a successful one beside a failed one in either order, and two failed
-ones are all refused. Under a retained installation the history must carry
+ones are all refused. Under a saved installation the history must carry
 exactly one, and it must have succeeded.
 
 Malformed, carrying an extra member, written under another name, written by a
 child coroutine, and naming another run are refused under either installation,
 whether the history is truncated or completed. A single missing or failed record
-is refused under a retained installation and permitted under a programmatic one,
+is refused under a saved installation and permitted under a programmatic one,
 for the reason above.
 
 Reading a recorded value is total. A value whose enumeration, property
@@ -248,7 +248,7 @@ descriptors, getters or classification refuse describes no run, and becomes the
 same fixed refusal every other unreadable record becomes — it never escapes
 carrying its own text.
 
-The history admission reads is the retained history: every discriminator settled
+The history admission reads is the saved history: every discriminator settled
 once, before anything is decided, and the same objects every later phase
 consumes. An event that refuses any member a decision rests on — its type, its
 coroutine, either half of its description, its settlement, or a successful
@@ -269,7 +269,7 @@ Admission and durable preparation have different jobs in each journal state:
 
 | State | What runs | What happens |
 | --- | --- | --- |
-| **live** — no record | the admission, then `prepare` | admission finds no earlier identity; preparation records the supplied retained run, or calls the programmatic host's `allocate()`, before the root is imported |
+| **live** — no record | the admission, then `prepare` | admission finds no earlier identity; preparation records the supplied saved run, or calls the programmatic host's `allocate()`, before the root is imported |
 | **truncated** — record present, root not closed | the admission, then `prepare` | admission restores the recorded run; the preparation's durable operation consumes its recorded result and advances its cursor without allocating again |
 | **completed** — root `Close` recorded | the admission only | canonical core validates the run and returns the recorded result without entering preparation or expanding the document |
 
@@ -284,7 +284,7 @@ The journal is parsed, never trusted.
 
 - A record that does not describe the closed `WorkflowRun` shape is refused.
   Stored values and unexpected member names are never quoted in diagnostics.
-- A retained run whose `runId`, `bundleHash` or exact target differs from the
+- A saved run whose `runId`, `bundleHash` or exact target differs from the
   supplied run is refused, naming the differing fields rather than their values.
 
 Both are `StaleInputError`: the journal does not describe the requested run and
@@ -298,7 +298,7 @@ document failure or cancellation after that point does not erase it.
 
 Failure *before* that point records no `WorkflowRun` value and expands no
 root document. A programmatic host's `allocate()` may fail while preparing its
-inputs; that generic preparation failure is still a durable outcome. A retained
+inputs; that generic preparation failure is still a durable outcome. A saved
 lifecycle run already exists in storage before this installation executes.
 
 Such a failure is journaled the way every durable effect's failure is — as a
@@ -318,7 +318,7 @@ it (§3.2).
 Git queries belong to `@executablemd/git`, not workflow definition or run
 identity. Repository and Git operations are specified in [Workflow Workspace
 §§6–7](workflow-workspace-spec.md#6-repository-and-worktree); the current query
-interface is [GitQueryApi](../packages/git/src/git.ts). Retained definitions
+interface is [GitQueryApi](../packages/git/src/git.ts). Saved definitions
 are read from their own source store (§9.4).
 
 `GitQuery.resolve(revision)` has the semantics of
@@ -349,10 +349,10 @@ workflow runs may contain the same expansion id; the expansion id does not embed
 the run id, and expansion identity works with no workflow middleware installed
 at all.
 
-## 9. Retained run storage
+## 9. Saved run storage
 
 A run recorded only in the journal of the execution that created it can be
-found only by whoever already has that journal. Retained storage is what lets
+found only by whoever already has that journal. Saved storage is what lets
 a second process open a run by its public id and continue from durable data.
 
 Each run owns one database. Shared code reaches it through a contextual Api
@@ -400,7 +400,7 @@ interface WorkflowDefinition {
 The descriptor carries **no version and no kind**. One shape is the only shape,
 so there is nothing for a reader to dispatch on, and a descriptor carrying
 either member is refused as carrying a member nobody declared. The shape is
-closed and admits its exact members in any object-key order. A record retained
+closed and admits its exact members in any object-key order. A record saved
 under an older format carried a `version`, and is therefore refused here rather
 than guessed at.
 
@@ -423,7 +423,7 @@ interface SourceBundleComponent {
 logical path, in the UTF-8 byte order of those paths. `entrypoint` names exactly
 one of them and ends in `.md`. `components`, when present, is non-empty, in the
 UTF-8 byte order of the names, one entry per name, and every path names a
-retained source — so the mapping a root resolves its component names through is
+saved source — so the mapping a root resolves its component names through is
 closed over the same bytes the run executes. Absence means the definition
 declares no workflow components; an empty array is not a second spelling of that
 and is refused.
@@ -534,7 +534,7 @@ repository-relative path. It may be absent, replaced or become unreachable
 without changing compatibility or preventing a resume, nothing reads it back to
 find the source, and failing to obtain it cannot fail a start. The supplied
 absolute path, the checkout path and the invocation working directory are never
-retained in the definition, the run identity, the journal binding or an
+saved in the definition, the run identity, the journal binding or an
 artifact.
 
 ### 9.2 Creating a run is also how it is found
@@ -568,11 +568,11 @@ A reuse agrees only when the hash algorithm, the bundle hash, the entrypoint,
 the complete canonical source manifest and component mapping, the exact presence
 and value of `targetPath`, and the normalized props all agree. The manifest is
 compared whole even though the bundle hash commits to it: a hash is not a reason
-to admit a retained structure that disagrees with itself. The candidate's host
+to admit a saved structure that disagrees with itself. The candidate's host
 path and its optional provenance are ignored, so identical bytes reached through
 another directory are the same run.
 
-**A compatible reuse executes the retained source, never the newly supplied
+**A compatible reuse executes the saved source, never the newly supplied
 buffers.**
 
 `lookup()` finds by id and creates nothing.
@@ -609,7 +609,7 @@ read, listed or mistaken for a run.
 - A nullable **stop reason**: either `{ kind: "host", code }`, a categorical
   code the host assigns, or `{ kind: "journal", eventId }`, a reference to an
   event that already crossed the secret filter. Neither shape can carry an
-  arbitrary exception message, because a message retained this way would be
+  arbitrary exception message, because a message saved this way would be
   history nothing had filtered. A journal reason names an event the run holds;
   one naming an event that is not there is refused, because a reason that
   refers to nothing is not a reason.
@@ -638,7 +638,7 @@ A newly created run keeps `PRAGMA user_version = 1`. Initialization never
 upgrades an existing database.
 
 The declaration is one immutable, closed inventory. `workflow_run` has **no
-`base` column**: a run starts from exact retained bytes rather than from a
+`base` column**: a run starts from exact saved bytes rather than from a
 repository state, so a column naming one would be a claim about a repository the
 run never had. Two tables hold what it executes: `workflow_definition_blob`,
 keyed by a 64-digit lowercase source hash with its byte length and content, and
@@ -653,17 +653,17 @@ is unsupported, and an altered or extra object is corruption — never a migrati
 candidate. Nothing repairs, migrates or reinterprets a database, and there is no
 earlier version for a file to be recognized as.
 
-#### What a retained source has to prove
+#### What a saved source has to prove
 
 The stored manifest equals the descriptor's complete `sources` array: one row
 per entry and no extra row. Every referenced blob exists, its byte length equals
-both retained lengths, and recomputing its source hash produces its key.
+both saved lengths, and recomputing its source hash produces its key.
 Multiple paths may reference one blob when their bytes are identical;
 unreferenced content is corruption rather than tolerated garbage. Recomputing
-the bundle hash from the retained manifest and component mapping produces
+the bundle hash from the saved manifest and component mapping produces
 `bundleHash`.
 
-No reader returns a partial bundle. Before a retained source is parsed as
+No reader returns a partial bundle. Before a saved source is parsed as
 Markdown, the entrypoint and every declared component decodes as well-formed
 UTF-8 under one strict decoder, which performs no normalization; the BLOB stays
 authoritative and is what export and every later resume preserve.
@@ -687,7 +687,7 @@ nothing.
 One initialization transaction then writes the descriptor,
 the manifest rows, the de-duplicated BLOBs, the initial Workspace state, the
 lifecycle state and the first document-execution record. They all appear or none
-do. The transition answers with the authenticated retained closure read back
+do. The transition answers with the authenticated saved closure read back
 from storage, which is what a caller imports.
 
 #### 9.4.2 Source is proved before the lifecycle moves
@@ -697,7 +697,7 @@ recovery, a new document-execution record, Workspace attachment, journal replay
 or root import. A failure therefore leaves the run's lifecycle and journal
 exactly as they were.
 
-For an existing run the retained BLOBs are re-derived in full; the original path
+For an existing run the saved BLOBs are re-derived in full; the original path
 and the provenance are never consulted. A run being created is held to the
 descriptor it is about to retain before anything is persisted. Completed replay,
 export and fork read the same store, so none of them reaches a repository.
@@ -709,11 +709,11 @@ discoverable by lookup or list. An interruption after the commit is an ordinary
 resumable execution, because the complete definition already exists.
 
 A fresh database contains one content-addressed Workspace root whose canonical
-manifest describes only `/` as a directory. Its retained manifest and blob
+manifest describes only `/` as a directory. Its saved manifest and blob
 reference sets are empty, its current-root pointer names that root, and its DOFS
 frontier contains only the corresponding root directory.
 
-Every later retained root is a complete canonical filesystem checkpoint. Root
+Every later saved root is a complete canonical filesystem checkpoint. Root
 format 1 uses fixed-key-order UTF-8 JSON containing `/` and every reachable
 absolute POSIX path sorted by UTF-8 bytes. Each entry records its kind, mode and
 observable mtime; files also record size, their DOFS manifest identity and a
@@ -727,10 +727,10 @@ The lowercase root ID is SHA-256 over
 the stored format and bytes to be identical. File bytes remain only in DOFS
 blobs. The normalized root-to-manifest and root-to-blob rows equal the exact
 transitive content of each root and prevent that content from being deleted
-while the root is retained.
+while the root is saved.
 
 Each file entry's declared size equals the size in its referenced DOFS
-manifest. Recognition checks that agreement for every file in every retained
+manifest. Recognition checks that agreement for every file in every saved
 root, including roots that are not current, while it validates the manifest's
 chunks and blobs transitively.
 
@@ -746,7 +746,7 @@ An event's opaque id is stored separately from its physical position. The id is
 stable once written and is what a journal stop reason points at; the position
 is what ordering uses and is not a public identifier.
 
-Every journal row also names the retained Workspace root current when the row
+Every journal row also names the saved Workspace root current when the row
 is inserted. Existing non-Workspace appends use the canonical empty current
 root and otherwise retain their established behavior.
 
@@ -789,7 +789,7 @@ the same canonical path after provider teardown produces a different identity.
 Every top-level transaction receives a separate opaque identity and an exact
 active record containing its path, connection generation, open state,
 authorized lease and transaction handle. The provider invalidates that record
-before commit or rollback, so a retained handle or token never becomes valid
+before commit or rollback, so a saved handle or token never becomes valid
 again in a later transaction.
 
 Each physical connection holds recovery coordination from opening through
@@ -799,7 +799,7 @@ database-and-journal pair. [Read-only lifecycle inspection](../architecture.md#r
 owns the recovery ordering and connection lifetime; §9.7 owns the storage
 refusals.
 
-Opening existing storage performs structural recognition, retained-root and
+Opening existing storage performs structural recognition, saved-root and
 content validation, the live/current comparison and the singleton run-row read
 inside one explicit SQLite read transaction. Those dependent reads therefore
 describe one committed version. Recognition does not mark the connection as a
@@ -967,11 +967,11 @@ writer's transaction is uncommitted, so a crash publishes nothing that was not
 already visible before it.
 
 A later process therefore opens the last committed state and nothing else: the
-same live filesystem, the same current root, the same retained roots, manifest
+same live filesystem, the same current root, the same saved roots, manifest
 and blob references, and the same ordered journal with the same event
 identities and Workspace-root associations. Recorded effects replay rather than
 execute again, and the private restoration materializer reconstructs any
-retained root from that state without the process that wrote it.
+saved root from that state without the process that wrote it.
 
 The provider-neutral coordinator receives the failure-activation continuation
 needed for this boundary. The default live coordinator ignores it and preserves
@@ -980,7 +980,7 @@ explicit Workspace operation selects the Workspace coordinator. The
 transaction-bound Files provider of §10 selects it for every document
 filesystem effect; workflow start and resume do not reach it.
 
-The private restoration materializer loads a fully validated retained root and
+The private restoration materializer loads a fully validated saved root and
 rebuilds directories, files, chunks, modes, mtimes, symbolic links and hardlink
 relationships inside a nested savepoint. It establishes valid mutable revision
 state, clears the authoritative DOFS resolution and blob caches, and requires a
@@ -988,7 +988,7 @@ read-only resnapshot to reproduce the selected root ID before the savepoint is
 released. A failure restores the prior live frontier and current-root pointer.
 
 Immutable roots are authoritative checkpoints and DOFS tables are the current
-live materialization. Every retained root remains indefinitely. The production
+live materialization. Every saved root remains indefinitely. The production
 closure neither exposes nor invokes Cloudflare garbage collection; root-aware
 deletion and collection are separate lifecycle behavior.
 
@@ -1014,23 +1014,23 @@ differently is reported as itself:
 | transaction | a transaction cannot be started, continued or committed as asked |
 | inspection recovery | a crashed run could not be read from a private recovered copy |
 | definition source missing | the descriptor names a manifest entry or blob the store does not hold |
-| definition corrupt | a retained path, length, hash, byte, mapping or bundle hash disagrees |
+| definition corrupt | a saved path, length, hash, byte, mapping or bundle hash disagrees |
 
 The last two are the source conditions, and they are kept apart because an
 operator acts on each differently. Missing content is gone and there is nothing
 to repair; corrupt content is there and no longer describes itself. Neither
 quotes source, props, retrieval metadata or an absolute path, neither returns
 partial content, neither advances lifecycle state, and **neither falls back** to
-current `HEAD`, working-tree bytes, the original file or the provenance. A malformed retained descriptor or database structure stays a
+current `HEAD`, working-tree bytes, the original file or the provenance. A malformed saved descriptor or database structure stays a
 storage-corruption refusal under the recognition rules above rather than being
 reclassified as an unavailable external source.
 
 Inspection recovery is a distinct condition because it says nothing about the
 run. It reports that read-only inspection could not produce or clean up the
-private copy it reads a crashed run from — the retained database and journal
+private copy it reads a crashed run from — the saved database and journal
 are unchanged, and their next write-capable owner still recovers them. Damage a
 recovered copy then reveals keeps its own condition above and is never folded
-into this one. The refusal names the retained database; it names the private
+into this one. The refusal names the saved database; it names the private
 copy as well, and only, when removing that copy failed and an operator has to
 remove it by hand.
 
@@ -1056,7 +1056,7 @@ migration candidate.
 Rows are held to what they mean and not only to their column types: a timestamp
 is an instant, an identity is not the empty string, and props are an object.
 
-Semantic recognition parses every retained root canonically, recomputes its ID
+Semantic recognition parses every saved root canonically, recomputes its ID
 and exact manifest/blob reachability, validates every referenced manifest,
 blob, byte payload and live chunk, and requires the read-only live snapshot to
 equal the singleton current root. Malformed paths or topology, dangling or
@@ -1065,7 +1065,7 @@ a file entry whose declared size differs from its referenced DOFS manifest, and
 a live/current mismatch are damage. Recognition performs no repair.
 
 No message repeats a stored value — or a stored *name*. Props and journal
-payloads are retained history, and a member name can carry a credential as
+payloads are saved history, and a member name can carry a credential as
 readily as a member value, so an unexpected member is refused without being
 named and a path through unknown members is written `*`.
 
@@ -1121,7 +1121,7 @@ One effect is one effect transaction. The mutation, the resulting immutable root
 and the filtered journal result commit together. An ordinary filesystem refusal
 rolls its mutation savepoint back before its result is published, so a write
 that created two parent directories and was then refused leaves neither behind,
-the retained outcome describes a Workspace that is exactly what it was, the
+the saved outcome describes a Workspace that is exactly what it was, the
 write reports its target as rolled back, and the next effect still commits. What
 crosses the boundary is a `FilesReason` selected from the shared vocabulary — no
 DOFS message, errno payload, SQLite text or resolved path. Everything that is
@@ -1146,4 +1146,4 @@ uncontained filesystem this boundary exists to prevent.
 Public `xmd workflow` lifecycle commands; lifecycle transition policy, executor
 leases and stale-owner recovery; public root selection, history checkpoints and
 forks; workflow-owned worktrees; and deterministic Git and GitHub effects.
-Retained roots and private restoration do not expose any of those behaviors.
+Saved roots and private restoration do not expose any of those behaviors.

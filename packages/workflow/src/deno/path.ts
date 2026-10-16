@@ -31,7 +31,7 @@ export function workflowRunPath(root: string, runId: string): string {
  * A suffix in the same namespace as the lock, and a candidate pattern of
  * `<hash>.sqlite` exactly excludes it: nothing discovers it, nothing lists it,
  * and no run id resolves to it. That is what lets a fork be assembled in full —
- * schema, run, inherited prefix, retained roots and a restored Workspace — and
+ * schema, run, inherited prefix, saved roots and a restored Workspace — and
  * replayed against its own filesystem before any storage the host would
  * recognize as the new run exists.
  *
@@ -47,7 +47,7 @@ export function workflowForkStaging(root: string, runId: string): string {
  *
  * A suffix rather than a subdirectory, so every path a run occupies is derived
  * from one hash and inspection's candidate pattern — `<hash>.sqlite` exactly —
- * excludes it by construction. It is not retained run state: it is how one host
+ * excludes it by construction. It is not saved run state: it is how one host
  * arranges ownership, and it may remain, empty, after the run is deleted.
  */
 export function workflowRunLock(root: string, runId: string): string {

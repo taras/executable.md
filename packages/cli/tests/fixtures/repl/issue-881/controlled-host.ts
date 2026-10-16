@@ -57,7 +57,7 @@ const LATCH = latches();
  *
  * The `ensure` is registered by `install`, so it runs when this entry's
  * installation scope is released — which is after the entry's outcome has been
- * retained and before the entry's work is finished. Writing the latch is how
+ * saved and before the entry's work is finished. Writing the latch is how
  * the harness knows the window is open; waiting for the other one is what
  * keeps it open.
  */

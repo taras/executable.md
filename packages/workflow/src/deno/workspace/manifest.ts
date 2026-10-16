@@ -119,15 +119,15 @@ export function parseWorkspaceManifest(
   try {
     offered = JSON.parse(manifest);
   } catch {
-    reject("one of its retained Workspace roots is not JSON");
+    reject("one of its saved Workspace roots is not JSON");
   }
   const parsed = rootManifestSchema.safeParse(offered);
   if (!parsed.success) {
-    reject("one of its retained Workspace roots has an invalid manifest");
+    reject("one of its saved Workspace roots has an invalid manifest");
   }
   validateWorkspaceEntries(parsed.data.entries, databasePath, reject);
   if (JSON.stringify(parsed.data) !== manifest) {
-    reject("one of its retained Workspace roots is not canonically encoded");
+    reject("one of its saved Workspace roots is not canonically encoded");
   }
   return parsed.data;
 }

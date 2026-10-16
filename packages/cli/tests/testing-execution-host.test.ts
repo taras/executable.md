@@ -420,7 +420,7 @@ describe("nested execution under the production run host", () => {
    */
   it("gives a run child the ordinary read profile: File, Glob and Syntax", function* () {
     const project = yield* useProject({
-      "notes.md": doc("the retained note"),
+      "notes.md": doc("the saved note"),
       "reader.md": doc(
         `<Evaluate text={'<Glob include={["notes.md"]} as="paths" />\\n` +
           `<File path="notes.md" as="note" />\\n` +
@@ -438,7 +438,7 @@ describe("nested execution under the production run host", () => {
         '<CollectOutput as="output" />',
         "",
         '<AssertStringIncludes actual={output} expected="notes.md" />',
-        '<AssertStringIncludes actual={output} expected="the retained note" />',
+        '<AssertStringIncludes actual={output} expected="the saved note" />',
         "</Execution>",
         "</Test>",
         "",
@@ -500,7 +500,7 @@ const SCHEMA =
  * A behavior document with a third stage nothing sends.
  *
  * `unsentstagemarker` is in the scenario source and in no prompt and no reply,
- * so a journal that mentions it retained configuration rather than results.
+ * so a journal that mentions it saved configuration rather than results.
  */
 const BEHAVIOR = doc(
   '<WhenPrompt as="review" template="Review {?subject}" />',
@@ -581,7 +581,7 @@ describe("deterministic dependencies declared for a nested run", () => {
         '<AssertStringIncludes actual={output} expected="summarized **the plan**" />',
         '<AssertStringIncludes actual={output} expected="decision: approve" />',
         "",
-        // What the child actually did is retained; what configured it is not.
+        // What the child actually did is saved; what configured it is not.
         '<AssertEquals actual={JSON.stringify(journal).includes("agent_prompt")} expected={true} />',
         '<AssertEquals actual={JSON.stringify(journal).includes("elicit")} expected={true} />',
         '<AssertEquals actual={JSON.stringify(journal).includes("unsentstagemarker")} expected={false} />',

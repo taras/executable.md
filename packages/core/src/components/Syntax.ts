@@ -102,7 +102,7 @@ const NO_REFERENCE_REFUSAL =
   "nothing established what a document may write at this site.";
 
 const UNREADABLE_RECORD =
-  "the retained <Syntax /> text is not a record this version can read, so no symbols were " +
+  "the saved <Syntax /> text is not a record this version can read, so no symbols were " +
   "produced.";
 
 /**
@@ -172,7 +172,7 @@ function syntax(claim: IdentityClaimant): ProtectedBody {
       throw new Error(NO_REFERENCE_REFUSAL);
     }
     const expansion = yield* getExpansion();
-    // A refusal is *retained*, not signalled out of band. Core's own selection
+    // A refusal is *saved*, not signalled out of band. Core's own selection
     // refusal becomes a value the record distinguishes, so it is read back the
     // same way on a live run and on a replay; a provider that throws is not
     // caught here at all and fails the operation, which is what keeps it
@@ -261,9 +261,9 @@ function* persistSymbols(
     throw new StaleInputError(UNREADABLE_RECORD);
   }
   if ("refused" in record) {
-    // Raised here rather than retained as an error, because a failure crossing
+    // Raised here rather than saved as an error, because a failure crossing
     // the durable boundary is rebuilt without its class and without any
-    // non-enumerable property. Re-raising from the retained *value* is what
+    // non-enumerable property. Re-raising from the saved *value* is what
     // makes a replayed refusal identical to a live one.
     throw markGeneratedRequestRefusal(new SyntaxSelectionRefusal(record.refused), record.refused);
   }

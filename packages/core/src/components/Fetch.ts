@@ -1,5 +1,5 @@
 /**
- * `<Fetch>` — one authorized HTTP read, retained
+ * `<Fetch>` — one authorized HTTP read, saved
  * (specs/executable-mdx-spec.md §6.18).
  *
  * ```md
@@ -11,7 +11,7 @@
  * transport is contextual `API.Fetch`, so a host that narrows reachable
  * destinations narrows this, and a test substitutes a provider at the same seam
  * a host uses. Nothing here reads a credential store, an environment variable,
- * or a host token, and a header a document writes is ordinary retained data
+ * or a host token, and a header a document writes is ordinary saved data
  * rather than an authentication mechanism.
  *
  * The whole request is admitted before transport — the URL, the method, the
@@ -87,7 +87,7 @@ function isSuccess(status: number): boolean {
 /**
  * The request and the body read, as one observation.
  *
- * The headers are detached before the body is read, so what is retained does
+ * The headers are detached before the body is read, so what is saved does
  * not depend on a provider that invalidates its own header collection once the
  * body has been consumed. A `HEAD` never calls `text()`: there is no body to
  * read, and asking for one would fail against a provider that says so.
@@ -96,7 +96,7 @@ function isSuccess(status: number): boolean {
  * admitted generated `<Fetch />` performs the request its entry's ceiling
  * admitted rather than the props it was written with, so it cannot enter this
  * component through its props — and a second observation of its own would be a
- * second answer to what a retained response is.
+ * second answer to what a saved response is.
  */
 export function* observeFetch(request: FetchRequest): Operation<FetchResponseRecord> {
   const response = yield* fetch(request.url, {
@@ -118,7 +118,7 @@ export default function* Fetch(props: Record<string, Json>): Operation<Json> {
   // written rather than to what came back.
   const bound = yield* hasBinding();
 
-  const retained = yield* persistFetch(
+  const saved = yield* persistFetch(
     {
       id: expansion.id,
       ...(expansion.position === undefined ? {} : { position: expansion.position }),
@@ -127,9 +127,9 @@ export default function* Fetch(props: Record<string, Json>): Operation<Json> {
     () => observeFetch(request),
   );
 
-  const response = parseResponseRecord(retained);
+  const response = parseResponseRecord(saved);
   if (!bound && !isSuccess(response.status)) {
     throw new FetchStatusError(request.url, response.status);
   }
-  return retained;
+  return saved;
 }

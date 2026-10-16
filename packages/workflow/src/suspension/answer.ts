@@ -18,7 +18,7 @@
  *
  * ## Publication is the provider's, inside the provider's transaction
  *
- * Retained delivery state and the answer event have to move together: an answer
+ * Saved delivery state and the answer event have to move together: an answer
  * consumed without an event would be lost, and an event published without the
  * consumption could be delivered twice. Neither is something this module can
  * arrange, because only the host that keeps the run has its transaction. So the
@@ -45,7 +45,7 @@ import {
 } from "@executablemd/durable-streams";
 import { WorkflowSuspensionRequestError, type WorkflowSuspensionRequest } from "./api.ts";
 
-/** The effect type one delivered answer is retained under. */
+/** The effect type one delivered answer is saved under. */
 export const SUSPENSION_ANSWER = "suspension_answer";
 
 /** What a live answer publication is given, and what it may do with it. */
@@ -60,16 +60,16 @@ export interface SuspensionAnswerPublication {
    * Publish the durable answer Yield carrying this value.
    *
    * Called inside the owner's own transaction, so the event and whatever
-   * retained state it consumes commit together or not at all.
+   * saved state it consumes commit together or not at all.
    */
   publish(value: Json): Operation<void>;
 }
 
-/** Whoever keeps a run's retained delivery state. */
+/** Whoever keeps a run's saved delivery state. */
 export interface SuspensionAnswerProvider {
   /**
    * The value that ends this wait, already published, or nothing when none is
-   * retained.
+   * saved.
    *
    * Returning a value without having published it is a defect rather than an
    * answer, and is refused: what makes a wait over is the event, not the
@@ -127,7 +127,7 @@ const answerProviders = (() => {
 })();
 
 /**
- * Install the owner of this run's retained delivery state for the current scope.
+ * Install the owner of this run's saved delivery state for the current scope.
  *
  * `{ at: "min" }` for the reason every provider here uses it: middleware at the
  * default position runs outermost, so an outer scope's registration would be
@@ -145,10 +145,10 @@ function describeAnswer(id: string): EffectDescription {
 
 /**
  * The wait's answer: replayed when one was published, consumed when one is
- * retained, and otherwise the wait itself.
+ * saved, and otherwise the wait itself.
  *
  * `enter` is the public composable route into the wait. It is reached only when
- * no answer is retained, and nothing it returns is an answer — a value arriving
+ * no answer is saved, and nothing it returns is an answer — a value arriving
  * from it means some handler stood between this operation and the controller,
  * so the operation does what an unentered wait is and stops.
  */
@@ -175,7 +175,7 @@ function answerCoordinator(
     ): Operation<Result> {
       const provider = answerProviders.get(yield* AnswerCoordination.operations.provider);
       if (provider !== undefined) {
-        const claimed = yield* claimRetainedAnswer(
+        const claimed = yield* claimSavedAnswer(
           provider,
           id,
           request,
@@ -204,7 +204,7 @@ function answerCoordinator(
   };
 }
 
-function* claimRetainedAnswer(
+function* claimSavedAnswer(
   provider: SuspensionAnswerProvider,
   id: string,
   request: WorkflowSuspensionRequest,

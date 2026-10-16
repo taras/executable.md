@@ -17,7 +17,7 @@
  * from it. Checking the host's object and then reading it again to retain it
  * would be two readings of a value the host controls, where an accessor could
  * answer one thing for the check and another for the copy. So the reading that
- * was validated is the reading that is retained.
+ * was validated is the reading that is saved.
  *
  * ## Whole, or not at all
  *
@@ -46,7 +46,7 @@ export class GeneratedSelectionError extends Error {
  * Sorted by component name rather than kept in the order a host's object
  * happened to enumerate in. Two middleware handlers compose one selection
  * normally, so enumeration order is a property of the assembly rather than of
- * what the host chose — and the retained admission compares the selected rows
+ * what the host chose — and the saved admission compares the selected rows
  * position by position. Deriving the order from the names makes that comparison
  * a fact about the selection instead of about how it was built.
  */
@@ -86,7 +86,7 @@ export function admitGeneratedSelection(
       );
     }
     // One read of this member, into data this module owns. The copy below is
-    // what every check and the retained map read; the host's object is never
+    // what every check and the saved map read; the host's object is never
     // consulted again.
     admitted.set(key, readForms(key, Reflect.get(selection, key)));
   }

@@ -6,7 +6,7 @@
  * document wrote are handed to native Git in the order it wrote them, from the
  * directory the element was written in, as one command.
  *
- * The retained result keeps those pathspecs and the checkout on both sides.
+ * The saved result keeps those pathspecs and the checkout on both sides.
  * Staging moves the index and nothing else, so the branch, the commit and the
  * HEAD tree are the same in both readings, and the index tree is the one value
  * that may have moved — or may not have, because staging what is already staged
@@ -44,7 +44,7 @@ export const WORKSPACE_GIT_ADD = "workspace_git_add";
  * The expansion makes two elements different effects and one element the same
  * effect across replays; the configuration fingerprint makes a document edited
  * to name other paths, another directory or another Repository diverge rather
- * than replaying the previous one's retained result.
+ * than replaying the previous one's saved result.
  *
  * The pathspecs are carried entry by entry rather than joined. The fingerprint's
  * encoding is injective over a sequence, so two arrays that differ in order, in

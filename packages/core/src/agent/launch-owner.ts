@@ -10,7 +10,7 @@
  * resolved, because a host with no terminal cannot launch anything and learning
  * that should not cost an agent probe. The request is issued next, routed
  * through the public `Agent` chain, and settled only from what the invocation
- * retained — never from what came back up the chain.
+ * saved — never from what came back up the chain.
  */
 
 import { createApi } from "@effectionx/context-api";
@@ -77,7 +77,7 @@ export function* launchSite(): Operation<LaunchSite> {
     identity,
     cwd: yield* cwd(),
     // `Agent.AddDir` is not built, so a launch declares no additional roots yet
-    // and the retained request says so explicitly rather than omitting it.
+    // and the saved request says so explicitly rather than omitting it.
     additionalDirectories: [],
     permissionMode: yield* AgentInternal.operations.permissionMode,
   };
@@ -104,13 +104,13 @@ export function createLaunchRegistry(): LaunchRegistry {
 }
 
 /**
- * Raise a phase that was retained as a refusal.
+ * Raise a phase that was saved as a refusal.
  *
- * Retained first and raised second, so the phase a later replay resumes from is
+ * Saved first and raised second, so the phase a later replay resumes from is
  * the phase that actually happened — including when what happened was the
  * provider declining to go further.
  */
-function raiseRetained(phase: LaunchPhase, failure: { class: string; message: string }): never {
+function raiseSaved(phase: LaunchPhase, failure: { class: string; message: string }): never {
   throw new AgentLaunchError(failure.message, {
     phase,
     failureClass: parseFailureClass(failure.class),
@@ -168,7 +168,7 @@ function unaccepted(request: AgentLaunchRequest, site: LaunchSite): PreparedLaun
 }
 
 /**
- * Perform one launch and return what the invocation retained.
+ * Perform one launch and return what the invocation saved.
  *
  * The registry is this document installation's; the coordinator handed to
  * providers resolves a routed request through it.
@@ -188,7 +188,7 @@ export function launchSession(
 
     const site = yield* launchSite();
     // Resolving here is the availability boundary: an agent that is not there
-    // fails expansion rather than being retained as a refused launch.
+    // fails expansion rather than being saved as a refused launch.
     const agent = yield* Agent.operations.agent(options?.agent);
 
     const sessionProp = typeof options?.session === "string" ? options.session : undefined;
@@ -213,7 +213,7 @@ export function launchSession(
     );
 
     // Whether this run is the one that prepared the session, rather than a
-    // resume reading a preparation an earlier run retained. Only the launch that
+    // resume reading a preparation an earlier run saved. Only the launch that
     // did the preparing may send the turn that follows it.
     let preparedThisRun = false;
     const launch: LiveLaunch = {
@@ -265,11 +265,11 @@ export function launchSession(
     }
     if (refused && issued.accepted()) {
       // The request was accepted and then something violated the protocol. That
-      // is not "nobody performed it", so it is not retained as one.
+      // is not "nobody performed it", so it is not saved as one.
       throw refused;
     }
 
-    // Nobody performed it. That is retained as a refusal rather than raised
+    // Nobody performed it. That is saved as a refusal rather than raised
     // bare, so a replay resumes from the phase that actually happened.
     if (!issued.accepted()) {
       const record = yield* launch.retention.prepared(
@@ -278,23 +278,23 @@ export function launchSession(
           return unaccepted(request, site);
         },
       );
-      raiseRetained("prepared", record.failure!);
+      raiseSaved("prepared", record.failure!);
     }
 
     if (launch.preparation?.failure) {
-      raiseRetained("prepared", launch.preparation.failure);
+      raiseSaved("prepared", launch.preparation.failure);
     }
     if (launch.materialization?.failure) {
-      raiseRetained("materialized", launch.materialization.failure);
+      raiseSaved("materialized", launch.materialization.failure);
     }
     if (launch.detachment?.failure) {
-      raiseRetained("detached", launch.detachment.failure);
+      raiseSaved("detached", launch.detachment.failure);
     }
     const exited = launch.exit;
     if (exited?.failure) {
-      raiseRetained("exited", exited.failure);
+      raiseSaved("exited", exited.failure);
     }
-    // The UI ran and ended badly. Reported from the retained record, so a
+    // The UI ran and ended badly. Reported from the saved record, so a
     // replay says the same thing without starting a second one.
     if (exited?.signal !== undefined) {
       throw new AgentLaunchError(`the native agent UI was terminated by ${exited.signal}`, {

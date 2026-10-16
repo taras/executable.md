@@ -3,7 +3,7 @@
  * partition (specs/test-agent-spec.md §Scenarios).
  *
  * The worker belongs to this process, so coordination is deterministic in-memory
- * state: one live owner at a time, with ownership retained until quiescence is
+ * state: one live owner at a time, with ownership saved until quiescence is
  * proven. There is no machine-wide namespace. Sibling tests naming the same agent,
  * session and directory own separate partitions and do not contend.
  */
@@ -32,7 +32,7 @@ export function createDeterministicSessionCoordinator(): AgentSessionCoordinator
   /** Held right now, by digest. */
   const occupied = new Set<string>();
   /** What the last owner left behind. Absent is the same as idle. */
-  const retained = new Map<string, "active" | "idle">();
+  const saved = new Map<string, "active" | "idle">();
 
   return {
     coordinate<T>(
@@ -57,7 +57,7 @@ export function createDeterministicSessionCoordinator(): AgentSessionCoordinator
           occupied.delete(digest);
         });
 
-        if (retained.get(digest) === "active") {
+        if (saved.get(digest) === "active") {
           return Err(
             new AgentSessionRecoveryRequired(
               `session "${key.sessionKey}" was left owned by work that did not finish, so it ` +
@@ -65,14 +65,14 @@ export function createDeterministicSessionCoordinator(): AgentSessionCoordinator
             ),
           );
         }
-        retained.set(digest, "active");
+        saved.set(digest, "active");
 
         let quiesced = false;
         // Registered before the body runs, so the idle mark is published on
         // every ordinary exit — and on none of the others.
         yield* ensure(() => {
           if (quiesced) {
-            retained.set(digest, "idle");
+            saved.set(digest, "idle");
           }
         });
 

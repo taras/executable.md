@@ -157,10 +157,10 @@ export function gitRefusal(operation: string, reason: GitFailureReason): GitOper
 }
 
 /**
- * The refusal a retained failure name describes, or `undefined` for none.
+ * The refusal a saved failure name describes, or `undefined` for none.
  *
  * A word outside the closed set is not a refusal this build may rebuild. It is a
- * retained result that says something this version cannot read, and the caller
+ * saved result that says something this version cannot read, and the caller
  * treats it as one rather than receiving a plausible refusal assembled from a
  * word nobody wrote.
  */

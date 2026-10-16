@@ -15,7 +15,7 @@
  * Git reads the caller's environment, and almost everything it finds there can
  * change what a clone produces: `~/.gitconfig` can set `core.hooksPath`,
  * `init.templateDir` or a URL rewrite; `GIT_DIR` and `GIT_WORK_TREE` can point a
- * command at a repository nobody named. A workflow's retained state must not
+ * command at a repository nobody named. A workflow's saved state must not
  * depend on whose machine it was created on, so the environment is built from
  * nothing and `HOME` points at the disposable materialization rather than at a
  * person.
@@ -193,7 +193,7 @@ function environment(
     // The Workspace provider owns Git identity (spec §7.3). Without one Git
     // derives a name and an address from the operating-system user and the
     // machine's hostname and writes them into every reflog it touches, which
-    // would put whoever ran the host into the run's own retained Git state.
+    // would put whoever ran the host into the run's own saved Git state.
     //
     // An ordinary run supplies one instead, because the opposite is true there:
     // the commit lands in the caller's own checkout, and the fixed identity
@@ -214,7 +214,7 @@ export interface RepositoryHostOptions {
    * What this host lends a remote-touching invocation.
    *
    * The trusted host decides which ambient mechanisms exist, which is why this
-   * is here rather than anywhere a document, a middleware or a retained record
+   * is here rather than anywhere a document, a middleware or a saved record
    * could reach. Absent, the shipped one is used.
    */
   readonly authentication?: GitAuthentication;

@@ -8,7 +8,7 @@
  * looked right.
  *
  * A failure names the column and never the value. Props and journal payloads
- * are retained history, and a row that does not parse is not a reason to print
+ * are saved history, and a row that does not parse is not a reason to print
  * what it held.
  */
 
@@ -190,7 +190,7 @@ export function readDefinition(row: Row, table: string): WorkflowDefinition {
 }
 
 /**
- * The retained run id, held to the rule a caller's id is held to.
+ * The saved run id, held to the rule a caller's id is held to.
  *
  * Storage that retains an id no request could ever name is storage nothing can
  * address, and reading it back as though it addressed something is how a run

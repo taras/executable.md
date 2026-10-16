@@ -2,7 +2,7 @@
  * Which provider turn each of this run's Prompts was
  * (specs/workflow-workspace-spec.md §8.6).
  *
- * A retained Agent session says which conversation this run is having. A
+ * A saved Agent session says which conversation this run is having. A
  * checkpoint says where in that conversation one Prompt landed — the identity
  * the provider gave the turn it had just completed. Together they are what lets
  * something later continue from an exact point rather than from "the latest

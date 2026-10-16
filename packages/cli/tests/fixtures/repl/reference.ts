@@ -117,7 +117,7 @@ export function* referenceEvents(): Operation<DurableEvent[]> {
  * One document holding one of each thing the Agent projection has to read: two
  * different agents talking in one conversation, one agent talking in two, a
  * turn that was granted permission while it ran, and a turn refused before it
- * reached a provider at all — which is the only way a retained turn has no
+ * reached a provider at all — which is the only way a saved turn has no
  * conversation to belong to.
  *
  * The provider is scripted rather than recorded, for the reason the entry above
@@ -157,7 +157,7 @@ const BUILD_OPTIONS: readonly PermissionOption[] = [
  * A provider that answers by the text it was sent.
  *
  * `refuse:` refuses before the turn starts, which is what leaves a record with
- * no session key. The build turn asks for permission, so one retained turn
+ * no session key. The build turn asks for permission, so one saved turn
  * carries an audit and the others carry none.
  */
 function scriptedAgent(): AgentProviderFactory {

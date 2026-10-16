@@ -1418,7 +1418,7 @@ describe("WF workflow document filesystem", () => {
         const recorded = yield* recordedFileEffects(database);
         const before = yield* database.journal.readAll();
 
-        // Recreated through the private seam, without touching the retained
+        // Recreated through the private seam, without touching the saved
         // delete record.
         yield* mutateWorkspace(database, function* (workspace) {
           yield* workspace.filesystem.writeFile("/x.txt", "recreated");
@@ -1576,7 +1576,7 @@ describe("Tier WF — the run's own directories", () => {
   });
 
   // WF23: the mutation, its outcome and the resulting root are one commit, and
-  // the content runs after it. Ordering is read off the retained effects, in
+  // the content runs after it. Ordering is read off the saved effects, in
   // the order they committed — the nested `<File>` landing proves nothing on
   // its own, because a write creates its own parents recursively and would land
   // either way.
@@ -1599,7 +1599,7 @@ describe("Tier WF — the run's own directories", () => {
       //
       // The nested `<File>` existing proves nothing on its own: a write creates
       // its own parents recursively, so it would land whether or not `<Dir>`
-      // had committed first. What settles the ordering is the retained order of
+      // had committed first. What settles the ordering is the saved order of
       // the effects themselves.
       const effects = yield* recordedFileEffects(database);
       const ensures = effects.filter((effect) => effect.name.startsWith("ensure-directory:"));
@@ -1746,7 +1746,7 @@ describe("Tier WF — the run's own directories", () => {
         expect(replayed.output).toContain("INSIDE");
         // No second ensure: the counter is unchanged.
         expect(made).toEqual(["/once"]);
-        // And the retained root is what a replay restores, not a new one.
+        // And the saved root is what a replay restores, not a new one.
         expect(rootOfLastEvent(path)).toEqual(after);
       },
       { decorateFilesystem: countingMkdirs(made) },

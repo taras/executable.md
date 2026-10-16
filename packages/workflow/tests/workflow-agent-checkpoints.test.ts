@@ -2,7 +2,7 @@
  * Tier WPC — which provider turn each of a run's Prompts was
  * (specs/workflow-workspace-spec.md §8.6).
  *
- * A retained Agent session says which conversation this run is having. A
+ * A saved Agent session says which conversation this run is having. A
  * checkpoint says where in that conversation one Prompt landed. These tests
  * verify that the second fact commits with the Prompt it describes and with
  * nothing else — so these drive the real publisher, the real transaction and
@@ -66,7 +66,7 @@ const IDENTITY: AgentSessionIdentity = {
 };
 
 /** What this run retains the conversation under. */
-const RETAINED = agentSessionKey(IDENTITY);
+const SAVED = agentSessionKey(IDENTITY);
 
 /**
  * What the provider calls the same session.
@@ -75,7 +75,7 @@ const RETAINED = agentSessionKey(IDENTITY);
  * placement key does. Nothing under test may recover one from the other by
  * taking the spelling apart.
  */
-const PLACEMENT = `${RETAINED}:0123456789abcdef`;
+const PLACEMENT = `${SAVED}:0123456789abcdef`;
 
 /** A session the run never placed, for the Prompt that must retain nothing. */
 const FOREIGN_PLACEMENT = "some-other-provider-key";
@@ -183,7 +183,7 @@ function scriptedProvider(replies: readonly Reply[]): AgentProviderFactory {
 function* retainSession(database: WorkflowRunDatabase): Operation<void> {
   const committed = yield* transactAgentSessions(database, function* (sessions) {
     sessions.commit({
-      sessionKey: RETAINED,
+      sessionKey: SAVED,
       ...IDENTITY,
       policy: POLICY,
       assertion: { kind: "acpx.agentSessionId", value: "agent-session:alpha" },
@@ -218,7 +218,7 @@ function runDocument(
     yield* useAgentPromptPublisher(
       createWorkflowPromptPublisher({
         database,
-        retainedSessionKey: (key) => (placed.includes(key) ? RETAINED : undefined),
+        savedSessionKey: (key) => (placed.includes(key) ? SAVED : undefined),
       }),
     );
     const factory = scriptedProvider(replies);
@@ -253,7 +253,7 @@ function runDocument(
   });
 }
 
-/** Every `agent_prompt` event this run retained, in journal order. */
+/** Every `agent_prompt` event this run saved, in journal order. */
 function prompts(events: readonly DurableEvent[]): DurableEvent[] {
   return events.filter(
     (event) => event.type === "yield" && event.description.type === "agent_prompt",
@@ -416,7 +416,7 @@ const THREE_PROMPTS = `# Review
 </Session>
 `;
 
-describe("Tier WPC — retained Prompt checkpoints", () => {
+describe("Tier WPC — saved Prompt checkpoints", () => {
   it("WPC1: one commit holds the Prompt, its Workspace root, the session and the token", function* () {
     const root = yield* useStorageRoot();
     const path = runPath(root, "release-1.4");
@@ -442,7 +442,7 @@ describe("Tier WPC — retained Prompt checkpoints", () => {
       expect(yield* associations(database)).toEqual([
         {
           eventId: event!.eventId,
-          sessionKey: RETAINED,
+          sessionKey: SAVED,
           provider: "codex",
           tokenKind: "app-server-turn-id",
           tokenValue: "turn-alpha",
@@ -451,7 +451,7 @@ describe("Tier WPC — retained Prompt checkpoints", () => {
     });
   });
 
-  it("WPC2: the retained session key is the run's, not the provider's", function* () {
+  it("WPC2: the saved session key is the run's, not the provider's", function* () {
     const root = yield* useStorageRoot();
     const path = runPath(root, "release-1.4");
     yield* withStorage(root, function* () {
@@ -464,7 +464,7 @@ describe("Tier WPC — retained Prompt checkpoints", () => {
       // The two keys share a prefix and are different things. A row carrying
       // the provider's key would satisfy every shape check here and reference
       // a session this run does not retain.
-      expect(row?.["session_key"]).toBe(RETAINED);
+      expect(row?.["session_key"]).toBe(SAVED);
       expect(row?.["session_key"]).not.toBe(PLACEMENT);
     });
   });
@@ -608,7 +608,7 @@ describe("Tier WPC — retained Prompt checkpoints", () => {
       yield* retainSession(database);
 
       // The first attempt is interrupted inside its third turn, so two Prompts
-      // are retained and the third was never journaled at all — which is the
+      // are saved and the third was never journaled at all — which is the
       // history a continuation actually meets.
       const reached = withResolvers<void>();
       const attempt = yield* spawn(() =>
@@ -698,7 +698,7 @@ describe("Tier WPC — retained Prompt checkpoints", () => {
     yield* withStorage(root, function* () {
       yield* createRun();
     });
-    // A legacy run that retained no session either, so the association's
+    // A legacy run that saved no session either, so the association's
     // foreign key is what fails. The fault comes from the table's own
     // constraint rather than from anything added to the schema to cause it.
     makeLegacy(path);

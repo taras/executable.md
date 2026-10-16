@@ -3,9 +3,9 @@
  *
  * A definition identifies the exact bytes, so a run of a file outside a
  * repository, of an untracked file, or of a file edited since its last commit
- * is one immutable definition the moment it is retained. Nothing is fetched
+ * is one immutable definition the moment it is saved. Nothing is fetched
  * from anywhere to execute one: the closure a run needs is the closure it
- * retained, which is why no host has to supply a reader to begin a run.
+ * saved, which is why no host has to supply a reader to begin a run.
  *
  * There is one definition shape and it carries no version. Nothing released
  * names an older one, so a later format is a clean break rather than a second
@@ -45,7 +45,7 @@ import {
  * `sources` is the complete closure the run executes, in canonical UTF-8 byte
  * order of `path`, with `entrypoint` naming exactly one of them. `components`
  * maps authored component names onto members of that closure, so adding,
- * removing or changing a retained dependency changes `bundleHash`.
+ * removing or changing a saved dependency changes `bundleHash`.
  */
 export interface WorkflowDefinition {
   readonly hashAlgorithm: "sha256";
@@ -57,14 +57,14 @@ export interface WorkflowDefinition {
   readonly components?: readonly SourceBundleComponent[];
 }
 
-/** One retained source: its logical path, and what its bytes hash and weigh. */
+/** One saved source: its logical path, and what its bytes hash and weigh. */
 export interface SourceBundleEntry {
   readonly path: string;
   readonly sourceHash: string;
   readonly byteLength: number;
 }
 
-/** One authored component name, resolved onto a retained source. */
+/** One authored component name, resolved onto a saved source. */
 export interface SourceBundleComponent {
   readonly name: string;
   readonly path: string;
@@ -218,7 +218,7 @@ function parseSourceEntry(value: unknown, path: string): SourceBundleEntry {
  *
  * Absence identifies a definition that declares no workflow components; an
  * empty array is not a second spelling of it and is refused. Every path names a
- * retained source, so the mapping is closed over the same bytes the run
+ * saved source, so the mapping is closed over the same bytes the run
  * executes rather than over something a later resolution would have to find.
  */
 function parseComponents(
@@ -474,7 +474,7 @@ export function* sourceBundleHash(identity: SourceBundleIdentity): Operation<str
  *
  * A descriptor that parses is well formed; this is the separate question of
  * whether it describes itself. Storage asks it before exposing a record,
- * because a bundle hash its own manifest does not produce is a retained
+ * because a bundle hash its own manifest does not produce is a saved
  * identity nobody can reproduce.
  */
 export function* verifySourceBundleDefinition(
@@ -490,7 +490,7 @@ export function* verifySourceBundleDefinition(
 /**
  * The exact bytes offered for a definition, owned and checked against it.
  *
- * Copied before anything is checked, so what is verified is what is retained: a
+ * Copied before anything is checked, so what is verified is what is saved: a
  * caller holding the original `Uint8Array` can mutate it afterwards without
  * changing the run. The snapshot must name exactly the descriptor's paths in
  * exactly its order — a missing, extra or reordered entry describes a different
@@ -507,15 +507,13 @@ export function* verifySourceBundleSnapshot(
 
   const entries = owned.value;
   if (entries.length !== definition.sources.length) {
-    return Err(new WorkflowRequestError(refusal("one entry per retained source")));
+    return Err(new WorkflowRequestError(refusal("one entry per saved source")));
   }
   for (let index = 0; index < entries.length; index++) {
     const source = definition.sources[index];
     const entry = entries[index];
     if (entry.path !== source.path) {
-      return Err(
-        new WorkflowRequestError(refusal(`the retained source path at position ${index}`)),
-      );
+      return Err(new WorkflowRequestError(refusal(`the saved source path at position ${index}`)));
     }
     if (entry.bytes.byteLength !== source.byteLength) {
       return Err(
@@ -541,7 +539,7 @@ export function* verifySourceBundleSnapshot(
 }
 
 /**
- * The Markdown a retained source holds.
+ * The Markdown a saved source holds.
  *
  * Strict: a byte sequence that is not well-formed UTF-8 is refused rather than
  * decoded to replacement characters, because the replacement would parse as a
@@ -560,7 +558,7 @@ export function decodeSourceText(bytes: Uint8Array): Result<string> {
 function refusal(subject: string): string {
   return (
     `The source snapshot offered for this workflow run does not match ${subject} its ` +
-    "definition declares. Nothing was retained."
+    "definition declares. Nothing was saved."
   );
 }
 

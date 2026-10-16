@@ -11,7 +11,7 @@
  *
  *   - **H1/H2** navigation is the whole file while content is one prefix, and
  *     nothing of a later position's payload crosses;
- *   - **H3** the head is derived from retained facts and work this process
+ *   - **H3** the head is derived from saved facts and work this process
  *     actually owns, in the frozen precedence;
  *   - **H4** the five rows are allocated by measurement: first and last
  *     positions, deterministic collisions, the entry/minor hierarchy, caption
@@ -56,7 +56,7 @@ const CROWD = fileURLToPath(new URL("./fixtures/repl/issue-881/", import.meta.ur
 /**
  * One entry that admits this many component scopes, in recorded order.
  *
- * Each invocation admits a scope and each admitted scope is one retained
+ * Each invocation admits a scope and each admitted scope is one saved
  * position, so this is how many positions the rail has to place. Built here
  * rather than read from `history-crowd.md` so a case can say how many it
  * needs; the fixture file is the same shape at two hundred.
@@ -338,9 +338,9 @@ describe("H4 — the five rows are allocated by measurement", () => {
 const facts = (over: Partial<Parameters<typeof headOf>[0]>) =>
   headOf({ entries: 1, outcome: false, working: false, paused: false, pausing: false, ...over });
 
-describe("H3 — the head is derived from retained facts and owned work", () => {
+describe("H3 — the head is derived from saved facts and owned work", () => {
   it("takes the frozen precedence, and never infers a pause", function* () {
-    // 1 settling beats everything: an outcome is retained and the work this
+    // 1 settling beats everything: an outcome is saved and the work this
     // process owns has not come down yet.
     expect(facts({ outcome: true, working: true, paused: true, pausing: true })).toBe("settling");
     expect(facts({ working: true, paused: true, pausing: true })).toBe("paused");
@@ -371,7 +371,7 @@ describe("H3 — the head a real session publishes", () => {
 
   it("is empty before an entry, live while one runs, settled once it has", function* () {
     const session = opened(yield* openReplSession({ execution: execution() }));
-    // Nothing retained and nothing owned.
+    // Nothing saved and nothing owned.
     expect(session.navigation.head).toBe("empty");
     expect(session.navigation.checkpoints).toEqual([]);
 
@@ -381,13 +381,13 @@ describe("H3 — the head a real session publishes", () => {
 
     yield* session.join();
     yield* sleep(0);
-    // The outcome is retained and nothing of the entry is still standing.
+    // The outcome is saved and nothing of the entry is still standing.
     expect(session.navigation.head).toBe("settled");
     expect(session.navigation.checkpoints.map((one) => one.kind)).toContain("entry");
     expect(session.navigation.checkpoints.map((one) => one.kind)).toContain("terminal");
   });
 
-  it("is SETTLING while the outcome is retained and the entry is still coming down", function* () {
+  it("is SETTLING while the outcome is saved and the entry is still coming down", function* () {
     // The window a reader watching a run end is actually in: the root closed,
     // and this process still owns what the entry acquired. A head taken from
     // the root Close alone would call this finished.
@@ -644,7 +644,7 @@ describe("H1 — two positions the rail draws as one mark select different conte
     }));
 });
 
-describe("H1/H5 — every retained position keeps its own identity", () => {
+describe("H1/H5 — every saved position keeps its own identity", () => {
   it("says what each kind is, with its full ordinal and entry number", function* () {
     const navigation = history([
       "entry",

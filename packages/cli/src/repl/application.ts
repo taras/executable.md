@@ -141,22 +141,22 @@ export interface ReplLive {
    *
    * Empty wherever a live reading has nothing to say: a replay, a document
    * with no element in flight, and every frozen prefix. What is here is what
-   * this process watched happen, which is why retained syntax and a recorded
+   * this process watched happen, which is why saved syntax and a recorded
    * admission add nothing to it.
    */
   readonly lifecycle: ReplLifecycleReading;
 }
 
 /**
- * One live or retained Sessions turn. Publication changes its source of facts;
+ * One live or saved Sessions turn. Publication changes its source of facts;
  * `key` preserves mounted identity and focus across that transition.
  */
 export interface ReplSessionTurn {
   /** The mounted identity: this process's slot, or a record's own marker. */
   readonly key: string;
   readonly prompt: string;
-  /** `retained` once a record holds it, and the live states until then. */
-  readonly state: ReplLiveTurnState | "retained";
+  /** `saved` once a record holds it, and the live states until then. */
+  readonly state: ReplLiveTurnState | "saved";
   readonly text: string;
   readonly agent: string | undefined;
   /**
@@ -181,7 +181,7 @@ export interface ReplSessionTurn {
 /**
  * Order turns by Prompt scheduling, not publication: concurrent providers can
  * publish a later Prompt first. Unobserved turns belong to the replayed prefix
- * and precede observed slots, whose own scheduling order is retained.
+ * and precede observed slots, whose own scheduling order is saved.
  */
 function chronology(model: ReplModel, live: ReplLive): readonly ReplSessionTurn[] {
   const observed = new Set<string>();
@@ -193,7 +193,7 @@ function chronology(model: ReplModel, live: ReplLive): readonly ReplSessionTurn[
   const shown: ReplSessionTurn[] = [];
   for (const turn of model.turns) {
     if (!observed.has(correlation(turn.entry, turn.name))) {
-      shown.push(retainedTurn(turn.marker, turn));
+      shown.push(savedTurn(turn.marker, turn));
     }
   }
   for (const slot of [...live.agent.slots].sort((left, right) => left.order - right.order)) {
@@ -229,7 +229,7 @@ function resolved(
   );
   if (record !== undefined) {
     // Keyed by the slot, not by the marker: this is the row it already was.
-    return retainedTurn(slot.key, record);
+    return savedTurn(slot.key, record);
   }
   // Accounted for here before the history it belongs to was projected. The facts
   // it had are still the facts, and a row that vanished for this one frame is
@@ -254,11 +254,11 @@ function liveTurn(key: string, turn: ReplLiveTurn, live: ReplLive): ReplSessionT
   });
 }
 
-function retainedTurn(key: string, turn: ReplAgentTurn): ReplSessionTurn {
+function savedTurn(key: string, turn: ReplAgentTurn): ReplSessionTurn {
   return Object.freeze({
     key,
     prompt: turn.input,
-    state: "retained",
+    state: "saved",
     text: turn.text,
     agent: turn.agent,
     sessionKey: turn.sessionKey.length === 0 ? undefined : turn.sessionKey,
@@ -332,7 +332,7 @@ export const EMPTY_FORM: ReplFormState = Object.freeze({
  *
  * Freedom restores the control that was focused before a modal was pushed, which
  * is where focus *was* rather than where the question now is: answering leaves a
- * retained invocation to look at, and dismissing leaves one still being asked.
+ * saved invocation to look at, and dismissing leaves one still being asked.
  * Both are named here rather than resolved, because which row that is depends on
  * what is mounted and only the view knows that.
  */
@@ -342,7 +342,7 @@ export type ReplFocusRestore =
    *
    * Named by what it caused rather than by where it sits: the record appends
    * after the drawer is gone, so the row does not exist yet at the moment the
-   * association is recorded. `known` is every answer already retained when this one was
+   * association is recorded. `known` is every answer already saved when this one was
    * taken and `answer` is exactly what was sent, which together name one
    * record — not the newest one, and not an answer somebody else caused.
    */
@@ -384,7 +384,7 @@ export interface ReplViewports {
   /** Rows the open permission drawer is scrolled by. */
   readonly permission: number;
   /**
-   * Rows each retained drawer reading is scrolled by, one per reading.
+   * Rows each saved drawer reading is scrolled by, one per reading.
    *
    * Keyed by what the reading **is** — the execution, the prefix being read, and
    * the binding or occurrence being shown — rather than by the drawer's title or
@@ -482,7 +482,7 @@ export interface ReplView {
   readonly state: ReplState;
   readonly model: ReplModel;
   /**
-   * Every position the history retained, and what the head is doing.
+   * Every position the history saved, and what the head is doing.
    *
    * The explicit exception to this view being a reading of one prefix: the
    * band is a map of the whole recorded order, because the positions after
@@ -560,7 +560,7 @@ export function answered(state: ReplState, model: ReplModel, answer: Json): Repl
     // invocation that has it rather than wherever the drawer was opened from.
     // Which invocation that is cannot be read yet: its record appends after this,
     // so the claim carries what will identify it when it arrives.
-    restore: Object.freeze({ kind: "answered", known: retainedAnswers(model), answer }),
+    restore: Object.freeze({ kind: "answered", known: savedAnswers(model), answer }),
     route: Object.freeze({
       ...state.route,
       drawers: Object.freeze(state.route.drawers.filter((drawer) => drawer.kind !== "live-elicit")),
@@ -1308,7 +1308,7 @@ export function reduceRepl(
           refusal: undefined,
         });
       }
-      // A retained reading: History, a binding's value or a recorded answer.
+      // A saved reading: History, a binding's value or a recorded answer.
       // Scrolling one changes that reading's own offset and nothing else — no
       // canonical location, no Journal, no History selection and no answer.
       const reading = readingKeyOf(state, open);
@@ -1707,7 +1707,7 @@ export function focusSettled(
   if (view.state.restore === undefined || claim === undefined || focused !== claim) {
     return view.state;
   }
-  // The reveal this frame presented, retained before the claim that caused it is
+  // The reveal this frame presented, saved before the claim that caused it is
   // spent. Only a claim on a catalog row can have moved that window, and only
   // the window's own admitted start is kept — the offset this process holds
   // becomes the one a person is actually looking at, so the next frame asks the
@@ -1723,7 +1723,7 @@ export function focusSettled(
 }
 
 /** Every answer this history already holds, wherever in its entries it holds it. */
-function retainedAnswers(model: ReplModel): readonly string[] {
+function savedAnswers(model: ReplModel): readonly string[] {
   const markers: string[] = [];
   const walk = (scope: ReplScope): void => {
     for (const elicitation of scope.elicitations) {
@@ -2350,7 +2350,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     // Present and empty. This REPL keeps one execution per invocation, and a
     // Sessions surface that vanished when it held nothing would read as a
     // feature that does not exist.
-    items.push(line("sessions:empty", "  (none retained)", styleOf("metadata")));
+    items.push(line("sessions:empty", "  (none saved)", styleOf("metadata")));
   } else {
     // One window over the whole reading. Every conversation, turn, fact, audit
     // and request is built in order and then windowed: a list that described all
@@ -2756,7 +2756,7 @@ function readingRows(prepared: ReplPreparedReading): readonly Described[] {
  * The selected entry's own, and nothing when a prefix admitted none. Live text
  * belongs to the entry producing it — the last one this prefix admitted, since
  * entries are serial — so a reader looking at an earlier entry is given that
- * entry's retained reading rather than text from the run that is still going.
+ * entry's saved reading rather than text from the run that is still going.
  */
 export function readingOf(view: ReplView): ReplReading {
   const key = view.selection.entry?.key;
@@ -2809,7 +2809,7 @@ function transcriptOf(model: ReplModel, selection: ReplSelection): readonly Repl
  *
  * Only the last entry a prefix admitted can still be running — entries are
  * serial, and an earlier one settled before this one was admitted. So output
- * this process has not retained belongs there, and nowhere else. Selecting
+ * this process has not saved belongs there, and nowhere else. Selecting
  * nothing is reading the execution, which includes whatever is running in it.
  */
 function livesHere(model: ReplModel, selection: ReplSelection): boolean {
@@ -2968,7 +2968,7 @@ function sessionRows(
         line(
           `sessions:audit:${turn.key}:${at}`,
           // The outcome comes last and stays, for the same reason a turn's state
-          // does: it is the whole of what a retained audit says.
+          // does: it is the whole of what a saved audit says.
           fitLine(
             [
               { text: "    granted: " },
@@ -3138,7 +3138,7 @@ function stateOf(turn: ReplSessionTurn): string {
   return turn.state === "terminal" ? `${ended}, not recorded yet` : `${ended}, recorded`;
 }
 
-/** What a retained audit says happened, without repeating the whole record. */
+/** What a saved audit says happened, without repeating the whole record. */
 function outcomeOf(audit: ReplAgentPermission): string {
   if (audit.outcome === "cancelled") {
     return "cancelled";
@@ -3327,7 +3327,7 @@ function drawerContent(
   } else if (open.kind === "recorded-elicit") {
     title = drawerTitle("Recorded answer", open.elicitation.location, width);
     // The whole of what was asked and the whole of what was answered. A drawer is
-    // where the retained value is, so a summary here would leave a reader with no
+    // where the saved value is, so a summary here would leave a reader with no
     // way to see what the record actually holds.
     content.push({
       described: drawerLine("drawer:schema", "schema", width, styleOf("field-label")),
@@ -3378,7 +3378,7 @@ function drawerContent(
     dismissing = request.key;
   } else if (open.kind === "history") {
     title = "History";
-    // Every retained position, through the same window. A marker outside it is
+    // Every saved position, through the same window. A marker outside it is
     // not described, so it is not a cell, not a target and not a Tab stop —
     // which is what makes reaching the last one a thing the controls do rather
     // than something clipping hides.
@@ -4148,7 +4148,7 @@ export interface ReplPresentation {
 }
 
 /**
- * Which reading one retained drawer is showing, as its own identity.
+ * Which reading one saved drawer is showing, as its own identity.
  *
  * Not the title and not the position in the stack: two bindings called `name` in
  * different scopes are different readings and must not share a window position,
@@ -4400,7 +4400,7 @@ function measurementTextOf(component: ReplComponent<ReplAction>, input: ReplView
  * Whether one row is a control.
  *
  * Read from what the row *is* — the component it was described with — rather
- * than from how its key happens to be spelled. A turn's own facts, a retained
+ * than from how its key happens to be spelled. A turn's own facts, a saved
  * audit, the location somebody copies and the reason the last action changed
  * nothing are lines, and a line has nothing to activate; every control answers
  * Enter, so a pointer on one asks for exactly what Enter there asks for.

@@ -11,10 +11,10 @@
  *   the exact sources. Canonical core captures it before any installation,
  *   middleware, or document code exists, resolves declared names against it,
  *   and invokes only the definitions it produced from it.
- * - **Retained history.** `admissions` holds every recorded component import
+ * - **Saved history.** `admissions` holds every recorded component import
  *   to the same catalog, inside canonical core's own journal read: before
- *   public replay policy, before any retained effect reaches execution, before
- *   a retained terminal result is reused, and before anything is appended. A
+ *   public replay policy, before any saved effect reaches execution, before
+ *   a saved terminal result is reused, and before anything is appended. A
  *   history that recorded a name this bundle does not declare, a path or hash
  *   the definition does not name, or source the commit does not hold, appends
  *   nothing and invokes nothing.
@@ -41,7 +41,7 @@ const IMPORT_COMPONENT = "import_component";
 const WORKFLOW_SELECTION_MEMBERS: readonly string[] = ["kind", "path", "sourceHash", "content"];
 
 /**
- * A retained component import this run's bundle does not authorize.
+ * A saved component import this run's bundle does not authorize.
  *
  * Fixed diagnostics throughout. What a history recorded is journal data, and a
  * refusal that quoted a planted name, path, or source would publish exactly the
@@ -52,14 +52,14 @@ export class WorkflowBundleHistoryError extends Error {
 }
 
 const REFUSALS = {
-  unreadable: "A retained component import cannot be read by this run's component bundle.",
-  undeclared: "A retained component import names a component this run's bundle does not declare.",
-  mismatched: "A retained component import does not match the component this run's bundle holds.",
+  unreadable: "A saved component import cannot be read by this run's component bundle.",
+  undeclared: "A saved component import names a component this run's bundle does not declare.",
+  mismatched: "A saved component import does not match the component this run's bundle holds.",
   wrongKind:
-    "A retained component import recorded a declared component as something other than a " +
+    "A saved component import recorded a declared component as something other than a " +
     "component this run's bundle supplies.",
   repository:
-    "A retained component import recorded a repository file, which a workflow run resolves none of.",
+    "A saved component import recorded a repository file, which a workflow run resolves none of.",
 } as const;
 
 /**
@@ -77,7 +77,7 @@ function reading<T>(read: () => T): T | undefined {
   }
 }
 
-/** The name a retained event imported, when the event is a settled import at all. */
+/** The name a saved event imported, when the event is a settled import at all. */
 function importedName(event: DurableEvent): string | undefined {
   const type = reading(() => event.type);
   if (type !== "yield") {
@@ -93,7 +93,7 @@ function importedName(event: DurableEvent): string | undefined {
 }
 
 /**
- * A retained value that refuses to be read.
+ * A saved value that refuses to be read.
  *
  * Distinct from absence. A settlement that is simply not there is an import
  * that failed, which this admission has nothing to say about; a settlement that
@@ -126,7 +126,7 @@ function importedValue(event: DurableEvent): { value: unknown } | undefined | ty
 }
 
 /**
- * Hold one retained import to the bundle, or refuse it.
+ * Hold one saved import to the bundle, or refuse it.
  *
  * Every branch is a decision about what the record *is*, taken before anything
  * is replayed from it. A declared name must have been recorded as a bundled
@@ -194,8 +194,8 @@ function admitImport(
 
 function admits(components: ReadonlyMap<string, WorkflowBundleComponent>): JournalAdmission {
   // deno-lint-ignore require-yield
-  return function* (retained: readonly DurableEvent[]) {
-    for (const event of retained) {
+  return function* (saved: readonly DurableEvent[]) {
+    for (const event of saved) {
       admitImport(event, components);
     }
   };
@@ -211,7 +211,7 @@ function admits(components: ReadonlyMap<string, WorkflowBundleComponent>): Journ
  *
  * ```ts
  * yield* executeInstalled(options, [
- *   retainedWorkflowInstallation(run),
+ *   savedWorkflowInstallation(run),
  *   workflowBundleInstallation(components),
  * ]);
  * ```

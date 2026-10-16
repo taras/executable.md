@@ -5,7 +5,7 @@
  * to the two components' own modules. `repository.ts` and `worktree.ts` own what
  * a `<Repository>` and a `<Worktree>` respectively create and attach;
  * `effects.ts` owns the durable envelope both perform inside; `refusals.ts` owns
- * the words a refusal travels in; `identity.ts` owns holding a retained record
+ * the words a refusal travels in; `identity.ts` owns holding a saved record
  * to the identity that names it.
  *
  * What is left here is the pairing of a creation with an attachment, the
@@ -133,7 +133,7 @@ export function workflowSelections(): SelectionRegistry<RepositoryRecord> {
 }
 
 /**
- * Rebuild a live checkout from the Workspace and prove it is the retained one.
+ * Rebuild a live checkout from the Workspace and prove it is the saved one.
  *
  * The transaction is held only for the export: Git runs afterwards, against
  * files, so a subprocess never keeps the run's database locked. Nothing here
@@ -182,7 +182,7 @@ function hostOf(options: CompositionProviderOptions): RepositoryHost {
 function unselected(operation: string): GitOperationAdmissionError {
   return new GitOperationAdmissionError(
     operation,
-    "the Repository in scope is not one this run selected, so it names no retained checkout",
+    "the Repository in scope is not one this run selected, so it names no saved checkout",
   );
 }
 

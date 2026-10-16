@@ -63,7 +63,7 @@ import {
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { SUSPENSION_ANSWER } from "../src/suspension/answer.ts";
-import type { RetainedDefinitionSources } from "../deno.ts";
+import type { SavedDefinitionSources } from "../deno.ts";
 import {
   FIXTURE_BUNDLE_PATH,
   FIXTURE_BUNDLE_SOURCE,
@@ -252,7 +252,7 @@ function forgedOwnWait(id: string): DetachedXmdArtifact {
 }
 
 /**
- * The wait this run is stopped at, forged, and its retained row dropped.
+ * The wait this run is stopped at, forged, and its saved row dropped.
  *
  * Leaving the row would make this a row naming a request for another wait,
  * which a different check already answers. Removing it is what leaves the
@@ -562,7 +562,7 @@ describe("XMD artifact container version 1", () => {
     expect(roomy.result.fileSha256).toBe(sha256Hex(yield* until(readFile(roomy.path))));
   });
 
-  it("C3 round-trips every retained record family", function* () {
+  it("C3 round-trips every saved record family", function* () {
     const directory = yield* useArtifactDirectory();
     const contents = richArtifact();
     const { path } = yield* sealed(directory, "evidence.xmd", contents);
@@ -594,7 +594,7 @@ describe("XMD artifact container version 1", () => {
       contents.roots.map((root) => root.manifest).sort(),
     );
     // A hardlink group, a symbolic link and a non-default mode are metadata a
-    // summary would drop, so each is asserted against the retained manifest.
+    // summary would drop, so each is asserted against the saved manifest.
     const current = read.roots.find(
       (root) => root.rootId === contents.frontier.currentWorkspaceRootId,
     );
@@ -872,7 +872,7 @@ describe("XMD artifact container version 1", () => {
     const read = yield* opened(path);
     const sealedFixture = richArtifact();
 
-    // A provider checkpoint token is retained evidence rather than a capability
+    // A provider checkpoint token is saved evidence rather than a capability
     // over the host that issued it, so the ban is on the names that would carry
     // capability — and the two members that may be called `token` are named.
     const forbiddenNames =
@@ -1050,7 +1050,7 @@ describe("XMD artifact container version 1", () => {
           content,
         );
     });
-    // Every way a retained answer can fail to be an answer to the history it
+    // Every way a saved answer can fail to be an answer to the history it
     // names. Each rewrites one member of one row and leaves the rest of the
     // artifact exactly as it was.
     const answerIdentity = (suspension: "consumed" | "pending"): string =>
@@ -1076,7 +1076,7 @@ describe("XMD artifact container version 1", () => {
       ...answer,
       requestEventId: "no-such-event",
     }));
-    // event-4 is the retained Git effect: a real event, and not a wait.
+    // event-4 is the saved Git effect: a real event, and not a wait.
     const suspensionNotARequest = yield* damageAnswer(
       "suspension-not-a-request.xmd",
       "pending",
@@ -1112,7 +1112,7 @@ describe("XMD artifact container version 1", () => {
         return { ...rest, state: "pending" };
       },
     );
-    // The publication side. Each rewrites the retained record of the answer
+    // The publication side. Each rewrites the saved record of the answer
     // event this run published, leaving the row that points at it untouched, so
     // what refuses them is the authentication of the publication itself.
     const damagePublication = (name: string, edit: (event: JsonObject) => JsonObject) =>
@@ -1135,7 +1135,7 @@ describe("XMD artifact container version 1", () => {
     }));
     const publicationPosition = yield* damagePublication("publication-position.xmd", (event) => ({
       ...event,
-      // Another coroutine entirely, where the yield behind it is the retained
+      // Another coroutine entirely, where the yield behind it is the saved
       // Git effect rather than the request it claims to answer.
       coroutineId: "root.0",
     }));
@@ -1221,7 +1221,7 @@ describe("XMD artifact container version 1", () => {
         "# A different document\n",
       );
     });
-    // A retained source the descriptor still maps a component name onto,
+    // A saved source the descriptor still maps a component name onto,
     // removed: the closure no longer carries what the definition names.
     const closureMembership = yield* damaged(path, join(directory, "membership.xmd"), (target) => {
       const identity = canonicalJsonText("workflows/Unused.md");
@@ -1281,7 +1281,7 @@ describe("XMD artifact container version 1", () => {
       // at both all agree. Nothing compares them to each other any more; what
       // refuses it is that no position in this run derives that identity.
       ["forged-answered.xmd", forgedOwnWait("f".repeat(32))],
-      // The same forgery on the wait this run is stopped at, with its retained
+      // The same forgery on the wait this run is stopped at, with its saved
       // row removed — so no answer row and no publication reaches the request,
       // and only holding the request itself to its position can catch it.
       ["forged-unanswered.xmd", forgedUnansweredWait("e".repeat(32))],
@@ -1339,14 +1339,14 @@ describe("XMD artifact container version 1", () => {
  *
  * The container, its identity domain and its verifier are the ones C1–C9
  * already hold; what is new is that a sealed artifact says, for every logical
- * Agent session that contributed a retained Prompt, either how a fork would
+ * Agent session that contributed a saved Prompt, either how a fork would
  * continue it or exactly why nothing could. So these cases are about the two
  * profiles version 1 now has: that merged legacy artifacts still open and gain
  * nothing, that a finalized one is total, and that the confidential bytes it
  * carries stay bytes.
  */
 describe("XMD artifact version 1 Agent portability evidence", () => {
-  it("F2 makes every Agent term and retained byte part of the identity", function* () {
+  it("F2 makes every Agent term and saved byte part of the identity", function* () {
     const base = finalizedArtifact();
     const baseline = derivedIdentity(base);
     const portable = portableOf(base);
@@ -1537,7 +1537,7 @@ describe("XMD artifact version 1 Agent portability evidence", () => {
 
     const cases: readonly (readonly [string, string, (database: DatabaseSync) => void])[] = [
       [
-        "nothing classified beside retained bundle bytes",
+        "nothing classified beside saved bundle bytes",
         "XmdArtifactInventoryError",
         (database) => {
           for (const key of [portableKey, incompleteKey, uncapturedKey]) {
@@ -1551,7 +1551,7 @@ describe("XMD artifact version 1 Agent portability evidence", () => {
         (database) => dropRow(database, PORTABILITY_KIND, canonicalJsonText(incompleteKey)),
       ],
       [
-        "a record for a session that retained no Prompt",
+        "a record for a session that saved no Prompt",
         "XmdArtifactInventoryError",
         (database) =>
           insertRow(
@@ -1563,7 +1563,7 @@ describe("XMD artifact version 1 Agent portability evidence", () => {
           ),
       ],
       [
-        "bundle bytes for a session that retained no Prompt",
+        "bundle bytes for a session that saved no Prompt",
         "XmdArtifactInventoryError",
         (database) =>
           insertRow(database, BUNDLE_KIND, idle.sessionKey, "bytes", encoder.encode("orphan")),
@@ -1635,7 +1635,7 @@ describe("XMD artifact version 1 Agent portability evidence", () => {
         })),
       ],
       [
-        "a retained Prompt whose session mapping is gone",
+        "a saved Prompt whose session mapping is gone",
         "XmdArtifactInventoryError",
         (database) => dropRow(database, "agent-session", canonicalJsonText(portableKey)),
       ],

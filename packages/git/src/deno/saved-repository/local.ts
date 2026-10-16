@@ -20,7 +20,7 @@
  * Deciding whether a path is inside the checkout means resolving it, and
  * resolving it means touching a filesystem the saved result is not about — a
  * continuation whose checkout has since been deleted would fail at the question
- * rather than answer from what it already knows. So the retained cursor is read
+ * rather than answer from what it already knows. So the saved cursor is read
  * first, without consuming anything: a position holding this operation's own
  * record is answered from the record, and only an operation with nothing saved
  * resolves, routes, leases and performs.
@@ -53,13 +53,13 @@ import {
   REPL_REPOSITORY_LOCAL,
   REPL_REPOSITORY_SELECTION,
   retainableRefusal,
-} from "../../retained-repository/records.ts";
+} from "../../saved-repository/records.ts";
 import type {
   ReplAmbientCheckout,
   ReplLocalOperation,
   ReplLocalRequest,
   ReplLocalValue,
-} from "../../retained-repository/records.ts";
+} from "../../saved-repository/records.ts";
 
 /**
  * A saved record standing where this operation belongs that it cannot read.
@@ -101,14 +101,14 @@ export function* localRecordName(operation: {
 }
 
 /**
- * Whether the next retained position in this coroutine holds this record.
+ * Whether the next saved position in this coroutine holds this record.
  *
  * Reads the description alone and consumes nothing. A `true` says a saved
  * result is probably standing here, which is reason enough to answer from the
  * journal instead of resolving a path; the matcher below decides whether it
  * really is.
  */
-export function* retainedRecordAhead(type: string, name?: string): Operation<boolean> {
+export function* savedRecordAhead(type: string, name?: string): Operation<boolean> {
   const context = yield* DurableContext.expect();
   const entry = context.replayIndex.peekYield(context.coroutineId);
   if (entry === undefined || entry.description.type !== type) {
@@ -131,13 +131,13 @@ export function* currentCoroutine(): Operation<string> {
 }
 
 /** Whether this entry's saved ambient routing stands at the cursor. */
-export function retainedSelectionAhead(): Operation<boolean> {
-  return retainedRecordAhead(REPL_REPOSITORY_SELECTION);
+export function savedSelectionAhead(): Operation<boolean> {
+  return savedRecordAhead(REPL_REPOSITORY_SELECTION);
 }
 
 /** Whether this operation's own saved result stands at the cursor. */
-export function retainedResultAhead(name: string): Operation<boolean> {
-  return retainedRecordAhead(REPL_REPOSITORY_LOCAL, name);
+export function savedResultAhead(name: string): Operation<boolean> {
+  return savedRecordAhead(REPL_REPOSITORY_LOCAL, name);
 }
 
 /**

@@ -1491,7 +1491,7 @@ function* expandListSegments(
                 {
                   type: "error",
                   // stderr was already displayed on its way past, so the
-                  // diagnostic quotes it only when this run retained it — and
+                  // diagnostic quotes it only when this run saved it — and
                   // what it quotes is what reached this run's boundary (#441).
                   message: codeResult.stderr
                     ? `Command failed (exit ${codeResult.exitCode}): ${codeResult.stderr}`
@@ -2615,7 +2615,7 @@ function* expandAll(
       scope.get(DurableContext) === undefined
         ? yield* all(children.map((child) => child()))
         : (yield* durableAll(
-            children.map((child) => (): Workflow<Json> => ephemeral(retained(child()))),
+            children.map((child) => (): Workflow<Json> => ephemeral(saved(child()))),
           )).map(readEmissions);
 
     for (const runs of rendered) {
@@ -2639,15 +2639,15 @@ function* expandAll(
 }
 
 /** One child's runs, as its durable close retains them. */
-function retained(child: Operation<Emission[]>): Operation<Json> {
+function saved(child: Operation<Emission[]>): Operation<Json> {
   return (function* (): Operation<Json> {
     return (yield* child).map((run) => ({ text: run.text, exact: run.exact }));
   })();
 }
 
-/** What a child's retained close is refused with when it will not read. */
+/** What a child's saved close is refused with when it will not read. */
 const UNREADABLE_RUNS =
-  "a spawned child's retained close cannot be read as what it rendered, so this run cannot " +
+  "a spawned child's saved close cannot be read as what it rendered, so this run cannot " +
   "rebuild the document that child produced. A history is read whole or not at all.";
 
 /**
@@ -2887,7 +2887,7 @@ function* expandComponent(
         // from. An open import — one no tier claims — never sets it, however its
         // answer describes itself.
         authorizedCanonically = true;
-        // Closed authorization answers with core's retained copy rather than the
+        // Closed authorization answers with core's saved copy rather than the
         // object the resolver recorded, and the copy is what this expansion
         // invokes — so the selection is recorded against it too. Only here: an
         // open execution's answer travelled through public middleware, and
@@ -2963,7 +2963,7 @@ function* expandComponent(
 
     // What this definition's own body may write. A declaration carries its
     // private closure here; every other body clears the caller's private closure.
-    // Decided from the definition canonical resolution retained — the one this
+    // Decided from the definition canonical resolution saved — the one this
     // expansion is about to invoke, reporting the origin core declared — rather
     // than from the name alone.
     const bodyEnvironment = environmentForBody(environment, name, definition);

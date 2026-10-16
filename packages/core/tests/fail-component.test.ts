@@ -418,7 +418,7 @@ describe("Tier FAIL — position, durability and precedence", () => {
 
     const second = yield* run(dir, source, { stream });
 
-    // The retained outcome, restored without expanding the root again — the
+    // The saved outcome, restored without expanding the root again — the
     // tripwire before the failure would have recorded a second run.
     expect(failureOf(second).message).toBe("Stop, and stay stopped.");
     expect(second.ran).toEqual([]);

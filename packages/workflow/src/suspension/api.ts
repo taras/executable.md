@@ -10,7 +10,7 @@
  *
  * ## Identity is position, not a name
  *
- * The caller selects neither a suspension ID nor a retained answer. The trusted
+ * The caller selects neither a suspension ID nor a saved answer. The trusted
  * execution derives one suspension ID from the run and the exact durable
  * coroutine position, which is what makes the wait a document reaches at one
  * point in a procedure the same wait it reaches there after a resume — and what
@@ -32,7 +32,7 @@
  * catch, and a caught suspension would be a document continuing past a wait it
  * asked for and did not get.
  *
- * Admission is the retained request at the caller's exact current durable
+ * Admission is the saved request at the caller's exact current durable
  * position. The identifier presented must be the one this run derives for the
  * position immediately behind the caller, and the yield there must be that
  * request, describing what is presented. An identifier from elsewhere in the
@@ -96,7 +96,7 @@ export const WorkflowSuspension: Api<WorkflowSuspensionApi> = createApi<Workflow
  * The request this value is, or a refusal naming what is wrong with it.
  *
  * Refused before anything is published, because a request that cannot be
- * retained must not become a durable event, and a schema that cannot describe a
+ * saved must not become a durable event, and a schema that cannot describe a
  * response must not be the thing a later host validates against. Both halves
  * are ordinary document input and neither has been checked by anyone else.
  */
@@ -117,7 +117,7 @@ export function parseSuspensionRequest(value: unknown): WorkflowSuspensionReques
   const retainable = retainableJson(request);
   if (retainable === undefined) {
     throw new WorkflowSuspensionRequestError(
-      "a suspension request is retained in the journal, so it must be JSON this run can store.",
+      "a suspension request is saved in the journal, so it must be JSON this run can store.",
     );
   }
   const schema = retainableJson(responseSchema);
@@ -138,10 +138,10 @@ export function parseSuspensionRequest(value: unknown): WorkflowSuspensionReques
 /**
  * The stable name of one wait's request and the shape that may end it.
  *
- * What a retained answer is correlated by. Delivery computes it from the
+ * What a saved answer is correlated by. Delivery computes it from the
  * request it read out of the journal and stores it beside the value; a resume
  * recomputes it from the request the execution actually reached and compares —
- * a run whose retained request at that position is not the one the value was
+ * a run whose saved request at that position is not the one the value was
  * judged against is a run that answer was never for.
  *
  * One function rather than one per caller. Everything that judges an answer has

@@ -1,10 +1,10 @@
 /**
- * Holding a retained record to the identity that names it.
+ * Holding a saved record to the identity that names it.
  *
  * Placement is a function of identity — a name decides a slot, a slot decides a
- * path — so a retained path is checkable rather than merely plausible. None of
+ * path — so a saved path is checkable rather than merely plausible. None of
  * it is this provider's word by the time it is read back: a column is whatever
- * the database holds, and every disagreement found here is stale retained state
+ * the database holds, and every disagreement found here is stale saved state
  * rather than a refusal, because the document did not ask for it and could not
  * have avoided it.
  */
@@ -34,12 +34,12 @@ export type StaleReason =
   | "linkage";
 
 const STALE_SENTENCES: ReadonlyMap<StaleReason, string> = new Map([
-  ["metadata", "the retained record naming it is gone or names something else"],
+  ["metadata", "the saved record naming it is gone or names something else"],
   ["checkout", "the Workspace no longer holds a checkout at the path it recorded"],
   ["administration", "what the Workspace holds there is no longer a readable Git checkout"],
-  ["repository", "the repository it belongs to is no longer retained"],
+  ["repository", "the repository it belongs to is no longer saved"],
   ["placement", "the path it recorded is not the one this run's placement gives its identity"],
-  ["locator", "the url retained for it is not the one its identity names"],
+  ["locator", "the url saved for it is not the one its identity names"],
   ["origin", "the checkout it holds came from a different repository"],
   ["object-format", "the checkout it holds names its objects with a different algorithm"],
   ["creation-commit", "the commit it was created at is not in the checkout it holds"],
@@ -51,22 +51,22 @@ export function stale(subject: string, reason: StaleReason): RepositoryStaleStat
 }
 
 /**
- * The retained record, once it still agrees with the identity that names it.
+ * The saved record, once it still agrees with the identity that names it.
  *
  * Placement is a function of identity: a name decides a slot, and the slot
- * decides the path. So a retained path is checkable rather than merely
+ * decides the path. So a saved path is checkable rather than merely
  * plausible — recomputing it from the record's own name and comparing the whole
  * string is the difference between "this looks like a Workspace path" and "this
  * is the path this run gives this identity".
  *
- * It matters because the retained path is not this provider's word by the time
+ * It matters because the saved path is not this provider's word by the time
  * it is read back. It is a column, and a column is whatever the database holds:
  * an edited row naming `/../../etc` would otherwise be joined to a host root and
  * followed out of the run's own tree. Checking here means the disagreement is
  * found before Git runs, before a child begins, and before anything is written.
  *
  * A disagreement is stale-state rather than a refusal, and deliberately so. The
- * document did not ask for this and could not have avoided it; retained state
+ * document did not ask for this and could not have avoided it; saved state
  * says something this run cannot have written, and nothing repairs that.
  */
 export function agreedRepository(record: RepositoryRecord, subject: string): RepositoryRecord {
@@ -84,7 +84,7 @@ export function agreedWorktree(record: WorktreeRecord, subject: string): Worktre
 }
 
 /**
- * The locator retained for a Repository, once it is still the one it names.
+ * The locator saved for a Repository, once it is still the one it names.
  *
  * Two things are checked and they are different. The bytes must still be
  * admissible — a stored locator that this provider would refuse today is not one
@@ -104,7 +104,7 @@ export function agreedLocator(stored: StoredRepository, subject: string): string
   return stored.locator;
 }
 
-/** A retained Repository row, once its path and its locator both still agree. */
+/** A saved Repository row, once its path and its locator both still agree. */
 export function agreedStored(stored: StoredRepository, subject: string): StoredRepository {
   agreedRepository(stored.record, subject);
   agreedLocator(stored, subject);
@@ -114,7 +114,7 @@ export function agreedStored(stored: StoredRepository, subject: string): StoredR
 /**
  * Whether this checkout identity is the one this run's placement gives that name.
  *
- * The half of a retained result the shared protocol cannot check. Placement is a
+ * The half of a saved result the shared protocol cannot check. Placement is a
  * function of identity and the function is this provider's, so a name and a path
  * that arrive together have to still be the pair placement produces: a result
  * naming one Worktree at another's path, or naming a Worktree at all where the
@@ -153,7 +153,7 @@ export function worktreeSubject(name: string): string {
  *
  * `repositoryDirectory` is where the Repository this checkout belongs to was
  * materialized — for a primary checkout, itself — and `repository` is that
- * Repository's retained record. Both travel with the directory because
+ * Repository's saved record. Both travel with the directory because
  * verification is a comparison, and neither half of it can be read off the host
  * tree alone.
  */

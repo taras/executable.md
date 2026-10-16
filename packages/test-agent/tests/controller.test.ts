@@ -353,7 +353,7 @@ describe("Tier TC — controller", () => {
 
     yield* task.halt();
     // The instance finalizer revoked the worker before the server closed;
-    // the retained instance shows its state cleared.
+    // the saved instance shows its state cleared.
     yield* client.closed;
     expect(info.scenario.journal.length).toBe(0);
     expect(info.scenario.failure).toBe(undefined);

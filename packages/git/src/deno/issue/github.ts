@@ -771,7 +771,7 @@ export function parseGitHubIssueUrl(url: string): GitHubIssueLocation | undefine
  * the answer. What comes back is checked against what was asked for, and what
  * is published is the URL the document wrote — never one the response supplied.
  * Otherwise a service that answered with a different issue would decide what a
- * document read, and the answer would be retained under the requested URL while
+ * document read, and the answer would be saved under the requested URL while
  * describing something else. The ceiling was admitted against the requested URL
  * too, so a response cannot reach past it by naming somewhere else.
  */

@@ -13,7 +13,7 @@
  * case: metadata is what makes a form offerable, and offering none takes
  * nothing away from authored use.
  *
- * ## Read once, validated and retained as one value
+ * ## Read once, validated and saved as one value
  *
  * A declaration crosses a package boundary, so the metadata is read the way
  * durable input is read: exactly the two members, an identity in the accepted
@@ -101,7 +101,7 @@ export function admitGeneratedForms(
       return Err(new Error(`offers generated use of its ${form} form, which it does not accept`));
     }
     // One read of each member, into data this module owns. Everything below —
-    // the checks and the retained copy alike — reads that data and never the
+    // the checks and the saved copy alike — reads that data and never the
     // declarer's object again.
     const offered = read(Reflect.get(generated, form), form);
     if (!offered.ok) {

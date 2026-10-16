@@ -29,7 +29,7 @@ import {
 } from "../src/evaluation-profile.ts";
 import { syntaxSymbols } from "../src/syntax.ts";
 
-const NOTE = "the retained note\n";
+const NOTE = "the saved note\n";
 
 function* useWorkspace<T>(
   files: Record<string, string>,
@@ -59,7 +59,7 @@ describe("Tier FE — the ordinary run profile", () => {
       function* (dir) {
         const result = yield* runCli(["run", join(dir, "doc.md")], { cwd: dir }).join();
         expect(result.code).toBe(0);
-        expect(result.stdout).toContain("the retained note");
+        expect(result.stdout).toContain("the saved note");
       },
     );
   });

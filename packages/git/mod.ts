@@ -27,7 +27,7 @@
  * </Repository>
  * ```
  *
- * A `<Repository>` is retained in the run's Workspace: its bytes, the row that
+ * A `<Repository>` is saved in the run's Workspace: its bytes, the row that
  * names it, and the Workspace root they were published against all commit
  * together or not at all. So a resumed run continues from the checkout it
  * recorded rather than from whatever is on the machine now, and a replay
@@ -58,7 +58,7 @@
  *
  * These components were published by `@executablemd/workflow` before this
  * package existed, and every journal, database row and artifact a released
- * build wrote names that origin. Those strings identify retained history rather
+ * build wrote names that origin. Those strings identify saved history rather
  * than current source ownership, so the `@executablemd/workflow/composition`
  * origin is preserved exactly here. What a generated `<Dir>` runs as is not
  * among them: that is stated by core's own declaration, which owns the

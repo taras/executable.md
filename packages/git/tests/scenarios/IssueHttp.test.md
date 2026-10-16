@@ -33,7 +33,7 @@ The publish step failed twice in a row on 503.
 
 Both requests carried the credential the tracker requires. The header is checked
 where its value is already known and reported as an answer, so the token appears
-neither in this document nor in anything the run retained.
+neither in this document nor in anything the run saved.
 
 <Test name="Both requests carried a Bearer credential the tracker accepted">
 <ServerRequests as="sent" />

@@ -5,7 +5,7 @@
  * to Close events. See spec §4.1.
  */
 
-import { retainEvents } from "./retained.ts";
+import { retainEvents } from "./saved.ts";
 import type {
   Close,
   CoroutineId,
@@ -22,19 +22,19 @@ export interface YieldEntry {
 
 export class ReplayIndex {
   private yields = new Map<CoroutineId, Yield[]>();
-  /** Every retained Yield in stream order, each owning its own settled cells. */
-  private retained: Yield[] = [];
+  /** Every saved Yield in stream order, each owning its own settled cells. */
+  private saved: Yield[] = [];
   private cursors = new Map<CoroutineId, number>();
   private closes = new Map<CoroutineId, Close>();
   /** Coroutines where replay has been disabled (run-live mode). */
   private disabled = new Set<CoroutineId>();
-  /** Retained coroutine identities reached by the current definition. */
+  /** Saved coroutine identities reached by the current definition. */
   private claimed = new Set<CoroutineId>();
 
   /**
    * Index a journal's events by identity, without reading what they settled to.
    *
-   * The events are retained first — idempotently, so a caller that already
+   * The events are saved first — idempotently, so a caller that already
    * produced the stable history hands the same objects on rather than a second
    * wrapping of them, and every phase then observes one identity and one
    * settlement per event.
@@ -47,7 +47,7 @@ export class ReplayIndex {
           list = [];
           this.yields.set(event.coroutineId, list);
         }
-        this.retained.push(event);
+        this.saved.push(event);
         list.push(event);
       }
       if (event.type === "close") {
@@ -57,13 +57,13 @@ export class ReplayIndex {
   }
 
   /**
-   * Every retained Yield in stream order, as the events a check phase sees.
+   * Every saved Yield in stream order, as the events a check phase sees.
    *
    * The same objects the replay path consumes, so a guard and a later consumer
    * observe one settled result rather than two reads of the stream.
    */
-  retainedYields(): Yield[] {
-    return [...this.retained];
+  savedYields(): Yield[] {
+    return [...this.saved];
   }
 
   /**
@@ -82,17 +82,17 @@ export class ReplayIndex {
     return this.disabled.has(coroutineId);
   }
 
-  /** Mark a retained coroutine identity as reached by the current run. */
+  /** Mark a saved coroutine identity as reached by the current run. */
   claim(coroutineId: CoroutineId): void {
     this.claimed.add(coroutineId);
     if (!this.closes.has(coroutineId)) {
       return;
     }
 
-    const retainedIds = new Set([...this.yields.keys(), ...this.closes.keys()]);
-    for (const retainedId of retainedIds) {
-      if (retainedId.startsWith(`${coroutineId}.`)) {
-        this.claimed.add(retainedId);
+    const savedIds = new Set([...this.yields.keys(), ...this.closes.keys()]);
+    for (const savedId of savedIds) {
+      if (savedId.startsWith(`${coroutineId}.`)) {
+        this.claimed.add(savedId);
       }
     }
   }
@@ -117,7 +117,7 @@ export class ReplayIndex {
   }
 
   /**
-   * Whether this coroutine walked away from retained history it never consumed.
+   * Whether this coroutine walked away from saved history it never consumed.
    *
    * True once replay has been disabled for it while entries it had not reached
    * are still there — which is what a run-live decision leaves behind. It stays
@@ -178,9 +178,9 @@ export class ReplayIndex {
   }
 
   /**
-   * Return the first retained coroutine not aligned with the current subtree.
+   * Return the first saved coroutine not aligned with the current subtree.
    *
-   * `entry` is the first unmatched retained protocol entry itself — the Yield
+   * `entry` is the first unmatched saved protocol entry itself — the Yield
    * at the cursor, or for an unmatched completed child its first Yield when it
    * has one and otherwise its Close — so a terminal diagnostic can name what
    * the terminating subtree did not reach, not just where it stopped.

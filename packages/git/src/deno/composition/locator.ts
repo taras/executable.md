@@ -6,7 +6,7 @@
  * here and they are different questions. **Admission** decides whether this
  * provider will hand the string to Git at all. **Fingerprinting** produces the
  * stable name the journal, the record and every compatibility comparison use,
- * so a changed locator diverges without the bytes of either one being retained
+ * so a changed locator diverges without the bytes of either one being saved
  * outside the single column that holds them.
  *
  * Admission is a closed allowlist rather than a search for bad shapes. Git's
@@ -84,7 +84,7 @@ export function admitLocator(locator: string): string | undefined {
   }
   // A local path. Absolute only: a relative one would name a different
   // repository depending on which directory the host happened to run in, and a
-  // workflow's retained identity must not depend on that.
+  // workflow's saved identity must not depend on that.
   if (locator.startsWith("/")) {
     return locator;
   }

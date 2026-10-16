@@ -47,7 +47,7 @@ function parseRoot(root: StoredWorkspaceRoot): {
   return JSON.parse(root.manifest);
 }
 
-describe("Tier WRR — immutable retained Workspace roots", () => {
+describe("Tier WRR — immutable saved Workspace roots", () => {
   it("WRR1: the canonical empty root remains byte-for-byte compatible with schema v1", function* () {
     const storage = yield* useStorageRoot();
 
@@ -75,7 +75,7 @@ describe("Tier WRR — immutable retained Workspace roots", () => {
     }
   });
 
-  it("WRR2: complete topology is canonical, content-addressed, and idempotently retained", function* () {
+  it("WRR2: complete topology is canonical, content-addressed, and idempotently saved", function* () {
     const storage = yield* useStorageRoot();
     let first: StoredWorkspaceRoot | undefined;
     let independentlyBuilt: StoredWorkspaceRoot | undefined;
@@ -88,7 +88,7 @@ describe("Tier WRR — immutable retained Workspace roots", () => {
         yield* workspace.filesystem.mkdir("/tree/nested", { mode: 0o700 });
         yield* workspace.filesystem.writeFile(
           "/tree/nested/file.txt",
-          "retained-only-in-dofs-blobs",
+          "saved-only-in-dofs-blobs",
           0o640,
         );
         yield* workspace.filesystem.link("/tree/nested/file.txt", "/tree/hardlink.txt");
@@ -116,7 +116,7 @@ describe("Tier WRR — immutable retained Workspace roots", () => {
         yield* workspace.filesystem.mkdir("/tree/nested", { mode: 0o700 });
         yield* workspace.filesystem.writeFile(
           "/tree/nested/file.txt",
-          "retained-only-in-dofs-blobs",
+          "saved-only-in-dofs-blobs",
           0o640,
         );
         yield* workspace.filesystem.link("/tree/nested/file.txt", "/tree/hardlink.txt");
@@ -168,7 +168,7 @@ describe("Tier WRR — immutable retained Workspace roots", () => {
         },
       ],
     });
-    expect(first.manifest).not.toContain("retained-only-in-dofs-blobs");
+    expect(first.manifest).not.toContain("saved-only-in-dofs-blobs");
 
     const sqlite = new DatabaseSync(runPath(storage, "canonical-a"));
     try {

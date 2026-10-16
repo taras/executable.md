@@ -42,7 +42,7 @@ import {
 import { durablePosition } from "@executablemd/durable-streams";
 import { collect, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import { retainedWorkflowInstallation } from "../src/run.ts";
+import { savedWorkflowInstallation } from "../src/run.ts";
 import type { WorkflowRunDatabase } from "../src/storage/api.ts";
 import { useStorageRoot, withBegunRun } from "./support/storage.ts";
 import type { WorkflowRun } from "../src/run.ts";
@@ -64,7 +64,7 @@ const RUN: WorkflowRun = Object.freeze({
  * One begun run, whose journal is what a suspension is verified against.
  *
  * A real database rather than a stream in memory, because entering a wait now
- * asks the run what it retained — what admits a wait is the retained request, so a
+ * asks the run what it saved — what admits a wait is the saved request, so a
  * suite that stubbed the journal would be proving nothing about it.
  */
 function withRun<T>(body: (database: WorkflowRunDatabase) => Operation<T>): Operation<T> {
@@ -82,7 +82,7 @@ interface Attempt {
   readonly thrown: unknown;
 }
 
-/** Every `suspension_request` this stream retained, oldest first. */
+/** Every `suspension_request` this stream saved, oldest first. */
 function requests(events: DurableEvent[]): DurableEvent[] {
   return events.filter(
     (event) => event.type === "yield" && event.description.type === SUSPENSION_REQUEST,
@@ -90,7 +90,7 @@ function requests(events: DurableEvent[]): DurableEvent[] {
 }
 
 /**
- * Run one document body under a retained run, until it suspends or ends.
+ * Run one document body under a saved run, until it suspends or ends.
  *
  * The controller stands in for the executor: it observes the reported wait, and
  * `race` then halts the execution — which is what the real owner does. Halting
@@ -127,7 +127,7 @@ function attempt(
             call(function* (): Operation<void> {
               yield* collect(
                 yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [
-                  retainedWorkflowInstallation(RUN),
+                  savedWorkflowInstallation(RUN),
                 ]),
               );
             }),
@@ -159,7 +159,7 @@ function attempt(
  * A durable operation built to look like a published suspension request.
  *
  * Exactly what document-side code can reach: the public effect type and the
- * public factory. Yielded where the real request sits, it replays that retained
+ * public factory. Yielded where the real request sits, it replays that saved
  * row, because replay identity compares a type and a name and nothing else.
  */
 function* forgedRequest(id: string): Workflow<void> {
@@ -314,7 +314,7 @@ describe("Tier WS — a durable wait's request and identity", () => {
     }
 
     yield* withRun(function* (database) {
-      // A request that is a well-typed `Json` and still cannot be retained: the
+      // A request that is a well-typed `Json` and still cannot be saved: the
       // journal holds what `JSON.stringify` produces, and a cycle produces
       // nothing. This is the case a type cannot catch.
       const cyclic: Record<string, Json> = {};
@@ -360,14 +360,14 @@ describe("Tier WS — a durable wait's request and identity", () => {
     });
   });
 
-  it("WS6: a retained request does not authorize a caller standing before it", function* () {
+  it("WS6: a saved request does not authorize a caller standing before it", function* () {
     yield* withRun(function* (database) {
       const refusals: string[] = [];
       const reached: string[] = [];
 
       // Document-side code that knows the provider's name and the identifier the
       // wait ahead of it will have — on a resume it could read that identifier
-      // straight out of the run's own retained history.
+      // straight out of the run's own saved history.
       function early(id: string): Operation<void> {
         return call(function* () {
           const Same: Api<WorkflowSuspensionApi> = createApi<WorkflowSuspensionApi>(
@@ -404,14 +404,14 @@ describe("Tier WS — a durable wait's request and identity", () => {
         };
       }
 
-      // First execution: the identifier is not retained yet, and the early call
+      // First execution: the identifier is not saved yet, and the early call
       // is refused for standing in the wrong place rather than for guessing.
-      const first = yield* attempt(database, procedure("an-identifier-not-yet-retained"));
+      const first = yield* attempt(database, procedure("an-identifier-not-yet-saved"));
       const id = first.notice?.suspensionId ?? "";
       expect(id).not.toBe("");
       expect(refusals).toEqual(["refused"]);
 
-      // Resume: the request is retained now, and its exact identifier is what
+      // Resume: the request is saved now, and its exact identifier is what
       // the early call presents. It must still be refused — the row exists, but
       // this caller has not reached it.
       const resumed = yield* attempt(database, procedure(id));
@@ -450,7 +450,7 @@ describe("Tier WS — a durable wait's request and identity", () => {
       const id = first.notice?.suspensionId ?? "";
       expect(id).not.toBe("");
 
-      // A clean resume first: the prior effect replays, the retained request
+      // A clean resume first: the prior effect replays, the saved request
       // replays, and the real operation reports the same wait.
       const clean = yield* attempt(database, function* () {
         yield* prior();
@@ -463,7 +463,7 @@ describe("Tier WS — a durable wait's request and identity", () => {
       ).toHaveLength(0);
 
       // Now a resume that never calls `suspendFor()`. It replays the prior
-      // effect, then replays the retained request with an operation it built
+      // effect, then replays the saved request with an operation it built
       // itself — replay identity is a type and a name, so this lands on exactly
       // the position the real wait occupies — and enters through the provider's
       // public name.
@@ -491,7 +491,7 @@ describe("Tier WS — a durable wait's request and identity", () => {
       });
 
       // Standing at the validated wait *is* being at it. The operation that
-      // replayed the retained request arrived where the real one publishes, so
+      // replayed the saved request arrived where the real one publishes, so
       // it reports the same wait rather than a new one — what identifies a wait
       // is the request at that position, not which code reached it.
       expect(refusal).toBe("");
@@ -664,7 +664,7 @@ describe("Tier WS — a durable wait's request and identity", () => {
       expect(performed).toEqual([]);
       expect(attempted.notice).toBeUndefined();
 
-      // The request is retained, because the document really did ask. The
+      // The request is saved, because the document really did ask. The
       // answer is not, because nobody delivered one — so a later resume reaches
       // this same wait rather than replaying an answer it invented.
       expect(requests(attempted.events)).toHaveLength(1);
@@ -679,7 +679,7 @@ describe("Tier WS — a durable wait's request and identity", () => {
     });
   });
 
-  it("WS10: a malformed retained request admits no wait", function* () {
+  it("WS10: a malformed saved request admits no wait", function* () {
     yield* withRun(function* (database) {
       let refusal = "";
 
@@ -711,7 +711,7 @@ describe("Tier WS — a durable wait's request and identity", () => {
         }
       });
 
-      // Refused for what the retained row is, not for where the caller stands.
+      // Refused for what the saved row is, not for where the caller stands.
       expect(refusal).toContain("not one a durable wait can be entered for");
       expect(attempted.notice).toBeUndefined();
 

@@ -7,7 +7,7 @@
  * pins it, `<Session>` itself composes it — and every one of those handlers can
  * replace the arguments it routes. A durable identity carried there would be a
  * durable identity any middleware could rewrite, which is how two sibling
- * `<Session name="review">` sites become one retained mapping.
+ * `<Session name="review">` sites become one saved mapping.
  *
  * So the two travel apart. The **authored name** stays on the public chain,
  * where it is descriptive and a handler may observe or change it. The

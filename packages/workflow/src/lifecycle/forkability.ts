@@ -2,10 +2,10 @@
  * Whether a run's history can be continued as somebody else's.
  *
  * A fork inherits a journal prefix and replays it under a new identity. That
- * only works while every retained event in the prefix means the same thing to
+ * only works while every saved event in the prefix means the same thing to
  * the fork as it did to the source: a recorded value the fork can consume, and
  * a Workspace root the fork can be given. An Agent turn whose provider session
- * the fork cannot enter, and a retained effect this build has never heard of,
+ * the fork cannot enter, and a saved effect this build has never heard of,
  * are events a fork would have to pretend it understood.
  *
  * ## An external effect is judged by its record, not by its type
@@ -25,14 +25,14 @@
  *
  * ## Recognition is an allowlist
  *
- * A retained effect type is forkable because it is named here, never because it
+ * A saved effect type is forkable because it is named here, never because it
  * failed to match something. A build that meets an effect a later build wrote
  * reports `unsupported-effect` rather than inheriting a record whose meaning it
  * is guessing at.
  *
  * ## What a blocker may say
  *
- * A stable code and an event id. Nothing else: the retained description, the
+ * A stable code and an event id. Nothing else: the saved description, the
  * filtered result, the run's props and whatever a provider said about a
  * session are history this classification reads and never republishes.
  */
@@ -78,7 +78,7 @@ const INHERITABLE_EFFECTS: ReadonlySet<string> = new Set([
   SUSPENSION_REQUEST,
   SUSPENSION_ANSWER,
   // Core's own durable operations. Named as the durable record names them,
-  // because that is what a retained row holds — a build reading history a
+  // because that is what a saved row holds — a build reading history a
   // different build wrote has only these strings to go on.
   "import_component",
   "eval",
@@ -92,7 +92,7 @@ const INHERITABLE_EFFECTS: ReadonlySet<string> = new Set([
   "loop",
   "loop_iteration",
   // The Workspace effects the local provider records. Every one of them is
-  // content inside this run's database, and a retained root carries it.
+  // content inside this run's database, and a saved root carries it.
   "workspace_file",
   "workspace_repository",
   "workspace_worktree",
@@ -102,7 +102,7 @@ const INHERITABLE_EFFECTS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Whether a retained Git-host event carries a completed reconciliation record.
+ * Whether a saved Git-host event carries a completed reconciliation record.
  *
  * A failed Git-host effect retains no record — its outcome is the durable
  * operation's failed result — so there is nothing there a fork could continue
@@ -111,7 +111,7 @@ const INHERITABLE_EFFECTS: ReadonlySet<string> = new Set([
  *
  * Read as compatibility data rather than through the feature's own parser. The
  * effect belongs to `@executablemd/git` now, and this module classifies
- * retained history without importing what wrote it. A record that will not
+ * saved history without importing what wrote it. A record that will not
  * read as completed is classified `external-state-unavailable`, which is the
  * conservative answer and the one the total parse also gave.
  */
@@ -176,7 +176,7 @@ function text(value: unknown): boolean {
 }
 
 /**
- * One retained object, when it declares exactly these members.
+ * One saved object, when it declares exactly these members.
  *
  * Exactly, because a member the shape does not declare describes something
  * else and a fork does not guess at it. A record that is nearly one is still
@@ -213,7 +213,7 @@ function exactly(value: unknown, members: readonly string[]): Record<string, unk
  * Whether this value is one JSON can express, all the way down.
  *
  * The same total reading the feature's own parser performs, expressed here
- * because this module classifies retained history without importing what wrote
+ * because this module classifies saved history without importing what wrote
  * it. It answers rather than detaching: what forkability needs is whether the
  * record can be read, not a copy of it.
  */
@@ -268,28 +268,28 @@ const AGENT_EFFECT = "agent_prompt";
  * The effect that reaches a Git host, as the durable record names it.
  *
  * Written out for the same reason every string in the allowlist above is: what
- * a retained row holds is this text, and a build classifying history a
+ * a saved row holds is this text, and a build classifying history a
  * different build wrote has only the text to go on. The effect belongs to
- * `@executablemd/git`; recognizing its retained rows is this module's own
+ * `@executablemd/git`; recognizing its saved rows is this module's own
  * compatibility obligation and not a dependency on that package.
  */
 const GIT_HOST_EFFECT = "git_host_effect";
 
-/** One retained event, as forkability reads it. */
+/** One saved event, as forkability reads it. */
 export interface ForkabilityCandidate {
   readonly eventId: string;
   readonly event: DurableEvent;
   readonly workspaceRootId: string;
 }
 
-/** What the classification needs to know about the run's retained state. */
+/** What the classification needs to know about the run's saved state. */
 export interface ForkabilityContext {
   /** Every Workspace root the run still retains. */
-  readonly retainedRoots: ReadonlySet<string>;
+  readonly savedRoots: ReadonlySet<string>;
 }
 
 /**
- * Forkability at each event, in the order the events were retained.
+ * Forkability at each event, in the order the events were saved.
  *
  * One entry per candidate, so a caller can read the answer for the exact
  * checkpoint it is considering without recomputing the prefix.
@@ -330,7 +330,7 @@ function blockersOf(
   context: ForkabilityContext,
 ): readonly ForkBlockerCode[] {
   const codes: ForkBlockerCode[] = [];
-  if (!context.retainedRoots.has(candidate.workspaceRootId)) {
+  if (!context.savedRoots.has(candidate.workspaceRootId)) {
     codes.push("workspace-root-unavailable");
   }
   const { event } = candidate;

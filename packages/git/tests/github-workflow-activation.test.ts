@@ -3,7 +3,7 @@
  *
  * The companion to `github-activation.test.ts`. What is here drives the
  * assemblies a command actually installs — the ordinary-run profile, and a
- * retained source-bundle run through the Workflow host — rather than the
+ * saved source-bundle run through the Workflow host — rather than the
  * adapters on their own. Both reach Workflow's storage adapter and so
  * `node:sqlite`, which Bun does not have and Node keeps behind a flag, so this
  * file is Deno's alone and the portable ordering cases stay next door.
@@ -77,7 +77,7 @@ describe("the bundled profile, assembled", () => {
   it("installs the whole ordinary-run profile without reading any of it", function* () {
     // The real assembly this time, not the adapters alone: `useRunComposition`
     // is what `xmd run` installs, and it brings the repository provider, the
-    // Git capability, both GitHub adapters and the retained lifecycles with it.
+    // Git capability, both GitHub adapters and the saved lifecycles with it.
     // Every outward boundary refuses, so installing any of them wrongly is a
     // failure here rather than a count checked afterwards.
     const rendered = yield* scoped(function* () {
@@ -113,7 +113,7 @@ describe("the bundled profile, assembled", () => {
   it("runs a version-2 source-bundle workflow outside Git without reaching GitHub", function* () {
     // The real lifecycle, not a test-shaped run: a source-bundle creation
     // begun through the same transitions `xmd workflow start` uses, so what
-    // executes below is a retained version-2 definition rather than a v1 Git
+    // executes below is a saved version-2 definition rather than a v1 Git
     // run that happens to render.
     const root = yield* useStorageRoot();
     yield* withRunHost(root, function* (transitions) {

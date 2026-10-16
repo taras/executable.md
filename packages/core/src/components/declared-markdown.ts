@@ -421,7 +421,7 @@ export interface PrivateClosure {
  *
  * The offer is what admits the import, and it is spent where it was made. What may be
  * invoked is the object canonical core's own resolver produced *inside this
- * ask* — so an answer retained from another import is admitted nowhere, however
+ * ask* — so an answer saved from another import is admitted nowhere, however
  * exactly it describes the same private component, and a name written where no
  * offer was made is not a private import at all.
  */
@@ -529,7 +529,7 @@ export class InstalledComponents implements ImportTier {
    * The closure the body of `imported` may write, if it is a declaration's own
    * body.
    *
-   * Decided from what canonical resolution retained — the definition core
+   * Decided from what canonical resolution saved — the definition core
    * invokes, reporting the origin core declared — rather than from the name
    * alone. A repository file, a bundled component and a registration all report
    * a different origin, and the answer core hands expansion is core's own copy

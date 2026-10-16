@@ -1,8 +1,8 @@
 /**
- * One retained protocol row, as history reads it.
+ * One saved protocol row, as history reads it.
  *
  * History is the run's record, not a reconstruction of it. An entry holds the
- * event exactly as the journal filtered and retained it, the opaque id that row
+ * event exactly as the journal filtered and saved it, the opaque id that row
  * keeps, and the Workspace root the row was already associated with. Nothing
  * here materializes a root, reopens a definition or asks a provider anything.
  *
@@ -13,7 +13,7 @@
  * from an expansion id, an effect name or the current source. A field that is
  * present and does not parse makes the entry unreadable — reporting it as
  * source-less would describe history the run does not hold — and the diagnostic
- * repeats no part of the value, which is retained filtered data.
+ * repeats no part of the value, which is saved filtered data.
  */
 
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -29,7 +29,7 @@ export interface WorkflowHistoryEntry {
   readonly eventId: string;
   readonly event: DurableEvent;
   readonly workspaceRootId: string;
-  /** Where the authored operation was written, when the event retained it. */
+  /** Where the authored operation was written, when the event saved it. */
   readonly source?: Readonly<SourcePosition>;
   /** Whether a fork may select this event, and what stands in the way. */
   readonly forkability: Forkability;
@@ -46,7 +46,7 @@ export interface InheritedEventProvenance {
 const MEMBERS = ["path", "generatedSource", "offset", "line", "column"];
 
 /**
- * The authored position an event retained, or none when it retained none.
+ * The authored position an event saved, or none when it saved none.
  *
  * A Close carries no description at all, and a trusted-host Yield may carry one
  * without this field. Both are ordinary absence.
@@ -122,7 +122,7 @@ function fail(reason: string, path: string): Error {
  */
 export interface HistoryProjectionContext {
   /** Every Workspace root the source still holds. */
-  readonly retainedRoots: ReadonlySet<string>;
+  readonly savedRoots: ReadonlySet<string>;
   /** Where each inherited row came from. Rows a run wrote itself are absent. */
   readonly inherited: ReadonlyMap<string, InheritedEventProvenance>;
 }
@@ -140,9 +140,9 @@ const UNCLASSIFIED: Forkability = Object.freeze({
 });
 
 /**
- * Ordered retained rows, as the public history they project to.
+ * Ordered saved rows, as the public history they project to.
  *
- * Everything history adds to a retained row happens here: the authored source
+ * Everything history adds to a saved row happens here: the authored source
  * is parsed out of the event, forkability is classified cumulatively over the
  * whole ordered prefix, inherited provenance is attached where there is any,
  * and each entry is frozen.
@@ -151,7 +151,7 @@ export function projectHistory(
   candidates: readonly ForkabilityCandidate[],
   context: HistoryProjectionContext,
 ): readonly WorkflowHistoryEntry[] {
-  const forkability = classifyForkability(candidates, { retainedRoots: context.retainedRoots });
+  const forkability = classifyForkability(candidates, { savedRoots: context.savedRoots });
   return Object.freeze(
     candidates.map((candidate, index) =>
       Object.freeze({

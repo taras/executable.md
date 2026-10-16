@@ -3,7 +3,7 @@
 ## Reading this architecture
 
 Read this document to understand the rules every engine implementation preserves.
-Start with a document running, then follow its execution, failures and retained
+Start with a document running, then follow its execution, failures and saved
 state. The detailed boundaries explain what an implementation may do; the
 terminology and construct inventory are references after those ideas are clear.
 
@@ -42,7 +42,7 @@ A workflow instead retains the definition bytes, props, journal and filesystem
 state under a run ID. Partial replay rebuilds the live resources needed to continue and restores
 completed effects from their records, then performs the first unrecorded work.
 It does not write or delete again merely because those steps are reached again.
-A completed root returns its retained output and result without expanding the
+A completed root returns its saved output and result without expanding the
 document or attaching operational providers.
 
 The journal is historical; the Workspace is the current filesystem frontier.
@@ -186,12 +186,12 @@ inspected or standard input is read. A `-` consumed as another option's value is
 not a document argument; another command's `-` keeps that command's meaning,
 and `--eval -` keeps its refusal.
 
-Core represents the supplied source as `retainedSource("<stdin>", source)`.
+Core represents the supplied source as `savedSource("<stdin>", source)`.
 
 What comes back is admitted through the existing supplied-source protocol rather
 than a form of its own. The origin `<stdin>` and the exact text travel together,
 which is what source positions, diagnostics, the root binding and the durable
-root import all carry — so replay restores the retained source without reading
+root import all carry — so replay restores the saved source without reading
 anything, and two different programs are two different roots without a second
 identity field. `<stdin>` is an origin and never a path: no file of that name is
 read or created, and every relative operation still resolves from the contextual
@@ -241,7 +241,7 @@ a caller asked for — two callers may spell one request differently — and it
 never substitutes for the exact target: it does not occupy the recorded
 exact-target field, it never enters a workflow definition, and it is never
 re-resolved against a newer checkout to decide what a resumed run means. A glob
-is retained in exactly one place, a failed selection's structural record, and
+is saved in exactly one place, a failed selection's structural record, and
 only so that an ordinary failed execution can be reproduced.
 
 The command line is the first consumer of that split. `xmd run` resolves a
@@ -250,7 +250,7 @@ that resolved — so a file replaced between the two reads fails on the target t
 run chose, rather than silently running whatever the glob would name now.
 
 `xmd workflow start` is the second, and it is stricter because its answer is
-retained. It resolves the selector once, against the exact bytes it is about to
+saved. It resolves the selector once, against the exact bytes it is about to
 retain, and stores only what core answered. A resume re-enters that section
 without resolving anything again: the glob is gone, and the bytes it was
 resolved against are the run's.
@@ -272,8 +272,8 @@ Validating that identity is **execution-owned**. Replay guards are composable
 policy — a handler installed further out may decline to delegate — so identity,
 which must not be negotiable, is not decided there. The execution owns the
 journal it replays through and validates the recorded selection inside the read
-itself, ahead of public guard policy, of a retained terminal result being
-reused, of authored work, and of any append. The retained history it owns covers
+itself, ahead of public guard policy, of a saved terminal result being
+reused, of authored work, and of any append. The saved history it owns covers
 every event that takes part in that decision, a recorded completion included, so
 no event can present one identity to the validation and another to the run.
 
@@ -325,7 +325,7 @@ durable is written.
   value>` binds by reference; a construct that evaluates an arbitrary operand
   keeps its own contract.
 - **Absence is not durable state.** Prop resolution records nothing of its own.
-  No resolved prop, validated prop, retained event or replay-restored prop holds
+  No resolved prop, validated prop, saved event or replay-restored prop holds
   `undefined`, and a replay reconstructs the same validated prop set through
   ordinary expansion.
 
@@ -367,7 +367,7 @@ middleware.
 
 Selecting a document target does not disturb any of this. Projection retains
 the original source ranges and scans each one under its own origin, so a
-retained element keeps the offset and line it was authored at, and with them
+saved element keeps the offset and line it was authored at, and with them
 its expansion ID. Two runs of the same document under different targets
 therefore agree on the ID of every element they both retain, and may share IDs
 without sharing effects — run identity and workflow-definition identity are
@@ -428,7 +428,7 @@ way out.
 
 Selection is not a permission and not durable state: it appends no journal event, a
 partial replay reconstructs it while completed effects replay, and a completed
-document replay reuses the retained result without expanding the body. `<Return>`
+document replay reuses the saved result without expanding the body. `<Return>`
 does not end the body, so later documentation runs and a later failure,
 cancellation or teardown failure keeps its existing precedence.
 
@@ -467,7 +467,7 @@ The selected `<Case>` contributes its own expansion frame even though the
 one identity. Neither construct is durable state: they append no journal event, a
 partial replay rebuilds the selection through ordinary expansion while completed
 effects in the chosen branch replay from their own records, and a completed
-document replay reuses the retained result without expanding anything.
+document replay reuses the saved result without expanding anything.
 
 ### Concurrent spawned children
 
@@ -506,7 +506,7 @@ colliding, and work after `</All>` continues on the parent counter it would have
 had without any child. Each successful child closes with the ordered `{ text, exact }` runs it
 rendered. Exact presentation is a provenance recorded against the segment
 objects expansion marked, and those segments do not cross the join — so the runs
-are what carries it, live and on replay alike, and a retained close that does
+are what carries it, live and on replay alike, and a saved close that does
 not read as that shape fails the run instead of rebuilding part of a document.
 
 **Output is authored order; the journal is completion order.** A child emits
@@ -524,12 +524,12 @@ or completion time.
 have finished tearing down. No private buffer is emitted, records acknowledged
 before the failure stay durable, and interrupted work is never recorded as
 complete. Cancelling the parent takes the same ownership path, and no task,
-subscription, retained resource or buffer survives its spawn. No scheduler, no
+subscription, saved resource or buffer survives its spawn. No scheduler, no
 new record family and no document-visible concurrency control is introduced.
 
 ## Errors, output and commands
 
-A document decides recovery through its structure. Output routing, retained evidence and process failure remain separate decisions.
+A document decides recovery through its structure. Output routing, saved evidence and process failure remain separate decisions.
 
 ### Two layers
 
@@ -791,7 +791,7 @@ replacing the failure being classified.
 
 ### Component invocation settlement
 
-A component invocation owns projected content, body resources and retained eval
+A component invocation owns projected content, body resources and saved eval
 resources. Teardown stops those three stages in that order and attempts every
 stage even when one fails. A body failure without teardown failure propagates
 its original error. Teardown failure alone produces one `InvocationTeardownError`
@@ -997,7 +997,7 @@ instead is a conjunction of a private one-use request, a private live boundary
 credential, and the acceptance record of a terminal created for that one call:
 the same request-and-terminal division *Authoritative behavior* describes,
 scoped to the smaller boundary. It is scope-owned and expires with the session
-or the element that established it, so a retained credential from a finished
+or the element that established it, so a saved credential from a finished
 boundary activates nothing.
 
 Canonical core enforces it, and the placement is the point. What a test *does*
@@ -1045,13 +1045,13 @@ fatal search and before any handler is dispatched.
 
 #### Output security and host retention
 
-Retained output crosses the pre-persistence secret gate exactly as any other
+Saved output crosses the pre-persistence secret gate exactly as any other
 journaled field does, and the gate examines what the boundary received — after
 enclosing middleware, not before. Two consequences follow, and both are
 intended: a host may redact a credential upstream so that the material never
 reaches the gate at all, and a host that introduces credential-shaped text
 upstream is refused by the gate like any other run that would persist one.
-Output that is never retained is never scanned, because there is nothing to
+Output that is never saved is never scanned, because there is nothing to
 persist and nothing was accumulated for a scanner to inspect.
 
 Which host paths retain is a property of the path, stated where the run starts:
@@ -1116,13 +1116,13 @@ echo on stderr, the observational output of a value root, and the testing
 report's own verbosity stay with the host that owns those streams and read the
 flag directly — so a document can decide what it renders and cannot decide what
 the process presents. Contextual verbosity decides nothing: it takes no
-part in durable identity, authorization, replay admission, retained-effect
+part in durable identity, authorization, replay admission, saved-effect
 ownership or journal identity, and no execution is admitted, substituted or
 settled differently because of it.
 
 ## Workflow state and lifecycle
 
-Retained workflow state makes an execution addressable and replayable. Storage, executor ownership and effects each enforce their own boundary.
+Saved workflow state makes an execution addressable and replayable. Storage, executor ownership and effects each enforce their own boundary.
 
 ### Workflow runs
 
@@ -1157,7 +1157,7 @@ creates no workflow run and the root document does not expand.
 
 `WorkflowRun` is one closed shape carrying `runId`, `bundleHash` and the exact
 target when it has one. It has no base and no pinned commit: a run starts from
-exact retained bytes rather than from a repository state, so a member naming one
+exact saved bytes rather than from a repository state, so a member naming one
 would be a statement about a repository the run never had. It neither creates nor
 seeds a Workspace Repository. Each `<Repository>` inside the definition resolves
 and pins its own optional Repository base, so one workflow may compose
@@ -1180,18 +1180,18 @@ capability, and the workflow package calls none of it. Ordinary `execute()`
 remains Git-independent, and so does starting, resuming, forking or exporting a
 run.
 
-**The workflow package imports no Git feature, and a retained run reaches no
+**The workflow package imports no Git feature, and a saved run reaches no
 repository either.** The CLI establishes a candidate from filesystem bytes, and
-the retained lifecycle re-derives the source from the run's own store, so a run
+the saved lifecycle re-derives the source from the run's own store, so a run
 genuinely needs none: there is no definition whose Markdown lives anywhere but
-in the run that retained it, and therefore no source capability for a host to
+in the run that saved it, and therefore no source capability for a host to
 supply.
 
 Replay restores the recorded `WorkflowRun` without allocating another run ID or
 invoking Git. The supplied bundle hash must equal the recorded one.
 
 A host that has already created the run's storage record passes
-`retainedWorkflowInstallation(run)` instead, with the exact frozen value.
+`savedWorkflowInstallation(run)` instead, with the exact frozen value.
 Nothing is left for the execution to decide: it records that value through the
 same `workflow_run` durable operation, allocates no identifier and resolves no
 base, and every journal state — live, truncated and completed — requires the
@@ -1208,7 +1208,7 @@ exposes no journal, Git, workspace or continuation capability. Replay preserves
 the field values, not JavaScript object identity.
 
 The `@executablemd/workflow` package owns `WorkflowRun`,
-`retainedWorkflowInstallation()`, `getWorkflowRun()` and the generic run,
+`savedWorkflowInstallation()`, `getWorkflowRun()` and the generic run,
 storage, replay and Workspace boundaries. It owns no Git: repository
 composition, the Git capability, issue and pull-request contracts and the
 Git-host engine are `@executablemd/git`'s, and that package imports Workflow's
@@ -1264,7 +1264,7 @@ against an old identity intercepts nothing, and an import of an old name does
 not resolve: two vocabularies for one seam is the outcome an alias would
 guarantee, and a silent miss is what an old identity would produce. The
 package-internal names that still read `Composition` — the provider
-installers, the error classes and the serialized refusal names retained
+installers, the error classes and the serialized refusal names saved
 history holds — are not this layer and did not move.
 
 ### Workflow Workspace
@@ -1294,8 +1294,8 @@ WorkflowRun SQLite
 
 Co-location does not turn arbitrary filesystem content into journal or training
 data. The journal security policy filters a value before insertion. Training
-ingestion deliberately selects retained filtered history; it never receives the
-whole database merely because the database is retained.
+ingestion deliberately selects saved filtered history; it never receives the
+whole database merely because the database is saved.
 
 Repository, filesystem, process, Git-host and Agent behavior reaches production
 code through contextual APIs. A provider adapter installs host behavior; shared
@@ -1305,7 +1305,7 @@ workflow capability is absent.
 ### Workflow run storage
 
 A workflow run recorded only in the journal of the document execution that
-created it can be found only by whoever already holds that journal. Retained
+created it can be found only by whoever already holds that journal. Saved
 storage is what makes a run addressable: another process opens it by public run
 ID and continues from durable data.
 
@@ -1377,12 +1377,12 @@ Workspace-root tables, current-root state, a non-null Workspace-root
 association on every journal event, and the Repository and Worktree creation
 records #293 added to it. A fresh run starts with one
 content-addressed root manifest describing only the root directory, empty
-retained manifest and blob reference sets, and the corresponding root-only DOFS
+saved manifest and blob reference sets, and the corresponding root-only DOFS
 frontier.
 
 `workflow_run` has **no `base` column**, and two tables hold the run's own
 source: content keyed by its SHA-256 with its byte length, and one manifest row
-per descriptor entry mapping a logical path to that hash. Content is retained as
+per descriptor entry mapping a logical path to that hash. Content is saved as
 BLOB bytes rather than as text or re-encoded JSON, and two paths holding
 identical bytes reference one blob.
 
@@ -1393,11 +1393,11 @@ that inventory is corruption, any other version is unsupported, and an altered
 or extra object is corruption rather than a migration candidate — there is no
 earlier shape for a file to be recognized as.
 
-Before a record is exposed, its retained source is re-derived in full:
+Before a record is exposed, its saved source is re-derived in full:
 the manifest equals the descriptor's `sources`, every referenced blob exists,
-both retained lengths equal the content's own, recomputing each blob's hash
+both saved lengths equal the content's own, recomputing each blob's hash
 produces its key, no blob is unreferenced, and recomputing the bundle hash from
-the retained manifest and mapping produces `bundleHash`. No reader returns a
+the saved manifest and mapping produces `bundleHash`. No reader returns a
 partial bundle, and nothing falls back to the original file or the provenance.
 
 A Workspace root is a complete, immutable filesystem checkpoint. Its canonical
@@ -1411,15 +1411,15 @@ do not participate in the identity.
 The root tables are authoritative checkpoints; the DOFS node, dirent and chunk
 tables are the live materialization of the current root. Files remain solely in
 DOFS content-addressed blobs. Normalized root-to-manifest and root-to-blob rows
-equal the root's transitive content exactly and prevent retained content from
+equal the root's transitive content exactly and prevent saved content from
 being deleted. Opening a run validates every root and referenced manifest and
 blob, then snapshots the live frontier read-only and requires it to equal
-`current_root`. The schema structure, retained content, live/current comparison
+`current_root`. The schema structure, saved content, live/current comparison
 and run row are read through one explicit SQLite snapshot. This recognition
 transaction is not a caller-owned Workspace transaction and enables no DOFS
 savepoints.
 
-Recognition also requires every file entry in every retained root, including a
+Recognition also requires every file entry in every saved root, including a
 historical root, to declare the size held by its referenced DOFS manifest. A
 root whose XMD identity and reference rows are internally consistent but whose
 file size disagrees with DOFS is corrupt and not restorable.
@@ -1431,10 +1431,10 @@ of them, is lifecycle policy applied above storage.
 
 Journal events reach storage already filtered, through the existing
 pre-persistence gate. Storage adds no second filtering policy: a rejected or
-cancelled gate leaves nothing behind. A record is retained in the
+cancelled gate leaves nothing behind. A record is saved in the
 representation the protocol produced and parsed back through the matching
 reader, so replay reads what was written rather than a re-encoding of it.
-Events replay in append order. An event's opaque identity is retained
+Events replay in append order. An event's opaque identity is saved
 separately from its physical position; the position orders replay and is not a
 public identifier.
 
@@ -1454,7 +1454,7 @@ connection. Reopening the same path after provider teardown creates a different
 generation. Each top-level transaction has its own opaque identity and exact
 active record, including its path, generation, authorized lease and public
 transaction handle. Finishing invalidates that record before commit or rollback
-can expose the connection to later work. Retained transaction handles and
+can expose the connection to later work. Saved transaction handles and
 tokens stay invalid across a later transaction on the same connection and
 across a later provider generation.
 
@@ -1511,12 +1511,12 @@ application identity with schema version zero is a partial initialization and
 therefore damage, not a supported historical version.
 
 Records are held to what they mean and not only to the types they are stored
-in. A retained timestamp is an instant, a retained identity is not empty, and
+in. A saved timestamp is an instant, a saved identity is not empty, and
 normalized props are an object.
 
 Nothing initializes, migrates, truncates, deletes or replaces incompatible or
 damaged storage, and a lookup that finds nothing creates nothing. Messages
-describe what failed without repeating retained props or journal payloads —
+describe what failed without repeating saved props or journal payloads —
 including their member *names*, which can carry a credential as readily as a
 member value can.
 
@@ -1555,7 +1555,7 @@ store and never rereads the candidate path. A file that is unreadable, not
 well-formed UTF-8, not Markdown, whose selector resolves to nothing, or that
 declares a component this command cannot read fails explicitly and before
 storage exists; none of them creates a replacement run or an empty definition. A
-workflow definition is one closed set of retained bytes, so the component search
+workflow definition is one closed set of saved bytes, so the component search
 path is empty and a repository component fails to resolve rather than resolving
 to content beside the definition in a mutable checkout.
 
@@ -1578,7 +1578,7 @@ The bundle is identity, so compatible reuse compares the whole array: a changed
 name, canonical path, source hash, or component set conflicts as `definition`,
 and a run closed over a bundle is never the same run as one closed over none.
 `resume` obtains the bundle under the executor lock and before the lifecycle
-advances. It re-derives the bundle from the run's own retained BLOBs,
+advances. It re-derives the bundle from the run's own saved BLOBs,
 recomputing every source hash and the bundle hash from the bytes it holds;
 nothing is read from a repository or from the files the run was started beside.
 A component that changed, went missing, or became unreachable leaves the run's
@@ -1592,7 +1592,7 @@ ordinary registered defaults, so core's own components stay available and no
 name they own can be taken back. Every selected member records one
 `import_component` result of exactly `{ kind: "workflow", path, sourceHash,
 content }`, and the installation contributes a journal admission that holds every
-retained component import to that exact bundle before public document policy or
+saved component import to that exact bundle before public document policy or
 the root import. While a bundle is installed, `Component.importComponent`
 middleware may observe, delegate, and refuse an import but cannot answer one:
 canonical core keeps its own copy of the definition it produced and invokes that
@@ -1602,19 +1602,19 @@ each fail before the component is invoked, including one masked by a `toJSON()`
 or by an accessor that answers twice.
 
 Every actual execution opens or creates the run's database, begins a
-document-execution record, installs the exact retained WorkflowRun, installs the
+document-execution record, installs the exact saved WorkflowRun, installs the
 service denial before the root is imported, and — for a live or partial
 execution — installs the logical working directory `/`, the transaction-bound
 Files provider and that database's Workspace effect coordinator. It executes
-against the database's own journal with the retained props and secret detection,
+against the database's own journal with the saved props and secret detection,
 then finishes the execution record and publishes the run's status. A completed
-run still replays, so its retained output and result are emitted, but it
+run still replays, so its saved output and result are emitted, but it
 attaches no Workspace provider or coordinator and performs no filesystem
 mutation.
 
-A failure retains `failed` and uses a journal stop reason when a retained event
+A failure retains `failed` and uses a journal stop reason when a saved event
 identifies it, and a categorical host code otherwise; no exception text is
-retained beside the journal that filtered it. Graceful foreground interruption
+saved beside the journal that filtered it. Graceful foreground interruption
 finishes the execution `interrupted` and exits 130. `suspended` is resumable;
 `failed` and `cancelled` are refused by `resume`, and `completed` replays under
 either command.
@@ -1629,7 +1629,7 @@ decide which adapter exists.
 
 The start/resume slice predated single-executor enforcement. Issue #367
 replaced its opportunistic orphan closure with the lifecycle ownership below,
-and no supported host advances a retained run without it.
+and no supported host advances a saved run without it.
 
 ### Workflow lifecycle ownership
 
@@ -1643,8 +1643,8 @@ to a host. Routing through a contextual Api selects a provider and grants no
 permission. Acquisition gives the workflow executor an opaque exact
 `ExecutorLock` object registered by that provider for one run and one
 acquisition. The provider checks the same object, its open scope, its run and
-the expected retained lifecycle state inside every mutating transaction. A run
-ID, database handle, structural look-alike, same-named context value or retained
+the expected saved lifecycle state inside every mutating transaction. A run
+ID, database handle, structural look-alike, same-named context value or saved
 token is admitted nowhere. Releasing or tearing down the executor lock
 invalidates that object before another acquisition can mutate the run.
 
@@ -1652,7 +1652,7 @@ The executor lock is not a time lease. It has no duration, expiry, renewal,
 heartbeat, watcher, generation record or liveness poll. The operating system
 releases the local lock when the workflow executor exits.
 
-The shared surface names outcomes and retained data, not a transport:
+The shared surface names outcomes and saved data, not a transport:
 
 ```ts
 interface ExecutorLock {
@@ -1721,13 +1721,13 @@ interface WorkflowLifecycleApi {
 }
 ```
 
-The two artifact operations are siblings of the retained-run pair rather than a
+The two artifact operations are siblings of the saved-run pair rather than a
 widening of it. A run ID names live lifecycle ownership in this host's storage;
 a path names immutable evidence somebody is holding, and no run has to exist for
 it to answer.
 
 `WorkflowInspectionSnapshot` is what a run says about itself, and both forms are
-it. The retained snapshot alone adds `retrieval`, because where a definition
+it. The saved snapshot alone adds `retrieval`, because where a definition
 could be fetched from now is a fact about the machine holding the run rather
 than about the run; the artifact snapshot alone adds which artifact answered and
 the boundary it was sealed at. Neither extends the other. That is what makes an
@@ -1746,7 +1746,7 @@ categories actually removed; it contains no statement about external effects.
 Acquisition has three observable outcomes: acquired, already held by a live
 workflow executor, or a storage/authorization failure. The initial local CLI
 reports the active workflow executor rather than following it. Once acquired,
-lifecycle changes are compare-and-set transitions against the retained state
+lifecycle changes are compare-and-set transitions against the saved state
 and unfinished document-execution record read in the same transaction.
 Beginning an execution, finishing its record and publishing the run state are
 therefore lifecycle transitions, not independent writes another command can
@@ -1764,7 +1764,7 @@ enclosing the document execution, and each is atomic within itself.
 
 An unfinished document-execution record found after acquisition belonged to the
 previous workflow executor and is proven stale. If the run says `running`, the
-new workflow executor first reconciles retained root history. A root Close
+new workflow executor first reconciles saved root history. A root Close
 restores its canonical terminal state. Without one, execution recovery closes
 the execution and publishes `interrupted` before beginning another. A
 cancellation command that
@@ -1777,7 +1777,7 @@ row.
 
 An execution settlement has one workflow executor and one winner. Canonical
 completion, failure, suspension and foreground interruption meet at the
-execution-owned settlement boundary. A retained root Close proves canonical completion or
+execution-owned settlement boundary. A saved root Close proves canonical completion or
 failure won before interruption or later lifecycle management. A cancellation
 command never enters this competition: while another workflow executor holds
 the lock it can only refuse, and after that lock is released there is no live
@@ -1787,7 +1787,7 @@ transition waits for
 the document execution's complete child and resource teardown, then atomically
 finishes its document-execution record and publishes the run state. Only after
 that transaction commits may the host report the status and release the
-executor lock. If settlement storage refuses, no unretained status is reported
+executor lock. If settlement storage refuses, no unsaved status is reported
 and lock teardown leaves the run recoverable by the next proven workflow
 executor.
 
@@ -1799,11 +1799,11 @@ infrastructure failures still cross by identity and win by kind; if their
 lifecycle transition cannot persist, no terminal status is reported. Every
 finalizer is attempted before any such result is observable.
 
-Retained lifecycle state gates every later acquisition before canonical
+Saved lifecycle state gates every later acquisition before canonical
 execution. A `failed` run carrying its root Close replays that recorded failure
 for compatible `start --id`. A host-settlement failure with no root Close
-reports the retained `failed` state and its categorical or filtered reason
-without entering replay. A `cancelled` run reports its retained state without
+reports the saved `failed` state and its categorical or filtered reason
+without entering replay. A `cancelled` run reports its saved state without
 entering replay under either command. None can be advanced under the same run
 ID.
 
@@ -1811,7 +1811,7 @@ The executor lock remains in the trusted host's outer lifecycle scope; it is not
 installed as a document provider. A completed replay may hold
 the lock while recording its document-execution envelope, while the run remains
 `completed` and cancellation remains refused. Canonical core returns the
-retained result before preparation or root expansion. It attaches no Workspace,
+saved result before preparation or root expansion. It attaches no Workspace,
 Files, Service, Agent, process or external provider and performs no live durable
 effect.
 
@@ -1830,7 +1830,7 @@ can address it.
 The lock file may remain empty after run deletion. Unlinking a locked sidecar
 would let another process create and lock a different file at the same path
 while the deleting workflow executor still holds its lock. An empty lock file
-is not retained run state and is not reported as history or provider-session
+is not saved run state and is not reported as history or provider-session
 data.
 
 #### Read-only lifecycle inspection
@@ -1843,7 +1843,7 @@ attach a Workspace, materialize a root, import a document, contact an Agent,
 process or external provider, or append.
 
 Two sources answer the same questions. `inspect(runId)` and `history(runId)`
-address this host's retained storage; `inspectArtifact(path)` and
+address this host's saved storage; `inspectArtifact(path)` and
 `historyArtifact(path)` address one sealed `.xmd` file. They are siblings rather
 than one operation over a union: a run id names live lifecycle ownership —
 something a caller may still advance, cancel or delete — while a path names
@@ -1858,7 +1858,7 @@ ordered rows — authored source, cumulative forkability, inherited provenance �
 because two mappings are how history quietly starts meaning different things
 depending on where it was read.
 
-The Deno provider first reads each retained database through its ordinary
+The Deno provider first reads each saved database through its ordinary
 read-only connection. A host crash may leave a hot rollback journal: that is a
 healthy database one SQLite rollback away from the last committed state, but
 SQLite cannot perform that rollback through a read-only connection. Only the
@@ -1866,18 +1866,18 @@ exact `SQLITE_READONLY_ROLLBACK` condition enters recovered inspection. Another
 read-only failure is reported as itself rather than treated as crash recovery.
 
 Recovered inspection acquires inspection recovery coordination and retries the
-retained database read-only. If a write-capable owner recovered it first, that
+saved database read-only. If a write-capable owner recovered it first, that
 ordinary source snapshot is the answer. If it remains hot, inspection copies
 the database and its rollback journal together into a private scratch directory
-while it holds the coordination, then releases the retained source and lets
+while it holds the coordination, then releases the saved source and lets
 SQLite recover the copy. The copy keeps the candidate's exact database name and
-passes through the same strict schema, retained-content, live/current and
+passes through the same strict schema, saved-content, live/current and
 location recognition as an ordinary snapshot. Recovery discards only the
 uncommitted transaction, so the resulting recovered inspection snapshot is the
-committed state the retained database describes rather than a repaired or
+committed state the saved database describes rather than a repaired or
 alternative run.
 
-Every write-capable connection to a retained workflow database holds the same
+Every write-capable connection to a saved workflow database holds the same
 coordination for as long as it is open. SQLite recovers a hot journal on
 whichever read first needs a page, and for a connection a host already has that
 read can come at any moment, from a caller that knows nothing about any of this.
@@ -1896,7 +1896,7 @@ The coordination is separate from the executor lock, produces no public
 capability, authorizes no transition and cannot make an inspector appear to be
 a workflow executor. Its deterministic empty sidecar occupies a provider-owned
 non-candidate namespace and may remain after run deletion like the executor-lock
-sidecar; it is host arrangement rather than retained state.
+sidecar; it is host arrangement rather than saved state.
 
 Scratch state is owner-private, belongs to the inspection scope and is processed
 one candidate at a time. Every success, failure and cancellation attempts its
@@ -1904,7 +1904,7 @@ complete removal during teardown. A successful snapshot is observable only
 after removal succeeds. A permanent removal failure instead returns a typed
 inspection-recovery storage error after every cleanup attempt; it identifies the
 host-selected scratch location so the operator can remove it and never repeats
-retained content. Cancellation remains Effection control flow unless cleanup
+saved content. Cancellation remains Effection control flow unless cleanup
 itself fails. Private non-candidate scratch may therefore remain only behind an
 explicit cleanup failure. Inspection never retries removal indefinitely, starts
 background cleanup or reports successful inspection while such residue is
@@ -1913,13 +1913,13 @@ known.
 Discovery remains arithmetic over the one run-storage root; there is no list
 registry. Each run contributes one database candidate. Exact advisory-lock
 sidecar names occupy a distinct provider-owned namespace and are not candidates.
-The Deno provider applies the same strict schema, retained-content and
+The Deno provider applies the same strict schema, saved-content and
 live/current recognition as execution to the direct or recovered snapshot.
 One absent, foreign, incompatible, damaged or unparseable candidate fails the
 whole list request with its distinct condition. Healthy rows are not returned
 as though they were a complete list, and every candidate remains unchanged.
 
-Every public history entry is one retained protocol row:
+Every public history entry is one saved protocol row:
 
 ```ts
 interface WorkflowHistoryEntry {
@@ -1954,8 +1954,8 @@ removes an event from the JSON contract or synthesizes a journal event.
 #### Portable XMD artifacts
 
 An XMD artifact is a semantic export, not a renamed workflow-run database. The
-exporter reads one committed retained snapshot and writes a separate sealed
-container containing that snapshot, every retained Workspace root and byte it
+exporter reads one committed saved snapshot and writes a separate sealed
+container containing that snapshot, every saved Workspace root and byte it
 references, and the workflow definition source closure. Host paths, lock
 sidecars, rollback journals, open connections, retrieval metadata, credentials
 and provider-owned session directories do not cross the boundary. The initial
@@ -1967,19 +1967,19 @@ artifact. Export takes the executor lock before choosing the artifact frontier,
 so a live workflow executor makes export refuse and no later committed event can
 race the chosen frontier. Crash recovery, when required, operates on a private
 copy under inspection recovery coordination. Export performs no lifecycle
-transition and never changes the retained source.
+transition and never changes the saved source.
 
 what one XMD artifact states about every logical workflow Agent session that contributed
-a retained Prompt: either complete portable evidence — the session and its compatibility
+a saved Prompt: either complete portable evidence — the session and its compatibility
 attributes, the provider, the bundle kind and compatibility identifier, the source and
 bundled provider-session identities, the identity-allocation mode, the ordered provider
 checkpoint tokens, and the Agent session bundle's length, hash and bytes — or an
-explicit unavailable marker naming why. A session that retained no Prompt has none. It
-is detached retained evidence about a conversation, never a live provider session and
+explicit unavailable marker naming why. A session that saved no Prompt has none. It
+is detached saved evidence about a conversation, never a live provider session and
 never control over the host that produced it
 
 Version 1 has two profiles. One holds no Agent portability content and is read
-exactly as it always was: a session that contributed a retained Prompt may carry
+exactly as it always was: a session that contributed a saved Prompt may carry
 no classification, and nothing is reconstructed for it. The other classifies
 every such session exactly once, as Agent session portability evidence —
 portable, with ordered provider checkpoint tokens and an Agent session bundle,
@@ -1993,7 +1993,7 @@ history render no classification, token or bundle byte.
 
 Semantic format, container and manifest are each version 1. Identity uses the
 exact domain `xmd-artifact\0v1\0`; every other declared version is refused.
-The workflow source closure is retained entry/content pairs, without a Git
+The workflow source closure is saved entry/content pairs, without a Git
 closure.
 
 Every command that consumes an XMD artifact opens it read-only and verifies its
@@ -2004,10 +2004,10 @@ so authenticity still comes from the channel that published the artifact.
 
 An artifact grants inspection and history-fork input only. It is never resumed,
 answered, cancelled, deleted as a run, or admitted as the writable storage for
-an existing run ID. A history fork from it creates a new run ID, copies retained
+an existing run ID. A history fork from it creates a new run ID, copies saved
 state rather than sharing pages, records the artifact identity with the source
 run and checkpoint, and passes through the same compatibility replay and
-forkability checks as a fork from local retained storage. The artifact remains
+forkability checks as a fork from local saved storage. The artifact remains
 byte-identical before, during and after the fork.
 
 This split is the concurrency boundary between environments. Arbitrarily many
@@ -2029,7 +2029,7 @@ run resumable; it is not explicit cancellation.
 Without a live workflow executor, the management host acquires the executor
 lock before any cancellation mutation. The exact executor lock is validated
 inside the transaction that publishes `cancelled`. A stale `running`
-execution is first checked for a retained root Close: a Close restores its
+execution is first checked for a saved root Close: a Close restores its
 canonical completed or failed outcome and cancellation refuses; without one,
 the transition finishes that exact
 unfinished execution as `cancelled`. A suspended or interrupted run has no live
@@ -2054,7 +2054,7 @@ Cancellation follows one status matrix:
 
 Deletion also acquires the executor lock. A live workflow executor is refused;
 a stale `running` record is proven stale before the exact run's database and
-provider-owned retained records are removed. Only the empty lock file may
+provider-owned saved records are removed. Only the empty lock file may
 remain. Every non-live status may be deleted. The explicit run ID is the
 confirmation boundary, so the command has no interactive prompt and no
 wildcard. An absent run is reported rather than treated as an idempotent
@@ -2106,13 +2106,13 @@ question and writes no durable record: the wait must be the outermost durable
 operation at its position, because a request published inside an enclosing
 durable operation takes the journal slot that operation never settles, and the
 resumed execution replays the coroutine and finds the wrong entry waiting. And
-the answer is therefore retained once, by the suspension protocol, rather than
+the answer is therefore saved once, by the suspension protocol, rather than
 twice. Public Elicitation middleware — an `<Answers>` region, or anything else
 installed nearer — may answer the question or refuse it, and in both cases the
-run it affected never suspended; continuation of a suspended run is retained
+run it affected never suspended; continuation of a suspended run is saved
 delivery state and nothing else.
 
-The retained request at the execution's exact current durable position is what
+The saved request at the execution's exact current durable position is what
 authorizes entry. The controller derives the identifier for the position
 immediately behind the caller's own, requires the presented one to equal it,
 reads the Yield at that exact position, parses it as a suspension request and
@@ -2121,8 +2121,8 @@ or later in the journal, a reconstructed contextual API name, or a matching row
 without the exact current position authorizes nothing.
 
 Durable replay identity compares a type and a name, both public, so another
-durable operation can reproduce the retained request and arrive at the same
-position. Once the controller has validated the exact retained request, that
+durable operation can reproduce the saved request and arrive at the same
+position. Once the controller has validated the exact saved request, that
 operation is observationally the same request to wait: it gains nothing
 that calling `suspendFor()` with that request would not have. Package-instance
 identity therefore does not take part in admitting a suspension. Requiring it
@@ -2152,23 +2152,23 @@ record may settle `suspended`; the request remains singular.
 #### Typed answer delivery
 
 Issue #300 builds typed answer delivery. Its boundary is the suspension ID and
-the retained response schema. Delivery is an operation separate from execution:
+the saved response schema. Delivery is an operation separate from execution:
 `xmd workflow answer <run-id> <suspension-id> <json>` retains one value for that
 exact wait and takes no executor lock, fetches no definition, attaches no
 Workspace, inserts no document-execution record, appends no journal event and
 changes no run status. A host offers a value only after the run is `suspended`,
-its stop reason names a retained `suspension_request` event carrying that ID,
-and the value satisfies the schema that request retained. The retained state and
+its stop reason names a saved `suspension_request` event carrying that ID,
+and the value satisfies the schema that request saved. The saved state and
 the answer event it would become cross the same secret gate durable journal
 persistence uses; `--no-secret-detection` disables that gate for one delivery.
 Every refusal — duplicate, consumed, wrong run, wrong request, late, invalid,
 cancelled-run and deleted-run — leaves the database unchanged, and neither the
 rejected value nor a secret match appears in a diagnostic.
 
-On a resumed execution, only authenticated retained answer state lets
+On a resumed execution, only authenticated saved answer state lets
 `suspendFor()` publish a separate ordinary durable `suspension_answer` Yield and
 return its value; a contextual handler's return value never publishes an answer.
-Consuming the retained answer and appending that Yield are one database
+Consuming the saved answer and appending that Yield are one database
 transaction, so a crash before it commits leaves the answer pending and a
 transaction that does not commit publishes nothing. Replay after that
 transaction commits restores the recorded answer event without reaching the live
@@ -2186,7 +2186,7 @@ answer delivery remains with #300.
 Issue #367 changes no durable schema shape. Single-executor enforcement uses only the
 provider-owned advisory-lock sidecar, suspension uses existing filtered journal
 and run-state records, and history reads the existing event-to-root association.
-Issue #300's retained answer state does add a durable record, and it amends the
+Issue #300's saved answer state does add a durable record, and it amends the
 one schema in place on the same terms as every other amendment: one
 `workflow_suspension_answers` table, no second version, no migration, and strict
 recognition refusing every other shape.
@@ -2334,7 +2334,7 @@ that is a deliberate correction rather than a simplification. An earlier design
 selected a provider on one surface and coordinated the invocation on a second;
 public middleware could read a credential from the first, take an invocation
 capability from the second, and answer a phase itself, and the journal then
-retained a completion no provider had produced. Two public surfaces that are
+saved a completion no provider had produced. Two public surfaces that are
 individually harmless composed into the power to settle a completion.
 
 The single operation is request-only. Public middleware receives one frozen,
@@ -2354,7 +2354,7 @@ the public refusing default, never the terminal.
 
 The durable operation is named by a fingerprint of the complete detached
 request, so a changed kind, input or natural key diverges rather than consuming
-the result retained at the same position, and the provider's answer is parsed at
+the result saved at the same position, and the provider's answer is parsed at
 the terminal before the durable executor returns, so a raw payload becomes a
 fixed protocol failure rather than journal content.
 
@@ -2362,7 +2362,7 @@ Some effects need live local state the frozen request cannot describe, and that
 travels as an object-source attachment rather than as an input. A push needs the
 Git objects its commit is made of and the destination it may reach; both are
 built by the trusted host for one reconciliation, authenticated against the
-retained identity they belong to, and held in the selected provider's closure.
+saved identity they belong to, and held in the selected provider's closure.
 Nothing about an attachment reaches the durable request, the natural key or the
 routing surface, so what discriminates the effect stays the filtered identity a
 journal may hold while what performs it stays where no replaceable code can
@@ -2408,12 +2408,12 @@ Workspace and the external service, and reconciliation rather than a distributed
 transaction is what makes an interrupted attempt reach the host once.
 
 A provider that needs a program must also not inherit configuration the run
-merely stores. A checkout's `.git/config` is retained document data, and several
+merely stores. A checkout's `.git/config` is saved document data, and several
 ordinary settings in one name a destination or a program — a push URL, a URL
 rewrite, a hook, a credential helper, an SSH command, a signing program. The
 Deno push provider therefore runs its transport in a disposable repository of
 its own that reads the selected checkout's object database through a read-only
-alternate, and aims it at the exact private retained locator rather than at a
+alternate, and aims it at the exact private saved locator rather than at a
 configured remote. The two settings that would otherwise choose how a remote
 operation authenticates — `credential.helper` and `core.sshCommand` — are fixed
 on the command line, where they outrank every configuration file, for every
@@ -2422,12 +2422,12 @@ invocation that transports to a remote.
 #### Invocation-owned authentication
 
 Authentication itself is the one live host input such an invocation borrows, and
-it is not the same question as inherited configuration. Retained state says
+it is not the same question as inherited configuration. Saved state says
 which repository an effect belongs to; it must never say who the run is, because
 an identity belongs to the machine a run is standing on and a run resumed
 elsewhere authenticates as whoever is there then. So one live provider
 invocation — a Repository creation, a Push reconciliation, a pull-request or
-Issue call — opens one authentication session lazily, for its own exact retained
+Issue call — opens one authentication session lazily, for its own exact saved
 locator, after the admission checks that operation requires. Every native
 command that invocation runs attaches that same session, so an observation and
 the mutation it decided go out under one identity rather than two, and the
@@ -2460,7 +2460,7 @@ channel to it — so an acquired credential with no rejection keeps the ordinary
 transport classification rather than acquiring a new one.
 
 A session opened for one locator never authorizes another, nothing about one is
-retained, and a completed replay opens none at all because it performs no remote
+saved, and a completed replay opens none at all because it performs no remote
 operation to attach one to. A missing or rejected credential is ordinary live
 refusal: it proves no absence and adopts no completion, and a transport that
 carries an identity attempted with no mechanism to prove one is refused under
@@ -2593,29 +2593,29 @@ completed Push is reconstructed from the root its own journal event was appended
 against, which is the association the run made when it wrote that event, rather
 than from the frontier the run reached. That reconstruction is a read: the
 historical root is materialized, exported from, and discarded on every path out,
-leaving the current root, the retained roots, the metadata and the journal
+leaving the current root, the saved roots, the metadata and the journal
 exactly as they were. It decides only which question is asked, because the
 request it produces still has to be the one that position asked before the
-retained record answers it.
+saved record answers it.
 
-#### Retained effects and history forks
+#### Saved effects and history forks
 
-An external effect is judged by its retained record rather than by its type. A
+An external effect is judged by its saved record rather than by its type. A
 completed Git-host reconciliation record replays without contacting a provider,
 so a fork inherits it and the remote is mutated once; the record keeps the
 identity it was written under, and the effect at a position the history already
 holds a record at is named by that identity, while every live attempt is named
 by the run performing it. The identity is established when the engine
-admits the run's retained snapshot and is published beside the run, so every
+admits the run's saved snapshot and is published beside the run, so every
 physical copy of the workflow package reads one answer. What authorizes live
-execution is not that answer: a coroutine that walked away from retained history
+execution is not that answer: a coroutine that walked away from saved history
 it never consumed performs no Git-host effect for the rest of its run — the
 engine's own account decides it, at every position after the divergence — so
 removing or replacing the transported identities can only make the effect replay
-correctly or refuse. It belongs to the exact retained event it
+correctly or refuse. It belongs to the exact saved event it
 came from, at the position that event occupies: records are offered in order,
 a call may take only the next untaken one and only when it asks exactly what
-that record answers, and a request named by a retained record that reaches live
+that record answers, and a request named by a saved record that reaches live
 execution performs nothing rather than performing under another run. A Git-host event that settled into no such record
 leaves the remote's state unestablished, and that checkpoint is not forkable.
 
@@ -2676,7 +2676,7 @@ teardown or final-validation failure, and commit failure. The surviving wrapper
 therefore cannot answer from uncommitted positive or negative cache entries
 after SQLite has restored the prior frontier.
 
-Retained roots, manifests and blobs remain indefinitely. Cloudflare garbage
+Saved roots, manifests and blobs remain indefinitely. Cloudflare garbage
 collection is not in the production closure and is never invoked. The provider
 exposes no public history selection at this layer; a fork's root copying is a
 lifecycle transaction above it. Its
@@ -2710,10 +2710,10 @@ That is the same boundary every other reader already observes rather than a
 second rule for crashes. A second connection sees the last committed state for
 as long as the writer's transaction is uncommitted, so a crash publishes
 nothing that was not visible before it. What a later process finds is that
-committed state — the filesystem, the current root, the retained roots and
+committed state — the filesystem, the current root, the saved roots and
 references, and the ordered journal with its event identities and root
 associations — from which it performs no recorded effect again and can
-materialize any retained root.
+materialize any saved root.
 
 The Deno journal adapter routes an append ordinarily when no destination is
 bound. A publication may instead bind one exact transaction destination for its
@@ -2768,13 +2768,13 @@ document replay returns its recorded result without expanding the document and
 therefore starts no service. Ordinary durable eval transforms a block and
 validates its declared exports against the live overlay before constructing its
 durable effect. A collision therefore has no eval `Yield`; compatible partial
-replay remains aligned, while retained history containing a now-incompatible
+replay remains aligned, while saved history containing a now-incompatible
 successful eval is rejected by the existing replay guard or divergence path.
-Every root and child termination checks its retained subtree before appending a
+Every root and child termination checks its saved subtree before appending a
 `Close`. The replay index tracks which coroutine identities the current
-definition uses, so a completed retained child is not mistaken for aligned
+definition uses, so a completed saved child is not mistaken for aligned
 history merely because it already has a `Close`. Durability failures take
-precedence over ordinary termination even after the last retained `Yield` was
+precedence over ordinary termination even after the last saved `Yield` was
 consumed. If collision handling terminates immediately,
 `TerminalDivergenceError` retains the collision as its cause and the history
 receives no terminal event; restoring the compatible definition can still
@@ -2879,7 +2879,7 @@ inside one savepoint and one `workspace_file` effect: successful creation or
 existing-directory adoption publishes the resulting root with the recorded
 success, while a documented refusal rolls every directory created by the
 attempt back and publishes the refusal against the unchanged root. An ordinary
-refusal from any mutation follows that rule, so the retained outcome describes
+refusal from any mutation follows that rule, so the saved outcome describes
 a Workspace that is exactly what it was, and the reason that crosses the
 boundary is selected from the shared vocabulary rather than derived from
 anything the filesystem said. Replay restores those recorded outcomes without
@@ -2887,7 +2887,7 @@ performing the mutation, opening a transaction or consulting the current
 frontier, which is why a create/delete/create history replays in order — and why
 a completed ensure does not create again. A cancellation between a mutation and
 its commit publishes nothing, so continuation performs it once against the
-retained frontier. A temporary directory is refused outright: the provider has
+saved frontier. A temporary directory is refused outright: the provider has
 no host directory to hand out, and falling through to the caller's would be the
 uncontained filesystem the boundary exists to prevent.
 
@@ -2961,7 +2961,7 @@ commit — in the provider instance's own closure. A checkout with no admitted
 
 Ordinary PullRequest upserts and evidence reads share the URL matching, host ceiling,
 response normalization and low-level GitHub reconciliation, and differ in lifecycle and
-admission. A read is performed afresh every execution and retained nowhere. An upsert
+admission. A read is performed afresh every execution and saved nowhere. An upsert
 authenticates the Repository selection and the contextual checkout, reads the current
 named branch and commit, and requires the exact matching entry this provider instance
 already holds — a Push for another checkout, Repository, origin, destination, branch or
@@ -3025,7 +3025,7 @@ first `<Git.Commit>` that needs one — never at installation — and kept in th
 closure for the rest of the execution, including when the host can name none. A run that
 commits nothing never asks. It is used for an ordinary `<Git.Commit>` and nothing else,
 because that commit lands in the caller's own checkout; a workflow run keeps its one
-fixed identity, whose whole purpose is that retained Git state does not depend on whose
+fixed identity, whose whole purpose is that saved Git state does not depend on whose
 machine made it. It is not a prop, a Context value, a component result or a middleware
 answer, and nothing else about the environment is borrowed with it — hooks, file-system
 monitors, signing programs and repository-supplied credential helpers stay disabled by
@@ -3037,7 +3037,7 @@ every other component is unaffected.
 
 An ordinary invocation identity is a fresh opaque random value the document execution's
 repository provider mints for itself and keeps in its own closure. It is not a prop, a
-Context value, a component result, a middleware answer, a lifecycle ID or a retained
+Context value, a component result, a middleware answer, a lifecycle ID or a saved
 record, and it is neither addressable nor reusable; live Issue and pull-request
 idempotency and reconciliation keys are derived from it together with the engine's own
 expansion identity.
@@ -3048,7 +3048,7 @@ An Agent proposes source; trusted execution admits and performs it. Session cont
 
 ### Native Agent sessions
 
-A native handoff gives one exact retained conversation to the provider UI. Its
+A native handoff gives one exact saved conversation to the provider UI. Its
 construction identity, executable compatibility and live owner are separate facts. Read
 these rules together with the [native launch
 interface](specs/native-agent-session-launch-spec.md) and [ACP provider
@@ -3088,11 +3088,11 @@ identity exists. A `<Session>` or `<Prompt>` meeting a bound client-allocated ro
 attaches under the route's exact identity; a legacy unbound route or an unavailable
 attachment capability refuses before a turn and creates no substitute conversation.
 
-Phases are retained as `agent_session_launch` records under one expansion identity — `prepared`
+Phases are saved as `agent_session_launch` records under one expansion identity — `prepared`
 before ownership is released, then `materialized` where an adapter required a
 materialization turn, then `detached`, then `exited` — so a completed replay
 launches nothing, a replay holding only `prepared` proves the handoff never began and
-may still create under the retained identity, and one holding `detached` resumes and
+may still create under the saved identity, and one holding `detached` resumes and
 never falls back. The public route carries an opaque one-use launch request and answers
 nothing; the right to run and retain a phase is delivered to the installed provider
 directly, so neither a returned completion nor a rebuilt request authors a launch.
@@ -3112,13 +3112,13 @@ message. No launch path discards persistent provider state.
 A session whose adapter pins a build is bound to that one build, whichever side named
 it: the build is observed inside ownership before an identity is allocated or a provider
 session is created, the binding is published with the bound route — V2 for
-client-native, V3 for ACP-first — and retained beside the prepared record, the native
+client-native, V3 for ACP-first — and saved beside the prepared record, the native
 child runs the exact observed path in place of the launcher name, and every later
 create, resume, attachment and incomplete replay reobserves and compares before a
 process, an ensure or a turn.
 
 A `<Session>` or `<Prompt>` meeting a bound client-native route attaches to it: it
-reobserves the build, requires any retained provider arrangement to assert that same
+reobserves the build, requires any saved provider arrangement to assert that same
 conversation, calls ensure with the route identity as `resumeSessionId`, and requires the
 provider to report that identity before a turn — refusing on missing capability, build
 drift, missing history or a differing assertion without creating a substitute
@@ -3147,7 +3147,7 @@ reads at a thread's first turn. That tuple is the compatibility point the advert
 stands on rather than an allowlist: admission accepts one canonical `codex-cli x.y.z` line,
 so another canonical version is admitted while bare, malformed, ambiguous or multi-line
 output refuses; exactness belongs to the session, whose accepted string becomes its
-retained executable binding and is reobserved and compared before every later create,
+saved executable binding and is reobserved and compared before every later create,
 resume, attachment and incomplete replay, so continuing a session across releases is not
 offered. Reading the ACP session id as the native identity stays forbidden; `Agent.AddDir`
 is unbuilt.
@@ -3202,7 +3202,7 @@ A prompt that started and a successful launch preparation retain one canonical
 `configuration`; a configuration refusal and an unconfigured operation retain none.
 
 Completed replay contacts no provider, and an incomplete configured launch reapplies
-that canonical value to the exact retained Session or fails.
+that canonical value to the exact saved Session or fails.
 
 Released launch `requestedModel` and observational `model` strings are
 compatibility-reader inputs only: valid values are discarded, malformed values refuse,
@@ -3213,7 +3213,7 @@ native UI; a final configured client-allocated launch refuses before route, iden
 private file or process, while middleware that routes an unconfigured Session receives
 the unchanged unconfigured contract.
 
-`Agent.options()` reports provider-ordered, grouped choices through one scoped unretained
+`Agent.options()` reports provider-ordered, grouped choices through one scoped unsaved
 inspection session that sends no prompt and creates no XMD execution, journal or durable
 session, and `xmd agent options` renders them as text or version-1 JSON.
 
@@ -3240,7 +3240,7 @@ constructed.
 Session materialization is the transition that makes a placement's chosen route and its
 backend history resumable. ACP-first materialization happens only when the backend
 reports that it accepted the session's first turn; client-native materialization is the
-native launch's existing retained construction. Nothing else promotes a placement — not
+native launch's existing saved construction. Nothing else promotes a placement — not
 a returning ensure, a first output, a terminal result, a checkpoint token, an error code
 or a diagnostic.
 
@@ -3248,7 +3248,7 @@ or a diagnostic.
 
 An established session is a placement whose immutable construction route and durable
 provider or native identity both already exist, and which is therefore validated
-eagerly: reattached, compared against its retained history, and refused when either is
+eagerly: reattached, compared against its saved history, and refused when either is
 missing or names another conversation.
 
 #### Instruction placement
@@ -3319,7 +3319,7 @@ An executable observer is the host-built capability that resolves a launcher com
 through the host's real execution environment, canonicalizes the target, requires an
 executable regular file, hashes that target and asks that same file its version. The
 host passes it directly into the provider like the coordinator beside it. It is
-deliberately not contextual: executable validation decides which retained history may be
+deliberately not contextual: executable validation decides which saved history may be
 accepted, and a resolver document middleware could replace could point the observation
 at one binary while the run spawns another.
 
@@ -3336,7 +3336,7 @@ joining it prove different things.
 
 Identity provenance records who chose a provider-native session identity: the provider
 returned it, or the client allocated it before the provider existed. This provenance is
-retained rather than inferred, because after the fact both are just a string in the
+saved rather than inferred, because after the fact both are just a string in the
 record. A released record written before the distinction existed reads as
 provider-returned, which is the only compatibility inference.
 
@@ -3371,7 +3371,7 @@ public permission chain. This is the V1 permission ceiling; the portable proof
 that every provider exposes no ambient tool is tracked separately and does not
 widen it. `xmd run` keeps its caller-selected Agent permission behavior.
 
-What a turn was allowed to do is retained beside what it said, and the two are
+What a turn was allowed to do is saved beside what it said, and the two are
 recorded by different things. A permission policy decides every request inside
 its scope without deferring outward, so nothing installed inside one — and
 nothing installed inside the turn, below a policy a host put around the execution
@@ -3529,7 +3529,7 @@ resumes.
 
 An interruption before the mapping commits is reconciled only from one canonical
 provider assertion — exactly one, for that identity. A missing assertion, an
-assertion conflicting with what is retained, one that replaced it, and more than
+assertion conflicting with what is saved, one that replaced it, and more than
 one at once each refuse. Once the mapping has committed, a restart compares the
 provider's current assertion against it before continuing, and reattaches only
 when the kind and the value both still agree. No refusal substitutes a new
@@ -3539,9 +3539,9 @@ Cancellation owns both sides of a live step. It stops the Prompt stream or the
 generated-XMD evaluation, completes provider and evaluator teardown, and removes
 the disposable directory before the attempt settles. Already committed session,
 Prompt, admission and effect records remain valid; an uncommitted read or
-mutation may run again under the same retained admission, on its own
+mutation may run again under the same saved admission, on its own
 component's ordinary transaction and retry terms. A final proposal is the
-retained result of its Prompt. Any later execution of its mutations crosses the
+saved result of its Prompt. Any later execution of its mutations crosses the
 separate mutation-proposal admission rather than an Agent channel.
 
 Generated XMD is untrusted input. The evaluator preflights the complete fragment
@@ -3553,7 +3553,7 @@ and fragment-local binding references remain available; pure components such as
 Json consume those values without effect permission. Generated bindings neither
 import caller values nor escape the fragment. The evaluator retains the exact
 filtered generated source for replay, history and deliberate training
-ingestion. An incomplete evaluation can continue from retained source without
+ingestion. An incomplete evaluation can continue from saved source without
 invoking the Agent again; a completed bounded information request reproduces its
 rendered findings without repeating reads.
 
@@ -3620,7 +3620,7 @@ that a workflow run offers the name at all; an ordinary run offers none. A
 host's own extensions are names it answers for. Selecting `write` intentionally authorizes Dir's
 persistent recursive directory creation as well as the mutations File and
 File.Delete perform. Each is the ordinary component and crosses `API.Files`
-into the run's transaction-bound provider, so an ensured directory is retained
+into the run's transaction-bound provider, so an ensured directory is saved
 by the same `workspace_file` effect an authored Dir publishes. The evaluator
 adds no mutation API, transaction or receipt of its own. A write-enabled
 fragment that only ensures a directory renders nothing unless the fragment
@@ -3631,11 +3631,11 @@ are outside the class.
 The identity a spelling runs under is a grant boundary, not a symbol
 decoration. An earlier `<Dir>` grant authorized lexical placement that created
 nothing, and it does not authorize the persistent mutation this one does. A
-continuation whose retained rows name a different identity for that spelling is
+continuation whose saved rows name a different identity for that spelling is
 refused before generated execution instead of inheriting a broader grant.
 Read-only admissions never reached the writing spellings and remain unaffected.
 
-The retained rows are the grant rather than a presentation, and their order is
+The saved rows are the grant rather than a presentation, and their order is
 derived from the selection rather than from how a host assembled it: one row per
 selected spelling, in canonical name order. A continuation is compared against
 them row by row, so adding the deletion spelling refuses a continuation that was
@@ -3652,13 +3652,13 @@ diagnostic and in what it retains alike, because the decision is recorded
 either way. A request the candidate malformed is a different thing: whether a request is
 well formed at all is the component's own question, asked where the request is
 made — which is after the admission. Admission is the line: before it nothing of
-the candidate is retained, and after it the exact source is retained on purpose,
+the candidate is saved, and after it the exact source is saved on purpose,
 so an ordinary component diagnostic naming part of the fragment discloses
 nothing the journal does not already hold.
 
-A retained admission is a grant, and a resumed run is held to it. Durable
+A saved admission is a grant, and a resumed run is held to it. Durable
 replay matches an effect by its type and name, and what a description carries
-is stored rather than compared, so the normalized policy is retained in the
+is stored rather than compared, so the normalized policy is saved in the
 admission's own result and a continuation checks it before one generated
 component is invoked or one effect is performed. Every term compares whole and
 exactly, in canonical order: the class selection and the admitted spellings with
@@ -3666,12 +3666,12 @@ the identity each runs under.
 
 What is deliberately absent is everything live. The run's own progress is not a
 term — every committed mutation retains another immutable root and advances the
-authoritative current root, and a grant compared against a retained copy of that
+authoritative current root, and a grant compared against a saved copy of that
 frontier would refuse a run for exactly the work it was admitted to do. Nor is a
 request ceiling: which destination an admitted read may reach is asked where the
 request is performed, against the effective `Permissions` of that scope, so a
-continuation held to a retained copy of it would refuse a run whose
-configuration legitimately moved. The retained policy holds one row per admitted
+continuation held to a saved copy of it would refuse a run whose
+configuration legitimately moved. The saved policy holds one row per admitted
 spelling: the name, the authored spelling, the absolute
 `https://executable.md/` identity that spelling runs under, whether canonical
 core supplies the body or the ordinary import chain answered for it, and which
@@ -3700,7 +3700,7 @@ yielded inline by the owning document expansion, in authored order and ahead
 of the expansion's later effects, so one durable sequence accounts for the
 admission, each nested generated effect, and whatever the document does next.
 A partial continuation is offered that same sequence: the admission and every
-completed nested read or mutation restore from their retained records without
+completed nested read or mutation restore from their saved records without
 another live execution or root publication, and the run continues to the next
 unrecorded position. The existing `scoped()` around generated expansion keeps
 owning its middleware, cancellation, and teardown. The evaluator is an
@@ -3713,7 +3713,7 @@ comparison rejecting the run's own progress.
 
 An XMD-mediated HTTP read is how a network-denied Agent is given external
 information: the authored document performs the read with `<Fetch>` and the
-retained response reaches the prompt as data. That does not raise the Agent's own
+saved response reaches the prompt as data. That does not raise the Agent's own
 ceiling. A generated fragment may name `Fetch` only when the host selected it,
 and what an admitted read may actually reach is the live terminal's question:
 a host that bounds its requests states that bound as a `Permissions`
@@ -3779,7 +3779,7 @@ them but core.
 
 What an admitted spelling then runs as comes from that definition's own declaration: an
 absolute `https://executable.md/` identity and one of the two effects, per authored
-spelling, read where the definition is published and retained with it. So the selection
+spelling, read where the definition is published and saved with it. So the selection
 says which names and spellings a fragment may write, and the owner says what writing
 them runs and which class it reaches — a spelling whose owner offers no generated use of
 it refuses at capture rather than acquiring a grant from the selection that named it.
@@ -3907,7 +3907,7 @@ or refresh information to validate history.
 
 One narrow namespaced classification identifies the normalized recoverable
 generated-request refusal and carries only a safe reason. Stale admission or malformed
-retained history, and terminal setup, runtime, provider, persistence, secret and
+saved history, and terminal setup, runtime, provider, persistence, secret and
 cleanup failures, are not that classification and are never recovered.
 Normalization reads the namespaced descriptive tag across loaded copies rather
 than matching messages, and a plain `GeneratedXmdError` is not a recoverability
@@ -3927,7 +3927,7 @@ owns directory placement, lifetime and the three validation times.
 
 #### Delivery status and standing of this amendment
 
-The current contract is below. Its earlier delivery sequencing is retained as
+The current contract is below. Its earlier delivery sequencing is saved as
 [Plan information-request history](specs/decisions.md#dec-017-plan-information-requests--delivery-history).
 The [Plan specification](specs/plan-command-spec.md) owns the authored interface
 and product verification.
@@ -3991,7 +3991,7 @@ Canonical protection fixes which implementation answers for a name canonical
 core owns. Five names are in that tier: Syntax, Evaluate, File, File.Delete and
 Dir. Selection answers them above the repository, default and host tiers, and
 the final `Component.importComponent` answer is verified against the copy
-canonical execution retained — so a registration, a repository file, a bundle
+canonical execution saved — so a registration, a repository file, a bundle
 member, a declared Markdown component, a middleware replacement and a
 definition from a second loaded copy are each refused where they are made.
 
@@ -4054,7 +4054,7 @@ runtime failure rather than a preflight refusal. Each `<Spawn>` under an `<All>`
 is checked from that same incoming snapshot and contributes nothing back, which
 is the binding contract the children actually run under. `<Loop>`,
 `<PrintErrors>` and `<Let>` bodies read and write the enclosing environment. Constructs keep their
-exact spelling in the retained source, never join the retained named-component
+exact spelling in the saved source, never join the saved named-component
 list, and change no record version.
 
 A trusted host may add another pure component only by placing
@@ -4067,7 +4067,7 @@ surface.
 
 Each evaluation receives a fresh narrowed protected-body route. It closes with
 the evaluation, before another Agent turn. Continuation verifies current
-canonical identity and retained structural identity before rebuilding a route.
+canonical identity and saved structural identity before rebuilding a route.
 Same-name replacements, copied functions, middleware substitutions, another
 loaded core copy and expired routes do not inherit protection. No protected
 function, live profile, provider or capability handle enters durable history.
@@ -4237,7 +4237,7 @@ participates. Plan does not install a transient execution around its content.
 Each admission or effect record is appended before its operation resumes and
 becomes ordinary replay history immediately. Evaluate does not stage, hide,
 publish or discard another component's records and changes no persistence
-contract. Two Evaluate occurrences cannot consume one another's retained work.
+contract. Two Evaluate occurrences cannot consume one another's saved work.
 
 A completed request replays without another Agent turn, fragment body, Syntax
 lookup, File read or Glob traversal. Re-entry needed to validate structural
@@ -4254,7 +4254,7 @@ and filesystem scope/policy identity. There are no bound values to compare.
 It uses stable structural identity, never function serialization or replaceable
 context state. Extra effect-description fields alone do not enforce comparison.
 Changing any bound fact is stale before another turn or read. Absent, malformed
-or inconsistent records fail closed, including a retained refusal for different
+or inconsistent records fail closed, including a saved refusal for different
 source. Authoritative checks cannot be skipped by public replay middleware.
 
 Unchanged completed findings remain historical information. Replay does not
@@ -4429,7 +4429,7 @@ because that is what the run turned out to be. A second delegation adds no
 second expansion, import or authored effect, while the work the first valid
 delegation already did stands. A preparation refusal prevents every later
 preparation, all document policy, the root import and every authored effect,
-while durable effects earlier preparations completed stay retained and are not
+while durable effects earlier preparations completed stay saved and are not
 rolled back; the root records the refusal as its terminal.
 
 A failure raised before the root import is whatever a handler or a preparation
@@ -4500,7 +4500,7 @@ replays the recorded failure — running no preparation, no policy, no import
 and no authored work, and appending nothing — while a different root source or
 target is refused, and a missing, malformed, duplicated or conflicting binding
 fails closed. A partial history is re-entered: a preparation that already
-recorded a durable effect finds it retained and restores it rather than
+recorded a durable effect finds it saved and restores it rather than
 performing it again, and a refusal that follows records a fresh terminal. A history with no recorded completion is unaffected: it continues
 live, and preparation runs again through the ordinary durable protocol.
 
@@ -4508,7 +4508,7 @@ live, and preparation runs again through the ordinary durable protocol.
 Terminal acceptance stores a **detached** structural copy of the accepted props:
 objects and arrays are recursively copied and frozen, `"__proto__"` is carried
 as an ordinary data member rather than assigned, and no container the caller
-still holds is retained. Anything that is not JSON, and any object that resists
+still holds is saved. Anything that is not JSON, and any object that resists
 being read, is refused as a `DocumentProtocolError` built here rather than
 rethrown — so neither a hostile trap's message nor the value that produced it
 reaches the caller.
@@ -4554,8 +4554,8 @@ request canonical core issues and consumes. The request retains the authored
 modifier chain and the block context; both are frozen when it is issued. Public
 middleware composes around the operation on the same terms it composes
 anywhere: it may observe the request, refuse by throwing, and delegate. It
-cannot produce the command. Canonical core authorizes and composes the retained
-chain and runs it against the retained context, so a rewritten, mutated, copied
+cannot produce the command. Canonical core authorizes and composes the saved
+chain and runs it against the saved context, so a rewritten, mutated, copied
 or fabricated request — and a `codeBlock` handler answering with another block —
 runs nothing rather than running something else. The outcome goes to the
 expansion that issued the request rather than through the operation's return
@@ -4577,7 +4577,7 @@ still reaches a registered modifier by name, a replaced `timeout` included.
 
 #### Capability-backed invocation identity
 
-A component that names a durable operation after itself decides which retained
+A component that names a durable operation after itself decides which saved
 record a replay restores, so two invocations arriving at one name each replay
 the other's work, and an implementation running under somebody else's identity
 commits against its own storage under their expansion. A decision like that
@@ -4655,7 +4655,7 @@ working directory is installed for their descendants at all, `<Git.Add>`,
 `<Git.Push>`, `<Git.Switch>` and `<Json>` turn a content-bearing invocation into
 a refusal, and `<Git.Commit>` and `<PullRequest>` decide what body is committed
 or published. Each reads the contextual answer, so middleware may alter the
-effect, the guard or the retained data each of those branches decides, and this
+effect, the guard or the saved data each of those branches decides, and this
 invocation boundary makes no stronger guarantee for them.
 
 **Which domain an invocation is in is decided by what resolution selected, not
@@ -4918,11 +4918,11 @@ and declared components are
 copied and frozen **before** any installation runs, so what ends up
 authoritative is fixed before any installed code, any middleware and any
 document code exists. Each runs inside the execution's own journal read, on the
-retained snapshot, in capture order, stopping at the first refusal — ahead of
+saved snapshot, in capture order, stopping at the first refusal — ahead of
 root-history admission, `ReplayGuard`, terminal reuse, authored work and any
 append.
 
-Admissions are refusal-only functions: they receive the retained history, return
+Admissions are refusal-only functions: they receive the saved history, return
 nothing, and never receive a `next`. They travel as values the host holds and
 passes — not through a context, an Api, a stable name, structural metadata or
 module-scoped state — which is why a separately loaded package composes here by
@@ -4950,13 +4950,13 @@ inside `install()` changes nothing. It travels as a value on the same terms an
 admission does, and is reachable through no context, Api or name.
 
 Preparations run in installation order, stopping at the first refusal, **after**
-retained-history admission and **before** any public `Execution.document`
+saved-history admission and **before** any public `Execution.document`
 policy, the root import, and every authored effect. They are `Workflow`
 operations, so what they record is journaled: on a completed terminal replay the
 durable root is already settled and no preparation runs at all, while on a live
 or partial continuation they run and record through the ordinary durable
 protocol — an effect an earlier preparation already completed is restored from
-its retained record rather than performed again.
+its saved record rather than performed again.
 
 #### The weak journal-provenance association
 
@@ -5183,7 +5183,7 @@ could not write is diagnosed on the same terms the document would have been.
 **No durable protocol changes.** There is no Plugin event, no Plugin-set
 identity and no generic Plugin record. The root import, the declaration records
 and every existing encoding are byte-identical, and a Plugin whose future
-middleware must reject an incompatible retained history supplies an explicit
+middleware must reject an incompatible saved history supplies an explicit
 `JournalAdmission` rather than having one inferred from its name.
 
 #### Where a consumer imports from
@@ -5296,7 +5296,7 @@ document the host runs.
 the kind before any other member and immediately refuses an unknown kind. For a
 known kind, the invocation retains that discriminant and its arm's members —
 factory bound, arrays and schemas copied — on the same terms as admissions and
-the bundle. The branch and the retained kind therefore come from one read, even
+the bundle. The branch and the saved kind therefore come from one read, even
 if a later read would answer differently. A schema is copied rather than
 referenced because it is a whole object graph, and holding the caller's object
 would leave the contract mutable after capture. A host that hands a declaration
@@ -5315,7 +5315,7 @@ gains no callee-private names but retains the caller's own lexical private names
 
 Eligibility belongs to the authored occurrence rather than to the name. What a
 private import may invoke is the object canonical core produced inside that ask,
-so an answer a handler retained from a legitimate private import authorizes
+so an answer a handler saved from a legitimate private import authorizes
 nothing at a later site — and because neither the name nor the current execution
 is what is checked, it authorizes nothing under an alias, inside a copy of the
 definition, after the invocation that produced it is over, or in a later
@@ -5406,7 +5406,7 @@ execution, the registry `xmd syntax` and structural validation enter, `<Plan>`'s
 internal admission validator, and `xmd plan`'s candidate validation. A Plan is therefore
 checked against the vocabulary the later `xmd run` supplies, rather than a
 narrower one that would refuse a program the run would have accepted, and the
-three checks inside one Plan command consume one retained assembly rather than
+three checks inside one Plan command consume one saved assembly rather than
 reinstalling and re-reading every packaged asset.
 
 The Plugin reserves the forty-one names for the commands that can run a review —
@@ -5642,7 +5642,7 @@ provenance is descriptive data and never a callable lookup key.
 
 Routes, projection edges, bodies, domains, callable sets and site operations
 belong to one live execution. Child closure and execution teardown invalidate
-retained operations. A same-name function, structural clone, independent wrapper,
+saved operations. A same-name function, structural clone, independent wrapper,
 unadmitted definition or implementation another loaded copy built gains no
 route. Durable records keep their existing structural identities, forms, source,
 profile inputs and results; they contain no callable permission. Continuation
@@ -5757,7 +5757,7 @@ one member — `{ symbols: string }` for a successful rendering, or
 `{ refused: non-empty string }` for a named selection canonical core refused.
 Both are durable values, because a failure crossing the durable boundary is
 rebuilt without its class; the component interprets the value only after
-publication succeeds, so a retained refusal means the same thing live and on
+publication succeeds, so a saved refusal means the same thing live and on
 replay while a publication failure prevents interpretation and stays terminal. A
 continuation hostile-parses that record and answers from it without consulting
 the filesystem, the registry, the bundle, the host or the lexical reference
@@ -6068,11 +6068,11 @@ middleware answer, document prop or durable record, and not on ordinary
 `execute()`. Core parses, name-validates and recursively copies the whole record
 before any installation or document code runs, and the detached values are
 ordinarily mutable inside the execution that receives them. The REPL derives
-that record only from values durably retained before the new entry's admission,
+that record only from values durably saved before the new entry's admission,
 so replay derives the identical record from the identical bytes.
 
 The session owns at most one entry task. Starting another needs two separate
-facts — the preceding entry has a retained terminal close, *and* its task has
+facts — the preceding entry has a saved terminal close, *and* its task has
 completely torn down and joined — because observing a terminal outcome is not
 the same as the work being over. There is no queue: a submission that arrives
 before both hold is refused, having started nothing, and teardown stops a
@@ -6080,8 +6080,8 @@ pending one from starting rather than appending on its behalf. Settled segments
 are projected and never replayed; only an unfinished final segment is given back
 to Core to continue.
 
-A location is resolved against the retained history before a session opens.
-Opening one starts or resumes the execution, and replay past the retained prefix
+A location is resolved against the saved history before a session opens.
+Opening one starts or resumes the execution, and replay past the saved prefix
 appends — so a route naming a scope or drawer the file never held is answered
 from the records already on disk, where being wrong costs nothing. Resolution
 takes one fact the model cannot hold: whether this process is asking a question.
@@ -6102,7 +6102,7 @@ runtime.
 
 Every pane reads the selected prefix. The History band and its drawer are the
 explicit exception, and the only one: they read a thin summary of the *whole*
-validated file — a marker and a kind per retained position, plus the head —
+validated file — a marker and a kind per saved position, plus the head —
 because the positions after the selected one are where a reader can go next.
 No label, source, name, value, outcome detail or observation is in it, so
 nothing a later position holds reaches a reading of an earlier one.
@@ -6120,7 +6120,7 @@ The session hands both halves over together, as one reading, and the root
 carries that one value through resolution, paint and resize rather than asking
 again for either half. It has to: the root reads the terminal's size between
 resolving a frame and composing it, that read suspends, and a record can be
-retained while it does. Content taken before it and navigation taken after it
+saved while it does. Content taken before it and navigation taken after it
 would describe two different files on one screen. A resize recomposes the
 reading that was resolved at a new size, never at a new snapshot.
 
@@ -6131,7 +6131,7 @@ resolve at its position: there, a reading still stands and the reason is said
 beside it. A refusal has nothing to stand beside, so nothing is left on the
 screen pretending to be current.
 
-The head is derived on read from retained facts and from work this session
+The head is derived on read from saved facts and from work this session
 owns, never from a body's return, a recorded root Close, a component badge or
 the selected content. It changes while the file stands still, so it publishes
 through the wake the session and the controller already send; History adds no
@@ -6168,14 +6168,14 @@ scope, which is what lets the REPL drawer answer a generated question and an
 Permission composes outermost-first: Core's own audit observer, then this
 session's authoritative policy, then whatever the document and provider
 installed, then the base denial. One private ledger per inherited Prompt scope
-holds what was granted, and a retained audit is read rather than answered. The
+holds what was granted, and a saved audit is read rather than answered. The
 live overlay, the application and the terminal have one owner each — the session,
 the root transition boundary and the screen — and every ending cancels and joins
 that owner rather than appending on its way out.
 
 Ownership in the model is read from the Journal and from nothing else. An
-import's retained selection says where its scope's source came from — a path for
-a component read from somewhere, the retained origin for one the host declared —
+import's saved selection says where its scope's source came from — a path for
+a component read from somewhere, the saved origin for one the host declared —
 and that origin is the path the effects inside it are recorded against. A
 generated fragment has no file, so the work inside it names the admission it was
 decided under, and the scope that admission created is what owns it: the
@@ -6222,7 +6222,7 @@ record or public Core Api carries one.
 A Prompt's sequence number is local to the execution that recorded it, so it
 restarts with every entry and two entries may each hold sequence `0`. Turns are
 therefore ordered by entry admission first and by sequence within that entry,
-and uniqueness is required only inside the owning entry. Both retained and live
+and uniqueness is required only inside the owning entry. Both saved and live
 turns carry their entry beside their scope, and a publication is correlated by
 the pair — a durable Prompt name says where it was written, so two entries
 running one source hold the same name at the same position, and correlating by
@@ -6241,7 +6241,7 @@ does nothing else. Activating it records that request's opaque key in
 process-local state — never in the location — and opens the Sessions-only
 `+permission` drawer; the reducer decides and `program.ts` alone holds the
 authority that answers, so the drawer closes only when the request is really
-settled and a stale, unknown or unoffered action settles nothing. A retained
+settled and a stale, unknown or unoffered action settles nothing. A saved
 permission audit is an inert reading, and a historical prefix has no live
 requests to answer.
 
@@ -6390,7 +6390,7 @@ Recovery changes nothing above it.
 Placement at narrow describes and mounts only the surface the route selected.
 The unselected surface has no node, cell, frame-map entry, focus stop or pointer
 target; both surface controls remain available, and application and journal
-state are retained. The inspection reading is different, and is not described there at all: a
+state are saved. The inspection reading is different, and is not described there at all: a
 narrow frame has no inspection region to put a binding row or a recorded answer
 in, and a row described into a region that does not exist is mounted, focusable
 and placed nowhere — a Tab stop drawing no cell and a pointer target behind
@@ -6449,9 +6449,9 @@ entry that read a file, wrote three and stopped at a question is reopened at the
 printed location, those four answer from what they produced, and the write after
 the question happens for the first time.
 
-Four operations are retained and no others: a `<File>` text read, a `<File>`
+Four operations are saved and no others: a `<File>` text read, a `<File>`
 write, a `<File.Delete />`, and the directory a `<Dir>` ensures, each in the
-ambient checkout the entry was started in. A read is retained because a document
+ambient checkout the entry was started in. A read is saved because a document
 binds its text and a continuation has to offer the same binding; a glob, a path
 check and a temporary directory bind nothing a continuation must answer again,
 and are left alone. A call outside that checkout is ordinary filesystem
@@ -6479,7 +6479,7 @@ checkout and takes no lease.
 
 Recording is ordinary ancestor-max `Files` middleware over the one document
 filesystem, so what is kept is the result the whole composition answered with,
-and a generated fragment's admitted operations are retained exactly as an
+and a generated fragment's admitted operations are saved exactly as an
 authored one's are: they cross the same route. A provider beneath that answers
 directly, or transforms the path or content and delegates, is provider behavior;
 the request as it arrived stays the operation's identity. Terminal permission
@@ -6711,7 +6711,7 @@ DurableEvents -> frozen ReplModel -> resolved immutable view
 | --- | --- |
 | `model.ts` | projecting one validated Journal prefix into a frozen model |
 | `route.ts` | the location grammar, and resolving one against a model |
-| `journal.ts` | the retained NDJSON stream and the repository over a root |
+| `journal.ts` | the saved NDJSON stream and the repository over a root |
 | `session.ts` | admitting entries in turn, reopening one history, and the live overlay |
 | `entries.ts` | partitioning one physical journal into entry segments, and the private stream view over one of them |
 | `expansion.ts` | pausing and continuing expansion over the public seams |
@@ -6719,7 +6719,7 @@ DurableEvents -> frozen ReplModel -> resolved immutable view
 | `description.ts` | opaque immutable descriptions and the closed action boundary |
 | `reconcile.ts` | reconciling descriptions into one mounted Freedom tree |
 | `handoff.ts` | the acknowledged commit boundary |
-| `navigation.ts` | every retained position and the head, as the one reading taken at the whole file |
+| `navigation.ts` | every saved position and the head, as the one reading taken at the whole file |
 | `history-rail.ts` | the five-row History band, placed from engine measurements |
 | `source-reading.ts` | one entry as output and then source, with what each element is doing |
 | `presentation-text.ts` · `presentation-style.ts` | what the characters of a reading are, and the colours it is drawn in |
@@ -6748,7 +6748,7 @@ for what it actually does: canonical resolution, admission, configured
 permission, ownership, coordination, publication, execution, or definitive
 settlement. Two serialized spellings keep the older word because their bytes are
 a compatibility contract, not a description: the durable `LaunchFailureClass`
-value `"directory-authority"`, which a retained launch record is parsed against
+value `"directory-authority"`, which a saved launch record is parsed against
 by exact match, and the Files invariant category `"authority"`, which crosses
 loaded copies and is matched the same way. Renaming either would break replay
 and categorization rather than clarify them, so both stay exactly as written.
@@ -6763,10 +6763,10 @@ and categorization rather than clarify them, so both stay exactly as written.
 | middleware | applied by the lexical structure, used by runtime execution [Reference](#two-layers). |
 | workflow run | a workflow being carried out with its progress and outcome recorded durably; document executions perform its work, while ongoing effects remain scoped to the document execution in which they run [Reference](#workflow-runs). |
 | document execution | one evaluation of a root document initiated through `execute()`, producing one output stream and one completion result while reading and appending a durable journal; its ongoing effects belong to the Effection scope in which the evaluation runs [Reference](#workflow-runs). |
-| workflow definition | one closed retained source-bundle descriptor: `hashAlgorithm`, `bundleHash`, `entrypoint`, `sources`, optional `targetPath` and `components`. It carries no version, kind, Git base or pinned commit; exact target and component mapping participate in identity. [Source and identity](#identity-is-separate-from-retrieval). |
-| source bundle | The exact retained entrypoint, source manifest and optional component mapping from which a workflow executes. [Owning rule](#identity-is-separate-from-retrieval). |
+| workflow definition | one closed saved source-bundle descriptor: `hashAlgorithm`, `bundleHash`, `entrypoint`, `sources`, optional `targetPath` and `components`. It carries no version, kind, Git base or pinned commit; exact target and component mapping participate in identity. [Source and identity](#identity-is-separate-from-retrieval). |
+| source bundle | The exact saved entrypoint, source manifest and optional component mapping from which a workflow executes. [Owning rule](#identity-is-separate-from-retrieval). |
 | logical path | a portable identity inside a source bundle, never a host filesystem path: NFC Unicode scalar values, `/`-separated, without leading or trailing separator, NUL, C0 control, DEL, backslash or `#`, and without an empty, `.` or `..` segment, compared case-sensitively by its UTF-8 bytes. The containing directory, the absolute path and the invocation working directory are retrieval facts and never identity [Reference](#identity-is-separate-from-retrieval). |
-| workflow component bundle | the closed set of authored Markdown components a workflow root declares. A bundle maps each name onto a logical path the same source bundle retains. It is both definition identity and canonical resolution: the names it declares resolve to its exact retained sources and to nothing else [Reference](#the-workflow-lifecycle). |
+| workflow component bundle | the closed set of authored Markdown components a workflow root declares. A bundle maps each name onto a logical path the same source bundle retains. It is both definition identity and canonical resolution: the names it declares resolve to its exact saved sources and to nothing else [Reference](#the-workflow-lifecycle). |
 | declared Markdown component | Exact first-party Markdown a trusted host declares to one execution. [Owning rule](#the-declared-markdown-boundary). |
 | private component closure | A declaration-owned set of implementations available only at eligible lexical occurrences of its own body. [Owning rule](#the-declared-markdown-boundary). |
 | retrieval metadata | replaceable, credential-free information about where a workflow definition can be fetched from now; it takes no part in run identity and is reauthorized by the host before use [Reference](#identity-is-separate-from-retrieval). |
@@ -6804,23 +6804,23 @@ and categorization rather than clarify them, so both stay exactly as written.
 | blocker | execution needs input (auth, a human answer); not a failure [Reference](#error-propagation). |
 | suspension | a durable wait: a crash restarts into the same wait [Reference](#durable-suspension). |
 | suspension ID | an opaque stable identifier derived by the trusted workflow execution for one logical suspension request; replay preserves it and only equality and input correlation are public [Reference](#durable-suspension). |
-| delivery | Retained input for one exact durable suspension, separate from resuming or publishing its answer. [Owning rule](#typed-answer-delivery). |
+| delivery | Saved input for one exact durable suspension, separate from resuming or publishing its answer. [Owning rule](#typed-answer-delivery). |
 | answer publication | appending the durable answer event that records what ended one durable wait; performed by the resuming document execution, never by a delivery [Reference](#typed-answer-delivery). |
-| answer consumption | marking a retained delivery spent; it commits in the same transaction as the answer publication it belongs to, so neither can be observed without the other [Reference](#typed-answer-delivery). |
+| answer consumption | marking a saved delivery spent; it commits in the same transaction as the answer publication it belongs to, so neither can be observed without the other [Reference](#typed-answer-delivery). |
 | workflow executor | the live host invocation that advances or settles one workflow run [Reference](#workflow-lifecycle-ownership). |
 | executor lock | the scope-owned, non-blocking exclusive host lock that permits at most one workflow executor for a run [Reference](#workflow-lifecycle-ownership). |
-| stale execution | an unfinished retained document execution found after acquiring the executor lock proves its previous workflow executor is gone [Reference](#workflow-lifecycle-ownership). |
-| inspection recovery coordination | provider-private cross-process exclusion between copying a crashed run's database-and-journal pair for inspection and opening the retained database write-capably for SQLite recovery; it grants no executor or lifecycle ownership [Reference](#read-only-lifecycle-inspection). |
-| recovered inspection snapshot | an immutable lifecycle snapshot read from a private scratch copy after SQLite rolls that copy's hot journal back to the retained store's last committed state; the retained database and journal are not changed [Reference](#read-only-lifecycle-inspection). |
-| XMD artifact | one immutable portable evidence file with the `.xmd` extension, containing one workflow run's committed retained state at one artifact frontier together with its workflow definition source closure; it is neither a live run store nor permission to continue the source run [Reference](#portable-xmd-artifacts). |
+| stale execution | an unfinished saved document execution found after acquiring the executor lock proves its previous workflow executor is gone [Reference](#workflow-lifecycle-ownership). |
+| inspection recovery coordination | provider-private cross-process exclusion between copying a crashed run's database-and-journal pair for inspection and opening the saved database write-capably for SQLite recovery; it grants no executor or lifecycle ownership [Reference](#read-only-lifecycle-inspection). |
+| recovered inspection snapshot | an immutable lifecycle snapshot read from a private scratch copy after SQLite rolls that copy's hot journal back to the saved store's last committed state; the saved database and journal are not changed [Reference](#read-only-lifecycle-inspection). |
+| XMD artifact | one immutable portable evidence file with the `.xmd` extension, containing one workflow run's committed saved state at one artifact frontier together with its workflow definition source closure; it is neither a live run store nor permission to continue the source run [Reference](#portable-xmd-artifacts). |
 | artifact frontier | the exact committed lifecycle snapshot, journal boundary and current Workspace root an XMD artifact records [Reference](#portable-xmd-artifacts). |
-| workflow definition source closure | the exact root Markdown source and every source in its declared workflow component bundle, the retained bytes re-derived from the run's own store. Retrieval metadata, provenance and a repository checkout are not part of either [Reference](#portable-xmd-artifacts). |
-| artifact manifest | the canonical versioned inventory of every semantic record and retained byte in one XMD artifact, excluding its own derived identity and physical container layout [Reference](#portable-xmd-artifacts). |
-| XMD artifact identity | the lowercase SHA-256 of an XMD artifact's artifact manifest; it identifies the evidence independently of its host path and physical encoding and is retained as the source identity of a history fork made from that artifact [Reference](#portable-xmd-artifacts). |
+| workflow definition source closure | the exact root Markdown source and every source in its declared workflow component bundle, the saved bytes re-derived from the run's own store. Retrieval metadata, provenance and a repository checkout are not part of either [Reference](#portable-xmd-artifacts). |
+| artifact manifest | the canonical versioned inventory of every semantic record and saved byte in one XMD artifact, excluding its own derived identity and physical container layout [Reference](#portable-xmd-artifacts). |
+| XMD artifact identity | the lowercase SHA-256 of an XMD artifact's artifact manifest; it identifies the evidence independently of its host path and physical encoding and is saved as the source identity of a history fork made from that artifact [Reference](#portable-xmd-artifacts). |
 | Agent session portability evidence | Verified portable session checkpoint tokens and bundle bytes, or an explicit unavailability classification. [Owning rule](#portable-xmd-artifacts). |
-| provider checkpoint token | one opaque value a provider issued for one completed Agent Prompt, retained in Agent session portability evidence beside the event it belongs to. It says where a conversation reached; it is not a credential, is never derived from event position, transcript text, another token or a provider head, and no ordinary presentation renders it [Reference](#portable-xmd-artifacts). |
-| Agent session bundle | the opaque bytes a provider captured one Agent session as, retained under that session's key in an XMD artifact. Nothing scans or scrubs them: a bundle may hold transcript text, tool state, secrets a conversation repeated and the exporting host's own paths, and it carries the confidentiality of the whole retained Workspace [Reference](#portable-xmd-artifacts). |
-| Workspace | the provider-neutral, run-owned environment that supplies retained filesystem, repository, process and working-directory capabilities to a workflow [Reference](#workflow-workspace). |
+| provider checkpoint token | one opaque value a provider issued for one completed Agent Prompt, saved in Agent session portability evidence beside the event it belongs to. It says where a conversation reached; it is not a credential, is never derived from event position, transcript text, another token or a provider head, and no ordinary presentation renders it [Reference](#portable-xmd-artifacts). |
+| Agent session bundle | the opaque bytes a provider captured one Agent session as, saved under that session's key in an XMD artifact. Nothing scans or scrubs them: a bundle may hold transcript text, tool state, secrets a conversation repeated and the exporting host's own paths, and it carries the confidentiality of the whole saved Workspace [Reference](#portable-xmd-artifacts). |
+| Workspace | the provider-neutral, run-owned environment that supplies saved filesystem, repository, process and working-directory capabilities to a workflow [Reference](#workflow-workspace). |
 | document filesystem | the files a document names in its own text, reached only through `API.Files`; distinct from the host paths the engine's own control plane reads [Reference](#the-document-filesystem-boundary). |
 | Files provider | the installed implementation of `API.Files` for a document execution: the host provider under `xmd run`, a transaction-bound provider under a workflow run. There is no default, and no provider falls back to another [Reference](#the-document-filesystem-boundary). |
 | stable host namespace | the condition the host Files provider's containment is stated under: no other process replaces a directory, symlink, junction or reparse point between the moment a path is observed and the moment it is used [Reference](#the-document-filesystem-boundary). |
@@ -6830,8 +6830,8 @@ and categorization rather than clarify them, so both stay exactly as written.
 | attached service | a scoped host process that publishes its authenticated loopback endpoint through the XMD service handshake protocol and remains supervised for the lifetime of its service attachment [Reference](#replay-safe-live-services). |
 | effect transaction | the single atomic SQLite transaction that publishes one Workspace-local mutation together with that effect's journal result [Reference](#replay-and-effect-transactions). |
 | external effect | an effect whose provider-owned outcome cannot participate in the Workspace SQLite transaction and therefore requires a stable identity and provider reconciliation [Reference](#replay-and-effect-transactions). |
-| XMD-mediated HTTP read | one bounded, non-mutating HTTP request an authored document performs through the contextual Fetch capability, whose detached response is retained as an ordinary durable observation. It is distinct from an Agent's own network permission, which it does not grant, and from a reconciled mutating external effect: it performs no reconciliation, so an interruption before its record commits may repeat the read [Reference](#replay-and-effect-transactions). |
-| Git-host evidence read | A complete bounded observation of one canonical pull-request URL, retained as an ordinary durable effect. [Owning rule](#git-host-evidence-reads). |
+| XMD-mediated HTTP read | one bounded, non-mutating HTTP request an authored document performs through the contextual Fetch capability, whose detached response is saved as an ordinary durable observation. It is distinct from an Agent's own network permission, which it does not grant, and from a reconciled mutating external effect: it performs no reconciliation, so an interruption before its record commits may repeat the read [Reference](#replay-and-effect-transactions). |
+| Git-host evidence read | A complete bounded observation of one canonical pull-request URL, saved as an ordinary durable effect. [Owning rule](#git-host-evidence-reads). |
 | object-source attachment | Invocation-private authenticated local Git objects and destination supplied to one reconciliation. [Owning rule](#replay-and-effect-transactions). |
 | checkpoint | a completed journal boundary associated with the logical Workspace root visible after that effect [Reference](#replay-and-effect-transactions). |
 | history fork | a new workflow run that replays a compatible journal prefix and continues from its checkpoint and Workspace root under a new immutable document definition [Reference](#replay-and-effect-transactions). |
@@ -6858,7 +6858,7 @@ and categorization rather than clarify them, so both stay exactly as written.
 | client-native attachment | ACP attachment to the exact conversation constructed by a native process [Full contract](#native-agent-sessions). |
 | identity provenance | Who chose the provider-native identity [Full contract](#native-agent-sessions). |
 | quiescence | Acknowledgement that nothing the former owner started can still act [Full contract](#native-agent-sessions). |
-| recovery tombstone | Retained active ownership that a crash alone cannot clear [Full contract](#native-agent-sessions). |
+| recovery tombstone | Saved active ownership that a crash alone cannot clear [Full contract](#native-agent-sessions). |
 | provider partition | One independently owned provider runtime, store, session set and teardown [Full contract](#native-agent-sessions). |
 | `JournalProvenance` | a non-operational, equality-only witness that a live publication stream descends from the exact journal backend a provider selected for one workflow run; it grants no append, read, execution, publication or reconciliation capability, and is meaningful only because the provider retains the witness it established and later requires exact equality [Reference](#the-weak-journal-provenance-association). |
 | result object | the value a component binds instead of failing: `{ok: true, value}` or `{ok: false, …}`, whose failure members the component declares [Reference](#construct-inventory). |
@@ -6880,7 +6880,7 @@ Status is measured against main.
 | Construct | Does | Status |
 | --- | --- | --- |
 | `xmd syntax` | Describes the production run-profile vocabulary without execution, as deterministic Markdown or version-2 JSON. [Construction and observation](#the-syntax-symbols-boundary); [named documentation](#the-canonical-protected-tier). | Built. |
-| `<Syntax />` | Renders the lexical vocabulary or requested component documentation under canonical protection. [Forms, capture, documentation and retained reads](#the-canonical-protected-tier). | Built; evaluation narrows the lexical execution reference. |
+| `<Syntax />` | Renders the lexical vocabulary or requested component documentation under canonical protection. [Forms, capture, documentation and saved reads](#the-canonical-protected-tier). | Built; evaluation narrows the lexical execution reference. |
 | document validation | validates one supplied root projection and the recursive Markdown source closure normal component selection discovers, returning deterministic version-1 document diagnostics and `valid`, `invalid` or `not-statically-checkable` invocation outcomes without evaluating document code or installing operational host behavior [Invariant](#the-document-validation-boundary). | built on the #654 stack |
 | `xmd plan` | Produces exact approved Plan source through the packaged adapter and shared Plan component, then delivers it to one exclusive sink without running it. [Command grammar](specs/plan-command-spec.md#command-grammar), [profile](specs/plan-command-spec.md#the-plan-writer-profile), [progress](specs/plan-command-spec.md#watching-a-plan-being-written), [journal](specs/plan-command-spec.md#the---journal-file) and [final admission](specs/plan-command-spec.md#structural-host-validation-and-the-artifact). | Built. |
 | `<Plan>` | Authors one exact-source Plan inside the enclosing execution, using the same fixed writer profile as the command. [Packaged component](specs/plan-command-spec.md#the-packaged-plan-component) and [language contract](specs/executable-mdx-spec.md#53-import-durableimportcomponent). | Built; no delivery, custom root, policy prop or replacement selector (#536). |
@@ -6900,7 +6900,7 @@ Status is measured against main.
 | `inspectSource()` | Locates executable delimiters using the engine scanner without interpreting source. [Source inspection](#1b-where-a-texts-elements-are-without-running-it). | built on this stack |
 | document targets | catalogs a root document's addressable static headings, resolves one selector to one exact target, and projects the document to it before expansion [Invariant](#document-targets). | built on the #412 stack |
 | document-aware `xmd run … --help` | describes what one document declares and every target it addresses, each as a full document reference with the description its section states, by inspection alone [Interface and evidence](specs/executable-mdx-spec.md#document-targets). | built on the #463 stack |
-| standard-input root documents | Acquires one whole source document from standard input only for explicit `xmd run` with the exact `-` document argument. [Root grammar, cancellation and retained origin](#the-root-document-a-run-is-given). | Built. |
+| standard-input root documents | Acquires one whole source document from standard input only for explicit `xmd run` with the exact `-` document argument. [Root grammar, cancellation and saved origin](#the-root-document-a-run-is-given). | Built. |
 | targeted `xmd run` | reads a file argument as a document reference and executes the one exact target its selector resolved to, replacing the selector before execution rereads the file [Invariant](#document-targets). | built on the #412 stack |
 | targeted workflow definition | a workflow definition optionally carries the exact canonical document target, which takes part in definition identity and in compatible reuse but not in the source-bundle hash [Invariant](#document-targets); [Interface and evidence](specs/workflow-spec.md#the-document-target-a-run-is-a-run-of). | built on the #412 stack; `xmd workflow start` takes a document reference and resolves any selector through core against the bytes it is about to retain |
 | source-bundle workflow definition | retains exact source bytes under logical paths, with domain-separated source hashes, lengths, bundle hash and optional exact target/component mapping. [Definition identity](#identity-is-separate-from-retrieval) and [source retention](#what-a-run-retains). | Built; one descriptor and live schema version 1, with no migration. Artifact-backed fork remains unbuilt. |
@@ -6908,14 +6908,14 @@ Status is measured against main.
 | declared Markdown component | Reserves exact first-party Markdown and its lexical private closure for one execution. [Capture, import and replay](#the-declared-markdown-boundary). | Built; packaged Plan and the review graph use the declaration boundary. |
 | workflow component bundle | Retains a closed mapping of component names to the definition source bundle. [Workflow lifecycle](#the-workflow-lifecycle). | built on the #301 stack; the full adversarial implementation loop and its scheduling remain unbuilt (#300), and generated XMD admits no bundled Markdown component (#369) |
 | `getWorkflowRun()` | reads the run the current execution is associated with [Invariant](#workflow-runs). | built on the #366 stack |
-| `retainedWorkflowInstallation()` | associates one document execution with a run storage already created, requiring exact journal agreement. It resolves no revision and names no Git feature, and a run retains the bytes it executes, so nothing afterwards reaches a repository for its source [Invariant](#workflow-runs); [Interface and evidence](specs/workflow-spec.md#3-where-the-run-is-prepared). | built on the #366 stack |
+| `savedWorkflowInstallation()` | associates one document execution with a run storage already created, requiring exact journal agreement. It resolves no revision and names no Git feature, and a run retains the bytes it executes, so nothing afterwards reaches a repository for its source [Invariant](#workflow-runs); [Interface and evidence](specs/workflow-spec.md#3-where-the-run-is-prepared). | built on the #366 stack |
 | `GitQuery.resolve()` | verifies and resolves one Git revision expression contextually [Interface and evidence](specs/workflow-spec.md#7-the-git-capability--moved). | built on main |
-| workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry [Invariant](#workflow-run-storage); [Interface and evidence](specs/workflow-spec.md#9-retained-run-storage). | built on the #365 stack; the CLI lifecycle reaches it on the #366 stack |
+| workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry [Invariant](#workflow-run-storage); [Interface and evidence](specs/workflow-spec.md#9-saved-run-storage). | built on the #365 stack; the CLI lifecycle reaches it on the #366 stack |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in [Invariant](#one-database-at-a-time-and-a-transaction-a-caller-can-hold). | built on main |
-| REPL entry retained file work | one executing REPL entry's own recording, established by core initialization in the scope the invocation owns and ending with it: it retains the `<File>` reads, `<File>` writes, `<File.Delete />` deletions and `<Dir>` ensures that land inside the ambient checkout the entry was started in, authored and admitted-generated alike, because both cross the one document filesystem. A completed operation answers from its saved result without live path canonicalization, ambient discovery, a lease, a permission lookup or a filesystem call — so only *new* work needs the environment, a continuation still binds the text its read answered with while the file says something else, and a new entry reading that path sees what is there now. A record's name is the digest of the record version, the operation kind and the complete received request, so two equal requests in one entry are one name at two ordered positions and the durable engine's positional matching tells them apart; equal work in two entries is the same name, and each entry executing against its own stream segment is what keeps those apart. Recording is ordinary ancestor-max `Files` middleware, so a provider beneath that answers directly or transforms and delegates is kept as provider behavior while the received request stays the operation's identity. A shared Git directory admits one live *mutating* entry at a time, held lazily for as long as the execution lasts and refused rather than queued; no read acquires it, so a new read proceeds while another entry holds it. There is no managed checkout, no `<Repository>` or `<Worktree>` selection, no local Git operation and nothing external here; work outside the checkout stays ordinary and unrecorded, and a passive reading initializes nothing [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
+| REPL entry saved file work | one executing REPL entry's own recording, established by core initialization in the scope the invocation owns and ending with it: it retains the `<File>` reads, `<File>` writes, `<File.Delete />` deletions and `<Dir>` ensures that land inside the ambient checkout the entry was started in, authored and admitted-generated alike, because both cross the one document filesystem. A completed operation answers from its saved result without live path canonicalization, ambient discovery, a lease, a permission lookup or a filesystem call — so only *new* work needs the environment, a continuation still binds the text its read answered with while the file says something else, and a new entry reading that path sees what is there now. A record's name is the digest of the record version, the operation kind and the complete received request, so two equal requests in one entry are one name at two ordered positions and the durable engine's positional matching tells them apart; equal work in two entries is the same name, and each entry executing against its own stream segment is what keeps those apart. Recording is ordinary ancestor-max `Files` middleware, so a provider beneath that answers directly or transforms and delegates is kept as provider behavior while the received request stays the operation's identity. A shared Git directory admits one live *mutating* entry at a time, held lazily for as long as the execution lasts and refused rather than queued; no read acquires it, so a new read proceeds while another entry holds it. There is no managed checkout, no `<Repository>` or `<Worktree>` selection, no local Git operation and nothing external here; work outside the checkout stays ordinary and unrecorded, and a passive reading initializes nothing [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
 | live durable-operation coordinator | explicitly coordinates structured live execution with existing Yield publication while leaving replay and callback effects unchanged [Invariant](#live-effect-coordination). | built on the #365 stack |
 | Workspace coordination API | fails closed by default; replaceable context routes only a one-use provider selection, while the selected provider directly invokes an execution-owned credentialed capability for execution, publication and failure activation [Invariant](#live-effect-coordination). | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
-| shared Git-host reconciliation | Reconciles Git push and pull-request upsert through one request-only boundary whose private terminal alone settles the retained outcome. [Invariant](#external-effects-and-git-host-mutations); [Invariant](#issue-effects). | Built on #297; Push (#370) and PullRequest (#295) consume it. Issue (#296) has its own middleware boundary. |
+| shared Git-host reconciliation | Reconciles Git push and pull-request upsert through one request-only boundary whose private terminal alone settles the saved outcome. [Invariant](#external-effects-and-git-host-mutations); [Invariant](#issue-effects). | Built on #297; Push (#370) and PullRequest (#295) consume it. Issue (#296) has its own middleware boundary. |
 | explicit WorkflowRun journal route | binds one already-filtered publication to one exact active transaction and otherwise uses ordinary serialized journal storage [Invariant](#local-workspace-topology). | built on the #365 stack |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation [Invariant](#replay-safe-live-services); [Interface and evidence](specs/executable-mdx-spec.md#attached-service-api). | built on main |
 | foreground command routing and retention | forwards a child's channels live, captures stdout for a `<Let as>` region, and retains output only when the host asked for a record [Invariant](#foreground-commands). | built on the #441 stack |
@@ -6935,9 +6935,9 @@ Status is measured against main.
 | `useWorkflowServiceDenial()` | provides a non-delegating workflow service denial provider, installed inside every start and resume execution scope [Invariant](#replay-safe-live-services). | built on the #366 stack |
 | `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI, under the Deno entrypoints only [Invariant](#the-workflow-lifecycle); [Interface and evidence](specs/workflow-workspace-spec.md#3-workflow-lifecycle). | built on the #366 stack; both acquire #367's executor lock before any lifecycle transition |
 | implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID [Invariant](#workflow-workspace); [Interface and evidence](specs/workflow-workspace-spec.md#5-workspace-structure-and-identity). | document filesystem built on the #366 stack and Repository/Worktree composition on the #293 stack; process capabilities unbuilt (#218) |
-| `<Repository>` / `<Worktree>` composition under a workflow run | names a Git repository and its linked checkouts inside the run-owned Workspace, installs each as contextual working directory, and retains creation identity beside the retained Git bytes [Interface and evidence](specs/workflow-workspace-spec.md#6-repository-and-worktree). | built on the #293 stack, Deno provider only |
+| `<Repository>` / `<Worktree>` composition under a workflow run | names a Git repository and its linked checkouts inside the run-owned Workspace, installs each as contextual working directory, and retains creation identity beside the saved Git bytes [Interface and evidence](specs/workflow-workspace-spec.md#6-repository-and-worktree). | built on the #293 stack, Deno provider only |
 | `<Dir path>` | Creates or adopts its target before content, scopes cwd without changing Repository selection, and restores cwd without deleting created directories. [Invariant](#the-document-filesystem-boundary); [Interface and evidence](specs/executable-mdx-spec.md#6132-entering-a-directory-dir). | Directory-creation contract added by #643; host and workflow Files providers. |
-| transactional Git effects (`Git.Switch` / `Git.Add` / `Git.Commit`) under a workflow run | publish local Git mutations with their journal result; the enclosing Repository and the contextual working directory select which retained checkout one runs in, and neither observation admits anything — the observed record is compared with the retained row and the directory with the checkouts that row holds, so a failure of admission, of retained state or of an unrecognized native condition fails the run instead of publishing a result [Invariant](#workspace-local-transactions); [Interface and evidence](specs/workflow-workspace-spec.md#7-git-operations). | built on the #294 stack, Deno provider only |
+| transactional Git effects (`Git.Switch` / `Git.Add` / `Git.Commit`) under a workflow run | publish local Git mutations with their journal result; the enclosing Repository and the contextual working directory select which saved checkout one runs in, and neither observation admits anything — the observed record is compared with the saved row and the directory with the checkouts that row holds, so a failure of admission, of saved state or of an unrecognized native condition fails the run instead of publishing a result [Invariant](#workspace-local-transactions); [Interface and evidence](specs/workflow-workspace-spec.md#7-git-operations). | built on the #294 stack, Deno provider only |
 | `Git.Push` under a workflow run | Publishes or adopts the selected named branch through authenticated non-force reconciliation. [Authored contract](specs/workflow-workspace-spec.md#74-push) and [effect mechanics](#replay-and-effect-transactions). | built on the #370 stack, Deno provider only |
 | `<PullRequest>` under a workflow run | Upserts the exact published branch and returns stable evidence only after this run proves matching Push history. [Props, results and refusals](specs/workflow-workspace-spec.md#75-pull-request); [positive-integer number and reconciliation](#issue-effects). | built on the #295 stack, Deno provider only |
 | repository composition vocabulary | Declares twelve ordinary shadowable defaults without installing an operational provider. [Names and profile ownership](#ordinary-repository-vocabulary). | built on the #643 stack |
@@ -6947,22 +6947,22 @@ Status is measured against main.
 | `<PullRequest>` and its evidence reads under an ordinary run | Reads current evidence or upserts only after this invocation proved the exact matching Push [Full contract](#ordinary-repository-ownership). | built on the #643 stack, Deno and compiled only |
 | `<Issue>` under an ordinary run | Calls the configured Issue provider using this execution and expansion identity [Full contract](#ordinary-repository-ownership). | built on the #643 stack, Deno and compiled only |
 | ordinary repository provider assembly | Assembles a fresh provider per ordinary execution, acquiring each resource only when needed [Full contract](#ordinary-repository-ownership). | built on the #643 stack |
-| `<Issue>` under a workflow run | Reads or upserts an Issue through its independent middleware boundary. [Forms and retained results](specs/workflow-workspace-spec.md#103-issue-effects); [tracker normalization, routing and provider responsibilities](#issue-effects). | built on the #296 stack; GitHub middleware, Deno host |
-| workflow lifecycle inspection and control | reads status/list/history without advancing a run, recovering a private copy when a crashed source needs rollback; enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes retained state [Invariant](#read-only-lifecycle-inspection); [Invariant](#cancellation-control). | direct read-only inspection and control built on the #367 stack; coordinated recovered inspection built on the #513 stack, Deno provider only |
+| `<Issue>` under a workflow run | Reads or upserts an Issue through its independent middleware boundary. [Forms and saved results](specs/workflow-workspace-spec.md#103-issue-effects); [tracker normalization, routing and provider responsibilities](#issue-effects). | built on the #296 stack; GitHub middleware, Deno host |
+| workflow lifecycle inspection and control | reads status/list/history without advancing a run, recovering a private copy when a crashed source needs rollback; enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes saved state [Invariant](#read-only-lifecycle-inspection); [Invariant](#cancellation-control). | direct read-only inspection and control built on the #367 stack; coordinated recovered inspection built on the #513 stack, Deno provider only |
 | XMD artifact export, inspection and fork source | Seals one committed frontier into immutable version-1 evidence for read-only inspection and future history-fork input. [Artifact identity and compatibility](#portable-xmd-artifacts) and [inspection APIs](#workflow-lifecycle-ownership). | Export, total verification, status and history built for Deno; artifact-source fork remains unbuilt. |
-| Agent session portability evidence in an XMD artifact | classifies every logical Agent session that contributed a retained Prompt as portable — with ordered provider checkpoint tokens and an opaque Agent session bundle — or as explicitly unavailable, as two content kinds inside the existing version-1 manifest and identity [Invariant](#portable-xmd-artifacts); [Interface and evidence](specs/xmd-artifact-spec.md#25-agent-session-portability-evidence). | specified by `specs/xmd-artifact-spec.md` §2.5; the closed union, both content kinds and the complete post-identity profile verifier are built on the #621 stack, Deno provider only. Provider bundle capture, Agent-aware export, intrinsic Agent-aware inspection and artifact-backed fork are unbuilt |
+| Agent session portability evidence in an XMD artifact | classifies every logical Agent session that contributed a saved Prompt as portable — with ordered provider checkpoint tokens and an opaque Agent session bundle — or as explicitly unavailable, as two content kinds inside the existing version-1 manifest and identity [Invariant](#portable-xmd-artifacts); [Interface and evidence](specs/xmd-artifact-spec.md#25-agent-session-portability-evidence). | specified by `specs/xmd-artifact-spec.md` §2.5; the closed union, both content kinds and the complete post-identity profile verifier are built on the #621 stack, Deno provider only. Provider bundle capture, Agent-aware export, intrinsic Agent-aware inspection and artifact-backed fork are unbuilt |
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry [Invariant](#read-only-lifecycle-inspection); [Interface and evidence](specs/workflow-workspace-spec.md#42-history). | built on the #367 stack |
-| history fork | creates a new run from one compatible checkpoint and retained Workspace root, under a new immutable definition and normalized props [Invariant](#retained-effects-and-history-forks); [Interface and evidence](specs/workflow-workspace-spec.md#11-history-forks). | built on the #368 stack, Deno provider only |
+| history fork | creates a new run from one compatible checkpoint and saved Workspace root, under a new immutable definition and normalized props [Invariant](#saved-effects-and-history-forks); [Interface and evidence](specs/workflow-workspace-spec.md#11-history-forks). | built on the #368 stack, Deno provider only |
 | workflow Agent session | Uses inert placement and authenticated first-turn mapping under the run-owned no-native-tool profile. [Session mapping](#agent-permissions-and-generated-xmd). | built on the #302 stack, with the explicit ACP-only selection from #561; the portable proof that an adapter honours an empty tool set is tracked by #496 and does not widen the ceiling |
 | generated-XMD admission | Preflights and retains one generated fragment under the exact selected identities and forms. [Admission and continuation](#agent-permissions-and-generated-xmd). | built on the #369 stack, continuation basis amended by #589, and the host's contribution narrowed to `Component.generated` by this stack; core owns the mechanics and no host wrapper remains |
 | `<Evaluate>` | Runs untrusted fragment text or paired-produced text under the host's captured generated selection; whole-fragment admission, local data expressions and ordinary rendered output remain distinct from provider permission. [Admission and captured implementations](#agent-permissions-and-generated-xmd). | built on the #302 stack, extended by #369, and narrowed to a name-and-form selection by this stack |
 | generated mutation proposals | Admits filesystem change proposals through the host's generated selection and ordinary component transactions. [Invariant](#agent-permissions-and-generated-xmd); [Interface and evidence](specs/workflow-workspace-spec.md#mutation-proposal-admission). | Built on #369/#567, with persistent directory creation added by #643; legacy Dir grants refuse, and Git/process/credential/external-write classes remain excluded. |
-| Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield [Invariant](#local-workspace-topology). | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
+| Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical saved roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield [Invariant](#local-workspace-topology). | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker [Interface and evidence](specs/workflow-workspace-spec.md#104-worker-shell). | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes [Invariant](#1-middleware-wraps-the-work). | defined, unbuilt |
 | `suspendFor()` | publishes one filtered suspension request, settles `suspended`, releases the executor lock, and re-enters the same wait without duplicating it [Invariant](#durable-suspension). | built on the #367 stack |
-| `xmd workflow answer <run-id> <suspension-id> <json>` | retains one schema-validated value for one retained wait, taking no executor lock and changing no run state [Invariant](#typed-answer-delivery); [Interface and evidence](specs/workflow-workspace-spec.md#typed-answer-delivery). | built by #300 |
-| `suspension_answer` durable effect | ends a wait from retained delivery state, publishing the answer and consuming that state in one transaction [Invariant](#typed-answer-delivery). | built by #300 |
+| `xmd workflow answer <run-id> <suspension-id> <json>` | retains one schema-validated value for one saved wait, taking no executor lock and changing no run state [Invariant](#typed-answer-delivery); [Interface and evidence](specs/workflow-workspace-spec.md#typed-answer-delivery). | built by #300 |
+| `suspension_answer` durable effect | ends a wait from saved delivery state, publishing the answer and consuming that state in one transaction [Invariant](#typed-answer-delivery). | built by #300 |
 | `<PullRequest.Reviews>` · `<PullRequest.Comments>` · `<PullRequest.Checks>` | read the reviews, comments and checks a Git host already holds for one numbered pull request, completely or not at all [Invariant](#git-host-evidence-reads). | built by #576 |
 | workflow scheduling (watchers, unattended iteration, remote host selection) | — [Invariant](#typed-answer-delivery). | #300 |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise [Invariant](#6-an-error-is-never-a-value). | defined, unbuilt |

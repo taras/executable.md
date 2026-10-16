@@ -137,7 +137,7 @@ from leaving a session that looks established.
 
 Nothing infers acceptance. No stop reason, status, event, error code or
 diagnostic promotes a record, and the marker is never appended to a
-conversation, emitted as an event, exposed as prompt text, or retained as a
+conversation, emitted as an event, exposed as prompt text, or saved as a
 checkpoint token.
 
 ## Packaging adaptations

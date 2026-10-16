@@ -126,7 +126,7 @@ interface Scripted {
    * Two requests from one turn, both raised before either is answered.
    *
    * Concurrent on purpose: the order they are *answered* in is then the test's
-   * to choose, which is what proves a retained audit keeps the order they
+   * to choose, which is what proves a saved audit keeps the order they
    * arrived in instead.
    */
   readonly permissions?: readonly {
@@ -632,7 +632,7 @@ function watchAppends(holder: ReplExecution): (count: number) => Operation<void>
 }
 
 /**
- * Every permission this session's retained turns hold, turn by turn.
+ * Every permission this session's saved turns hold, turn by turn.
  *
  * Read from the projected model rather than from the ledger: what a row about a
  * durable audit is entitled to is what the Journal says, after core parsed it
@@ -798,7 +798,7 @@ describe("L2 — exact atomic live-to-durable replacement", () => {
     expect(session.agent.turns).toHaveLength(0);
     // Distinct conversations, identical text: nothing correlated by content.
     // The two conversations the authored `<Session>` elements named, each
-    // carrying its own retained turn although the text is identical.
+    // carrying its own saved turn although the text is identical.
     expect(new Set(session.model.turns.map((one) => one.sessionKey))).toEqual(
       new Set(["stub:planner", "stub:reviewer"]),
     );
@@ -861,8 +861,8 @@ describe("L2 — exact atomic live-to-durable replacement", () => {
     expect(outcome.ok).toBe(true);
     // And the second record replaced only the turn that was left.
     expect(session.agent.turns).toEqual([]);
-    // Both conversations retained, each exactly once. Compared as a set: a
-    // retained turn is ordered by its Prompt sequence, and two concurrent
+    // Both conversations saved, each exactly once. Compared as a set: a
+    // saved turn is ordered by its Prompt sequence, and two concurrent
     // children allocate that sequence in whichever order they reach it — so
     // source order is what the *rendering* preserves, not what this list does.
     expect(new Set(session.model.turns.map((one) => one.sessionKey))).toEqual(
@@ -897,7 +897,7 @@ describe("L2 — exact atomic live-to-durable replacement", () => {
       );
       yield* replayed.join();
       // Restored rather than re-run: the provider was never asked, and the
-      // retained turn produced no reading of its own.
+      // saved turn produced no reading of its own.
       expect(stub.asked).toEqual([]);
       expect(replayed.agent.turns).toEqual([]);
       expect(replayed.model.turns).toHaveLength(1);
@@ -1283,7 +1283,7 @@ describe("P2 — one live request, one direct settlement", () => {
     expect(session.agent.requests).toEqual([]);
     expect(session.model.turns).toHaveLength(1);
     expect(session.model.turns[0]!.text).toBe("resumed");
-    // Retained once, as the denial it was — not as a cancellation, and not twice.
+    // Saved once, as the denial it was — not as a cancellation, and not twice.
     expect(audited(session)).toEqual([
       {
         toolCallId: "call-1",
@@ -1295,7 +1295,7 @@ describe("P2 — one live request, one direct settlement", () => {
     ]);
   });
 
-  it("P2: a cold retained audit has no pending reading and no authority", function* () {
+  it("P2: a cold saved audit has no pending reading and no authority", function* () {
     const AUDIT = [
       {
         toolCallId: "call-1",
@@ -1349,7 +1349,7 @@ describe("P2 — one live request, one direct settlement", () => {
       yield* reopened.join();
       // The same audit, read from the history rather than observed again.
       expect(audited(reopened)).toEqual(AUDIT);
-      // The audit is retained model data; replay recreates no wait from it.
+      // The audit is saved model data; replay recreates no wait from it.
       expect(reopened.agent.requests).toEqual([]);
       expect(reopened.permissions.choose("request-1", "once")).toBe(false);
       expect(stub.asked).toEqual([]);
@@ -1666,7 +1666,7 @@ describe("P5 — the durable audit of a live REPL turn", () => {
     const session = opened(yield* start(holder, ONE_PROMPT, "approve-reads"));
     const outcome = yield* session.join();
     expect(outcome.ok).toBe(true);
-    // The decision was made and retained.
+    // The decision was made and saved.
     expect(audited(session)).toHaveLength(1);
     // And what the provider owned stayed the provider's: not in the bytes, not
     // in the model, not under any name.
@@ -1778,7 +1778,7 @@ describe("P6 — only a canonical Prompt claims a record", () => {
     expect(session.agent.turns).toEqual([]);
   });
 
-  it("P6: a refused publication leaves the turn neither retained nor mounted", function* () {
+  it("P6: a refused publication leaves the turn neither saved nor mounted", function* () {
     const stub = createStub({ one: { deltas: ["reply"] } });
     yield* useStub(stub);
     const holder = refusingExecution();
@@ -1788,7 +1788,7 @@ describe("P6 — only a canonical Prompt claims a record", () => {
     // The provider really ran and really finished, so the overlay was
     // terminal at the moment publication was refused.
     expect(stub.asked).toEqual(["one"]);
-    // Nothing retained it.
+    // Nothing saved it.
     expect(outcome.ok).toBe(false);
     expect(session.model.turns).toEqual([]);
     // And nothing is still mounted waiting for a record that will never come.

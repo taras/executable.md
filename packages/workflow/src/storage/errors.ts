@@ -8,7 +8,7 @@
  * seven different situations, and collapsing them would leave a host guessing
  * whether to create, refuse, or report damage.
  *
- * None of these messages quotes a stored value. Retained props and journal
+ * None of these messages quotes a stored value. Saved props and journal
  * payloads are filtered history, and a storage failure is not a reason to copy
  * them into an error that travels to logs and terminals. A conflict names the
  * fields that differ; the run id and the host path are named because the caller
@@ -151,7 +151,7 @@ export class WorkflowDatabaseCorruptError extends WorkflowStorageError {
  * Inspection reads a database a lost host left mid-transaction by recovering a
  * copy of it, so this says the copy could not be produced or could not be
  * cleaned up — never that the run itself is damaged. Damage keeps its own
- * types. The retained database and its journal are unchanged either way.
+ * types. The saved database and its journal are unchanged either way.
  *
  * `scratchPath` is absent whenever cleanup succeeded, which is every failure
  * except one. It is populated only when the private copy could not be removed,
@@ -160,7 +160,7 @@ export class WorkflowDatabaseCorruptError extends WorkflowStorageError {
 export class WorkflowInspectionRecoveryError extends WorkflowStorageError {
   override name = "WorkflowInspectionRecoveryError";
 
-  /** The retained run database inspection was asked about. */
+  /** The saved run database inspection was asked about. */
   readonly path: string;
 
   /** The private directory that still holds a copy, when removal failed. */
@@ -243,7 +243,7 @@ export class WorkflowDatabaseClosedError extends WorkflowStorageError {
 }
 
 /**
- * A version-2 run's own retained source is not there.
+ * A version-2 run's own saved source is not there.
  *
  * Its own category because there is nothing to fall back to and nothing to
  * repair: the descriptor names a manifest entry or a blob the live store does
@@ -264,11 +264,11 @@ export class WorkflowDefinitionSourceMissingError extends WorkflowStorageError {
 }
 
 /**
- * A version-2 run's retained source is there and does not describe itself.
+ * A version-2 run's saved source is there and does not describe itself.
  *
  * Distinct from absence because an operator acts on it differently. A path, a
  * length, a source hash, a component mapping or the bundle hash disagrees with
- * what the descriptor states, so what is retained is no longer evidence of the
+ * what the descriptor states, so what is saved is no longer evidence of the
  * definition it names. No partial closure is returned.
  */
 export class WorkflowDefinitionCorruptError extends WorkflowStorageError {
@@ -276,7 +276,7 @@ export class WorkflowDefinitionCorruptError extends WorkflowStorageError {
 
   constructor(reason: string) {
     super(
-      `This workflow run's retained source bundle disagrees with its own descriptor: ${reason}. ` +
+      `This workflow run's saved source bundle disagrees with its own descriptor: ${reason}. ` +
         "No partial source is returned and the run is left unchanged.",
     );
   }
@@ -321,7 +321,7 @@ export class WorkflowExportBusyError extends WorkflowStorageError {
  * The base of every expected XMD artifact outcome.
  *
  * An artifact is discovered from the path a caller supplied and from nothing
- * else, so every one of these names that path. None of them quotes a retained
+ * else, so every one of these names that path. None of them quotes a saved
  * byte: an artifact holds whatever the run wrote into its Workspace, and a
  * refusal that repeated part of it would publish the content the file was
  * being refused for.
@@ -441,7 +441,7 @@ export class XmdArtifactSchemaError extends XmdArtifactError {
   }
 }
 
-/** A retained record does not describe what its kind declares. */
+/** A saved record does not describe what its kind declares. */
 export class XmdArtifactRecordError extends XmdArtifactError {
   override name = "XmdArtifactRecordError";
 

@@ -303,10 +303,10 @@ describe("Tier WFD — establishing a declared bundle", () => {
       expect(definition.components).toEqual([{ name: "Stage", path: "stages/Stage.md" }]);
       expect(sourceSnapshot.map((entry) => entry.path)).toEqual(["root.md", "stages/Stage.md"]);
 
-      // The bytes retained for the component are the component's, and the
+      // The bytes saved for the component are the component's, and the
       // execution view carries the same identity the descriptor does.
-      const retained = sourceSnapshot.find((entry) => entry.path === "stages/Stage.md");
-      expect(new TextDecoder().decode(retained?.bytes)).toBe(stage);
+      const saved = sourceSnapshot.find((entry) => entry.path === "stages/Stage.md");
+      expect(new TextDecoder().decode(saved?.bytes)).toBe(stage);
       expect(components.map((component) => component.name)).toEqual(["Stage"]);
       expect(components[0]?.content).toBe(stage);
       expect(components[0]?.sourceHash).toBe(
@@ -354,7 +354,7 @@ describe("Tier WFD — establishing a declared bundle", () => {
  * The argument is a document reference, so `notes.md#Release/Publish` names a
  * section rather than a file whose name ends in `#Release/Publish`. What the
  * descriptor keeps is the canonical target core resolved against the bytes that
- * are about to be retained — never the selector the caller wrote, because two
+ * are about to be saved — never the selector the caller wrote, because two
  * spellings of one request are one run and a glob re-resolved against different
  * bytes would name a different section.
  */
@@ -418,13 +418,13 @@ describe("Tier WFD — the target a reference resolves", () => {
       if (!result.ok) {
         throw result.error;
       }
-      // What is retained is what core resolved, so a resume continues the
+      // What is saved is what core resolved, so a resume continues the
       // section this start selected rather than re-answering the pattern.
       expect(result.value.definition.targetPath).toBe("Publish");
     });
   });
 
-  it("WFD46: a selector naming no section refuses, before anything is retained", function* () {
+  it("WFD46: a selector naming no section refuses, before anything is saved", function* () {
     yield* useDocument({ "sections.md": SECTIONS }, function* (directory) {
       const absent = yield* establishDefinition(`${join(directory, "sections.md")}#Nowhere`);
       expect(absent.ok).toBe(false);
@@ -442,7 +442,7 @@ describe("Tier WFD — the target a reference resolves", () => {
         const escaped = yield* establishDefinition(`${join(directory, "od%23d.md")}`);
         expect(escaped.ok).toBe(false);
         // Refused for what it is: a logical path inside a bundle admits no `#`,
-        // because a retained path holding one could not be told from a path and
+        // because a saved path holding one could not be told from a path and
         // a target. The refusal names the grammar, not the selector parser.
         expect(escaped.ok ? "" : escaped.error.message).toContain('without a "#"');
 

@@ -86,7 +86,7 @@ export type GitHostDecision = "adopted" | "performed";
  * The complete successful record one external effect retains.
  *
  * The request is repeated inside the record on purpose. A replayed record is
- * read back and compared with the request being made now, so a retained result
+ * read back and compared with the request being made now, so a saved result
  * is consumed by the effect that produced it rather than by whatever arrives at
  * the same journal position.
  */
@@ -378,7 +378,7 @@ export function sameGitHostEffectRequest(
  *
  * A digest of the canonical encoding, so the durable operation's own identity
  * moves when the kind, the inputs or the natural key move. Without it a changed
- * request would arrive at a matching `type` and name and consume the retained
+ * request would arrive at a matching `type` and name and consume the saved
  * result of a different question.
  *
  * The platform's `crypto`, adapted with `until`: this is shared code, and it

@@ -28,7 +28,7 @@ import { collect } from "../src/collect.ts";
 import { executeInstalled } from "../host.ts";
 import { useSelection } from "./support/generated-selection.ts";
 import type { ExecutionInstallation } from "../host.ts";
-import { retainedSource } from "../src/root-source.ts";
+import { savedSource } from "../src/root-source.ts";
 import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
 import type { RecordedFiles } from "./support/fragment-files.ts";
 import { answerProvider } from "./support/answer-provider.ts";
@@ -36,7 +36,7 @@ import { registerComponents } from "../src/components/registration.ts";
 import type { FunctionComponentDefinition } from "../src/types.ts";
 
 const ROOT_PATH = "workflows/agent.md";
-const NOTE = "the retained note\n";
+const NOTE = "the saved note\n";
 const OTHER = "the other note\n";
 
 function reading(files: RecordedFiles): ExecutionInstallation {
@@ -84,7 +84,7 @@ function run(
 ): Operation<Json> {
   return scoped(function* () {
     return yield* collect(
-      yield* executeInstalled({ ...retainedSource(ROOT_PATH, source), stream }, [...installations]),
+      yield* executeInstalled({ ...savedSource(ROOT_PATH, source), stream }, [...installations]),
     );
   });
 }
@@ -129,7 +129,7 @@ describe("Tier FE31 — a fragment binds locally and renders what it chose", () 
 
     const rendered = String(output);
     expect(files.performed).toEqual(["read notes.md"]);
-    expect(rendered).toContain("the retained note");
+    expect(rendered).toContain("the saved note");
     expect(rendered).not.toContain('"note"');
     expect(rendered).not.toContain("observations");
   });

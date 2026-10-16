@@ -47,7 +47,7 @@
  * The override is qualified: an embedded provider never falls through. A
  * snapshot that cannot be verified, materialized or launched refuses that agent
  * rather than quietly becoming the published adapter, which would produce a run
- * that completed every Prompt and retained nothing, and said nothing about why —
+ * that completed every Prompt and saved nothing, and said nothing about why —
  * the exact silence this feature exists to remove.
  *
  * Materialization is lazy, and happens only for an embedded selection, just
@@ -60,13 +60,13 @@
  * quietly went to the wrong binary.
  *
  * A Prompt whose adapter names no turn is not a failed Prompt. It is journaled,
- * retained and replayed exactly as it always was; the only thing missing is the
+ * saved and replayed exactly as it always was; the only thing missing is the
  * association.
  *
  * ## Where a Prompt lands in that conversation
  *
  * The session row says which conversation this run is having. Which turn each
- * Prompt was is a second fact, and it is retained the same way: in the run's own
+ * Prompt was is a second fact, and it is saved the same way: in the run's own
  * database, in the transaction that appends that Prompt. This module installs
  * the publisher that opens it, because this is the only side that holds both the
  * run and the placement that made the session — the provider names the turn, the
@@ -81,7 +81,7 @@ import {
   createAcpxProvider,
   createAcpxSessionStore,
   DEFAULT_AGENT_NAME,
-  retainedSession,
+  savedSession,
 } from "@executablemd/acp";
 import type {
   AcpxProviderDependencies,
@@ -121,7 +121,7 @@ import type {
   WorkflowAgentAttachment,
 } from "@executablemd/workflow/deno";
 
-/** How this host names itself in a retained provider-session record. */
+/** How this host names itself in a saved provider-session record. */
 const PROVIDER = "acpx";
 
 /** What kind of durable identity this provider asserts. Tagged, so it compares as one. */
@@ -171,7 +171,7 @@ export const WORKFLOW_SESSION_INSTRUCTIONS =
 const ALLOWED_TOOLS: readonly string[] = [];
 
 /**
- * The fingerprint one session policy is retained under.
+ * The fingerprint one session policy is saved under.
  *
  * Over the values that decide the ceiling, so changing any of them is a changed
  * policy and refuses a session created under the previous one.
@@ -231,7 +231,7 @@ export interface WorkflowAgentProfileOptions {
  */
 function assertionsFor(store: AcpxSessionStore) {
   return function* (placementKey: string): Operation<ProviderAssertion[]> {
-    const held = yield* retainedSession(store, placementKey);
+    const held = yield* savedSession(store, placementKey);
     if (held?.agentSessionId === undefined) {
       return [];
     }
@@ -258,7 +258,7 @@ function sessionPolicy(
   policy: string,
   store: AcpxSessionStore,
   adapters: EmbeddedAdapters,
-): { policy: AcpxSessionPolicy; retainedSessionKey: (placementKey: string) => string | undefined } {
+): { policy: AcpxSessionPolicy; savedSessionKey: (placementKey: string) => string | undefined } {
   const assertions = assertionsFor(store);
   const emptied = new Set<string>();
   /** What each placement key was placed for, so the commit names the same thing. */
@@ -275,8 +275,8 @@ function sessionPolicy(
    * snapshot on another host would compare as a different agent.
    *
    * For every other agent: the resolved command, exactly as this profile
-   * retained it before any adapter was embedded. Its identity is not this
-   * host's to restate, and rewriting it would make sessions retained by an
+   * saved it before any adapter was embedded. Its identity is not this
+   * host's to restate, and rewriting it would make sessions saved by an
    * earlier run of the same workflow compare as a different agent — a
    * compatibility break in return for nothing, since a Gemini session has no
    * snapshot for the alternative to name.
@@ -299,12 +299,12 @@ function sessionPolicy(
    * What this run retains the session behind one ACPX placement key under.
    *
    * A lookup of what the placement recorded, never a parse of the key. The
-   * placement key namespaces the provider and command into the retained key
+   * placement key namespaces the provider and command into the saved key
    * because ACPX's store is shared; recovering one from the other by taking the
    * spelling apart would be reading arrangement as identity, and would keep
    * working right up until the two namespaces diverged.
    */
-  function retainedSessionKey(placementKey: string): string | undefined {
+  function savedSessionKey(placementKey: string): string | undefined {
     const identity = placed.get(placementKey);
     return identity === undefined ? undefined : agentSessionKey(identity);
   }
@@ -358,7 +358,7 @@ function sessionPolicy(
     *established(placement, providerIdentity) {
       // The order is the contract: the provider has been created and has
       // asserted, and only now does the mapping commit. An attempt that stops
-      // before this leaves nothing retained, and the next attachment reconciles
+      // before this leaves nothing saved, and the next attachment reconciles
       // it from the provider's own assertion.
       const identity = placed.get(placement.sessionKey);
       if (identity === undefined) {
@@ -377,11 +377,11 @@ function sessionPolicy(
       const sessionKey = agentSessionKey(identity);
 
       const committed = yield* transactAgentSessions(database, function* (sessions) {
-        const retained = sessions.read(sessionKey);
+        const saved = sessions.read(sessionKey);
         // Re-resolved inside the transaction that commits it, so a mapping
         // another attempt wrote in between is compared rather than overwritten.
-        const resolution = resolveAgentSession(retained, policy, [asserted], identity);
-        if (retained === undefined && resolution.kind === "reattach") {
+        const resolution = resolveAgentSession(saved, policy, [asserted], identity);
+        if (saved === undefined && resolution.kind === "reattach") {
           sessions.commit(resolution.record);
         }
       });
@@ -391,7 +391,7 @@ function sessionPolicy(
     },
   };
 
-  return { policy: acpxPolicy, retainedSessionKey };
+  return { policy: acpxPolicy, savedSessionKey };
 }
 
 /** Install the workflow Agent profile for one live or partial attachment. */
@@ -458,7 +458,7 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
   yield* useAgentPromptPublisher(
     createWorkflowPromptPublisher({
       database: options.attachment.database,
-      retainedSessionKey: sessions.retainedSessionKey,
+      savedSessionKey: sessions.savedSessionKey,
     }),
   );
   yield* registerAgentProvider(PROVIDER, factory);

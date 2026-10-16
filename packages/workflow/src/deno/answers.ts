@@ -1,7 +1,7 @@
 /**
  * The rows one run keeps for the answers delivered to its durable waits.
  *
- * A retained answer is a row rather than a journal event, because delivery and
+ * A saved answer is a row rather than a journal event, because delivery and
  * execution are different operations. The value arrives while nothing is
  * running; it becomes history only when an execution reaches the wait it
  * answers and publishes it. Until then the row is what the run holds and the
@@ -10,7 +10,7 @@
  * Each row carries the identity of the wait it answers three ways over: the
  * suspension id it was delivered against, the exact journal event the request
  * was published as, and a fingerprint of the request and its response schema.
- * The fingerprint is what a resume compares — a run whose retained request at
+ * The fingerprint is what a resume compares — a run whose saved request at
  * that position is not the one the value was judged against is a run this
  * answer was never for.
  */
@@ -31,16 +31,16 @@ const CONSUME_ANSWER = `UPDATE workflow_suspension_answers
   SET state = 'consumed', consumed_at = ?
   WHERE suspension_id = ? AND state = 'pending'`;
 
-/** Whether a retained answer is still waiting to be published, or already was. */
-export type RetainedAnswerState = "pending" | "consumed";
+/** Whether a saved answer is still waiting to be published, or already was. */
+export type SavedAnswerState = "pending" | "consumed";
 
 /** One delivered answer, as this run retains it. */
-export interface RetainedAnswer {
+export interface SavedAnswer {
   readonly suspensionId: string;
   readonly requestEventId: string;
   readonly requestFingerprint: string;
   readonly answer: Json;
-  readonly state: RetainedAnswerState;
+  readonly state: SavedAnswerState;
   readonly createdAt: string;
   readonly consumedAt: string | undefined;
 }
@@ -54,24 +54,24 @@ export interface PendingAnswerInsertion {
   readonly createdAt: string;
 }
 
-/** The answer retained for this wait, whatever state it is in. */
-export function readRetainedAnswer(
+/** The answer saved for this wait, whatever state it is in. */
+export function readSavedAnswer(
   database: DatabaseSync,
   suspensionId: string,
-): RetainedAnswer | undefined {
+): SavedAnswer | undefined {
   const row = reading(database, SELECT_ANSWER).get(suspensionId);
-  return row === undefined ? undefined : parseRetainedAnswer(row);
+  return row === undefined ? undefined : parseSavedAnswer(row);
 }
 
 /**
  * Every answer this run retains, in one deterministic order.
  *
  * What an export seals. Ordered by the wait each one answers rather than by
- * insertion, so the same retained state reads the same however SQLite would
+ * insertion, so the same saved state reads the same however SQLite would
  * have returned the rows.
  */
-export function readAllRetainedAnswers(database: DatabaseSync): RetainedAnswer[] {
-  return reading(database, SELECT_ANSWERS).all().map(parseRetainedAnswer);
+export function readAllSavedAnswers(database: DatabaseSync): SavedAnswer[] {
+  return reading(database, SELECT_ANSWERS).all().map(parseSavedAnswer);
 }
 
 /**
@@ -97,14 +97,14 @@ export function insertPendingAnswer(
 }
 
 /**
- * Mark this wait's retained answer consumed, and say whether it was this call
+ * Mark this wait's saved answer consumed, and say whether it was this call
  * that did it.
  *
  * The state is part of the statement rather than something read first: a second
  * consumption changes no rows and is told so, which is how the publication that
  * commits with it stays the only one.
  */
-export function consumeRetainedAnswer(
+export function consumeSavedAnswer(
   database: DatabaseSync,
   suspensionId: string,
   consumedAt: string,
@@ -113,7 +113,7 @@ export function consumeRetainedAnswer(
   return Number(changes) === 1;
 }
 
-function parseRetainedAnswer(row: Record<string, unknown>): RetainedAnswer {
+function parseSavedAnswer(row: Record<string, unknown>): SavedAnswer {
   return Object.freeze({
     suspensionId: text(row, "suspension_id"),
     requestEventId: text(row, "request_event_id"),
@@ -125,7 +125,7 @@ function parseRetainedAnswer(row: Record<string, unknown>): RetainedAnswer {
   });
 }
 
-function state(row: Record<string, unknown>): RetainedAnswerState {
+function state(row: Record<string, unknown>): SavedAnswerState {
   const value = text(row, "state");
   if (value !== "pending" && value !== "consumed") {
     throw new WorkflowRecordMalformedError(

@@ -13,7 +13,7 @@
  * executor lock. It registered that object for one run and one acquisition and
  * checks it by identity — together with its open scope and run — inside every
  * mutating transaction. A run id, a database handle, a structural look-alike or
- * a retained token authorizes nothing.
+ * a saved token authorizes nothing.
  *
  * ## Inspection returns values
  *
@@ -80,7 +80,7 @@ export interface WorkflowForkLineage {
  * Every member here is true of the run. What is deliberately *not* here is
  * retrieval metadata: where a definition could be fetched from now is a fact
  * about the machine holding the run rather than about the run, so it belongs to
- * the retained-run snapshot alone and is not a key of this type at all. A
+ * the saved-run snapshot alone and is not a key of this type at all. A
  * sealed artifact projects these members and nothing else, and stating that as
  * a shared base is what makes "an artifact carries no retrieval" checkable
  * rather than a promise about what one implementation happens to write.
@@ -88,7 +88,7 @@ export interface WorkflowForkLineage {
 export interface WorkflowInspectionSnapshot {
   readonly record: WorkflowRunRecord;
   readonly executions: readonly DocumentExecutionRecord[];
-  /** The last retained event and the root it was associated with. */
+  /** The last saved event and the root it was associated with. */
   readonly journalFrontier?: {
     readonly eventId: string;
     readonly workspaceRootId: string;
@@ -99,10 +99,10 @@ export interface WorkflowInspectionSnapshot {
 }
 
 /**
- * One retained run's snapshot: what it says about itself, and where this host
+ * One saved run's snapshot: what it says about itself, and where this host
  * can find its definition again.
  *
- * `retrieval` is the one member a retained run has and evidence about a run
+ * `retrieval` is the one member a saved run has and evidence about a run
  * does not. It is replaceable, credential-free host arrangement — which is
  * exactly why it stays here rather than in the shared base.
  */
@@ -133,7 +133,7 @@ export interface WorkflowLifecycleApi {
    * answer to a question nobody asked.
    */
   list(): Operation<Result<readonly WorkflowLifecycleSnapshot[]>>;
-  /** Every retained event of one run, in append order. */
+  /** Every saved event of one run, in append order. */
   history(runId: string): Operation<Result<readonly WorkflowHistoryEntry[]>>;
   /**
    * One sealed artifact's lifecycle snapshot, read from the file at `path`.
@@ -145,9 +145,9 @@ export interface WorkflowLifecycleApi {
   inspectArtifact(path: string): Operation<Result<WorkflowArtifactSnapshot>>;
   /** Every event one sealed artifact retains, in append order. */
   historyArtifact(path: string): Operation<Result<WorkflowArtifactHistory>>;
-  /** Make one run terminal, following its retained status. */
+  /** Make one run terminal, following its saved status. */
   cancel(runId: string): Operation<Result<WorkflowRunRecord>>;
-  /** Remove one run's retained storage. */
+  /** Remove one run's saved storage. */
   delete(runId: string): Operation<Result<WorkflowDeletion>>;
   /**
    * Seal one committed frontier as a portable artifact, leaving the run as it

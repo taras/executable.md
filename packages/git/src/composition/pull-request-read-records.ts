@@ -6,7 +6,7 @@
  * are what "every existing review, comment and check result" means in a value.
  * Each is closed and provider-neutral: no raw provider response, live handle,
  * credential, endpoint or pagination transport state crosses this boundary, and
- * every body and provider message is retained byte-for-byte because a reviewer
+ * every body and provider message is saved byte-for-byte because a reviewer
  * reading a summary of an objection has not read the objection.
  *
  * `id` is a decimal string. Provider identifiers already exceed what a JSON
@@ -284,7 +284,7 @@ function evidenceJson(item: PullRequestEvidence): JsonObject {
   return record;
 }
 
-/** The retained envelope, read back rather than asserted. */
+/** The saved envelope, read back rather than asserted. */
 export function parsePullRequestReadResult(value: Json): PullRequestReadResult | undefined {
   if (!isJsonObject(value)) {
     return undefined;

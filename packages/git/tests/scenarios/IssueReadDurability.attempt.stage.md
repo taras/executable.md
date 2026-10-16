@@ -16,7 +16,7 @@ here is: a request's identity includes the expansion it was made at.
 />
 
 On the second attempt the provider boundary refuses everything. A replay that
-answered from the retained result does not notice; one that asked would fail
+answered from the saved result does not notice; one that asked would fail
 here rather than quietly making a second request.
 
 <GitHubIssues ceiling={[server.repository]} endpoint={server.url} credential="valid">

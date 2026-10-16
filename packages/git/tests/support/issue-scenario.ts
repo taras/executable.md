@@ -26,7 +26,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 import { useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
-import { retainedWorkflowInstallation } from "../../../workflow/src/run.ts";
+import { savedWorkflowInstallation } from "../../../workflow/src/run.ts";
 import type { WorkflowRun } from "../../../workflow/src/run.ts";
 import { useCompositionComponents } from "../../src/composition/installation.ts";
 import { ISSUE_EFFECT } from "../../src/issue/effect-type.ts";
@@ -40,7 +40,7 @@ import {
 } from "./issue-providers.ts";
 import type { ProviderLog } from "./issue-providers.ts";
 import { useGitHubIssues } from "../../src/deno/issue/github.ts";
-import { useRetainedIssueOperations } from "../../src/issue/effect.ts";
+import { useSavedIssueOperations } from "../../src/issue/effect.ts";
 import { credential, useIssueTrackerServer } from "./issue-tracker-server.ts";
 import type { IssueTrackerServer, ServedIssue } from "./issue-tracker-server.ts";
 
@@ -137,13 +137,13 @@ export interface ScenarioFixture {
    * No testing session: a staged attempt is a previous *run*, not a test.
    */
   stage(document: string): Operation<AttemptOutcome>;
-  /** The staged attempts' retained journal, as the next attempt inherits it. */
+  /** The staged attempts' saved journal, as the next attempt inherits it. */
   journal(): DurableEvent[];
   /**
    * Run a scenario document under its own complete testing session.
    *
    * Each asserting document executes against a journal of its own, named for
-   * the document. A retained history belongs to the document that wrote it, so
+   * the document. A saved history belongs to the document that wrote it, so
    * a second document replaying the first's would diverge on the first name
    * that did not match — and an asserting document is never a continuation of a
    * staged attempt anyway. What it asks about the scenario's journal it asks
@@ -160,10 +160,10 @@ export function* useScenarioFixture(): Operation<ScenarioFixture> {
   const attempting: Attempting = { current: undefined };
 
   yield* useCompositionComponents();
-  // The retained lifecycle `<Issue>` asks for, above whichever transport a
+  // The saved lifecycle `<Issue>` asks for, above whichever transport a
   // scenario installs beneath it. The scenarios are about a workflow run's
   // durability, so it is the workflow one they run under.
-  yield* useRetainedIssueOperations();
+  yield* useSavedIssueOperations();
   yield* useProviderComponents(log);
   yield* useKeyRecorder(log);
   yield* useScenarioComponents(server, held, log, staged, attempting);
@@ -203,7 +203,7 @@ function observeDocument(
   return scoped(function* () {
     const tests = yield* useTesting();
     const execution = yield* executeInstalled({ path, stream: held.for(runId) }, [
-      retainedWorkflowInstallation({ ...RUN, runId }),
+      savedWorkflowInstallation({ ...RUN, runId }),
     ]);
     // Drained to its close value first: output closes with the rendered text —
     // complete or partial — even when the execution settles Err, so a failing
@@ -508,7 +508,7 @@ function useScenarioComponents(
           paths: server.requests.map((request) => request.path),
           // The scheme, never the credential. A document that received the
           // header itself would carry a credential in its own text and in the
-          // run's retained history — the one thing this contract says a history
+          // run's saved history — the one thing this contract says a history
           // never holds — and would not settle at all
           // (taras/executable.md#524). Whether the credential the tracker wants
           // actually arrived is decided here, where it is already known, and
@@ -623,7 +623,7 @@ function useScenarioComponents(
       },
       // deno-lint-ignore require-yield
       *fn(): Operation<Json> {
-        // Asked of every Issue effect the run retained rather than of the
+        // Asked of every Issue effect the run saved rather than of the
         // members somebody remembered to look at, and answered here rather than
         // handed over: the credential and the marker would not survive
         // rendering at all, and the rest would put a deployment's addresses and
@@ -639,7 +639,7 @@ function useScenarioComponents(
         // where the run's own document wrote the `<Issue>`, and this harness
         // loads that document by absolute path. It is removed before the scan
         // so the probe still catches a provider's or deployment's data leaking
-        // anywhere else in the retained effect.
+        // anywhere else in the saved effect.
         const events = held.snapshot(RUN.runId);
         const scanned = issueYields(events).map((event) => {
           if (event.type !== "yield") {
@@ -847,7 +847,7 @@ interface AuthoredBody {
  *
  * The marker is reported as a boolean and never as text. It is a digest of the
  * idempotency key, so handing it to a document would put a run's internal
- * identity into that document's rendered output and into its retained history,
+ * identity into that document's rendered output and into its saved history,
  * and a scenario proves the marker was written by saying that it was.
  */
 function authoredIn(body: unknown): AuthoredBody {
@@ -916,7 +916,7 @@ function stageAttempt(
     });
 
     const execution = yield* executeInstalled({ path, stream }, [
-      retainedWorkflowInstallation({ ...RUN, runId: id }),
+      savedWorkflowInstallation({ ...RUN, runId: id }),
     ]);
     const output = yield* drain(execution.output);
     const outcome = yield* execution;
@@ -935,8 +935,8 @@ function stageAttempt(
           (event) => event.type === "yield" && event.description.type === ISSUE_EFFECT,
         )
       : -1;
-    const retained = died === -1 ? continuing : continuing.slice(0, died);
-    held.truncate(id, retained);
+    const saved = died === -1 ? continuing : continuing.slice(0, died);
+    held.truncate(id, saved);
     return {
       ok: outcome.ok,
       output,
@@ -944,7 +944,7 @@ function stageAttempt(
       // What the attempt *left behind*, not what it managed to write before it
       // stopped existing. An interrupted process journaled nothing, and the
       // count a scenario asks about is the one the next attempt inherits.
-      effects: issueYields(retained).length,
+      effects: issueYields(saved).length,
       calls: server.requests.length - before,
     };
   });

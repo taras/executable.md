@@ -12,7 +12,7 @@
  * 1. The request is detached, so nothing the caller does to its own objects
  *    afterwards reaches the effect this describes.
  * 2. One short read-only Workspace transaction authenticates the observed
- *    Repository record and working directory against the retained rows and
+ *    Repository record and working directory against the saved rows and
  *    exports the selected checkout family.
  * 3. The transaction closes. Everything after it reads files.
  * 4. The exported checkout is prepared and authenticated, and its current
@@ -150,7 +150,7 @@ function* admitInputs(
  * parsed.
  *
  * Ordered so that everything a later step trusts has already been proven: the
- * retained rows and the export inside one short transaction, the exported
+ * saved rows and the export inside one short transaction, the exported
  * checkout's identity outside it, the branch and commit from that checkout,
  * this run's own proof that it published them, and only then a frozen request
  * and a provider that can answer for it.
@@ -207,7 +207,7 @@ export function* upsertPullRequest(
     const events = yield* database.journal.readAll();
     admitPushEvidence(events, inputs);
 
-    // The exact retained locator, authenticated against its own fingerprint
+    // The exact saved locator, authenticated against its own fingerprint
     // when the row was read, rather than a `remote.origin.url` out of a
     // configuration file this run merely stores. It stays in the provider's
     // closure and reaches no durable or public value.
@@ -277,7 +277,7 @@ export function* useGitHubPullRequests(
             () =>
               new GitOperationAdmissionError(
                 PULL_REQUEST_ELEMENT,
-                "the Repository in scope is not one this run selected, so it names no retained " +
+                "the Repository in scope is not one this run selected, so it names no saved " +
                   "checkout",
               ),
           ),

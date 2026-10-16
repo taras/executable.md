@@ -302,7 +302,7 @@ the launch, and nothing after it named a second.
 
 The route, the journal, the ACP client's own arrangement and the identity the
 launch reported all name the same conversation — and the build this run would
-use is the build the route retained.
+use is the build the route saved.
 
 <AssertEquals actual={proof.route.schema} expected={"session-route.v2"} />
 <AssertEquals actual={proof.route.kind} expected={"client-native"} />

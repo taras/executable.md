@@ -23,7 +23,7 @@ import { API, FETCH_NOT_PERMITTED_MESSAGE, Permissions } from "@executablemd/run
 import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
-import { retainedSource, SOURCE_POSITION_FIELD } from "@executablemd/core";
+import { savedSource, SOURCE_POSITION_FIELD } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { collect } from "@executablemd/core";
 import {
@@ -37,7 +37,7 @@ import type { RecordedFiles } from "../../core/tests/support/fragment-files.ts";
 const ROOT_PATH = "workflows/agent.md";
 const URL_ONE = "https://api.example.test/one";
 const URL_TWO = "https://api.example.test/two";
-const NOTE = "the retained note\n";
+const NOTE = "the saved note\n";
 
 /** What the substituted transport was asked to do. */
 interface Transport {
@@ -125,7 +125,7 @@ function once(
     }
     try {
       const output = yield* collect(
-        yield* executeInstalled({ ...retainedSource(ROOT_PATH, source), stream, includes: [] }, []),
+        yield* executeInstalled({ ...savedSource(ROOT_PATH, source), stream, includes: [] }, []),
       );
       return { output: String(output), events: yield* stream.readAll() };
     } catch (error) {
@@ -271,7 +271,7 @@ describe("Tier WGX — the selection a workflow run offers", () => {
     const attempt = yield* run(evaluating(`<File path="notes.md" />\n`), { files });
 
     expect(attempt.failure).toBe(undefined);
-    expect(attempt.output).toContain("the retained note");
+    expect(attempt.output).toContain("the saved note");
     const policy = policyOf(admissions(attempt.events)[0]);
     // The closed shape this build writes: the marker, the selected classes and
     // the rows. No Workspace basis and no request inventory — what a run stands
@@ -449,7 +449,7 @@ describe("Tier WGX — what an admitted request may reach is live", () => {
     // this one through carrying `EXTRA, admitted`.
     expect(server.received).toEqual(["admitted"]);
     expect(transformed.failure).toContain("not permitted in this scope");
-    // What it retained is the refusal, not an observation: the request was
+    // What it saved is the refusal, not an observation: the request was
     // refused where it would have been sent, so there is no response here to
     // restore from.
     expect(statuses(fetches(transformed.events))).toEqual(["err"]);
@@ -498,7 +498,7 @@ describe("Tier WGX — what an admitted request may reach is live", () => {
     // selection taken from a second reading would send it under no policy at
     // all.
     expect(server.asked).toEqual([]);
-    // The retained reading bounded nothing, so `<Fetch>` was never offered: the
+    // The saved reading bounded nothing, so `<Fetch>` was never offered: the
     // fragment is refused at admission, by name, and retains no effect.
     expect(attempt.failure).toContain("did not admit");
     expect(fetches(attempt.events)).toEqual([]);
@@ -581,7 +581,7 @@ describe("Tier WGX — a completed effect restores from its record", () => {
     // the admission's identity.
     expect(admission.description[SOURCE_POSITION_FIELD]).toMatchObject({ path: ROOT_PATH });
 
-    // A continuation of the retained history: the admission and the nested read
+    // A continuation of the saved history: the admission and the nested read
     // replay aligned, so nothing is admitted twice and no read is performed
     // again.
     const again = yield* run(source, { events: first.events, files });

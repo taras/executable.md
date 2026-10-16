@@ -1,5 +1,5 @@
 /**
- * Tier WFK — admitting a fork of a retained source bundle.
+ * Tier WFK — admitting a fork of a saved source bundle.
  *
  * Deno-only, and deliberately its own file: every case here takes the run's
  * executor lock, which `packages/workflow/src/deno/advisory-lock.ts` reaches
@@ -42,8 +42,8 @@ import { DatabaseSync } from "node:sqlite";
 import { workflowForkStaging } from "../deno.ts";
 import { readRepositories, readWorktrees } from "../src/deno/fork-source.ts";
 
-/** One retained yield, as the journal holds it. */
-function retained(type: string, name = type, result: Json = null): DurableEvent {
+/** One saved yield, as the journal holds it. */
+function saved(type: string, name = type, result: Json = null): DurableEvent {
   return {
     type: "yield",
     coroutineId: "root",
@@ -76,7 +76,7 @@ describe("Tier WFK — a source-bundle fork", () => {
           }),
         );
         yield* begun.database.journal.append(rootImport);
-        yield* begun.database.journal.append(retained("checkpoint"));
+        yield* begun.database.journal.append(saved("checkpoint"));
 
         const entries = yield* begun.database.readJournalEntries();
         if (!entries.ok) {
@@ -84,7 +84,7 @@ describe("Tier WFK — a source-bundle fork", () => {
         }
         const last = entries.value.at(-1);
         if (last === undefined) {
-          throw new Error("the source run retained no checkpoint");
+          throw new Error("the source run saved no checkpoint");
         }
         const settled = yield* transitions.settle(executorLock, {
           executionId: begun.execution.executionId,
@@ -186,7 +186,7 @@ describe("Tier WFK — a source-bundle fork", () => {
 
       // What it assembled, read out of the staging file while the resource that
       // owns it is still alive. The kind alone would be satisfied by a staging
-      // copy that retained some other document; the bytes are what a
+      // copy that saved some other document; the bytes are what a
       // compatibility replay would actually run.
       const database = new DatabaseSync(workflowForkStaging(root, "fork-staged"), {
         readOnly: true,
@@ -226,7 +226,7 @@ describe("Tier WFK — a source-bundle fork", () => {
  * this copy path would refuse these rows, and a column dropped or rewritten on
  * the way through would come back different.
  */
-describe("Tier WFO — retained checkout rows travel as stored", () => {
+describe("Tier WFO — saved checkout rows travel as stored", () => {
   /** Values no Git parser would accept, in columns the physical schema allows. */
   const REPOSITORY = Object.freeze({
     name: "kept",

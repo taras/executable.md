@@ -237,7 +237,7 @@ interface Answer {
    */
   readonly baseline: ImportedDefinition | undefined;
   /**
-   * One retained copy per resolution this answer was published in.
+   * One saved copy per resolution this answer was published in.
    *
    * Window keys are weak: retaining an answer does not keep its past
    * resolutions alive. The outer record is weakly keyed by the answer, too.
@@ -334,7 +334,7 @@ export interface OpenAnswerRequest {
  *
  * Holding this is the right to be asked, fixed to one origin. It is not the
  * right to answer: every publication goes through a request this mints for one
- * invocation, so a retained installation handle can open a *new* request but
+ * invocation, so a saved installation handle can open a *new* request but
  * cannot revive a settled one or reach another provider's.
  */
 export interface ProviderInstallation {
@@ -472,7 +472,7 @@ export class CanonicalImports {
    *
    * Holding this is the right to be *asked*. It states nothing on its own:
    * every answer goes through a request this mints for one handler invocation,
-   * so a retained installation handle can be asked again — which a multi-name
+   * so a saved installation handle can be asked again — which a multi-name
    * provider needs — and can never revive a settled request or reach another
    * provider's.
    *
@@ -561,7 +561,7 @@ export class CanonicalImports {
         // add: one import is one implementation, and this is that one again.
         return answer;
       }
-      // Retained once before it is compared: the answer may run user-controlled
+      // Saved once before it is compared: the answer may run user-controlled
       // machinery when read, so comparing it and then retaining it would leave
       // a gap in which those two reads could describe different definitions.
       // Asked before anything is recorded and before the window is spent, so a
@@ -600,7 +600,7 @@ export class CanonicalImports {
     // Read off core's own copy rather than off the object the chain still
     // holds: a definition whose metadata answers one way for a check and
     // another way for the read would otherwise be validated as one thing and
-    // retained as another. An answer that could not be copied at all is left
+    // saved as another. An answer that could not be copied at all is left
     // for the comparison below to fail closed on, because there is nothing
     // here to validate.
     const refusal = baseline === undefined ? undefined : definitionGeneratedRefusal(baseline);

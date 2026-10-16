@@ -761,11 +761,11 @@ describe("Tier O — Eval scope hierarchy", () => {
   });
 });
 
-describe("Tier RT — Retained resources under durability", () => {
+describe("Tier RT — Saved resources under durability", () => {
   beforeAll(() => useTempFileCompiler());
 
   /**
-   * One bounded execution. A resource retained at the root belongs to the
+   * One bounded execution. A resource saved at the root belongs to the
    * document eval scope, which `execute()` acquires on its caller's frame —
    * so the scope has to close before the run's effects can be read.
    */
@@ -788,9 +788,9 @@ describe("Tier RT — Retained resources under durability", () => {
 
   // RT15: retention is a property of component execution, so it composes with
   // durability the way an ordinary resource does (O22). The import and the
-  // durable effect replay; the retained resource is re-established on each
+  // durable effect replay; the saved resource is re-established on each
   // execution that actually runs, and released with its site scope each time.
-  it("RT15: a retained resource is re-established on every execution", function* () {
+  it("RT15: a saved resource is re-established on every execution", function* () {
     const tmpDir = yield* makeTempDir();
     yield* writeFiles(tmpDir, {
       "components/Held.ts": [
@@ -809,8 +809,8 @@ describe("Tier RT — Retained resources under durability", () => {
         "",
         "export default function*() {",
         "  const token = yield* retain(function*() {",
-        "    mark('retained', 'acquire');",
-        "    yield* ensure(function*() { mark('retained', 'release'); });",
+        "    mark('saved', 'acquire');",
+        "    yield* ensure(function*() { mark('saved', 'release'); });",
         "    return 'token';",
         "  });",
         "  const stamp = yield* durableCall('held-stamp', () =>",
@@ -840,9 +840,9 @@ describe("Tier RT — Retained resources under durability", () => {
     expect(second).toBe(first);
     // The durable executor ran once and replayed the second time.
     expect(yield* lines("executor")).toEqual(["ran"]);
-    // The retained resource did not: it is re-established per execution and
+    // The saved resource did not: it is re-established per execution and
     // released with that execution's site scope — the document scope here.
-    expect(yield* lines("retained")).toEqual(["acquire", "release", "acquire", "release"]);
+    expect(yield* lines("saved")).toEqual(["acquire", "release", "acquire", "release"]);
   });
 
   // RT16: the same request from an eval block is refused. Eval is durable, so a

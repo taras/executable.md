@@ -10,7 +10,7 @@
  *
  * ## The Repository travels filtered
  *
- * The whole retained `RepositoryRecord` carries `checkoutPath` — a place inside
+ * The whole saved `RepositoryRecord` carries `checkoutPath` — a place inside
  * the run's own Workspace. A Git host has no business holding one, and the
  * journal has no reason to repeat it under a second name, so what reaches
  * durable JSON is the `RepositoryIdentity` a selection already carries.
@@ -24,7 +24,7 @@
  * that resource is named by the Repository, the remote and the destination ref.
  * A changed source commit is a different *request* — the durable fingerprint
  * covers the complete request, so it diverges rather than consuming the
- * retained result — but it is not a different resource, and putting it in the
+ * saved result — but it is not a different resource, and putting it in the
  * natural key would say a branch moved to another commit is somewhere else.
  */
 
@@ -145,7 +145,7 @@ const RESULT_MEMBERS = [
  * An object id in the algorithm this repository names its objects with.
  *
  * Width and case both. A value that is merely a non-empty string is not an
- * object id, and reading one as an id is how a retained result that names
+ * object id, and reading one as an id is how a saved result that names
  * nothing passes for one that names a commit.
  */
 export function gitObjectId(value: unknown, format: GitObjectFormat): string | undefined {
@@ -319,7 +319,7 @@ export function parseGitPushObservations(
  * destination that is not that branch's ref, a refspec that is not this exact
  * commit published to that destination, and an observed commit that is not the
  * one this attempt asked the remote to hold. A Push that succeeded left the
- * destination naming its source, so a retained result saying anything else
+ * destination naming its source, so a saved result saying anything else
  * describes an outcome this operation does not produce.
  */
 export function parseGitPushResult(

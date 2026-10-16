@@ -272,7 +272,7 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     expect(yield* ended(second)).toBe(0);
 
     // A separate new entry, opened at the same location: its read is new work,
-    // so it reads the file as it is now. What is retained is each operation,
+    // so it reads the file as it is now. What is saved is each operation,
     // not a value the session remembers for the path.
     //
     // A third session rather than another entry typed into the second one: a

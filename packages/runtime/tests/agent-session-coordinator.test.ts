@@ -40,8 +40,8 @@ function owner(kind: "session" | "prompt" | "native-launch", id: string) {
   return { kind, operationId: id };
 }
 
-/** The retained ownership record, read as another process would. */
-function* retained(root: string, key: AgentSessionKey): Operation<unknown> {
+/** The saved ownership record, read as another process would. */
+function* saved(root: string, key: AgentSessionKey): Operation<unknown> {
   const file = join(root, "ownership", `${agentSessionKeyDigest(key)}.json`);
   const text = yield* until(readFile(file, "utf8").catch(() => undefined));
   return text === undefined ? undefined : parseAgentSessionOwnership(JSON.parse(text));
@@ -89,14 +89,14 @@ describe("Tier CO — the agent session coordinator", () => {
       owner("native-launch", "op-1"),
       function* (ownership) {
         // Active while the body runs: that is what a later owner refuses on.
-        expect(yield* retained(root, KEY)).toMatchObject({ state: "active" });
+        expect(yield* saved(root, KEY)).toMatchObject({ state: "active" });
         ownership.quiesced();
         return "done";
       },
     );
 
     expect(outcome.ok && outcome.value).toBe("done");
-    expect(yield* retained(root, KEY)).toMatchObject({
+    expect(yield* saved(root, KEY)).toMatchObject({
       state: "idle",
       ownerKind: "native-launch",
       operationId: "op-1",
@@ -163,7 +163,7 @@ describe("Tier CO — the agent session coordinator", () => {
     // right — nothing here can say what that owner had already done.
     const root = yield* useTempDirectory("xmd-co-");
     const child = yield* holder(root, KEY);
-    expect(yield* retained(root, KEY)).toMatchObject({ state: "active" });
+    expect(yield* saved(root, KEY)).toMatchObject({ state: "active" });
 
     child.kill();
 
@@ -196,7 +196,7 @@ describe("Tier CO — the agent session coordinator", () => {
     expect(outcome.ok).toBe(false);
     expect(outcome.ok === false && outcome.error.name).toBe("AgentSessionRecoveryRequired");
     // Still owned, and still by the owner that died.
-    expect(yield* retained(root, KEY)).toMatchObject({
+    expect(yield* saved(root, KEY)).toMatchObject({
       state: "active",
       operationId: "00000000-0000-4000-8000-000000000001",
     });

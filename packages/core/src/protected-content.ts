@@ -52,7 +52,7 @@ export interface ProtectedContentLease {
    * End it.
    *
    * Called from the same `finally` that closes the invocation's issued
-   * permissions, so a callback a body retained — in a closure, on an object it
+   * permissions, so a callback a body saved — in a closure, on an object it
    * returned, in something it spawned — refuses rather than projecting content
    * of an element that has finished.
    */

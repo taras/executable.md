@@ -10,4 +10,5 @@ export const BANNED_WORDS = [
   "reclaims",
   "reclaimed",
   "reclaiming",
+  "retained",
 ];

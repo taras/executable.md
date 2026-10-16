@@ -6,8 +6,8 @@
  * continued from its own database after the remote is gone, and neither a
  * stand-in for Git nor a stand-in for DOFS could show that.
  *
- * Two observations do most of the work. The retained rows say what the run
- * decided its identity was, and the retained bytes say whether what it decided
+ * Two observations do most of the work. The saved rows say what the run
+ * decided its identity was, and the saved bytes say whether what it decided
  * is still there — including the one thing a materialization must never leave
  * behind, which is its own host path.
  */
@@ -19,8 +19,8 @@ import { git, moveRemoteBranch, useBareRemote } from "./support/git-remotes.ts";
 import {
   countingHost,
   countingOptions,
-  retainedRepositories,
-  retainedWorktrees,
+  savedRepositories,
+  savedWorktrees,
   runDocument,
   subcommands,
   workspaceEntry,
@@ -54,11 +54,11 @@ describe("workflow Repository retention", () => {
         ].join("\n"),
       );
 
-      const repositories = yield* retainedRepositories(database);
+      const repositories = yield* savedRepositories(database);
       expect(repositories.map((entry) => entry.record.name)).toEqual(["api", "sdk"]);
 
-      const apiWorktrees = yield* retainedWorktrees(database, "api");
-      const sdkWorktrees = yield* retainedWorktrees(database, "sdk");
+      const apiWorktrees = yield* savedWorktrees(database, "api");
+      const sdkWorktrees = yield* savedWorktrees(database, "sdk");
 
       const paths = [
         repositories[0]?.record.checkoutPath,
@@ -108,11 +108,11 @@ describe("workflow Repository retention", () => {
         `<Repository name="project" url="${remote.locator}" as="repository" />`,
       );
 
-      const [retained] = yield* retainedRepositories(database);
-      expect(retained?.record.primaryBranch).toBe("trunk");
-      expect(retained?.record.requestedBase).toBe(null);
-      expect(retained?.record.creationCommit).toBe(remote.heads.get("trunk"));
-      expect(yield* workspaceText(database, `${retained?.record.checkoutPath}/which.txt`)).toBe(
+      const [saved] = yield* savedRepositories(database);
+      expect(saved?.record.primaryBranch).toBe("trunk");
+      expect(saved?.record.requestedBase).toBe(null);
+      expect(saved?.record.creationCommit).toBe(remote.heads.get("trunk"));
+      expect(yield* workspaceText(database, `${saved?.record.checkoutPath}/which.txt`)).toBe(
         "trunk\n",
       );
     });
@@ -138,17 +138,17 @@ describe("workflow Repository retention", () => {
         `<Repository name="project" url="${remote.locator}" base="release" as="repository" />`,
       );
 
-      const [retained] = yield* retainedRepositories(database);
-      expect(retained?.record.primaryBranch).toBe("release");
-      expect(retained?.record.requestedBase).toBe("release");
-      expect(retained?.record.creationCommit).toBe(remote.heads.get("release"));
+      const [saved] = yield* savedRepositories(database);
+      expect(saved?.record.primaryBranch).toBe("release");
+      expect(saved?.record.requestedBase).toBe("release");
+      expect(saved?.record.creationCommit).toBe(remote.heads.get("release"));
 
       // Moving the branch afterwards changes neither the record nor what a
       // later read of the run finds: resolution happened once.
       moveRemoteBranch(remote, "release", remote.heads.get("main") ?? "");
-      const again = yield* retainedRepositories(database);
+      const again = yield* savedRepositories(database);
       expect(again[0]?.record.creationCommit).toBe(remote.heads.get("release"));
-      expect(yield* workspaceText(database, `${retained?.record.checkoutPath}/which.txt`)).toBe(
+      expect(yield* workspaceText(database, `${saved?.record.checkoutPath}/which.txt`)).toBe(
         "release\n",
       );
     });
@@ -170,16 +170,16 @@ describe("workflow Repository retention", () => {
         `<Repository name="project" url="${remote.locator}" base="v1" as="repository" />`,
       );
 
-      const [retained] = yield* retainedRepositories(database);
-      expect(retained?.record.primaryBranch).toBe("xmd/base");
-      expect(retained?.record.creationCommit).toBe(remote.tags.get("v1"));
+      const [saved] = yield* savedRepositories(database);
+      expect(saved?.record.primaryBranch).toBe("xmd/base");
+      expect(saved?.record.creationCommit).toBe(remote.tags.get("v1"));
 
-      // Never detached: the retained HEAD is a symbolic ref to the branch the
+      // Never detached: the saved HEAD is a symbolic ref to the branch the
       // provider named, which is what a later Switch, Commit or Push needs.
-      expect(yield* workspaceText(database, `${retained?.record.checkoutPath}/.git/HEAD`)).toBe(
+      expect(yield* workspaceText(database, `${saved?.record.checkoutPath}/.git/HEAD`)).toBe(
         "ref: refs/heads/xmd/base\n",
       );
-      expect(yield* workspaceText(database, `${retained?.record.checkoutPath}/which.txt`)).toBe(
+      expect(yield* workspaceText(database, `${saved?.record.checkoutPath}/which.txt`)).toBe(
         "first\n",
       );
     });
@@ -203,7 +203,7 @@ describe("workflow Repository retention", () => {
       );
 
       expect(String(output)).toContain("does not name a commit");
-      expect(yield* retainedRepositories(database)).toHaveLength(0);
+      expect(yield* savedRepositories(database)).toHaveLength(0);
     });
   });
 
@@ -234,14 +234,14 @@ describe("workflow Repository retention", () => {
       );
 
       const rendered = String(output);
-      const [retained] = yield* retainedRepositories(database);
-      const path = retained?.record.checkoutPath ?? "";
+      const [saved] = yield* savedRepositories(database);
+      const path = saved?.record.checkoutPath ?? "";
 
       // Compatible reuse addresses the same Repository rather than making a
       // second one.
       expect(rendered).toContain(`first: ${path}`);
       expect(rendered).toContain(`second: ${path}`);
-      expect(yield* retainedRepositories(database)).toHaveLength(1);
+      expect(yield* savedRepositories(database)).toHaveLength(1);
 
       // A changed locator and a changed base are both incompatible reuse, and
       // neither repoints the name.
@@ -250,7 +250,7 @@ describe("workflow Repository retention", () => {
       // Both refusals printed and the region carried on, which is what makes
       // "the name was not repointed" a claim about reuse rather than about a
       // run that stopped at the first refusal.
-      expect(yield* retainedRepositories(database)).toHaveLength(1);
+      expect(yield* savedRepositories(database)).toHaveLength(1);
     });
   });
 
@@ -278,8 +278,8 @@ describe("workflow Repository retention", () => {
         `<Repository name="project" url="${remote.locator}" as="repository" />`,
       );
 
-      const [retained] = yield* retainedRepositories(database);
-      const checkout = retained?.record.checkoutPath ?? "";
+      const [saved] = yield* savedRepositories(database);
+      const checkout = saved?.record.checkoutPath ?? "";
 
       const tree = yield* workspaceTree(database, checkout);
       expect(tree.get(`${checkout}/blob.bin`)).toEqual(binary);
@@ -356,7 +356,7 @@ describe("workflow Worktree retention", () => {
         ].join("\n"),
       );
 
-      const [worktree] = yield* retainedWorktrees(database, "project");
+      const [worktree] = yield* savedWorktrees(database, "project");
       expect(worktree?.requestedBranch).toBe("feature/new");
       expect(worktree?.requestedBase).toBe(null);
       expect(worktree?.creationCommit).toBe(remote.heads.get("main"));
@@ -379,7 +379,7 @@ describe("workflow Worktree retention", () => {
         ].join("\n"),
       );
 
-      const [worktree] = yield* retainedWorktrees(database, "project");
+      const [worktree] = yield* savedWorktrees(database, "project");
       expect(worktree?.requestedBase).toBe("feature/existing");
       expect(worktree?.creationCommit).toBe(remote.heads.get("feature/existing"));
       expect(yield* workspaceText(database, `${worktree?.checkoutPath}/which.txt`)).toBe(
@@ -403,7 +403,7 @@ describe("workflow Worktree retention", () => {
         ].join("\n"),
       );
 
-      const [worktree] = yield* retainedWorktrees(database, "project");
+      const [worktree] = yield* savedWorktrees(database, "project");
       // The existing branch's commit, not the primary checkout's: the branch
       // was used rather than recreated at HEAD.
       expect(worktree?.creationCommit).toBe(remote.heads.get("feature/existing"));
@@ -434,7 +434,7 @@ describe("workflow Worktree retention", () => {
       );
 
       // The first one survives untouched; the refusal added nothing.
-      const worktrees = yield* retainedWorktrees(database, "project");
+      const worktrees = yield* savedWorktrees(database, "project");
       expect(worktrees.map((entry) => entry.name)).toEqual(["first"]);
     });
   });
@@ -457,7 +457,7 @@ describe("workflow Worktree retention", () => {
       );
 
       expect(String(output)).toContain("already checked out by another worktree");
-      expect(yield* retainedWorktrees(database, "project")).toHaveLength(0);
+      expect(yield* savedWorktrees(database, "project")).toHaveLength(0);
     });
   });
 
@@ -481,10 +481,10 @@ describe("workflow Worktree retention", () => {
       );
 
       const rendered = String(output);
-      const [worktree] = yield* retainedWorktrees(database, "project");
+      const [worktree] = yield* savedWorktrees(database, "project");
       expect(rendered).toContain(`first: ${worktree?.checkoutPath}`);
       expect(rendered).toContain(`second: ${worktree?.checkoutPath}`);
-      expect(yield* retainedWorktrees(database, "project")).toHaveLength(1);
+      expect(yield* savedWorktrees(database, "project")).toHaveLength(1);
     });
   });
 
@@ -510,9 +510,9 @@ describe("workflow Worktree retention", () => {
         "that name is already this repository's, for a different branch or base",
       );
 
-      // The refusal moved nothing: the retained Worktree is the first one, on
+      // The refusal moved nothing: the saved Worktree is the first one, on
       // the branch it was created for.
-      const worktrees = yield* retainedWorktrees(database, "project");
+      const worktrees = yield* savedWorktrees(database, "project");
       expect(worktrees).toHaveLength(1);
       expect(worktrees[0]?.requestedBranch).toBe("feature/new");
     });
@@ -533,8 +533,8 @@ describe("workflow Worktree retention", () => {
         ].join("\n"),
       );
 
-      const [repository] = yield* retainedRepositories(database);
-      const [worktree] = yield* retainedWorktrees(database, "project");
+      const [repository] = yield* savedRepositories(database);
+      const [worktree] = yield* savedWorktrees(database, "project");
 
       // The two administration files that carry an absolute path hold Workspace
       // paths, which is what makes the pair relocatable to another host.
@@ -568,9 +568,9 @@ describe("workflow composition retention across the run", () => {
       );
 
       // The document finished and every live materialization is gone. What the
-      // run holds is what it retained, and no deletion happened on the way out.
-      const [repository] = yield* retainedRepositories(database);
-      const [worktree] = yield* retainedWorktrees(database, "project");
+      // run holds is what it saved, and no deletion happened on the way out.
+      const [repository] = yield* savedRepositories(database);
+      const [worktree] = yield* savedWorktrees(database, "project");
       expect(repository?.record.name).toBe("project");
       expect(worktree?.name).toBe("implementation");
       expect(yield* workspaceText(database, `${repository?.record.checkoutPath}/which.txt`)).toBe(
@@ -602,7 +602,7 @@ describe("workflow Repository locator admission", () => {
 
       // Two places a token is ordinarily written into a URL. Neither carries
       // any part of a repository's location for the transports this provider
-      // admits, and a locator is retained whole — so admitting one would be
+      // admits, and a locator is saved whole — so admitting one would be
       // deciding to keep whatever it held.
       //
       // The values here are deliberately unremarkable: a realistic secret never
@@ -628,8 +628,8 @@ describe("workflow Repository locator admission", () => {
       expect(output.match(/could not be used as a Git locator/g)).toHaveLength(2);
       expect(subcommands(counting.counters)).not.toContain("clone");
 
-      // And nothing was written: no row, so nothing retained either part.
-      expect(yield* retainedRepositories(database)).toHaveLength(0);
+      // And nothing was written: no row, so nothing saved either part.
+      expect(yield* savedRepositories(database)).toHaveLength(0);
     });
   });
 });

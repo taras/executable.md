@@ -19,7 +19,7 @@ export interface SavepointManager {
    * Run `body` and discard everything it wrote, however it ends.
    *
    * For work whose whole product is outside this database — reading the
-   * Workspace as a retained root held it, by materializing that root and
+   * Workspace as a saved root held it, by materializing that root and
    * exporting from it. The materialization is a means, not a result, so there
    * is no path on which it commits: success rolls back exactly as failure and
    * cancellation do.

@@ -1,13 +1,13 @@
 /**
- * Tier WBA — holding a retained history to the component bundle.
+ * Tier WBA — holding a saved history to the component bundle.
  *
  * `workflowBundleInstallation()` carries two halves of one fact. Live import
- * resolves a declared name to its pinned source, which core owns. Retained
+ * resolves a declared name to its pinned source, which core owns. Saved
  * history is held to the same components *before* any of it is replayed from,
  * which is what this suite drives.
  *
  * The admission runs inside canonical core's own journal read: ahead of public
- * replay policy, of any retained effect reaching execution, of a retained
+ * replay policy, of any saved effect reaching execution, of a saved
  * terminal result being reused, and of every append. So a refusal here leaves
  * the journal exactly as it was and invokes nothing — which is what each case
  * below asserts alongside the refusal itself.
@@ -22,7 +22,7 @@ import { expect } from "@executablemd/test-support/expect";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
-import { collect, retainedSource } from "@executablemd/core";
+import { collect, savedSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation, WorkflowBundleComponent } from "@executablemd/core/host";
 import { workflowBundleInstallation } from "../mod.ts";
@@ -57,7 +57,7 @@ function* run(
   extra: readonly ExecutionInstallation[] = [],
 ): Operation<Json> {
   return yield* collect(
-    yield* executeInstalled({ ...retainedSource(ROOT_PATH, source), stream, includes: [] }, [
+    yield* executeInstalled({ ...savedSource(ROOT_PATH, source), stream, includes: [] }, [
       workflowBundleInstallation(components),
       ...extra,
     ]),
@@ -102,9 +102,9 @@ function planting(value: unknown): (event: DurableEvent) => DurableEvent {
 /** What a refused execution reported, and what it did to the journal. */
 function* refused(
   stream: DurableStream,
-  retained?: number,
+  saved?: number,
 ): Operation<{ message: string; appended: number }> {
-  const before = retained ?? (yield* stream.readAll()).length;
+  const before = saved ?? (yield* stream.readAll()).length;
   try {
     yield* run(ROOT, stream);
   } catch (error) {
@@ -113,10 +113,10 @@ function* refused(
       appended: (yield* stream.readAll()).length - before,
     };
   }
-  throw new Error("expected the retained history to be refused");
+  throw new Error("expected the saved history to be refused");
 }
 
-describe("Tier WBA — a retained history is held to the bundle", () => {
+describe("Tier WBA — a saved history is held to the bundle", () => {
   it("WBA1: a history recording exactly this bundle replays", function* () {
     const partial = yield* continuing(ROOT);
     const before = (yield* partial.readAll()).filter((event) => isImport(event)).length;
@@ -140,8 +140,7 @@ describe("Tier WBA — a retained history is held to the bundle", () => {
       const outcome = yield* refused(planted);
       expect({ says, message: outcome.message, appended: outcome.appended }).toEqual({
         says,
-        message:
-          "A retained component import does not match the component this run's bundle holds.",
+        message: "A saved component import does not match the component this run's bundle holds.",
         appended: 0,
       });
     }
@@ -157,7 +156,7 @@ describe("Tier WBA — a retained history is held to the bundle", () => {
         : event,
     );
     expect((yield* refused(renamed)).message).toBe(
-      "A retained component import names a component this run's bundle does not declare.",
+      "A saved component import names a component this run's bundle does not declare.",
     );
   });
 
@@ -189,7 +188,7 @@ describe("Tier WBA — a retained history is held to the bundle", () => {
     );
 
     expect((yield* refused(planted)).message).toBe(
-      "A retained component import recorded a repository file, which a workflow run resolves " +
+      "A saved component import recorded a repository file, which a workflow run resolves " +
         "none of.",
     );
   });
@@ -272,7 +271,7 @@ describe("Tier WBA — a retained history is held to the bundle", () => {
     );
 
     expect((yield* refused(planted)).message).toBe(
-      "A retained component import names a component this run's bundle does not declare.",
+      "A saved component import names a component this run's bundle does not declare.",
     );
   });
 

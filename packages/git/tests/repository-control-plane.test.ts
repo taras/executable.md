@@ -44,8 +44,8 @@ import {
   raised,
   removeWorkspacePath,
   replaceWorkspaceTree,
-  retainedRepositories,
-  retainedWorktrees,
+  savedRepositories,
+  savedWorktrees,
   runDocument,
   subcommands,
   survivingRoots,
@@ -106,10 +106,10 @@ describe("workflow Git control-plane containment", () => {
       ].join("\n");
 
       yield* runDocument(database, document);
-      const [before] = yield* retainedRepositories(database);
+      const [before] = yield* savedRepositories(database);
       const checkout = before?.record.checkoutPath ?? "";
 
-      // The checkout root stays a real retained directory. Only the control
+      // The checkout root stays a real saved directory. Only the control
       // plane inside it is redirected.
       yield* linkWorkspacePath(database, `${external}/.git`, `${checkout}/.git`);
       const externalHead = yield* readTextFile(`${external}/.git/HEAD`);
@@ -137,7 +137,7 @@ describe("workflow Git control-plane containment", () => {
 
       // The external clone and the run are both exactly as they were.
       expect(yield* readTextFile(`${external}/.git/HEAD`)).toBe(externalHead);
-      expect(yield* retainedRepositories(database)).toEqual([before]);
+      expect(yield* savedRepositories(database)).toEqual([before]);
       expect(committedRoot(runPath(root, "release-1.4"))).toBe(frontier);
       expect(committedCompositionEvents(runPath(root, "release-1.4"))).toBe(events);
     });
@@ -158,7 +158,7 @@ describe("workflow Git control-plane containment", () => {
       ].join("\n");
 
       yield* runDocument(database, document);
-      const [before] = yield* retainedWorktrees(database, "project");
+      const [before] = yield* savedWorktrees(database, "project");
 
       // A real regular `.git` file, with a traversal-shaped pointer at
       // compatible external administration. No symbolic link involved.
@@ -181,7 +181,7 @@ describe("workflow Git control-plane containment", () => {
       expect(subcommands(counting.counters)).not.toContain("clone");
       expect(subcommands(counting.counters)).not.toContain("worktree");
       expect(String(rendered)).not.toContain("child marker");
-      expect(yield* retainedWorktrees(database, "project")).toEqual([before]);
+      expect(yield* savedWorktrees(database, "project")).toEqual([before]);
     });
   });
 
@@ -199,8 +199,8 @@ describe("workflow Git control-plane containment", () => {
       ].join("\n");
 
       yield* runDocument(database, document);
-      const [before] = yield* retainedWorktrees(database, "project");
-      const [repository] = yield* retainedRepositories(database);
+      const [before] = yield* savedWorktrees(database, "project");
+      const [repository] = yield* savedRepositories(database);
 
       // A canonical Workspace path that is not a slot this repository has.
       yield* writeWorkspaceFile(
@@ -244,7 +244,7 @@ describe("workflow Git control-plane containment", () => {
       ].join("\n");
 
       yield* runDocument(database, document);
-      const [before] = yield* retainedRepositories(database);
+      const [before] = yield* savedRepositories(database);
       yield* linkWorkspacePath(database, external, `${before?.record.checkoutPath}/.git/worktrees`);
       dropRootClose(runPath(root, "release-1.4"));
 
@@ -321,8 +321,8 @@ describe("workflow Git control-plane completeness", () => {
       ].join("\n");
 
       yield* runDocument(database, document);
-      const [repository] = yield* retainedRepositories(database);
-      const [worktree] = yield* retainedWorktrees(database, "project");
+      const [repository] = yield* savedRepositories(database);
+      const [worktree] = yield* savedWorktrees(database, "project");
 
       // The slot Git wrote, found the way the validator finds it.
       const pointer = yield* workspaceText(database, `${worktree?.checkoutPath}/.git`);
@@ -351,8 +351,8 @@ describe("workflow Git control-plane completeness", () => {
       expect(String(rendered)).not.toContain("later sibling marker");
 
       // Nothing was repaired and nothing advanced.
-      expect(yield* retainedRepositories(database)).toEqual([repository]);
-      expect(yield* retainedWorktrees(database, "project")).toEqual([worktree]);
+      expect(yield* savedRepositories(database)).toEqual([repository]);
+      expect(yield* savedWorktrees(database, "project")).toEqual([worktree]);
       expect(committedRoot(runPath(root, "release-1.4"))).toBe(frontier);
       expect(committedCompositionEvents(runPath(root, "release-1.4"))).toBe(events);
     });

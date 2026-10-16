@@ -1,5 +1,5 @@
 /**
- * Retained events — what a run reads a journal as.
+ * Saved events — what a run reads a journal as.
  *
  * A journal is data supplied by a backend, and every phase of a replay reads
  * the same events: a private admission gate, the replay index, public guard
@@ -8,14 +8,14 @@
  * one thing for validation and another for execution, and nothing downstream
  * can detect the substitution.
  *
- * A retained event is therefore read once and detached. **Every** event that
- * participates in admission, indexing, or terminal reuse is retained, Close as
+ * A saved event is therefore read once and detached. **Every** event that
+ * participates in admission, indexing, or terminal reuse is saved, Close as
  * well as Yield: a Close decides whether a coroutine has a terminal result to
  * reuse, so leaving it as the backend's own object lets it belong to a child
  * coroutine while one phase asks and to the root while the next does.
  *
  * The discriminator is settled once, by the classification that chooses a
- * retained event's kind, and never read from the source again. Identity — the
+ * saved event's kind, and never read from the source again. Identity — the
  * coroutine an event belongs to, and a Yield's complete effect description — is
  * settled once too, so no phase can be shown a different event than the phase
  * before it.
@@ -37,7 +37,7 @@ import type {
   Yield,
 } from "./types.ts";
 
-/** What one retained value's single read of the stream produced. */
+/** What one saved value's single read of the stream produced. */
 type Settled<T> =
   | { readonly kind: "value"; readonly value: T }
   | { readonly kind: "refusal"; readonly refusal: unknown };
@@ -58,7 +58,7 @@ function resolve<T>(settled: Settled<T>): T {
 }
 
 /**
- * A detached copy of one retained JSON value.
+ * A detached copy of one saved JSON value.
  *
  * Every property is read once and rebuilt, so nothing the stream still owns
  * remains reachable: a nested accessor cannot answer one thing to one phase and
@@ -83,7 +83,7 @@ export function detachJson(value: Json, seen: Set<object> = new Set()): Json {
     return value;
   }
   if (seen.has(value)) {
-    throw new TypeError("a retained value cannot contain a cycle");
+    throw new TypeError("a saved value cannot contain a cycle");
   }
   seen.add(value);
   try {
@@ -112,7 +112,7 @@ export function detachJson(value: Json, seen: Set<object> = new Set()): Json {
 /**
  * A detached copy, frozen through.
  *
- * The authoritative retained graph is what admission validated and what replay
+ * The authoritative saved graph is what admission validated and what replay
  * consumes, so nothing that reaches a caller may write to it. Freezing is the
  * restriction on *policy*, not on a workflow: what a document finally receives
  * is a fresh mutable copy taken from this, never this.
@@ -133,7 +133,7 @@ function freezeDeep(value: Json): void {
   }
 }
 
-/** A detached copy of a retained failure's description. */
+/** A detached copy of a saved failure's description. */
 function detachError(error: SerializedError): SerializedError {
   const name = error.name;
   const stack = error.stack;
@@ -145,7 +145,7 @@ function detachError(error: SerializedError): SerializedError {
 }
 
 /**
- * A retained result detached from everything the stream still owns.
+ * A saved result detached from everything the stream still owns.
  *
  * Each member is read exactly once, here, and the tree beneath it is rebuilt.
  * Copying only the outer object would leave a `value` the journal can still
@@ -156,7 +156,7 @@ function detachResult(result: Result): Result {
   if (status === "ok") {
     // Every successful shape, including the one that settled to nothing. A
     // `Result<void>` carries no value to detach, but the envelope is still
-    // the retained settlement — left writable, a caller of a public observation could add one
+    // the saved settlement — left writable, a caller of a public observation could add one
     // before replay reads it.
     if (!("value" in result)) {
       return Object.freeze({ status });
@@ -166,7 +166,7 @@ function detachResult(result: Result): Result {
   }
   if (status === "err") {
     if (!("error" in result)) {
-      throw new TypeError("a retained failure carries the error it failed with");
+      throw new TypeError("a saved failure carries the error it failed with");
     }
     return Object.freeze({ status, error: detachError(result.error) });
   }
@@ -200,7 +200,7 @@ function detachDescription(description: EffectDescription): EffectDescription {
     extra.push([key, member]);
   }
   if (typeof type !== "string" || typeof name !== "string") {
-    throw new TypeError("a retained effect description carries a type and a name");
+    throw new TypeError("a saved effect description carries a type and a name");
   }
   const detached: EffectDescription = { type, name };
   for (const [key, member] of extra) {
@@ -214,8 +214,8 @@ function detachDescription(description: EffectDescription): EffectDescription {
   return Object.freeze(detached);
 }
 
-/** Everything about a retained Yield except what it settled to. */
-interface RetainedIdentity {
+/** Everything about a saved Yield except what it settled to. */
+interface SavedIdentity {
   readonly coroutineId: CoroutineId;
   readonly description: EffectDescription;
 }
@@ -223,12 +223,12 @@ interface RetainedIdentity {
 function readCoroutineId(source: { coroutineId: CoroutineId }): CoroutineId {
   const coroutineId = source.coroutineId;
   if (typeof coroutineId !== "string") {
-    throw new TypeError("a retained event belongs to a coroutine");
+    throw new TypeError("a saved event belongs to a coroutine");
   }
   return coroutineId;
 }
 
-function readIdentity(source: Yield): RetainedIdentity {
+function readIdentity(source: Yield): SavedIdentity {
   return {
     coroutineId: readCoroutineId(source),
     description: detachDescription(source.description),
@@ -236,7 +236,7 @@ function readIdentity(source: Yield): RetainedIdentity {
 }
 
 /**
- * One retained Yield: one identity, and one cell for what it settled to.
+ * One saved Yield: one identity, and one cell for what it settled to.
  *
  * Identity is read together and once. Reading `type` here and `coroutineId`
  * there would let a source present an unrelated event to one phase and the root
@@ -250,9 +250,9 @@ function readIdentity(source: Yield): RetainedIdentity {
  * refuse one phase and then answer the next.
  */
 /**
- * Present a retained member the way the event it stands for presents it.
+ * Present a saved member the way the event it stands for presents it.
  *
- * Own and enumerable, so a retained event spreads, serializes, and compares
+ * Own and enumerable, so a saved event spreads, serializes, and compares
  * like the plain event a backend would have supplied. The settled cells stay
  * genuinely private, which is what keeps them out of all of that.
  */
@@ -260,7 +260,7 @@ function present<T>(target: object, name: string, read: () => T): void {
   Object.defineProperty(target, name, { enumerable: true, get: read });
 }
 
-class RetainedYield implements Yield {
+class SavedYield implements Yield {
   /**
    * Settled by the classification that chose this wrapper, never re-read. A
    * second read of the source's own discriminator is a second chance for it to
@@ -272,7 +272,7 @@ class RetainedYield implements Yield {
   declare readonly description: EffectDescription;
   declare readonly result: Result;
   #source: Yield;
-  #identity: Settled<RetainedIdentity> | undefined;
+  #identity: Settled<SavedIdentity> | undefined;
   #settled: Settled<Result> | undefined;
 
   constructor(source: Yield) {
@@ -286,14 +286,14 @@ class RetainedYield implements Yield {
     });
   }
 
-  #stable(): RetainedIdentity {
+  #stable(): SavedIdentity {
     this.#identity ??= settle(() => readIdentity(this.#source));
     return resolve(this.#identity);
   }
 }
 
 /**
- * One retained Close: settled identity, and one cell for its terminal result.
+ * One saved Close: settled identity, and one cell for its terminal result.
  *
  * A Close decides whether a coroutine has a terminal result to reuse, so it
  * participates in admission exactly as a Yield does. Left as the backend's own
@@ -301,7 +301,7 @@ class RetainedYield implements Yield {
  * root while the next does — a history nobody could admit, reused as a result
  * nobody asked for.
  */
-class RetainedClose implements Close {
+class SavedClose implements Close {
   declare readonly type: "close";
   declare readonly coroutineId: CoroutineId;
   declare readonly result: Result;
@@ -309,7 +309,7 @@ class RetainedClose implements Close {
   #settled: Settled<Result>;
 
   constructor(source: Close) {
-    // Settled here, while the history is being retained, rather than at a first
+    // Settled here, while the history is being saved, rather than at a first
     // later read. A Close carries the result a completed run hands back, and
     // deferring that read leaves an interval — between the moment a consumer's
     // private admission accepts the history and the moment terminal reuse
@@ -335,7 +335,7 @@ class RetainedClose implements Close {
  * remembered and re-raised from every member, rather than retried — a source
  * that refuses one phase must not answer the next.
  */
-class RetainedRefusal implements Yield {
+class SavedRefusal implements Yield {
   declare readonly type: "yield";
   declare readonly coroutineId: CoroutineId;
   declare readonly description: EffectDescription;
@@ -353,46 +353,44 @@ class RetainedRefusal implements Yield {
 }
 
 /**
- * The retained form of a journal's events.
+ * The saved form of a journal's events.
  *
- * Idempotent: retaining an already-retained event returns it, so a caller that
+ * Idempotent: retaining an already-saved event returns it, so a caller that
  * has produced the stable history hands the same objects onward rather than a
  * second wrapping of them. That is what lets one snapshot serve every phase.
  *
  * Only the event type is read here, which is the least a caller can read and
- * still tell a Yield from a Close. Everything else is the retained event's own.
+ * still tell a Yield from a Close. Everything else is the saved event's own.
  */
 export function retainEvents(events: readonly DurableEvent[]): DurableEvent[] {
   return events.map((event) => {
-    if (isRetained(event)) {
+    if (isSaved(event)) {
       return event;
     }
     // The one read of the source's discriminator. Whatever it says here is what
-    // the retained event reports from now on, to every phase.
+    // the saved event reports from now on, to every phase.
     const classified = settle(() => event.type);
     if (classified.kind === "refusal") {
-      return new RetainedRefusal(classified.refusal);
+      return new SavedRefusal(classified.refusal);
     }
     if (classified.value === "yield") {
-      return new RetainedYield(event as Yield);
+      return new SavedYield(event as Yield);
     }
     if (classified.value === "close") {
-      return new RetainedClose(event as Close);
+      return new SavedClose(event as Close);
     }
-    return new RetainedRefusal(new TypeError("a retained event is a yield or a close"));
+    return new SavedRefusal(new TypeError("a saved event is a yield or a close"));
   });
 }
 
-function isRetained(event: DurableEvent): boolean {
+function isSaved(event: DurableEvent): boolean {
   return (
-    event instanceof RetainedYield ||
-    event instanceof RetainedClose ||
-    event instanceof RetainedRefusal
+    event instanceof SavedYield || event instanceof SavedClose || event instanceof SavedRefusal
   );
 }
 
 /**
- * An isolated observation of a retained event, for public policy to read.
+ * An isolated observation of a saved event, for public policy to read.
  *
  * A replay guard is composable policy, and composition means handlers read,
  * annotate, and pass along. What it must never mean is that a handler edits the
@@ -433,11 +431,11 @@ function observeDescription(description: EffectDescription): EffectDescription {
 }
 
 /**
- * A retained result as a consumer may hold it: ordinary mutable JSON.
+ * A saved result as a consumer may hold it: ordinary mutable JSON.
  *
  * The authoritative copy is frozen so policy cannot rewrite it. A document
  * that resumes on a restored binding writes to it, so what a workflow receives
- * is a fresh copy taken from that retained history rather than the retained history itself.
+ * is a fresh copy taken from that saved history rather than the saved history itself.
  */
 export function consumable(result: Result): Result {
   if (result.status === "ok") {

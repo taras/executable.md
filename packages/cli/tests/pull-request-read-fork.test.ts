@@ -1,9 +1,9 @@
 /**
  * Tier PRR — a fork that inherits a completed pull-request read.
  *
- * The question is what a fork does with retained evidence at a durable position
+ * The question is what a fork does with saved evidence at a durable position
  * it inherits. Answering it needs a checkpoint *after* the read, not before: a
- * fork that begins earlier never presents the retained collection to anything,
+ * fork that begins earlier never presents the saved collection to anything,
  * and would prove nothing about either branch.
  *
  * Both branches matter, and the control is what keeps the other honest. If the
@@ -204,7 +204,7 @@ describe("Tier PRR — forking a run that already read a pull request", () => {
       expect(changed.code).not.toBe(0);
       // Refused *as a divergence at this position*, which is the only reason
       // that means anything here: an argument or usage failure would also be a
-      // non-zero exit and would prove nothing about the retained read.
+      // non-zero exit and would prove nothing about the saved read.
       expect(changed.stderr).toContain("diverges");
       expect(changed.stderr).toContain(checkpoint);
       expect(changed.stdout).not.toContain("reviews: 2");

@@ -17,7 +17,7 @@
  *
  * ## Why a tag rather than a class
  *
- * `GeneratedXmdError` is raised for both a refused construct and a retained
+ * `GeneratedXmdError` is raised for both a refused construct and a saved
  * admission whose ceilings moved — the same class, opposite meanings — so
  * reading it by `instanceof` would call stale history and a revoked profile a
  * refusal of the request. Matching the message is worse: the sentences are fixed
@@ -47,7 +47,7 @@
  *
  * It is not how a *durable* refusal travels. A failure crossing a durable
  * boundary is rebuilt without its class and without any non-enumerable property,
- * so a refusal that has to survive replay is retained as a value the record
+ * so a refusal that has to survive replay is saved as a value the record
  * distinguishes and re-raised — marked again — when that value is read back.
  * `components/Syntax.ts` is the one place that needs this today.
  */

@@ -34,7 +34,7 @@ import {
   type WorkflowForkRequest,
   type WorkflowRunCreation,
 } from "../lifecycle/execution.ts";
-import type { RetainedDefinitionSources } from "../lifecycle/source.ts";
+import type { SavedDefinitionSources } from "../lifecycle/source.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
 import { conflictingFields, type WorkflowRunComparison } from "../storage/compatibility.ts";
 import { definitionToJson } from "../storage/definition.ts";
@@ -67,8 +67,8 @@ import { readJournalEntries } from "./journal.ts";
 import { readRetrievalMetadata } from "./artifact-frontier.ts";
 import {
   readDefinitionSourceRows,
-  type RetainedSourceRows,
-  verifyRetainedSources,
+  type SavedSourceRows,
+  verifySavedSources,
   writeDefinitionSources,
 } from "./definition-source.ts";
 import type { ForkSourceSnapshot } from "./fork-source.ts";
@@ -134,7 +134,7 @@ export function* beginExecution(
   const connection = yield* connections.at(path);
 
   // Everything the source has to prove, proved first. This caller holds the
-  // executor lock, and nothing here writes — so a run whose retained bytes are
+  // executor lock, and nothing here writes — so a run whose saved bytes are
   // missing, damaged or unobtainable is refused with its lifecycle and its
   // journal exactly as they were, rather than after a recovery it then has to
   // leave behind.
@@ -195,7 +195,7 @@ interface AuthenticatedSource {
    * path — an existing run of either version, and a Git run being created from
    * a descriptor the reader can already be asked about — proves it here.
    */
-  readonly proved?: RetainedDefinitionSources;
+  readonly proved?: SavedDefinitionSources;
   /** The creation's snapshot, copied and checked against its descriptor. */
   readonly owned?: readonly SourceBundleSnapshotEntry[];
 }
@@ -207,7 +207,7 @@ interface AuthenticatedSource {
  * after a write. A version-2 creation's snapshot is copied and held to its own
  * descriptor, so a caller that keeps mutating its arrays changes nothing and a
  * snapshot that does not describe the descriptor never reaches storage. An
- * existing run's retained source is re-derived from what it holds, or — for a
+ * existing run's saved source is re-derived from what it holds, or — for a
  * version-1 run — fetched through the host's legacy reader and validated
  * against the descriptor the run retains.
  */
@@ -235,7 +235,7 @@ function* authenticateBeforeBegin(
   }
 
   // A run that is already there is held to what it retains. A run that is being
-  // created has nothing retained yet — its bytes are the snapshot verified
+  // created has nothing saved yet — its bytes are the snapshot verified
   // above, and the closure it executes is read back out of the store once the
   // transaction has committed them.
   if (stored.value === undefined) {
@@ -253,7 +253,7 @@ function* authenticateBeforeBegin(
 interface StoredSource {
   readonly record: WorkflowRunRecord;
   readonly retrieval: Json | undefined;
-  readonly rows?: RetainedSourceRows;
+  readonly rows?: SavedSourceRows;
 }
 
 /**
@@ -299,12 +299,12 @@ function* readStoredSource(
  * admitted without knowing what it executes: every version-1 lifecycle
  * admission is gated before it writes.
  */
-function* authenticate(stored: StoredSource): Operation<Result<RetainedDefinitionSources>> {
+function* authenticate(stored: StoredSource): Operation<Result<SavedDefinitionSources>> {
   const { definition } = stored.record;
   if (stored.rows === undefined) {
     return Err(new WorkflowDefinitionSourceMissingError());
   }
-  return yield* verifyRetainedSources(definition, stored.rows);
+  return yield* verifySavedSources(definition, stored.rows);
 }
 
 /**
@@ -319,15 +319,15 @@ function* settleSources(
   connection: RunConnection,
   path: string,
   record: WorkflowRunRecord,
-  proved: RetainedDefinitionSources | undefined,
-): Operation<Result<RetainedDefinitionSources>> {
+  proved: SavedDefinitionSources | undefined,
+): Operation<Result<SavedDefinitionSources>> {
   if (proved !== undefined) {
     return Ok(proved);
   }
   // The one case left: a run this call created. Its content existed nowhere
   // until the transaction committed, so it is read back out of the store and
   // verified again — which is what makes the closure a caller imports the
-  // retained bytes rather than the buffers it supplied.
+  // saved bytes rather than the buffers it supplied.
   const stored = yield* readStoredSource(connection, path);
   if (!stored.ok) {
     return stored;
@@ -765,7 +765,7 @@ function forkConflicts(
 /**
  * Finish this execution and publish what the run became, together.
  *
- * A status line says what was retained, so the record that says the execution
+ * A status line says what was saved, so the record that says the execution
  * ended and the state that says what it ended as commit at once or not at all.
  */
 export function* settleExecution(
@@ -959,7 +959,7 @@ function admissionRefusal(
   }
   if (status === "cancelled") {
     return new WorkflowRequestError(
-      "workflow run cancelled: a cancelled run reports its retained state and is not advanced.",
+      "workflow run cancelled: a cancelled run reports its saved state and is not advanced.",
     );
   }
   return undefined;
@@ -972,7 +972,7 @@ function terminal(status: WorkflowRunStatus): boolean {
 /**
  * Close what the previous workflow executor left, on the evidence the run itself holds.
  *
- * Precedence is the architecture's. A retained root Close proves the canonical
+ * Precedence is the architecture's. A saved root Close proves the canonical
  * outcome won before anything else could; failing that, a cancellation
  * addressed to the exact generation that died settles the execution it was
  * addressed to; failing both, the execution was interrupted.
@@ -1011,7 +1011,7 @@ interface Closing {
 /**
  * What the previous workflow executor's execution became, on the evidence the run holds.
  *
- * A retained root Close proves the canonical outcome won before anything could
+ * A saved root Close proves the canonical outcome won before anything could
  * interrupt it, so it is restored. Failing that, the execution was interrupted:
  * the workflow executor went away without recording an outcome, and that is what happened.
  */
@@ -1037,7 +1037,7 @@ const interrupted = { kind: "host", code: "executor-interrupted" } as const;
  *
  * A root Close is what proves the document itself finished. Its result decides
  * the run's terminal status, and its own event identity is the reason — the
- * journal already filtered it, so nothing new is retained to say why.
+ * journal already filtered it, so nothing new is saved to say why.
  */
 function rootOutcome(
   database: DatabaseSync,
@@ -1197,7 +1197,7 @@ function refusal<T>(error: unknown, path: string): Result<T> {
  * Make one run terminal under the executor lock without starting anything.
  *
  * There is no live execution to halt here: acquiring the lock is what proved
- * that. What is left is retained state, and the rules are the architecture's —
+ * that. What is left is saved state, and the rules are the architecture's —
  * a root Close means the canonical outcome already won and cancellation is
  * refused; an unfinished execution left by a workflow executor that went away is finished
  * as cancelled; a run with nothing running becomes cancelled directly; a run

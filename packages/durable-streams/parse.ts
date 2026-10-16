@@ -100,7 +100,7 @@ function parseEffectDescription(value: unknown, path: string): EffectDescription
       continue;
     }
     // `${path}.*`, not `${path}.${key}`: these member names come from the
-    // record, and a record's own names are as much retained content as its
+    // record, and a record's own names are as much saved content as its
     // values. A path built from one would carry it into logs and terminals.
     define(description, key, parseJsonValue(member, `${path}.*`));
   }
@@ -202,7 +202,7 @@ function parseStringMember(members: Members, key: string, path: string): string 
  *
  * The names it *does* declare are this module's own and safe to print; the one
  * that turned up is content from the record, and a record's member names are
- * as much retained history as its values.
+ * as much saved history as its values.
  */
 function requireMemberNames(members: Members, names: string[], path: string): void {
   for (const key of members.keys()) {

@@ -49,7 +49,7 @@ function withLifecycle<T>(root: string, body: () => Operation<T>): Operation<T> 
   });
 }
 
-/** A run left in one retained state, by a workflow executor that is gone. */
+/** A run left in one saved state, by a workflow executor that is gone. */
 function* runEndedAs(
   root: string,
   runId: string,
@@ -132,7 +132,7 @@ describe("Tier WLC — cancellation and deletion", () => {
     });
   });
 
-  it("WLC2: a run with no live workflow executor follows its retained state", function* () {
+  it("WLC2: a run with no live workflow executor follows its saved state", function* () {
     const root = yield* useStorageRoot();
 
     // Nothing running, nothing recorded: cancellable directly.
@@ -291,7 +291,7 @@ describe("Tier WLC — cancellation and deletion", () => {
       if (!removed.ok) {
         throw removed.error;
       }
-      // Only what actually went, and the lock is not retained run state.
+      // Only what actually went, and the lock is not saved run state.
       expect(removed.value.removed).toEqual(["run-storage"]);
 
       // Absent is reported rather than treated as an idempotent success.
@@ -314,7 +314,7 @@ describe("Tier WLC — cancellation and deletion", () => {
  *
  * Between the moment a creation transaction commits and the moment its caller
  * has registered anything of its own there is real work: the begin transition
- * reads its retained source back and authenticates it, the caller reports the
+ * reads its saved source back and authenticates it, the caller reports the
  * run id, projects the closure and imports the Deno adapter. Every one of those
  * suspends, and a cancellation arriving in any of them used to leave the
  * durable run and its execution saying `running` while the executor lock was
@@ -359,7 +359,7 @@ describe("Tier WLT — interrupted after the creation transaction committed", ()
     return n;
   }
 
-  interface Retained {
+  interface Saved {
     readonly status: unknown;
     readonly reasonKind: unknown;
     readonly reasonCode: unknown;
@@ -369,7 +369,7 @@ describe("Tier WLT — interrupted after the creation transaction committed", ()
     readonly events: number;
   }
 
-  function retained(root: string, runId: string): Retained {
+  function saved(root: string, runId: string): Saved {
     const database = new DatabaseSync(workflowRunPath(root, runId), { readOnly: true });
     try {
       const run = row(database.prepare("SELECT * FROM workflow_run").get(), "the run");
@@ -390,7 +390,7 @@ describe("Tier WLT — interrupted after the creation transaction committed", ()
                 "ON b.source_hash = s.source_hash ORDER BY s.path ASC",
             )
             .all(),
-          "a retained source",
+          "a saved source",
         ),
         events: count(
           database.prepare("SELECT count(*) AS n FROM journal_events").get(),
@@ -404,7 +404,7 @@ describe("Tier WLT — interrupted after the creation transaction committed", ()
 
   /** Everything both post-commit windows owe, whichever one produced them. */
   function* settledInterrupted(root: string, runId: string): Operation<void> {
-    const after = retained(root, runId);
+    const after = saved(root, runId);
 
     // The complete version-2 snapshot is durable: the descriptor, and the exact
     // bytes behind every path it names. Read through the same parser a host
@@ -445,11 +445,11 @@ describe("Tier WLT — interrupted after the creation transaction committed", ()
     // have written what they saw. Acquiring is what proves the release.
     yield* withRunHost(root, function* () {
       yield* withExecutor(runId, function* () {
-        expect(retained(root, runId).status).toBe("interrupted");
+        expect(saved(root, runId).status).toBe("interrupted");
       });
     });
 
-    // And the run resumes from the bytes it retained, not from anything a host
+    // And the run resumes from the bytes it saved, not from anything a host
     // would have to go and find.
     yield* withRunHost(root, function* (transitions) {
       yield* withExecutor(runId, function* (executorLock) {
@@ -459,11 +459,11 @@ describe("Tier WLT — interrupted after the creation transaction committed", ()
         }
         const { sources } = resumed.value;
         expect(sources.sources.map((one) => one.path)).toEqual([BUNDLE_ENTRYPOINT]);
-        const retainedBytes = sources.sources[0]?.bytes;
-        if (retainedBytes === undefined) {
+        const savedBytes = sources.sources[0]?.bytes;
+        if (savedBytes === undefined) {
           throw new Error("the resumed run retains no entrypoint");
         }
-        expect(new TextDecoder().decode(retainedBytes)).toBe(BUNDLE_SOURCE);
+        expect(new TextDecoder().decode(savedBytes)).toBe(BUNDLE_SOURCE);
       });
     });
   }
@@ -478,7 +478,7 @@ describe("Tier WLT — interrupted after the creation transaction committed", ()
     };
 
     // The first time the connection lock is taken after the creation
-    // transaction committed is source settlement reading the retained bytes
+    // transaction committed is source settlement reading the saved bytes
     // back to authenticate them. Holding that acquisition open is what puts
     // this case inside the window by construction rather than by winning a race
     // against it: the transition is provably still in `settleSources`, because
@@ -489,7 +489,7 @@ describe("Tier WLT — interrupted after the creation transaction committed", ()
     /** Whether the creation transaction has committed, asked of the file. */
     function committed(): boolean {
       try {
-        return retained(root, runId).executions.length === 1;
+        return saved(root, runId).executions.length === 1;
       } catch {
         // No database, or no table in it yet: nothing has committed.
         return false;
@@ -544,9 +544,9 @@ describe("Tier WLT — interrupted after the creation transaction committed", ()
         // transition has not returned.
         yield* arrived.operation;
         expect(returned).toBe(false);
-        expect(retained(root, runId).status).toBe("running");
-        expect(retained(root, runId).executions).toHaveLength(1);
-        expect(retained(root, runId).executions[0]?.["stopped_at"]).toBe(null);
+        expect(saved(root, runId).status).toBe("running");
+        expect(saved(root, runId).executions).toHaveLength(1);
+        expect(saved(root, runId).executions[0]?.["stopped_at"]).toBe(null);
 
         // Halted where it stands, and the acquisition torn down under it —
         // structured cancellation, inside the window.
@@ -584,8 +584,8 @@ describe("Tier WLT — interrupted after the creation transaction committed", ()
         // Exactly where the command stands when it reports the run id,
         // projects the closure and imports the Deno adapter: admitted, running,
         // and with nothing of its own registered yet. The scope ends here.
-        expect(retained(root, runId).status).toBe("running");
-        expect(retained(root, runId).executions[0]?.["stopped_at"]).toBe(null);
+        expect(saved(root, runId).status).toBe("running");
+        expect(saved(root, runId).executions[0]?.["stopped_at"]).toBe(null);
       });
     });
 

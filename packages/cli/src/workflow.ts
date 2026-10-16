@@ -1,5 +1,5 @@
 /**
- * `xmd workflow` — running a document as a retained workflow run, and reading
+ * `xmd workflow` — running a document as a saved workflow run, and reading
  * one back.
  *
  * The command selects the environment; the document describes the procedure.
@@ -40,7 +40,7 @@
  * `start` names a document; every other action names a run. That asymmetry is
  * the whole lifecycle rule: a document path locates a definition and never
  * selects a previous run, and a run id addresses a run whose definition and
- * props are already retained. Starting the same document twice without `--id` therefore
+ * props are already saved. Starting the same document twice without `--id` therefore
  * makes two runs, and `resume` accepts no definition, no props and no generated
  * prop arguments at all — supplying them would ask this run to be a different
  * one.
@@ -69,13 +69,13 @@ import type { Operation, Result } from "effection";
 import { field, object, cli } from "configliere";
 import { z } from "zod";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
-import { retainedSource, validateProps } from "@executablemd/core";
+import { savedSource, validateProps } from "@executablemd/core";
 import { gitDirectorySelection } from "@executablemd/git";
 import type { PropsSchema } from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
 import {
   definitionComponents,
-  retainedWorkflowInstallation,
+  savedWorkflowInstallation,
   workflowBundleInstallation,
   WORKFLOW_RUN_STATUSES,
   WorkflowLifecycle,
@@ -97,8 +97,8 @@ import { SUSPENSION_REQUEST } from "@executablemd/workflow";
 import { describeError } from "./props.ts";
 import { offering, useNoGeneratedEvaluation } from "./workflow-generated.ts";
 import { preflightFork } from "./workflow-fork.ts";
-import type { EstablishedDefinition, RetainedSources } from "./workflow-definition.ts";
-import type { RetainedDefinitionSources } from "@executablemd/workflow/deno";
+import type { EstablishedDefinition, SavedSources } from "./workflow-definition.ts";
+import type { SavedDefinitionSources } from "@executablemd/workflow/deno";
 import type { WorkflowBundleComponent } from "@executablemd/core/host";
 import { decodeSourceText } from "@executablemd/workflow";
 import type { WorkflowRun, WorkflowRunRecord } from "@executablemd/workflow";
@@ -106,7 +106,7 @@ import type { WorkflowRun, WorkflowRunRecord } from "@executablemd/workflow";
 /**
  * What this module cannot do without knowing the host.
  *
- * Three operations, all of which reach a run's retained state. Everything else
+ * Three operations, all of which reach a run's saved state. Everything else
  * about the lifecycle — the grammar, the definition, the props, the statuses,
  * the exit codes — is the same wherever a run lives.
  */
@@ -177,7 +177,7 @@ const EXIT_BY_STATUS: Readonly<Record<WorkflowRunStatus, number>> = Object.freez
   running: 1,
 });
 
-/** A failure the host classified, rather than an exception message it retained. */
+/** A failure the host classified, rather than an exception message it saved. */
 const HOST_FAILURE_CODE = "document-execution-failed";
 const HOST_INTERRUPTED_CODE = "executor-interrupted";
 const HOST_ORPHANED_CODE = "executor-disappeared";
@@ -212,7 +212,7 @@ const OPTIONS_BY_ACTION: Readonly<Record<string, readonly string[]>> = Object.fr
   start: [...EXECUTION_OPTIONS, "--id"],
   resume: EXECUTION_OPTIONS,
   fork: [...EXECUTION_OPTIONS, "--id", "--at"],
-  // A delivery writes retained state, so it crosses the same gate a durable
+  // A delivery writes saved state, so it crosses the same gate a durable
   // event crosses. It runs no document, so nothing else about executing one
   // applies to it.
   answer: ["--secret-detection", "--no-secret-detection"],
@@ -248,7 +248,7 @@ export const workflowConfig = object({
     ...field(z.string().optional()),
   },
   at: {
-    description: "the retained event a fork continues from (fork only)",
+    description: "the saved event a fork continues from (fork only)",
     ...field(z.string().optional()),
   },
   verbose: {
@@ -280,13 +280,13 @@ export const workflowConfig = object({
   },
   artifact: {
     description:
-      "inspect this sealed .xmd artifact instead of a retained run (status and history only)",
+      "inspect this sealed .xmd artifact instead of a saved run (status and history only)",
     ...field(z.string().optional()),
   },
   output: {
     description:
       "the .xmd file to write the artifact to (export only); the artifact contains this " +
-      "run's complete retained Workspace, which may include source, generated files and " +
+      "run's complete saved Workspace, which may include source, generated files and " +
       "secrets — treat it as confidential",
     ...field(z.string().optional()),
   },
@@ -301,7 +301,7 @@ export interface WorkflowRequest {
   readonly verbose: boolean;
   readonly raw: boolean;
   readonly secretDetection: boolean;
-  /** The retained event a fork continues from. Present exactly for `fork`. */
+  /** The saved event a fork continues from. Present exactly for `fork`. */
   readonly at?: string;
   /** The definition a fork runs. Present exactly for `fork`. */
   readonly definition?: string;
@@ -367,7 +367,7 @@ export interface WorkflowExecution {
    * What the trusted host attaches to this run's one execution.
    *
    * An `ExecutionInstallation` rather than something installed into a scope:
-   * its retained-run admission is applied inside canonical core's own journal
+   * its saved-run admission is applied inside canonical core's own journal
    * read, before any middleware or document code exists, and its `prepare`
    * hook records the run inside the durable root before the root import.
    */
@@ -416,7 +416,7 @@ function reportRun(runId: string): void {
  * identifier: `xmd workflow answer` takes the run *and* the suspension, and
  * without this line the only way to learn the second one is to read the
  * journal. Reported after the settlement commits, for the same reason the
- * status line is — a wait nothing retained is not one to answer.
+ * status line is — a wait nothing saved is not one to answer.
  */
 function reportSuspension(suspensionId: string): void {
   report(`workflow suspension: ${suspensionId}`);
@@ -435,7 +435,7 @@ function* isCompleted(stream: DurableStream): Operation<boolean> {
 /**
  * The stop reason a failure gets.
  *
- * A retained event that already crossed the secret filter is preferable to a
+ * A saved event that already crossed the secret filter is preferable to a
  * code, because it says which effect failed. Anything else becomes one
  * categorical host code: the alternative is retaining an exception message
  * beside the journal that filtered it, which is history nothing has filtered.
@@ -698,7 +698,7 @@ function inspectionSource(
   return Err(
     new Error(
       `xmd workflow ${action} needs something to inspect — a run id ` +
-        `(\`xmd workflow ${action} <run-id>\`) for a retained run, or ` +
+        `(\`xmd workflow ${action} <run-id>\`) for a saved run, or ` +
         `\`xmd workflow ${action} --artifact=<path.xmd>\` for a sealed artifact.`,
     ),
   );
@@ -885,7 +885,7 @@ export interface WorkflowStart {
  * status.
  *
  * `execute` is the shared CLI's own document machinery, handed everything this
- * run decided: the retained source, the retained props, the run's journal, the
+ * run decided: the saved source, the saved props, the run's journal, the
  * installations that belong inside the execution scope, and the attachment that
  * wraps it.
  *
@@ -907,7 +907,7 @@ export function runWorkflow(
     // executor lock — and a generated one is this invocation's own run.
     const runId = request.action === "resume" ? request.target : (request.id ?? generatedRunId());
 
-    // A fork begins from the properties the source retained, so the merged set
+    // A fork begins from the properties the source saved, so the merged set
     // is decided before the creation that carries it — and therefore before
     // preflight replays under it, before it is admitted, and before it becomes
     // the identity a reused fork id is compared against.
@@ -940,7 +940,7 @@ export function runWorkflow(
       return { exitCode: 1 };
     }
 
-    // Acquired before storage is created or opened, before a retained
+    // Acquired before storage is created or opened, before a saved
     // definition is fetched, before replay history is read, before a Workspace
     // is attached and before the root is imported. Nothing below this line
     // happens for a run somebody else is running.
@@ -1000,12 +1000,12 @@ export function runWorkflow(
       if (phase.state !== "running") {
         return;
       }
-      const retained = yield* transitions.settle(executorLock, {
+      const saved = yield* transitions.settle(executorLock, {
         executionId: execution.executionId,
         status: "interrupted",
         reason: { kind: "host", code: HOST_INTERRUPTED_CODE },
       });
-      if (!retained.ok) {
+      if (!saved.ok) {
         // Never claim a status storage refused. What went wrong is reported,
         // and no `workflow status:` line is published.
         //
@@ -1015,7 +1015,7 @@ export function runWorkflow(
         // interrupted run exits 130 whether or not its last write landed. What
         // this run owes the caller is an accurate account, not a different exit
         // code.
-        report(retained.error.message);
+        report(saved.error.message);
         return;
       }
       reportStatus("interrupted");
@@ -1051,7 +1051,7 @@ export function runWorkflow(
       // The exact target the run retains, never a selector re-resolved now: a
       // resumed run continues the section it started, and nothing asks the
       // document layer that question a second time.
-      root: retainedSource(rootDocumentName(record), source.value.source, {
+      root: savedSource(rootDocumentName(record), source.value.source, {
         ...(record.definition.targetPath === undefined
           ? {}
           : { target: record.definition.targetPath }),
@@ -1064,17 +1064,17 @@ export function runWorkflow(
       // beside it, through the same host-service slot `xmd run` fills with a
       // real adapter.
       installations: [
-        retainedWorkflowInstallation(installedRun(record)),
+        savedWorkflowInstallation(installedRun(record)),
         // The bundle this run is a run of, when it is a run of one. Both start
         // and resume install it, and a completed replay installs it too: the
-        // retained history is held to the same components before its recorded
+        // saved history is held to the same components before its recorded
         // output is accepted.
         ...(source.value.components.length === 0
           ? []
           : [workflowBundleInstallation(source.value.components)]),
       ],
       around<T>(operation: Operation<T>): Operation<T> {
-        // A completed run replays its retained output and result. Attaching a
+        // A completed run replays its saved output and result. Attaching a
         // Workspace for it would open a transaction and capture a root for
         // work that is not going to happen. A replayed terminal run keeps its
         // outcome either way — the begin transition preserved it.
@@ -1085,7 +1085,7 @@ export function runWorkflow(
         //
         // The generated selection is offered inside the attachment, in the
         // scope that executes the document: a completed replay restores its
-        // retained output and expands nothing, so it is offered nothing — and
+        // saved output and expands nothing, so it is offered nothing — and
         // states that, because this command's ordinary default encloses it and
         // a run offered nothing is not a run that inherits a vocabulary.
         // `<Dir>`'s spelling comes from the Git Plugin, which decides that a
@@ -1128,7 +1128,7 @@ export function runWorkflow(
     if (settlement.kind === "suspension") {
       // The executor lock is still held, and stays held until this invocation
       // returns: teardown finished above, and only then may the run claim a
-      // status. The stop reason names the retained request event rather than
+      // status. The stop reason names the saved request event rather than
       // repeating anything the request said.
       const requested = yield* suspensionEvent(database, settlement.notice.suspensionId);
       const suspended = yield* transitions.settle(executorLock, {
@@ -1150,7 +1150,7 @@ export function runWorkflow(
     const result = settlement.result;
     const status: WorkflowRunStatus = result.ok ? "completed" : "failed";
     const reason = result.ok ? undefined : yield* failureReason(database);
-    const retained = yield* transitions.settle(executorLock, {
+    const saved = yield* transitions.settle(executorLock, {
       executionId: execution.executionId,
       status,
       ...(reason === undefined ? {} : { reason }),
@@ -1161,10 +1161,10 @@ export function runWorkflow(
     if (!result.ok) {
       report(result.error.message);
     }
-    if (!retained.ok) {
-      // The status was not retained, so it is not published and its exit code
+    if (!saved.ok) {
+      // The status was not saved, so it is not published and its exit code
       // is not this invocation's. Storage refusing is its own failure.
-      report(retained.error.message);
+      report(saved.error.message);
       return { exitCode: 1 };
     }
     phase.state = "settled";
@@ -1302,11 +1302,11 @@ function* startCreation(
  * The properties this run is created with.
  *
  * A `start` supplies its own and nothing else. A fork begins from what the
- * source retained: a corrected definition is still a run of the same procedure,
+ * source saved: a corrected definition is still a run of the same procedure,
  * and restating every property the original was started with would make
  * forking a transcription exercise. Whatever the fork command wrote itself
  * takes precedence, property by property — that is what "add or override"
- * means — and a property the source retained under a name the fork also wrote
+ * means — and a property the source saved under a name the fork also wrote
  * is the fork's.
  *
  * The result is held to the *candidate* document, because that is the document
@@ -1340,12 +1340,12 @@ function* forkProps(
 }
 
 /**
- * What the source run retained, for a fork to begin from.
+ * What the source run saved, for a fork to begin from.
  *
  * Read through the ordinary read-only inspection surface, before the fork's
  * executor lock and before anything of the fork exists. Every other action
  * answers with nothing: a `start` has no source, and a `resume` already has the
- * properties its own run retained.
+ * properties its own run saved.
  */
 function* inheritedProps(
   request: WorkflowRequest,
@@ -1369,11 +1369,11 @@ function* inheritedProps(
  * second read here would be a second source of truth about what the run is a
  * run of, and the two could differ.
  */
-function executableSources(sources: RetainedDefinitionSources): Result<RetainedSources> {
+function executableSources(sources: SavedDefinitionSources): Result<SavedSources> {
   const byPath = new Map(sources.sources.map((source) => [source.path, source.bytes]));
   const entry = byPath.get(sources.definition.entrypoint);
   if (entry === undefined) {
-    return Err(new Error("this run's retained source holds no entrypoint"));
+    return Err(new Error("this run's saved source holds no entrypoint"));
   }
   const source = decodeSourceText(entry);
   if (!source.ok) {
@@ -1383,9 +1383,9 @@ function executableSources(sources: RetainedDefinitionSources): Result<RetainedS
   const components: WorkflowBundleComponent[] = [];
   for (const declared of sources.definition.components ?? []) {
     const bytes = byPath.get(declared.path);
-    const retained = sources.definition.sources.find((each) => each.path === declared.path);
-    if (bytes === undefined || retained === undefined) {
-      return Err(new Error(`this run's retained source holds no ${declared.name}`));
+    const saved = sources.definition.sources.find((each) => each.path === declared.path);
+    if (bytes === undefined || saved === undefined) {
+      return Err(new Error(`this run's saved source holds no ${declared.name}`));
     }
     const content = decodeSourceText(bytes);
     if (!content.ok) {
@@ -1394,7 +1394,7 @@ function executableSources(sources: RetainedDefinitionSources): Result<RetainedS
     components.push({
       name: declared.name,
       path: declared.path,
-      sourceHash: retained.sourceHash,
+      sourceHash: saved.sourceHash,
       content: content.value,
     });
   }
@@ -1457,7 +1457,7 @@ type Settlement =
   | { readonly kind: "suspension"; readonly notice: SuspensionNotice };
 
 /**
- * The retained request event one suspension published, as a stop reason.
+ * The saved request event one suspension published, as a stop reason.
  *
  * A reference rather than a copy. The request already crossed the secret gate
  * on its way into the journal and already carries this run's Workspace root;

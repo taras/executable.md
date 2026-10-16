@@ -482,8 +482,8 @@ interface Pty {
    *
    * The stream answers a different question than the screen does, and every
    * surface decision is a question about the screen: bytes that drew a composer
-   * are retained after a dialog was drawn over it, bytes that drew a refusal are
-   * retained after a repaint wiped it, and a frame held back by `CSI ?2026h` has
+   * are saved after a dialog was drawn over it, bytes that drew a refusal are
+   * saved after a repaint wiped it, and a frame held back by `CSI ?2026h` has
    * arrived without having been shown to anybody.
    *
    * The frames rather than a flag, because one `data` event from the pty applies
@@ -1129,7 +1129,7 @@ function parseLaunchRecord(source: Record<string, unknown>): LaunchRecord | unde
 /**
  * The launch records one diagnostic journal holds, in order.
  *
- * A retained preparation carries the prepared instruction text, so this reads it
+ * A saved preparation carries the prepared instruction text, so this reads it
  * and nothing that reaches a verdict repeats it: what crosses out of here is
  * whether a digest exists, never the text or the digest's own bytes.
  */
@@ -1576,7 +1576,7 @@ function* settleAccounts(journey: Journey, verdict: JourneyVerdict): Operation<v
     }
   }
 
-  // Every materialization the whole journey retained, however many invocations
+  // Every materialization the whole journey saved, however many invocations
   // it took. This is the number the authorized budget is spent against.
   const materialized = all.filter((record) => record.phase === "materialized");
   verdict.materializationTurns = materialized.length;
@@ -1716,7 +1716,7 @@ function* ready(journey: Journey, verdict: JourneyVerdict): Operation<boolean> {
  * Materialize once, leave without saying anything, and come back.
  *
  * The second invocation is the question: a session that is already resumable
- * owes no turn, so a materialization retained twice would mean a reader paid
+ * owes no turn, so a materialization saved twice would mean a reader paid
  * again for something that had already been done.
  */
 function* runZeroNativeTurn(journey: Journey, verdict: JourneyVerdict): Operation<void> {
@@ -1860,7 +1860,7 @@ function* runNativeLaunch(
 function decideZeroNativeTurn(verdict: JourneyVerdict): void {
   if (verdict.materializationTurns !== 1) {
     verdict.verdict = "PRODUCT_FAILED";
-    verdict.detail = `the journey retained ${verdict.materializationTurns} materialization turns`;
+    verdict.detail = `the journey saved ${verdict.materializationTurns} materialization turns`;
     return;
   }
   if (verdict.nativeUserTurns !== 0) {
@@ -1887,7 +1887,7 @@ function decideZeroNativeTurn(verdict: JourneyVerdict): void {
 function decideNativeLaunch(verdict: JourneyVerdict): void {
   if (verdict.materializationTurns !== 1) {
     verdict.verdict = "PRODUCT_FAILED";
-    verdict.detail = `the journey retained ${verdict.materializationTurns} materialization turns`;
+    verdict.detail = `the journey saved ${verdict.materializationTurns} materialization turns`;
     return;
   }
   if (!verdict.openingSentenceExact) {

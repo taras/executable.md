@@ -422,7 +422,7 @@ yield* Sample.around({
     yield* expectGone(fixturePids(stderr));
   });
 
-  it("fails projected content promptly, tears down retained service attachments, and does not restart", function* () {
+  it("fails projected content promptly, tears down saved service attachments, and does not restart", function* () {
     const stderr: string[] = [];
     let tokenCalls = 0;
     yield* scoped(function* () {
@@ -445,11 +445,11 @@ meta:
 ---
 
 \`\`\`bash service=firstServer exec
-${command("normal", "first-retained")}
+${command("normal", "first-saved")}
 \`\`\`
 
 \`\`\`bash service=secondServer exec
-${command("normal", "second-retained")}
+${command("normal", "second-saved")}
 \`\`\`
 
 <Content />
@@ -485,8 +485,8 @@ throw new Error("projected content failure");
 
     const pids = fixturePids(stderr);
     expect(pids).toHaveLength(2);
-    expect(stderr.join("")).toContain("service stopping:first-retained");
-    expect(stderr.join("")).toContain("service stopping:second-retained");
+    expect(stderr.join("")).toContain("service stopping:first-saved");
+    expect(stderr.join("")).toContain("service stopping:second-saved");
     yield* expectGone(pids);
   });
 

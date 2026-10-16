@@ -96,7 +96,7 @@ import { workflowForkStaging, workflowRunPath } from "./path.ts";
 import { authorizedRoot, checkRunId } from "./provider.ts";
 import { reading, readTransaction } from "./reading.ts";
 import type { DetachedXmdArtifact } from "./artifact/types.ts";
-import type { RetainedDefinitionSources } from "../lifecycle/source.ts";
+import type { SavedDefinitionSources } from "../lifecycle/source.ts";
 import type { WorkflowDefinition } from "../storage/definition.ts";
 import type { Json } from "@executablemd/durable-streams";
 import { writeXmdArtifact } from "./artifact/mod.ts";
@@ -104,8 +104,8 @@ import { historyArtifact, inspectArtifact } from "./artifact-inspection.ts";
 import { readExportFrontier, readRetrievalMetadata } from "./artifact-frontier.ts";
 import {
   readDefinitionSourceRows,
-  type RetainedSourceRows,
-  verifyRetainedSources,
+  type SavedSourceRows,
+  verifySavedSources,
 } from "./definition-source.ts";
 import type { WorkflowExportRequest, WorkflowExportResult } from "../lifecycle/export.ts";
 import { readDocumentExecution, readRetrieval, readRunRecord } from "./rows.ts";
@@ -139,7 +139,7 @@ export type RecoveryPhase =
  *
  * The directory is host arrangement this installation just made, which is what
  * lets a test plant a real filesystem fault or start a real competing process
- * at the exact moment that matters. It is not retained state, and nothing else
+ * at the exact moment that matters. It is not saved state, and nothing else
  * about the run travels with it: no lock, no transition, no database handle and
  * no value the run kept.
  */
@@ -451,18 +451,18 @@ function* readSource(
 }
 
 /**
- * Remove one run's retained storage under its executor lock.
+ * Remove one run's saved storage under its executor lock.
  *
  * The lock decides whether there is anything to refuse: a live workflow executor holds
  * it, and a run somebody is running is not one to delete. Everything else may
  * be, including a `running` record whose workflow executor is gone — acquiring
  * the released lock is what proves it.
  *
- * What goes is the run's database and the provider sessions it retained. The
+ * What goes is the run's database and the provider sessions it saved. The
  * lock file stays, empty: unlinking a file
  * this workflow executor still holds would let the next caller create and lock
  * a different file at the same path. An empty lock is host
- * arrangement rather than retained run state, so it is not a category anybody
+ * arrangement rather than saved run state, so it is not a category anybody
  * is told about.
  */
 function* remove(
@@ -506,7 +506,7 @@ function* remove(
 
     yield* rm(path);
     // After the run's own storage, and under the same lock. A provider session
-    // is retained state this run owns, so deleting the run and leaving the
+    // is saved state this run owns, so deleting the run and leaving the
     // conversation it was having behind would be a deletion that reported more
     // than it did. Absent is not removed, and is not reported as such.
     const sessions = yield* removeProviderSessions(root, hold.runId);
@@ -600,7 +600,7 @@ function* acquire(
  *
  * The read itself is the ordinary inspection path, which is what gives a
  * crashed source the existing recovery-copy discipline for free: a private copy
- * is recovered and read, and the retained database is left untouched.
+ * is recovered and read, and the saved database is left untouched.
  */
 function* exportRun(
   root: string,
@@ -642,10 +642,10 @@ function* exportRun(
   // The run's own source store is the only place a closure comes from. Nothing
   // is fetched and no host capability is consulted: a run retains the bytes it
   // executes, so a run whose store is empty is corrupt rather than remote.
-  const closure: Result<RetainedDefinitionSources> =
+  const closure: Result<SavedDefinitionSources> =
     selected.value.rows === undefined
       ? Err(new WorkflowDefinitionSourceMissingError())
-      : yield* verifyRetainedSources(definition, selected.value.rows);
+      : yield* verifySavedSources(definition, selected.value.rows);
   if (!closure.ok) {
     return closure;
   }
@@ -670,8 +670,8 @@ interface SelectedFrontier {
   readonly detached: Omit<DetachedXmdArtifact, "definition">;
   readonly definition: WorkflowDefinition;
   readonly retrieval: Json | undefined;
-  /** The retained source store this run executes out of. */
-  readonly rows?: RetainedSourceRows;
+  /** The saved source store this run executes out of. */
+  readonly rows?: SavedSourceRows;
 }
 
 function* inspectRun(
@@ -692,11 +692,11 @@ function* runHistory(
     runId,
     (database) =>
       // Classified against the roots this database still holds, read in the
-      // same snapshot as the events. A root that was never retained and a root
+      // same snapshot as the events. A root that was never saved and a root
       // deleted since are the same fact to a fork: it cannot be given that
       // Workspace.
       projectHistory(readJournalEntries(database), {
-        retainedRoots: retainedRoots(database),
+        savedRoots: savedRoots(database),
         inherited: readEventProvenance(database),
       }),
     observe,
@@ -726,7 +726,7 @@ function readEventProvenance(
       typeof sourceEventId !== "string"
     ) {
       throw new WorkflowRequestError(
-        "a retained inherited-event provenance row does not describe an inherited event.",
+        "a saved inherited-event provenance row does not describe an inherited event.",
       );
     }
     provenance.set(eventId, Object.freeze({ sourceRunId, sourceEventId }));
@@ -734,7 +734,7 @@ function readEventProvenance(
   return provenance;
 }
 
-export function retainedRoots(database: DatabaseSync): ReadonlySet<string> {
+export function savedRoots(database: DatabaseSync): ReadonlySet<string> {
   const roots = new Set<string>();
   for (const row of reading(database, "SELECT root_id FROM workspace_roots").all()) {
     const rootId = row["root_id"];
@@ -749,7 +749,7 @@ export function retainedRoots(database: DatabaseSync): ReadonlySet<string> {
  * Read one run this caller named, refusing storage that holds a different one.
  *
  * Two questions, and the second is asked for every candidate rather than only
- * here: `withSnapshot` refuses a database whose retained id does not name its
+ * here: `withSnapshot` refuses a database whose saved id does not name its
  * file at all, so what is left to ask is whether the run it holds is the run
  * that was asked for.
  */
@@ -792,7 +792,7 @@ function* listRuns(
     // run this root holds, and a shorter one silently answers a question the
     // caller did not ask. A candidate that is a perfectly good database of
     // *another* run is one of those: `withSnapshot` refuses it because its
-    // retained id does not name the file it was found in.
+    // saved id does not name the file it was found in.
     const read = yield* withSnapshot(
       path,
       (database, record) => snapshot(database, record, path),
@@ -841,9 +841,9 @@ function* candidatePaths(root: string): Operation<string[]> {
  * rather than only where a caller supplied an id to compare against.
  *
  * Two paths call this with two different files. The ordinary one reads the
- * retained database, where `physical` and `source` are the same path. Recovered
+ * saved database, where `physical` and `source` are the same path. Recovered
  * inspection reads a private copy, where `physical` is that copy and `source`
- * is still the retained database every diagnostic and every returned path is
+ * is still the saved database every diagnostic and every returned path is
  * about. Identity is not overridden between them: the copy is made under the
  * candidate's own filename, so the location check below asks the real file the
  * same question either way.
@@ -920,9 +920,9 @@ function journalOf(database: string): string {
 }
 
 /**
- * Inspect a crashed run without touching what it retained.
+ * Inspect a crashed run without touching what it saved.
  *
- * The retained pair is copied under coordination and recovered nowhere near the
+ * The saved pair is copied under coordination and recovered nowhere near the
  * original: SQLite rolls the copy's journal back into the copy, and the answer
  * is read from that. What the run kept is exactly as its lost host left it when
  * this returns, still waiting for the write-capable owner whose job recovery

@@ -209,7 +209,7 @@ export function useProviderComponents(log: ProviderLog): Operation<void> {
           return yield* content();
         }
         // A boundary that refuses everything, for content that must reach no
-        // provider at all. A replay standing on a retained result proves it by
+        // provider at all. A replay standing on a saved result proves it by
         // succeeding here: had it asked, this would have answered by failing.
         yield* IssueApi.around({
           // deno-lint-ignore require-yield

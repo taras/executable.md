@@ -273,7 +273,7 @@ export interface ChildSettlement {
   readonly outcome: ExecutionOutcome;
   /** Complete output, or the partial prefix rendered before a failure. */
   readonly output: string;
-  /** The child journal's completed snapshot, when the profile retained one. */
+  /** The child journal's completed snapshot, when the profile saved one. */
   readonly journal?: readonly DurableEvent[];
 }
 

@@ -226,7 +226,7 @@ describe(
       );
       // Closed: the agent saw its input end rather than being left running.
       expect(result.asked.at(-1)).toBe("closed");
-      // No document ran, so no journal — and nothing of this command is retained
+      // No document ran, so no journal — and nothing of this command is saved
       // where a run retains a durable session or a machine-session mapping. What
       // the provider keeps of its own history is the provider's business and is
       // deliberately not asserted here.

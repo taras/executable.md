@@ -4,7 +4,7 @@
  * The materialization is a copy of what the database holds, and every guarantee
  * this provider offers rests on that: deleting one costs time and nothing else.
  * These are the rules about the checkout root itself — that it is a real
- * retained directory and that the export lands where it was aimed — and the
+ * saved directory and that the export lands where it was aimed — and the
  * control that says ordinary tracked symbolic links inside a checkout are still
  * content.
  */
@@ -45,8 +45,8 @@ import {
   raised,
   removeWorkspacePath,
   replaceWorkspaceTree,
-  retainedRepositories,
-  retainedWorktrees,
+  savedRepositories,
+  savedWorktrees,
   runDocument,
   subcommands,
   survivingRoots,
@@ -68,7 +68,7 @@ import {
 } from "./support/replay.ts";
 
 /**
- * Native Git may only operate on the provider-owned export of the retained
+ * Native Git may only operate on the provider-owned export of the saved
  * checkout.
  *
  * The materialization is a copy of what the database holds, and every guarantee
@@ -116,7 +116,7 @@ describe("workflow Repository materialization containment", () => {
       ].join("\n");
 
       yield* runDocument(database, document);
-      const [before] = yield* retainedRepositories(database);
+      const [before] = yield* savedRepositories(database);
       yield* linkWorkspacePath(database, external, before?.record.checkoutPath ?? "");
 
       const frontier = committedRoot(runPath(root, "release-1.4"));
@@ -145,7 +145,7 @@ describe("workflow Repository materialization containment", () => {
 
       // The external clone is untouched, and so is the run.
       expect((yield* until(stat(external))).isDirectory()).toBe(true);
-      expect(yield* retainedRepositories(database)).toEqual([before]);
+      expect(yield* savedRepositories(database)).toEqual([before]);
       expect(committedRoot(runPath(root, "release-1.4"))).toBe(frontier);
       expect(committedCompositionEvents(runPath(root, "release-1.4"))).toBe(events);
     });
@@ -166,7 +166,7 @@ describe("workflow Repository materialization containment", () => {
       ].join("\n");
 
       yield* runDocument(database, document);
-      const [before] = yield* retainedWorktrees(database, "project");
+      const [before] = yield* savedWorktrees(database, "project");
       yield* linkWorkspacePath(database, external, before?.checkoutPath ?? "");
       dropRootClose(runPath(root, "release-1.4"));
 
@@ -177,7 +177,7 @@ describe("workflow Repository materialization containment", () => {
       expect(failure?.message).toContain("is not a directory");
       expect(String(rendered)).not.toContain("child marker");
       expect(subcommands(counting.counters)).not.toContain("clone");
-      expect(yield* retainedWorktrees(database, "project")).toEqual([before]);
+      expect(yield* savedWorktrees(database, "project")).toEqual([before]);
     });
   });
 
@@ -189,7 +189,7 @@ describe("workflow Repository materialization containment", () => {
       const database = yield* createRun();
       const document = `<Repository name="project" url="${remote.locator}" as="repository" />`;
       yield* runDocument(database, document);
-      const [before] = yield* retainedRepositories(database);
+      const [before] = yield* savedRepositories(database);
       const checkout = before?.record.checkoutPath ?? "";
 
       const replaced = yield* transactWorkspaceRoots(database, function* (workspace) {
@@ -256,7 +256,7 @@ describe("workflow Repository materialization containment", () => {
       expect(rendered).toContain("child marker");
       expect(subcommands(counting.counters)).not.toContain("clone");
 
-      const [repository] = yield* retainedRepositories(database);
+      const [repository] = yield* savedRepositories(database);
       const link = yield* workspaceEntry(database, `${repository?.record.checkoutPath}/link.txt`);
       expect(link.kind).toBe("symlink");
       expect(link.target).toBe("which.txt");

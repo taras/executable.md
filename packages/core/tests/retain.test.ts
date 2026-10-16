@@ -1,5 +1,5 @@
 /**
- * Tier RT — retained resources (spec §4.4).
+ * Tier RT — saved resources (spec §4.4).
  *
  * `retain()` creates a resource owned by the scope that invoked the component,
  * so it outlives the invocation and is released with the site — while nothing
@@ -40,7 +40,7 @@ function retainer(name: string, timeline: string[], label: string) {
   );
 }
 
-describe("Tier RT — Retained resources", () => {
+describe("Tier RT — Saved resources", () => {
   // RT1: the contract self-closing components are for — capture the value with
   // `as`, then have a later sibling read the binding while the resource behind
   // it is still alive.
@@ -53,7 +53,7 @@ describe("Tier RT — Retained resources", () => {
           return yield* retain(() =>
             (function* (): Operation<string> {
               yield* useWatch(timeline, "dir");
-              return "/retained/path";
+              return "/saved/path";
             })(),
           );
         })(),
@@ -78,41 +78,41 @@ describe("Tier RT — Retained resources", () => {
     // The capture renders nothing at the call site, and the sibling resolves
     // the binding it wrote.
     expect(output).not.toContain("<Dir");
-    expect(output).toContain("path is /retained/path");
+    expect(output).toContain("path is /saved/path");
     expect(observed).toEqual(["live"]);
     expect(timeline).toEqual(["start:dir", "stop:dir"]);
   });
 
   // RT2: the whole point — the resource is still live once the invocation that
   // created it has been dismantled.
-  it("RT2: a retained resource stays alive after the child invocation ends", function* () {
+  it("RT2: a saved resource stays alive after the child invocation ends", function* () {
     const timeline: string[] = [];
     const definitions = {
-      Holder: retainer("Holder", timeline, "retained"),
+      Holder: retainer("Holder", timeline, "saved"),
       Probe: markdown("Probe", WATCH_BLOCK_OWN),
     };
 
     yield* expandAll(`<Holder />\n\n<Probe />`, definitions, timeline);
 
     // `own` belongs to the later sibling invocation. It starts and stops
-    // entirely inside the window where `retained` is still alive.
-    expect(timeline).toEqual(["start:retained", "start:own", "stop:own", "stop:retained"]);
+    // entirely inside the window where `saved` is still alive.
+    expect(timeline).toEqual(["start:saved", "start:own", "stop:own", "stop:saved"]);
   });
 
   // RT3: the site scope's ordinary completion releases it.
-  it("RT3: a retained resource is released when the site scope succeeds", function* () {
+  it("RT3: a saved resource is released when the site scope succeeds", function* () {
     const timeline: string[] = [];
-    const definitions = { Holder: retainer("Holder", timeline, "retained") };
+    const definitions = { Holder: retainer("Holder", timeline, "saved") };
 
     yield* expandAll(`<Holder />`, definitions, timeline);
 
-    expect(timeline).toEqual(["start:retained", "stop:retained"]);
+    expect(timeline).toEqual(["start:saved", "stop:saved"]);
   });
 
   // RT4: a failure at the site tears the resource down on the way out.
-  it("RT4: a retained resource is released when the site scope errors", function* () {
+  it("RT4: a saved resource is released when the site scope errors", function* () {
     const timeline: string[] = [];
-    const definitions = { Holder: retainer("Holder", timeline, "retained") };
+    const definitions = { Holder: retainer("Holder", timeline, "saved") };
     let raised: unknown;
 
     try {
@@ -129,13 +129,13 @@ describe("Tier RT — Retained resources", () => {
     }
 
     expect(raised).toBeInstanceOf(Error);
-    expect(timeline).toEqual(["start:retained", "stop:retained"]);
+    expect(timeline).toEqual(["start:saved", "stop:saved"]);
   });
 
   // RT5: cancellation of the site scope, with the resource live at halt time.
-  it("RT5: a retained resource is released when the site scope is cancelled", function* () {
+  it("RT5: a saved resource is released when the site scope is cancelled", function* () {
     const timeline: string[] = [];
-    const definitions = { Holder: retainer("Holder", timeline, "retained") };
+    const definitions = { Holder: retainer("Holder", timeline, "saved") };
 
     yield* race([
       scoped(function* () {
@@ -149,12 +149,12 @@ describe("Tier RT — Retained resources", () => {
       sleep(50),
     ]);
 
-    expect(timeline).toEqual(["start:retained", "stop:retained"]);
+    expect(timeline).toEqual(["start:saved", "stop:saved"]);
   });
 
   // RT6: an enclosing invocation is itself a site. Its content scope owns what
-  // was retained there, so nesting unwinds leaf-first.
-  it("RT6: nested site scopes release retained resources leaf-first", function* () {
+  // was saved there, so nesting unwinds leaf-first.
+  it("RT6: nested site scopes release saved resources leaf-first", function* () {
     const timeline: string[] = [];
     const definitions = {
       Outer: component("Outer", () =>
@@ -163,17 +163,17 @@ describe("Tier RT — Retained resources", () => {
           return yield* content();
         })(),
       ),
-      Inner: retainer("Inner", timeline, "inner-retained"),
+      Inner: retainer("Inner", timeline, "inner-saved"),
     };
 
     yield* expandAll(`<Outer>\n<Inner />\n</Outer>`, definitions, timeline);
 
-    // `inner-retained` is owned by Outer's content scope — stage 1 of Outer's
+    // `inner-saved` is owned by Outer's content scope — stage 1 of Outer's
     // teardown — so it stops before Outer releases its own resource.
     expect(timeline).toEqual([
       "start:outer",
-      "start:inner-retained",
-      "stop:inner-retained",
+      "start:inner-saved",
+      "stop:inner-saved",
       "stop:outer",
     ]);
   });
@@ -202,7 +202,7 @@ describe("Tier RT — Retained resources", () => {
   // says so rather than silently falling back to invocation lifetime.
   it("RT8: retain() without an invocation-site scope reports the missing scope", function* () {
     const timeline: string[] = [];
-    const definitions = { Holder: retainer("Holder", timeline, "retained") };
+    const definitions = { Holder: retainer("Holder", timeline, "saved") };
 
     const expanded = yield* scoped(function* () {
       yield* useHarness(definitions, timeline);
@@ -220,7 +220,7 @@ describe("Tier RT — Retained resources", () => {
   // resource in a scope with no relationship to the call site.
   it("RT8b: a missing site does not fall through to an inherited provider", function* () {
     const timeline: string[] = [];
-    const definitions = { Holder: retainer("Holder", timeline, "retained") };
+    const definitions = { Holder: retainer("Holder", timeline, "saved") };
 
     const expanded = yield* scoped(function* () {
       // A stray provider in an enclosing context, of the shape an embedding
@@ -245,26 +245,26 @@ describe("Tier RT — Retained resources", () => {
     expect(timeline).toEqual([]);
   });
 
-  // RT9: a resource retained at the root lives for the expansion, not for the
+  // RT9: a resource saved at the root lives for the expansion, not for the
   // element — the site scope there is the document's.
-  it("RT9: a resource retained at the root outlives every later sibling", function* () {
+  it("RT9: a resource saved at the root outlives every later sibling", function* () {
     const timeline: string[] = [];
     const definitions = {
-      Holder: retainer("Holder", timeline, "retained"),
+      Holder: retainer("Holder", timeline, "saved"),
       Wrap: markdown("Wrap", `${WATCH_BLOCK_OWN}\n\n<Content />`),
     };
 
     yield* expandAll(`<Holder />\n\n<Wrap>text</Wrap>`, definitions, timeline);
 
-    expect(timeline).toEqual(["start:retained", "start:own", "stop:own", "stop:retained"]);
+    expect(timeline).toEqual(["start:saved", "start:own", "stop:own", "stop:saved"]);
   });
 
   // RT10: halting mid-expansion, while a later block suspends, still releases
-  // what an earlier element retained.
-  it("RT10: halting expansion releases what an earlier element retained", function* () {
+  // what an earlier element saved.
+  it("RT10: halting expansion releases what an earlier element saved", function* () {
     const timeline: string[] = [];
     const definitions = {
-      Holder: retainer("Holder", timeline, "retained"),
+      Holder: retainer("Holder", timeline, "saved"),
       Wrap: markdown("Wrap", "<Content />"),
     };
 
@@ -272,11 +272,11 @@ describe("Tier RT — Retained resources", () => {
       expandAll(`<Holder />\n\n<Wrap>\n${HANG_BLOCK}\n</Wrap>`, definitions, timeline),
     );
     yield* sleep(20);
-    expect(timeline).toContain("start:retained");
+    expect(timeline).toContain("start:saved");
 
     yield* task.halt();
 
-    expect(timeline).toContain("stop:retained");
+    expect(timeline).toContain("stop:saved");
   });
 });
 
@@ -340,7 +340,7 @@ describe("Tier RT — Site isolation", () => {
     // The sibling's block ran through the harness's modifier, not the
     // factory's, so its watch was recorded normally.
     expect(timeline).toContain("start:own");
-    // And the retained resource is released with the site.
+    // And the saved resource is released with the site.
     expect(timeline[timeline.length - 1]).toBe("stop:leaky");
   });
 });

@@ -36,11 +36,11 @@ import {
   type LiveDurableOperationCoordinator,
 } from "./live-coordinator.ts";
 import { ReplayGuard } from "./replay-guard.ts";
-import { consumable, observeEvent } from "./retained.ts";
+import { consumable, observeEvent } from "./saved.ts";
 import { protocolToEffection, serializeError } from "./serialize.ts";
 import { advanceDurablePosition } from "./position.ts";
 import type { YieldEntry } from "./replay-index.ts";
-import type { AbandonedRetainedHistory } from "./live-coordinator.ts";
+import type { AbandonedSavedHistory } from "./live-coordinator.ts";
 import type {
   CoroutineView,
   DurableEffect,
@@ -84,7 +84,7 @@ type ReplayResult<T> =
   | {
       path: "live";
       /**
-       * The retained entry this live path stepped over, when it stepped over
+       * The saved entry this live path stepped over, when it stepped over
        * one.
        *
        * Present only when replay had an entry at this position and divergence
@@ -94,7 +94,7 @@ type ReplayResult<T> =
        * all, and reads it from here rather than from anything a document can
        * supply.
        */
-      abandoned: AbandonedRetainedHistory;
+      abandoned: AbandonedSavedHistory;
     };
 
 /**
@@ -151,7 +151,7 @@ function checkReplay<T>(
 
       // Description matches — now check replay guards before replaying.
       // An isolated observation, like the check and admit phases: a decision is
-      // policy, and policy reads. Handing the retained description or result
+      // policy, and policy reads. Handing the saved description or result
       // here would let a guard rewrite what replay is about to consume.
       const observed = observeEvent({
         type: "yield",

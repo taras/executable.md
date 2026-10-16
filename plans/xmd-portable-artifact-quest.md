@@ -14,7 +14,7 @@
 
 Deliver one portable, immutable `.xmd` evidence artifact for a committed
 workflow-run frontier. CI and a local developer inspect the same bytes. A local
-continuation always becomes a separately retained history fork; an artifact is
+continuation always becomes a separately saved history fork; an artifact is
 never authority to resume, answer, cancel, delete, or otherwise advance the
 source run.
 
@@ -33,16 +33,16 @@ contract in `specs/xmd-artifact-spec.md`; they do not change it.
 
 ## Current State
 
-- The Deno workflow provider already has strict, read-only retained-run
+- The Deno workflow provider already has strict, read-only saved-run
   inspection, recovery-copy handling, executor locks, history projection, and
   fork staging/commit boundaries in `packages/workflow/src/deno/lifecycle.ts`.
 - `packages/workflow/src/deno/fork-source.ts` and
-  `packages/workflow/src/deno/fork-write.ts` already copy a selected retained
+  `packages/workflow/src/deno/fork-write.ts` already copy a selected saved
   history prefix, Workspace roots, content blobs, Repository and Worktree rows
   into a new independent run.
 - `packages/cli/src/workflow.ts`, `packages/cli/src/workflow-management.ts`, and
   `packages/cli/src/workflow-fork.ts` own lifecycle grammar, presentation, and
-  fork preflight. They currently accept retained run IDs only.
+  fork preflight. They currently accept saved run IDs only.
 - `packages/cli/src/workflow-definition.ts` and
   `packages/cli/src/workflow-bundle.ts` establish and authenticate root and
   component Markdown from a pinned workflow definition.
@@ -54,7 +54,7 @@ contract in `specs/xmd-artifact-spec.md`; they do not change it.
 - `.xmd`, artifact-format version, canonical manifest, and manifest identity are
   the public compatibility boundary. SQLite is only V1's private container
   encoding; raw schema and SQL are not public APIs.
-- The artifact contains complete XMD-owned retained state plus the authenticated
+- The artifact contains complete XMD-owned saved state plus the authenticated
   root/component Markdown source closure. It preserves all Workspace bytes,
   metadata, modes, links, and Repository/Worktree records exactly.
 - Credentials, retrieval metadata, host paths, locks, sidecars, open
@@ -113,7 +113,7 @@ or a live database handle.
 
 - Define V1's distinct SQLite application marker, artifact/container versions,
   exact recognized schema, and canonical artifact manifest encoding.
-- Define the canonical inventory of all retained semantic records and bytes;
+- Define the canonical inventory of all saved semantic records and bytes;
   derive the lowercase SHA-256 artifact identity from the specified domain
   prefix and manifest bytes.
 - Write a sealed artifact from an already-complete in-memory snapshot, and open
@@ -132,7 +132,7 @@ or a live database handle.
 2. Re-encoding the same semantic snapshot with permitted physical SQLite
    differences yields the same canonical manifest and artifact identity, while
    the final-file digest remains a separate byte-transport value.
-3. The reader verifies the complete container, all retained bytes, and the
+3. The reader verifies the complete container, all saved bytes, and the
    derived identity before exposing status, history, forkability, Workspace, or
    definition data.
 4. Foreign, live-run, malformed, future-version, and tampered artifacts refuse
@@ -163,9 +163,9 @@ boundaries; do not teach the artifact container to acquire execution authority.
 
 - Add a provider-neutral lifecycle export request/result and Deno-provider
   implementation that takes the source executor lock, reads one committed
-  frontier, gathers all XMD-owned retained state, and hands a detached snapshot
+  frontier, gathers all XMD-owned saved state, and hands a detached snapshot
   to Story 1's writer.
-- Obtain each root and bundled component source from retained bytes or
+- Obtain each root and bundled component source from saved bytes or
   reauthorized retrieval, and authenticate it against the definition's object
   format, commit, path, and blob identity before sealing it.
 - Add `xmd workflow export <run-id> --output=<path.xmd>` with required local
@@ -180,28 +180,28 @@ boundaries; do not teach the artifact container to acquire execution authority.
 1. Export while another executor holds the source lock refuses and creates no
    target; an export holding the lock chooses one consistent committed frontier
    and releases the lock without changing source state.
-2. A successful artifact contains the complete retained run state: run and prior
+2. A successful artifact contains the complete saved run state: run and prior
    lineage, lifecycle/executions, filtered journal and provenance, every root,
    manifest/blob byte and filesystem metadata, Repository/Worktree rows,
-   suspension state, retained external-effect records, Agent mappings, and the
+   suspension state, saved external-effect records, Agent mappings, and the
    authenticated definition closure.
 3. Missing retrieval authority or source objects, object-format/hash mismatch,
-   unreadable retained state, invalid output path, existing target, atomic
+   unreadable saved state, invalid output path, existing target, atomic
    publication failure, cancellation, or a temporary cleanup failure before
    publication leaves no requested output and does not claim export success.
    Successful atomic no-replace publication commits the export: cleanup of the
    private entry it published from is best effort, and a failure there is
-   reported as a retained leftover beside a successful export rather than
+   reported as a saved leftover beside a successful export rather than
    invalidating or rolling back the committed artifact.
 4. A crashed source uses the existing recovery-copy discipline; export does not
-   repair, settle, replay, append to, or relabel the retained source.
+   repair, settle, replay, append to, or relabel the saved source.
 5. CLI output distinguishes semantic artifact identity from final-file digest
    and its help warns that arbitrary Workspace content can be confidential.
 
 **Focused evidence:** Extend workflow artifact tests with a run containing
 multiple Workspace roots, file bytes/mode/symlink/hardlink state, Repository or
 Worktree records, a root plus an unexpanded bundled component, and a suspension
-or retained effect. Verify that export includes the exact root/component bytes
+or saved effect. Verify that export includes the exact root/component bytes
 and their declared object identities, and that mismatched or unavailable source
 refuses export. Repository-independent continuation from those bytes belongs to
 Story 4. Add CLI integration cases for successful atomic export, lock refusal,
@@ -219,11 +219,11 @@ cover export.
 Story 3 may use Story 1 fixtures while it is implemented.
 
 **Ownership:** Lifecycle inspection projection and CLI grammar/presentation.
-`list` remains retained-run discovery only.
+`list` remains saved-run discovery only.
 
 **Implementation outcome:**
 
-- Extend status/history source parsing so exactly one of a retained run ID or
+- Extend status/history source parsing so exactly one of a saved run ID or
   `--artifact=<path.xmd>` is required; reject ambiguous/missing source forms.
 - Project the validated artifact into the existing immutable status/history JSON
   shapes, adding artifact identity and artifact frontier while keeping any host
@@ -236,7 +236,7 @@ Story 3 may use Story 1 fixtures while it is implemented.
 
 1. `workflow status --artifact` and `workflow history --artifact`, including
    `--json` and `--forkable`, report the same semantic lifecycle/history fields
-   as an equivalent retained run plus artifact identity/frontier.
+   as an equivalent saved run plus artifact identity/frontier.
 2. Every artifact inspection first completes Story 1 recognition; a malformed or
    tampered artifact returns no partial status/history row and remains
    byte-identical with no sidecars.
@@ -251,7 +251,7 @@ Story 3 may use Story 1 fixtures while it is implemented.
 
 **Focused evidence:** Add CLI workflow-inspection cases that inspect one
 artifact from two paths (including a read-only directory), compare
-retained-run/artifact JSON projections, prove no sidecars/mutations, and
+saved-run/artifact JSON projections, prove no sidecars/mutations, and
 exercise grammar refusals. Run
 `deno task test packages/cli/tests/workflow-inspection.test.ts` plus the
 artifact reader tests.
@@ -281,18 +281,18 @@ checkpoint can continue.
 - Extend fork lineage with artifact identity while retaining source run ID,
   selected event ID, and selected root ID. Preserve inherited-event provenance.
 - Treat artifact identity as an immutable fork-identity term when an explicit
-  destination run ID already exists. Compatible reuse requires the retained
+  destination run ID already exists. Compatible reuse requires the saved
   destination to name the same artifact identity as the new request, in addition
   to the existing source/checkpoint/root, definition, base, and props terms.
 
 **Acceptance criteria:**
 
 1. Artifact fork grammar requires `--artifact` and `--at`, then creates a new
-   explicit or host-generated run ID; artifact and retained-run source forms are
+   explicit or host-generated run ID; artifact and saved-run source forms are
    mutually exclusive. The optional definition selects the embedded
    authenticated closure only when absent.
 2. A fork obtains a new run ID and independent copied database/pages, roots,
-   retained bytes, and required definition state; deleting either source run or
+   saved bytes, and required definition state; deleting either source run or
    artifact cannot make the fork unreadable or resumably dependent on it.
 3. Forkability uses the existing cumulative blocker vocabulary, and preflight
    refuses invalid artifact, non-checkpoint, blocked checkpoint, bad merged
@@ -303,7 +303,7 @@ checkpoint can continue.
    provenance.
 5. Forking never resumes or advances the artifact/source identity, never shares
    an executor lock or writable page, and leaves the artifact byte-identical.
-6. A completed external effect replays only from retained evidence; an
+6. A completed external effect replays only from saved evidence; an
    unavailable Agent/external continuation remains blocked and new live effects
    use the local host's authority and credentials.
 7. Reusing an explicit destination run ID compares XMD artifact identity as a
@@ -320,13 +320,13 @@ from artifact A under one explicit destination run ID, then request that same ID
 from artifact B with the same source run, checkpoint, selected root, definition,
 base, and props but a different artifact identity; prove the second request
 refuses before changing any destination row, journal event, Workspace root, or
-retained byte. Run those explicit tests plus the artifact test file.
+saved byte. Run those explicit tests plus the artifact test file.
 
 ## Delivery Order
 
 1. Story 1 establishes the private encoding, public semantic identity, and
    verified immutable reader.
-2. Story 2 makes a live retained run exportable through the authority-safe lock
+2. Story 2 makes a live saved run exportable through the authority-safe lock
    and authenticated closure path.
 3. Story 3 makes the verified reader observable through existing inspection
    commands. It can be developed in parallel with Story 2 after Story 1, but
@@ -348,9 +348,9 @@ ships inspection; Story 4 ships artifact fork.
 | Definition closure is complete and authenticated at export      | 2     | Exact root and unexpanded bundle-component bytes/object identities are sealed; mismatch or unavailability refuses |
 | Embedded definition closure is self-sufficient for continuation | 4     | Root and unexpanded bundle component fork after repository access is removed                                      |
 | Workspace confidentiality is explicit                           | 2     | CLI help/output proves disclosure warning; artifact retains unfiltered Workspace fixture bytes                    |
-| Artifact inspection equals retained evidence                    | 3     | Status/history JSON comparison after moving the exact file                                                        |
+| Artifact inspection equals saved evidence                    | 3     | Status/history JSON comparison after moving the exact file                                                        |
 | Artifact never gains execution authority                        | 3, 4  | No artifact resume/control grammar; inspection trace has no execution/provider effects                            |
-| Artifact fork creates independent lineage                       | 4     | Two forks from one file, retained artifact identity/provenance, source deletion and resumability                  |
+| Artifact fork creates independent lineage                       | 4     | Two forks from one file, saved artifact identity/provenance, source deletion and resumability                  |
 | Explicit destination reuse includes artifact identity           | 4     | Fork ID created from artifact A refuses artifact B with the same source/checkpoint/root before mutation           |
 | Compatibility and forkability remain fail-closed                | 4     | Blocked checkpoint and divergent candidate leave no discoverable destination                                      |
 
@@ -364,7 +364,7 @@ check, runtime, JSR, and required CI gates.
 Review this file against the structural checklist in
 `specs/xmd-artifact-spec.md` §7. In particular, verify that the story boundaries
 preserve: source-run authority; one committed locked frontier; total verified
-read-only recognition; complete retained-state and definition closure; explicit
+read-only recognition; complete saved-state and definition closure; explicit
 artifact lineage; artifact identity as an explicit destination fork-identity
 term; exclusion of credentials/provider state/host paths; exact Workspace
 preservation; and the `.xmd` semantic compatibility boundary.

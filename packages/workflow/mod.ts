@@ -5,29 +5,29 @@
  *
  * A workflow run is a run of one immutable definition, recorded durably before
  * the root document is imported so later document executions and durable
- * effects share one explicit identity. The run itself is retained, so another
+ * effects share one explicit identity. The run itself is saved, so another
  * process can find it by its public id and continue from durable data rather
  * than from whoever happened to be holding the journal.
  *
  * A definition is the exact bytes themselves, addressed by portable logical
- * paths and retained with the run. That is what lets a file outside Git, an
+ * paths and saved with the run. That is what lets a file outside Git, an
  * untracked file, and a file edited since its last commit each be one
- * immutable definition the moment it is retained — and it is why nothing here
+ * immutable definition the moment it is saved — and it is why nothing here
  * reaches a repository for source. Starting, resuming, forking and exporting
  * all read the run's own store, so there is no source capability for a host to
  * supply and no definition whose bytes live anywhere but in the run.
  *
- * `retainedWorkflowInstallation()` resolves no base and names no Git feature,
+ * `savedWorkflowInstallation()` resolves no base and names no Git feature,
  * and that is now a statement about what a run needs rather than only about
  * this package's imports.
  *
  * ```ts
- * import { retainedWorkflowInstallation } from "@executablemd/workflow";
+ * import { savedWorkflowInstallation } from "@executablemd/workflow";
  * import { executeInstalled } from "@executablemd/core/host";
  *
  * const execution = yield* executeInstalled(
  *   { path: "./workflow.md", stream },
- *   [retainedWorkflowInstallation(run)],
+ *   [savedWorkflowInstallation(run)],
  * );
  * ```
  *
@@ -41,12 +41,12 @@
  * Repository composition, the Git capability, issue and pull-request contracts
  * and the Git-host reconciliation engine belong to `@executablemd/git`, which
  * imports this package's public extension boundaries rather than the other way
- * round. A run's history still holds their retained records, and this package
+ * round. A run's history still holds their saved records, and this package
  * still reads enough of one to decide whether a checkpoint can be forked — as
  * compatibility data, named by the strings a released build wrote.
  */
 
-export { getWorkflowRun, retainedWorkflowInstallation } from "./src/run.ts";
+export { getWorkflowRun, savedWorkflowInstallation } from "./src/run.ts";
 /**
  * How a trusted host states what its own run is.
  *
@@ -60,12 +60,12 @@ export type { WorkflowRunPreparation } from "./src/run.ts";
 export { workflowBundleInstallation, WorkflowBundleHistoryError } from "./src/bundle.ts";
 export { workflowRunValue } from "./src/journal.ts";
 /**
- * The retained run value, and the refusal a run that is not it travels in.
+ * The saved run value, and the refusal a run that is not it travels in.
  *
- * The description names the exact retained identity a run writes; the refusal
+ * The description names the exact saved identity a run writes; the refusal
  * is the exact words a disagreement with it travels in.
  */
-export { describeWorkflowRun, retainedRunMismatch } from "./src/journal.ts";
+export { describeWorkflowRun, savedRunMismatch } from "./src/journal.ts";
 export type { WorkflowRun } from "./src/journal.ts";
 export { useWorkflowServiceDenial, WorkflowServiceDeniedError } from "./src/service-denial.ts";
 
@@ -83,7 +83,7 @@ export type {
 } from "./src/storage/api.ts";
 
 export type { WorkflowRunCreation } from "./src/lifecycle/execution.ts";
-export type { RetainedDefinitionSources, RetainedSource } from "./src/lifecycle/source.ts";
+export type { SavedDefinitionSources, SavedSource } from "./src/lifecycle/source.ts";
 
 export { WorkflowLifecycle, WorkflowLifecycleProviderError } from "./src/lifecycle/api.ts";
 export type {
@@ -95,7 +95,7 @@ export type {
   WorkflowLifecycleApi,
   WorkflowLifecycleSnapshot,
 } from "./src/lifecycle/api.ts";
-// The export request, its result and the boundary it names. The retained record
+// The export request, its result and the boundary it names. The saved record
 // shapes an artifact also carries are DOFS and SQLite rows, so they are the
 // Deno entrypoint's to publish rather than this one's.
 export type {

@@ -2,12 +2,12 @@
  * Tier WF — what a `<Git.Add>` retains, replays and refuses to guess.
  *
  * These tests inspect the run's database rather than an index. A replay must
- * stage nothing and append no second transition; a retained result that no
+ * stage nothing and append no second transition; a saved result that no
  * longer describes the invocation it was recorded for must stop the run; a
  * cancelled or unretainable staging must leave the frontier exactly as it was.
  *
  * Every replay happens after the remote is deleted, so what continues a run is
- * what the run retained or nothing does.
+ * what the run saved or nothing does.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -53,7 +53,7 @@ import {
   gitOutcomes,
   physicalGitApiCopy,
   raised,
-  retainedRepositories,
+  savedRepositories,
   runDocument,
   stagedPaths,
   subcommands,
@@ -114,7 +114,7 @@ function tableNames(path: string): string[] {
   }
 }
 
-/** Damage the one retained add result, refusing to continue if it damaged none. */
+/** Damage the one saved add result, refusing to continue if it damaged none. */
 function damageAddResult(path: string, damage: (record: Record<string, unknown>) => void): void {
   let rewritten = 0;
   tamper(path, (database) => {
@@ -191,7 +191,7 @@ describe("workflow Git.Add durability", () => {
   });
 
   /**
-   * Every way a retained add result can stop describing its invocation.
+   * Every way a saved add result can stop describing its invocation.
    *
    * Shape, then meaning: an object id that is not one, a checkout that is not
    * the one this request selects or is not where placement puts it, pathspecs
@@ -293,7 +293,7 @@ describe("workflow Git.Add durability", () => {
   ];
 
   for (const { name, damage } of DAMAGE) {
-    it(`fails a replay whose retained result ${name}`, function* () {
+    it(`fails a replay whose saved result ${name}`, function* () {
       const root = yield* useStorageRoot();
       const remote = yield* useBareRemote(REMOTE);
       const path = runPath(root, "release-1.4");
@@ -357,14 +357,14 @@ describe("workflow Git.Add durability", () => {
       expect(yield* stagedPaths(database, yield* checkoutOf(database))).toEqual([]);
 
       // Nothing Git printed, nowhere it ran, and nothing it found.
-      const retained = `${outcome?.name} ${outcome?.message}`;
-      expect(retained).toContain("ignored-pathspec");
-      expect(retained).not.toContain("ignored.txt");
-      expect(retained).not.toContain("gitignore");
-      expect(retained).not.toContain("hint:");
-      expect(retained).not.toContain(tmpdir());
+      const saved = `${outcome?.name} ${outcome?.message}`;
+      expect(saved).toContain("ignored-pathspec");
+      expect(saved).not.toContain("ignored.txt");
+      expect(saved).not.toContain("gitignore");
+      expect(saved).not.toContain("hint:");
+      expect(saved).not.toContain(tmpdir());
       for (const materialization of live.counters.roots) {
-        expect(retained).not.toContain(materialization);
+        expect(saved).not.toContain(materialization);
       }
 
       const published = publishedRoots(path);
@@ -417,7 +417,7 @@ describe("workflow Git.Add durability", () => {
         yield* task.halt();
       });
 
-      expect(yield* retainedRepositories(database)).toHaveLength(1);
+      expect(yield* savedRepositories(database)).toHaveLength(1);
       expect(yield* gitEvents(database)).toHaveLength(0);
       expect(committedRoot(path)).toBe(latestRoot(path));
       expect(yield* stagedPaths(database, yield* checkoutOf(database))).toEqual([]);
@@ -486,19 +486,19 @@ describe("workflow Git.Add durability", () => {
       expect(tableNames(runPath(root, "staged"))).toEqual(tableNames(runPath(root, "untouched")));
 
       // Creation identity does not move when an index does.
-      const [before] = yield* retainedRepositories(untouched);
-      const [after] = yield* retainedRepositories(staged);
+      const [before] = yield* savedRepositories(untouched);
+      const [after] = yield* savedRepositories(staged);
       expect(after?.record).toEqual(before?.record);
 
       const [outcome] = yield* gitOutcomes(staged);
-      const retained = JSON.stringify(outcome?.record);
+      const saved = JSON.stringify(outcome?.record);
       for (const materialization of counting.counters.roots) {
-        expect(retained).not.toContain(materialization);
+        expect(saved).not.toContain(materialization);
       }
-      expect(retained).not.toContain(tmpdir());
-      // The pathspecs are retained; what Git found beyond them is not.
-      expect(retained).toContain("added.txt");
-      expect(retained).not.toContain("nested/note.md");
+      expect(saved).not.toContain(tmpdir());
+      // The pathspecs are saved; what Git found beyond them is not.
+      expect(saved).toContain("added.txt");
+      expect(saved).not.toContain("nested/note.md");
     });
   });
 });
@@ -599,11 +599,11 @@ function probe(
   };
 }
 
-/** The primary checkout's Workspace path, once this run has retained one. */
+/** The primary checkout's Workspace path, once this run has saved one. */
 function* checkoutOf(database: WorkflowRunDatabase): Operation<string> {
-  const [repository] = yield* retainedRepositories(database);
+  const [repository] = yield* savedRepositories(database);
   if (repository === undefined) {
-    throw new Error("the run retained no repository");
+    throw new Error("the run saved no repository");
   }
   return repository.record.checkoutPath;
 }

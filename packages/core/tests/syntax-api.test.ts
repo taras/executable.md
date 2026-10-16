@@ -185,12 +185,12 @@ describe("Tier SA — contextual Syntax", () => {
     for (const [index, record] of records.entries()) {
       if (record.type !== "yield" || record.result.status !== "ok") {
         throw new Error(
-          `Syntax occurrence ${index + 1} retained an unexpected result: ${JSON.stringify(record)}`,
+          `Syntax occurrence ${index + 1} saved an unexpected result: ${JSON.stringify(record)}`,
         );
       }
-      expect({ occurrence: index + 1, retained: JSON.stringify(record.result.value) }).toEqual({
+      expect({ occurrence: index + 1, saved: JSON.stringify(record.result.value) }).toEqual({
         occurrence: index + 1,
-        retained: expect.stringContaining("FINAL NAMED"),
+        saved: expect.stringContaining("FINAL NAMED"),
       });
     }
   });
@@ -286,11 +286,11 @@ describe("Tier SA — contextual Syntax", () => {
       });
       const failed = new InMemoryStream();
       yield* run('<PrintErrors><Syntax names={["HostOnly"]} /></PrintErrors>\n', failed);
-      const retained = failed
+      const saved = failed
         .snapshot()
         .find((event) => event.type === "yield" && event.description.type === "syntax_symbols");
-      expect(retained?.type === "yield" ? retained.result.status : "absent").toBe("err");
-      expect(JSON.stringify(retained)).toContain("provider failure");
+      expect(saved?.type === "yield" ? saved.result.status : "absent").toBe("err");
+      expect(JSON.stringify(saved)).toContain("provider failure");
     });
   });
 

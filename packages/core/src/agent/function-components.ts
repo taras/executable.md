@@ -502,7 +502,7 @@ function* runPrompt(
   // authentic use answers with what it was verified under, and a raw session
   // answers with nothing.
   //
-  // Retained only once the provider said the turn started, because that is when
+  // Saved only once the provider said the turn started, because that is when
   // the conversation was under these settings: a prompt that failed while they
   // were still being applied ran under nothing, and one that started and then
   // failed still ran under exactly them.
@@ -552,9 +552,9 @@ function* runPrompt(
  * and launches nothing.
  *
  * The launch itself is the provider's, and every phase it completes is
- * retained through the journal installed here. That is also the coordination
+ * saved through the journal installed here. That is also the coordination
  * boundary: middleware around the Agent Api may observe a launch or refuse
- * one, but a result that arrives without those retained phases describes a
+ * one, but a result that arrives without those saved phases describes a
  * launch that did not happen, and is refused.
  */
 /**
@@ -564,7 +564,7 @@ function* runPrompt(
  * `Agent.launch()`, which a repository function component may call directly.
  * A second implementation here is what let the component and the programmatic
  * caller disagree about what a launch is — and it is why an exit the provider
- * never retained used to be able to settle one.
+ * never saved used to be able to settle one.
  */
 export function* SessionLaunch(props: Record<string, Json>): Operation<Json> {
   const instructions = (yield* hasContent()) ? String(yield* content()) : "";

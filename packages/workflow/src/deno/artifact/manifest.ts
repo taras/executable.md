@@ -1,7 +1,7 @@
 /**
  * The canonical inventory an XMD artifact is identified by.
  *
- * The manifest names every semantic record and retained byte the artifact
+ * The manifest names every semantic record and saved byte the artifact
  * holds, and nothing about the file those bytes ended up in. Page size, free
  * space, insertion order, index layout and the path the file was written to are
  * all outside it — which is what makes the identity a statement about the

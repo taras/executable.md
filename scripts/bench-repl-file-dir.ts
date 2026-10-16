@@ -62,13 +62,13 @@ import { useCompositionComponents } from "../packages/git/src/composition/instal
 import { useRunComposition } from "../packages/git/src/deno/run-composition/provider.ts";
 import type { HelperAssembly } from "../packages/git/src/deno/composition/credential-helper.ts";
 import { Execution } from "@executablemd/core/api";
-import { useReplRepositoryRecording } from "../packages/git/src/deno/retained-repository/provider.ts";
-import { admitReplRepositoryHistory } from "../packages/git/src/retained-repository/admission.ts";
+import { useReplRepositoryRecording } from "../packages/git/src/deno/saved-repository/provider.ts";
+import { admitReplRepositoryHistory } from "../packages/git/src/saved-repository/admission.ts";
 import { denoRepositoryHost } from "../packages/git/src/deno/composition/host.ts";
 import {
   REPL_REPOSITORY_LOCAL,
   REPL_REPOSITORY_SELECTION,
-} from "../packages/git/src/retained-repository/records.ts";
+} from "../packages/git/src/saved-repository/records.ts";
 
 /** What one invocation was asked to measure. */
 interface Settings {
@@ -342,14 +342,14 @@ function measure(
   checkout: string,
   managed: string,
   source: string,
-  retained: readonly DurableEvent[] = [],
+  saved: readonly DurableEvent[] = [],
 ): Operation<Measured> {
   return scoped(function* (): Operation<Measured> {
     const counted = counters();
     // Every lock descriptor this run opens, observed at the one native function
     // `useAdvisoryLock` reaches for. The sidecar itself is left alone.
     const descriptors = yield* useObservedLocks(counted);
-    const stream = new InMemoryStream([...retained]);
+    const stream = new InMemoryStream([...saved]);
     const path = join(checkout, "entry.md");
     yield* writeTextFile(path, source);
     yield* API.Env.around(
@@ -407,16 +407,16 @@ function measure(
       });
       yield* collect(
         yield* executeInstalled({ path, stream }, [
-          { admissions: [(retained) => admitReplRepositoryHistory(retained)] },
+          { admissions: [(saved) => admitReplRepositoryHistory(saved)] },
         ]),
       );
     }
     const ms = performance.now() - started;
 
     const events = yield* stream.readAll();
-    counted.appends = events.length - retained.length;
+    counted.appends = events.length - saved.length;
     counted.localAppends = events
-      .slice(retained.length)
+      .slice(saved.length)
       .filter(
         (event) => event.type === "yield" && event.description.type === REPL_REPOSITORY_LOCAL,
       ).length;
@@ -461,7 +461,7 @@ function report(name: string, samples: readonly Measured[]): void {
   console.log(
     `${"".padEnd(13)} git ${counted.commands}  lock descriptors ${counted.lease}  ` +
       `appends ${counted.appends} (local results ${counted.localAppends})  ` +
-      `retained records ${counted.records}  journal ${counted.journalBytes} bytes`,
+      `saved records ${counted.records}  journal ${counted.journalBytes} bytes`,
   );
 }
 

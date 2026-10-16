@@ -14,7 +14,7 @@
  * file has changed since.
  *
  * A new mutation also takes the checkout's lease, and a new read does not.
- * Being retained and being exclusive are different questions: what the lease
+ * Being saved and being exclusive are different questions: what the lease
  * answers is that one entry at a time changes a repository, so a read proceeds
  * while another entry holds it and never holds it itself.
  *
@@ -56,15 +56,15 @@ import type { Around } from "@effectionx/context-api";
 import {
   localRecordName,
   recordedLocalOperation,
-  retainedResultAhead,
-  retainedSelectionAhead,
+  savedResultAhead,
+  savedSelectionAhead,
 } from "./local.ts";
 import type {
   ReplAmbientCheckout,
   ReplLocalOperation,
   ReplLocalRequest,
   ReplLocalValue,
-} from "../../retained-repository/records.ts";
+} from "../../saved-repository/records.ts";
 
 /** What the entry knows about where it is working and what it may hold. */
 export interface ReplLocalRecorder {
@@ -140,7 +140,7 @@ export function replFileMiddleware(recorder: ReplLocalRecorder): Partial<Around<
 /**
  * Answer this request from the journal, or route it and perform it live.
  *
- * The retained cursor is read before the filesystem, because resolving a path is
+ * The saved cursor is read before the filesystem, because resolving a path is
  * work a saved result is not about: a continuation whose checkout has since been
  * removed answers from what it already recorded rather than failing at a
  * question nobody asked. Saved routing is restored first for the same reason —
@@ -153,10 +153,10 @@ function* routed(
   perform: () => Operation<Result<ReplLocalValue>>,
 ): Operation<Result<ReplLocalValue>> {
   const name = yield* localRecordName({ operation, request });
-  if (yield* retainedSelectionAhead()) {
+  if (yield* savedSelectionAhead()) {
     yield* recorder.selection();
   }
-  if (yield* retainedResultAhead(name)) {
+  if (yield* savedResultAhead(name)) {
     return yield* recordedLocalOperation({ operation, request, perform });
   }
 
@@ -164,7 +164,7 @@ function* routed(
   if (checkout === undefined) {
     return yield* perform();
   }
-  // Only a mutation takes the lease. A read is retained like the rest, but the
+  // Only a mutation takes the lease. A read is saved like the rest, but the
   // lease is about one entry at a time *changing* a checkout, and an
   // observation is not a change: a read that took it would refuse while
   // somebody else is working, and refuse them while it is only looking.

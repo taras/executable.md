@@ -131,7 +131,7 @@ function answerWith(generated: unknown): ImportedDefinition {
   return Object.assign(bare(), { generated });
 }
 
-/** The generated identity on a retained definition, whichever arm it is. */
+/** The generated identity on a saved definition, whichever arm it is. */
 function offeredIdentity(definition: ImportedDefinition | undefined): unknown {
   const generated = definition === undefined ? undefined : Reflect.get(definition, "generated");
   if (typeof generated !== "object" || generated === null) {
@@ -495,7 +495,7 @@ describe("Tier CIV — a publication belongs to one answer of one import", () =>
     expect(imports.identify(resolution, published)).toBe(undefined);
   });
 
-  it("CIV25: an installation retained past its execution opens nothing", function* () {
+  it("CIV25: an installation saved past its execution opens nothing", function* () {
     const imports = owner();
     const provider = imports.provider(ORIGIN);
     const { resolution, before } = resolving(imports, "Open", (resolution) => ({
@@ -657,7 +657,7 @@ describe("Tier CIV — a publication belongs to one answer of one import", () =>
  *
  * Each request retains the window that was open when its handler began. A
  * descendant scope preserves that correlation, and closing the window makes
- * the retained request unable to record an answer’s identity in a later one.
+ * the saved request unable to record an answer’s identity in a later one.
  */
 describe("Tier PA10b — one serial resolution window", () => {
   /**
@@ -803,7 +803,7 @@ describe("Tier PA10c — one definition answering more than one import", () => {
     resolving(imports, "Open", (resolution) => {
       asking(provider, "Open", (request) => {
         // Refused before anything is recorded: the publication was about the
-        // definition core retained, and this object is no longer it.
+        // definition core saved, and this object is no longer it.
         expect(refusalOf(() => request.answer(shared))).toBeInstanceOf(AnswerIdentityError);
         return undefined;
       });

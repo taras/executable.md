@@ -46,7 +46,7 @@ export function restoreWorkspaceRoot(
         !equalStrings(restored.manifestHashes, selected.manifestHashes) ||
         !equalStrings(restored.blobHashes, selected.blobHashes)
       ) {
-        corrupt(path, "a retained Workspace root did not materialize to its own identity");
+        corrupt(path, "a saved Workspace root did not materialize to its own identity");
       }
       if (options.publish === true) {
         setCurrentWorkspaceRoot(database, selected.rootId, path);
@@ -62,7 +62,7 @@ function rebuild(database: DatabaseSync, root: StoredWorkspaceRoot, databasePath
   const parsed = parseWorkspaceManifest(root.manifest, databasePath);
   const rootEntry = parsed.entries[0];
   if (rootEntry === undefined || rootEntry.kind !== "directory" || rootEntry.path !== "/") {
-    corrupt(databasePath, "a retained Workspace root has no root directory");
+    corrupt(databasePath, "a saved Workspace root has no root directory");
   }
 
   database.exec("DELETE FROM vfs_dirents");
@@ -86,7 +86,7 @@ function rebuild(database: DatabaseSync, root: StoredWorkspaceRoot, databasePath
     const parent = parentPath(entry.path);
     const parentInode = inodes.get(parent);
     if (parentInode === undefined) {
-      corrupt(databasePath, "a retained Workspace root names a child without a parent");
+      corrupt(databasePath, "a saved Workspace root names a child without a parent");
     }
     const name = entry.path.slice(parent === "/" ? 1 : parent.length + 1);
     const inode = materializeNode(database, entry, revision, hardlinks, databasePath);
@@ -133,7 +133,7 @@ function materializeNode(
   } else {
     const manifest = readDofsManifest(database, entry.manifest, databasePath);
     if (manifest.size !== entry.size) {
-      corrupt(databasePath, "a retained file size differs from its DOFS manifest");
+      corrupt(databasePath, "a saved file size differs from its DOFS manifest");
     }
     const result = database
       .prepare(

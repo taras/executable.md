@@ -167,13 +167,13 @@ export function createDenoAgentSessionCoordinator(
       parsed = JSON.parse(text);
     } catch {
       throw new AgentSessionRecoveryRequired(
-        "the retained agent session ownership record is not readable",
+        "the saved agent session ownership record is not readable",
       );
     }
     const record = parseAgentSessionOwnership(parsed);
     if (!record) {
       throw new AgentSessionRecoveryRequired(
-        "the retained agent session ownership record is not valid",
+        "the saved agent session ownership record is not valid",
       );
     }
     return record;
@@ -261,8 +261,8 @@ export function createDenoAgentSessionCoordinator(
           return Err(busy(key));
         }
 
-        const retained = yield* readOwnership(record);
-        if (retained?.state === "active") {
+        const saved = yield* readOwnership(record);
+        if (saved?.state === "active") {
           // The lock is free and the record is not. Whoever held it last never
           // said it had stopped, and nothing here can say it for them.
           return Err(

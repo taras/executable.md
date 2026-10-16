@@ -19,7 +19,7 @@
  * by, and it covers every member: the canonical target, the discriminator, the
  * title, the description, the normalized tags and the assignee. A changed
  * request therefore diverges at the durable position rather than consuming the
- * result retained for a different question.
+ * result saved for a different question.
  *
  * ## Tags are a set
  *
@@ -33,7 +33,7 @@
  * ## Absence has one spelling
  *
  * An absent assignee is `null` from the moment the component reads its props,
- * in the request, and in the retained record. `undefined` is not a JSON value,
+ * in the request, and in the saved record. `undefined` is not a JSON value,
  * and a member that is sometimes missing is a second shape rather than a value.
  */
 
@@ -79,7 +79,7 @@ export interface IssueUpsertRequest {
  * The complete durable request one `<Issue>` makes.
  *
  * Discriminated, because the two are different questions and a name that could
- * be either would let a read consume an upsert's retained result.
+ * be either would let a read consume an upsert's saved result.
  */
 export type IssueRequest = IssueReadRequest | IssueUpsertRequest;
 
@@ -270,7 +270,7 @@ export function parseIssueInput(value: unknown): IssueInput | undefined {
   ) {
     return undefined;
   }
-  // Read back as a set. A retained value whose tags are out of order or
+  // Read back as a set. A saved value whose tags are out of order or
   // repeated is not one this boundary wrote, and reading it as though it were
   // would let two spellings of one request answer for each other.
   const written = read["tags"];
@@ -400,7 +400,7 @@ export function issueIdempotencyKey(
  * A digest of the canonical encoding, so the durable operation's own identity
  * moves when the target, the discriminator or any authored field moves.
  * Without it a changed request would arrive at a matching type and name and
- * consume the result retained at the same journal position.
+ * consume the result saved at the same journal position.
  */
 export function* issueRequestFingerprint(request: IssueRequest): Operation<string> {
   const encoded = new TextEncoder().encode(canonicalJson(issueRequestJson(request)));

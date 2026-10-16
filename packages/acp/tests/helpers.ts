@@ -723,7 +723,7 @@ export interface CoordinatorHarness {
 
 export function makeCoordinator(): CoordinatorHarness {
   const occupied = new Set<string>();
-  const retained = new Map<string, "active" | "idle">();
+  const saved = new Map<string, "active" | "idle">();
   const acquisitions: CoordinatorHarness["acquisitions"] = [];
   const order: string[] = [];
 
@@ -731,7 +731,7 @@ export function makeCoordinator(): CoordinatorHarness {
     acquisitions,
     events: order,
     tombstone(key) {
-      retained.set(agentSessionKeyDigest(key), "active");
+      saved.set(agentSessionKeyDigest(key), "active");
     },
     coordinator: {
       coordinate<T>(
@@ -749,14 +749,14 @@ export function makeCoordinator(): CoordinatorHarness {
           yield* ensure(() => {
             occupied.delete(digest);
           });
-          if (retained.get(digest) === "active") {
+          if (saved.get(digest) === "active") {
             acquisitions.push({ kind: owner.kind, key, outcome: "recovery-required" });
             return Err(
               new AgentSessionRecoveryRequired(`session "${key.sessionKey}" needs recovery`),
             );
           }
           acquisitions.push({ kind: owner.kind, key, outcome: "granted" });
-          retained.set(digest, "active");
+          saved.set(digest, "active");
           order.push("owned");
           let quiesced = false;
           yield* ensure(() => {
@@ -764,7 +764,7 @@ export function makeCoordinator(): CoordinatorHarness {
             // finalizer the body registers unwinds ahead of it.
             order.push(quiesced ? "released-idle" : "released-active");
             if (quiesced) {
-              retained.set(digest, "idle");
+              saved.set(digest, "idle");
             }
           });
           return Ok(

@@ -353,7 +353,7 @@ describe("the default scanner over a persistence backend", () => {
     expect(error.message).not.toContain(CANARY);
     expect(error.stack ?? "").not.toContain(CANARY);
 
-    // Read back through the stream rather than from anything the run retained.
+    // Read back through the stream rather than from anything the run saved.
     const persisted = yield* backend.readAll();
     expect(persisted.some((event) => event.type === "yield")).toBe(false);
     expect(persisted.map(label)).toEqual(["close(root)"]);

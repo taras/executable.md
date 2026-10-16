@@ -32,7 +32,7 @@ export interface DurableContext {
   /**
    * How many durable yields this coroutine has settled.
    *
-   * Advanced by both settlement paths, so a coroutine running past its retained
+   * Advanced by both settlement paths, so a coroutine running past its saved
    * history keeps counting where replay left off. See `position.ts`.
    */
   position?: number;

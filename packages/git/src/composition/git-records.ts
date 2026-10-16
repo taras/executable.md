@@ -5,8 +5,8 @@
  * checkout the enclosing `<Repository>` and the contextual working directory
  * select, so what a component sends is the whole Repository record it observed
  * and the logical directory it observed — neither of which admits anything.
- * The provider authenticates both against what this run retained; a record that
- * is not the retained one, or a directory inside no retained checkout, is a
+ * The provider authenticates both against what this run saved; a record that
+ * is not the saved one, or a directory inside no saved checkout, is a
  * failure of admission rather than an outcome, and nothing is published for it.
  *
  * What comes back is evidence rather than a summary. The checkout the operation
@@ -25,7 +25,7 @@ import type { Json } from "@executablemd/durable-streams";
 import { beneath, canonicalWorkspacePath, members, optionalText, text } from "./parse.ts";
 import type { GitObjectFormat, RepositoryRecord } from "./records.ts";
 
-/** Which retained checkout one Git operation ran in. */
+/** Which saved checkout one Git operation ran in. */
 export interface GitCheckoutIdentity {
   readonly repositoryName: string;
   /** The Worktree's name, or `null` when the operation ran in the primary checkout. */
@@ -47,7 +47,7 @@ export interface GitCheckoutState {
  *
  * The Repository arrives whole rather than by name. A name alone can only be
  * looked up; the record can be *compared*, which is what lets the provider hold
- * a replaced context to the exact row this run retained rather than to whichever
+ * a replaced context to the exact row this run saved rather than to whichever
  * Repository happens to answer to that name.
  *
  * The working directory is kept apart from the checkout throughout. A checkout
@@ -64,7 +64,7 @@ export interface GitSwitchRequest {
 }
 
 /**
- * What a completed `<Git.Switch>` retained.
+ * What a completed `<Git.Switch>` saved.
  *
  * The requested branch beside the branch the checkout ended on, and the
  * requested base beside the commit it actually started from — `null` when the
@@ -101,7 +101,7 @@ const SWITCH_MEMBERS = [
  *
  * Length and case both, because a digest is a fixed-width lowercase hex string
  * everywhere Git writes one. A value that is merely a non-empty string is not an
- * object id, and treating one as an id is how a retained result that says
+ * object id, and treating one as an id is how a saved result that says
  * nothing passes for one that says something.
  */
 function objectId(value: unknown, format: GitObjectFormat): string | undefined {
@@ -254,7 +254,7 @@ export function parseGitSwitchResult(
     return undefined;
   }
   // Switching to the branch a checkout is already on moves nothing: no reset,
-  // no reference change, and nothing staged or unstaged. A retained result whose
+  // no reference change, and nothing staged or unstaged. A saved result whose
   // commit, HEAD tree or index tree changed across it describes a transition
   // Switch does not make.
   if (
@@ -324,7 +324,7 @@ export interface GitAddRequest {
 }
 
 /**
- * What a completed `<Git.Add>` retained.
+ * What a completed `<Git.Add>` saved.
  *
  * The pathspecs exactly as they were given, and the checkout on both sides of
  * the command. Staging moves the index and nothing else, so the branch, the
@@ -332,7 +332,7 @@ export interface GitAddRequest {
  * what makes that checkable rather than assumed — and the index tree is the one
  * value the operation may have changed. What was staged is not enumerated:
  * naming files Git discovered would put content beyond the document's own
- * pathspecs into retained history.
+ * pathspecs into saved history.
  */
 export interface GitAddResult {
   readonly checkout: GitCheckoutIdentity;
@@ -371,7 +371,7 @@ function samePaths(left: readonly string[], right: readonly string[]): boolean {
  * The add result this value describes for this request, or `undefined`.
  *
  * Exact about membership and closed about meaning, on the same terms as every
- * other retained result. Beyond the shape it refuses a result whose checkout is
+ * other saved result. Beyond the shape it refuses a result whose checkout is
  * not the one the request selects, whose pathspecs are not the ones it was
  * given — in the same order, with the same repetitions — and whose two readings
  * describe something other than staging: the branch, the commit and the HEAD
@@ -442,7 +442,7 @@ export function parseGitCommitMessageSource(value: unknown): GitCommitMessageSou
  * The message arrives canonical, because canonicalization is a decision about
  * what a document meant and the component is where a document is read. What the
  * provider does with it is arithmetic: these are the bytes Git receives, and the
- * bytes the retained digest describes.
+ * bytes the saved digest describes.
  *
  * `messageSource` travels beside it because the two are different facts. A
  * reader of the run's history can see that a message came from prose written
@@ -459,9 +459,9 @@ export interface GitCommitRequest {
 }
 
 /**
- * What a completed `<Git.Commit>` retained.
+ * What a completed `<Git.Commit>` saved.
  *
- * The commit is described rather than quoted. Its message is retained as a
+ * The commit is described rather than quoted. Its message is saved as a
  * digest and a byte length instead of as text, because a run's history is read
  * by people and machines that have no business holding authored prose a second
  * time — and a digest is what proves the bytes Git committed are the bytes the
@@ -530,7 +530,7 @@ function count(value: unknown): number | undefined {
 /**
  * The commit result this value describes for this request, or `undefined`.
  *
- * Exact about membership and closed about meaning, like every retained result
+ * Exact about membership and closed about meaning, like every saved result
  * here. What it adds is the object graph: a commit of the index has exactly one
  * parent and that parent is where the checkout was, its tree is the tree the
  * index described, and the checkout ends on that commit with its HEAD tree and

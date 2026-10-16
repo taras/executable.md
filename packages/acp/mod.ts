@@ -81,8 +81,8 @@ export type {
  * ACPX's persistent session store, for a host arranging its own retention. The
  * provider takes one; this is how a host builds and reads the one it takes.
  */
-export { createAcpxSessionStore, retainedSession } from "./src/session-store.ts";
-export type { AcpxRetainedSession, AcpxSessionStore } from "./src/session-store.ts";
+export { createAcpxSessionStore, savedSession } from "./src/session-store.ts";
+export type { AcpxSavedSession, AcpxSessionStore } from "./src/session-store.ts";
 
 export {
   AcpxPartitionError,

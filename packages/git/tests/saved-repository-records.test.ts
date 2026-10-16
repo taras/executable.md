@@ -30,16 +30,16 @@ import {
   REPL_REPOSITORY_SELECTION,
   REPL_REPOSITORY_VERSION,
   retainableRefusal,
-} from "../src/retained-repository/records.ts";
+} from "../src/saved-repository/records.ts";
 import type {
   ReplLocalOperation,
   ReplLocalRequest,
   ReplLocalValue,
-} from "../src/retained-repository/records.ts";
+} from "../src/saved-repository/records.ts";
 import {
   admitReplRepositoryHistory,
   ReplRepositoryHistoryError,
-} from "../src/retained-repository/admission.ts";
+} from "../src/saved-repository/admission.ts";
 
 const WRITE: ReplLocalRequest = { cwd: "/work", path: "note.md", content: "first" };
 

@@ -80,7 +80,7 @@ describe("Tier FG — process retention", () => {
       retain: false,
     });
 
-    // "no output" and "not retained" are different answers, and this is the
+    // "no output" and "not saved" are different answers, and this is the
     // second one.
     expect(result.stdout).toBeUndefined();
     expect(result.stderr).toBeUndefined();

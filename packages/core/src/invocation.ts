@@ -65,7 +65,7 @@ function asError(cause: unknown): Error {
  *
  *   1. halt the content scope — projected content, to completion;
  *   2. halt the body — the author's own resources;
- *   3. halt A — whatever `persist eval` and `daemon` retained.
+ *   3. halt A — whatever `persist eval` and `daemon` saved.
  *
  * Every stage is attempted even when an earlier one throws. Success, error and
  * cancellation all leave through it: the body's throw is caught at its task

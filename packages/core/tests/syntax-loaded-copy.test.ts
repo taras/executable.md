@@ -60,7 +60,7 @@ import { Component } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
 import { executeInstalled } from "../host.ts";
 import type { ComponentAnswerInstallation, ExecutionInstallation } from "../host.ts";
-import { retainedSource } from "../src/root-source.ts";
+import { savedSource } from "../src/root-source.ts";
 import { SYNTAX_COMPONENT, props as syntaxProps } from "../src/components/Syntax.ts";
 import { fixedFilesystemDefinition } from "../src/components/fixed-filesystem.ts";
 import { form as fileForm, props as fileProps } from "../src/components/File.ts";
@@ -264,7 +264,7 @@ function runRoot(
     return yield* collect(
       yield* executeInstalled(
         {
-          ...retainedSource("documents/root.md", source),
+          ...savedSource("documents/root.md", source),
           stream: new InMemoryStream(),
           includes: [],
         },
@@ -399,7 +399,7 @@ describe("Tier FE14 — a separately loaded provider publishes its own answer", 
       return yield* collect(
         yield* executeInstalled(
           {
-            ...retainedSource("documents/root.md", `<Evaluate text={'<Loaded />\\n'} />\n`),
+            ...savedSource("documents/root.md", `<Evaluate text={'<Loaded />\\n'} />\n`),
             stream,
             includes: [],
           },
@@ -419,11 +419,11 @@ describe("Tier FE14 — a separately loaded provider publishes its own answer", 
     const admission = (yield* stream.readAll()).find(
       (event) => event.type === "yield" && event.description.type === "generated_xmd",
     );
-    const retained =
+    const saved =
       admission?.type === "yield" && admission.result.status === "ok"
         ? admission.result.value
         : undefined;
-    expect(JSON.stringify(retained)).toContain(loaded.identity());
+    expect(JSON.stringify(saved)).toContain(loaded.identity());
     expect(loaded.identity()).toBe("https://executable.md/components/loaded/read");
   });
 });

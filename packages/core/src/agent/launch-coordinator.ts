@@ -47,7 +47,7 @@ import type {
  *
  * `detach` and `exit` receive the preparation carrying the identity the launch
  * is handing over, which for a launch that owed a turn is the one that turn
- * asserted rather than the empty one the preparation was retained with.
+ * asserted rather than the empty one the preparation was saved with.
  */
 export interface AgentLaunchPhases {
   prepare(): Operation<PreparedLaunchRecord>;
@@ -73,7 +73,7 @@ export interface AgentLaunchCoordinator {
    *
    * The only record this can author is a prepared failure. A provider that
    * cannot start — no capability, a busy session, a session whose last owner
-   * never proved it stopped — says so here, and nothing later is retained.
+   * never proved it stopped — says so here, and nothing later is saved.
    */
   refuse(request: AgentLaunchRequest, preparation: PreparedLaunchRecord): Operation<void>;
   /**
@@ -151,20 +151,20 @@ export interface LaunchRetention {
 export interface LiveLaunch {
   issued: IssuedLaunch;
   retention: LaunchRetention;
-  /** What the retained records settled to, once every phase is accepted. */
+  /** What the saved records settled to, once every phase is accepted. */
   settled?: SessionLaunchResult;
-  /** The retained preparation, so a refusal is reportable to the caller. */
+  /** The saved preparation, so a refusal is reportable to the caller. */
   preparation?: PreparedLaunchRecord;
-  /** The retained materialization, for a launch that owed a turn. */
+  /** The saved materialization, for a launch that owed a turn. */
   materialization?: MaterializedLaunchRecord;
-  /** The retained detach, so a handoff that stopped there says why. */
+  /** The saved detach, so a handoff that stopped there says why. */
   detachment?: DetachedLaunchRecord;
-  /** The retained exit, so how the native UI ended is the caller's answer. */
+  /** The saved exit, so how the native UI ended is the caller's answer. */
   exit?: ExitedLaunchRecord;
 }
 
 /**
- * Why a retained preparation cannot be the one that was asked for.
+ * Why a saved preparation cannot be the one that was asked for.
  *
  * The provider asserts the session facts, but the request is the document's.
  * A record that changed what was asked would make the journal describe a launch
@@ -251,7 +251,7 @@ export function createLaunchCoordinator(
       const prepared = yield* launch.retention.prepared(() => phases.prepare());
       launch.preparation = prepared;
       if (prepared.failure) {
-        // A refusal the provider retained through its own preparation. It stops
+        // A refusal the provider saved through its own preparation. It stops
         // here exactly as `refuse()` would; nothing later is authored.
         return;
       }
@@ -309,7 +309,7 @@ export function createLaunchCoordinator(
           materialized.requestId !== plan.requestId
         ) {
           throw new AgentLaunchProtocolError(
-            "the provider retained a materialization turn other than the one this launch planned",
+            "the provider saved a materialization turn other than the one this launch planned",
           );
         }
         if (materialized.failure) {
@@ -337,7 +337,7 @@ export function createLaunchCoordinator(
         return;
       }
       // The handoff itself completed; how the native UI then ended is a
-      // separate fact, and one that is retained rather than settled. A launch
+      // separate fact, and one that is saved rather than settled. A launch
       // whose UI died is not a launch to run again.
       if (exited.signal !== undefined || exited.exitCode !== 0) {
         return;

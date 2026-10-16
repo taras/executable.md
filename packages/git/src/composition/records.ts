@@ -9,10 +9,10 @@
  * unversioned "current commit" column.
  *
  * A record names no locator and no host path. The locator a caller supplied is
- * retained beside the record, where compatibility is decided; what travels
+ * saved beside the record, where compatibility is decided; what travels
  * through the journal and back to a document is its fingerprint. A fingerprint
  * discriminates a changed locator without publishing the bytes of one, which is
- * what keeps a credential that slipped into a URL out of retained history even
+ * what keeps a credential that slipped into a URL out of saved history even
  * before the journal's own filter sees it.
  *
  * Every value here is parsed on the way back in. A replayed record arrives as

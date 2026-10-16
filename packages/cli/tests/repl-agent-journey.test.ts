@@ -213,13 +213,13 @@ describe("J1 — the Story, from one entry to one README", () => {
       // Taken, and streaming: the turn is active before it has said anything.
       held.start(AUTHORSHIP);
       yield* showing(terminal, "· streaming");
-      // Ended, with the fact its provider reported, and then retained: the row a
+      // Ended, with the fact its provider reported, and then saved: the row a
       // person was watching becomes its own record, under the scope the packaged
       // Plan was admitted as.
       held.deltas(AUTHORSHIP);
       yield* showing(terminal, "stopped: end_turn");
       yield* showing(terminal, "completed, recorded");
-      yield* awaiting("the turn was never retained", function* () {
+      yield* awaiting("the turn was never saved", function* () {
         return (
           recorded(yield* journal(hostRoot)).filter((kind) => kind === "agent_prompt").length > 0
         );
@@ -320,7 +320,7 @@ describe("J1 — the Story, from one entry to one README", () => {
       });
       expect(yield* untilResolved(readdir(workspace))).toEqual(["README.md"]);
 
-      // Both authorship turns are retained, under the scope the packaged Plan
+      // Both authorship turns are saved, under the scope the packaged Plan
       // was admitted as: the entry holds a `Plan` component scope, the program
       // it produced hangs under it, and both rows are recorded ones rather than
       // this process's live readings.
@@ -331,7 +331,7 @@ describe("J1 — the Story, from one entry to one README", () => {
       expect(occurrences(terminal, "completed, recorded")).toBe(2);
       expect(shows(terminal, "component Plan")).toBe(true);
       expect(shows(terminal, "generated generated")).toBe(true);
-      // And both Plan reviews are retained where they were asked, which is
+      // And both Plan reviews are saved where they were asked, which is
       // inside that scope rather than in the entry.
       expect(
         yield* answeredUnder(terminal, "component Plan", "answered @executablemd/cli/Plan"),
@@ -623,7 +623,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       yield* untilDrawn(second.terminal);
 
       // The whole journey, from the Journal: the packaged Plan's own scope, the
-      // program it produced, both retained turns and their conversation, the
+      // program it produced, both saved turns and their conversation, the
       // forms that were answered, the preview the program rendered and the
       // write it reported.
       for (const line of [
@@ -638,18 +638,18 @@ describe("J3 — durable truth, and a cold process over it", () => {
         yield* showing(second.terminal, line);
       }
       // Both turns are recorded rows rather than a live process's readings, and
-      // both Plan reviews are retained where they were asked.
+      // both Plan reviews are saved where they were asked.
       expect(occurrences(second.terminal, "completed, recorded")).toBe(2);
       expect(
         yield* answeredUnder(second.terminal, "component Plan", "answered @executablemd/cli/Plan"),
       ).toBe(2);
-      // The program's own two questions are retained with the answers they
+      // The program's own two questions are saved with the answers they
       // took. Their positions carry no path — generated source is not a file —
       // so they are shown under the fragment that produced them.
       yield* click(second.terminal, "generated generated");
       yield* settled(40);
       // The answers themselves are read from the reading above, which shows
-      // them in full; what this counts is that each question is retained under
+      // them in full; what this counts is that each question is saved under
       // the fragment that asked it, at the position it was written.
       expect(occurrences(second.terminal, "answered 4:1")).toBe(1);
       expect(occurrences(second.terminal, "answered 12:1")).toBe(1);
@@ -680,7 +680,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
     expect(yield* history(hostRoot)).toBe(before);
   });
 
-  it("EC1: two entries of retained Agent work reopen cold, asking nobody", function* () {
+  it("EC1: two entries of saved Agent work reopen cold, asking nobody", function* () {
     const hostRoot = yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-journey-")));
     const live = createFakeAcp();
     live.script({ reply: "ONE-DONE" });
@@ -902,7 +902,7 @@ describe("J3 — durable truth, and a cold process over it", () => {
       // admission, the turn's publication, and the root settling.
       yield* click(terminal, "[history]");
       yield* settled(40);
-      // The categories a retained position reads as. Re-anchored for #881
+      // The categories a saved position reads as. Re-anchored for #881
       // PR 3: a drawer row was the checkpoint's own label and is now its place
       // in the recorded order and what kind of position it is — identical
       // wording live and historical, so neither route invents a richer one.
@@ -1105,14 +1105,14 @@ describe("J2 — three conversations at once, through the terminal", () => {
       // focused control stay exactly where the person left them.
       held.start(PLAN_IT);
       held.deltas(PLAN_IT);
-      yield* awaiting("the third turn was never retained", function* () {
+      yield* awaiting("the third turn was never saved", function* () {
         return (
           recorded(yield* journal(hostRoot)).filter((kind) => kind === "agent_prompt").length === 3
         );
       });
       expect(sessionOf(terminal)).toBe(standing);
       expect(focusedRow(terminal)).toBe(focused);
-      // And the filter still holds: the others are retained and not shown,
+      // And the filter still holds: the others are saved and not shown,
       // because this screen is showing one.
       expect(childrenShown(terminal)).toHaveLength(1);
 
@@ -1134,7 +1134,7 @@ describe("J2 — three conversations at once, through the terminal", () => {
       expect(conversationRows(terminal, digest).length).toBeGreaterThan(offered);
 
       // Three turns, three records, one per conversation.
-      yield* awaiting("the three turns were never all retained", function* () {
+      yield* awaiting("the three turns were never all saved", function* () {
         return (
           recorded(yield* journal(hostRoot)).filter((kind) => kind === "agent_prompt").length === 3
         );
@@ -1208,7 +1208,7 @@ describe("J2 — a filter and a draft across a resize (#875 R1)", () => {
         held.start(asked);
         held.deltas(asked);
       }
-      yield* awaiting("the three turns were never all retained", function* () {
+      yield* awaiting("the three turns were never all saved", function* () {
         return (
           recorded(yield* journal(hostRoot)).filter((kind) => kind === "agent_prompt").length === 3
         );
@@ -1386,7 +1386,7 @@ describe("J2 — what filtering Sessions leaves on the screen (#875 R1)", () => 
         held.start(asked);
         held.deltas(asked);
       }
-      yield* awaiting("the three turns were never all retained", function* () {
+      yield* awaiting("the three turns were never all saved", function* () {
         return (
           recorded(yield* journal(hostRoot)).filter((kind) => kind === "agent_prompt").length === 3
         );
@@ -2344,7 +2344,7 @@ function occurrences(terminal: Terminal, text: string): number {
  *
  * #881 PR 2 gave the Transcript the selected entry's reading, so the records of
  * every scope no longer appear there at once; the answers a nested scope
- * retained are read by selecting that scope, which is where the product says
+ * saved are read by selecting that scope, which is where the product says
  * they were asked. Selection is the behavior being tested: a row counted under the wrong scope
  * would be an answer attributed to somewhere it never happened.
  */
@@ -2475,7 +2475,7 @@ function routeOf(location: string | undefined): ReplRoute {
   return decoded.value;
 }
 
-/** Whether this reading is a retained position rather than the live head. */
+/** Whether this reading is a saved position rather than the live head. */
 function historicalOn(terminal: Terminal): boolean {
   return shows(terminal, "[live]");
 }

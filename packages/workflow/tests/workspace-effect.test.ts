@@ -581,14 +581,14 @@ describe("Tier DLC — Workspace coordination selection", () => {
     }
   });
 
-  it("DLC21: retained contextual continuation cannot reuse a completed invocation", function* () {
+  it("DLC21: saved contextual continuation cannot reuse a completed invocation", function* () {
     const stream = new InMemoryStream();
     establishJournalProvenance(stream);
     const { provider, counts } = successfulProvider();
-    let retained: ((request: unknown) => Operation<unknown>) | undefined;
-    let retainedRequest: unknown;
+    let saved: ((request: unknown) => Operation<unknown>) | undefined;
+    let savedRequest: unknown;
     function* workflow(): Workflow<void> {
-      yield* workspaceStep("retained-continuation", function* () {
+      yield* workspaceStep("saved-continuation", function* () {
         return null;
       });
     }
@@ -596,20 +596,18 @@ describe("Tier DLC — Workspace coordination selection", () => {
     yield* scoped(function* () {
       yield* WorkspaceInvocationCollision.around({
         *coordinate(args, next): Operation<unknown> {
-          retained = (request) => next(request);
-          retainedRequest = args[0];
+          saved = (request) => next(request);
+          savedRequest = args[0];
           return yield* next(...args);
         },
       });
       yield* withWorkspaceCoordinationProvider(provider, durableRun(workflow, { stream }));
     });
-    if (retained === undefined) {
+    if (saved === undefined) {
       throw new Error("the collision middleware did not retain its continuation");
     }
 
-    expect(yield* raised(retained(retainedRequest))).toBeInstanceOf(
-      WorkspaceCoordinationProviderError,
-    );
+    expect(yield* raised(saved(savedRequest))).toBeInstanceOf(WorkspaceCoordinationProviderError);
     expect(counts).toEqual({ providers: 1, executions: 1, publications: 1 });
     expect(yieldEvents(stream.snapshot())).toHaveLength(1);
   });

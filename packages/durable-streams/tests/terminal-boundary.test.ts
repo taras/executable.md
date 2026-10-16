@@ -76,7 +76,7 @@ function* recordTwoStepChild(): Operation<DurableEvent[]> {
 }
 
 describe("durable terminal boundary", () => {
-  it("claiming a completed child aligns its retained descendants", function* () {
+  it("claiming a completed child aligns its saved descendants", function* () {
     const golden = new InMemoryStream();
     let executions = 0;
     const nestedWorkflow = function* (): Workflow<string> {
@@ -97,8 +97,8 @@ describe("durable terminal boundary", () => {
     };
 
     yield* durableRun(nestedWorkflow, { stream: golden });
-    const retained = golden.snapshot().filter((event) => event.coroutineId !== "root");
-    const replay = new InMemoryStream(retained);
+    const saved = golden.snapshot().filter((event) => event.coroutineId !== "root");
+    const replay = new InMemoryStream(saved);
 
     expect(yield* durableRun(nestedWorkflow, { stream: replay })).toBe("recorded");
     expect(executions).toBe(1);
@@ -106,8 +106,8 @@ describe("durable terminal boundary", () => {
   });
 
   it("rejects a normal root return that abandons a completed child", function* () {
-    const retained = yield* recordCompletedChild();
-    const stream = new InMemoryStream(retained);
+    const saved = yield* recordCompletedChild();
+    const stream = new InMemoryStream(saved);
     const before = stream.snapshot();
     let failure: unknown;
 
@@ -126,14 +126,14 @@ describe("durable terminal boundary", () => {
     expect(failure).toBeInstanceOf(EarlyReturnDivergenceError);
     expectUnchanged(stream, before);
 
-    const compatible = new InMemoryStream(retained);
+    const compatible = new InMemoryStream(saved);
     expect(yield* replayCompletedChild(compatible)).toBe("recorded");
     expect(compatible.snapshot().at(-1)?.coroutineId).toBe("root");
   });
 
   it("rejects a root error that abandons a completed child", function* () {
-    const retained = yield* recordCompletedChild();
-    const stream = new InMemoryStream(retained);
+    const saved = yield* recordCompletedChild();
+    const stream = new InMemoryStream(saved);
     const before = stream.snapshot();
     const workflowFailure = new Error("current root failed");
     let failure: unknown;
@@ -160,8 +160,8 @@ describe("durable terminal boundary", () => {
 
   it("does not close a child or root over stale child history", function* () {
     const completed = yield* recordCompletedChild();
-    const retained = completed.filter((event) => event.type === "yield");
-    const stream = new InMemoryStream(retained);
+    const saved = completed.filter((event) => event.type === "yield");
+    const stream = new InMemoryStream(saved);
     const before = stream.snapshot();
     const stale = new StaleInputError("child input changed");
 
@@ -187,8 +187,8 @@ describe("durable terminal boundary", () => {
 
   it("does not close a child or root over divergent child history", function* () {
     const completed = yield* recordCompletedChild();
-    const retained = completed.filter((event) => event.type === "yield");
-    const stream = new InMemoryStream(retained);
+    const saved = completed.filter((event) => event.type === "yield");
+    const stream = new InMemoryStream(saved);
     const before = stream.snapshot();
     let failure: unknown;
 
@@ -215,8 +215,8 @@ describe("durable terminal boundary", () => {
   });
 
   it("checks child alignment before a successful child Close", function* () {
-    const retained = yield* recordTwoStepChild();
-    const stream = new InMemoryStream(retained);
+    const saved = yield* recordTwoStepChild();
+    const stream = new InMemoryStream(saved);
     const before = stream.snapshot();
     let failure: unknown;
 
@@ -242,8 +242,8 @@ describe("durable terminal boundary", () => {
   });
 
   it("checks child alignment before a failed child Close", function* () {
-    const retained = yield* recordTwoStepChild();
-    const stream = new InMemoryStream(retained);
+    const saved = yield* recordTwoStepChild();
+    const stream = new InMemoryStream(saved);
     const before = stream.snapshot();
     const childFailure = new Error("child failed early");
     let failure: unknown;
@@ -273,9 +273,9 @@ describe("durable terminal boundary", () => {
     expectUnchanged(stream, before);
   });
 
-  it("names the first unreached retained yield when a completed child is removed", function* () {
-    const retained = yield* recordCompletedChild();
-    const stream = new InMemoryStream(retained);
+  it("names the first unreached saved yield when a completed child is removed", function* () {
+    const saved = yield* recordCompletedChild();
+    const stream = new InMemoryStream(saved);
     let failure: unknown;
 
     try {
@@ -297,7 +297,7 @@ describe("durable terminal boundary", () => {
     expect(failure.message).toContain('first unreached entry is call("child-step")');
   });
 
-  it("a removed completed child with no yields names its retained Close", function* () {
+  it("a removed completed child with no yields names its saved Close", function* () {
     const golden = new InMemoryStream();
     yield* durableRun(
       function* (): Workflow<string> {
@@ -311,8 +311,8 @@ describe("durable terminal boundary", () => {
       },
       { stream: golden },
     );
-    const retained = golden.snapshot().filter((event) => event.coroutineId !== "root");
-    const stream = new InMemoryStream(retained);
+    const saved = golden.snapshot().filter((event) => event.coroutineId !== "root");
+    const stream = new InMemoryStream(saved);
     const before = stream.snapshot();
     let failure: unknown;
 
@@ -338,7 +338,7 @@ describe("durable terminal boundary", () => {
     expectUnchanged(stream, before);
   });
 
-  it("child cancellation finalization names the first unreached retained entry", function* () {
+  it("child cancellation finalization names the first unreached saved entry", function* () {
     const events: DurableEvent[] = [
       {
         type: "yield",
@@ -387,11 +387,11 @@ describe("durable terminal boundary", () => {
     if (!(failure instanceof TerminalDivergenceError)) {
       throw new Error("expected terminal divergence");
     }
-    expect(failure.message).toContain("cancelled before retained history was exhausted");
+    expect(failure.message).toContain("cancelled before saved history was exhausted");
     expect(failure.message).toContain(
       'first unreached entry is call("child-second") at docs/Plan.md:12:1',
     );
-    // The retained prefix is unchanged: no Close was appended over the
+    // The saved prefix is unchanged: no Close was appended over the
     // unconsumed history of the cancelled child, and none for the root.
     expect(
       stream

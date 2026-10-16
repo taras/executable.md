@@ -38,7 +38,7 @@ import { join } from "node:path";
 
 import { collect } from "../src/collect.ts";
 import { executeInstalled } from "../host.ts";
-import { retainedSource } from "../src/root-source.ts";
+import { savedSource } from "../src/root-source.ts";
 import type { ExecutionInstallation } from "../host.ts";
 import { selecting } from "./support/generated-selection.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -232,10 +232,9 @@ function run(fixture: Fixture, source: string): Operation<Json> {
     yield* useHost(fixture);
     yield* useRegions();
     return yield* collect(
-      yield* executeInstalled(
-        { ...retainedSource(ROOT_PATH, source), stream: new InMemoryStream() },
-        [ceiling()],
-      ),
+      yield* executeInstalled({ ...savedSource(ROOT_PATH, source), stream: new InMemoryStream() }, [
+        ceiling(),
+      ]),
     );
   });
 }
@@ -470,7 +469,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
         return yield* collect(
           yield* executeInstalled(
             {
-              ...retainedSource(
+              ...savedSource(
                 ROOT_PATH,
                 [
                   "<ReadOnly>",
@@ -524,7 +523,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
         return yield* collect(
           yield* executeInstalled(
             {
-              ...retainedSource(
+              ...savedSource(
                 ROOT_PATH,
                 `<Evaluate allow={["read","write"]} text={'<File path="source.txt" as="note" />\\n` +
                   `<File path="made.txt">from the fragment</File>\\n'} />\n`,
@@ -559,7 +558,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
         const rendered = yield* collect(
           yield* executeInstalled(
             {
-              ...retainedSource(
+              ...savedSource(
                 ROOT_PATH,
                 `<Evaluate text={'<Fetch url="${admitted.url}" as="answer" />\\n` +
                   `<Json value={answer} />\\n'} />\n`,
@@ -600,7 +599,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
         yield* collect(
           yield* executeInstalled(
             {
-              ...retainedSource(
+              ...savedSource(
                 ROOT_PATH,
                 `<Evaluate text={'<Fetch url="${admitted.url}" as="answer" />\\n` +
                   `<Json value={answer} />\\n'} />\n`,
@@ -661,7 +660,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
       // request goes out.
       yield* collect(
         yield* executeInstalled(
-          { ...retainedSource(ROOT_PATH, source), stream: new InMemoryStream() },
+          { ...savedSource(ROOT_PATH, source), stream: new InMemoryStream() },
           [admitting],
         ),
       );
@@ -681,7 +680,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
         try {
           yield* collect(
             yield* executeInstalled(
-              { ...retainedSource(ROOT_PATH, source), stream: new InMemoryStream() },
+              { ...savedSource(ROOT_PATH, source), stream: new InMemoryStream() },
               [admitting],
             ),
           );
@@ -737,7 +736,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
         yield* collect(
           yield* executeInstalled(
             {
-              ...retainedSource(
+              ...savedSource(
                 ROOT_PATH,
                 // Permitted first — a generated refusal ends the run, so the
                 // element that proves the entry works has to be the one ahead
@@ -797,7 +796,7 @@ describe("Tier PRM — authored, generated and direct operations under one restr
       yield* collect(
         yield* executeInstalled(
           {
-            ...retainedSource(
+            ...savedSource(
               ROOT_PATH,
               ["<Editing>", "", element, "", "</Editing>", "", element, ""].join("\n"),
             ),

@@ -6,7 +6,7 @@
  * controlled launcher, so what it asserts is what a document gets. The stub
  * goes through the real seam — it records each phase through
  * `AgentLaunchJournal` and asks the real `NativeLauncher` Api to run the
- * child — so the ordering, the retained records and the refusals are the
+ * child — so the ordering, the saved records and the refusals are the
  * production ones, with only the provider's own product replaced.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -198,7 +198,7 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
                     message: stub.configurationRefused,
                   };
                 } else if (configuration !== undefined) {
-                  // What this provider put the conversation under, retained as
+                  // What this provider put the conversation under, saved as
                   // the one thing a launch record says about its settings.
                   prepared.configuration = {
                     ...(configuration.model === undefined ? {} : { model: configuration.model }),
@@ -314,7 +314,7 @@ interface RunOptions {
   /**
    * Run in a directory the caller owns, rather than a fresh one.
    *
-   * A launch's durable identity and its retained cwd both name the document's
+   * A launch's durable identity and its saved cwd both name the document's
    * own directory, so a replay of an earlier attempt has to be the same
    * document — a second temp directory replays nothing and proves nothing.
    */
@@ -538,7 +538,7 @@ function preparedRecord(events: DurableEvent[]): Record<string, Json> {
   return prepared.value as Record<string, Json>;
 }
 
-/** The failure class the retained preparation carries, if it carries one. */
+/** The failure class the saved preparation carries, if it carries one. */
 function preparedFailure(events: DurableEvent[]): string | undefined {
   const failure = preparedRecord(events).failure;
   if (typeof failure !== "object" || failure === null || Array.isArray(failure)) {
@@ -547,8 +547,8 @@ function preparedFailure(events: DurableEvent[]): string | undefined {
   return typeof failure.class === "string" ? failure.class : undefined;
 }
 
-/** Which launch phases the journal retained, in order. */
-function retainedPhases(events: DurableEvent[]): string[] {
+/** Which launch phases the journal saved, in order. */
+function savedPhases(events: DurableEvent[]): string[] {
   return launchRecords(events).map((entry) => entry.name.split("/").at(-1) ?? "");
 }
 
@@ -743,7 +743,7 @@ describe("Tier SL — native session launch", () => {
     expect(record.launcher).toBe("stub");
     expect(record.sessionState).toBe("created");
     expect(record.instructionChannel).toBe("stub.systemPrompt");
-    // The body is retained exactly as it rendered, and the digest is of that
+    // The body is saved exactly as it rendered, and the digest is of that
     // exact text — not of a tidied version of it.
     expect(record.instructions).toBe("\nYou are the implementor.\n");
     expect(record.instructionsDigest).toBe(digest("\nYou are the implementor.\n"));
@@ -781,7 +781,7 @@ describe("Tier SL — native session launch", () => {
       "launched without releasing its ACP session",
     );
     // Detach is durable before spawn, so a refusal there costs no child.
-    expect(retainedPhases(run.events)).toEqual(["prepared", "detached"]);
+    expect(savedPhases(run.events)).toEqual(["prepared", "detached"]);
     expect(run.stub.exits).toBe(0);
     expect(run.launcher.requests).toEqual([]);
   });
@@ -796,7 +796,7 @@ describe("Tier SL — native session launch", () => {
     expect(run.launcher.requests.length).toBe(0);
     // The refusal is the only phase: a replay resumes from what happened, not
     // from a launch nobody performed.
-    expect(retainedPhases(run.events)).toEqual(["prepared"]);
+    expect(savedPhases(run.events)).toEqual(["prepared"]);
     expect(preparedFailure(run.events)).toBe("unsupported-capability");
   });
 
@@ -818,11 +818,11 @@ describe("Tier SL — native session launch", () => {
     expect(second.launcher.requests.length).toBe(0);
   });
 
-  it("SL15: partial replay resumes the retained identity without preparing again", function* () {
+  it("SL15: partial replay resumes the saved identity without preparing again", function* () {
     const stream = new InMemoryStream();
     const stub = createLaunchStub();
     // One document, interrupted and then resumed. The launch's durable identity
-    // and its retained cwd both name this directory, so a second one would
+    // and its saved cwd both name this directory, so a second one would
     // replay nothing.
     const dir = path.join(os.tmpdir(), `xmd-sl-${randomUUID()}`);
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
@@ -831,7 +831,7 @@ describe("Tier SL — native session launch", () => {
     expect(interrupted.requests.length).toBe(1);
     expect(stub.preparations.length).toBe(1);
     expect(stub.detaches).toBe(1);
-    // The child never exited, so no exit phase was retained.
+    // The child never exited, so no exit phase was saved.
     const afterCrash = yield* stream.readAll();
     const crashNames = launchRecords(afterCrash).map((entry) => entry.name);
     expect(crashNames.some((name) => name.endsWith("/prepared"))).toBe(true);
@@ -844,7 +844,7 @@ describe("Tier SL — native session launch", () => {
     // session was created.
     expect(stub.preparations.length).toBe(1);
     expect(stub.detaches).toBe(1);
-    // The native UI reattached to the identity the first attempt retained.
+    // The native UI reattached to the identity the first attempt saved.
     expect(resumed.launcher.requests.length).toBe(1);
     expect(resumed.launcher.requests[0]?.command).toEqual(["stub-ui", "--resume", "native-abc"]);
   });
@@ -956,16 +956,16 @@ describe("Tier FS — the final public launch surface", () => {
     // And the forged identity is nowhere durable.
     expect(JSON.stringify(run.events)).not.toContain("invented");
     // No later phase, no child, and the provider was never asked to prepare.
-    expect(retainedPhases(run.events)).toEqual(["prepared"]);
+    expect(savedPhases(run.events)).toEqual(["prepared"]);
     expect(run.launcher.requests).toEqual([]);
     expect(run.stub.preparations).toEqual([]);
     expect(run.stub.detaches).toBe(0);
   });
 
-  it("FS2: middleware that delegates cannot replace what the provider retained", function* () {
+  it("FS2: middleware that delegates cannot replace what the provider saved", function* () {
     // The other half: the provider really did prepare, detach and exit, and
     // the handler then answers with something else. What the document settles
-    // on is the retained account, not the last value returned up the chain.
+    // on is the saved account, not the last value returned up the chain.
     const run = yield* runDoc(LAUNCH, {
       intercept: function* (request, next) {
         yield* next(request);
@@ -981,7 +981,7 @@ describe("Tier FS — the final public launch surface", () => {
     expect(run.result.ok).toBe(true);
     expect(preparedRecord(run.events)?.nativeSessionId).toBe("native-abc");
     expect(JSON.stringify(run.events)).not.toContain("invented");
-    expect(retainedPhases(run.events)).toEqual(["prepared", "detached", "exited"]);
+    expect(savedPhases(run.events)).toEqual(["prepared", "detached", "exited"]);
     // The real launch happened exactly once.
     expect(run.stub.preparations).toHaveLength(1);
     expect(run.launcher.requests).toHaveLength(1);
@@ -1068,8 +1068,8 @@ describe("Tier FS — the final public launch surface", () => {
     ]);
     expect(run.result.ok).toBe(false);
     expect(preparedFailure(run.events)).toBe("unsupported-capability");
-    // Only the refusal is retained, and no phase, detach or process happened.
-    expect(retainedPhases(run.events)).toEqual(["prepared"]);
+    // Only the refusal is saved, and no phase, detach or process happened.
+    expect(savedPhases(run.events)).toEqual(["prepared"]);
     expect(run.stub.preparations).toEqual([]);
     expect(run.stub.detaches).toBe(0);
     expect(run.stub.exits).toBe(0);
@@ -1115,7 +1115,7 @@ describe("Tier FS — the final public launch surface", () => {
 
     expect(run.stub.preparations).toHaveLength(1);
     expect(run.launcher.requests).toHaveLength(1);
-    expect(retainedPhases(run.events)).toEqual(["prepared", "detached", "exited"]);
+    expect(savedPhases(run.events)).toEqual(["prepared", "detached", "exited"]);
   });
 
   it("FS8: core no longer publishes a launch journal to compose around", function* () {
@@ -1144,7 +1144,7 @@ const BINDING: ExecutableBuildBindingV1 = {
   executableDigest: { algorithm: "sha256", value: "d".repeat(64) },
 };
 
-/** The same build as retained data, so a parser case starts from unknown. */
+/** The same build as saved data, so a parser case starts from unknown. */
 const BOUND: Record<string, Json> = {
   schema: "executable-build.v1",
   reportedVersion: "2.1.241 (Claude Code)",
@@ -1173,11 +1173,11 @@ function prepared(overrides: Record<string, Json> = {}): Record<string, Json> {
 
 /**
  * Run one launch to completion and then replay it, proving the second run
- * reaches no provider and starts no child whatever the first one retained.
+ * reaches no provider and starts no child whatever the first one saved.
  */
-function* replayIsCold(retained: Partial<LaunchStub>): Operation<void> {
+function* replayIsCold(saved: Partial<LaunchStub>): Operation<void> {
   const stream = new InMemoryStream();
-  const stub = createLaunchStub(retained);
+  const stub = createLaunchStub(saved);
   const first = yield* runDoc(LAUNCH, { stream, stub });
   expect(first.result.ok ? "" : first.result.error.message).toBe("");
   expect(stub.factoryActivations).toBe(1);
@@ -1263,7 +1263,7 @@ describe("Tier PV — identity provenance", () => {
  * A provider-native identity means one thing only while the build that issued
  * or accepted it can be recognized later, so the binding is exact on the way in
  * and exact on the way out. Core observes no executables: it reads what was
- * retained and says whether two of them name the same build.
+ * saved and says whether two of them name the same build.
  */
 describe("Tier EB — executable build binding", () => {
   function bound(overrides: Record<string, Json> = {}): Record<string, Json> {
@@ -1321,7 +1321,7 @@ describe("Tier EB — executable build binding", () => {
     }
   });
 
-  it("EB4: equality is over the retained build, and a path is not part of it", function* () {
+  it("EB4: equality is over the saved build, and a path is not part of it", function* () {
     // There is no path to ignore, which is the point: the same build reached
     // through a different path compares equal because nothing about where it
     // was ever entered the record.
@@ -1367,7 +1367,7 @@ describe("Tier EB — executable build binding", () => {
 });
 
 /** One durable yield, as the journal holds it. */
-interface Retained {
+interface Saved {
   type: string;
   name: string;
   /** The description's `input`, which is what the effect was asked to do. */
@@ -1375,7 +1375,7 @@ interface Retained {
   value: Json | undefined;
 }
 
-function retained(events: DurableEvent[]): Retained[] {
+function saved(events: DurableEvent[]): Saved[] {
   return events.flatMap((event) =>
     event.type === "yield" && event.result.status === "ok"
       ? [
@@ -1391,22 +1391,22 @@ function retained(events: DurableEvent[]): Retained[] {
 }
 
 function one(events: DurableEvent[], suffix: string): Record<string, Json> {
-  const found = retained(events).filter((entry) => entry.name.endsWith(suffix));
+  const found = saved(events).filter((entry) => entry.name.endsWith(suffix));
   if (found.length !== 1) {
-    throw new Error(`expected exactly one retained "${suffix}", found ${found.length}`);
+    throw new Error(`expected exactly one saved "${suffix}", found ${found.length}`);
   }
   const value = found[0]?.value;
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`retained "${suffix}" is not a record`);
+    throw new Error(`saved "${suffix}" is not a record`);
   }
   return value;
 }
 
-/** One member of a retained record that is itself a record. */
+/** One member of a saved record that is itself a record. */
 function nested(record: Record<string, Json>, member: string): Record<string, Json> {
   const value = record[member];
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`retained member "${member}" is not a record`);
+    throw new Error(`saved member "${member}" is not a record`);
   }
   return value;
 }
@@ -1432,7 +1432,7 @@ function* cutAfter(stream: InMemoryStream, suffix: string): Operation<InMemorySt
 
 /**
  * The turn a stub session owes. Fixed rather than minted, so a case can name the
- * request id the retained plan committed to.
+ * request id the saved plan committed to.
  */
 const OWED: MaterializationPlan = {
   promptVersion: "stub-materialization.v1",
@@ -1445,21 +1445,21 @@ describe("Tier MR — retaining and replaying the materialization turn", () => {
     return createLaunchStub({ materialization: OWED, ...overrides });
   }
 
-  it("MR1: the owed turn is spent once and retained as both a prompt and a phase", function* () {
+  it("MR1: the owed turn is spent once and saved as both a prompt and a phase", function* () {
     const stub = owing();
     const run = yield* runDoc(LAUNCH, { stub });
     expect(run.result.ok ? "" : run.result.error.message).toBe("");
     expect(stub.turns).toEqual([OWED.requestId]);
-    expect(retainedPhases(run.events)).toEqual(["prepared", "materialized", "detached", "exited"]);
+    expect(savedPhases(run.events)).toEqual(["prepared", "materialized", "detached", "exited"]);
 
-    // The plan is retained with the preparation, before anything is spent.
+    // The plan is saved with the preparation, before anything is spent.
     expect(one(run.events, "/prepared").materialization).toEqual({
       promptVersion: OWED.promptVersion,
       requestId: OWED.requestId,
       prompt: OWED.prompt,
     });
     // The prompt says the turn was spent, and says which turn it was.
-    const prompt = retained(run.events).find((entry) => entry.name.endsWith("/materialization"));
+    const prompt = saved(run.events).find((entry) => entry.name.endsWith("/materialization"));
     expect(prompt?.type).toBe("agent_prompt");
     expect(prompt?.input).toBe(OWED.prompt);
     expect(one(run.events, "/materialization").status).toBe("completed");
@@ -1495,7 +1495,7 @@ describe("Tier MR — retaining and replaying the materialization turn", () => {
     expect(second.launcher.requests.length).toBe(0);
   });
 
-  it("MR3: a retained prompt with no phase rebuilds the phase and spends nothing", function* () {
+  it("MR3: a saved prompt with no phase rebuilds the phase and spends nothing", function* () {
     const stub = owing();
     const dir = path.join(os.tmpdir(), `xmd-mr-${randomUUID()}`);
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
@@ -1523,7 +1523,7 @@ describe("Tier MR — retaining and replaying the materialization turn", () => {
     expect(rebuilt.response).toBe("Acknowledged.");
     expect(rebuilt.usage).toEqual({});
     expect(rebuilt.failure).toBe(undefined);
-    // And the launch goes on to hand the retained identity over.
+    // And the launch goes on to hand the saved identity over.
     expect(resumed.launcher.requests[0]?.command).toEqual(["stub-ui", "--resume", "native-abc"]);
   });
 
@@ -1548,10 +1548,10 @@ describe("Tier MR — retaining and replaying the materialization turn", () => {
     const refusal = nested(one(resumed.events, "/materialized"), "failure");
     expect(refusal.class).toBe("session-recovery-required");
     expect(refusal.message).toContain("not knowable");
-    expect(retainedPhases(resumed.events)).toEqual(["prepared", "materialized"]);
+    expect(savedPhases(resumed.events)).toEqual(["prepared", "materialized"]);
   });
 
-  it("MR5: a retained refusal replays as itself and never opens a native UI", function* () {
+  it("MR5: a saved refusal replays as itself and never opens a native UI", function* () {
     const stream = new InMemoryStream();
     const stub = owing({ turnRefused: true });
     const first = yield* runDoc(LAUNCH, { stream, stub });
@@ -1575,8 +1575,8 @@ describe("Tier MR — retaining and replaying the materialization turn", () => {
     expect(run.result.ok ? "" : run.result.error.message).toBe("");
     expect(stub.turns).toEqual([]);
     expect(one(run.events, "/prepared").materialization).toBe(undefined);
-    expect(retainedPhases(run.events)).toEqual(["prepared", "detached", "exited"]);
-    expect(retained(run.events).some((entry) => entry.type === "agent_prompt")).toBe(false);
+    expect(savedPhases(run.events)).toEqual(["prepared", "detached", "exited"]);
+    expect(saved(run.events).some((entry) => entry.type === "agent_prompt")).toBe(false);
   });
 
   it("MR7: a planned turn the provider cannot spend stops the launch", function* () {
@@ -1610,10 +1610,10 @@ describe("Tier MR — retaining and replaying the materialization turn", () => {
     expect(run.result.ok ? "" : run.result.error.message).toContain(
       "without asserting the provider-native identity",
     );
-    // The turn was spent and is retained as spent — what is missing is the
+    // The turn was spent and is saved as spent — what is missing is the
     // session, and there is nothing for a native UI to be handed.
     expect(stub.turns).toEqual([OWED.requestId]);
-    expect(retainedPhases(run.events)).toEqual(["prepared", "materialized"]);
+    expect(savedPhases(run.events)).toEqual(["prepared", "materialized"]);
     expect(stub.detaches).toBe(0);
     expect(run.launcher.requests.length).toBe(0);
   });
@@ -1709,7 +1709,7 @@ describe("Tier MJ — reading the materialization phase back", () => {
     for (const value of ["", 3, null, []]) {
       expect(parseMaterialized(materialized({ usage: value }))).toBe(undefined);
     }
-    // Reported nothing is a report, and it is retained as exactly that.
+    // Reported nothing is a report, and it is saved as exactly that.
     expect(parseMaterialized(materialized({ usage: {} }))?.usage).toEqual({});
   });
 
@@ -1756,7 +1756,7 @@ const CONFIGURED_LAUNCH = [
 ].join("\n");
 
 describe("Tier SC — configured native launch", () => {
-  it("SC1: the routed use and the retained preparation carry the same two values", function* () {
+  it("SC1: the routed use and the saved preparation carry the same two values", function* () {
     const run = yield* runDoc(CONFIGURED_LAUNCH, { declareSession: true });
 
     expect(run.result.ok ? "" : run.result.error.message).toBe("");
@@ -1778,9 +1778,9 @@ describe("Tier SC — configured native launch", () => {
     expect(run.result.ok ? "" : run.result.error.message).toContain(
       "whose configuration is not what this launch asked for",
     );
-    // The preparation was retained — it is what happened — and nothing after it
+    // The preparation was saved — it is what happened — and nothing after it
     // was: no detach, and no native UI.
-    expect(retainedPhases(run.events)).toEqual(["prepared"]);
+    expect(savedPhases(run.events)).toEqual(["prepared"]);
     expect(run.stub.detaches).toBe(0);
     expect(run.launcher.requests.length).toBe(0);
   });
@@ -1835,7 +1835,7 @@ describe("Tier SC — the final routed Session decides a launch", () => {
     });
 
     expect(run.result.ok ? "" : run.result.error.message).toBe("");
-    // The launch happened, and nothing was configured or retained: a raw
+    // The launch happened, and nothing was configured or saved: a raw
     // session carries no settings, and the record says only what ran.
     expect(run.stub.configurations).toEqual([]);
     expect(preparedRecord(run.events).configuration).toBe(undefined);
@@ -1901,7 +1901,7 @@ describe("Tier SC — the final routed Session decides a launch", () => {
  * feature existed still parses, and one whose member does not read back is
  * refused rather than replayed as a launch that asked for nothing.
  */
-describe("Tier SJ — configuration in a retained preparation", () => {
+describe("Tier SJ — configuration in a saved preparation", () => {
   it("SJ1: a record without any of them parses as a launch that asked for nothing", function* () {
     expect(parsePrepared(prepared())?.configuration).toBe(undefined);
   });
@@ -1966,7 +1966,7 @@ describe("Tier SJ — configuration in a retained preparation", () => {
     }
   });
 
-  it("SJ4: configuration-refused is a retained failure class", function* () {
+  it("SJ4: configuration-refused is a saved failure class", function* () {
     const parsed = parsePrepared(
       prepared({ failure: { class: "configuration-refused", message: "why" } }),
     );
@@ -1977,8 +1977,8 @@ describe("Tier SJ — configuration in a retained preparation", () => {
 /**
  * Tier SR — replaying a configured launch (issue #828).
  *
- * What a launch asked its conversation to run under is retained, so a resumed
- * launch reads it rather than deciding again — and the phases it retained stay
+ * What a launch asked its conversation to run under is saved, so a resumed
+ * launch reads it rather than deciding again — and the phases it saved stay
  * the phases that happened. Applying the configuration is the provider's; what
  * these rows own is the durable sequence around it.
  */
@@ -1993,10 +1993,10 @@ describe("Tier SR — configured launch replay", () => {
 
     expect(run.result.ok).toBe(false);
     expect(run.result.ok ? "" : run.result.error.message).toContain("Unknown model");
-    // Retained as what happened, under the class an author can act on, and
+    // Saved as what happened, under the class an author can act on, and
     // nothing after it was authored.
     expect(preparedFailure(run.events)).toBe("configuration-refused");
-    expect(retainedPhases(run.events)).toEqual(["prepared"]);
+    expect(savedPhases(run.events)).toEqual(["prepared"]);
     expect(run.stub.detaches).toBe(0);
     expect(run.launcher.requests.length).toBe(0);
     // A refusal names no settings: this conversation was never put under any,
@@ -2027,7 +2027,7 @@ describe("Tier SR — configured launch replay", () => {
     // Neither phase ran again, and the journal still holds exactly one of each.
     expect(stub.preparations.length).toBe(1);
     expect(stub.detaches).toBe(1);
-    expect(retainedPhases(resumed.events).filter((phase) => phase === "detached").length).toBe(1);
+    expect(savedPhases(resumed.events).filter((phase) => phase === "detached").length).toBe(1);
     // What it was prepared with survived the interruption, which is what a
     // provider reapplies before it continues.
     expect(preparedRecord(resumed.events).configuration).toEqual({

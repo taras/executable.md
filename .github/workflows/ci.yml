@@ -228,7 +228,7 @@ jobs:
       - name: The <Plan> Component the compiled binary carries
         run: deno test --allow-all --frozen scripts/tests/plan-component-compiled.test.ts
 
-      # The entry host a REPL entry's file work is retained by is assembled by
+      # The entry host a REPL entry's file work is saved by is assembled by
       # `compiled.ts`, which is a different entrypoint from the one the source
       # row runs. A binary built without it starts a REPL, performs the work and
       # retains none of it, so the defect would appear at a person's first
@@ -258,7 +258,7 @@ jobs:
       # Fetch adapter, and detaches the response before binding it. All three
       # live in the module graph, so only the binary shows they survived
       # `deno compile`. The script owns the server the request reaches.
-      - name: Smoke test a retained HTTP read with the compiled binary
+      - name: Smoke test a saved HTTP read with the compiled binary
         run: deno run --allow-all --frozen scripts/smoke-fetch.ts
 
       # A built-in resolves from the module graph rather than a search path.

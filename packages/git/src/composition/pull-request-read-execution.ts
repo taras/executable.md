@@ -11,13 +11,13 @@
  * Once those three are answered, what to *do* with the admitted read is the
  * profile's business and no longer the adapter's. That is this boundary. The
  * adapter hands over the admitted read and the operation that would perform it;
- * the installed policy decides whether performing it is retained.
+ * the installed policy decides whether performing it is saved.
  *
  * The base performs it afresh, which is both the ordinary profile's behaviour
  * and the honest default: a host that installed no lifecycle policy still reads
  * the collection, it simply keeps nothing. A workflow run composes middleware
  * here that wraps the same operation in one durable effect, so a completed one
- * replays without a session and a failure after admission is retained as this
+ * replays without a session and a failure after admission is saved as this
  * read's own.
  *
  * The admitted read carries only what identifies the question — no run, no

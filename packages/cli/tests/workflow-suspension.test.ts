@@ -20,7 +20,7 @@
  * is established through the command's own module and the attachment is
  * `withWorkflowWorkspace` itself — so nothing it depends on is installed by
  * this suite. Only the agent is a stand-in, in the slot the real agent profile
- * fills, because what is under test is that a turn is retained once rather than
+ * fills, because what is under test is that a turn is saved once rather than
  * what an agent says.
  *
  * One case below is a process after all, and says why: which provider answers
@@ -74,7 +74,7 @@ import type {
   WorkflowStart,
 } from "../src/workflow.ts";
 import { runWorkflowManagement } from "../src/workflow-management.ts";
-import { retainedSource } from "../../workflow/tests/support/storage.ts";
+import { savedSource } from "../../workflow/tests/support/storage.ts";
 
 const SCHEMA = { type: "object", properties: { approved: { type: "boolean" } } };
 
@@ -185,7 +185,7 @@ function useGit(fixture: Fixture): Operation<void> {
 }
 
 /** Everything a second connection can see of one run. */
-interface Retained {
+interface Saved {
   readonly status: string;
   readonly executions: { status: string | undefined; reasonEventId: string | undefined }[];
   readonly requests: string[];
@@ -208,10 +208,10 @@ function readRecords(path: string): string[] {
 }
 
 /**
- * Rewrite every retained record through `edit`.
+ * Rewrite every saved record through `edit`.
  *
  * A continuation admitted under a previous release cannot be produced by
- * running this one, so the retained history is edited into the shape that
+ * running this one, so the saved history is edited into the shape that
  * release left behind. Nothing else about the run changes — the same source,
  * roots and selection — so the identity is the only thing a resume can
  * disagree about.
@@ -235,7 +235,7 @@ function rewriteRecords(path: string, edit: (record: string) => string): void {
   }
 }
 
-function retained(path: string): Retained {
+function saved(path: string): Saved {
   const database = new DatabaseSync(path, { readOnly: true });
   try {
     const status = String(
@@ -284,10 +284,10 @@ function retained(path: string): Retained {
  * A run with its definition recorded and nothing executed yet.
  *
  * Created through the same transitions production uses, so what the executions
- * below resume is an ordinary retained run rather than a fixture shape.
+ * below resume is an ordinary saved run rather than a fixture shape.
  */
 function* createRun(root: string, fixture: Fixture): Operation<string> {
-  const retained = yield* retainedSource("workflow.md", fixture.contents);
+  const saved = yield* savedSource("workflow.md", fixture.contents);
 
   return yield* scoped(function* () {
     const transitions = yield* useWorkflowRunHost({
@@ -305,8 +305,8 @@ function* createRun(root: string, fixture: Fixture): Operation<string> {
       runId,
       action: "start",
       creation: {
-        definition: retained.definition,
-        sourceSnapshot: retained.sourceSnapshot,
+        definition: saved.definition,
+        sourceSnapshot: saved.sourceSnapshot,
         props: {},
         retrieval: { kind: "local-checkout", checkout: fixture.repository },
       },
@@ -390,7 +390,7 @@ function manage(
   });
 }
 
-/** The retained answers this run holds, read the way something outside XMD would. */
+/** The saved answers this run holds, read the way something outside XMD would. */
 function answers(path: string): { suspensionId: string; state: string; answer: string }[] {
   const database = new DatabaseSync(path, { readOnly: true });
   try {
@@ -480,7 +480,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
     // Suspension is its own outcome, and it is the exit code a caller reads.
     expect(first.exitCode).toBe(2);
 
-    const afterFirst = retained(path);
+    const afterFirst = saved(path);
     expect(afterFirst.status).toBe("suspended");
 
     // The run was created and left resumable before this suite ran, so its
@@ -491,7 +491,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
     );
     expect(firstSuspended).toHaveLength(1);
 
-    // The stop reason names the retained request event rather than repeating
+    // The stop reason names the saved request event rather than repeating
     // anything the request said.
     expect(firstSuspended[0]?.reasonEventId).toBe(afterFirst.requestEventId);
 
@@ -522,7 +522,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
       );
       expect(resumed.exitCode).toBe(2);
 
-      const after = retained(path);
+      const after = saved(path);
       expect(after.status).toBe("suspended");
 
       // One prior effect and one request across every execution: a resume
@@ -532,7 +532,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
       expect(after.rootCloses).toBe(0);
 
       // One more execution record per attempt, every one settled `suspended`,
-      // each naming the one retained request.
+      // each naming the one saved request.
       const suspended = after.executions.filter((execution) => execution.status === "suspended");
       expect(suspended).toHaveLength(attempt + 1);
       expect(suspended.every((execution) => execution.reasonEventId === after.requestEventId)).toBe(
@@ -590,7 +590,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
 
     expect(completed.exitCode).toBe(0);
     const path = workflowRunPath(root, runId);
-    const after = retained(path);
+    const after = saved(path);
     expect(after.status).toBe("completed");
     expect(after.requests).toHaveLength(0);
     expect(after.rootCloses).toBe(1);
@@ -605,7 +605,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
       body(),
     );
     expect(replayed.exitCode).toBe(0);
-    const afterReplay = retained(path);
+    const afterReplay = saved(path);
     expect(afterReplay.status).toBe("completed");
     expect(afterReplay.priorEffects).toBe(after.priorEffects);
     expect(afterReplay.requests).toHaveLength(0);
@@ -630,7 +630,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
     ).toBe(2);
 
     const path = workflowRunPath(root, runId);
-    const suspended = retained(path);
+    const suspended = saved(path);
     const suspensionId = suspended.requests[0] ?? "";
     expect(suspensionId).not.toBe("");
 
@@ -653,7 +653,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
 
     // The run is exactly where the suspension left it: same status, same stop
     // reason, same executions, same history.
-    const afterDelivery = retained(path);
+    const afterDelivery = saved(path);
     expect(afterDelivery).toEqual(suspended);
     expect(answers(path)).toEqual([
       { suspensionId, state: "pending", answer: JSON.stringify({ approved: true }) },
@@ -679,7 +679,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
       `continued-with-${JSON.stringify({ approved: true })}`,
     ]);
 
-    const afterResume = retained(path);
+    const afterResume = saved(path);
     expect(afterResume.status).toBe("completed");
     expect(afterResume.rootCloses).toBe(1);
     // One request across every execution, and the delivery is spent.
@@ -703,7 +703,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
     );
 
     const path = workflowRunPath(root, runId);
-    const suspensionId = retained(path).requests[0] ?? "";
+    const suspensionId = saved(path).requests[0] ?? "";
     expect(suspensionId).not.toBe("");
 
     // A wait this run is not at, refused without writing anything.
@@ -824,7 +824,7 @@ const FILE_EFFECT = WORKSPACE_FILE;
 /**
  * What core's own declaration offers the paired `<Dir>` as.
  *
- * Spelled here rather than imported, because a case about what a retained
+ * Spelled here rather than imported, because a case about what a saved
  * admission holds has to name the string the journal holds: reading it from the
  * component the resume also reads would agree with itself after a rename.
  */
@@ -839,7 +839,7 @@ interface AgentCalls {
  * A root Agent provider that answers without a process.
  *
  * Test-only, and the smallest thing that makes `<Prompt>` a real durable turn:
- * what is under test is that the turn is retained once, not what an agent says.
+ * what is under test is that the turn is saved once, not what an agent says.
  */
 function* useStubAgent(calls: AgentCalls): Operation<void> {
   // Installed on the caller's scope, not a nested one: a `scoped()` here would
@@ -1072,7 +1072,7 @@ function counts(path: string): Record<string, number> {
   };
 }
 
-/** Every durable yield of one description type this run retained. */
+/** Every durable yield of one description type this run saved. */
 function journalled(path: string, type: string): number {
   const database = new DatabaseSync(path, { readOnly: true });
   try {
@@ -1092,10 +1092,10 @@ function journalled(path: string, type: string): number {
 }
 
 /** The Workspace roots this run has published, and the one it stands on. */
-function workspaceRootState(path: string): { retained: number; current: string } {
+function workspaceRootState(path: string): { saved: number; current: string } {
   const database = new DatabaseSync(path, { readOnly: true });
   try {
-    const retained = Number(
+    const saved = Number(
       database.prepare("SELECT COUNT(*) AS count FROM workspace_roots").get()?.["count"],
     );
     const current = String(
@@ -1103,13 +1103,13 @@ function workspaceRootState(path: string): { retained: number; current: string }
         .prepare("SELECT current_root_id FROM workspace_state WHERE singleton_id = 1")
         .get()?.["current_root_id"],
     );
-    return { retained, current };
+    return { saved, current };
   } finally {
     database.close();
   }
 }
 
-/** Every durable yield this run retained, in journal order, as type and name. */
+/** Every durable yield this run saved, in journal order, as type and name. */
 function orderedEffects(path: string): { type: string; name: string }[] {
   const database = new DatabaseSync(path, { readOnly: true });
   try {
@@ -1189,16 +1189,16 @@ describe("Tier CKX — a checkpoint a document asked for", () => {
     ]);
 
     const path = workflowRunPath(root, runId);
-    const suspended = retained(path);
+    const suspended = saved(path);
     expect(suspended.status).toBe("suspended");
     expect(suspended.requests).toHaveLength(1);
     expect(suspended.rootCloses).toBe(0);
 
-    // The wait the caller was told to answer is the wait the run retained —
+    // The wait the caller was told to answer is the wait the run saved —
     // read back from the journal rather than from the line that announced it.
     expect(reported).toBe(suspended.requests[0]);
 
-    // The stop reason names the retained request rather than repeating it.
+    // The stop reason names the saved request rather than repeating it.
     const settled = suspended.executions.filter((execution) => execution.status === "suspended");
     expect(settled).toHaveLength(1);
     expect(settled[0]?.reasonEventId).toBe(suspended.requestEventId);
@@ -1255,7 +1255,7 @@ describe("Tier CKX — a checkpoint a document asked for", () => {
     expect(rendered).toEqual([]);
 
     // CK3 — the delivery retains a value and moves nothing.
-    const suspended = retained(path);
+    const suspended = saved(path);
     const suspensionId = suspended.requests[0] ?? "";
     const delivered = yield* manage(
       { action: "answer", runId, suspensionId, value: { proceed: true }, secretDetection: true },
@@ -1264,7 +1264,7 @@ describe("Tier CKX — a checkpoint a document asked for", () => {
     expect(delivered.exitCode).toBe(0);
     expect(delivered.written.out).toEqual([`workflow answer: ${runId} (${suspensionId})`]);
     expect(delivered.written.err).toEqual([]);
-    expect(retained(path)).toEqual(suspended);
+    expect(saved(path)).toEqual(suspended);
     expect(calls.prompts).toHaveLength(1);
 
     // CK4 — the resume spends the answer, and repeats none of the three.
@@ -1276,7 +1276,7 @@ describe("Tier CKX — a checkpoint a document asked for", () => {
     );
     expect(resumed.exitCode).toBe(0);
 
-    const completed = retained(path);
+    const completed = saved(path);
     expect(completed.status).toBe("completed");
     expect(completed.requests).toHaveLength(1);
     expect(completed.requests[0]).toBe(suspended.requests[0]);
@@ -1309,10 +1309,10 @@ describe("Tier CKX — a checkpoint a document asked for", () => {
       .slice("workflow run: ".length)
       .trim();
     const path = workflowRunPath(root, runId);
-    const suspensionId = retained(path).requests[0] ?? "";
+    const suspensionId = saved(path).requests[0] ?? "";
     expect(suspensionId).not.toBe("");
 
-    // An answer the retained response schema rejects. `proceed` is the field
+    // An answer the saved response schema rejects. `proceed` is the field
     // `<Elicit>` declared, and this is the shape its schema gives it — so the
     // refusal is by the schema the document compiled, not one delivery guessed.
     const before = yield* storageDigest(path);
@@ -1399,7 +1399,7 @@ decision: {decision.proceed}
       component: `<Evaluate text={"<File path=\\"notes.md\\" />"} allow={["read"]} as="observed" />\n`,
       setup: `
 <File path="notes.md">
-the retained note
+the saved note
 </File>
 `,
       nested: [{ operation: "read", target: "notes.md" }],
@@ -1443,7 +1443,7 @@ the retained note
       // parent effect committed ahead of the wait. The journal counts and the
       // Workspace root publications captured here are the once-only baseline
       // everything after the suspension is held to.
-      const suspended = retained(path);
+      const suspended = saved(path);
       expect(suspended.status).toBe("suspended");
       expect(suspended.requests).toHaveLength(1);
       expect(rendered).toEqual([]);
@@ -1485,7 +1485,7 @@ the retained note
         productionHost(store, calls),
       );
       expect(delivered.exitCode).toBe(0);
-      expect(retained(path)).toEqual(suspended);
+      expect(saved(path)).toEqual(suspended);
       expect(counts(path)).toEqual(atSuspension);
       expect(workspaceRootState(path)).toEqual(rootsAtSuspension);
 
@@ -1500,7 +1500,7 @@ the retained note
       );
       expect(resumed.exitCode).toBe(0);
 
-      const completed = retained(path);
+      const completed = saved(path);
       expect(completed.status).toBe("completed");
       expect(counts(path)).toEqual(atSuspension);
       expect(workspaceRootState(path)).toEqual(rootsAtSuspension);
@@ -1548,7 +1548,7 @@ the retained note
       .trim();
     const path = workflowRunPath(store, runId);
 
-    const suspended = retained(path);
+    const suspended = saved(path);
     expect(suspended.status).toBe("suspended");
     // The admission carries the identity core's own declaration offers the
     // paired spelling as, in the write table that admitted it — so that is what
@@ -1562,7 +1562,7 @@ the retained note
     ).toBe(true);
 
     // And the generated `<Dir>` really executed before the run suspended: the
-    // retained file effects hold an ensure for `/generated` ahead of the nested
+    // saved file effects hold an ensure for `/generated` ahead of the nested
     // write beneath it. Read from the committed order rather than from the
     // fragment's text, because the text says what was asked for and the order
     // says what happened.
@@ -1606,7 +1606,7 @@ the retained note
 
     // It really resumes.
     expect(resumed.exitCode).toBe(0);
-    expect(retained(path).status).toBe("completed");
+    expect(saved(path).status).toBe("completed");
     expect(rendered).toHaveLength(1);
     // And the resume publishes nothing further: no additional effect, and no
     // new Workspace root.

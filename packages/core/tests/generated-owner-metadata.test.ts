@@ -37,7 +37,7 @@ import { collect } from "../src/collect.ts";
 import { executeInstalled } from "../host.ts";
 import type { ComponentAnswerInstallation, ExecutionInstallation } from "../host.ts";
 import { useSelection } from "./support/generated-selection.ts";
-import { retainedSource } from "../src/root-source.ts";
+import { savedSource } from "../src/root-source.ts";
 import type { IdentityComponent } from "../src/invocation-identity.ts";
 import { Component } from "../src/component-api.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -263,7 +263,7 @@ describe("Tier GOM — a declaration states what its spellings are offered as", 
   });
 
   // deno-lint-ignore require-yield
-  it("GOM1: an accessor is read once, and what was validated is what is retained", function* () {
+  it("GOM1: an accessor is read once, and what was validated is what is saved", function* () {
     // The check/use gap at the declaration boundary. The identity answers the
     // accepted URL the first time it is read and `not-a-url` afterwards, so a
     // registration that validated the declarer's object and then copied it
@@ -502,7 +502,7 @@ describe("Tier GOM — a shared definition's metadata cannot be edited", () => {
  * Every row drives a real execution: the host declares the component, the
  * execution builds it, a provider publishes that exact built object, and the
  * fragment names it in the spelling its declaration offers. What the rows read
- * is the admission the run retained, because a refusal assertion would pass for
+ * is the admission the run saved, because a refusal assertion would pass for
  * a run that admitted the wrong URL and happened to fail later.
  */
 describe("Tier GOM — a declared component's offer survives capture", () => {
@@ -587,7 +587,7 @@ describe("Tier GOM — a declared component's offer survives capture", () => {
   ): Operation<Json> {
     return scoped(function* () {
       return yield* collect(
-        yield* executeInstalled({ ...retainedSource(ROOT_PATH, NAMING_PROBE), stream }, [
+        yield* executeInstalled({ ...savedSource(ROOT_PATH, NAMING_PROBE), stream }, [
           ...installations,
         ]),
       );
@@ -598,7 +598,7 @@ describe("Tier GOM — a declared component's offer survives capture", () => {
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
 
-  /** The row this run's admission retained for the name it admitted. */
+  /** The row this run's admission saved for the name it admitted. */
   function* admittedRow(stream: InMemoryStream): Operation<Json> {
     const events = yield* stream.readAll();
     const event = events.find(
@@ -606,7 +606,7 @@ describe("Tier GOM — a declared component's offer survives capture", () => {
     );
     const result = event?.type === "yield" ? event.result : undefined;
     if (result === undefined || result.status !== "ok" || !isRecord(result.value)) {
-      throw new Error("the run retained no admission");
+      throw new Error("the run saved no admission");
     }
     const policy = result.value.policy;
     if (!isRecord(policy) || !Array.isArray(policy.allowed)) {

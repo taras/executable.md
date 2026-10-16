@@ -4,7 +4,7 @@
  * A journal entry's identity is its `type` and `name`. A position is neither,
  * so it travels beside them under one stable namespaced field and takes no part
  * in matching — which is the whole reason it can be added to an existing
- * description at all. These tests hold both halves: the position is retained for
+ * description at all. These tests hold both halves: the position is saved for
  * the operations an author wrote, and replay still matches the entries it
  * matched before.
  *
@@ -81,7 +81,7 @@ function useMark(): Operation<void> {
   ]);
 }
 
-/** The position one operation retained, or `undefined` when it retained none. */
+/** The position one operation saved, or `undefined` when it saved none. */
 function sourceOf(events: DurableEvent[], type: string, name?: string): unknown {
   const found = events.find(
     (event) =>
@@ -164,7 +164,7 @@ describe("Tier JSP — authored source in the journal", () => {
     const recorded = (yield* stream.readAll()).length;
 
     // The same journal, replayed: every entry matches by type and name, and a
-    // full replay adds nothing to what was already retained.
+    // full replay adds nothing to what was already saved.
     const replayed = yield* collect(yield* execute({ path, stream }));
 
     expect(replayed).toEqual(first);

@@ -55,7 +55,7 @@ interface Yield {
 }
 ```
 
-**`Close`** is written when a coroutine terminates — whether it completed, threw an error, or was cancelled — after its retained subtree is aligned. Alignment requires every retained yield to be consumed and every retained child coroutine to be claimed by the current definition. Close events are load-bearing: they tell the runtime on restart which coroutines finished cleanly and which need re-execution. An unaligned termination is divergence and appends no `Close`.
+**`Close`** is written when a coroutine terminates — whether it completed, threw an error, or was cancelled — after its saved subtree is aligned. Alignment requires every saved yield to be consumed and every saved child coroutine to be claimed by the current definition. Close events are load-bearing: they tell the runtime on restart which coroutines finished cleanly and which need re-execution. An unaligned termination is divergence and appends no `Close`.
 
 ### What goes into the journal
 
@@ -331,11 +331,11 @@ During replay, every yielded effect is validated against its journal entry. Only
 Three additional terminal conditions are checked:
 
 - **Generator finishes early**: the code returns before consuming all journal entries — effects were removed.
-- **Generator fails early**: the code throws before consuming all journal entries — the ordinary failure cannot close over retained effects the current execution never reached.
+- **Generator fails early**: the code throws before consuming all journal entries — the ordinary failure cannot close over saved effects the current execution never reached.
 - **Generator continues past close**: the journal shows the coroutine closed, but the code keeps yielding — effects were added.
-- **Completed child is abandoned**: retained child history has a `Close`, but the current definition never claims that coroutine identity.
+- **Completed child is abandoned**: saved child history has a `Close`, but the current definition never claims that coroutine identity.
 
-All indicate the code has changed in a way that makes the stored history invalid. Early return raises `EarlyReturnDivergenceError`; early failure raises `TerminalDivergenceError` with the ordinary failure as its cause. Neither appends a terminal `Close`, so a compatible definition can still replay the retained history. The solution for intentional code changes is `versionCheck`:
+All indicate the code has changed in a way that makes the stored history invalid. Early return raises `EarlyReturnDivergenceError`; early failure raises `TerminalDivergenceError` with the ordinary failure as its cause. Neither appends a terminal `Close`, so a compatible definition can still replay the saved history. The solution for intentional code changes is `versionCheck`:
 
 ```typescript
 function* orderWorkflow(orderId: string): Workflow<void> {
@@ -381,9 +381,9 @@ The canonical example is a file-backed effect. If the workflow previously read `
 
 A replay guard has three stages, separated by a strict I/O boundary:
 
-**Stage 1 — `check`**: runs in generator context before replay begins, once per retained `Yield`. I/O is allowed. Use it to gather current state (compute file hashes, check timestamps) and cache results in the middleware closure.
+**Stage 1 — `check`**: runs in generator context before replay begins, once per saved `Yield`. I/O is allowed. Use it to gather current state (compute file hashes, check timestamps) and cache results in the middleware closure.
 
-**Stage 2 — `admit`**: runs once after every retained event has been offered to `check`, and before a recorded terminal result is reused. It receives the retained history as a whole — the coroutine about to be resumed, its retained `Yield`s, and whether a terminal result exists for it. A guard that requires something of the history *as a whole* — that an event it validates is present at all, and present once — refuses here, because a per-event `check` has nothing to object to in a journal that simply omits the event. The default is a no-op.
+**Stage 2 — `admit`**: runs once after every saved event has been offered to `check`, and before a recorded terminal result is reused. It receives the saved history as a whole — the coroutine about to be resumed, its saved `Yield`s, and whether a terminal result exists for it. A guard that requires something of the history *as a whole* — that an event it validates is present at all, and present once — refuses here, because a per-event `check` has nothing to object to in a journal that simply omits the event. The default is a no-op.
 
 **Stage 3 — `decide`**: runs synchronously inside the replay loop, after identity matching succeeds. Must be pure — no I/O, no side effects. Reads from the cache populated during `check` and returns a `ReplayOutcome`.
 
@@ -393,11 +393,11 @@ The separation between generator and synchronous stages is necessary because the
 
 A replay distinguishes three things, and conflating any two of them gives the wrong holder the decision:
 
-1. **The authoritative retained history.** What a consumer's own admission validated and what replay consumes. Detached from the backend and immutable to policy — its descriptions and results are frozen through, so nothing that receives it can rewrite what replay will decide.
+1. **The authoritative saved history.** What a consumer's own admission validated and what replay consumes. Detached from the backend and immutable to policy — its descriptions and results are frozen through, so nothing that receives it can rewrite what replay will decide.
 2. **Isolated guard observations.** What `check`, `admit`, and `decide` receive: a deep, mutable copy made per invocation. Middleware may read, annotate, and compose over it freely; nothing it writes reaches replay.
-3. **Values delivered to workflow code.** A fresh mutable copy taken from the retained history at the moment of consumption — for a replayed effect and for a completed run's own return value alike. This is the only thing "mutable replayed value" ever means: a document that resumes on a restored binding writes to its copy, and writing to it cannot reach the retained history or the next replay.
+3. **Values delivered to workflow code.** A fresh mutable copy taken from the saved history at the moment of consumption — for a replayed effect and for a completed run's own return value alike. This is the only thing "mutable replayed value" ever means: a document that resumes on a restored binding writes to its copy, and writing to it cannot reach the saved history or the next replay.
 
-The retained history is frozen through in **every** settlement shape — a success with a value, a `Result<void>` with none, a failure, and a cancellation, on `Yield` and `Close` alike. An envelope left writable is one a public observation could add a value to before replay reads it.
+The saved history is frozen through in **every** settlement shape — a success with a value, a `Result<void>` with none, a failure, and a cancellation, on `Yield` and `Close` alike. An envelope left writable is one a public observation could add a value to before replay reads it.
 
 Handing policy the authoritative events would let a guard rename effect A to B — so a workflow asking for B consumes A's result without B ever running — or rewrite a recorded root selection after admission accepted it.
 
@@ -409,21 +409,21 @@ That makes a guard the wrong place for anything that decides *identity*. A consu
 
 Use guards for staleness policy. Do not use them to enforce an invariant that must not be negotiable.
 
-### Retained events are read once
+### Saved events are read once
 
-Every phase of a replay reads the same events, and a journal is data a backend supplies. Events are therefore **retained**: read once and detached from whatever the backend still owns.
+Every phase of a replay reads the same events, and a journal is data a backend supplies. Events are therefore **saved**: read once and detached from whatever the backend still owns.
 
-**Every** event that participates in admission, indexing, or terminal reuse is retained — `Close` as well as `Yield`. A `Close` decides whether a coroutine has a terminal result to reuse, so leaving it as the backend's own object lets it belong to a child coroutine while one phase asks and to the root while the next does.
+**Every** event that participates in admission, indexing, or terminal reuse is saved — `Close` as well as `Yield`. A `Close` decides whether a coroutine has a terminal result to reuse, so leaving it as the backend's own object lets it belong to a child coroutine while one phase asks and to the root while the next does.
 
-The **discriminator** is settled by the classification that chooses an event's retained kind, and never read from the source again. **Identity** — the coroutine an event belongs to, and a `Yield`'s complete effect description — is settled once too, so no phase can be shown a different event than the phase before it. An event that refuses to say what it is is refused from every member.
+The **discriminator** is settled by the classification that chooses an event's saved kind, and never read from the source again. **Identity** — the coroutine an event belongs to, and a `Yield`'s complete effect description — is settled once too, so no phase can be shown a different event than the phase before it. An event that refuses to say what it is is refused from every member.
 
 A `Yield`'s **settlement** stays lazy and separate, because the index is built before guards run and a guard that would refuse an event must get that chance before the stream is asked to produce a result.
 
-A `Close`'s result is settled **while the history is retained**, not at a first later read. A `Close` carries what a completed run hands back, and deferring that read leaves an interval — between the moment a consumer's own admission accepts the history and the moment terminal reuse consumes it — in which the backend still owns the answer and can replace it. Reading once at a later getter closes repeated reads and leaves that window open.
+A `Close`'s result is settled **while the history is saved**, not at a first later read. A `Close` carries what a completed run hands back, and deferring that read leaves an interval — between the moment a consumer's own admission accepts the history and the moment terminal reuse consumes it — in which the backend still owns the answer and can replace it. Reading once at a later getter closes repeated reads and leaves that window open.
 
 Every cell keeps both outcomes: a refusal is remembered and re-raised rather than retried, so retaining a history never fails and a refusal reaches whichever phase asks.
 
-A retained event presents its members as ordinary own properties, so it spreads, serializes, and compares like the plain event a backend would have supplied.
+A saved event presents its members as ordinary own properties, so it spreads, serializes, and compares like the plain event a backend would have supplied.
 
 A detached result shares no object or array with the journal, and remains ordinary mutable JSON — detaching is a claim against the *stream*, not against the consumer, and replayed values are legitimately written to.
 
@@ -654,7 +654,7 @@ members replay guards read.
 
 Nothing from the record reaches the failure. Members the protocol does not name
 appear in the path as `*` rather than by name, because a record's own member
-names are as much retained content as its values, so a parse failure copies
+names are as much saved content as its values, so a parse failure copies
 neither into logs and terminals.
 
 ---
@@ -719,7 +719,7 @@ import {
   preserveJournalProvenance,
 } from "@executablemd/durable-streams";
 
-const provenance = establishJournalProvenance(journal); // retained by the provider
+const provenance = establishJournalProvenance(journal); // saved by the provider
 ```
 
 The value is a `JournalProvenance` — a non-operational, equality-only witness.

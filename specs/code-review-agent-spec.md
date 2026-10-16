@@ -244,7 +244,7 @@ by path — and a command that names none has none of the forty-two names.
 One installation per command then serves every surface that describes or
 validates the vocabulary — ordinary execution, `xmd syntax`, structural
 validation, `<Plan>`'s admission validator and `xmd plan`'s candidate validation
-— so the three checks inside one Plan command consume one retained assembly
+— so the three checks inside one Plan command consume one saved assembly
 rather than re-reading every packaged asset.
 
 ---

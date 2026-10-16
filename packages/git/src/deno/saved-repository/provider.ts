@@ -43,7 +43,7 @@ import type { GitSession } from "../composition/git.ts";
 import { discoverAmbientCheckout } from "../run-composition/ambient.ts";
 import { lazily } from "../run-composition/lazy.ts";
 import { useCommonDirectoryLease } from "./leases.ts";
-import type { ReplAmbientCheckout } from "../../retained-repository/records.ts";
+import type { ReplAmbientCheckout } from "../../saved-repository/records.ts";
 import { currentCoroutine, selectedCheckout } from "./local.ts";
 import { replFileMiddleware } from "./files.ts";
 import type { ReplLocalRecorder } from "./files.ts";

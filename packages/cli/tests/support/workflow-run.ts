@@ -34,7 +34,7 @@ export function withStorage<T>(root: string, body: () => Operation<T>): Operatio
 }
 
 /**
- * One run of one retained document, created the way a host creates one.
+ * One run of one saved document, created the way a host creates one.
  *
  * The descriptor is derived from the bytes rather than written beside them, so
  * the bundle hash this retains is the hash those bytes really produce — which

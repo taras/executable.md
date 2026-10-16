@@ -5,7 +5,7 @@
  * is an artifact at all — recognition, manifest, inventory and every semantic
  * gate — and returns a detached, deep-frozen value or says why it will not.
  * This turns that value into the provider-neutral snapshot and history a
- * retained run already answers with, and knows nothing about containers.
+ * saved run already answers with, and knows nothing about containers.
  *
  * ## No live ownership, at all
  *
@@ -78,7 +78,7 @@ export function* historyArtifact(path: string): Operation<Result<WorkflowArtifac
   const candidates: ForkabilityCandidate[] = [];
   const inherited = new Map<string, InheritedEventProvenance>();
   for (const row of artifact.journal) {
-    // The retained bytes, through the parser that wrote them. A verified
+    // The saved bytes, through the parser that wrote them. A verified
     // container says these records are the ones the journal's own gate
     // filtered; what they *mean* is still this parser's answer, and a record it
     // refuses is history nobody can read rather than a row to skip.
@@ -101,9 +101,9 @@ export function* historyArtifact(path: string): Operation<Result<WorkflowArtifac
       artifact: identityOf(artifact),
       entries: projectHistory(candidates, {
         // Every root the artifact carries. An artifact holds the run's whole
-        // retained set, so a checkpoint blocked by a missing Workspace here is
+        // saved set, so a checkpoint blocked by a missing Workspace here is
         // blocked for the same reason it would be in the run.
-        retainedRoots: new Set(artifact.roots.map((root) => root.rootId)),
+        savedRoots: new Set(artifact.roots.map((root) => root.rootId)),
         inherited,
       }),
     }),
@@ -118,7 +118,7 @@ function identityOf(artifact: VerifiedXmdArtifact): WorkflowArtifactIdentity {
  * The last committed event and the root that row was associated with.
  *
  * The row's own root, never the current Workspace pointer. They are two
- * retained facts and they disagree whenever the run's last event did not move
+ * saved facts and they disagree whenever the run's last event did not move
  * the Workspace — projecting one as the other would report a boundary the run
  * never had.
  */

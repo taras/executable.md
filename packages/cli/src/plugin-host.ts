@@ -29,7 +29,7 @@ import type {
 } from "@executablemd/core/host";
 
 /**
- * What one command's Plugins contributed, retained for every consumer of it.
+ * What one command's Plugins contributed, saved for every consumer of it.
  *
  * One assembly per command. `xmd plan` asks the same value for the symbols it
  * shows a writer, for each draft check, for admission and for final validation,
@@ -57,7 +57,7 @@ export interface CommandPlugins {
   /**
    * The original argv these Plugins were installed from.
    *
-   * Retained because a nested `host="run"` child installs the same values again
+   * Saved because a nested `host="run"` child installs the same values again
    * in its own scope, and an install request is the command and the argv the
    * invocation was written on — never a second reading of either.
    */

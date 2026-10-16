@@ -77,7 +77,7 @@ function coherentStopReason(): string {
  * Kept as separate definitions so verification can compare what a file holds
  * with what this build writes, rather than settling for the table's name.
  *
- * The complete version-1 shape includes the pinned DOFS objects, retained
+ * The complete version-1 shape includes the pinned DOFS objects, saved
  * Workspace roots, journal and metadata. Dependency order is explicit: DOFS
  * content precedes root references, and roots precede the journal rows that
  * name them.
@@ -828,8 +828,8 @@ export function checkIntegrity(database: DatabaseSync, path: string): void {
 /**
  * Ask SQLite whether its references still point at anything.
  *
- * A retained reference names an object only while that object exists; a row
- * pointing at nothing is damage rather than a partial retained state.
+ * A saved reference names an object only while that object exists; a row
+ * pointing at nothing is damage rather than a partial saved state.
  */
 function checkForeignKeys(database: DatabaseSync, path: string): void {
   if (query(database, "PRAGMA foreign_key_check", path).length > 0) {

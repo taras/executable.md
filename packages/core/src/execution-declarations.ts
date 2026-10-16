@@ -41,7 +41,7 @@
  * ## What crosses to the handler
  *
  * Nothing here calls a handler. The declarations are admitted, the handler an
- * installation supplied is retained beside them, and the entry that holds it
+ * installation supplied is saved beside them, and the entry that holds it
  * is reachable only by holding this catalog. There is no registry, registrar,
  * plugin object, contextual slot, token or authentication handle.
  */
@@ -191,7 +191,7 @@ export interface ExpansionRequest {
 export type ExpansionHandler = (request: ExpansionRequest) => Operation<void>;
 
 /** What one installation contributed, read once at capture. */
-export interface RetainedInstallation {
+export interface SavedInstallation {
   readonly declarations: readonly ExecutionDeclaration[];
   readonly expand?: ExpansionHandler;
 }
@@ -379,7 +379,7 @@ export function* admitExecutionDeclarations(
 export type IncompleteStructural = "declarations-without-handler" | "handler-without-declarations";
 
 export function incompleteStructural(
-  installation: RetainedInstallation,
+  installation: SavedInstallation,
 ): IncompleteStructural | undefined {
   const declares = installation.declarations.some(
     (declaration) => declaration.kind === "structural",
@@ -403,7 +403,7 @@ export function incompleteStructural(
  * expand, so it is refused here — before the root document is read.
  */
 export function* admitInstalledDeclarations(
-  installations: readonly RetainedInstallation[],
+  installations: readonly SavedInstallation[],
   registry: ComponentRegistry,
 ): Operation<ExecutionDeclarationCatalog> {
   return yield* admit(installations, registry, true);
@@ -417,7 +417,7 @@ export function* admitInstalledDeclarations(
  * questions only a whole set can answer come afterwards.
  */
 function* admit(
-  installations: readonly RetainedInstallation[],
+  installations: readonly SavedInstallation[],
   registry: ComponentRegistry,
   /** Whether the caller is an execution, and so has handlers to be held to. */
   installed: boolean,

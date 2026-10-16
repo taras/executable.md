@@ -3,7 +3,7 @@
  *
  * Hand-written events and parser spies, because what is under test is the
  * projection itself: no database is opened here, and no effect-specific parser
- * is imported. The retained payloads carry a sentinel standing in for a
+ * is imported. The saved payloads carry a sentinel standing in for a
  * credential, so a diagnostic that echoed one would be visible.
  */
 
@@ -12,14 +12,14 @@ import { expect } from "@executablemd/test-support/expect";
 import { readTextFile } from "@effectionx/fs";
 import {
   effectSequence,
-  readRetainedRecords,
-  readRetainedValues,
+  readSavedRecords,
+  readSavedValues,
   selectYields,
 } from "@executablemd/test-support/journal";
-import type { RetainedRecordParser } from "@executablemd/test-support/journal";
+import type { SavedRecordParser } from "@executablemd/test-support/journal";
 import type { Close, DurableEvent, Json, Yield } from "@executablemd/durable-streams";
 
-const SENTINEL = "retained-credential-sentinel";
+const SENTINEL = "saved-credential-sentinel";
 
 function settled(type: string, value: Json): Yield {
   return {
@@ -68,7 +68,7 @@ interface Reconciliation {
 
 /** A parser that owns its record type, and counts what it was asked to read. */
 function reconciliations(): {
-  parse: RetainedRecordParser<Reconciliation>;
+  parse: SavedRecordParser<Reconciliation>;
   seen: unknown[];
 } {
   const seen: unknown[] = [];
@@ -147,7 +147,7 @@ describe("test-support journal reader", () => {
       settled("git_host_effect", { kind: "pull-request", decision: "adopted" }),
     ];
 
-    const outcomes = readRetainedValues(events, "git_host_effect", parse);
+    const outcomes = readSavedValues(events, "git_host_effect", parse);
 
     expect(outcomes).toEqual([
       {
@@ -182,7 +182,7 @@ describe("test-support journal reader", () => {
       }),
     ];
 
-    expect(readRetainedRecords(events, "workspace_repository", parse)).toEqual([
+    expect(readSavedRecords(events, "workspace_repository", parse)).toEqual([
       {
         position: 0,
         effect: "workspace_repository",
@@ -202,7 +202,7 @@ describe("test-support journal reader", () => {
       cancelled("git_host_effect"),
     ];
 
-    expect(readRetainedValues(events, "git_host_effect", parse)).toEqual([
+    expect(readSavedValues(events, "git_host_effect", parse)).toEqual([
       {
         position: 0,
         effect: "git_host_effect",
@@ -229,11 +229,9 @@ describe("test-support journal reader", () => {
       unsettled("git_host_effect"),
     ];
 
-    const message = refusal(() => readRetainedValues(events, "git_host_effect", parse));
+    const message = refusal(() => readSavedValues(events, "git_host_effect", parse));
 
-    expect(message).toBe(
-      "the value retained at 1 git_host_effect is not a record its parser reads",
-    );
+    expect(message).toBe("the value saved at 1 git_host_effect is not a record its parser reads");
     expect(message).not.toContain(SENTINEL);
   });
 
@@ -243,10 +241,10 @@ describe("test-support journal reader", () => {
     const { parse } = reconciliations();
     const events: DurableEvent[] = [settled("workspace_repository", { token: SENTINEL })];
 
-    const message = refusal(() => readRetainedRecords(events, "workspace_repository", parse));
+    const message = refusal(() => readSavedRecords(events, "workspace_repository", parse));
 
     expect(message).toBe(
-      "the value retained at 0 workspace_repository is not a record its parser reads",
+      "the value saved at 0 workspace_repository is not a record its parser reads",
     );
     expect(message).not.toContain(SENTINEL);
   });
@@ -259,11 +257,9 @@ describe("test-support journal reader", () => {
       settled("git_host_effect", { decision: "performed", token: SENTINEL }),
     ];
 
-    const message = refusal(() => readRetainedValues(events, "git_host_effect", parse));
+    const message = refusal(() => readSavedValues(events, "git_host_effect", parse));
 
-    expect(message).toBe(
-      "the value retained at 0 git_host_effect is not a record its parser reads",
-    );
+    expect(message).toBe("the value saved at 0 git_host_effect is not a record its parser reads");
     expect(message).not.toContain(SENTINEL);
   });
 

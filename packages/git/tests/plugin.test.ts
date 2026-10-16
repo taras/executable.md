@@ -22,10 +22,10 @@ import { collect, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type { PluginInstallRequest } from "@executablemd/core/api";
-import { retainedWorkflowInstallation } from "../../workflow/src/run.ts";
+import { savedWorkflowInstallation } from "../../workflow/src/run.ts";
 import type { WorkflowRun } from "../../workflow/src/run.ts";
 import { declaresFor, gitPlugin } from "../src/plugin.ts";
-import { retainedGitHostIdentitiesHere, retainedIssueIdentitiesHere } from "../src/identities.ts";
+import { savedGitHostIdentitiesHere, savedIssueIdentitiesHere } from "../src/identities.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect.ts";
 import { reconcileGitHostEffect, withGitHostProvider } from "@executablemd/git/api";
 import type { GitHostProvider } from "@executablemd/git/api";
@@ -116,12 +116,12 @@ function useEffectComponent(observed: Seen): Operation<void> {
         // entry held onto here would report what this execution did rather
         // than what it was handed.
         observed.gitHost.push(
-          (yield* retainedGitHostIdentitiesHere())?.map((identity) => ({
+          (yield* savedGitHostIdentitiesHere())?.map((identity) => ({
             runId: identity.runId,
             claimed: identity.claimed,
           })),
         );
-        observed.issue.push(yield* retainedIssueIdentitiesHere());
+        observed.issue.push(yield* savedIssueIdentitiesHere());
         yield* reconcileGitHostEffect(PUSH);
         return "";
       },
@@ -141,7 +141,7 @@ function gitHostYields(events: DurableEvent[]): DurableEvent[] {
 }
 
 /**
- * One document execution, under one retained run and one Plugin contribution.
+ * One document execution, under one saved run and one Plugin contribution.
  *
  * `installation` is the same value in every call a case makes, because that is
  * the question: a host installs this Plugin once and may run many documents.
@@ -180,7 +180,7 @@ function* document(options: {
 }): Operation<unknown> {
   return yield* collect(
     yield* executeInstalled({ ...inlineSource(SOURCE), stream: options.stream }, [
-      retainedWorkflowInstallation(options.run),
+      savedWorkflowInstallation(options.run),
       options.installation,
     ]),
   );
@@ -369,7 +369,7 @@ describe("the Git Plugin's command profile", () => {
   });
 });
 
-describe("one Plugin value, one execution's retained identities", () => {
+describe("one Plugin value, one execution's saved identities", () => {
   it("derives each execution's identities from its own history and no other", function* () {
     // One installation, asked of the Plugin once, and used by every execution
     // below — which is what a host running several documents under one command
@@ -380,7 +380,7 @@ describe("one Plugin value, one execution's retained identities", () => {
     const historyB = yield* record(SOURCE_B, installation);
 
     // Every replay below runs provider-free, so what it consumes is the
-    // retained record and nothing else, and what it reports is the value its
+    // saved record and nothing else, and what it reports is the value its
     // own execution's journal read installed.
     const first = seen();
     yield* execute({

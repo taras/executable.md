@@ -35,14 +35,14 @@
  *
  * The complete request fingerprint still covers every input, so a changed
  * title, body, draft flag, base, head commit or number diverges at the durable
- * position rather than consuming the result retained for another question.
+ * position rather than consuming the result saved for another question.
  *
  * ## The result is what the reconciliation settled on
  *
  * What a document binds is the pull request this effect left behind: the
  * provider's stable identity for it, its number, its URL, and the head and base
  * commits of the snapshot the reconciliation finished at. Reviews, checks,
- * labels and later edits are separate reads. A retained record that re-read
+ * labels and later edits are separate reads. A saved record that re-read
  * them would be answering a different question every time it replayed.
  */
 
@@ -171,7 +171,7 @@ export interface PullRequestOutcome {
 }
 
 /**
- * What a retained pull-request record is read back for.
+ * What a saved pull-request record is read back for.
  *
  * The complete admitted inputs, because every one of them is something the
  * record has to agree with: the resource it names, the immutable facts it was

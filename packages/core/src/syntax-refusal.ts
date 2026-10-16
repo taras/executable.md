@@ -23,7 +23,7 @@
  *
  * ## How the conclusion survives replay
  *
- * Not as an error. The executor turns a recognized refusal into the retained
+ * Not as an error. The executor turns a recognized refusal into the saved
  * value `{ refused }`, and `components/Syntax.ts` re-raises it — marked — when
  * that value is read back, which happens after the durable operation returns on
  * a live run and on a replay alike. A refusal that could not be published is

@@ -101,9 +101,9 @@ export interface ForegroundOutput {
   /** stdout a `<Let as>` region asked for; empty otherwise. */
   captured: string;
   /** stdout the host asked to retain; undefined when it asked for none. */
-  retainedStdout: string | undefined;
+  savedStdout: string | undefined;
   /** stderr the host asked to retain; undefined when it asked for none. */
-  retainedStderr: string | undefined;
+  savedStderr: string | undefined;
   /** stdout a bound block's binding asked for; undefined when none did. */
   boundStdout: string | undefined;
   /** stderr a bound block's binding asked for; undefined when none did. */
@@ -114,7 +114,7 @@ export interface ForegroundOutput {
  * Route one block's channels, and keep what this run has been told to keep.
  *
  * Installed before the child is acquired, so a chunk written during startup is
- * routed and retained like any other. Routing and retention are decided
+ * routed and saved like any other. Routing and retention are decided
  * together because they read the same bytes and must not read them twice:
  *
  * - retention records first, so silencing a block never weakens a record the
@@ -149,8 +149,8 @@ export function* route(
   bind = false,
 ): Operation<() => ForegroundOutput> {
   let captured = "";
-  let retainedStdout = "";
-  let retainedStderr = "";
+  let savedStdout = "";
+  let savedStderr = "";
   let boundStdout = "";
   let boundStderr = "";
   const fromStdout = new TextDecoder();
@@ -164,7 +164,7 @@ export function* route(
       // stateful decoder twice would corrupt a split code point.
       const text = wantsStdout ? fromStdout.decode(bytes, { stream: true }) : "";
       if (retain) {
-        retainedStdout += text;
+        savedStdout += text;
       }
       if (bind) {
         boundStdout += text;
@@ -181,7 +181,7 @@ export function* route(
     *stderr([bytes], next) {
       const text = wantsStderr ? fromStderr.decode(bytes, { stream: true }) : "";
       if (retain) {
-        retainedStderr += text;
+        savedStderr += text;
       }
       if (bind) {
         boundStderr += text;
@@ -199,7 +199,7 @@ export function* route(
     if (wantsStdout) {
       const tail = fromStdout.decode();
       if (retain) {
-        retainedStdout += tail;
+        savedStdout += tail;
       }
       if (bind) {
         boundStdout += tail;
@@ -211,7 +211,7 @@ export function* route(
     if (wantsStderr) {
       const tail = fromStderr.decode();
       if (retain) {
-        retainedStderr += tail;
+        savedStderr += tail;
       }
       if (bind) {
         boundStderr += tail;
@@ -219,8 +219,8 @@ export function* route(
     }
     return {
       captured,
-      retainedStdout: retain ? retainedStdout : undefined,
-      retainedStderr: retain ? retainedStderr : undefined,
+      savedStdout: retain ? savedStdout : undefined,
+      savedStderr: retain ? savedStderr : undefined,
       boundStdout: bind ? boundStdout : undefined,
       boundStderr: bind ? boundStderr : undefined,
     };

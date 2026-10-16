@@ -38,7 +38,7 @@
  * container imports it. Which run, which final committed event and which
  * Workspace root is what the *lifecycle* decided under the executor lock; the
  * artifact records that decision. Every member is a string, so this stays where
- * the provider-neutral surface can name it — the retained shapes an artifact
+ * the provider-neutral surface can name it — the saved shapes an artifact
  * also carries are DOFS and SQLite records that belong to the adapter holding
  * them.
  *

@@ -185,7 +185,7 @@ function asText(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function retainedRepositoryNames(path: string): string[] {
+function savedRepositoryNames(path: string): string[] {
   const sqlite = new DatabaseSync(path);
   try {
     return sqlite
@@ -246,7 +246,7 @@ function journalRoot(path: string, name: string): string | undefined {
   }
 }
 
-function retainedRootCount(path: string): number {
+function savedRootCount(path: string): number {
   const sqlite = new DatabaseSync(path);
   try {
     const value = sqlite.prepare("SELECT COUNT(*) AS count FROM workspace_roots").get()?.["count"];
@@ -745,7 +745,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         type: "yield",
         coroutineId: "root",
         description: { type: "workspace-proof", name: "replayed" },
-        result: { status: "ok", value: "retained" },
+        result: { status: "ok", value: "saved" },
       });
       let mutations = 0;
       function* workflow(): Workflow<string> {
@@ -913,7 +913,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       const other = yield* createRun({ runId: "atomic-destination-other" });
       const selectedPath = runPath(root, "atomic-destination-selected");
       const baseline = yield* inspectWorkspace(selected, "/wrong-destination.txt");
-      const roots = retainedRootCount(selectedPath);
+      const roots = savedRootCount(selectedPath);
 
       const copied: DurableStream = {
         readAll: () => selected.journal.readAll(),
@@ -986,10 +986,10 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         expect(mutations).toBe(0);
         expect(laterExecutions).toBe(0);
         // Refused before the transaction does any work: no savepoint opened,
-        // no root retained, no journal row committed, and the frontier is
+        // no root saved, no journal row committed, and the frontier is
         // where it was.
         expect(savepoints).toEqual([]);
-        expect(retainedRootCount(selectedPath)).toBe(roots);
+        expect(savedRootCount(selectedPath)).toBe(roots);
         expect(committedEventCount(selectedPath)).toBe(0);
         expect(yield* inspectWorkspace(selected, "/wrong-destination.txt")).toEqual(baseline);
         expect(yield* selected.journal.readAll()).toEqual([]);
@@ -1016,7 +1016,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       function* (database) {
         selected = database;
         const baseline = yield* inspectWorkspace(database, "/post-publication.txt");
-        const roots = retainedRootCount(path);
+        const roots = savedRootCount(path);
         let gateCalls = 0;
         let caught: unknown;
         let laterExecutions = 0;
@@ -1050,7 +1050,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         expect(gateCalls).toBe(1);
         expect(laterExecutions).toBe(0);
         expect(yield* inspectWorkspace(database, "/post-publication.txt")).toEqual(baseline);
-        expect(retainedRootCount(path)).toBe(roots);
+        expect(savedRootCount(path)).toBe(roots);
         expect(yield* database.journal.readAll()).toEqual([]);
       },
       {
@@ -1078,7 +1078,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       function* (database) {
         selected = database;
         const baseline = yield* inspectWorkspace(database, "/cancel-before-commit.txt");
-        const roots = retainedRootCount(path);
+        const roots = savedRootCount(path);
         let gateCalls = 0;
         const guarded = trustedFilter(database.journal, function* (event) {
           if (event.type === "yield") {
@@ -1099,7 +1099,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         yield* task.halt();
         expect(gateCalls).toBe(1);
         expect(yield* inspectWorkspace(database, "/cancel-before-commit.txt")).toEqual(baseline);
-        expect(retainedRootCount(path)).toBe(roots);
+        expect(savedRootCount(path)).toBe(roots);
         expect(yield* database.journal.readAll()).toEqual([]);
       },
       {
@@ -1225,7 +1225,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
     });
   });
 
-  it("WAC16: current-root publication failure rolls retained state back", function* () {
+  it("WAC16: current-root publication failure rolls saved state back", function* () {
     const root = yield* useStorageRoot();
 
     yield* withStorage(root, function* () {
@@ -1233,7 +1233,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       const database = yield* createRun({ runId });
       const path = runPath(root, runId);
       const baseline = yield* inspectWorkspace(database, "/current-root.txt");
-      const roots = retainedRootCount(path);
+      const roots = savedRootCount(path);
       let caught: unknown;
       let laterExecutions = 0;
       tamper(path, (sqlite) => {
@@ -1267,7 +1267,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       expect(laterExecutions).toBe(0);
       tamper(path, (sqlite) => sqlite.exec("DROP TRIGGER refuse_current_root"));
       expect(yield* inspectWorkspace(database, "/current-root.txt")).toEqual(baseline);
-      expect(retainedRootCount(path)).toBe(roots);
+      expect(savedRootCount(path)).toBe(roots);
       expect(yield* database.journal.readAll()).toEqual([]);
     });
   });
@@ -1330,7 +1330,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         observe,
         function* (database, connection) {
           const baseline = yield* inspectWorkspace(database, "/savepoint.txt");
-          const roots = retainedRootCount(connection.path);
+          const roots = savedRootCount(connection.path);
           let caught: unknown;
           let laterExecutions = 0;
           observed.length = 0;
@@ -1378,7 +1378,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
           expect(failure).toBeInstanceOf(Error);
           expect(laterExecutions).toBe(0);
           expect(yield* inspectWorkspace(database, "/savepoint.txt")).toEqual(baseline);
-          expect(retainedRootCount(connection.path)).toBe(roots);
+          expect(savedRootCount(connection.path)).toBe(roots);
           expect(yield* database.journal.readAll()).toEqual([]);
           if (phase === "create") {
             expect(observed.some((event) => event.kind === "create")).toBe(false);
@@ -1458,7 +1458,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       const database = yield* createRun({ runId });
       const path = runPath(root, runId);
       const baseline = yield* inspectWorkspace(database, "/middleware-failure.txt");
-      const roots = retainedRootCount(path);
+      const roots = savedRootCount(path);
       let replacementRuns = 0;
       let caught: unknown;
       let laterExecutions = 0;
@@ -1521,7 +1521,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       expect(failure).toBeInstanceOf(Error);
       expect(laterExecutions).toBe(0);
       expect(yield* inspectWorkspace(database, "/middleware-failure.txt")).toEqual(baseline);
-      expect(retainedRootCount(path)).toBe(roots);
+      expect(savedRootCount(path)).toBe(roots);
       expect(yield* database.journal.readAll()).toEqual([]);
     });
   });
@@ -1540,7 +1540,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       const database = yield* createRun({ runId });
       const path = runPath(root, runId);
       const baseline = yield* inspectWorkspace(database, "/substituted.txt");
-      const roots = retainedRootCount(path);
+      const roots = savedRootCount(path);
       let mutations = 0;
       function* workflow(): Workflow<void> {
         yield* workspaceStep(database, "substituted-provider", function* (filesystem) {
@@ -1563,7 +1563,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       expect(mutations).toBe(0);
       expect(savepoints).toEqual([]);
       expect(yield* inspectWorkspace(database, "/substituted.txt")).toEqual(baseline);
-      expect(retainedRootCount(path)).toBe(roots);
+      expect(savedRootCount(path)).toBe(roots);
       expect(yield* database.journal.readAll()).toEqual([]);
     });
   });
@@ -1576,7 +1576,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       const database = yield* createRun({ runId });
       const path = runPath(root, runId);
       const baseline = yield* inspectWorkspace(database, "/minimum.txt");
-      const roots = retainedRootCount(path);
+      const roots = savedRootCount(path);
       const observed: unknown[] = [];
       function* workflow(): Workflow<void> {
         yield* workspaceStep(database, "minimum-publication", function* (filesystem) {
@@ -1604,7 +1604,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       expect(observed).toEqual([]);
       expect(committed.content).toBe("committed with Yield");
       expect(committed.root).not.toBe(baseline.root);
-      expect(retainedRootCount(path)).toBe(roots + 1);
+      expect(savedRootCount(path)).toBe(roots + 1);
       expect(workspaceYields(events)).toHaveLength(1);
       expect(journalRoot(path, "minimum-publication")).toBe(committed.root);
     });
@@ -1618,7 +1618,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       const database = yield* createRun({ runId });
       const path = runPath(root, runId);
       const baseline = yield* inspectWorkspace(database, "/minimum-failure.txt");
-      const roots = retainedRootCount(path);
+      const roots = savedRootCount(path);
       let collisions = 0;
       let caught: unknown;
       let laterExecutions = 0;
@@ -1668,7 +1668,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       expect(failure).toBeInstanceOf(Error);
       expect(laterExecutions).toBe(0);
       expect(yield* inspectWorkspace(database, "/minimum-failure.txt")).toEqual(baseline);
-      expect(retainedRootCount(path)).toBe(roots);
+      expect(savedRootCount(path)).toBe(roots);
       expect(yield* database.journal.readAll()).toEqual([]);
     });
   });
@@ -1712,7 +1712,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       expect(committed.root).not.toBe(baseline.root);
       // The row and the bytes are published together, against the same root the
       // journal entry names.
-      expect(retainedRepositoryNames(path)).toEqual(["proof"]);
+      expect(savedRepositoryNames(path)).toEqual(["proof"]);
       expect(journalRoot(path, "retain")).toBe(committed.root);
     });
   });
@@ -1725,7 +1725,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       const database = yield* createRun({ runId });
       const path = runPath(root, runId);
       const baseline = yield* inspectWorkspace(database, "/kept/marker.txt");
-      const roots = retainedRootCount(path);
+      const roots = savedRootCount(path);
       let caught: unknown;
 
       function* workflow(): Workflow<void> {
@@ -1754,8 +1754,8 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
       // Nothing the attempt wrote survives: not the bytes, not the row, and not
       // a published root — and the failed Yield names the root it started from.
       expect(yield* inspectWorkspace(database, "/kept/marker.txt")).toEqual(baseline);
-      expect(retainedRepositoryNames(path)).toEqual([]);
-      expect(retainedRootCount(path)).toBe(roots);
+      expect(savedRepositoryNames(path)).toEqual([]);
+      expect(savedRootCount(path)).toBe(roots);
       const events = workspaceYields(yield* database.journal.readAll());
       expect(events).toHaveLength(1);
       expect(events[0]?.result.status).toBe("err");
@@ -1764,7 +1764,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
   });
 
   /**
-   * The window a retained view would otherwise still be inside.
+   * The window a saved view would otherwise still be inside.
    *
    * Not after the run — by then the transaction has ended and its own
    * authorization would refuse anyway, so a case that only looked there would
@@ -1773,12 +1773,12 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
    * its root is still open, which is exactly where "for this callback" has to
    * be a fact rather than a convention.
    */
-  it("WAC29: every capability a mutation retained answers nothing once it returned", function* () {
+  it("WAC29: every capability a mutation saved answers nothing once it returned", function* () {
     const root = yield* useStorageRoot();
-    const runId = "atomic-storage-retained";
+    const runId = "atomic-storage-saved";
     const path = join(root, `${runId}.sqlite`);
     let selected: WorkflowRunDatabase | undefined;
-    let retained: WorkflowWorkspaceTransaction | undefined;
+    let saved: WorkflowWorkspaceTransaction | undefined;
     /**
      * Operations built while the mutation was still valid.
      *
@@ -1808,7 +1808,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
             function* (transaction): Operation<Json> {
               members = Object.keys(transaction).sort();
               storageMembers = Object.keys(transaction.storage).sort();
-              retained = transaction;
+              saved = transaction;
               prepared = [
                 {
                   name: "readTextFile",
@@ -1824,7 +1824,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
                   operation: transaction.savepoint(
                     // deno-lint-ignore require-yield
                     (function* (): Operation<null> {
-                      throw new Error("the retained savepoint entered its body");
+                      throw new Error("the saved savepoint entered its body");
                     })(),
                   ),
                 },
@@ -1842,7 +1842,7 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
         expect(storageMembers).toEqual(["all", "get", "run"]);
 
         expect(attempted).toBe(true);
-        // Every retained capability, synchronous and deferred alike.
+        // Every saved capability, synchronous and deferred alike.
         expect(refusals.map((refusal) => refusal.name).sort()).toEqual([
           "all",
           "get",
@@ -1861,13 +1861,13 @@ describe("Tier WAC — atomic provider-level Workspace effects", () => {
           }).toEqual({ name: refusal.name, held: true });
         }
         // And nothing any of them attempted reached the run.
-        expect(retainedRepositoryNames(path)).toEqual([]);
+        expect(savedRepositoryNames(path)).toEqual([]);
         const settled = yield* inspectWorkspace(database, "/escaped.txt");
         expect(settled.content).toBe(undefined);
       },
       {
         *beforeCommit(candidate): Operation<void> {
-          const transaction = retained;
+          const transaction = saved;
           if (candidate !== selected || transaction === undefined || attempted) {
             return;
           }
@@ -1989,7 +1989,7 @@ describe("Tier WAR — read-only Workspace inspection", () => {
       const path = runPath(root, runId);
       yield* retain(database, "current bytes", PROOF_REPOSITORY);
       const current = (yield* inspectWorkspace(database, "/kept.txt")).root;
-      const roots = retainedRootCount(path);
+      const roots = savedRootCount(path);
 
       let members: string[] = [];
       let storageMembers: string[] = [];
@@ -2016,15 +2016,15 @@ describe("Tier WAR — read-only Workspace inspection", () => {
       // objects that have no writing member for a guard to be the only thing in
       // front of.
       expect(storageMembers).toEqual(["all", "get"]);
-      // Nothing moved: not the current root, and not the retained ones.
+      // Nothing moved: not the current root, and not the saved ones.
       expect((yield* inspectWorkspace(database, "/kept.txt")).root).toBe(current);
-      expect(retainedRootCount(path)).toBe(roots);
+      expect(savedRootCount(path)).toBe(roots);
     });
   });
 
-  it("WAR2: reads a retained root and leaves the run on the one it was on", function* () {
+  it("WAR2: reads a saved root and leaves the run on the one it was on", function* () {
     const root = yield* useStorageRoot();
-    const runId = "inspect-retained";
+    const runId = "inspect-saved";
 
     yield* withStorage(root, function* () {
       const database = yield* createRun({ runId });
@@ -2033,7 +2033,7 @@ describe("Tier WAR — read-only Workspace inspection", () => {
       const current = yield* inspectWorkspace(database, "/kept.txt");
       expect(current.content).toBe("the later bytes");
       expect(current.root).not.toBe(earlier);
-      const roots = retainedRootCount(path);
+      const roots = savedRootCount(path);
 
       const read = yield* readWorkflowWorkspace(database, { rootId: earlier }, (snapshot) =>
         snapshot.filesystem.readTextFile("/kept.txt"),
@@ -2047,7 +2047,7 @@ describe("Tier WAR — read-only Workspace inspection", () => {
       // can observe the Workspace selected at the earlier root.
       expect(read.value).toBe("the earlier bytes");
       expect(yield* inspectWorkspace(database, "/kept.txt")).toEqual(current);
-      expect(retainedRootCount(path)).toBe(roots);
+      expect(savedRootCount(path)).toBe(roots);
     });
   });
 
@@ -2072,9 +2072,9 @@ describe("Tier WAR — read-only Workspace inspection", () => {
       const path = runPath(root, runId);
       const earlier = yield* retainTwice(database, path);
       const current = yield* inspectWorkspace(database, "/kept.txt");
-      const roots = retainedRootCount(path);
+      const roots = savedRootCount(path);
 
-      // A failure inside the callback, after the retained root materialized.
+      // A failure inside the callback, after the saved root materialized.
       const raised = new Error("the inspection failed after materializing");
       const failed = yield* readWorkflowWorkspace(
         database,
@@ -2088,7 +2088,7 @@ describe("Tier WAR — read-only Workspace inspection", () => {
       expect(failed.ok).toBe(false);
       expect(failed.ok ? undefined : failed.error).toBe(raised);
       expect(yield* inspectWorkspace(database, "/kept.txt")).toEqual(current);
-      expect(retainedRootCount(path)).toBe(roots);
+      expect(savedRootCount(path)).toBe(roots);
 
       // And a cancellation, halted while the callback is suspended inside the
       // materialized root.
@@ -2107,7 +2107,7 @@ describe("Tier WAR — read-only Workspace inspection", () => {
       });
 
       expect(yield* inspectWorkspace(database, "/kept.txt")).toEqual(current);
-      expect(retainedRootCount(path)).toBe(roots);
+      expect(savedRootCount(path)).toBe(roots);
 
       // And the connection is still usable: a later inspection opens the run's
       // transaction again and reads the root the cancellation left it on,
@@ -2122,9 +2122,9 @@ describe("Tier WAR — read-only Workspace inspection", () => {
     });
   });
 
-  it("WAR4: a retained snapshot answers nothing once its inspection returned", function* () {
+  it("WAR4: a saved snapshot answers nothing once its inspection returned", function* () {
     const root = yield* useStorageRoot();
-    const runId = "inspect-retained-view";
+    const runId = "inspect-saved-view";
 
     yield* withStorage(root, function* () {
       const database = yield* createRun({ runId });
@@ -2165,7 +2165,7 @@ describe("Tier WAR — read-only Workspace inspection", () => {
       const path = runPath(root, runId);
       yield* retain(database, "current bytes", PROOF_REPOSITORY);
       const current = yield* inspectWorkspace(database, "/kept.txt");
-      const roots = retainedRootCount(path);
+      const roots = savedRootCount(path);
 
       // Built while the snapshot was valid, carried out of the callback, and
       // yielded afterwards. A gate checked only when the member is called would
@@ -2195,7 +2195,7 @@ describe("Tier WAR — read-only Workspace inspection", () => {
         "valid only while the callback that received it is running",
       );
       expect(yield* inspectWorkspace(database, "/kept.txt")).toEqual(current);
-      expect(retainedRootCount(path)).toBe(roots);
+      expect(savedRootCount(path)).toBe(roots);
     });
   });
 
@@ -2216,8 +2216,8 @@ describe("Tier WAR — read-only Workspace inspection", () => {
       const path = runPath(root, runId);
       yield* retain(database, "current bytes");
       const current = yield* inspectWorkspace(database, "/kept.txt");
-      const roots = retainedRootCount(path);
-      expect(retainedRepositoryNames(path)).toEqual([]);
+      const roots = savedRootCount(path);
+      expect(savedRepositoryNames(path)).toEqual([]);
 
       const attempts: { sql: string; refused: boolean }[] = [];
       const read = yield* readWorkflowWorkspace(database, {}, function* (snapshot) {
@@ -2258,8 +2258,8 @@ describe("Tier WAR — read-only Workspace inspection", () => {
       expect(attempts).toHaveLength(6);
       expect(read.value).toEqual([]);
       // Nothing was written, nothing was dropped, and the run did not move.
-      expect(retainedRepositoryNames(path)).toEqual([]);
-      expect(retainedRootCount(path)).toBe(roots);
+      expect(savedRepositoryNames(path)).toEqual([]);
+      expect(savedRootCount(path)).toBe(roots);
 
       // And the connection is the one every other caller expects. This runs on
       // the run's own handle and opens a private transaction whose verification

@@ -5,7 +5,7 @@
  * and compiled distributions execute identical bytes.
  *
  * A snapshot materializes under its SHA-256. Durable identity is provider, package,
- * version and digest; the quoted host-local launch path is never retained in a
+ * version and digest; the quoted host-local launch path is never saved in a
  * session or sealed artifact.
  *
  * Stage privately, publish by one rename and verify the published tree before
@@ -136,7 +136,7 @@ export interface EmbeddedAdapters {
    * What this adapter *is*, independent of where this host put it.
    *
    * The durable half: provider, package, version and snapshot digest, and
-   * nothing about this machine. A retained Agent session records this and a
+   * nothing about this machine. A saved Agent session records this and a
    * sealed artifact carries it, so the same snapshot compares equal wherever it
    * was materialized.
    */
@@ -146,13 +146,13 @@ export interface EmbeddedAdapters {
    *
    * The path on its own, for a caller that needs to inspect or verify it rather
    * than launch it. Host-local like {@link EmbeddedAdapters.command}, and
-   * retained nowhere.
+   * saved nowhere.
    */
   executablePath(provider: string): string;
   /**
    * The command that launches one provider's embedded adapter here.
    *
-   * The host-local half, and never retained. Answers before the adapter is on
+   * The host-local half, and never saved. Answers before the adapter is on
    * disk, because the path is the snapshot's digest beneath a known root. The
    * path is quoted: a materialization root may contain a space, and an unquoted
    * command would split there.
@@ -640,7 +640,7 @@ export function createEmbeddedAdapters(
  * A closed registry was the wrong shape for the same reason. It made "this
  * build has no Codex snapshot problem to solve for Gemini" into "this build
  * refuses Gemini", which is a much broader restriction than the one being made,
- * and it would have changed the retained identity of agents the checkpoint work
+ * and it would have changed the saved identity of agents the checkpoint work
  * has nothing to say about.
  *
  * The overlay is *qualified*: an embedded provider never falls through. A

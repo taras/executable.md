@@ -11,7 +11,7 @@
  *
  * Run and expansion identify the effect; the complete detached request's digest
  * names the durable operation so changed inputs cannot consume an earlier answer.
- * Retained identities and abandoned-history enforcement remain checked on the live
+ * Saved identities and abandoned-history enforcement remain checked on the live
  * path before provider work.
  *
  * {@link GitHost} exposes one frozen, one-use routing request. Public middleware
@@ -31,7 +31,7 @@
 import { createApi } from "@effectionx/context-api";
 import { createDurableOperation, serializeError } from "@executablemd/durable-streams";
 import type {
-  AbandonedRetainedHistory,
+  AbandonedSavedHistory,
   ActivateDurabilityFailure,
   EffectDescription,
   JournalProvenance,
@@ -44,11 +44,11 @@ import { Err, ensure, Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { getExpansion, sourceDescription } from "@executablemd/core";
 import { getWorkflowRun } from "@executablemd/workflow";
-import { retainedGitHostIdentitiesHere } from "../identities.ts";
+import { savedGitHostIdentitiesHere } from "../identities.ts";
 import { GIT_HOST_EFFECT } from "./effect-type.ts";
-import { claimRetainedGitHostIdentity, exhaustRetainedGitHostIdentities } from "./identities.ts";
+import { claimSavedGitHostIdentity, exhaustSavedGitHostIdentities } from "./identities.ts";
 
-/** A request named by a retained record, and how to retire the rest of them. */
+/** A request named by a saved record, and how to retire the rest of them. */
 interface BorrowedIdentity {
   exhaust(): void;
 }
@@ -479,22 +479,22 @@ function gitHostCoordinator(
       publish: (result: DurableResult) => Operation<void>,
       activateFailure: ActivateDurabilityFailure,
       _journalProvenance: JournalProvenance | undefined,
-      abandoned: AbandonedRetainedHistory,
+      abandoned: AbandonedSavedHistory,
     ): Operation<DurableResult> {
       // Reached only live, and never on replay.
       //
       // Two ways a live attempt here is not this run's to make, and neither is
       // decided by anything a document supplies. `steppedOver` is the engine's
-      // own account of the coroutine: it walked away from retained history it
+      // own account of the coroutine: it walked away from saved history it
       // never consumed, so records still ahead of it describe work that already
       // happened at a service this journal does not enclose — and doing any of
       // it again is exactly what this boundary exists to prevent. It stays true
       // for every operation after the one that diverged, which is the whole
       // point: guarding only the diverging position leaves every position after
-      // it open. `borrowed` says the request was named by a retained record,
+      // it open. `borrowed` says the request was named by a saved record,
       // which cannot be a live request either.
       //
-      // The first is the load-bearing one: it holds whether or not the retained
+      // The first is the load-bearing one: it holds whether or not the saved
       // identities reached this copy, so erasing or replacing them cannot buy a
       // live effect. Nothing has been executed yet, so the Git host is never
       // reached and nothing is published.
@@ -502,7 +502,7 @@ function gitHostCoordinator(
         borrowed?.exhaust();
         throw activateFailure(
           new GitHostProviderError(
-            "this run walked away from retained history it never consumed, so a Git-host " +
+            "this run walked away from saved history it never consumed, so a Git-host " +
               "effect here would repeat work that already happened outside this journal, or " +
               "perform under a run this execution is not. Nothing was asked of the Git host.",
           ),
@@ -593,21 +593,19 @@ export function* reconcileGitHostEffect(
   const expansion = yield* getExpansion();
   // A position this run already retains a record at is named by the identity
   // that record holds; everywhere else by this run's own.
-  // The live form first, because what a retained record has to match is the
+  // The live form first, because what a saved record has to match is the
   // request being made — and the run id is the one member being decided.
   const live = completeRequest(run.runId, expansion.id, request);
-  const held = yield* retainedGitHostIdentitiesHere();
-  const retainedIdentity = claimRetainedGitHostIdentity(held, live);
+  const held = yield* savedGitHostIdentitiesHere();
+  const savedIdentity = claimSavedGitHostIdentity(held, live);
   const complete =
-    retainedIdentity === undefined
-      ? live
-      : completeRequest(retainedIdentity, expansion.id, request);
-  // Carried into the live path so a name that came from a retained record
+    savedIdentity === undefined ? live : completeRequest(savedIdentity, expansion.id, request);
+  // Carried into the live path so a name that came from a saved record
   // cannot be the one a live attempt performs under.
   const borrowed: BorrowedIdentity | undefined =
-    retainedIdentity === undefined
+    savedIdentity === undefined
       ? undefined
-      : { exhaust: () => exhaustRetainedGitHostIdentities(held) };
+      : { exhaust: () => exhaustSavedGitHostIdentities(held) };
   const description: EffectDescription = {
     type: GIT_HOST_EFFECT,
     name: yield* gitHostRequestFingerprint(complete),
@@ -617,14 +615,14 @@ export function* reconcileGitHostEffect(
     ...sourceDescription(expansion.position),
   };
 
-  let retained: unknown;
+  let saved: unknown;
   try {
-    retained = yield* attempt(description, complete, borrowed);
+    saved = yield* attempt(description, complete, borrowed);
   } catch (error) {
     throw gitHostFailure(error);
   }
 
-  const record = parseGitHostReconciliationRecord(retained);
+  const record = parseGitHostReconciliationRecord(saved);
   if (record === undefined) {
     throw new GitHostProtocolError(
       "the journal holds a value that does not describe a Git-host reconciliation record",

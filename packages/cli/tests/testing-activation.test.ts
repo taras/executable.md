@@ -2,7 +2,7 @@
  * A real workflow installation grants no testing capability.
  *
  * `executeInstalled()` is how a trusted host attaches what an execution needs,
- * and a retained workflow installation is the most privileged thing this
+ * and a saved workflow installation is the most privileged thing this
  * repository attaches through it. It decides the run, the definition and the
  * journal — none of which is a testing session — so a document that registered
  * the testing components and answered the public boolean `true` is in exactly
@@ -19,7 +19,7 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { inlineSource, registerComponents, useTempFileCompiler } from "@executablemd/core";
 import type { Json } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import { retainedWorkflowInstallation } from "@executablemd/workflow";
+import { savedWorkflowInstallation } from "@executablemd/workflow";
 import { GitQuery } from "@executablemd/git/api";
 import { installTestingComponents } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
@@ -29,7 +29,7 @@ const RUN = Object.freeze({
   bundleHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 });
 
-/** A Git that fails the run if the retained installation consults it. */
+/** A Git that fails the run if the saved installation consults it. */
 function useForbiddenGit(): Operation<void> {
   return GitQuery.around(
     {
@@ -90,7 +90,7 @@ describe("workflow installation and testing activation", () => {
           ...inlineSource('<Test name="t"><Sentinel /><Assert expr={true} /></Test>\n'),
           stream,
         },
-        [retainedWorkflowInstallation(RUN)],
+        [savedWorkflowInstallation(RUN)],
       );
       return yield* execution;
     });

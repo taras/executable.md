@@ -40,7 +40,7 @@ import {
   installPermissionMode,
   installPromptFailurePolicy,
   registerAgentProvider,
-  retainedSource,
+  savedSource,
   useNormalizedOutput,
   useTerminalOutput,
 } from "@executablemd/core";
@@ -469,7 +469,7 @@ export function* runPlanCommandDocument(profile: PlanWriterProfile): Operation<R
         // than two arrangements of one.
         const execution = yield* executeInstalled(
           {
-            ...retainedSource(PLAN_COMMAND_IDENTITY, source),
+            ...savedSource(PLAN_COMMAND_IDENTITY, source),
             stream: profile.stream,
             // No repository component search. What the adapter may name is
             // what this command declares, so a file in the caller's tree

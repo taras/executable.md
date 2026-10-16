@@ -4,7 +4,7 @@
  * Both directions arrive here. A **fresh** session submits one entry into an
  * empty history; a **cold** one opens a history somebody else wrote and reaches
  * the same place through ordinary replay. They share this module because they
- * are the same thing: a retained stream, an execution over it, and a model
+ * are the same thing: a saved stream, an execution over it, and a model
  * reprojected from what that stream now holds.
  *
  * ## The entry is admitted once, or not at all
@@ -19,7 +19,7 @@
  *
  * A session owns the one physical stream, installs its one observer on it, and
  * owns **at most one** entry task. Starting another entry needs two separate
- * facts: the entry before it has a retained terminal close, and that entry's own
+ * facts: the entry before it has a saved terminal close, and that entry's own
  * task has finished tearing down and been joined. Observing a terminal outcome
  * is not the second of those — an execution whose root has closed is still
  * releasing providers, middleware and held permissions — so a submission that
@@ -41,9 +41,9 @@
  * runs in a scope the caller can drop: a divergence, a stale answer or a
  * malformed record comes back as a refusal, and the application mounts that
  * instead of a half-reconstructed view. Nothing was appended and no provider was
- * called, because replay contacts neither until it is past what was retained.
+ * called, because replay contacts neither until it is past what was saved.
  *
- * Admission is the first thing that proves replay got past the retained prefix:
+ * Admission is the first thing that proves replay got past the saved prefix:
  * the execution settling, the first new record reaching the file, or the first
  * question reaching this process. Before any of those, a divergence class is a
  * refusal; after them, a failure is an outcome the transcript shows.
@@ -241,7 +241,7 @@ export interface ExpansionView {
 export interface ReplReading {
   /** The model of the requested prefix. */
   readonly model: ReplModel;
-  /** Every position the whole file retained, and what the head is doing. */
+  /** Every position the whole file saved, and what the head is doing. */
   readonly navigation: ReplHistoryNavigation;
 }
 
@@ -287,7 +287,7 @@ export interface ReplSession {
   /** The frozen model of the projected prefix, as it stands. */
   readonly model: ReplModel;
   /**
-   * Every position the whole history retained, and what the head is doing.
+   * Every position the whole history saved, and what the head is doing.
    *
    * The one reading not taken at the selected prefix. A reader standing at an
    * earlier position is owed the whole rail — the positions after theirs are
@@ -343,7 +343,7 @@ export interface ReplSession {
    *
    * Ephemeral and detached, like the Agent reading beside it: a cold process
    * reconstructs none of it, and an entry that closes takes its observations
-   * with it. Static syntax and a retained admission prove nothing about it —
+   * with it. Static syntax and a saved admission prove nothing about it —
    * what is here is what this process actually watched happen.
    */
   readonly lifecycle: ReplLifecycleReading;
@@ -366,7 +366,7 @@ export interface ReplSession {
   /**
    * Admit one more entry into this execution, or refuse and start nothing.
    *
-   * Answers once that entry's work has reached past what the history retained —
+   * Answers once that entry's work has reached past what the history saved —
    * its first record, its first question or its own settlement — so a caller that
    * is told `Ok` has an entry, not an intention. A refusal names why this is not
    * a moment to submit and leaves the history, the running entry and the proposed
@@ -430,7 +430,7 @@ interface ReplEntryTask {
   /** The admission-order key of the entry this task is running. */
   readonly key: string;
   readonly task: Task<void>;
-  /** Resolves once this entry's work has passed what its segment retained. */
+  /** Resolves once this entry's work has passed what its segment saved. */
   readonly admitted: Operation<Result<void>>;
   /** Resolves with how this entry's execution finished. */
   readonly finished: Operation<Result<unknown>>;
@@ -557,12 +557,12 @@ function* start(
     /** How the last entry to finish finished. */
     let finished: Result<unknown> | undefined;
     /**
-     * Every retained position, taken at the whole file rather than at the
+     * Every saved position, taken at the whole file rather than at the
      * selected prefix. Rebuilt with the model, so a wake that moves one moves
      * both.
      */
     let points: readonly ReplNavigationPoint[] = NO_NAVIGATION.checkpoints;
-    /** Whether the latest entry of the *whole* file has a retained outcome. */
+    /** Whether the latest entry of the *whole* file has a saved outcome. */
     let outcome = false;
     /** How many entries the whole file holds. */
     let admitted = 0;
@@ -597,7 +597,7 @@ function* start(
      */
     function readingAt(at: string | undefined): Result<ReplReading> {
       // One acknowledged array answers both halves. The stream is the one
-      // writer, so `retained` is what the file holds; projecting the whole of
+      // writer, so `saved` is what the file holds; projecting the whole of
       // it and the requested prefix from the same slice is what makes the
       // rail and the content incapable of describing different files.
       //
@@ -606,8 +606,8 @@ function* start(
       // usually an overlay moving rather than a record arriving. The head is
       // *not* memoized: pausing, resuming and the last of an entry's
       // resources being released all change it while the file stands still.
-      if (memo === undefined || memo.length !== retained.length || memo.at !== at) {
-        memo = { length: retained.length, at, projected: project(retained.slice(), at) };
+      if (memo === undefined || memo.length !== saved.length || memo.at !== at) {
+        memo = { length: saved.length, at, projected: project(saved.slice(), at) };
       }
       if (!memo.projected.ok) {
         return memo.projected;
@@ -754,7 +754,7 @@ function* start(
     }
 
     /**
-     * Whichever entry is running has reached past what its segment retained.
+     * Whichever entry is running has reached past what its segment saved.
      *
      * The same fact admits the session and answers the submission that started
      * the entry: both are waiting to hear that replay got beyond the records
@@ -802,7 +802,7 @@ function* start(
           ),
         );
       }
-      const prefix = projectRepl(retained);
+      const prefix = projectRepl(saved);
       if (!prefix.ok) {
         return prefix;
       }
@@ -915,7 +915,7 @@ function* start(
         });
         const outcome = yield* runEntry(key, source, view, initialBindings);
         settle(outcome);
-        // A settled entry is past whatever its segment retained, whichever way
+        // A settled entry is past whatever its segment saved, whichever way
         // it settled — including a failure that appended nothing at all, which
         // is still an answer to the submission that asked for it.
         admit(outcome.ok ? Ok(undefined) : Err(outcome.error));
@@ -1013,13 +1013,13 @@ function* start(
     // The stream is the one writer, so what it acknowledges is what the file
     // holds. Reprojection reads that acknowledged array rather than
     // accumulating a second copy of the history beside it.
-    const retained = yield* stream.readAll();
+    const saved = yield* stream.readAll();
     // The positions this history already holds, before anything is appended.
     // `start` validated the same bytes; this derives the thin summary from
     // them so a session that never appends still shows its rail.
     reproject();
     const observe = (event: DurableEvent): void => {
-      retained.push(event);
+      saved.push(event);
       // One transition, and nothing suspends inside it: the record joins the
       // history, the live overlay it completed is removed, and only then does
       // anything announce. No observable snapshot holds one turn twice, and
@@ -1070,7 +1070,7 @@ function* start(
       return question !== undefined;
     })(elicitation.changes);
 
-    // A queued Agent turn is work beyond the retained prefix, exactly as a new
+    // A queued Agent turn is work beyond the saved prefix, exactly as a new
     // record or a question is: replay that reached one is past what the history
     // held, so the session is admitted rather than still provisional.
     yield* spawn(consumeAdmissions(agentReadings, reached));
@@ -1100,7 +1100,7 @@ function* start(
       begin(
         resumed.entry.key,
         resumed.entry.source,
-        new EntrySegmentStream(stream, { retained: resumed.segment.events, final: true }),
+        new EntrySegmentStream(stream, { saved: resumed.segment.events, final: true }),
         entryInitialBindings(head, resumed.entry),
       );
     } else if (submitted !== undefined) {
@@ -1205,7 +1205,7 @@ function declaredMarkdown(
  * document failed".
  *
  * A closed list of the protocol's own refusals. A document that fails after
- * replay is past the retained prefix is an outcome the transcript shows; one of
+ * replay is past the saved prefix is an outcome the transcript shows; one of
  * these means the run never got there, and what a reader would otherwise be
  * shown is a reconstruction of something that did not happen.
  */

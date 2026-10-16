@@ -97,7 +97,7 @@ export function* useStubFs(files: Record<string, string>): Operation<void> {
  *
  * It answers like a real child: the text is written to the stdio chain as it
  * "arrives", so whatever encloses the call sees it the way it would see a
- * child's, and it is retained in the outcome only when the caller asked
+ * child's, and it is saved in the outcome only when the caller asked
  * for retention. A stub that always returned strings would let a document
  * render output the contract says was already displayed.
  */
@@ -107,7 +107,7 @@ export function* useEchoExec(): Operation<void> {
       const script = (options.command[2] ?? "").trim();
       const text = script.startsWith("echo ") ? script.slice(5) + "\n" : script + "\n";
       yield* Stdio.operations.stdout(encoder.encode(text));
-      return retained(options, { exitCode: 0, stdout: text, stderr: "" });
+      return saved(options, { exitCode: 0, stdout: text, stderr: "" });
     },
   });
 }
@@ -121,7 +121,7 @@ export function* useFailingExec(exitCode: number, stderr = "command failed"): Op
   yield* API.Process.around({
     *exec([options], _next) {
       yield* Stdio.operations.stderr(encoder.encode(stderr));
-      return retained(options, { exitCode, stdout: "", stderr });
+      return saved(options, { exitCode, stdout: "", stderr });
     },
   });
 }
@@ -129,7 +129,7 @@ export function* useFailingExec(exitCode: number, stderr = "command failed"): Op
 const encoder = new TextEncoder();
 
 /** What the caller asked to keep, so a stub cannot retain more than a call would. */
-function retained(
+function saved(
   options: { retain?: boolean },
   outcome: { exitCode: number; stdout: string; stderr: string },
 ): { exitCode: number; stdout: string | undefined; stderr: string | undefined } {

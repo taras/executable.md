@@ -62,7 +62,7 @@ or imply a permission they do not have.
 
 An empty `names` list, a duplicate name, a member that is not a string, and a
 name no symbol entry matches are each refused before anything is read, so a
-refusal produces no partial text and no retained result. A paired spelling
+refusal produces no partial text and no saved result. A paired spelling
 and any prop other than `names` and `as` are refused the same way.
 
 ### What it does not do
@@ -143,7 +143,7 @@ answer is validated against, so what comes back is the shape the document said
 it needed rather than free text a later step has to interpret. The answer binds
 through `as`.
 
-The question is asked once and retained. A run that resumes after the answer was
+The question is asked once and saved. A run that resumes after the answer was
 given restores it rather than asking again, which is what makes a document with
 an elicitation in it safe to interrupt.
 

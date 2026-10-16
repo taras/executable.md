@@ -4,12 +4,12 @@
  *
  * `<Git.Switch branch="release/1.4" base="main" />` uses the enclosing Repository
  * and contextual cwd; a Dir may select one of its linked worktrees. Both values
- * are observations the provider verifies against retained state, never permission.
+ * are observations the provider verifies against saved state, never permission.
  * The component renders and binds nothing; before/after evidence is journal-only.
  *
  * Git refusals such as an unresolved base, an occupied branch or overwritten local
  * changes become fixed GitOperationError failures recoverable by PrintErrors.
- * Missing or unretained Repository selection, cwd outside its checkouts and identity
+ * Missing or unsaved Repository selection, cwd outside its checkouts and identity
  * mismatch are GitOperationAdmissionError failures: printing cannot recover them,
  * and they publish no outcome.
  */

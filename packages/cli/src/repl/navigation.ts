@@ -1,5 +1,5 @@
 /**
- * Every position this history retained, and what the execution is doing now.
+ * Every position this history saved, and what the execution is doing now.
  *
  * The one thing on this screen that is *not* read at the selected prefix. A
  * reader standing at an earlier position is still owed the whole rail — the
@@ -33,13 +33,13 @@
 
 import type { ReplCheckpoint } from "./model.ts";
 
-/** One retained position, as the rail needs to know it. */
+/** One saved position, as the rail needs to know it. */
 export type ReplNavigationPoint = Pick<ReplCheckpoint, "marker" | "kind">;
 
 /**
  * What the execution is doing, as the band says it.
  *
- * Seven states and no eighth. Each is a fact about retained records and about
+ * Seven states and no eighth. Each is a fact about saved records and about
  * work this process actually owns — never about what a body returned, what a
  * root Close recorded, what a badge says or what the selected content shows.
  */
@@ -85,9 +85,9 @@ export function navigationOf(
 
 /** What the head is doing, by the one precedence the band states. */
 export interface ReplHeadFacts {
-  /** Whether this prefix retained any entry at all. */
+  /** Whether this prefix saved any entry at all. */
   readonly entries: number;
-  /** Whether the latest entry has a retained root outcome. */
+  /** Whether the latest entry has a saved root outcome. */
   readonly outcome: boolean;
   /**
    * Whether this process still owns the entry's work.
@@ -110,13 +110,13 @@ export interface ReplHeadFacts {
  * In precedence order, because more than one can be true at once and the
  * first match is the honest one:
  *
- *  1. an outcome is retained and the work is still coming down — **settling**,
+ *  1. an outcome is saved and the work is still coming down — **settling**,
  *     which is the window a reader watching a run end is actually in;
  *  2. no outcome and the controller is paused — **paused**;
  *  3. no outcome and it is pausing — **pausing**, distinct because the holds
  *     have not all been taken yet;
  *  4. work this process owns, and none of the above — **live**;
- *  5. nothing retained and nothing owned — **empty**;
+ *  5. nothing saved and nothing owned — **empty**;
  *  6. no owned work and the latest entry has an outcome — **settled**, and
  *     neutrally: a success, a failure and a cancellation all finished;
  *  7. no owned work and no outcome — **unfinished**. Never an inferred pause:
@@ -153,7 +153,7 @@ export const HEAD_LABELS: Readonly<Record<ReplHeadState, string>> = Object.freez
 });
 
 /**
- * What one retained position is, said as a category and nothing more.
+ * What one saved position is, said as a category and nothing more.
  *
  * The drawer's row for a marker. `N` is its one-based ordinal in the full
  * list and `E` is the admitted order of the entry it belongs to — both
@@ -182,7 +182,7 @@ export function pointLabel(point: ReplNavigationPoint, ordinal: number, entry: n
 }
 
 /**
- * Every retained position with the entry it belongs to.
+ * Every saved position with the entry it belongs to.
  *
  * The entry number is the count of `entry` kinds up to and including this
  * point, which is the admitted order — counted from the list rather than

@@ -65,7 +65,7 @@ export interface ElicitationIdentity {
   /** `path:line:column` — the durable name. */
   location: string;
   fingerprint: string;
-  /** The normalized schema, retained so history can show what was asked. */
+  /** The normalized schema, saved so history can show what was asked. */
   schema: JsonObject;
   /** Where the element was written, for history. Never read back as identity. */
   position?: Readonly<SourcePosition>;

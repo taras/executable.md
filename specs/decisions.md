@@ -713,7 +713,7 @@ that never gets there wedges the invocation the same silent way.
 
 ### Context
 
-A retained `generated_xmd` admission holds the normalized policy it was granted
+A saved `generated_xmd` admission holds the normalized policy it was granted
 under, and a continuation was compared against it whole and exactly — the
 Workspace roots and selected root included. But those two fields are values of
 the run's own mutable progress: every committed Workspace mutation retains
@@ -733,10 +733,10 @@ here around an expansion that yields ordinary durable effects.
 ### Decision
 
 An admission's `roots` and `selectedRoot` remain exact as-of-admission
-provenance in the retained record — no shape or migration change — and a
-continuation checks them as a **retained basis, by membership**: every
-admission root and the admission's selected root must still be retained, and
-the current selected root must be retained, while additional roots and an
+provenance in the saved record — no shape or migration change — and a
+continuation checks them as a **saved basis, by membership**: every
+admission root and the admission's selected root must still be saved, and
+the current selected root must be saved, while additional roots and an
 advanced current root pass. Loss of any admission root refuses before generated
 work, with the unchanged fixed diagnostic. Every non-root term — class
 selection, selected pinned identities and forms, request ceilings — still
@@ -755,7 +755,7 @@ preserves that distinction.
 Removing the bridge is DEC-034 conformance, **not** the continuation
 correction: the reproduced WGAC16 resume failed identically with and without
 it, and exact journal order does not distinguish the bridge, because a re-run
-expansion re-offers the retained sequence either way. The observed defect was
+expansion re-offers the saved sequence either way. The observed defect was
 the exact root comparison rejecting the run's own progress, and the membership
 basis is what fixes it. No durable-stream protocol, journal or record schema
 changes, and no child durable coroutine exists: replay evidence is GX18a–d and

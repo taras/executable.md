@@ -487,7 +487,7 @@ describe("Tier WLA — a source-bundle creation", () => {
     // The caller's array really did change afterwards, and the run did not.
     //
     // This is the weaker of the two ownership claims: SQLite binds a parameter
-    // synchronously, so a transition that retained the caller's array rather
+    // synchronously, so a transition that saved the caller's array rather
     // than a copy would still store these bytes. What the copy protects is the
     // window between verification and persistence, and the observable that
     // discriminates it is `verifySourceBundleSnapshot`'s own answer — WD49.
@@ -498,7 +498,7 @@ describe("Tier WLA — a source-bundle creation", () => {
     });
 
     // And the run still reads back as the definition it claims, which is the
-    // check a drifted retained byte would fail.
+    // check a drifted saved byte would fail.
     const resumed = yield* withRunHost(root, function* (transitions) {
       return yield* withExecutor("bundle-copy", function* (executorLock) {
         return yield* transitions.begin(executorLock, { runId: "bundle-copy", action: "resume" });
@@ -529,7 +529,7 @@ describe("Tier WLA — a source-bundle creation", () => {
 
     expect(refused.ok).toBe(false);
     expect(!refused.ok && refused.error).toBeInstanceOf(WorkflowRequestError);
-    // Nothing was retained, so nothing recognizes the id: opening a connection
+    // Nothing was saved, so nothing recognizes the id: opening a connection
     // leaves an empty file behind, and an empty file is not a run.
     expect(yield* undiscoverable(root, "bundle-lie")).toBe(true);
   });

@@ -223,7 +223,7 @@ describe("workflow published Deno entrypoint", () => {
  * Where the Git feature is, and where it is not.
  *
  * #443 held one module — `src/run.ts` — to a single named Git import, because
- * everything else that retained, recognized, resumed or sealed a run already
+ * everything else that saved, recognized, resumed or sealed a run already
  * reached no repository. #822 finishes that: the feature is its own package, so
  * the rule is no longer "one exception" but "none at all".
  *

@@ -4,7 +4,7 @@
  * What is under test is a commit that survives in the run's own Workspace: the
  * object it wrote, the bytes of its message, the instant it recorded and the
  * value it handed back. The discriminating observation is the commit object
- * itself, read out of the retained checkout with `cat-file` — a retained result
+ * itself, read out of the saved checkout with `cat-file` — a saved result
  * says what this provider believes, and only the object says what Git did.
  */
 
@@ -62,8 +62,8 @@ import {
   headCommit,
   inCheckout,
   raised,
-  retainedRepositories,
-  retainedWorktrees,
+  savedRepositories,
+  savedWorktrees,
   runDocument,
   stagedPaths,
   subcommands,
@@ -137,16 +137,16 @@ function staging(locator: string, message: string, ...extra: string[]): string {
   );
 }
 
-/** What a retained result is read back for. */
+/** What a saved result is read back for. */
 function* expectation(
   database: WorkflowRunDatabase,
   message: string,
   source: GitCommitMessageSource,
   workingDirectory?: string,
 ): Operation<GitCommitExpectation> {
-  const [repository] = yield* retainedRepositories(database);
+  const [repository] = yield* savedRepositories(database);
   if (repository === undefined) {
-    throw new Error("the run retained no repository to read a result against");
+    throw new Error("the run saved no repository to read a result against");
   }
   const evidence = gitCommitMessageEvidence(message);
   return {
@@ -158,11 +158,11 @@ function* expectation(
   };
 }
 
-/** The primary checkout's Workspace path, once this run has retained one. */
+/** The primary checkout's Workspace path, once this run has saved one. */
 function* checkout(database: WorkflowRunDatabase): Operation<string> {
-  const [repository] = yield* retainedRepositories(database);
+  const [repository] = yield* savedRepositories(database);
   if (repository === undefined) {
-    throw new Error("the run retained no repository");
+    throw new Error("the run saved no repository");
   }
   return repository.record.checkoutPath;
 }
@@ -223,20 +223,20 @@ describe("workflow Git.Commit", () => {
 
       const [, outcome] = yield* gitOutcomes(database);
       expect(outcome?.status).toBe("ok");
-      const retained = parseGitCommitResult(
+      const saved = parseGitCommitResult(
         outcome?.record,
         yield* expectation(database, message, "prop"),
       );
-      expect(retained?.commit).toBe(object.commit);
-      expect(retained?.parent).toBe(object.parents[0]);
-      expect(retained?.tree).toBe(object.tree);
-      expect(retained?.checkout.repositoryName).toBe("project");
-      expect(retained?.checkout.worktreeName).toBe(null);
-      expect(retained?.messageSource).toBe("prop");
-      expect(retained?.after.commit).toBe(object.commit);
-      expect(retained?.after.headTree).toBe(object.tree);
-      expect(retained?.after.indexTree).toBe(object.tree);
-      expect(retained?.before.commit).toBe(retained?.parent);
+      expect(saved?.commit).toBe(object.commit);
+      expect(saved?.parent).toBe(object.parents[0]);
+      expect(saved?.tree).toBe(object.tree);
+      expect(saved?.checkout.repositoryName).toBe("project");
+      expect(saved?.checkout.worktreeName).toBe(null);
+      expect(saved?.messageSource).toBe("prop");
+      expect(saved?.after.commit).toBe(object.commit);
+      expect(saved?.after.headTree).toBe(object.tree);
+      expect(saved?.after.indexTree).toBe(object.tree);
+      expect(saved?.before.commit).toBe(saved?.parent);
 
       // Nothing is staged afterwards: the index and HEAD describe one tree.
       expect(yield* stagedPaths(database, yield* checkout(database))).toEqual([]);
@@ -323,11 +323,11 @@ describe("workflow Git.Commit", () => {
 
       const [, outcome] = yield* gitOutcomes(database);
       const object = yield* headCommit(database, yield* checkout(database));
-      const retained = parseGitCommitResult(
+      const saved = parseGitCommitResult(
         outcome?.record,
         yield* expectation(database, "timed\n", "prop"),
       );
-      const second = retained?.committedAt;
+      const second = saved?.committedAt;
       expect(typeof second).toBe("number");
       expect(object.authorTime).toBe(`${second} +0000`);
       expect(object.committerTime).toBe(`${second} +0000`);
@@ -364,11 +364,11 @@ describe("workflow Git.Commit message", () => {
       expect(object.message).toBe("\nwritten as content\n");
 
       const [, outcome] = yield* gitOutcomes(database);
-      const retained = parseGitCommitResult(
+      const saved = parseGitCommitResult(
         outcome?.record,
         yield* expectation(database, "\nwritten as content\n", "children"),
       );
-      expect(retained?.messageSource).toBe("children");
+      expect(saved?.messageSource).toBe("children");
     });
   });
 
@@ -401,12 +401,12 @@ describe("workflow Git.Commit message", () => {
       );
 
       const [, outcome] = yield* gitOutcomes(database);
-      const retained = parseGitCommitResult(
+      const saved = parseGitCommitResult(
         outcome?.record,
         yield* expectation(database, object.message, "both"),
       );
-      expect(retained?.messageSource).toBe("both");
-      expect(retained?.messageLength).toBe(new TextEncoder().encode(object.message).length);
+      expect(saved?.messageSource).toBe("both");
+      expect(saved?.messageLength).toBe(new TextEncoder().encode(object.message).length);
     });
   });
 
@@ -415,7 +415,7 @@ describe("workflow Git.Commit message", () => {
    *
    * `--cleanup=verbatim` is what makes this hold. Git's own default cleanup
    * strips whitespace at the end of every line and empty lines at the start,
-   * which would commit prose nobody wrote and leave the retained digest
+   * which would commit prose nobody wrote and leave the saved digest
    * describing bytes the repository does not hold.
    */
   it("commits the canonical bytes and nothing Git would have tidied", function* () {
@@ -435,14 +435,14 @@ describe("workflow Git.Commit message", () => {
 
       const [, outcome] = yield* gitOutcomes(database);
       const evidence = gitCommitMessageEvidence(canonical);
-      const retained = parseGitCommitResult(
+      const saved = parseGitCommitResult(
         outcome?.record,
         yield* expectation(database, canonical, "prop"),
       );
-      expect(retained?.messageDigest).toBe(evidence.digest);
-      expect(retained?.messageLength).toBe(evidence.length);
+      expect(saved?.messageDigest).toBe(evidence.digest);
+      expect(saved?.messageLength).toBe(evidence.length);
 
-      // The message itself is nowhere in what the run retained.
+      // The message itself is nowhere in what the run saved.
       expect(JSON.stringify(outcome?.record)).not.toContain("keep the indent");
     });
   });
@@ -648,10 +648,10 @@ describe("workflow Git.Commit leading content", () => {
     source: GitCommitMessageSource,
     message: string,
   ): Operation<string> {
-    const [repository] = yield* retainedRepositories(database);
+    const [repository] = yield* savedRepositories(database);
     const record = repository?.record;
     if (record === undefined) {
-      throw new Error("the run retained no repository");
+      throw new Error("the run saved no repository");
     }
     return gitOperationFingerprint([
       record.name,
@@ -694,14 +694,14 @@ describe("workflow Git.Commit leading content", () => {
       // And the evidence describes exactly those bytes.
       const evidence = gitCommitMessageEvidence(message);
       const [, outcome] = yield* gitOutcomes(database);
-      const retained = parseGitCommitResult(
+      const saved = parseGitCommitResult(
         outcome?.record,
         yield* expectation(database, message, "children"),
       );
-      expect(retained?.messageSource).toBe("children");
-      expect(retained?.messageDigest).toBe(evidence.digest);
-      expect(retained?.messageLength).toBe(evidence.length);
-      expect(retained?.messageLength).toBe(8);
+      expect(saved?.messageSource).toBe("children");
+      expect(saved?.messageDigest).toBe(evidence.digest);
+      expect(saved?.messageLength).toBe(evidence.length);
+      expect(saved?.messageLength).toBe(8);
 
       // The identity is the identity of the bytes that were preserved, and not
       // the identity the trimmed message would have had.
@@ -737,13 +737,13 @@ describe("workflow Git.Commit leading content", () => {
 
       const evidence = gitCommitMessageEvidence(message);
       const [, outcome] = yield* gitOutcomes(database);
-      const retained = parseGitCommitResult(
+      const saved = parseGitCommitResult(
         outcome?.record,
         yield* expectation(database, message, "both"),
       );
-      expect(retained?.messageSource).toBe("both");
-      expect(retained?.messageDigest).toBe(evidence.digest);
-      expect(retained?.messageLength).toBe(evidence.length);
+      expect(saved?.messageSource).toBe("both");
+      expect(saved?.messageDigest).toBe(evidence.digest);
+      expect(saved?.messageLength).toBe(evidence.length);
 
       const [, event] = yield* gitEvents(database);
       const named = event?.type === "yield" ? event.description.configuration : undefined;
@@ -775,11 +775,11 @@ describe("workflow Git.Commit leading content", () => {
       expect(object.message).toBe("only the prop\n");
 
       const [, outcome] = yield* gitOutcomes(database);
-      const retained = parseGitCommitResult(
+      const saved = parseGitCommitResult(
         outcome?.record,
         yield* expectation(database, "only the prop\n", "prop"),
       );
-      expect(retained?.messageSource).toBe("prop");
+      expect(saved?.messageSource).toBe("prop");
     });
   });
 });
@@ -807,22 +807,22 @@ describe("workflow Git.Commit selection", () => {
         ),
       );
 
-      const [worktree] = yield* retainedWorktrees(database, "project");
+      const [worktree] = yield* savedWorktrees(database, "project");
       if (worktree === undefined) {
-        throw new Error("the run retained no worktree");
+        throw new Error("the run saved no worktree");
       }
       const object = yield* headCommit(database, worktree.checkoutPath);
       expect(object.branch).toBe("feature/new");
       expect(object.message).toBe("inside the worktree\n");
 
       const [, outcome] = yield* gitOutcomes(database);
-      const retained = parseGitCommitResult(
+      const saved = parseGitCommitResult(
         outcome?.record,
         yield* expectation(database, "inside the worktree\n", "prop", worktree.checkoutPath),
       );
-      expect(retained?.checkout.worktreeName).toBe("implementation");
-      expect(retained?.checkout.checkoutPath).toBe(worktree.checkoutPath);
-      expect(retained?.commit).toBe(object.commit);
+      expect(saved?.checkout.worktreeName).toBe("implementation");
+      expect(saved?.checkout.checkoutPath).toBe(worktree.checkoutPath);
+      expect(saved?.commit).toBe(object.commit);
 
       // The primary checkout did not move.
       const primary = yield* headCommit(database, yield* checkout(database));
@@ -862,11 +862,11 @@ describe("workflow Git.Commit selection", () => {
       expect(inCommit).toEqual(["added.txt"]);
 
       const [, outcome] = yield* gitOutcomes(database);
-      const retained = parseGitCommitResult(
+      const saved = parseGitCommitResult(
         outcome?.record,
         yield* expectation(database, "written inside nested\n", "prop", `${path}/nested`),
       );
-      expect(retained?.checkout.checkoutPath).toBe(path);
+      expect(saved?.checkout.checkoutPath).toBe(path);
     });
   });
 
@@ -906,12 +906,12 @@ describe("workflow Git.Commit selection", () => {
     ].join("\n");
 
     yield* withStorage(root, function* () {
-      const unretained = yield* createRun({ runId: "ghost" });
+      const unsaved = yield* createRun({ runId: "ghost" });
       const counting = countingHost();
-      const ghost = yield* raised(runForged(unretained, FORGED, source, countingOptions(counting)));
+      const ghost = yield* raised(runForged(unsaved, FORGED, source, countingOptions(counting)));
       expect(causedBy(ghost, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
       expect(causedBy(ghost, isGitFailure)).toBe(undefined);
-      expect(yield* gitEvents(unretained)).toHaveLength(0);
+      expect(yield* gitEvents(unsaved)).toHaveLength(0);
 
       // A real name carrying a substituted member is refused for the member.
       const substituted = yield* createRun({ runId: "substituted" });
@@ -919,7 +919,7 @@ describe("workflow Git.Commit selection", () => {
         runForged(substituted, { ...FORGED, name: "project" }, source, countingOptions(counting)),
       );
       expect(causedBy(failure, isAdmissionFailure)).toBeInstanceOf(GitOperationAdmissionError);
-      expect(yield* retainedRepositories(substituted)).toHaveLength(1);
+      expect(yield* savedRepositories(substituted)).toHaveLength(1);
       expect(yield* gitEvents(substituted)).toHaveLength(0);
       expect(subcommands(counting.counters)).not.toContain("commit");
     });
@@ -1085,10 +1085,10 @@ describe("workflow Git.Commit transition", () => {
       const database = yield* createRun();
       yield* runDocument(database, staging(remote.locator, "identified"));
 
-      const [repository] = yield* retainedRepositories(database);
+      const [repository] = yield* savedRepositories(database);
       const record = repository?.record;
       if (record === undefined) {
-        throw new Error("the run retained no repository");
+        throw new Error("the run saved no repository");
       }
       const [, event] = yield* gitEvents(database);
       expect(event?.type === "yield" ? event.description.configuration : undefined).toBe(
@@ -1205,12 +1205,12 @@ describe("workflow Git.Commit request ownership", () => {
 
       const [, outcome] = yield* gitOutcomes(database);
       expect(outcome?.status).toBe("ok");
-      const retained = parseGitCommitResult(
+      const saved = parseGitCommitResult(
         outcome?.record,
         yield* expectation(database, "admitted by the operation\n", "prop"),
       );
-      expect(retained?.commit).toBe(object.commit);
-      expect(retained?.checkout.repositoryName).toBe("project");
+      expect(saved?.commit).toBe(object.commit);
+      expect(saved?.checkout.repositoryName).toBe("project");
     });
   });
 });
@@ -1277,7 +1277,7 @@ describe("workflow Git.Commit repository configuration", () => {
     });
   }
 
-  /** Add these lines to the retained checkout's own configuration. */
+  /** Add these lines to the saved checkout's own configuration. */
   function* configure(
     database: WorkflowRunDatabase,
     checkoutPath: string,
@@ -1300,7 +1300,7 @@ describe("workflow Git.Commit repository configuration", () => {
    * is outside the materialization, which is also outside anything a rollback
    * could take back.
    */
-  it("runs no hook a retained .git/config activates", function* () {
+  it("runs no hook a saved .git/config activates", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
     const outside = yield* useTempDirectory("xmd-commit-hooks-");
@@ -1349,13 +1349,13 @@ describe("workflow Git.Commit repository configuration", () => {
 
       const [, outcome] = yield* gitOutcomes(database);
       expect(outcome?.status).toBe("ok");
-      const retained = parseGitCommitResult(
+      const saved = parseGitCommitResult(
         outcome?.record,
         yield* expectation(database, "configured commit\n", "prop"),
       );
-      expect(retained?.commit).toBe(object.commit);
-      expect(retained?.tree).toBe(object.tree);
-      expect(retained?.parent).toBe(object.parents[0]);
+      expect(saved?.commit).toBe(object.commit);
+      expect(saved?.tree).toBe(object.tree);
+      expect(saved?.parent).toBe(object.parents[0]);
 
       // Replaying a run whose checkout is configured this way runs no Git, so
       // there is no second chance for a hook either.
@@ -1379,7 +1379,7 @@ describe("workflow Git.Commit repository configuration", () => {
    * Neither is skipped by a flag — both are configuration, and configuration is
    * what a checkout carries.
    */
-  it("runs no signing or monitor program a retained .git/config names", function* () {
+  it("runs no signing or monitor program a saved .git/config names", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
     const outside = yield* useTempDirectory("xmd-commit-programs-");
@@ -1423,11 +1423,11 @@ describe("workflow Git.Commit repository configuration", () => {
 
       const [, outcome] = yield* gitOutcomes(database);
       expect(outcome?.status).toBe("ok");
-      const retained = parseGitCommitResult(
+      const saved = parseGitCommitResult(
         outcome?.record,
         yield* expectation(database, "configured commit\n", "prop"),
       );
-      expect(retained?.commit).toBe(object.commit);
+      expect(saved?.commit).toBe(object.commit);
     });
   });
 });

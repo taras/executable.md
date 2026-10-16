@@ -333,8 +333,8 @@ completion summary appears before the native UI opens.
 ## The turn was the exact one the contract names
 
 Its version, its bytes and its request identity are fixed by the product, not
-composed at the call site, and the retained preparation named the same request
-the retained turn later reported against.
+composed at the call site, and the saved preparation named the same request
+the saved turn later reported against.
 
 <AssertEquals actual={proof.materialization.promptVersion} expected={"codex-materialization.v1"} />
 <Assert expr={proof.materialization.promptExact} />

@@ -32,7 +32,7 @@ import { collect, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { runWorkflow } from "../src/workflow.ts";
 import type { WorkflowExecution, WorkflowHost, WorkflowRequest } from "../src/workflow.ts";
-import { retainedSource } from "../../workflow/tests/support/storage.ts";
+import { savedSource } from "../../workflow/tests/support/storage.ts";
 
 interface Fixture {
   readonly repository: string;
@@ -101,7 +101,7 @@ describe("Tier WFC2 — xmd workflow cancel and delete", () => {
     });
   });
 
-  it("WFC2-2: cancelling a resumable run succeeds and reports the retained status", function* () {
+  it("WFC2-2: cancelling a resumable run succeeds and reports the saved status", function* () {
     yield* useFixture(function* (fixture) {
       yield* xmd(fixture, ["workflow", "start", "--id=release-1", "flow.md"]).expect();
       // A run whose outcome has not won: the only way to reach one from here is
@@ -132,7 +132,7 @@ describe("Tier WFC2 — xmd workflow cancel and delete", () => {
       expect(deleted.stdout).toContain("run-storage");
 
       expect(yield* exists(workflowRunPath(fixture.runs, "release-1"))).toBe(false);
-      // The empty lock may remain; it is host arrangement, not retained state,
+      // The empty lock may remain; it is host arrangement, not saved state,
       // and it is not a category the caller is told about.
       expect(deleted.stdout).not.toContain("lifecycle-control");
 
@@ -169,7 +169,7 @@ function* status(fixture: Fixture, runId: string): Operation<string> {
 }
 
 /**
- * The retained shape an interrupted run has: an outcome its root never
+ * The saved shape an interrupted run has: an outcome its root never
  * recorded. Removing the Close is the only way to reach it from here, since
  * this fixture's document cannot be made to hang.
  */
@@ -222,7 +222,7 @@ function* definitionObject(fixture: Fixture): Operation<string> {
   return result.stdout.trim();
 }
 
-/** The definition, answered at the Git boundary the retained run reads across. */
+/** The definition, answered at the Git boundary the saved run reads across. */
 function useDefinitionGit(fixture: Fixture, objectId: string): Operation<void> {
   return GitQuery.around(
     {
@@ -348,7 +348,7 @@ function lifecycleRows(path: string): { status: string; executions: string[] } {
 }
 
 function* startedRun(root: string, repository: string, objectId: string): Operation<string> {
-  const retained = yield* retainedSource("workflow.md", "recorded\n");
+  const saved = yield* savedSource("workflow.md", "recorded\n");
 
   return yield* scoped(function* () {
     const transitions = yield* useWorkflowRunHost({
@@ -363,8 +363,8 @@ function* startedRun(root: string, repository: string, objectId: string): Operat
       runId,
       action: "start",
       creation: {
-        definition: retained.definition,
-        sourceSnapshot: retained.sourceSnapshot,
+        definition: saved.definition,
+        sourceSnapshot: saved.sourceSnapshot,
         props: {},
         retrieval: { kind: "local-checkout", checkout: repository },
       },

@@ -35,7 +35,7 @@ import {
 } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import { retainedWorkflowInstallation } from "../../workflow/src/run.ts";
+import { savedWorkflowInstallation } from "../../workflow/src/run.ts";
 import { gitPlugin } from "../src/plugin.ts";
 import type { WorkflowRun } from "../../workflow/src/run.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect.ts";
@@ -68,7 +68,7 @@ import type {
  * Asked of the Plugin value rather than assembled here, so what these cases
  * exercise is the same contribution a command gets — one Plugin value, and an
  * admission that derives this execution's identities from this execution's own
- * retained history.
+ * saved history.
  */
 function* gitPluginAdmissions(): Operation<ExecutionInstallation> {
   const install = gitPlugin.install;
@@ -264,9 +264,9 @@ interface RunOptions {
 }
 
 /**
- * One document execution of `<Effect />`, under one retained run.
+ * One document execution of `<Effect />`, under one saved run.
  *
- * The run is retained rather than allocated so that every execution in a test
+ * The run is saved rather than allocated so that every execution in a test
  * carries the same external identity, which is what the reconciliation is keyed
  * on. The document's failure is captured rather than raised: what each test
  * measures is the provider traffic and the journal, and both outlive the
@@ -299,7 +299,7 @@ function collectDocument(stream: DurableStream): Operation<unknown> {
 function* collectSource(source: string, stream: DurableStream): Operation<unknown> {
   return yield* collect(
     yield* executeInstalled({ ...inlineSource(source), stream }, [
-      retainedWorkflowInstallation(RUN),
+      savedWorkflowInstallation(RUN),
       yield* gitPluginAdmissions(),
     ]),
   );
@@ -571,7 +571,7 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     expect(gitHostYields(stream.snapshot())).toEqual([]);
   });
 
-  it("GH8: a changed request cannot consume a retained completion", function* () {
+  it("GH8: a changed request cannot consume a saved completion", function* () {
     const stream = new InMemoryStream();
     const host = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
     const first = yield* runDocument({ stream, provider: host.provider });
@@ -1038,7 +1038,7 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
 
   it("GH14: a counterfeit context cannot choose a Git-host identity", function* () {
     // A fork's journal holds records its source wrote, so the effect at a
-    // retained position is named by the identity that record holds. What must
+    // saved position is named by the identity that record holds. What must
     // never choose it is a binding: `DurableContext` is a public stable name,
     // and a stateful replacement can forge one replay-index answer and delegate
     // the rest.
@@ -1093,7 +1093,7 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     }
   });
 
-  it("GH15: an inherited identity answers one retained call, never the live one after it", function* () {
+  it("GH15: an inherited identity answers one saved call, never the live one after it", function* () {
     // `reconcileGitHostEffect()` is a public surface, so one expansion may reach
     // it twice. A fork whose inherited prefix ends after the first of those
     // calls must not lend the source's identity to the second: that call is
@@ -1114,7 +1114,7 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     expect(gitHostYields(seedStream.snapshot())).toHaveLength(2);
 
     // What a fork inherits: the prefix ending after the *first* record, written
-    // under the source's identity. The second call has nothing retained.
+    // under the source's identity. The second call has nothing saved.
     const rewritten = yield* inheritedHistory(partial(seedStream.snapshot()), sourceRunId);
     const upTo = rewritten.findIndex(
       (event) => event.type === "yield" && event.description.type === GIT_HOST_EFFECT,
@@ -1154,8 +1154,8 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     expect(record?.request.identity.runId).toBe(RUN.runId);
   });
 
-  it("GH16: a live Git-host effect never stands on retained history", function* () {
-    // Two retained records. The call being made asks what the *second* one
+  it("GH16: a live Git-host effect never stands on saved history", function* () {
+    // Two saved records. The call being made asks what the *second* one
     // answers, while the record at this position is the first — and public
     // divergence policy chooses to run live rather than refuse. Neither the
     // source's identity nor a live provider call may come of that: the position
@@ -1208,7 +1208,7 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     });
 
     // It borrowed nothing — the record at this position does not answer what it
-    // asks — and it did not perform either. Standing where retained history
+    // asks — and it did not perform either. Standing where saved history
     // already holds a Git-host record and not replaying it means the effect
     // that record describes has already happened at a service this journal does
     // not enclose, so nothing is asked of the Git host and nothing is appended.
@@ -1282,7 +1282,7 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     // The identities travel in a stable-named slot so a second physical copy of
     // this package reads them. A component can bind that name: it can keep the
     // run and erase what sits beside it, and then the reconciliation finds
-    // nothing to recognize the retained record by. What it must not be able to
+    // nothing to recognize the saved record by. What it must not be able to
     // do is turn that into a live effect at a position the history already
     // holds one for.
     //
@@ -1313,7 +1313,7 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
               // The queue is bound by name, so a document could rebind it. The run
               // itself is untouched; only what sits beside it moves.
               const slot = createContext<readonly unknown[] | undefined>(
-                "executablemd.git.git-host.retained-identities",
+                "executablemd.git.git-host.saved-identities",
                 undefined,
               );
               const genuine = yield* slot.get();
@@ -1350,9 +1350,9 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     }
   });
 
-  it("GH18: a coroutine that stepped over retained history performs no Git-host effect", function* () {
+  it("GH18: a coroutine that stepped over saved history performs no Git-host effect", function* () {
     // The divergence is not at the Git-host position at all. An ordinary
-    // durable call ahead of it mismatches, run-live steps over the retained
+    // durable call ahead of it mismatches, run-live steps over the saved
     // history, and the Git-host record is still sitting there unconsumed. A
     // guard that only saw the position where replay gave up would let this one
     // through — and erasing the shared identities is exactly how a caller would
@@ -1393,7 +1393,7 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
  *
  * The generic call is what a later definition can disagree about without
  * touching the Git-host request at all, which is the shape a divergence ahead
- * of retained history has.
+ * of saved history has.
  */
 function* markedRun(options: {
   readonly stream: DurableStream;
@@ -1411,7 +1411,7 @@ function* markedRun(options: {
         *fn() {
           if (options.erase === true) {
             const slot = createContext<readonly unknown[] | undefined>(
-              "executablemd.git.git-host.retained-identities",
+              "executablemd.git.git-host.saved-identities",
               undefined,
             );
             const genuine = yield* slot.get();
@@ -1496,7 +1496,7 @@ const COUNTERFEIT_RUN = "counterfeit-run";
  * install one. The replacement is *stateful* and armed immediately before the
  * effect: it forges one completed Git-host entry for the next `peekYield()` and
  * delegates every later peek to the genuine index, so anything consulting the
- * replay index for an identity at that moment sees a retained record while
+ * replay index for an identity at that moment sees a saved record while
  * durable execution sees the real position.
  *
  * Nothing it does may change which identity the effect uses.
@@ -1589,7 +1589,7 @@ function* counterfeitRecord(): Operation<DurableEvent> {
 /**
  * One run's history as another run's, so it can be inherited.
  *
- * Only the Git-host record moves: its retained identity becomes the source's,
+ * Only the Git-host record moves: its saved identity becomes the source's,
  * and the durable operation is renamed to the digest that identity produces —
  * which is exactly what the source itself wrote, and what a fork copies
  * verbatim.

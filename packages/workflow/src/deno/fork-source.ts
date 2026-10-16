@@ -30,15 +30,15 @@ import {
 } from "./workspace/manifest.ts";
 import { loadWorkspaceRoot } from "./workspace/root.ts";
 
-/** One retained journal row, exactly as the source stores it. */
-export interface RetainedJournalRow {
+/** One saved journal row, exactly as the source stores it. */
+export interface SavedJournalRow {
   readonly eventId: string;
   readonly record: string;
   readonly workspaceRootId: string;
 }
 
 /** One DOFS manifest, as content the fork must hold for itself. */
-export interface RetainedManifest {
+export interface SavedManifest {
   readonly hash: Uint8Array;
   readonly size: number;
   readonly encoded: Uint8Array;
@@ -46,15 +46,15 @@ export interface RetainedManifest {
 }
 
 /** One DOFS blob and its bytes. */
-export interface RetainedBlob {
+export interface SavedBlob {
   readonly hash: Uint8Array;
   readonly size: number;
   readonly lastSeen: number;
   readonly content: Uint8Array;
 }
 
-/** One retained Repository checkout, as the fork inherits it. */
-export interface RetainedRepository {
+/** One saved Repository checkout, as the fork inherits it. */
+export interface SavedRepository {
   readonly name: string;
   readonly locator: string;
   readonly locatorFingerprint: string;
@@ -65,8 +65,8 @@ export interface RetainedRepository {
   readonly checkoutPath: string;
 }
 
-/** One retained Worktree checkout, as the fork inherits it. */
-export interface RetainedWorktree {
+/** One saved Worktree checkout, as the fork inherits it. */
+export interface SavedWorktree {
   readonly repositoryName: string;
   readonly name: string;
   readonly requestedBranch: string;
@@ -85,12 +85,12 @@ export interface ForkSourceSnapshot {
   /** The root the source's root import was written against, when the prefix holds one. */
   readonly rootImportWorkspaceRootId: string;
   /** The prefix without the two records the fork writes for itself. */
-  readonly inherited: readonly RetainedJournalRow[];
+  readonly inherited: readonly SavedJournalRow[];
   readonly roots: readonly StoredWorkspaceRoot[];
-  readonly manifests: readonly RetainedManifest[];
-  readonly blobs: readonly RetainedBlob[];
-  readonly repositories: readonly RetainedRepository[];
-  readonly worktrees: readonly RetainedWorktree[];
+  readonly manifests: readonly SavedManifest[];
+  readonly blobs: readonly SavedBlob[];
+  readonly repositories: readonly SavedRepository[];
+  readonly worktrees: readonly SavedWorktree[];
 }
 
 /**
@@ -107,11 +107,11 @@ export function readForkSource(
   sourceRunId: string,
   checkpointEventId: string,
 ): ForkSourceSnapshot {
-  const rows = readRetainedRows(database);
+  const rows = readSavedRows(database);
   const at = rows.findIndex((row) => row.eventId === checkpointEventId);
   if (at === -1) {
     throw new WorkflowRequestError(
-      `no retained event of workflow run ${JSON.stringify(sourceRunId)} is ` +
+      `no saved event of workflow run ${JSON.stringify(sourceRunId)} is ` +
         `${JSON.stringify(checkpointEventId)}.`,
     );
   }
@@ -131,7 +131,7 @@ export function readForkSource(
 
   const checkpoint = prefix[at];
   if (checkpoint === undefined) {
-    throw new WorkflowRequestError("the selected checkpoint is not a retained event");
+    throw new WorkflowRequestError("the selected checkpoint is not a saved event");
   }
 
   const rootIds = new Set(prefix.map((row) => row.workspaceRootId));
@@ -162,7 +162,7 @@ export function readForkSource(
  * The directories the checkpoint's Workspace held.
  *
  * A checkout exists in the fork only when the root the fork starts from
- * contains its tree. Selecting by the manifest rather than by the retained
+ * contains its tree. Selecting by the manifest rather than by the saved
  * metadata is what keeps a Repository the source created *after* the checkpoint
  * from arriving in a fork whose Workspace has no such directory.
  */
@@ -188,14 +188,14 @@ function directoryPaths(
 }
 
 /**
- * Every retained journal row, in append order.
+ * Every saved journal row, in append order.
  *
  * A fork slices a prefix out of this; an export seals all of it. Both read the
  * rows the same way, because what makes a row well formed is not a property of
  * which of them is asking.
  */
-export function readRetainedRows(database: DatabaseSync): RetainedJournalRow[] {
-  const rows: RetainedJournalRow[] = [];
+export function readSavedRows(database: DatabaseSync): SavedJournalRow[] {
+  const rows: SavedJournalRow[] = [];
   for (const row of reading(
     database,
     "SELECT event_id, record, workspace_root_id FROM journal_events ORDER BY sequence ASC",
@@ -226,15 +226,15 @@ export function readRetainedRows(database: DatabaseSync): RetainedJournalRow[] {
   return rows;
 }
 
-function isRunRecord(row: RetainedJournalRow): boolean {
+function isRunRecord(row: SavedJournalRow): boolean {
   return isRunRecordEvent(parsed(row));
 }
 
-function isRootImport(row: RetainedJournalRow): boolean {
+function isRootImport(row: SavedJournalRow): boolean {
   return isRootImportEvent(parsed(row));
 }
 
-function parsed(row: RetainedJournalRow): DurableEvent {
+function parsed(row: SavedJournalRow): DurableEvent {
   const event = parseDurableEvent(row.record);
   if (!event.ok) {
     throw new WorkflowRecordMalformedError("journal_events.record", event.error.message);
@@ -242,7 +242,7 @@ function parsed(row: RetainedJournalRow): DurableEvent {
   return event.value;
 }
 
-function readManifest(database: DatabaseSync, hash: string, path: string): RetainedManifest {
+function readManifest(database: DatabaseSync, hash: string, path: string): SavedManifest {
   const row = reading(
     database,
     "SELECT hash, size, encoded, last_seen FROM vfs_manifests WHERE hex(hash) = upper(?)",
@@ -260,7 +260,7 @@ function readManifest(database: DatabaseSync, hash: string, path: string): Retai
   });
 }
 
-function readBlob(database: DatabaseSync, hash: string, path: string): RetainedBlob {
+function readBlob(database: DatabaseSync, hash: string, path: string): SavedBlob {
   const row = reading(
     database,
     `SELECT blob.hash AS hash, blob.size AS size, blob.last_seen AS last_seen,
@@ -286,8 +286,8 @@ export function readRepositories(
   database: DatabaseSync,
   path: string,
   checkouts?: ReadonlySet<string>,
-): RetainedRepository[] {
-  const repositories: RetainedRepository[] = [];
+): SavedRepository[] {
+  const repositories: SavedRepository[] = [];
   for (const row of reading(database, "SELECT * FROM workspace_repositories ORDER BY name").all()) {
     const checkoutPath = text(row["checkout_path"], "workspace_repositories.checkout_path");
     // Absent selects every row. A fork takes only the checkouts its chosen root
@@ -318,8 +318,8 @@ export function readWorktrees(
   database: DatabaseSync,
   path: string,
   checkouts?: ReadonlySet<string>,
-): RetainedWorktree[] {
-  const worktrees: RetainedWorktree[] = [];
+): SavedWorktree[] {
+  const worktrees: SavedWorktree[] = [];
   for (const row of reading(
     database,
     "SELECT * FROM workspace_worktrees ORDER BY repository_name, name",

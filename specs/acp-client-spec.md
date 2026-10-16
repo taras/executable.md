@@ -4,7 +4,7 @@ The `Agent` Api, the `<Agent>` / `<Session>` / `<Prompt>` components, prompt
 journaling and replay, the provider-factory seam, and the `Config` timeouts are
 implemented in `@executablemd/core`. A provider is supplied through
 the `rootProvider` factory seam described below. This specification owns the
-public operations, configuration and retained record shapes.
+public operations, configuration and saved record shapes.
 [Agent permissions and generated work](../architecture.md#agent-permissions-and-generated-xmd)
 own workflow isolation and mapping publication;
 [native Agent sessions](../architecture.md#native-agent-sessions) own the shared
@@ -115,12 +115,12 @@ routes an opaque request and cannot manufacture that result.
   has neither. A host missing either refuses that agent before any provider
   effect, on the same terms as a missing coordinator. The observer is not a
   contextual Api for the same reason the coordinator is not: executable
-  validation decides which retained history may be accepted.
+  validation decides which saved history may be accepted.
 - While ownership is held and before any provider construction effect, the
   provider reconciles the route. A fresh `session()` places the session and
   publishes no route. The first subscribed consuming `prompt()` publishes or
   adopts `acp-first` before runtime creation, `ensureSession()` or a turn; an
-  established `session()` reconciles its retained route eagerly. An ensure that
+  established `session()` reconciles its saved route eagerly. An ensure that
   fails afterwards leaves that route standing. A
   launch by an adapter that names its own sessions publishes `client-native`
   under an identity that adapter allocated, unless existing durable ACPX state
@@ -134,7 +134,7 @@ routes an opaque request and cannot manufacture that result.
   converts.
 - A `session()` or subscribed `prompt()` meeting a **bound** `client-native`
   route **attaches** to it. Under the same ownership it reobserves the build and
-  compares the binding exactly, requires any retained ACP arrangement to assert
+  compares the binding exactly, requires any saved ACP arrangement to assert
   that route's identity, selects the runtime for `(resolved agent command,
   binding)`, calls `ensureSession()` with `resumeSessionId` equal to that
   identity, and requires the returned canonical assertion to equal it before a
@@ -508,7 +508,7 @@ Each prompt is one durable operation (`agent_prompt`). The record carries the
 prompt's identity and input, the agent and session identity, terminal status,
 stop reason, text (including partial text on failure), any structured failure,
 one optional canonical `configuration`, and one optional list of `permissions`.
-The configuration is retained only
+The configuration is saved only
 after the provider emits `started`: a turn that started is one the provider put
 under exactly those settings, while a configuration refusal started no turn
 and retains none. A prompt that starts and later fails or is cancelled retains
@@ -566,7 +566,7 @@ specs/native-agent-session-launch-spec.md.
 
 A completed replay contacts no provider, so it neither reads nor applies any
 configuration. A successful prepared launch reapplies its one canonical
-configuration to the exact retained Session before it continues; an
+configuration to the exact saved Session before it continues; an
 unconfigured record performs no configuration read. Live prompt and launch
 records always derive their configuration from the final routed authentic use,
 never from a requested/effective pair.
@@ -648,7 +648,7 @@ created with `mcpServers: []`, each session with `allowedTools: []`, and the
 permission mode is `deny-all` with non-interactive denial.
 
 A fixed session instruction layer states that boundary to the Agent in the same
-terms, and states all of it: that no native tool is authorized; that retained
+terms, and states all of it: that no native tool is authorized; that saved
 work can be asked for only when the prompt being answered asks for it and only
 in the exact closed shape that prompt supplies; and that nothing the Agent
 returns carries permission — source it writes is data this run may admit under
@@ -686,7 +686,7 @@ Nothing else changes. `<Prompt>` is still exactly one turn, the Agent Api gains
 no workflow-only operation, and `xmd run` keeps its caller-selected cwd, its
 omitted MCP and session options, and its public permission routing.
 
-#### Retained sessions
+#### Saved sessions
 
 A provider session outlives one execution, so a continued run reattaches the
 conversation it was having rather than replaying its transcript into a new one.
@@ -720,7 +720,7 @@ Continuation is decided before a turn starts:
 
 No refusal starts a replacement session. ACPX fixes a session's creation-time
 options when the ACP session is created and ignores them when it reuses a
-persistent record, so continuing without comparing the retained policy would be
+persistent record, so continuing without comparing the saved policy would be
 continuing a session created under a wider one.
 
 The mapping is a row in the run's own database, committed in the run's own
@@ -989,13 +989,13 @@ none.
   still gets to choose how the session is constructed. Established says the
   route and the durable identity already exist, and `session()` keeps its eager
   behavior for one: it takes ownership where the agent needs it, reconciles the
-  retained route, ensures through the bound runtime, validates the exact identity
+  saved route, ensures through the bound runtime, validates the exact identity
   and host mapping, releases the handle, and starts no turn.
 
   Directory placement classifies a record still carrying the pending
   materialization marker as pending, and a record without one — including every
   record written before deferred materialization existed — as established. A
-  retained client-native route is established even before ACPX has attached to
+  saved client-native route is established even before ACPX has attached to
   it. A published `acp-first` route is not: it is what a first turn writes down
   before it runs, and a first turn nobody accepted leaves exactly that behind.
 
@@ -1021,7 +1021,7 @@ none.
   `executablemd.session-materialization/v1`, carried as `{"state": "accepted"}`
   in the update metadata of a standard ACP `session_info_update`. It is control
   data: ACPX consumes it, and it is never appended to the conversation, published
-  as an event, exposed as prompt text or retained as a checkpoint token. Nothing
+  as an event, exposed as prompt text or saved as a checkpoint token. Nothing
   else promotes a record — not a returning `ensureSession()`, a `startTurn()`
   that returned, a synthesized `started` event, a first text delta, a terminal
   result, checkpoint metadata, an error code or a diagnostic.
@@ -1103,7 +1103,7 @@ none.
   `ensureSession()` exactly as given; `permissions: "strict"` selects the
   workflow profile's permission path; and `sessions` replaces directory-walk
   placement with a host's own, answering with the placement's `state` as well as
-  its key and directory, and is where a retained session this host cannot
+  its key and directory, and is where a saved session this host cannot
   continue is refused. `sessions.established()` is called where an assertion
   exists and not before: after the ensure that validated a reattachment, and
   after the backend accepted a constructed session's first turn. Every one of

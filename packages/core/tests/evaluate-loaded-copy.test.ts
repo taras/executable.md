@@ -33,12 +33,12 @@ import { executeInstalled } from "../host.ts";
 import type { ExecutionInstallation } from "../host.ts";
 import { useSelection } from "./support/generated-selection.ts";
 import { registerComponents } from "../src/components/registration.ts";
-import { retainedSource } from "../src/root-source.ts";
+import { savedSource } from "../src/root-source.ts";
 import { recordedFiles, useRecordedFiles } from "./support/fragment-files.ts";
 import type { RecordedFiles } from "./support/fragment-files.ts";
 
 const ROOT_PATH = "evaluate.md";
-const NOTE = "the retained note\n";
+const NOTE = "the saved note\n";
 
 /** A read-only selection: core's `<File />` and no writing spelling at all. */
 function reading(files: RecordedFiles): ExecutionInstallation {
@@ -70,7 +70,7 @@ function run(
 ): Operation<Json> {
   return scoped(function* () {
     return yield* collect(
-      yield* executeInstalled({ ...retainedSource(ROOT_PATH, source), stream }, [...installations]),
+      yield* executeInstalled({ ...savedSource(ROOT_PATH, source), stream }, [...installations]),
     );
   });
 }
@@ -126,7 +126,7 @@ describe("Tier FE — nothing replaces the protected implementation", () => {
     // and the fragment runs.
     const files = recordedFiles({ "notes.md": NOTE });
     const output = yield* run(READS, [reading(files)]);
-    expect(String(output)).toContain("the retained note");
+    expect(String(output)).toContain("the saved note");
     expect(files.performed).toEqual(["read notes.md"]);
   });
 
@@ -165,7 +165,7 @@ describe("Tier FE — nothing replaces the protected implementation", () => {
       return yield* run(READS, [reading(clean)]);
     });
     expect(observed).toContain("Evaluate");
-    expect(String(output)).toContain("the retained note");
+    expect(String(output)).toContain("the saved note");
   });
 
   it("FE24: a deliberate middleware refusal stays a refusal", function* () {
@@ -310,7 +310,7 @@ describe("Tier FE — ownership is not permission", () => {
     expect(reached).toEqual(["repository"]);
     // ...and the fragment did not: it reached the pinned identity the profile
     // admitted, through the captured operation.
-    expect(rendered).toContain("the retained note");
+    expect(rendered).toContain("the saved note");
     expect(files.performed).toEqual(["read notes.md"]);
     expect(admissions(yield* stream.readAll())).toHaveLength(1);
   });
@@ -347,7 +347,7 @@ describe("Tier FE — ownership is not permission", () => {
     const output = yield* scoped(function* () {
       return yield* run(READS, [reading(files)]);
     });
-    expect(String(output)).toContain("the retained note");
+    expect(String(output)).toContain("the saved note");
     expect(files.performed).toEqual(["read notes.md"]);
   });
 });

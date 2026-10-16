@@ -177,13 +177,13 @@ export {
   formatDocumentReference,
   INLINE_SOURCE_PATH,
   inlineSource,
-  retainedSource,
+  savedSource,
   rootSourcePath,
 } from "./src/root-source.ts";
 export type {
   FileRootDocument,
   InlineRootDocument,
-  RetainedRootDocument,
+  SavedRootDocument,
   RootDocumentSource,
 } from "./src/root-source.ts";
 export {
@@ -192,7 +192,7 @@ export {
   isDocumentTargetError,
   // The one decision on what an exact target looks like. Exported under the
   // fuller name because a consumer outside this package — a stored workflow
-  // definition validating the target it retained — reads it beside its own
+  // definition validating the target it saved — reads it beside its own
   // vocabulary, where "target" alone would not say target of what.
   isCanonicalTarget as isCanonicalDocumentTarget,
   parseDocumentTargetFailure,

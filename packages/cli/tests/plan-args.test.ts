@@ -27,7 +27,7 @@ import {
 const REQUEST = "ask me for my age and write the result to a file";
 
 /** Every option the command still defines, with a value where it takes one. */
-const RETAINED: readonly string[][] = [
+const SAVED: readonly string[][] = [
   ["--include", "lib"],
   ["--agent-provider", "acpx"],
   ["--default-agent", "codex"],
@@ -130,8 +130,8 @@ describe("Tier PR — xmd plan fixed grammar", () => {
     expect(separated.fixed).toEqual(["plan"]);
   });
 
-  it("PS1: every retained option is accepted, before and after the request", function* () {
-    for (const option of RETAINED) {
+  it("PS1: every saved option is accepted, before and after the request", function* () {
+    for (const option of SAVED) {
       expect(scanPlanArgs(["plan", REQUEST, ...option]).error).toBe(undefined);
       expect(scanPlanArgs(["plan", ...option, REQUEST]).error).toBe(undefined);
     }
@@ -139,10 +139,10 @@ describe("Tier PR — xmd plan fixed grammar", () => {
     // All of them at once, and every token reaches the parser in the order it
     // was written: the invocation keeps its own options rather than losing one
     // to a neighbour.
-    const scan = scanPlanArgs(["plan", REQUEST, ...RETAINED.flat()]);
+    const scan = scanPlanArgs(["plan", REQUEST, ...SAVED.flat()]);
     expect(scan.error).toBe(undefined);
     expect(scan.request).toBe(REQUEST);
-    expect(scan.fixed).toEqual(["plan", REQUEST, ...RETAINED.flat()]);
+    expect(scan.fixed).toEqual(["plan", REQUEST, ...SAVED.flat()]);
 
     // `--session` still needs a name. An option the parser reads as absent
     // falls back to the generated session, so a caller who asked for a named
@@ -169,7 +169,7 @@ describe("Tier PR — xmd plan fixed grammar", () => {
       ["plan", REQUEST, "--run", "--run"],
       ["plan", "--run", REQUEST],
       ["plan", "--run=false", REQUEST],
-      // Written where a retained option would otherwise swallow it: a value
+      // Written where a saved option would otherwise swallow it: a value
       // nobody names a directory is how a removed spelling survives.
       ["plan", REQUEST, "--include", "--run"],
       ["plan", REQUEST, "--output", "--run"],
@@ -273,7 +273,7 @@ describe("Tier PR — xmd plan fixed grammar", () => {
   });
 
   it("PO7: an option that reaches this grammar after --journal is that option, not a path", function* () {
-    // The reported hole. Every retained spelling that reaches this grammar,
+    // The reported hole. Every saved spelling that reaches this grammar,
     // written where the path goes: reading one as a filename would exclusively
     // create a file called `--verbose` and drop what the caller actually asked
     // for, and the scan used to accept all of it in silence.
@@ -350,9 +350,9 @@ describe("Tier PR — xmd plan fixed grammar", () => {
     }
 
     // A command line naming none of them has nothing to say here, whatever else
-    // it holds — including the retained options and `--help` itself.
+    // it holds — including the saved options and `--help` itself.
     expect(removedPlanOption(["plan", "--help"])).toBe(undefined);
-    expect(removedPlanOption(["plan", REQUEST, ...RETAINED.flat()])).toBe(undefined);
+    expect(removedPlanOption(["plan", REQUEST, ...SAVED.flat()])).toBe(undefined);
     // A token after the separator is the request, not an option.
     expect(removedPlanOption(["plan", "--", "--run"])).toBe(undefined);
   });

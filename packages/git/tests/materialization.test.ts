@@ -9,7 +9,7 @@
  *
  * These drive the exporter directly rather than through a component, because
  * the properties are the exporter's own and no component exists to reach them
- * yet. A path that arrives from a retained row is not this provider's word by
+ * yet. A path that arrives from a saved row is not this provider's word by
  * the time it is read back, which is why containment is proven from the string
  * rather than from what the filesystem resolved.
  */
@@ -52,7 +52,7 @@ function* raised(operation: Operation<unknown>): Operation<unknown> {
 }
 
 describe("workflow Workspace materialization", () => {
-  it("refuses to join a traversal-shaped retained path to a host root", function* () {
+  it("refuses to join a traversal-shaped saved path to a host root", function* () {
     const root = yield* useStorageRoot();
     const host = yield* useHostRoot();
     const escaped = join(host, "..", "escaped-by-traversal");
@@ -61,7 +61,7 @@ describe("workflow Workspace materialization", () => {
       const database = yield* createRun();
       const attempted = yield* transactWorkspaceRoots(database, function* (workspace) {
         return yield* raised(
-          exportTree(workspace.filesystem, host, "/../../etc", "a retained checkout"),
+          exportTree(workspace.filesystem, host, "/../../etc", "a saved checkout"),
         );
       });
       expect(attempted.ok).toBe(true);
@@ -72,7 +72,7 @@ describe("workflow Workspace materialization", () => {
     });
   });
 
-  it("refuses a retained path that is not absolute", function* () {
+  it("refuses a saved path that is not absolute", function* () {
     const root = yield* useStorageRoot();
     const host = yield* useHostRoot();
 
@@ -80,7 +80,7 @@ describe("workflow Workspace materialization", () => {
       const database = yield* createRun();
       const attempted = yield* transactWorkspaceRoots(database, function* (workspace) {
         return yield* raised(
-          exportTree(workspace.filesystem, host, "relative/checkout", "a retained checkout"),
+          exportTree(workspace.filesystem, host, "relative/checkout", "a saved checkout"),
         );
       });
       expect(attempted.ok && attempted.value).toBeInstanceOf(RepositoryStaleStateError);
@@ -129,7 +129,7 @@ describe("workflow Workspace materialization", () => {
         yield* files.symlink("/outside/the/workspace", "/tree/escaping.txt");
 
         // Out to the host, then back over a Workspace path of its own.
-        yield* exportTree(files, host, "/tree", "a retained checkout");
+        yield* exportTree(files, host, "/tree", "a saved checkout");
         yield* files.remove("/tree", { recursive: true, force: true });
         yield* importTree(files, host, "/tree");
 
@@ -151,7 +151,7 @@ describe("workflow Workspace materialization", () => {
       expect(carried.value.text).toBe("plain\n");
       expect(carried.value.blob).toEqual(binary);
       expect(carried.value.tool).not.toBe(0);
-      // A tracked link is content: retained as its target, never resolved,
+      // A tracked link is content: saved as its target, never resolved,
       // including one whose target leaves the Workspace entirely.
       expect(carried.value.link).toBe("text.txt");
       expect(carried.value.escaping).toBe("/outside/the/workspace");
@@ -167,7 +167,7 @@ describe("workflow Workspace materialization", () => {
       const attempted = yield* transactWorkspaceRoots(database, function* (workspace) {
         yield* workspace.filesystem.writeFile("/not-a-checkout", "a file");
         const failure = yield* raised(
-          exportTree(workspace.filesystem, host, "/not-a-checkout", "a retained checkout"),
+          exportTree(workspace.filesystem, host, "/not-a-checkout", "a saved checkout"),
         );
         const captured = yield* workspace.capture();
         yield* workspace.publish(captured.rootId);

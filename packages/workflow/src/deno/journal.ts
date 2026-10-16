@@ -24,7 +24,7 @@ import {
 import { WorkflowRecordMalformedError } from "../storage/errors.ts";
 import { describe } from "../storage/members.ts";
 
-/** One retained event, the opaque id it keeps, and the root it was written against. */
+/** One saved event, the opaque id it keeps, and the root it was written against. */
 export interface JournalEntry {
   readonly eventId: string;
   readonly event: DurableEvent;
@@ -64,7 +64,7 @@ function currentWorkspaceRoot(database: DatabaseSync): string {
   return rootId;
 }
 
-/** Every retained event, in the order it was appended. */
+/** Every saved event, in the order it was appended. */
 export function readJournalEntries(database: DatabaseSync): JournalEntry[] {
   const entries: JournalEntry[] = [];
 

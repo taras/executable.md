@@ -21,7 +21,7 @@ import { readTextFile } from "@effectionx/fs";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { agentIdentityComponents, collect, retainedSource } from "@executablemd/core";
+import { agentIdentityComponents, collect, savedSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { Json } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
@@ -81,7 +81,7 @@ function attach(
           return yield* collect(
             yield* executeInstalled(
               {
-                ...retainedSource("workflows/sibling-sessions.md", source),
+                ...savedSource("workflows/sibling-sessions.md", source),
                 stream: database.journal,
               },
               // `<Session>` names durable work after its own invocation, so the
@@ -115,7 +115,7 @@ function established(fake: FakeAcp): string[] {
   return [...new Set(fake.ensured.map((input) => input.sessionKey))].sort();
 }
 
-/** One retained mapping, as a second connection sees it. */
+/** One saved mapping, as a second connection sees it. */
 interface MappingRow {
   readonly sessionIdentity: string;
   readonly kind: string;
@@ -272,7 +272,7 @@ describe("Tier WSR — a restart reattaches each Session site", () => {
  * substituted.
  */
 describe("Tier WSA — the workflow profile serves Claude over ACP alone", () => {
-  it("WSR3: a Claude session is retained and reattached with no machine-wide account", function* () {
+  it("WSR3: a Claude session is saved and reattached with no machine-wide account", function* () {
     const root = yield* useStorageRoot();
     const source = yield* documentSource("claude-session.md");
 

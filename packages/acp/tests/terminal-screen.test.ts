@@ -86,7 +86,7 @@ describe("Tier NA — native answer observation", () => {
     terminal.write(`${ANSWER}\r\n`);
 
     // On the shell's own screen the words are genuinely there, which is why a
-    // proof reading retained bytes would have accepted them.
+    // proof reading saved bytes would have accepted them.
     expect(observeAnswer(terminal.snapshot(), asked()).found).toBe(true);
 
     terminal.write(ALT_ON);

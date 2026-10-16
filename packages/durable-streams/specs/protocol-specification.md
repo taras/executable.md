@@ -306,8 +306,8 @@ asked to produce what the event settled to — an eager read hands a backend tha
 cannot produce a result the ability to fail past every guard, carrying its own
 error.
 
-Each retained Yield owns one cell for what it settled to, and **that cell spans
-the whole replay lifecycle**: the check phase is handed the retained Yields
+Each saved Yield owns one cell for what it settled to, and **that cell spans
+the whole replay lifecycle**: the check phase is handed the saved Yields
 rather than the stream's own events, so a guard that validates a result and the
 replay path that later consumes it observe the same value. The stream's event is
 consulted at most once. Reading once across phases is the property that makes
@@ -325,14 +325,14 @@ remembered and re-raised rather than retried, so a source cannot refuse the
 guard and then answer replay.
 
 **Every** event that participates in admission, indexing, or terminal reuse is
-retained — Close as well as Yield. A Close decides whether a coroutine has a
+saved — Close as well as Yield. A Close decides whether a coroutine has a
 terminal result to reuse, so leaving it as the backend's own object lets it
 belong to a child coroutine while one phase asks and to the root while the next
 does: the phase that admits the history sees no terminal result, and the phase
 that reuses one sees it.
 
 The discriminator is settled by the classification that chooses an event's
-retained kind, and never read from the source again. Identity — the coroutine an
+saved kind, and never read from the source again. Identity — the coroutine an
 event belongs to, and a Yield's complete effect description — is settled once
 too, so no phase can be shown a different event than the phase before it. An
 event that refuses to say what it is is refused from every member.
@@ -340,7 +340,7 @@ event that refuses to say what it is is refused from every member.
 A Yield's settlement stays lazy, so a guard's check remains the first ordinary
 consumer of a recorded result.
 
-A Close's result is settled while the history is retained. A Close carries what
+A Close's result is settled while the history is saved. A Close carries what
 a completed run hands back, and deferring that read leaves an interval — between
 the moment a consumer's own admission accepts the history and the moment
 terminal reuse consumes it — in which the backend still owns the answer and can
@@ -355,8 +355,8 @@ The detached result is ordinary mutable JSON. Detaching is the claim against the
 stream; making the copy immutable would be a claim against the consumer, and
 replayed values are legitimately written to.
 
-After every retained event has been offered to `check` and before any recorded
-terminal result is reused, guards receive the retained history once through
+After every saved event has been offered to `check` and before any recorded
+terminal result is reused, guards receive the saved history once through
 `admit`. A guard that requires something of the history as a whole — that an
 event it validates is present, and present once — refuses there, because a
 per-event check has nothing to object to in a journal that simply omits the
@@ -365,19 +365,19 @@ event. Its default is a no-op.
 A replay distinguishes three views of one history, and conflating any two hands
 the decision to whoever holds the wrong one:
 
-1. the **authoritative retained history**, which admission validated and replay
+1. the **authoritative saved history**, which admission validated and replay
    consumes — detached from the backend and immutable to policy, its
    descriptions and results frozen through;
 2. **isolated guard observations**, a deep mutable copy made per guard
    invocation, over which middleware composes freely and from which nothing
    flows back; and
 3. **values delivered to workflow code**, a fresh mutable copy taken from the
-   retained history at consumption — for a replayed effect and for a completed run's
+   saved history at consumption — for a replayed effect and for a completed run's
    own return value alike. This is the only thing "mutable replayed value"
-   means: writing to that copy reaches neither the retained history nor the next
+   means: writing to that copy reaches neither the saved history nor the next
    replay.
 
-The retained history is frozen through in every settlement shape: a success with a
+The saved history is frozen through in every settlement shape: a success with a
 value, a `Result<void>` with none, a failure, and a cancellation, on Yield and
 Close alike. An envelope left writable is one a public observation could add a
 value to before replay reads it.
@@ -390,7 +390,7 @@ Replay guards are **composable policy, not enforcement**. Guards compose through
 middleware, and a handler installed further out may decline to delegate — which
 is what composition is for. An invariant that must not be negotiable therefore
 does not belong in a guard. A consumer whose durable identity depends on
-validating retained history owns that validation itself, for example by wrapping
+validating saved history owns that validation itself, for example by wrapping
 the `DurableStream` it passes to `durableRun` so the check happens inside the
 read every later phase depends on.
 
@@ -405,7 +405,7 @@ class ReplayIndex {
   private closes = new Map<CoroutineId, Close>();
 
   constructor(events: DurableEvent[]) {
-    // Retained first, idempotently: a caller that already produced the stable
+    // Saved first, idempotently: a caller that already produced the stable
     // history hands the same objects on rather than a second wrapping of them.
     for (const event of retainEvents(events)) {
       if (event.type === "yield") {
@@ -688,11 +688,11 @@ run — effects were removed without a version gate.
 
 **Generator fails early.** The generator throws while the replay index still
 has unconsumed entries. The ordinary execution error does not describe a
-completed replay of the retained history. The runtime raises
+completed replay of the saved history. The runtime raises
 `TerminalDivergenceError`, retaining the execution error as its cause, and
 appends neither that ordinary error nor any root `Close`.
 
-**Retained child is not claimed.** A retained child coroutine has completed,
+**Saved child is not claimed.** A saved child coroutine has completed,
 but the current definition terminates its parent without reaching that child
 identity. Its `Close` proves only that the earlier child completed; it does not
 make the current coroutine tree aligned.
@@ -703,17 +703,17 @@ finished after consuming all recorded yields. This means the current
 code produces more effects than the recorded run — effects were added
 without a version gate.
 
-Every terminal divergence diagnostic names the first retained protocol
+Every terminal divergence diagnostic names the first saved protocol
 entry the terminating subtree did not reach, beside the consumed and
 total counts and the ordinary failure cause, which remain unchanged. An
 unreached `Yield` is rendered as its `type("name")` with its optional
 authored source, exactly as §6.2 renders a mismatch side. When the first
-unreached entry is a `Close` — a removed completed child that retained
+unreached entry is a `Close` — a removed completed child that saved
 no `Yield` — the diagnostic names that `Close` and its coroutine rather
 than inventing an effect or a source.
 
 Terminal alignment covers the whole terminating coroutine subtree. All
-terminal divergence cases raise a durability error and leave the retained
+terminal divergence cases raise a durability error and leave the saved
 journal unchanged. A durability failure discovered after the last replay entry
 was consumed remains a durability failure and is never serialized as
 `Close(err)`. Once any durability failure is active, no later replay entry is
@@ -882,7 +882,7 @@ Version gates follow a three-phase lifecycle:
 1. **Add gate.** Deploy code with both old (v0) and new (v1) paths.
    In-flight workflows replay with v0. New workflows execute with v1.
 2. **Deprecate old path.** Once all v0 workflows have completed, the
-   v0 code path is dead but retained for safety.
+   v0 code path is dead but saved for safety.
 3. **Remove gate.** Once all v1 workflows from the deprecation era
    have completed, remove the gate and the old code path entirely.
 
@@ -1018,9 +1018,9 @@ restored as a value `JSON.stringify` cannot write back.
 `MalformedDurableEventError.path` locates the offending member, such as
 `$.result.error.message`. Members the protocol does not name — the extra
 description fields, anything inside a result value — appear as `*`, because a
-record's own member names are as much retained content as its values. Neither
+record's own member names are as much saved content as its values. Neither
 the path nor the message repeats anything from the record: a journal is
-retained, filtered history, and a parse failure is not a reason to copy its
+saved, filtered history, and a parse failure is not a reason to copy its
 contents into an error that travels to logs and terminals.
 
 ### 11.3 Stream consistency
@@ -1202,10 +1202,10 @@ These tests MUST pass for the protocol to be considered implemented.
 | 11  | **Type mismatch**                  | Record a `call` effect. Replay code yields `sleep` at same position.                  | `DivergenceError` citing type mismatch.                                 |
 | 12  | **Name mismatch**                  | Record `call("fetchOrder")`. Replay yields `call("chargeCard")`.                      | `DivergenceError` citing name mismatch.                                 |
 | 12b | **Positioned mismatch** | Record a description carrying `"executablemd.source-position"`. Replay yields a differently named effect carrying its own position. | `DivergenceError` names both authored sites, one per side; identical extra metadata still matches. |
-| 13  | **Generator finishes early**       | Record a partial stream with 5 yields and no root close. Replay code produces only 3 yields then returns. | `EarlyReturnDivergenceError` naming the first unreached retained `Yield`; no root `Close` is appended. |
-| 13b | **Generator fails early** | Record a partial stream with a retained yield and no root close. Replay code throws before reaching it. | `TerminalDivergenceError` naming the first unreached retained `Yield`; the original error is its cause and no root `Close` is appended. |
-| 13c | **Completed child removed** | Record a child `Yield` and `Close`, omit the root `Close`, then remove the child from the current definition. | Root return and root failure both reject the unchanged prefix, naming the child's first retained `Yield` — or its `Close` when it retained none; the compatible definition still replays it. |
-| 13d | **Child cancellation finalization** | Record a child with retained history, then cancel that child before its history is exhausted. | The cancellation `TerminalDivergenceError` names the first unreached retained entry like every other terminal path. |
+| 13  | **Generator finishes early**       | Record a partial stream with 5 yields and no root close. Replay code produces only 3 yields then returns. | `EarlyReturnDivergenceError` naming the first unreached saved `Yield`; no root `Close` is appended. |
+| 13b | **Generator fails early** | Record a partial stream with a saved yield and no root close. Replay code throws before reaching it. | `TerminalDivergenceError` naming the first unreached saved `Yield`; the original error is its cause and no root `Close` is appended. |
+| 13c | **Completed child removed** | Record a child `Yield` and `Close`, omit the root `Close`, then remove the child from the current definition. | Root return and root failure both reject the unchanged prefix, naming the child's first saved `Yield` — or its `Close` when it saved none; the compatible definition still replays it. |
+| 13d | **Child cancellation finalization** | Record a child with saved history, then cancel that child before its history is exhausted. | The cancellation `TerminalDivergenceError` names the first unreached saved entry like every other terminal path. |
 | 14  | **Generator continues past close** | Record stream with close after 3 yields. Replay code produces 5 yields.               | `DivergenceError`: journal shows close but generator hasn't finished.   |
 
 ### Tier 3 — Structured concurrency
@@ -1221,7 +1221,7 @@ These tests MUST pass for the protocol to be considered implemented.
 | 21  | **Error boundary**                                 | Child error caught by parent `try/catch`.                                      | Parent catches error; siblings NOT cancelled; execution continues.                            |
 | 22  | **Race — winner cancels losers**                   | `race([op1, op2])`, op1 wins.                                                  | op2 receives `Close(cancelled)`; race returns op1's result.                                   |
 | 23  | **Race replay with partial loser**                 | Replay race where loser partially executed.                                    | Loser's partial yields replayed, then cancelled at correct point.                             |
-| 23b | **Child durability failure** | Make replay stale or divergent inside a retained child. | Neither the child nor root appends `Close`; the exact durability failure escapes and the prefix remains unchanged. |
+| 23b | **Child durability failure** | Make replay stale or divergent inside a saved child. | Neither the child nor root appends `Close`; the exact durability failure escapes and the prefix remains unchanged. |
 
 ### Tier 4 — Deterministic identity
 

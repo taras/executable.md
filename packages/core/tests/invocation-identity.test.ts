@@ -3,7 +3,7 @@
  * (specs/executable-mdx-spec.md §5.6).
  *
  * A component that names a durable operation after its own invocation is
- * asserting ownership: the name decides which retained record a replay
+ * asserting ownership: the name decides which saved record a replay
  * restores, and an implementation running under somebody else's identity
  * commits against its own storage under their expansion. Code Rule 15 says a
  * decision like that never trusts replaceable state, so nothing here is read
@@ -613,7 +613,7 @@ describe("Tier CIV — the identity a host's component names its work after", ()
     // `<Nest><Probe /></Nest>`. The harness only installs the adversary — it
     // retains the declared implementation at the first site's own resolution,
     // then registers the name again so the nested site resolves to that
-    // registration, and runs what it retained there with the nested site's own
+    // registration, and runs what it saved there with the nested site's own
     // genuine invocation.
     const source = yield* readTextFile(
       fileURLToPath(
@@ -668,7 +668,7 @@ describe("Tier CIV — the identity a host's component names its work after", ()
             *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
               const borrowed = kept;
               if (typeof borrowed !== "function") {
-                nested.push("nothing retained");
+                nested.push("nothing saved");
                 return "";
               }
               return yield* borrowed(props, invocation);
@@ -678,7 +678,7 @@ describe("Tier CIV — the identity a host's component names its work after", ()
       });
     });
 
-    // The declared site named itself. The nested site ran the retained
+    // The declared site named itself. The nested site ran the saved
     // implementation with its own genuine invocation and named nothing:
     // canonical resolution selected the nested registration there, so that
     // invocation is in no domain. Restoring identity by authored-name equality

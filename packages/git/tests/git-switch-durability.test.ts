@@ -2,14 +2,14 @@
  * Tier WF — what a `<Git.Switch>` retains, replays and refuses to guess.
  *
  * These tests inspect the run's database rather than a checkout. A replay must
- * move no branch and append no second transition; a retained result that no
+ * move no branch and append no second transition; a saved result that no
  * longer parses must stop the run rather than be read around; a cancelled
  * switch must leave the frontier, the materialization and the journal exactly
- * as it found them; and the retained rows a switch runs against must be the
+ * as it found them; and the saved rows a switch runs against must be the
  * same rows afterwards, because creation identity does not move when HEAD does.
  *
  * Every replay happens after the remote is deleted, so what continues a run is
- * what the run retained or nothing does.
+ * what the run saved or nothing does.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -57,7 +57,7 @@ import {
   gitEvents,
   gitOutcomes,
   raised,
-  retainedRepositories,
+  savedRepositories,
   runDocument,
   subcommands,
   survivingRoots,
@@ -145,7 +145,7 @@ function tableNames(path: string): string[] {
 }
 
 /**
- * Damage the one retained switch result, and refuse to continue if it damaged
+ * Damage the one saved switch result, and refuse to continue if it damaged
  * none.
  *
  * A tamper that matched nothing leaves the run healthy, and a regression built
@@ -272,7 +272,7 @@ describe("workflow Git.Switch durability", () => {
   });
 
   /**
-   * Every way a retained result can stop describing the invocation it was
+   * Every way a saved result can stop describing the invocation it was
    * recorded for.
    *
    * Shape is the cheap half. The rest is meaning: an object id that is not one,
@@ -340,7 +340,7 @@ describe("workflow Git.Switch durability", () => {
   ];
 
   for (const { name, damage } of DAMAGE) {
-    it(`fails a replay whose retained result ${name}`, function* () {
+    it(`fails a replay whose saved result ${name}`, function* () {
       const root = yield* useStorageRoot();
       const remote = yield* useBareRemote(REMOTE);
       const path = runPath(root, "release-1.4");
@@ -365,7 +365,7 @@ describe("workflow Git.Switch durability", () => {
   }
 
   /**
-   * A retained Worktree identity is a name *and* the place that name is given.
+   * A saved Worktree identity is a name *and* the place that name is given.
    *
    * Placement is a function of identity, so the two travel together and have to
    * still be the pair placement produces. A result naming one Worktree at
@@ -388,7 +388,7 @@ describe("workflow Git.Switch durability", () => {
   ];
 
   for (const { name, damage } of WORKTREE_DAMAGE) {
-    it(`fails a replay whose retained result ${name}`, function* () {
+    it(`fails a replay whose saved result ${name}`, function* () {
       const root = yield* useStorageRoot();
       const remote = yield* useBareRemote(REMOTE);
       const path = runPath(root, "release-1.4");
@@ -421,7 +421,7 @@ describe("workflow Git.Switch durability", () => {
     yield* withStorage(root, function* () {
       const database = yield* createRun();
       // Switching to the branch the checkout is already on moves nothing, so a
-      // retained index digest that changed across it is describing a transition
+      // saved index digest that changed across it is describing a transition
       // this component does not make.
       expect(String(yield* runDocument(database, unchangedSource(remote.locator)))).toContain(
         "after: main",
@@ -548,7 +548,7 @@ describe("workflow Git.Switch durability", () => {
 
       // The Repository before it committed; the switch did not, and published
       // no failed result either — a cancelled effect is not an outcome.
-      expect(yield* retainedRepositories(database)).toHaveLength(1);
+      expect(yield* savedRepositories(database)).toHaveLength(1);
       expect(yield* gitEvents(database)).toHaveLength(0);
       expect(committedRoot(path)).toBe(latestRoot(path));
       expect(yield* survivingRoots({ commands: [], roots, effects: [], attachments: [] })).toEqual(
@@ -573,13 +573,13 @@ describe("workflow Git.Switch durability", () => {
       yield* runDocument(switched, source(remote.locator), countingOptions(counting));
 
       // A switch adds nothing to the schema: the branch it moved lives in the
-      // retained checkout, not in a column.
+      // saved checkout, not in a column.
       expect(tableNames(runPath(root, "switched"))).toEqual(tableNames(runPath(root, "untouched")));
 
       // And it moves nothing in the row. Creation identity is what the row
       // holds, and the checkout is on another branch by now.
-      const [before] = yield* retainedRepositories(untouched);
-      const [after] = yield* retainedRepositories(switched);
+      const [before] = yield* savedRepositories(untouched);
+      const [after] = yield* savedRepositories(switched);
       expect(after?.record).toEqual(before?.record);
       expect(after?.record.primaryBranch).toBe("main");
       expect(after?.record.creationCommit).toBe(remote.heads.get("main"));
@@ -590,11 +590,11 @@ describe("workflow Git.Switch durability", () => {
       // Nothing the host owns reaches the journal: not the disposable
       // materialization the operation ran in, and not the directory it lived in.
       const [outcome] = yield* gitOutcomes(switched);
-      const retained = JSON.stringify(outcome?.record);
+      const saved = JSON.stringify(outcome?.record);
       for (const materialization of counting.counters.roots) {
-        expect(retained).not.toContain(materialization);
+        expect(saved).not.toContain(materialization);
       }
-      expect(retained).not.toContain(tmpdir());
+      expect(saved).not.toContain(tmpdir());
     });
   });
 });

@@ -5,7 +5,7 @@
  * `xmd workflow fork <source> --at=<event> <definition>` says: run *this*
  * document, but start it where that run had already got to. That only holds if
  * the candidate definition, its component bundle and the fork's props produce
- * exactly the retained prefix when replayed. Anything else — an effect in a
+ * exactly the saved prefix when replayed. Anything else — an effect in a
  * different order, an effect that is no longer there, a document that finishes
  * early — is divergence, and a fork admitted on divergent history would replay
  * work its own document never describes.
@@ -30,7 +30,7 @@
  *
  * A durable operation performs its work and *then* appends, so a stream that
  * merely refuses appends would already have run the first live effect. What
- * stops this replay is the retained prefix running out: a guard counts the
+ * stops this replay is the saved prefix running out: a guard counts the
  * events replay consumes and, on the last one, ends the execution before the
  * stored result is handed back. Nothing after the checkpoint is entered, no
  * host service is reached, and no event is appended.
@@ -52,13 +52,13 @@ import { Err, Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { ReplayGuard } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, ReplayOutcome } from "@executablemd/durable-streams";
-import { retainedSource } from "@executablemd/core";
+import { savedSource } from "@executablemd/core";
 import { offering, useNoGeneratedEvaluation } from "./workflow-generated.ts";
 import {
   forkJournal,
   forkRunRecordEvent,
   isRootImportEvent,
-  retainedWorkflowInstallation,
+  savedWorkflowInstallation,
   selectForkPrefix,
   workflowBundleInstallation,
   WorkflowLifecycle,
@@ -317,7 +317,7 @@ function* replayPrefix(
  * One preflight execution of the candidate definition.
  *
  * The same shape both passes use: the fork's own identity, the candidate's
- * retained source and bundle, and a stream that answers with whatever that pass
+ * saved source and bundle, and a stream that answers with whatever that pass
  * is replaying.
  */
 function execution(
@@ -327,7 +327,7 @@ function execution(
   around: <T>(operation: Operation<T>) => Operation<T>,
 ): WorkflowExecution {
   return {
-    root: retainedSource(request.creation.definition.entrypoint, request.established.source, {
+    root: savedSource(request.creation.definition.entrypoint, request.established.source, {
       ...(request.creation.definition.targetPath === undefined
         ? {}
         : { target: request.creation.definition.targetPath }),
@@ -335,7 +335,7 @@ function execution(
     props: request.creation.props,
     stream,
     installations: [
-      retainedWorkflowInstallation(run),
+      savedWorkflowInstallation(run),
       ...(request.established.components.length === 0
         ? []
         : [workflowBundleInstallation(request.established.components)]),
@@ -380,7 +380,7 @@ function reachedCheckpoint(error: unknown): boolean {
  * matched, so that is the boundary a caller has to look at. The failure's own
  * message is carried because it is the durable machinery's account of the
  * disagreement, and it is about the candidate document rather than about
- * retained values.
+ * saved values.
  */
 function divergence(
   error: Error,
@@ -400,7 +400,7 @@ function divergence(
 /**
  * The inherited event replay was about to consume.
  *
- * Its retained id and the effect's own type, which is its identity. The
+ * Its saved id and the effect's own type, which is its identity. The
  * evaluated arguments and the recorded result are filtered history and stay
  * where they are.
  */

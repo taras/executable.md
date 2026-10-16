@@ -65,13 +65,8 @@ import type {
   WorkflowRunStatus,
   WorkflowStopReason,
 } from "../../storage/record.ts";
-import type { RetainedAnswer, RetainedAnswerState } from "../answers.ts";
-import type {
-  RetainedBlob,
-  RetainedManifest,
-  RetainedRepository,
-  RetainedWorktree,
-} from "../fork-source.ts";
+import type { SavedAnswer, SavedAnswerState } from "../answers.ts";
+import type { SavedBlob, SavedManifest, SavedRepository, SavedWorktree } from "../fork-source.ts";
 import { agentSessionKey } from "../workspace/agent-sessions.ts";
 import type { AgentSessionRecord } from "../workspace/agent-sessions.ts";
 import {
@@ -98,7 +93,7 @@ import type {
   XmdArtifactJournalRow,
   XmdArtifactProviderSessionIdentity,
 } from "./types.ts";
-import type { RetainedDefinitionSources } from "../../lifecycle/source.ts";
+import type { SavedDefinitionSources } from "../../lifecycle/source.ts";
 import {
   sourceBundleHash,
   type WorkflowDefinition,
@@ -370,7 +365,7 @@ export function encodeXmdArtifactInventory(
   }
 
   // One entry and one content value per logical source path, both keyed by the
-  // canonical JSON string of that path. Bytes rather than text: the retained
+  // canonical JSON string of that path. Bytes rather than text: the saved
   // BLOB is what the run executes, and re-encoding it through a decoder would
   // seal something the bundle hash does not describe.
   const declared = new Map(
@@ -480,7 +475,7 @@ function structured(entry: XmdArtifactContentEntry, path: string): Json {
     offered = JSON.parse(text);
   } catch {
     // The thrown SyntaxError quotes the offending text, which is the one thing
-    // a refusal about retained content must not repeat.
+    // a refusal about saved content must not repeat.
     reject("it is not JSON");
   }
   const value = parseJsonValue(offered, "$", failing(path, entry.kind));
@@ -490,7 +485,7 @@ function structured(entry: XmdArtifactContentEntry, path: string): Json {
   return value;
 }
 
-/** The text a `utf8` entry holds, exactly as it was retained. */
+/** The text a `utf8` entry holds, exactly as it was saved. */
 function textOf(entry: XmdArtifactContentEntry, path: string): string {
   const reject: Reject = rejecting(path, entry.kind);
   if (entry.encoding !== "utf8") {
@@ -616,7 +611,7 @@ function definition(parsed: Map<string, unknown>, path: string, kind: string): W
 }
 
 /**
- * The records in their retained order, refusing any order with a hole in it.
+ * The records in their saved order, refusing any order with a hole in it.
  *
  * Position is carried by each record rather than implied by how the container
  * happened to return its rows, because the physical order of a generic content
@@ -633,7 +628,7 @@ function ordered<T>(
     if (row.position !== index) {
       throw new XmdArtifactInventoryError(
         path,
-        `its ${kind} records do not occupy one contiguous retained order`,
+        `its ${kind} records do not occupy one contiguous saved order`,
       );
     }
   }
@@ -711,7 +706,7 @@ function decodeRun(inventory: Inventory, path: string): WorkflowRunRecord {
     kind,
   );
   const reason = stopReason(parsed, path, kind);
-  const retained = definition(parsed, path, kind);
+  const saved = definition(parsed, path, kind);
   const shared = {
     runId: parseRunId(parsed.get("runId"), "$.runId", failing(path, kind)),
     props: parseJsonObject(parsed.get("props"), "$.props", failing(path, kind)),
@@ -728,7 +723,7 @@ function decodeRun(inventory: Inventory, path: string): WorkflowRunRecord {
     }
     const record: WorkflowRunRecord = {
       runId: shared.runId,
-      definition: retained,
+      definition: saved,
       props: shared.props,
       status: shared.status,
       createdAt: shared.createdAt,
@@ -826,7 +821,7 @@ function decodeJournal(inventory: Inventory, path: string): readonly XmdArtifact
     try {
       readEventSource(event.value);
     } catch {
-      // The live parser names the retained field and its shape; what it read is
+      // The live parser names the saved field and its shape; what it read is
       // filtered history and stays out of the sentence that reaches a terminal.
       throw new XmdArtifactRecordError(
         path,
@@ -933,7 +928,7 @@ function hashes(
   return Object.freeze(list);
 }
 
-function decodeManifests(inventory: Inventory, path: string): readonly RetainedManifest[] {
+function decodeManifests(inventory: Inventory, path: string): readonly SavedManifest[] {
   const kind = "dofs-manifest";
   return Object.freeze(
     inventory.identities(kind).map((identity) => {
@@ -960,7 +955,7 @@ function decodeManifests(inventory: Inventory, path: string): readonly RetainedM
   );
 }
 
-function decodeBlobs(inventory: Inventory, path: string): readonly RetainedBlob[] {
+function decodeBlobs(inventory: Inventory, path: string): readonly SavedBlob[] {
   const kind = "dofs-blob";
   return Object.freeze(
     inventory.identities(kind).map((identity) => {
@@ -987,7 +982,7 @@ function decodeBlobs(inventory: Inventory, path: string): readonly RetainedBlob[
   );
 }
 
-function decodeRepositories(inventory: Inventory, path: string): readonly RetainedRepository[] {
+function decodeRepositories(inventory: Inventory, path: string): readonly SavedRepository[] {
   const kind = "workspace-repository";
   return Object.freeze(
     inventory.identities(kind).map((identity) => {
@@ -1034,7 +1029,7 @@ function decodeRepositories(inventory: Inventory, path: string): readonly Retain
   );
 }
 
-function decodeWorktrees(inventory: Inventory, path: string): readonly RetainedWorktree[] {
+function decodeWorktrees(inventory: Inventory, path: string): readonly SavedWorktree[] {
   const kind = "workspace-worktree";
   return Object.freeze(
     inventory.identities(kind).map((identity) => {
@@ -1106,7 +1101,7 @@ function checkoutPath(parsed: Map<string, unknown>, path: string, kind: string):
   return value;
 }
 
-function decodeAnswers(inventory: Inventory, path: string): readonly RetainedAnswer[] {
+function decodeAnswers(inventory: Inventory, path: string): readonly SavedAnswer[] {
   const kind = "suspension-answer";
   return Object.freeze(
     inventory.identities(kind).map((identity) => {
@@ -1153,8 +1148,8 @@ function decodeAnswers(inventory: Inventory, path: string): readonly RetainedAns
   );
 }
 
-/** Whether a retained answer is still waiting to be published, or already was. */
-function answerState(value: string, path: string, kind: string): RetainedAnswerState {
+/** Whether a saved answer is still waiting to be published, or already was. */
+function answerState(value: string, path: string, kind: string): SavedAnswerState {
   if (value === "pending" || value === "consumed") {
     return value;
   }
@@ -1219,12 +1214,12 @@ function decodeDefinitionSources(
   inventory: Inventory,
   path: string,
   run: WorkflowRunRecord,
-): RetainedDefinitionSources {
+): SavedDefinitionSources {
   return decodeSourceBundle(inventory, path, run.definition);
 }
 
 /**
- * The retained bytes this artifact carries, one pair per logical path.
+ * The saved bytes this artifact carries, one pair per logical path.
  *
  * Each pair's natural identity is the canonical JSON string of its path, and
  * both halves are consumed under it: an entry whose own `path` is not the
@@ -1239,9 +1234,9 @@ function decodeSourceBundle(
   inventory: Inventory,
   path: string,
   definition: WorkflowDefinition,
-): RetainedDefinitionSources {
+): SavedDefinitionSources {
   const kind = "definition-source-entry";
-  const retained = new Map(definition.sources.map((source) => [source.path, source]));
+  const saved = new Map(definition.sources.map((source) => [source.path, source]));
   const sources = inventory.identities(kind).map((identity) => {
     const parsed = members(
       structured(inventory.take(kind, identity), path),
@@ -1260,7 +1255,7 @@ function decodeSourceBundle(
     // are checked against the descriptor too, so agreeing with it is what makes
     // the entry, the content and the definition one statement rather than three
     // a re-sealed artifact could move independently.
-    const entry = retained.get(logical);
+    const entry = saved.get(logical);
     if (entry === undefined) {
       throw new XmdArtifactInventoryError(
         path,
@@ -1371,7 +1366,7 @@ function verifyLifecycle(
 }
 
 /**
- * Every retained byte, held to the identity it is stored under.
+ * Every saved byte, held to the identity it is stored under.
  *
  * Sizes and hashes are recomputed rather than believed: the manifest already
  * proved the bytes are the ones that were sealed, and this proves the bytes are
@@ -1450,7 +1445,7 @@ function verifyRoots(
         reject("a Workspace root names a DOFS manifest this artifact does not hold");
       }
       if (entry.size !== manifest.size) {
-        reject("a retained file size differs from its DOFS manifest");
+        reject("a saved file size differs from its DOFS manifest");
       }
       declared.set(entry.manifest, manifest);
     }
@@ -1477,10 +1472,10 @@ function verifyRoots(
   }
 
   if (referencedManifests.size !== contents.manifests.length) {
-    reject("it holds DOFS manifests no retained Workspace root needs");
+    reject("it holds DOFS manifests no saved Workspace root needs");
   }
   if (referencedBlobs.size !== contents.blobs.length) {
-    reject("it holds DOFS blobs no retained Workspace root needs");
+    reject("it holds DOFS blobs no saved Workspace root needs");
   }
 }
 
@@ -1510,7 +1505,7 @@ function verifyCheckouts(contents: XmdArtifactContents, reject: Reject): void {
   }
 }
 
-/** One retained Yield, at the durable position its coroutine gave it. */
+/** One saved Yield, at the durable position its coroutine gave it. */
 interface DurableYield {
   readonly eventId: string;
   readonly coroutineId: string;
@@ -1518,7 +1513,7 @@ interface DurableYield {
   readonly index: number;
   readonly description: EffectDescription;
   readonly result: Result;
-  /** Whether the retained run wrote this row, rather than inheriting it. */
+  /** Whether the saved run wrote this row, rather than inheriting it. */
   readonly own: boolean;
 }
 
@@ -1529,12 +1524,12 @@ interface AnswerPublication {
 }
 
 /**
- * Every retained answer, authenticated against the retained history of its
+ * Every saved answer, authenticated against the saved history of its
  * corresponding request.
  *
  * A row naming an event the journal holds proves nothing on its own. What has
  * to be true is that the named event *is* the wait, that it is *this* wait, that
- * the request it retained is the one the value was judged against, that the
+ * the request it saved is the one the value was judged against, that the
  * value could still end that wait, and — when the row says the wait is over —
  * that the journal published exactly that value at exactly the position a
  * publication occupies.
@@ -1569,9 +1564,9 @@ function* verifySuspensions(
     }
     const named = entry.description["name"];
     if (typeof named !== "string" || named !== entry.description["suspensionId"]) {
-      reject("a retained suspension request does not name one wait");
+      reject("a saved suspension request does not name one wait");
     }
-    // Every request the retained run authored, whether or not an answer row or
+    // Every request the saved run authored, whether or not an answer row or
     // a publication ever reaches it. A wait's identity is derived from the run
     // and the exact durable position, and nothing else — a caller supplies
     // neither — so a request standing at a position that derives some other
@@ -1581,7 +1576,7 @@ function* verifySuspensions(
     // at that run's position, and re-deriving it here would refuse every fork
     // for having a history.
     if (entry.own && suspensionId(contents.run.runId, entry) !== named) {
-      reject("a retained suspension request names a wait its own position does not derive");
+      reject("a saved suspension request names a wait its own position does not derive");
     }
     requests.set(entry.eventId, entry);
   }
@@ -1624,7 +1619,7 @@ function* verifySuspensions(
 
     const request = requests.get(answer.requestEventId);
     if (request === undefined) {
-      reject("a suspension answer names an event that is not a retained request for a wait");
+      reject("a suspension answer names an event that is not a saved request for a wait");
     }
     if (
       request.description["name"] !== answer.suspensionId ||
@@ -1645,14 +1640,14 @@ function* verifySuspensions(
       });
     } catch {
       // The live parser's sentence describes a request a document offered; what
-      // this artifact holds is a retained one, and the value stays out of it.
-      reject("a retained suspension request does not describe a wait");
+      // this artifact holds is a saved one, and the value stays out of it.
+      reject("a saved suspension request does not describe a wait");
     }
 
     if (suspensionRequestFingerprint(wait) !== answer.requestFingerprint) {
       reject("a suspension answer was delivered against a request this artifact does not hold");
     }
-    yield* judgeRetainedAnswer(wait, answer.answer, reject);
+    yield* judgeSavedAnswer(wait, answer.answer, reject);
 
     const publication = published.get(answer.suspensionId);
     if (answer.state === "pending") {
@@ -1676,7 +1671,7 @@ function* verifySuspensions(
     }
     // Presence, and never normalized. A publication carrying no value at all is
     // not a publication of `null`: reading it as one would let a wait that
-    // ended with nothing stand as evidence for a wait whose retained answer is
+    // ended with nothing stand as evidence for a wait whose saved answer is
     // null, and those are different histories. The member is asked for by name
     // — a record parsed out of JSON cannot hold an explicit `undefined`, so
     // absence is the only way past this.
@@ -1695,7 +1690,7 @@ function positionKey(coroutineId: string, index: number): string {
 }
 
 /**
- * Every retained Yield, with the durable position its coroutine gave it.
+ * Every saved Yield, with the durable position its coroutine gave it.
  *
  * A position is a count of that coroutine's settled yields, so it is recovered
  * by counting them in append order. A Close terminates a coroutine and settles
@@ -1726,14 +1721,14 @@ function durableYields(contents: XmdArtifactContents, path: string): readonly Du
 }
 
 /**
- * The value, judged by the schema the wait itself retained.
+ * The value, judged by the schema the wait itself saved.
  *
  * The same compilation a delivery and an `<Elicit>` use, so what this artifact
  * accepts as an answer is exactly what a live run would have. The refusal says
  * that it does not satisfy the schema and never which part of it failed: the
- * issues quote the value, and a value is retained content.
+ * issues quote the value, and a value is saved content.
  */
-function* judgeRetainedAnswer(
+function* judgeSavedAnswer(
   wait: WorkflowSuspensionRequest,
   answer: Json,
   reject: Reject,
@@ -1743,14 +1738,14 @@ function* judgeRetainedAnswer(
     const prepared = yield* prepareElicitation(wait.responseSchema, "artifact answer");
     issues = validateParsed(prepared.validate, answer);
   } catch {
-    reject("a retained response schema cannot judge the answer stored against it");
+    reject("a saved response schema cannot judge the answer stored against it");
   }
   if (issues.length > 0) {
-    reject("a retained answer does not satisfy the response schema its wait retained");
+    reject("a saved answer does not satisfy the response schema its wait saved");
   }
 }
 
-/** One retained record, as the durable event it describes. */
+/** One saved record, as the durable event it describes. */
 function parseJournalEvent(record: string, path: string): DurableEvent {
   const parsed = parseDurableEvent(record);
   if (!parsed.ok) {
@@ -1774,7 +1769,7 @@ function verifyAgentSessions(contents: XmdArtifactContents, reject: Reject): voi
     }
     keys.add(session.sessionKey);
     if (agentSessionKey(session) !== session.sessionKey) {
-      reject("an Agent session mapping is retained under a key its identity does not derive");
+      reject("an Agent session mapping is saved under a key its identity does not derive");
     }
   }
 }
@@ -1795,7 +1790,7 @@ function* verifyDefinitionSources(contents: XmdArtifactContents, reject: Reject)
     return;
   }
   if (sources.length !== definition.sources.length) {
-    reject("it does not carry exactly one source pair per retained path");
+    reject("it does not carry exactly one source pair per saved path");
     return;
   }
 
@@ -1893,7 +1888,7 @@ export function partitionXmdArtifactEntries(
  *
  * Nothing at all is merged legacy V1. No marker was ever stored for it and none
  * is invented here: a Prompt-contributing session that carries no
- * classification is preserved exactly as it was retained, and a caller receives
+ * classification is preserved exactly as it was saved, and a caller receives
  * no member rather than an empty one it could mistake for a decision.
  */
 export function decodeXmdArtifactAgentEvidence(
@@ -2064,14 +2059,14 @@ function decodeAssociations(
   );
 }
 
-/** One retained Prompt, as the journal holds it and the live parser reads it. */
-interface RetainedPrompt {
+/** One saved Prompt, as the journal holds it and the live parser reads it. */
+interface SavedPrompt {
   readonly eventId: string;
   readonly record: PromptRecord;
 }
 
 /**
- * Whether this artifact classifies every Agent session it retained a Prompt for.
+ * Whether this artifact classifies every Agent session it saved a Prompt for.
  *
  * Asked only of a finalized artifact, and only once the stored manifest and the
  * artifact identity have already been compared — so what is being interpreted
@@ -2091,10 +2086,10 @@ export function verifyXmdArtifactAgentEvidence(
   const reject: Reject = inventoryFailure(path);
   const sessions = new Map(contents.agentSessions.map((session) => [session.sessionKey, session]));
 
-  const prompts = new Map<string, RetainedPrompt[]>();
-  for (const prompt of retainedPrompts(contents, path, reject)) {
+  const prompts = new Map<string, SavedPrompt[]>();
+  for (const prompt of savedPrompts(contents, path, reject)) {
     if (!sessions.has(prompt.record.sessionKey)) {
-      reject("a retained Agent Prompt names a session mapping this artifact does not hold");
+      reject("a saved Agent Prompt names a session mapping this artifact does not hold");
     }
     const group = prompts.get(prompt.record.sessionKey) ?? [];
     group.push(prompt);
@@ -2130,19 +2125,19 @@ export function verifyXmdArtifactAgentEvidence(
       reject("an Agent portability record disagrees with the session mapping it classifies");
     }
 
-    const retained = prompts.get(record.sessionKey);
-    if (retained === undefined) {
-      reject("an Agent portability record classifies a session that retained no Prompt");
+    const saved = prompts.get(record.sessionKey);
+    if (saved === undefined) {
+      reject("an Agent portability record classifies a session that saved no Prompt");
       return;
     }
-    verifyAssociations(record, retained, reject);
+    verifyAssociations(record, saved, reject);
 
     const covered = record.associations.map((association) => association.eventId);
     const exactCoverage =
-      retained.every((prompt) => prompt.record.status === "completed") &&
+      saved.every((prompt) => prompt.record.status === "completed") &&
       sameStrings(
         covered,
-        retained.map((prompt) => prompt.eventId),
+        saved.map((prompt) => prompt.eventId),
       );
     const bundle = bundles.get(record.sessionKey);
 
@@ -2154,7 +2149,7 @@ export function verifyXmdArtifactAgentEvidence(
         reject("a portable Agent session names a source session the mapping never asserted");
       }
       if (!exactCoverage) {
-        reject("a portable Agent session does not associate every Prompt it retained");
+        reject("a portable Agent session does not associate every Prompt it saved");
       }
       if (bundle === undefined) {
         reject("a portable Agent session carries no bundle");
@@ -2173,18 +2168,18 @@ export function verifyXmdArtifactAgentEvidence(
       reject("an unavailable Agent session carries bundle bytes");
     }
     if (record.reason === "provider-capability-unavailable" && !exactCoverage) {
-      reject("an Agent session with incomplete retained Prompt evidence claims the wrong reason");
+      reject("an Agent session with incomplete saved Prompt evidence claims the wrong reason");
     }
     if (record.reason === "checkpoint-token-unavailable" && exactCoverage) {
       reject(
-        "an Agent session whose retained Prompts are complete and covered claims the wrong reason",
+        "an Agent session whose saved Prompts are complete and covered claims the wrong reason",
       );
     }
   }
 
   for (const sessionKey of prompts.keys()) {
     if (!classified.has(sessionKey)) {
-      reject("a session that retained a Prompt carries no Agent portability record");
+      reject("a session that saved a Prompt carries no Agent portability record");
     }
   }
   for (const sessionKey of bundles.keys()) {
@@ -2195,7 +2190,7 @@ export function verifyXmdArtifactAgentEvidence(
 }
 
 /**
- * The associations one record names, held to the Prompts the session retained.
+ * The associations one record names, held to the Prompts the session saved.
  *
  * Distinct, in journal append order, each naming a Prompt of *this* session
  * that completed. A dangling, foreign, reordered, repeated, non-Prompt or
@@ -2204,15 +2199,15 @@ export function verifyXmdArtifactAgentEvidence(
  */
 function verifyAssociations(
   record: XmdArtifactAgentPortability,
-  retained: readonly RetainedPrompt[],
+  saved: readonly SavedPrompt[],
   reject: Reject,
 ): void {
-  const positions = new Map(retained.map((prompt, index) => [prompt.eventId, index]));
+  const positions = new Map(saved.map((prompt, index) => [prompt.eventId, index]));
   const seen = new Set<string>();
   let previous = -1;
   for (const association of record.associations) {
     if (seen.has(association.eventId)) {
-      reject("an Agent portability record names one retained Prompt twice");
+      reject("an Agent portability record names one saved Prompt twice");
     }
     seen.add(association.eventId);
     const at = positions.get(association.eventId);
@@ -2224,25 +2219,25 @@ function verifyAssociations(
       reject("an Agent portability record's associations are not in journal append order");
     }
     previous = at;
-    if (retained[at]?.record.status !== "completed") {
+    if (saved[at]?.record.status !== "completed") {
       reject("an Agent portability record associates a Prompt that did not complete");
     }
   }
 }
 
 /**
- * Every retained Prompt, in journal append order.
+ * Every saved Prompt, in journal append order.
  *
  * A finalized artifact classifies what its Prompts say, so a Prompt whose
  * durable result is a failure or is not a Prompt record at all is damage rather
  * than a session with nothing to classify.
  */
-function retainedPrompts(
+function savedPrompts(
   contents: XmdArtifactContents,
   path: string,
   reject: Reject,
-): readonly RetainedPrompt[] {
-  const prompts: RetainedPrompt[] = [];
+): readonly SavedPrompt[] {
+  const prompts: SavedPrompt[] = [];
   for (const row of contents.journal) {
     const event = parseJournalEvent(row.record, path);
     if (event.type !== "yield" || event.description.type !== AGENT_PROMPT) {
@@ -2251,7 +2246,7 @@ function retainedPrompts(
     const result = event.result;
     const record = result.status === "ok" ? parsePromptRecord(result.value) : undefined;
     if (record === undefined) {
-      reject("a retained Agent Prompt holds no Prompt record");
+      reject("a saved Agent Prompt holds no Prompt record");
       return prompts;
     }
     prompts.push(Object.freeze({ eventId: row.eventId, record }));

@@ -3,10 +3,10 @@
  *
  * Two operations that must not be confused, proved against a real run in a real
  * file. **Delivery** happens while nothing is running: it judges a value against
- * the schema the wait retained, crosses the secret gate, and retains it. It
+ * the schema the wait saved, crosses the secret gate, and retains it. It
  * appends no journal event, begins no document execution and leaves the run
  * `suspended`. **Resume** is what spends it: the execution reaches the same
- * wait, publishes one durable answer event and consumes the retained value in
+ * wait, publishes one durable answer event and consumes the saved value in
  * one transaction, and the document continues from the value.
  *
  * The invariants worth stating carefully are the ones a weaker implementation
@@ -25,7 +25,7 @@ import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { collect, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { Result } from "effection";
-import { retainedWorkflowInstallation } from "../src/run.ts";
+import { savedWorkflowInstallation } from "../src/run.ts";
 import { SUSPENSION_ANSWER, WorkflowInputDelivery, type WorkflowAnswerRetention } from "../mod.ts";
 import { SUSPENSION_REQUEST, suspendFor } from "../src/suspension/suspend.ts";
 import { createSuspensionController } from "../src/deno/suspension.ts";
@@ -74,7 +74,7 @@ interface Attempted {
  *
  * The controller stands in for the executor, exactly as the CLI arranges it:
  * it observes a reported wait, `race` halts the execution around it, and the
- * run is settled `suspended` with a stop reason naming the retained request —
+ * run is settled `suspended` with a stop reason naming the saved request —
  * which is the state delivery reads. A run that did not wait is left alone.
  */
 function attempt(
@@ -122,7 +122,7 @@ function attempt(
                 call(function* (): Operation<void> {
                   yield* collect(
                     yield* executeInstalled({ ...inlineSource("<Probe />\n"), stream }, [
-                      retainedWorkflowInstallation({
+                      savedWorkflowInstallation({
                         runId: RUN_ID,
                         bundleHash:
                           "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -221,7 +221,7 @@ function deliver(
   });
 }
 
-/** Every retained answer row, read the way something outside XMD would. */
+/** Every saved answer row, read the way something outside XMD would. */
 function answerRows(root: string, runId = RUN_ID): Record<string, unknown>[] {
   const database = new DatabaseSync(runPath(root, runId));
   try {
@@ -283,7 +283,7 @@ describe("Tier WAD — a delivered answer, and the resume that spends it", () =>
     expect(JSON.parse(String(rows[0]?.["answer"]))).toEqual(ANSWER);
   });
 
-  it("WAD2: a value the retained schema refuses is not retained", function* () {
+  it("WAD2: a value the saved schema refuses is not saved", function* () {
     const root = yield* useStorageRoot();
     const id = yield* suspendedRun(root);
 
@@ -462,7 +462,7 @@ describe("Tier WAD — a delivered answer, and the resume that spends it", () =>
     expect(consumedAt).toEqual(expect.any(String));
 
     // Nothing is delivered for the second wait, so this resume replays the
-    // first one's answer out of its retained event and stops at the second
+    // first one's answer out of its saved event and stops at the second
     // again. The value comes back, and no second event and no second
     // consumption come with it.
     const replayed = yield* attempt(root, "resume", twoWaits);
@@ -513,7 +513,7 @@ describe("Tier WAD — a delivered answer, and the resume that spends it", () =>
         database.exec(`
           CREATE TRIGGER refuse_consume BEFORE UPDATE ON workflow_suspension_answers
           BEGIN
-            SELECT raise(ABORT, 'the retained answer refuses to be consumed');
+            SELECT raise(ABORT, 'the saved answer refuses to be consumed');
           END
         `);
       });
@@ -531,7 +531,7 @@ describe("Tier WAD — a delivered answer, and the resume that spends it", () =>
   });
 });
 
-/** The run's retained history, read through a host installation of its own. */
+/** The run's saved history, read through a host installation of its own. */
 function attemptEvents(root: string): Operation<readonly DurableEvent[]> {
   return scoped(function* () {
     const database = new DatabaseSync(runPath(root, RUN_ID));

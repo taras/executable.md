@@ -160,7 +160,7 @@ carried here.
 
 A missing acceptance marker is a different matter, and deliberately so: no
 fallback promotes a session in its place, so a first turn that never reports
-acceptance leaves the session unestablished rather than silently retained.
+acceptance leaves the session unestablished rather than silently saved.
 
 A missing checkpoint affects only association retention. An agent that reports
 no turn identity — because this build overrides nothing for it, or because the
