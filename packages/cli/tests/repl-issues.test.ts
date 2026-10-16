@@ -16,7 +16,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, resource, scoped, suspend, until, withResolvers } from "effection";
+import { ensure, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { exists, writeTextFile } from "@effectionx/fs";
 import { rm } from "@effectionx/fs";
@@ -46,6 +46,7 @@ import type {
   IssueReadInvocation,
   IssueUpsertInvocation,
 } from "../../git/src/issue/operations.ts";
+import { IssueApi } from "../../git/src/issue/api.ts";
 import type { IssueDetails, IssueReference } from "../../git/src/issue/api.ts";
 import { replIssueInstallation } from "../../git/src/deno/retained-repository/issues.ts";
 import { gitHubSource } from "../../git/src/deno/composition/github.ts";
@@ -567,8 +568,121 @@ function failingRecording(acquired: Acquisitions, root: string): Operation<void>
   });
 }
 
+/** The normalized read one public middleware answers with, without a transport. */
+const ANSWERED: IssueDetails = Object.freeze({
+  url: `${TRACKER}/issues/1`,
+  title: "What the middleware answered",
+  description: "answered without reaching a tracker",
+  tags: Object.freeze(["alpha", "beta"]),
+  assignee: null,
+});
+
+/**
+ * Ordinary public middleware that answers a read itself.
+ *
+ * The other half of what the seam is for: a handler may answer instead of
+ * delegating, and what the envelope then retains is that answer. Nothing below
+ * it runs, so neither the entry's transport-facing default nor the adapter is
+ * reached at all.
+ */
+function answeringChain(chain: Chain, details: IssueDetails): ExecutionInstallation {
+  return {
+    *install(): Operation<void> {
+      yield* IssueOperations.around({
+        // deno-lint-ignore require-yield
+        *read([invocation]): Operation<IssueDetails> {
+          chain.calls.push(`read ${invocation.url}`);
+          return details;
+        },
+        *upsert([invocation], next): Operation<IssueReference> {
+          chain.calls.push(`upsert ${invocation.target}`);
+          return yield* next(invocation);
+        },
+      });
+    },
+  };
+}
+
+/** How many times each chain was entered, which on a replay must be never. */
+interface Chains {
+  operations: number;
+  api: number;
+}
+
+/**
+ * Both chains, set to fail if anything reaches them.
+ *
+ * A replay that invoked middleware, or reached a transport before matching its
+ * record, fails here rather than passing a count that happened to be right.
+ */
+function refusingChains(counted: Chains): ExecutionInstallation {
+  return {
+    *install(): Operation<void> {
+      yield* IssueOperations.around({
+        // deno-lint-ignore require-yield
+        *read(): Operation<IssueDetails> {
+          counted.operations += 1;
+          throw new Error("a replayed read reached the profile chain");
+        },
+        // deno-lint-ignore require-yield
+        *upsert(): Operation<IssueReference> {
+          counted.operations += 1;
+          throw new Error("a replayed upsert reached the profile chain");
+        },
+      });
+      yield* IssueApi.around({
+        // deno-lint-ignore require-yield
+        *read(): Operation<IssueDetails> {
+          counted.api += 1;
+          throw new Error("a replayed read reached the transport chain");
+        },
+        // deno-lint-ignore require-yield
+        *upsert(): Operation<IssueReference> {
+          counted.api += 1;
+          throw new Error("a replayed upsert reached the transport chain");
+        },
+      });
+    },
+  };
+}
+
+/** One entry-owned cleanup, and the two sides of holding it open. */
+interface Cleanup {
+  /** Resolved when the entry's teardown has entered the finalizer. */
+  readonly entered: { resolve(value: void): void; operation: Operation<void> };
+  /** Awaited inside the finalizer, so teardown cannot complete until released. */
+  readonly release: { resolve(value: void): void; operation: Operation<void> };
+}
+
+/**
+ * A finalizer the entry's own scope owns, registered around the live dispatch.
+ *
+ * Registered before the work it guards, so it is released after it — which is
+ * the ordering that makes it a cleanup rather than a hope. Holding it open is
+ * how a row observes that leaving an entry *waits*: the request is cancelled,
+ * this runs, and nothing about the entry is finished until it returns.
+ */
+function heldCleanup(cleanup: Cleanup): ExecutionInstallation {
+  return {
+    *install(): Operation<void> {
+      yield* IssueOperations.around({
+        *upsert([invocation], next): Operation<IssueReference> {
+          yield* ensure(function* (): Operation<void> {
+            cleanup.entered.resolve();
+            yield* cleanup.release.operation;
+          });
+          return yield* next(invocation);
+        },
+      });
+    },
+  };
+}
+
 /** One entry that files one issue, and one that leaves a question after it. */
 const FILES_ONE = `<IssueTracker url="${TRACKER}"><Issue title="Filed" as="filed">a described issue</Issue></IssueTracker>`;
+
+/** What a row watches for a suffix effect that must not have happened. */
+const SUFFIX = '<File path="after.md">continued</File>';
 
 const QUESTION =
   '<Elicit schema={{ type: "object", properties: { decision: { type: "string" } }, required: ["decision"], additionalProperties: false }} as="answer">Continue?</Elicit>';
@@ -814,7 +928,7 @@ describe("how a REPL entry gets its issues", () => {
       opened(
         yield* submitReplEntry({
           execution: run,
-          source: FILES_ONE,
+          source: [FILES_ONE, SUFFIX].join("\n"),
           installations,
           generated: ordinaryGeneratedSelection(),
           entryInstallation: entryHost(fixture, seen),
@@ -828,6 +942,10 @@ describe("how a REPL entry gets its issues", () => {
     expect(fixture.server.issues.length).toBe(1);
     const mark = bodies(fixture.server)[0];
     expect(issueRecords(stream.events).length).toBe(0);
+    // A cancelled append publishes no outcome: there is no root close in the
+    // history, and what the document wrote after the issue never ran.
+    expect(stream.events.some((event) => event.type === "close")).toBe(false);
+    expect(yield* exists(join(fixture.checkout, "after.md"))).toBe(false);
 
     // Reopened. The same execution and the same entry, so the same owner and
     // the same key — and the adapter finds its own mark and adopts rather than
@@ -845,6 +963,8 @@ describe("how a REPL entry gets its issues", () => {
     expect(paths(fixture.server).filter((path) => path.startsWith("POST"))).toEqual(posts);
     expect(urls(again.events)).toEqual([`${TRACKER}/issues/1`]);
     expect(seen.owners[0]).toBe(seen.owners[1]);
+    // And the suffix runs now, for the first time, on the continuation.
+    expect(yield* exists(join(fixture.checkout, "after.md"))).toBe(true);
   });
 
   it("E3: an acknowledged upsert replays with no provider call at all", function* (): Operation<void> {
@@ -1048,7 +1168,7 @@ describe("how a REPL entry gets its issues", () => {
   it("E6: a journal that cannot retain the result allows no suffix effect", function* (): Operation<void> {
     const fixture = yield* useFixture();
     const stream = refusingStream();
-    const source = [FILES_ONE, '<File path="after.md">continued</File>'].join("\n");
+    const source = [FILES_ONE, SUFFIX].join("\n");
 
     const ran = yield* submit(
       fixture,
@@ -1145,6 +1265,162 @@ describe("how a REPL entry gets its issues", () => {
     // factory is never called and the tracker never hears from this process.
     expect(passive.owners).toEqual([]);
     expect(paths(fixture.server).length).toBe(before);
+  });
+
+  it("E1: retains what public middleware answered, and replays past both chains", function* (): Operation<void> {
+    const fixture = yield* useFixture();
+    const seen = counted();
+    const chain: Chain = { calls: [] };
+    const source = [
+      `<IssueTracker url="${TRACKER}">`,
+      '<Issue title="Filed" as="filed">a described issue</Issue>',
+      `<Issue url="${TRACKER}/issues/1" as="found" />`,
+      "</IssueTracker>",
+      QUESTION,
+    ].join("\n");
+
+    const run = execution("execution-1");
+    const left = yield* submit(fixture, source, run, {
+      host: entryHost(fixture, seen),
+      installations: [answeringChain(chain, ANSWERED)],
+      leave: true,
+    });
+
+    // The read was answered by the chain and never reached a transport; the
+    // upsert delegated through it and did, which is the list-then-create its
+    // own reconciliation makes.
+    expect(chain.calls).toEqual([`upsert ${TRACKER}`, `read ${TRACKER}/issues/1`]);
+    expect(paths(fixture.server).filter((path) => path.endsWith("/issues/1"))).toEqual([]);
+    const sent = paths(fixture.server);
+    const retained = issueRecords(left.events).map((event) =>
+      event.type === "yield" && event.result.status === "ok" ? event.result.value : undefined,
+    );
+    // Exactly what the middleware answered, normalized and retained.
+    expect(retained).toEqual([
+      { url: `${TRACKER}/issues/1` },
+      { ...ANSWERED, tags: [...ANSWERED.tags] },
+    ]);
+
+    // Reopened with both chains set to fail if anything reaches them. A replay
+    // that asked middleware first, or a transport at all, fails here.
+    const refusing: Chains = { operations: 0, api: 0 };
+    const again = yield* reopen(
+      fixture,
+      { id: run.id, stream: run.stream },
+      {
+        host: entryHost(fixture, seen),
+        installations: [refusingChains(refusing)],
+        leave: true,
+      },
+    );
+
+    expect(refusing).toEqual({ operations: 0, api: 0 });
+    expect(
+      issueRecords(again.events).map((event) =>
+        event.type === "yield" && event.result.status === "ok" ? event.result.value : undefined,
+      ),
+    ).toEqual(retained);
+    // Not one further request of any kind: both records answered from the
+    // journal, so neither chain and neither destination was asked anything.
+    expect(paths(fixture.server)).toEqual(sent);
+  });
+
+  it("E2: two evaluations of one authored site are two sites", function* (): Operation<void> {
+    const fixture = yield* useFixture();
+    const seen = counted();
+    // One element, evaluated twice, with the same text both times: if an
+    // identity were derived from the element or from what it says, these two
+    // would collapse into one — one issue filed, one key, one record.
+    const source = [
+      `<IssueTracker url="${TRACKER}">`,
+      '<Each in={[1, 2]} let="turn">',
+      '<Issue title="Looped" as="filed">the same described issue</Issue>',
+      "</Each>",
+      "</IssueTracker>",
+      QUESTION,
+    ].join("\n");
+
+    const run = execution("execution-1");
+    const left = yield* submit(fixture, source, run, {
+      host: entryHost(fixture, seen),
+      leave: true,
+    });
+
+    // Two canonical sites, two keys, two issues.
+    const sites = identities(left.events);
+    expect(sites.length).toBe(2);
+    expect(sites[0]).not.toBe(sites[1]);
+    expect(new Set(sites.map((site) => site.split("\u0000")[0])).size).toBe(1);
+    expect(fixture.server.issues.length).toBe(2);
+    expect(new Set(bodies(fixture.server)).size).toBe(2);
+    const posts = paths(fixture.server).filter((path) => path.startsWith("POST"));
+    expect(posts.length).toBe(2);
+
+    // And the iteration a record belongs to survives the reopen: the same two
+    // sites, in the same order, with nothing filed again.
+    const again = yield* reopen(
+      fixture,
+      { id: run.id, stream: run.stream },
+      {
+        host: entryHost(fixture, seen),
+        leave: true,
+      },
+    );
+    expect(identities(again.events)).toEqual(sites);
+    expect(paths(fixture.server).filter((path) => path.startsWith("POST"))).toEqual(posts);
+    expect(fixture.server.issues.length).toBe(2);
+  });
+
+  it("E6: leaving waits for the request cleanup the entry owns", function* (): Operation<void> {
+    const blocked = withResolvers<void>();
+    const arrived = withResolvers<void>();
+    const holding = { count: 0 };
+    const fixture = yield* useFixture([], {
+      *hold(): Operation<void> {
+        holding.count += 1;
+        arrived.resolve();
+        yield* blocked.operation;
+      },
+    });
+    const cleanup: Cleanup = { entered: withResolvers<void>(), release: withResolvers<void>() };
+    const run = execution("execution-1");
+
+    let finished = false;
+    const leaving = yield* spawn(function* (): Operation<void> {
+      yield* scoped(function* (): Operation<void> {
+        yield* useNodeReplHost(run.id);
+        yield* useHostFiles();
+        yield* useWorkingDirectory(fixture.checkout);
+        const installations = [...(yield* replInstallations()), heldCleanup(cleanup)];
+        opened(
+          yield* submitReplEntry({
+            execution: run,
+            source: FILES_ONE,
+            installations,
+            generated: ordinaryGeneratedSelection(),
+            entryInstallation: entryHost(fixture, counted()),
+          }),
+        );
+        // Left while the request is in flight, which is what makes the cleanup
+        // below a cancellation rather than an ordinary release.
+        yield* arrived.operation;
+      });
+      finished = true;
+    });
+
+    // The entry's own finalizer has started, so the cancellation reached it.
+    yield* cleanup.entered.operation;
+    // And leaving is not finished: the scope cannot complete while a cleanup
+    // registered inside it has not returned. Nothing is retained either.
+    expect(finished).toBe(false);
+    expect(settledIssueRecords(yield* run.stream.readAll()).length).toBe(0);
+
+    // Released, and only now does leaving join.
+    cleanup.release.resolve();
+    yield* leaving;
+    expect(finished).toBe(true);
+    expect(holding.count).toBeGreaterThan(0);
+    expect(settledIssueRecords(yield* run.stream.readAll()).length).toBe(0);
   });
 
   it("E2: shadows the inherited default, and refuses where no host selected one", function* (): Operation<void> {
