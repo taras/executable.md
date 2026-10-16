@@ -1722,17 +1722,24 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
 });
 
 /**
- * Tier R3 — IN6: two captures, and what cannot reach across them.
+ * Tier R3 — IN6: what a capture seals, and what cannot reach across it.
  *
  * The integration moved control construction from per-response definitions to
  * definitions installed and sealed once per conversation. Two things follow that
  * nothing else in this suite observes, and they are the rows below.
  *
- * **Two owners are two captures.** Each conversation's controls close over the
- * request handle its own root answers, so a reply in one conversation cannot
- * reach the other one's. With setup-time capture that is a property of *where
- * the definition was sealed* rather than of what was passed with a call, which
- * is why it needs saying here.
+ * **A capture answers the handle it was installed with.** Each ceiling's
+ * controls close over the request handle given to the installation that sealed
+ * them, so what a control reads is a property of *where the definition was
+ * sealed* rather than of what was passed with a call.
+ *
+ * These rows reach that through the canonical host capture directly: each one
+ * opens a HostExecution, evaluates a root and closes it before the next begins,
+ * and none of them constructs a Sidekick owner or a conversation. So they say
+ * nothing about two *live* owners — a Sidekick assembly that handed a second
+ * conversation the first one's captured controls would satisfy every row here.
+ * That observation needs two whole owners open at once, and it lives in
+ * `repl-sidekick-journey.test.ts` under "two live owners".
  *
  * **What is sealed is sealed.** A definition answer or a wider selection
  * composed after setup reaches a response not at all: canonical capture
@@ -1740,23 +1747,26 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
  * admitted control runs that snapshot. An interception may well refuse under
  * Core's own contract — what it must never do is run.
  */
-describe("Tier R3 — two captures, and what cannot reach across them", () => {
+describe("Tier R3 — what a capture seals, and what cannot reach across it", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("R3m: two owners' controls answer their own request handles", function* () {
+  it("R3m: each capture answers the handle its own installation sealed", function* () {
     const one = fresh();
     const other = fresh();
 
-    // Two executions, each capturing its own ceiling over its own stub. The
-    // same source in both, so what tells the two apart is the handle each
-    // control closed over and nothing about the reply.
+    // Two executions, one after the other, each capturing its own ceiling over
+    // its own stub. The same source in both, so what tells the two apart is the
+    // handle each control closed over and nothing about the reply. The second
+    // execution begins after the first has completed and closed, which is why
+    // this is a claim about installation and not about two conversations being
+    // alive together.
     const first = yield* reply("<Output>\n<REPL.Bindings />\n</Output>\n", one);
     const second = yield* reply("<Output>\n<REPL.Bindings />\n</Output>\n", other);
 
     expect(rendered(first)).toContain("Ada");
     expect(rendered(second)).toContain("Ada");
-    // Each owner was asked once, by its own reply. A control that had closed
-    // over a shared handle would show both reads against one of them.
+    // Each stub was asked once, by the reply whose capture named it. A control
+    // that had closed over a shared handle would show both reads against one.
     expect(one.requests).toEqual(["bindings"]);
     expect(other.requests).toEqual(["bindings"]);
     expect(one.began).toHaveLength(1);

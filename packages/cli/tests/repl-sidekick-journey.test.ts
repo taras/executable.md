@@ -18,7 +18,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Ok, spawn, withResolvers } from "effection";
+import { Ok, spawn, suspend, useScope, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 
 import { previewGeneratedXmdRoot } from "@executablemd/core/host";
@@ -2139,5 +2139,271 @@ describe("Tier R5 — one capture, and each response's own records", () => {
     // And what was delivered was delivered to this conversation, established by
     // the canonical turn that carried it rather than by a record of ours.
     expect(reading.value.delivered.map((one) => one.conversation)).toEqual([reading.value.active]);
+  });
+});
+
+/**
+ * Tier R5 — IN6: two Sidekick owners alive at once, each with its own controls.
+ *
+ * Capture moved from per-response definitions to definitions installed and
+ * sealed once per conversation, and that is what makes this row necessary. The
+ * controls-suite rows evaluate two canonical host captures one after the other,
+ * which cannot see the failure that matters here: a Sidekick assembly that
+ * reused the most recently opened owner's controls while both conversations
+ * were alive would satisfy a sequential helper and lose somebody's chat.
+ *
+ * So both owners here are whole ones, each with its own repository, its own
+ * session, its own scripted provider and its own conversation, and neither is
+ * closed before the other opens. Both conversations are open before the
+ * observation, and the second owner's capture and evaluation happen while the
+ * first owner's response is suspended inside a control it already ran.
+ *
+ * What tells the two apart is a real REPL fact rather than anything written
+ * into the reply: each session has run one entry of its own, and the two owners
+ * are sent the same control source byte for byte.
+ */
+describe("Tier R5 — two live owners, and the controls each conversation captured", () => {
+  /** What each REPL's own entry prints, so the two readings cannot be confused. */
+  const FIRST = "the first chat's own entry";
+  const SECOND = "the second chat's own entry";
+
+  /**
+   * The one reply both owners are sent, byte for byte.
+   *
+   * A read and then a write, so both classes of control are observed rather
+   * than only the one that answers. The read names `entry-1` — which both
+   * sessions have, holding different text — so an answer from the wrong REPL is
+   * a different string rather than a refusal.
+   */
+  const SHARED = [
+    '<REPL.EntryOutput entry="entry-1" />',
+    "<REPL.EntryInput>a prepared body</REPL.EntryInput>",
+    "<Output>Read it.</Output>",
+    "",
+  ].join("\n");
+
+  /** One harness, and the way into the scope it is held open in. */
+  interface Held extends Harness {
+    /** Run one operation inside this harness's own scope. */
+    run<T>(work: () => Operation<T>): Operation<T>;
+  }
+
+  /**
+   * One whole harness, held open in a task of its own.
+   *
+   * Two cannot be acquired in one scope: each registers the agent components,
+   * and the engine refuses two registrations of a name at one scope rather than
+   * letting one of them silently win — it says to shadow in a nested scope
+   * instead, and a task is one. The task then suspends, so both harnesses stay
+   * live for the whole row, and the row's own scope is what finally halts them.
+   *
+   * Its work runs in that same scope rather than in the caller's, because the
+   * REPL host each harness installs is installed there: a message sent from out
+   * here would be a conversation looking for a host that is not above it. That
+   * is also what a command does — one host per command — so the indirection is
+   * the arrangement rather than a way around it.
+   *
+   * Handed back through a resolver rather than after a count of turns, because
+   * a spawned task starts a turn late.
+   */
+  function* holding(extra: Parameters<typeof useHarness>[1] = {}): Operation<Held> {
+    const ready = withResolvers<Held>();
+    yield* spawn(function* (): Operation<void> {
+      const harness = yield* useHarness(undefined, extra);
+      const scope = yield* useScope();
+      ready.resolve({ ...harness, run: (work) => scope.run(work) });
+      yield* suspend();
+    });
+    return yield* ready.operation;
+  }
+
+  /** This chat's control intents, as the records it wrote hold them. */
+  function controlsIn(
+    held: readonly SidekickRecord[],
+  ): { conversation: string; response: string; order: number; component: string }[] {
+    return held.flatMap((record) =>
+      record.kind === "control"
+        ? [
+            {
+              conversation: record.conversation,
+              response: record.response,
+              order: record.order,
+              component: record.component,
+            },
+          ]
+        : [],
+    );
+  }
+
+  /** One control intent, as this owner's own conversation records it. */
+  function ownControl(
+    owner: SidekickOwner,
+    response: string,
+    order: number,
+    component: string,
+  ): { conversation: string; response: string; order: number; component: string } {
+    return { conversation: active(owner), response, order, component };
+  }
+
+  /** This owner's reading of its own history, refused loudly. */
+  function read(owner: SidekickOwner): SidekickReading {
+    const held = owner.reading;
+    if (!held.ok) {
+      throw held.error;
+    }
+    return held.value;
+  }
+
+  /** The conversation this owner is in. */
+  function active(owner: SidekickOwner): string {
+    const conversation = read(owner).active;
+    if (conversation === undefined) {
+      throw new Error("this owner is in no conversation yet");
+    }
+    return conversation;
+  }
+
+  /** Every reply this owner's chat holds, in order. */
+  function replies(owner: SidekickOwner): string[] {
+    return read(owner).chat.flatMap((item) => (item.kind === "reply" ? [item.text] : []));
+  }
+
+  /** One real entry of this REPL's own, run as a person runs one. */
+  function* seeded(held: Held, text: string): Operation<void> {
+    const admitted = yield* held.run(() => held.session.submit(`<Output>${text}</Output>\n`));
+    if (!admitted.ok) {
+      throw admitted.error;
+    }
+    yield* held.run(() => held.session.join());
+    expect(held.session.model.entries).toHaveLength(1);
+    expect(held.session.model.entries[0]?.terminal?.output).toContain(text);
+  }
+
+  /** One message, through this owner, in this owner's own scope. */
+  function said(held: Held, text: string): Operation<Result<SidekickTurn>> {
+    return held.run(() => held.owner.message(text));
+  }
+
+  it("R5: the same reply in two live conversations reads and records only its own", function* () {
+    const entered = withResolvers<void>();
+    const release = withResolvers<void>();
+
+    // The first owner's fill suspends, which is what lets its response be left
+    // live and mid-control while the second owner works. Only the fill differs
+    // between the two harnesses; the reply they are sent does not.
+    const one = yield* holding({
+      *fill(): Operation<Result<void>> {
+        entered.resolve();
+        yield* release.operation;
+        return Ok(undefined);
+      },
+    });
+    const other = yield* holding();
+
+    yield* seeded(one, FIRST);
+    yield* seeded(other, SECOND);
+
+    // Both conversations opened and activated, before any observation.
+    one.fake.script({ reply: "<Output>Open.</Output>\n" });
+    other.fake.script({ reply: "<Output>Open.</Output>\n" });
+    const opened = yield* said(one, "open this one");
+    if (!opened.ok) {
+      throw opened.error;
+    }
+    const alsoOpened = yield* said(other, "open that one");
+    if (!alsoOpened.ok) {
+      throw alsoOpened.error;
+    }
+    expect(active(one.owner)).not.toBe(active(other.owner));
+
+    one.fake.script({ reply: SHARED });
+    one.fake.script({ reply: "<Output>Thanks.</Output>\n" });
+    other.fake.script({ reply: SHARED });
+    other.fake.script({ reply: "<Output>Thanks.</Output>\n" });
+    other.fake.script({ reply: SHARED });
+    other.fake.script({ reply: "<Output>Thanks.</Output>\n" });
+
+    // The second owner's whole cycle, with both conversations live. Both writes
+    // are designated, so the message takes a second turn: what it answers with
+    // is that turn's reply, and the response that ran the controls is the one
+    // before it in the chat.
+    const answered = yield* said(other, "read and prepare");
+    if (!answered.ok) {
+      throw answered.error;
+    }
+    expect(answered.value.output).toContain("Thanks.");
+    expect(replies(other.owner)).toContain("Read it.");
+
+    // Its read answered from its own REPL. The source named `entry-1` and both
+    // sessions have one, so this is the fact that distinguishes the handles: an
+    // owner holding the other's captured controls would read the other's entry.
+    const toOther = other.fake.prompts[2] ?? "";
+    expect(toOther).toContain("## REPL.EntryOutput");
+    expect(toOther).toContain(SECOND);
+    expect(toOther).not.toContain(FIRST);
+    // And its write reached its own session's draft, while the first owner's is
+    // untouched — nothing of this cycle belonged to that conversation.
+    expect(other.state().draft).toBe("a prepared body");
+    expect(one.state().draft).toBe("");
+
+    // Now the first owner's response, left suspended inside its own fill.
+    const held = yield* spawn(() => said(one, "read and prepare"));
+    yield* entered.operation;
+    expect(one.owner.busy).toBe(true);
+    // Both conversations are not merely open but working: one is mid-response
+    // and the other is about to run a whole cycle of its own, which is the
+    // state two sequential captures cannot reach.
+    expect(active(one.owner)).not.toBe(active(other.owner));
+
+    const again = yield* said(other, "read and prepare again");
+    if (!again.ok) {
+      throw again.error;
+    }
+    // Still its own REPL, with the other conversation's response in flight.
+    const toOtherAgain = other.fake.prompts[4] ?? "";
+    expect(toOtherAgain).toContain(SECOND);
+    expect(toOtherAgain).not.toContain(FIRST);
+    expect(one.owner.busy).toBe(true);
+
+    // Released, and the first owner finishes the response it was holding.
+    release.resolve();
+    const finished = yield* held;
+    if (!finished.ok) {
+      throw finished.error;
+    }
+    expect(finished.value.output).toContain("Thanks.");
+    expect(replies(one.owner)).toContain("Read it.");
+
+    // The same source, the other REPL's answer.
+    const toOne = one.fake.prompts[2] ?? "";
+    expect(toOne).toContain("## REPL.EntryOutput");
+    expect(toOne).toContain(FIRST);
+    expect(toOne).not.toContain(SECOND);
+
+    // Each owner asked its own provider, and only its own: a call that had
+    // crossed would show as a turn on the wrong one.
+    expect(one.fake.prompts).toHaveLength(3);
+    expect(other.fake.prompts).toHaveLength(5);
+
+    // And the records. Each chat holds its own controls, in admission order,
+    // under its own conversation and its own response — and names the other
+    // conversation nowhere at all.
+    const oneRecords = yield* records(one.execution);
+    const otherRecords = yield* records(other.execution);
+    expect(controlsIn(oneRecords)).toEqual([
+      ownControl(one.owner, "response:2", 0, "REPL.EntryOutput"),
+      ownControl(one.owner, "response:2", 1, "REPL.EntryInput"),
+    ]);
+    expect(controlsIn(otherRecords)).toEqual([
+      ownControl(other.owner, "response:2", 0, "REPL.EntryOutput"),
+      ownControl(other.owner, "response:2", 1, "REPL.EntryInput"),
+      ownControl(other.owner, "response:4", 0, "REPL.EntryOutput"),
+      ownControl(other.owner, "response:4", 1, "REPL.EntryInput"),
+    ]);
+    expect(JSON.stringify(oneRecords)).not.toContain(active(other.owner));
+    expect(JSON.stringify(otherRecords)).not.toContain(active(one.owner));
+    // Neither session ran the other's entry either: one apiece, each its own.
+    expect(one.session.model.entries).toHaveLength(1);
+    expect(other.session.model.entries).toHaveLength(1);
   });
 });
