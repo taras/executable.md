@@ -52,6 +52,13 @@ import type {
   InvocationForm,
 } from "./invocation-identity.ts";
 import { pinnedJson } from "./generated-xmd.ts";
+import type {
+  GeneratedEffectClass,
+  GeneratedImplementation,
+  GeneratedMutation,
+  GeneratedObservation,
+} from "./generated-xmd.ts";
+import { ComponentInvocationError } from "./invocation-identity.ts";
 import { definitionGeneratedRefusal, offeredForm } from "./components/generated-metadata.ts";
 import type { GeneratedEffect } from "./components/generated-metadata.ts";
 import type { AdmittedSelection } from "./generated-selection.ts";
@@ -529,4 +536,98 @@ function freeze<T extends Json>(value: T): T {
     return value;
   }
   return value;
+}
+
+export const NO_WRITE_TABLE =
+  '<Evaluate allow={["write"]} /> asks for mutation, and this host installed no write table. A ' +
+  "selection reaches what the host already stated; it never adds to it.";
+
+export const NO_READ_TABLE =
+  '<Evaluate allow={["read"]} /> asks for observation, and this host installed no read table.';
+
+/**
+ * The pinned tables one selection resolves to.
+ *
+ * Shared rather than the authored site's own, because a generated **root** is
+ * admitted from the same captured profile: one machinery selects for both
+ * kinds, so neither can drift into admitting a table the other would not.
+ */
+export interface SelectedTables {
+  readonly observations: readonly GeneratedObservation[];
+  readonly mutations: readonly GeneratedMutation[];
+  /** Both tables together, for describing the vocabulary the fragment has. */
+  readonly admitted: readonly CapturedEntry[];
+}
+
+/**
+ * The host's captured tables, as the pinned entries the evaluator admits.
+ *
+ * A class the host installed nothing for is refused here — before the durable
+ * name is assigned and before a program exists — rather than reaching the
+ * evaluator as an empty table. The identity a run retains for each admitted
+ * spelling comes from the definition that spelling runs, where the declaration
+ * that owns the implementation states it.
+ *
+ * The definition carries the *captured* schema rather than its own, so a host
+ * that edits the schema on the definition it handed over after installation
+ * does not change what a fragment's props are validated against.
+ */
+export function selectedTables(
+  profile: EvaluationProfile,
+  allow: readonly GeneratedEffectClass[],
+): SelectedTables {
+  const observations: GeneratedObservation[] = [];
+  const mutations: GeneratedMutation[] = [];
+  // Composition first and under every selection, so the vocabulary an agent is
+  // shown lists what it may always write before what this selection added. It
+  // is not narrowed by `allow`: a pure component performs nothing, so there is
+  // no class for a selection to withhold it from.
+  const admitted: CapturedEntry[] = [...profile.composition];
+  if (allow.includes("read")) {
+    if (profile.read.length === 0) {
+      throw new ComponentInvocationError(NO_READ_TABLE);
+    }
+    for (const entry of profile.read) {
+      observations.push({
+        name: entry.name,
+        definition: entry.definition,
+        kind: implementation(entry),
+        ...(entry.dispatch === undefined ? {} : { dispatch: entry.dispatch }),
+        // An entry admitted for one spelling admits that one; an entry admitted
+        // for both is the form-insensitive component it has always been.
+        ...(entry.forms.length === 1 && entry.forms[0] === "self-closing"
+          ? { selfClosing: true }
+          : {}),
+      });
+      admitted.push(entry);
+    }
+  }
+  if (allow.includes("write")) {
+    if (profile.write.length === 0) {
+      throw new ComponentInvocationError(NO_WRITE_TABLE);
+    }
+    for (const entry of profile.write) {
+      mutations.push({
+        name: entry.name,
+        definition: entry.definition,
+        kind: implementation(entry),
+        ...(entry.dispatch === undefined ? {} : { dispatch: entry.dispatch }),
+        form: entry.forms.length === 2 ? "either" : (entry.forms[0] ?? "self-closing"),
+      });
+      admitted.push(entry);
+    }
+  }
+  return { observations, mutations, admitted };
+}
+
+/**
+ * What kind of thing is behind one captured entry's name.
+ *
+ * Every selected entry is an answer the import chain resolved, because that is
+ * the one way a selected name reaches an implementation now. It travels with
+ * the entry rather than being inferred at the record, so a reader comparing two
+ * admissions reads what each row was retained as.
+ */
+function implementation(entry: CapturedEntry): GeneratedImplementation {
+  return entry.kind === "component-answer" ? "component-answer" : "capability";
 }

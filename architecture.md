@@ -4135,7 +4135,35 @@ structured findings authors that structure explicitly:
 
 `Json` is a pure renderer, not an effect class. `allow` restricts effectful
 component permission; it does not remove language constructs, fragment-local
-bindings, or pure composition. Plan captures the fragment's rendered output with
+bindings, or pure composition.
+
+**A generated root is the same admission in a different context, and the record
+says which.** A root is evaluated by the execution that captured the selection
+it runs under — through `HostExecution.evaluateGeneratedXmdRoot` or the same
+method on a retained conversation — so the table it may write and the
+vocabulary it may read about come from one capture, and canonical `<Syntax />`
+is admitted from the exact implementation that execution minted. There is no
+siteless form: a root that narrowed from nothing would have to mint a second
+Syntax implementation and read core's own asset for its chapters.
+
+A root begins with an empty binding environment, which is what makes a brace it
+writes resolve only names it bound itself; a fragment expands against the
+document that admitted it and may not read a binding through interpolation at
+all. A direct top-level `<Output>` declares what a root renders, through the
+same body rule and the same props rule an authored body uses; below the top
+level it declares nothing in either kind, and `<Content>` and `<Return>` stay
+unavailable to both. A root's ordinary failure carries what it had already
+rendered; a fragment's propagates, and a failure of the *run* — durability,
+Files infrastructure, secret policy, teardown — keeps its own classification
+through both.
+
+The two kinds are told apart by the record's marker rather than by a member
+inside it: a fragment is marker 4 with exactly the closed shape it already had,
+a root is marker 5 with the same ordered fields, and each evaluation reads only
+its own at the result and inside the policy. A retained admission of one kind
+therefore cannot authorize the other, even for identical source and selected
+rows, and every fragment record written before roots existed stays readable as
+what it is. Plan captures the fragment's rendered output with
 ordinary `Let` and sends that text to the next Agent turn. Empty Glob matches are
 an ordinary successful `[]` binding; they reach the next turn only if the
 generated fragment renders them.

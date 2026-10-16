@@ -420,7 +420,7 @@ function isRecoveredContent(error: object): boolean {
  * names its own reach, so a rule that belongs to one question cannot silence the
  * other.
  */
-function firstCause<T>(
+export function firstCause<T>(
   error: unknown,
   select: (candidate: unknown) => T | undefined,
   opaque?: OpaqueFailure,
