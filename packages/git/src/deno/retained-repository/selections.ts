@@ -44,10 +44,19 @@
  *
  * Both are acquired inside the recorded operation, so a replayed selection
  * acquires neither. When both are needed the slot comes first.
+ *
+ * ## The selector finishes before its answer is written down
+ *
+ * What the selector itself acquires is shorter-lived than the entry: the
+ * authentication a clone opens belongs to that one clone. It runs in a scope of
+ * its own that is torn down and joined before the placement is published, so no
+ * record and no body work can precede that cleanup. A cleanup that fails takes
+ * the ordinary fatal path, publishing nothing — a selector whose own teardown
+ * did not finish has not described a checkout anybody may work in.
  */
 
-import { Err, Ok, withResolvers } from "effection";
-import type { Operation, Result } from "effection";
+import { Err, Ok, scoped, withResolvers } from "effection";
+import type { Operation, Result, WithResolvers } from "effection";
 import { createDurableOperation, StaleInputError } from "@executablemd/durable-streams";
 import { retainedRecordAhead } from "./local.ts";
 import type {
@@ -130,8 +139,15 @@ export interface ReplSelectionEntry {
   root(): Operation<string>;
   /** The repository this invocation started in, discovered at most once. */
   ambient(): Operation<AmbientRepository | undefined>;
-  /** Hold a managed slot for the entry, single-flight per slot. */
-  holdSlot(kind: SlotKind, path: string, subject: string): Operation<void>;
+  /**
+   * Hold a managed slot for the entry, single-flight per root and slot.
+   *
+   * The root is stated rather than taken from today's configuration, because a
+   * slot's lock sidecar lives under the root the slot belongs to: a replayed
+   * placement's slot belongs to the root its own record carries, and locking it
+   * under a different one excludes nobody.
+   */
+  holdSlot(root: string, kind: SlotKind, path: string, subject: string): Operation<void>;
   /** Hold the shared Git directory a new Worktree selector may change. */
   holdCommon(commonDirectory: string): Operation<void>;
   /** Run live selector work for one slot in order within this entry. */
@@ -170,8 +186,8 @@ export function* selectReplRepository(
     slot: (root) => repositorySlot(root, locator, request.name),
     // The slot lease, before anything inspects or creates the checkout, and
     // held until this entry tears down.
-    acquire: (slot) =>
-      entry.holdSlot("repository", slot, `repository ${JSON.stringify(request.name)}`),
+    acquire: (root, slot) =>
+      entry.holdSlot(root, "repository", slot, `repository ${JSON.stringify(request.name)}`),
     *perform(root, slot) {
       {
         const managed = yield* selectManagedRepository(yield* entry.git(), entry.host, slot, {
@@ -236,8 +252,8 @@ export function* selectReplWorktree(
 
   const registration = yield* recordedPlacement(entry, recorded, {
     slot: (root) => worktreeSlot(root, owner.commonDirectory, request.name),
-    *acquire(slot) {
-      yield* entry.holdSlot("worktree", slot, `worktree ${JSON.stringify(request.name)}`);
+    *acquire(root, slot) {
+      yield* entry.holdSlot(root, "worktree", slot, `worktree ${JSON.stringify(request.name)}`);
       // Before the selector, not after: `worktree add` writes refs and linked
       // administration into the Git directory every checkout of that repository
       // shares, and whether this call creates or reuses is the selector's own
@@ -382,7 +398,7 @@ function* recordedPlacement(
 interface ReplPlacementSelector {
   slot(root: string): string | undefined;
   /** The holds a genuinely new selection needs, taken before it runs. */
-  acquire(slot: string): Operation<void>;
+  acquire(root: string, slot: string): Operation<void>;
   /** Call the ordinary selector, and describe what it selected. */
   perform(root: string, slot: string): Operation<ReplPlacement>;
 }
@@ -429,7 +445,8 @@ function* performed(
   if (yield* retainedRecordAhead(REPL_REPOSITORY_PLACEMENT, name)) {
     return yield* once();
   }
-  const slot = selector.slot(yield* entry.root());
+  const root = yield* entry.root();
+  const slot = selector.slot(root);
   if (slot === undefined) {
     return yield* once();
   }
@@ -439,7 +456,7 @@ function* performed(
   // directory, so the second waits and then performs its own ordinary reuse
   // check — which is what it would have done arriving a moment later.
   return yield* entry.serialize(slot, function* () {
-    yield* selector.acquire(slot);
+    yield* selector.acquire(root, slot);
     return yield* once();
   });
 }
@@ -459,8 +476,16 @@ function* attempted(
 ): Operation<Result<ReplPlacement>> {
   const slot = selector.slot(root) ?? "";
   try {
-    yield* selector.acquire(slot);
-    return Ok(yield* selector.perform(root, slot));
+    yield* selector.acquire(root, slot);
+    // Scoped, so everything the selector itself acquired — the authentication a
+    // clone opened above all — is released and *joined* before this answer
+    // becomes a result. Without it the selector's resources outlive the
+    // publication: the durable substrate runs this callback and its append in
+    // one task, so a credential would still be being torn down while the
+    // placement was already acknowledged and the body had begun. What stays
+    // outside is what the entry owns: the Git session, its isolation directory
+    // and both holds, each acquired into the entry's own scope above.
+    return Ok(yield* scoped(() => selector.perform(root, slot)));
   } catch (error) {
     const refusal = classified(request, error);
     if (refusal === undefined) {
@@ -721,26 +746,79 @@ const placementCoordinator: LiveDurableOperationCoordinator = {
  * ordinary reuse check, which is what it would have done arriving a moment
  * later.
  *
- * The turn is released on success, failure and cancellation alike: a caller
- * halted while it waits gives up its own wait, and one halted while it holds
- * the turn hands it on rather than stranding everybody behind it.
+ * ## A waiter that leaves releases nothing
+ *
+ * The turn is a queue with one holder, rather than a chain of waiters each
+ * signalling the next. Chaining is what made a cancelled waiter grant the slot:
+ * its cleanup resolved its own completion, which is all its successor was
+ * waiting for, so the successor entered while the *holder* was still working.
+ *
+ * Here a waiter that is cancelled before it is granted the turn takes itself
+ * out of the queue and signals nothing, so exclusion stays with whoever has it.
+ * Its own teardown is prompt and waits for no live work. A waiter that was
+ * granted the turn and then cancelled before it resumed hands the turn on
+ * rather than stranding it, which is the one case the two cleanups have to tell
+ * apart.
  */
 export function slotTurns(): <T>(key: string, work: () => Operation<T>) => Operation<T> {
-  const tails = new Map<string, Operation<void>>();
+  interface Waiting {
+    readonly granted: WithResolvers<void>;
+    /** Whether the turn has been handed to this waiter. */
+    taken: boolean;
+  }
+  interface Slot {
+    held: boolean;
+    readonly queue: Waiting[];
+  }
+  const slots = new Map<string, Slot>();
+
+  /** Hand the turn to the next waiter, or leave the slot free. */
+  function release(key: string, slot: Slot): void {
+    const next = slot.queue.shift();
+    if (next === undefined) {
+      slot.held = false;
+      slots.delete(key);
+      return;
+    }
+    next.taken = true;
+    next.granted.resolve();
+  }
+
   return function* <T>(key: string, work: () => Operation<T>): Operation<T> {
-    const ahead = tails.get(key);
-    const mine = withResolvers<void>();
-    tails.set(key, mine.operation);
-    try {
-      if (ahead !== undefined) {
-        yield* ahead;
+    let slot = slots.get(key);
+    if (slot === undefined) {
+      slot = { held: false, queue: [] };
+      slots.set(key, slot);
+    }
+    const here = slot;
+    if (here.held) {
+      const mine: Waiting = { granted: withResolvers<void>(), taken: false };
+      here.queue.push(mine);
+      let entered = false;
+      try {
+        yield* mine.granted.operation;
+        entered = true;
+      } finally {
+        if (!entered) {
+          if (mine.taken) {
+            // Granted and never taken up: the turn is this waiter's to hand on.
+            release(key, here);
+          } else {
+            // Never granted: there is nothing to release, and the holder keeps
+            // what it has.
+            const at = here.queue.indexOf(mine);
+            if (at >= 0) {
+              here.queue.splice(at, 1);
+            }
+          }
+        }
       }
+    }
+    here.held = true;
+    try {
       return yield* work();
     } finally {
-      if (tails.get(key) === mine.operation) {
-        tails.delete(key);
-      }
-      mine.resolve();
+      release(key, here);
     }
   };
 }

@@ -32,13 +32,20 @@ import {
   until,
   withResolvers,
 } from "effection";
-import type { Operation } from "effection";
+import type { Operation, Result } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { mkdir, mkdtemp, readdir, realpath, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, open, readdir, realpath, writeFile } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import process from "node:process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { API, cwd, hostFilesHandler } from "@executablemd/runtime";
-import type { FilePathInput, FilesHandler, FileWriteInput } from "@executablemd/runtime";
+import type {
+  FilePathInput,
+  FilesHandler,
+  FileWriteInput,
+  FileWriteSuccess,
+} from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { Execution } from "@executablemd/core/api";
@@ -51,6 +58,7 @@ import { gitSession } from "../src/deno/composition/git.ts";
 import type { GitAuthenticationSession } from "../src/deno/composition/authentication.ts";
 import { UNAUTHENTICATED } from "../src/deno/composition/authentication.ts";
 import { useReplRepositoryRecording } from "../src/deno/retained-repository/provider.ts";
+import { slotTurns } from "../src/deno/retained-repository/selections.ts";
 import { admitReplRepositoryHistory } from "../src/retained-repository/admission.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import {
@@ -60,6 +68,9 @@ import {
 import type { ReplPlacementRecord } from "../src/retained-repository/placement-records.ts";
 import { REPL_REPOSITORY_LOCAL } from "../src/retained-repository/records.ts";
 import { metadataOf, repositorySlot, worktreeSlot } from "../src/deno/run-composition/placement.ts";
+import { writeMetadata } from "../src/deno/run-composition/checkouts.ts";
+import { METADATA_VERSION } from "../src/deno/run-composition/metadata.ts";
+import type { ManagedRepositoryMetadata } from "../src/deno/run-composition/metadata.ts";
 
 interface Fixture {
   /** The scenario's own directory: source repository, managed root and HOME. */
@@ -105,6 +116,152 @@ function useFixture(): Operation<Fixture> {
     const managed = join(root, "repositories");
     yield* provide({ root, origin, managed, ambient });
   });
+}
+
+/** Let every ready task run, so "reached its wait" is about turns. */
+function* settled(turns = 8): Operation<void> {
+  for (let turn = 0; turn < turns; turn += 1) {
+    yield* sleep(0);
+  }
+}
+
+/**
+ * A promise a row releases by hand.
+ *
+ * What makes the two filesystem cuts below deterministic rather than a race: an
+ * acquisition is started, the halt is delivered while it is demonstrably still
+ * pending, and only then is it allowed to deliver.
+ */
+function gate(): { readonly released: Promise<void>; release(): void } {
+  let open = (): void => {};
+  const released = new Promise<void>((resolve) => {
+    open = () => resolve();
+  });
+  return { released, release: () => open() };
+}
+
+/** The sidecar the metadata cut below writes, which is ordinary record data. */
+const REPOSITORY_SIDECAR: ManagedRepositoryMetadata = Object.freeze({
+  kind: "repository" as const,
+  version: METADATA_VERSION,
+  name: "project",
+  locator: "/origin",
+  locatorFingerprint: "a".repeat(64),
+  requestedBase: null,
+  creationCommit: "b".repeat(40),
+  primaryBranch: "main",
+  objectFormat: "sha1" as const,
+  commonDirectory: "/origin/.git",
+});
+
+/** What one observed `git` child reported about its own lifetime. */
+interface WatchedChildren {
+  /** Resolves once a watched child has been spawned. */
+  readonly spawned: Operation<void>;
+  /** Handed to the host, which forwards it to the one place a child exists. */
+  readonly observe: NonNullable<GitInvocation["observe"]>;
+  /** How many watched children were spawned. */
+  observed(): number;
+  /** Whether every observed child has closed both of its pipes. */
+  closed(): boolean;
+  /** Whether any observed process is still running. */
+  alive(): boolean;
+}
+
+/**
+ * Watch the real children a row's chosen invocation spawns.
+ *
+ * The production host forwards this to `runProcess`, which calls it with the
+ * child as it is spawned — the only point at which a row can see the process
+ * this command really started. A wrapper around the host sees the call and its
+ * answer and never the child between them, which is why observing residue
+ * afterwards cannot tell an interrupted clone from one that never began.
+ */
+function watchChildren(): WatchedChildren {
+  const pids: number[] = [];
+  let count = 0;
+  let closes = 0;
+  const first = withResolvers<void>();
+  return {
+    spawned: first.operation,
+    observe(child): void {
+      count += 1;
+      if (child.pid !== undefined) {
+        pids.push(child.pid);
+      }
+      child.on("close", () => {
+        closes += 1;
+      });
+      first.resolve();
+    },
+    observed: () => count,
+    closed: () => count > 0 && closes === count,
+    alive: () =>
+      pids.some((pid) => {
+        try {
+          // Signal 0 asks the operating system whether the process is there.
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      }),
+  };
+}
+
+/**
+ * A script that reports it ran and then waits.
+ *
+ * What makes a child cut deterministic: the marker says the command really
+ * reached this point, and the wait keeps it there until the halt arrives. The
+ * process group teardown is what ends it.
+ */
+function* waitingScript(path: string, marker: string): Operation<void> {
+  yield* writeTextFile(path, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nsleep 120\n`);
+  yield* until(chmod(path, 0o755));
+}
+
+/**
+ * Make a `file://` clone of this fixture's origin wait inside its transfer.
+ *
+ * `uploadpack.packObjectsHook` is honored from the configuration of the
+ * repository being read, which is this fixture's own, so the clone's child is a
+ * real `git clone` with a real descendant doing real work when the halt
+ * arrives. Without it a local clone of one commit finishes in milliseconds and
+ * nothing is ever interrupted.
+ */
+function* blockPackObjects(fixture: Fixture): Operation<string> {
+  const script = join(fixture.root, "pack-objects-hook");
+  const marker = join(fixture.root, "pack-objects-ran");
+  yield* waitingScript(script, marker);
+  const git = gitSession(denoRepositoryHost(), fixture.root);
+  yield* git.run(["config", "uploadpack.packObjectsHook", script], fixture.origin);
+  return marker;
+}
+
+/**
+ * A hooks directory whose one hook waits, for the commands that run hooks.
+ *
+ * `worktree add` runs `post-checkout` after it has made the checkout, so the
+ * marker also says the partial state this row is about is already on disk.
+ */
+function* blockingHooks(fixture: Fixture, hook: string): Operation<string> {
+  const hooks = join(fixture.root, "hooks");
+  yield* until(mkdir(hooks, { recursive: true }));
+  const marker = join(fixture.root, `${hook}-ran`);
+  yield* waitingScript(join(hooks, hook), marker);
+  return marker;
+}
+
+/** Wait until this path is there, or say what never appeared. */
+function* appears(path: string): Operation<void> {
+  const deadline = Date.now() + 30_000;
+  while (!(yield* exists(path))) {
+    if (Date.now() > deadline) {
+      throw new Error(`${path} never appeared`);
+    }
+    yield* sleep(25);
+  }
 }
 
 /** What the composition and the host beneath the recorder were asked to do. */
@@ -182,7 +339,11 @@ type GitBarrier = (invocation: GitInvocation) => Operation<void>;
  * that halts there halts with the native work still to come — and one that
  * delegates first halts with a real child in flight.
  */
-function countingHost(counted: Counters, barrier?: GitBarrier): RepositoryHost {
+function countingHost(
+  counted: Counters,
+  barrier?: GitBarrier,
+  intercept?: (invocation: GitInvocation) => Partial<GitInvocation> | undefined,
+): RepositoryHost {
   const host = denoRepositoryHost();
   return {
     *git(invocation: GitInvocation): Operation<GitOutcome> {
@@ -190,7 +351,7 @@ function countingHost(counted: Counters, barrier?: GitBarrier): RepositoryHost {
       if (barrier !== undefined) {
         yield* barrier(invocation);
       }
-      return yield* host.git(invocation);
+      return yield* host.git({ ...invocation, ...(intercept?.(invocation) ?? {}) });
     },
     *useDirectory(): Operation<string> {
       counted.directories += 1;
@@ -201,6 +362,32 @@ function countingHost(counted: Counters, barrier?: GitBarrier): RepositoryHost {
       return host.useAuthentication === undefined
         ? UNAUTHENTICATED
         : yield* host.useAuthentication(locator);
+    },
+  };
+}
+
+/**
+ * The host, with the authentication a clone opens reporting its own release.
+ *
+ * Substituted at the one seam the production host already offers, so what this
+ * observes is the *lifetime* of a selector-owned resource rather than anything
+ * about a credential transport.
+ */
+function tracedAuthentication(host: RepositoryHost, trace: string[] | undefined): RepositoryHost {
+  if (trace === undefined) {
+    return host;
+  }
+  return {
+    ...host,
+    useAuthentication(): Operation<GitAuthenticationSession> {
+      return resource(function* (provide) {
+        yield* ensure(function* () {
+          trace.push("auth-cleanup-start");
+          yield* sleep(20);
+          trace.push("auth-cleanup-end");
+        });
+        yield* provide(UNAUTHENTICATED);
+      });
     },
   };
 }
@@ -219,8 +406,24 @@ interface RunOptions {
   readonly between?: () => Operation<void>;
   /** A barrier inside one `git` invocation. */
   readonly barrier?: GitBarrier;
+  /**
+   * What this row changes about one invocation before the real host runs it.
+   *
+   * Where a row reaches the child a command spawns, and where it adds the `-c`
+   * settings that make one wait. Returning nothing leaves the invocation
+   * exactly as the provider built it.
+   */
+  readonly intercept?: (invocation: GitInvocation) => Partial<GitInvocation> | undefined;
   /** Whether this entry installs a managed root at all. */
   readonly root?: string | undefined;
+  /**
+   * Where this row records the selector's own cleanup and the work around it.
+   *
+   * Present only for the ownership row: the authentication a clone opens is
+   * substituted for one that says when it is released, and the first document
+   * write says when the body began.
+   */
+  readonly trace?: string[];
 }
 
 /** One entry, over one journal, with a real managed root. */
@@ -257,6 +460,15 @@ function run(
       },
       { at: "min" },
     );
+    const trace = options.trace;
+    if (trace !== undefined) {
+      yield* API.Files.around({
+        *writeTextFile([input], next): Operation<Result<FileWriteSuccess>> {
+          trace.push("body-file-write");
+          return yield* next(input);
+        },
+      });
+    }
     yield* useCompositionComponents();
     if (options.between !== undefined) {
       yield* options.between();
@@ -268,7 +480,10 @@ function run(
     yield* Execution.around({
       *init(_args, next): Operation<void> {
         yield* useReplRepositoryRecording({
-          host: countingHost(counted, options.barrier),
+          host: tracedAuthentication(
+            countingHost(counted, options.barrier, options.intercept),
+            trace,
+          ),
           ...(managed === undefined ? {} : { root: managed }),
         });
         yield* next();
@@ -629,6 +844,92 @@ describe("one entry's managed Repository and Worktree selections", () => {
     expect(checkoutOf(recorded[0])).toBe(checkoutOf(recorded[1]));
   });
 
+  it("E3: keeps a cancelled slot waiter from releasing the active holder", function* () {
+    const serialize = slotTurns();
+    const active = withResolvers<void>();
+    const release = withResolvers<void>();
+    let third = false;
+
+    yield* scoped(function* (): Operation<void> {
+      // A holding the turn, B waiting on A, C waiting behind B.
+      yield* spawn(() =>
+        serialize("one-slot", function* (): Operation<void> {
+          active.resolve();
+          yield* release.operation;
+        }),
+      );
+      yield* active.operation;
+      const waiting = yield* spawn(() =>
+        serialize("one-slot", function* (): Operation<void> {
+          yield* suspend();
+        }),
+      );
+      yield* sleep(0);
+      yield* spawn(() =>
+        serialize("one-slot", function* (): Operation<void> {
+          third = true;
+          yield* suspend();
+        }),
+      );
+      yield* sleep(0);
+
+      // B leaves. It was never granted the turn, so it releases nothing and
+      // the exclusion stays with A — a waiter that signalled its own
+      // completion here would let C run a selector beside A's.
+      yield* waiting.halt();
+      yield* sleep(0);
+      expect(third).toBe(false);
+
+      // A ends, and C is the one that inherits the turn.
+      release.resolve();
+      yield* sleep(0);
+      expect(third).toBe(true);
+    });
+  });
+
+  it("E5: finishes the selector's own cleanup before the placement is recorded", function* () {
+    const fixture = yield* useFixture();
+    const live = counters();
+    const trace: string[] = [];
+    const events: DurableEvent[] = [];
+    // The journal, with the placement append marked where it happens.
+    const stream: DurableStream = {
+      *readAll(): Operation<DurableEvent[]> {
+        return [...events];
+      },
+      *append(event: DurableEvent): Operation<void> {
+        if (event.type === "yield" && event.description.type === REPL_REPOSITORY_PLACEMENT) {
+          trace.push("placement-append");
+        }
+        events.push(event);
+        yield* sleep(0);
+      },
+    };
+
+    const ran = yield* run(
+      fixture,
+      [
+        `<Repository name="project" url=${JSON.stringify(fixture.origin)}>`,
+        '<File path="body.md">body</File>',
+        "</Repository>",
+      ].join("\n"),
+      stream,
+      live,
+      { trace },
+    );
+
+    expect(ran.refusal).toBe(undefined);
+    // The clone's authentication is the selector's own, not the entry's. Its
+    // cleanup is joined before the answer becomes a record, so no placement and
+    // no body work precede it.
+    expect(trace).toEqual([
+      "auth-cleanup-start",
+      "auth-cleanup-end",
+      "placement-append",
+      "body-file-write",
+    ]);
+  });
+
   it("E3: resumes two spawned branches in their own placements, in reverse order", function* () {
     const fixture = yield* useFixture();
     const live = counters();
@@ -879,68 +1180,227 @@ describe("one entry's managed Repository and Worktree selections", () => {
     expect(yield* exists(join(fixture.root, "sentinel.md"))).toBe(false);
   });
 
-  it("E5: joins an interrupted clone and adopts or refuses the slot afterwards", function* () {
+  it("E5: joins an actually running clone child and its blocked descendant", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
-    const reached = withResolvers<void>();
-    const source =
-      `<Repository name="project" url=${JSON.stringify(fixture.origin)} as="project" />` +
-      '\n<File path="sentinel.md">sentinel</File>';
+    // A clone that is genuinely running when the halt arrives. The transport
+    // command is a script that reports it was reached and then waits, so the
+    // child is a real `git clone` holding a real descendant open — not a
+    // command that had yet to be delegated to.
+    //
+    // Git creates the destination only once the connection has succeeded, so
+    // this cut leaves no bytes behind. What it discriminates is the teardown:
+    // whether the process this entry started, and the process that one
+    // started, are joined before the owner finishes. The worktree cut below is
+    // the one that interrupts a command *after* it has written something, and
+    // proves the ordinary handling of what it left.
+    const reached = join(fixture.root, "transport-ran");
+    const transport = join(fixture.root, "transport");
+    yield* waitingScript(transport, reached);
+    const locator = "ssh://example.invalid/repo.git";
+    const source = [
+      `<Repository name="project" url=${JSON.stringify(locator)} as="project" />`,
+      '<File path="sentinel.md">sentinel</File>',
+    ].join("\n");
 
-    // The barrier delegates nothing: the halt arrives with the clone still to
-    // come, so what this row proves is that teardown finishes and the slot is
-    // left for ordinary policy rather than repaired.
-    const barrier: GitBarrier = function* (invocation: GitInvocation): Operation<void> {
-      if (invocation.args.includes("clone")) {
-        reached.resolve();
-        yield* suspend();
-      }
-    };
-
+    const watched = watchChildren();
+    const journal = new InMemoryStream();
     yield* scoped(function* () {
       const task = yield* spawn(() =>
-        run(fixture, source, new InMemoryStream(), counted, { barrier }),
+        run(fixture, source, journal, counted, {
+          intercept: (invocation) =>
+            invocation.args.includes("clone")
+              ? {
+                  observe: watched.observe,
+                  args: ["-c", `core.sshCommand=${transport}`, ...invocation.args],
+                }
+              : undefined,
+        }),
       );
-      yield* reached.operation;
-      // Teardown joins the Git session, its isolation directory and the
-      // in-flight acquisition before this returns.
+      yield* watched.spawned;
+      // Not merely spawned: inside its own transport, with a descendant of its
+      // own waiting. Halting before the delegation would interrupt a command
+      // that had done nothing, which is the hole this row closes.
+      yield* appears(reached);
+      // The guard against a vacuous row: a clone that had already ended would
+      // make everything below true without anything being interrupted.
+      expect(watched.closed()).toBe(false);
+      // Teardown kills the process group and waits for `close`, so this does
+      // not return until the child and its descendant are gone.
       yield* task.halt();
     });
 
-    // No placement, no body after it, and the isolation directory the session
-    // took is gone with the entry.
+    expect(watched.observed()).toBe(1);
+    expect(watched.closed()).toBe(true);
+    expect(watched.alive()).toBe(false);
+
+    // No placement was published, and no body ran after it.
+    expect(placements(yield* journal.readAll())).toEqual([]);
     expect(yield* exists(join(fixture.root, "sentinel.md"))).toBe(false);
+    // The isolation directory the session took is gone with the entry.
     expect(counted.directories).toBe(1);
-    // The slot holds no sidecar, so the next attempt is an ordinary creation
-    // rather than a reuse of something nothing describes.
-    const slot = repositorySlot(fixture.managed, fixture.origin, "project");
+
+    // And nothing was published for a creation that never reached a checkout.
+    const slot = repositorySlot(fixture.managed, locator, "project");
     expect(yield* exists(metadataOf(slot))).toBe(false);
     expect(yield* temporarySiblings(slot)).toEqual([]);
+  });
 
+  it("E5: joins an actually running worktree-add child and adopts what it left", function* () {
+    const fixture = yield* useFixture();
+    const counted = counters();
+    // `worktree add` runs the `post-checkout` hook in the checkout it just
+    // made, so a hook that waits holds the real child open after it has done
+    // its work — which is the partial state the next attempt has to account
+    // for.
+    const checkedOut = yield* blockingHooks(fixture, "post-checkout");
+    const hooks = join(fixture.root, "hooks");
+    const source = [
+      `<Repository name="project" url=${JSON.stringify(fixture.origin)}>`,
+      '<Worktree name="experiment" branch="experiment" as="worktree" />',
+      '<File path="sentinel.md">sentinel</File>',
+      "</Repository>",
+    ].join("\n");
+
+    const watched = watchChildren();
+    const journal = new InMemoryStream();
+    yield* scoped(function* () {
+      const task = yield* spawn(() =>
+        run(fixture, source, journal, counted, {
+          intercept: (invocation) =>
+            invocation.args.includes("worktree")
+              ? {
+                  observe: watched.observe,
+                  args: ["-c", `core.hooksPath=${hooks}`, ...invocation.args],
+                }
+              : undefined,
+        }),
+      );
+      yield* watched.spawned;
+      // The hook runs after the checkout, so this says the worktree is on disk
+      // and the command is still the live owner of it.
+      yield* appears(checkedOut);
+      expect(watched.closed()).toBe(false);
+      yield* task.halt();
+    });
+
+    expect(watched.observed()).toBe(1);
+    expect(watched.closed()).toBe(true);
+    expect(watched.alive()).toBe(false);
+    expect(placements(yield* journal.readAll()).map((record) => record.kind)).toEqual([
+      "repository",
+    ]);
+    expect(yield* exists(join(fixture.root, "sentinel.md"))).toBe(false);
+
+    // The worktree slot holds a checkout nothing describes yet.
+    const owner = yield* commonOf(fixture, "project");
+    const slot = worktreeSlot(fixture.managed, owner, "experiment");
+    expect(yield* exists(join(slot, "checkout"))).toBe(true);
+    expect(yield* exists(metadataOf(slot))).toBe(false);
+
+    // The next attempt proves it under the ordinary stricter proof and adopts
+    // it, which is what keeps the bytes somebody's work rather than something
+    // to recreate.
     const again = counters();
     const continued = yield* run(fixture, source, new InMemoryStream(), again);
     expect(continued.refusal).toBe(undefined);
-    expect(yield* readTextFile(metadataOf(slot))).toContain('"kind": "repository"');
+    expect(yield* readTextFile(metadataOf(slot))).toContain('"kind": "worktree"');
   });
 
-  it("E5: leaves no isolation directory behind when its creation is cancelled", function* () {
-    const before = yield* isolationDirectories();
-    const host = denoRepositoryHost();
+  it("E5: waits for a pending metadata open and closes what it delivers", function* () {
+    const fixture = yield* useFixture();
+    const slot = join(fixture.root, "metadata-slot");
+    yield* until(mkdir(slot, { recursive: true }));
 
-    // Halted in the same turn the acquisition starts, so the halt arrives while
-    // `mkdtemp` is still in flight — the window a cleanup registered after the
-    // directory was created would not cover.
-    yield* scoped(function* () {
-      yield* race([
-        (function* (): Operation<void> {
-          yield* host.useDirectory();
-          yield* suspend();
-        })(),
-        sleep(0),
-      ]);
+    const asked = withResolvers<string>();
+    const held = gate();
+    let closed = false;
+    let opened = false;
+    // The open is started and then held, so the halt below lands in exactly the
+    // window this ownership discipline exists for: after the acquisition began
+    // and before its descriptor arrived.
+    const openExclusive = (path: string): Promise<FileHandle> => {
+      asked.resolve(path);
+      return held.released
+        .then(() => open(path, "wx"))
+        .then((handle) => {
+          opened = true;
+          const close = handle.close.bind(handle);
+          return Object.assign(handle, {
+            close: (): Promise<void> => {
+              closed = true;
+              return close();
+            },
+          });
+        });
+    };
+
+    let returned = false;
+    yield* scoped(function* (): Operation<void> {
+      const writing = yield* spawn(() => writeMetadata(slot, REPOSITORY_SIDECAR, openExclusive));
+      const temporary = yield* asked.operation;
+      const halting = yield* spawn(function* (): Operation<void> {
+        yield* writing.halt();
+        returned = true;
+      });
+      yield* settled();
+      // Teardown is waiting for the acquisition it armed its release before.
+      expect(returned).toBe(false);
+      expect(opened).toBe(false);
+
+      held.release();
+      yield* halting;
+      expect(temporary.startsWith(`${metadataOf(slot)}.`)).toBe(true);
     });
 
-    expect(yield* isolationDirectories()).toEqual(before);
+    // It waited for delivery, and closed what was delivered.
+    expect(returned).toBe(true);
+    expect(opened).toBe(true);
+    expect(closed).toBe(true);
+    // And published nothing: a sidecar is renamed into place only by a write
+    // that finished.
+    expect(yield* exists(metadataOf(slot))).toBe(false);
+  });
+
+  it("E5: waits for a pending isolation directory and removes what it delivers", function* () {
+    const made: string[] = [];
+    const asked = withResolvers<void>();
+    const held = gate();
+    const create = (prefix: string): Promise<string> => {
+      asked.resolve();
+      return held.released
+        .then(() => mkdtemp(prefix))
+        .then((directory) => {
+          made.push(directory);
+          return directory;
+        });
+    };
+    const host = denoRepositoryHost({ directories: { create } });
+
+    let returned = false;
+    yield* scoped(function* (): Operation<void> {
+      const taking = yield* spawn(function* (): Operation<void> {
+        yield* host.useDirectory();
+        yield* suspend();
+      });
+      yield* asked.operation;
+      const halting = yield* spawn(function* (): Operation<void> {
+        yield* taking.halt();
+        returned = true;
+      });
+      yield* settled();
+      // The creation is still pending, and teardown has not finished over it.
+      expect(returned).toBe(false);
+      expect(made).toEqual([]);
+
+      held.release();
+      yield* halting;
+    });
+
+    expect(returned).toBe(true);
+    // It waited for the directory to arrive, and removed it.
+    expect(made.length).toBe(1);
+    expect(yield* exists(made[0] ?? "")).toBe(false);
   });
 });
 

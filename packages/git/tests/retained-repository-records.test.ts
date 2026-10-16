@@ -423,6 +423,32 @@ describe("what one entry's placement records say", () => {
     ).toBe(undefined);
   });
 
+  it("reads an ambient absence as null alone, and refuses anything else", function* () {
+    const ambient: ReplPlacementRequest = { kind: "ambient-owner", cwd: "/work" };
+    const fingerprint = yield* replPlacementFingerprint(ambient);
+    const payload = Object(
+      replPlacementRecordJson({
+        fingerprint,
+        request: ambient,
+        outcome: Ok({ ...PLACEMENT, kind: "ambient-owner", managedRoot: undefined }),
+      }),
+    );
+    const placement = Object(payload["placement"]);
+
+    // The control: absence is written as null, and reads back as absence.
+    expect(placement["managedRoot"]).toBe(null);
+    expect(parseReplPlacementRecord(payload)?.kind).toBe("ambient-owner");
+
+    // A value that is present and is not a managed root is a record this
+    // version did not write, not a record that carried no root. Reading the two
+    // as one answer would let a malformed ambient placement bind a path.
+    for (const stated of [42, "", true, {}, [], 0]) {
+      expect(
+        parseReplPlacementRecord({ ...payload, placement: { ...placement, managedRoot: stated } }),
+      ).toBe(undefined);
+    }
+  });
+
   it("carries only a refusal word its own vocabulary names", function* () {
     const fingerprint = yield* replPlacementFingerprint(REPOSITORY_REQUEST);
     const refused = Object(
@@ -592,6 +618,30 @@ describe("which histories one entry will continue", () => {
   it("refuses a placement journaled under a name it does not produce", function* () {
     const event = yield* placementEvent(REPOSITORY_REQUEST, Ok(PLACEMENT), "another name");
     expect((yield* refusalOf([event]))?.reason).toBe("request-fingerprint");
+  });
+
+  it("refuses an ambient placement whose managed root is not one", function* () {
+    const ambient: ReplPlacementRequest = { kind: "ambient-owner", cwd: "/work" };
+    const event = yield* placementEvent(
+      ambient,
+      Ok({
+        ...PLACEMENT,
+        kind: "ambient-owner",
+        managedRoot: undefined,
+      }),
+    );
+    // The valid-null control is admitted.
+    expect(yield* refusalOf([event])).toBe(undefined);
+
+    const placement = Object(payloadOf(event)["placement"]);
+    const malformed: DurableEvent = {
+      ...event,
+      result: {
+        status: "ok",
+        value: { ...payloadOf(event), placement: { ...placement, managedRoot: 42 } },
+      },
+    };
+    expect((yield* refusalOf([malformed]))?.reason).toBe("malformed-record");
   });
 
   it("admits an empty history", function* () {

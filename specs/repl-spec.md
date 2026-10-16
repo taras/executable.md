@@ -838,7 +838,7 @@ standing in:
   <Dir path={worktree}>
     <File path="note.md">first</File>
     <File path="note.md" as="held" />
-    <Elicit schema={{ type: "string", enum: ["continue"] }}>Recorded value: {held}</Elicit>
+    <Elicit schema={{ type: "string", enum: ["continue"] }} as="answer">Recorded value: {held}</Elicit>
     <File path="after.md">continued</File>
   </Dir>
 </Repository>
@@ -984,10 +984,11 @@ schedules no timer.
   What an entry retains is `<Repository>` and `<Worktree>` selection and the
   file and directory work inside those checkouts and the one it was started in;
   nothing is staged, committed, pushed or published.
-- Generated selection is unchanged. An admitted generated `<File>`,
-  `<File.Delete />` or `<Glob>` is retained exactly as an authored one is, and a
-  generated `<Repository>`, `<Worktree>` or `<Dir>` refuses before any provider
-  is asked.
+- Generated selection is unchanged. An admitted generated `<File>` read, write
+  or `<File.Delete />` is retained exactly as an authored one is, because both
+  cross the one document filesystem. `<Glob>` stays ordinary and is retained by
+  nothing here, authored or generated. A generated `<Repository>`, `<Worktree>`
+  or `<Dir>` refuses before any provider is asked.
 - Nothing inventories the managed root. There is no listing of the checkouts an
   entry or a session has selected, no snapshot of their contents, and no
   restoration pass; a managed checkout is somebody's work and nothing here

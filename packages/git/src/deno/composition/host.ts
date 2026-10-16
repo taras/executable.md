@@ -59,7 +59,7 @@ import type {
   GitAuthentication,
   GitAuthenticationSession,
 } from "./authentication.ts";
-import { runProcess, type ProcessOutcome } from "./subprocess.ts";
+import { runProcess, type ProcessInvocation, type ProcessOutcome } from "./subprocess.ts";
 
 /** What one Git invocation reported. A nonzero exit is an answer, not a throw. */
 export type GitOutcome = ProcessOutcome;
@@ -106,6 +106,15 @@ export interface GitInvocation {
    * command that stays inside the materialization.
    */
   readonly attachment?: GitAttachment;
+  /**
+   * Handed the child as it is spawned, before anything is attached to it.
+   *
+   * Package-private, and forwarded unchanged to the one place a child exists.
+   * It is the only point at which a cancellation regression can observe the
+   * process this command really started — a wrapper around this host sees the
+   * call and its answer, never the child between them. Production passes none.
+   */
+  readonly observe?: ProcessInvocation["observe"];
 }
 
 export interface RepositoryHost {
@@ -211,6 +220,15 @@ function environment(
 
 export interface RepositoryHostOptions {
   /**
+   * How this host creates the isolation directory a Git session works in.
+   *
+   * Package-private, for the cancellation regression: the ownership window this
+   * leaf has is between starting the creation and being handed the path, and
+   * holding that open is the only way to cut it. Production states none and
+   * gets `mkdtemp`.
+   */
+  readonly directories?: { create(prefix: string): Promise<string> };
+  /**
    * What this host lends a remote-touching invocation.
    *
    * The trusted host decides which ambient mechanisms exist, which is why this
@@ -223,6 +241,7 @@ export interface RepositoryHostOptions {
 }
 
 export function denoRepositoryHost(options: RepositoryHostOptions = {}): RepositoryHost {
+  const directories = options.directories ?? { create: (prefix: string) => mkdtemp(prefix) };
   const authentication =
     options.authentication ??
     denoGitAuthentication(options.helper === undefined ? {} : { assembly: options.helper });
@@ -235,6 +254,7 @@ export function denoRepositoryHost(options: RepositoryHostOptions = {}): Reposit
       committedAt,
       identity,
       attachment,
+      observe,
     }: GitInvocation): Operation<GitOutcome> {
       // A command with no attachment reaches no authentication mechanism. That
       // is what makes a completed replay reach none: replay performs no remote
@@ -248,6 +268,7 @@ export function denoRepositoryHost(options: RepositoryHostOptions = {}): Reposit
           ...(attachment?.environment ?? {}),
         },
         ...(input === undefined ? {} : { input }),
+        ...(observe === undefined ? {} : { observe }),
       });
     },
 
@@ -278,7 +299,7 @@ export function denoRepositoryHost(options: RepositoryHostOptions = {}): Reposit
             yield* until(rm(made, { recursive: true, force: true }));
           }
         });
-        creating = mkdtemp(join(tmpdir(), "xmd-workflow-git-"));
+        creating = directories.create(join(tmpdir(), "xmd-workflow-git-"));
         const created = yield* until(creating);
         // The resolved path, not the one that was handed back. A temporary
         // directory reached through a symbolic link — `/var` on macOS is

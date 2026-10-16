@@ -6581,6 +6581,13 @@ the Worktree before its selector because a linked checkout writes administration
 every checkout of that repository shares, and when both are needed the slot
 comes first.
 
+What the selector itself acquires is shorter-lived than the entry. The
+authentication a clone opens belongs to that one clone, and its scope is torn
+down and joined before the placement is published — so no record and no body
+work precedes that cleanup, and a cleanup that fails takes the ordinary fatal
+path rather than leaving an acknowledged selection behind. The entry keeps what
+is entry-owned: the Git session, its isolation directory and both holds.
+
 A selection's durable append completes before its path is bound or its body
 expands. Native work may finish without being acknowledged: on cancellation
 before the append no completion is manufactured, and the continuation runs that

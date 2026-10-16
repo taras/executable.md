@@ -464,6 +464,12 @@ function parseWorktreeRequest(value: unknown): ReplWorktreeRequest | undefined {
  * and refused for the ambient owner: a record stating one for a checkout
  * nothing placed, or omitting one for a checkout something did, disagrees with
  * the kind it is named under.
+ *
+ * Absence is exactly `null`, and nothing else is read as it. A value that is
+ * present and is not a managed root — a number, an object, the empty string —
+ * is a record this version did not write, not a record that carried no root:
+ * reading the two as one answer would admit a malformed ambient placement and
+ * bind a path from it.
  */
 function parsePlacement(
   value: unknown,
@@ -481,6 +487,9 @@ function parsePlacement(
     return undefined;
   }
   const stated = read["managedRoot"];
+  if (stated !== null && text(stated) === undefined) {
+    return undefined;
+  }
   const managedRoot = stated === null ? undefined : text(stated);
   if ((kind === "ambient-owner") !== (managedRoot === undefined)) {
     return undefined;

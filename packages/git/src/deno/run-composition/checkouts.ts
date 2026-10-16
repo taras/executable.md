@@ -108,7 +108,19 @@ function unusable(sentence: string): never {
  * still in flight would find no handle to close and let teardown finish while
  * one was still coming.
  */
-function* writeMetadata(slot: string, metadata: ManagedMetadata): Operation<void> {
+export function* writeMetadata(
+  slot: string,
+  metadata: ManagedMetadata,
+  /**
+   * How the exclusive temporary sibling is opened.
+   *
+   * Package-private, for the cancellation regression: the window this
+   * discipline exists for is between starting the open and being handed the
+   * descriptor, and holding that open is the only way to cut it. Production
+   * states none.
+   */
+  openExclusive: (path: string) => Promise<FileHandle> = (path) => open(path, "wx"),
+): Operation<void> {
   const temporary = `${metadataOf(slot)}.${randomUUID()}`;
   yield* scoped(function* () {
     let opening: Promise<FileHandle> | undefined;
@@ -121,7 +133,7 @@ function* writeMetadata(slot: string, metadata: ManagedMetadata): Operation<void
         yield* until(opened.close());
       }
     });
-    opening = open(temporary, "wx");
+    opening = openExclusive(temporary);
     const handle = yield* until(opening);
     yield* until(handle.writeFile(metadataBytes(metadata), "utf8"));
   });

@@ -212,9 +212,22 @@ export function* useReplRepositoryRecording(options: ReplRecordingOptions = {}):
       return root;
     }
   });
-  const useSlots = lazily(entry, function* (): Operation<Leases> {
-    return yield* useLeases(yield* useRoot());
-  });
+  // One `Leases` per managed root, because a slot's lock sidecar lives under
+  // the root that slot belongs to. A replayed placement names the root it was
+  // selected under, which is not necessarily the one configured now — the same
+  // configured path can resolve somewhere else — and locking a saved slot under
+  // today's root would open a sidecar nobody else is holding.
+  const roots = new Map<string, () => Operation<Leases>>();
+  function useSlots(root: string): Operation<Leases> {
+    let acquire = roots.get(root);
+    if (acquire === undefined) {
+      acquire = lazily(entry, function* (): Operation<Leases> {
+        return yield* useLeases(root);
+      });
+      roots.set(root, acquire);
+    }
+    return acquire();
+  }
 
   // Everything a Repository identity needs, and only a root `<Worktree>` needs
   // it. An entry that writes files and selects nothing keeps PR 1's smaller
@@ -231,12 +244,14 @@ export function* useReplRepositoryRecording(options: ReplRecordingOptions = {}):
   // opening their own descriptor would be refused by the operating system for
   // contending with their own entry.
   const slots = new Map<string, () => Operation<void>>();
-  function holdSlot(kind: SlotKind, path: string, subject: string): Operation<void> {
-    const key = `${kind}:${path}`;
+  function holdSlot(root: string, kind: SlotKind, path: string, subject: string): Operation<void> {
+    // Keyed on the root as well as the slot: two placements of one entry may
+    // name the same slot path under two roots, and they are two sidecars.
+    const key = `${root}\u0000${kind}:${path}`;
     let acquire = slots.get(key);
     if (acquire === undefined) {
       acquire = lazily(entry, function* (): Operation<void> {
-        yield* (yield* useSlots()).hold(kind, path, subject);
+        yield* (yield* useSlots(root)).hold(kind, path, subject);
       });
       slots.set(key, acquire);
     }
@@ -261,10 +276,15 @@ export function* useReplRepositoryRecording(options: ReplRecordingOptions = {}):
     selections,
     remember(registration: ReplPlacementRegistration): void {
       const slot = registration.slot;
-      if (slot === undefined) {
+      // The root this placement recorded, not the one configured now: a
+      // restored placement's slot belongs to the root it was selected under,
+      // and that is the sidecar an ordinary owner of it holds.
+      const placedRoot = registration.placement.managedRoot;
+      if (slot === undefined || placedRoot === undefined) {
         // The ambient owner is a routing answer rather than a managed
-        // placement. Registering it for file coverage would shadow the saved
-        // ambient record a coroutine consumes at its own cursor.
+        // placement, and has neither a slot nor a root. Registering it for file
+        // coverage would shadow the saved ambient record a coroutine consumes
+        // at its own cursor.
         return;
       }
       const checkoutRoot = registration.placement.checkoutRoot;
@@ -274,7 +294,7 @@ export function* useReplRepositoryRecording(options: ReplRecordingOptions = {}):
         checkoutRoot,
         commonDirectory: registration.placement.commonDirectory,
         own(): Operation<void> {
-          return holdManagedPlacement(() => holdSlot(slot.kind, slot.path, subject));
+          return holdManagedPlacement(() => holdSlot(placedRoot, slot.kind, slot.path, subject));
         },
       };
       if (existing < 0) {

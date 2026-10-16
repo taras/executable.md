@@ -31,7 +31,7 @@ import {
   withResolvers,
 } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { mkdir, mkdtemp, realpath } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, symlink, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { API, hostFilesHandler } from "@executablemd/runtime";
@@ -50,7 +50,8 @@ import {
   CommonDirectoryLeaseError,
   useCommonDirectoryLease,
 } from "../src/deno/retained-repository/leases.ts";
-import { commonDirectoryLock } from "../src/deno/run-composition/placement.ts";
+import { commonDirectoryLock, repositorySlot } from "../src/deno/run-composition/placement.ts";
+import { useLeases } from "../src/deno/run-composition/leases.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { REPL_REPOSITORY_LOCAL } from "../src/retained-repository/records.ts";
 import { REPL_REPOSITORY_PLACEMENT } from "../src/retained-repository/placement-records.ts";
@@ -740,6 +741,94 @@ describe("an entry's hold on the checkout it is working in", () => {
     );
     expect(wrote.refusal).toBe(undefined);
     expect(after.writes).toEqual(["later.md"]);
+  });
+
+  it("E4: reacquires a restored placement's slot under the root it recorded", function* () {
+    const fixture = yield* useFixture();
+    const origin = yield* useOrigin(fixture.root, "recorded-origin");
+    // Two real managed roots and one configured spelling that resolves to one
+    // of them. The configured string never changes; only what it resolves to
+    // does, which is what makes this about the root a placement *recorded*
+    // rather than about a caller passing a different option.
+    const managedA = join(fixture.root, "managed-a");
+    const managedB = join(fixture.root, "managed-b");
+    const configured = join(fixture.root, "managed-link");
+    yield* until(mkdir(managedA, { recursive: true }));
+    yield* until(mkdir(managedB, { recursive: true }));
+    yield* until(symlink(managedA, configured, "dir"));
+
+    const source = [
+      `<Repository name="project" url=${JSON.stringify(origin)}>`,
+      QUESTION,
+      '<File path="after.md">after</File>',
+      "</Repository>",
+    ].join("\n");
+
+    const live = counters();
+    const prefix = yield* leftEntry(fixture.checkout, source, live, configured);
+    expect(placementRecords(prefix)).toBe(1);
+
+    yield* scoped(function* (): Operation<void> {
+      // An ordinary owner of that placement, holding its slot under the root
+      // the placement was selected under.
+      const slot = repositorySlot(managedA, origin, "project");
+      const held = yield* useLeases(managedA);
+      yield* held.hold("repository", slot, 'repository "project"');
+
+      // The positive control: a second independent acquisition of the same
+      // slot, under the same root, is refused. Without it, a continuation that
+      // "succeeded" would prove nothing about which sidecar was opened.
+      let control: string | undefined;
+      try {
+        yield* scoped(function* (): Operation<void> {
+          const competing = yield* useLeases(managedA);
+          yield* competing.hold("repository", slot, 'repository "project"');
+        });
+      } catch (error) {
+        control = error instanceof Error ? error.message : String(error);
+      }
+      expect(control).toContain("another process is working in the managed checkout");
+
+      // The configured spelling now resolves somewhere else. The placement
+      // still names the root it recorded, so the continuation's new write has
+      // to meet the holder above — a lock taken under today's root would open a
+      // sidecar nobody holds and let the write through.
+      yield* until(unlink(configured));
+      yield* until(symlink(managedB, configured, "dir"));
+
+      const after = counters();
+      const continued = yield* entry(
+        fixture.checkout,
+        source,
+        new InMemoryStream([...prefix]),
+        after,
+        answeringOnce(),
+        configured,
+      );
+      expect(continued.refusal).toContain("another process is working in the managed checkout");
+      expect(after.writes).toEqual([]);
+    });
+
+    // The holder is gone, so the same continuation now performs its write in
+    // the checkout the placement recorded.
+    const released = counters();
+    const later = yield* entry(
+      fixture.checkout,
+      source,
+      new InMemoryStream([...prefix]),
+      released,
+      answeringOnce(),
+      configured,
+    );
+    expect(later.refusal).toBe(undefined);
+    expect(released.writes).toEqual(["after.md"]);
+    // And it landed in the checkout the placement recorded, under root A,
+    // while the configured spelling still resolves to B.
+    expect(
+      yield* readTextFile(
+        join(repositorySlot(managedA, origin, "project"), "checkout", "after.md"),
+      ),
+    ).toBe("after");
   });
 
   it("E8: opens, locks, releases and closes each descriptor exactly once", function* () {
