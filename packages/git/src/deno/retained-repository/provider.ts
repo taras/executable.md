@@ -17,24 +17,28 @@
  *
  * ## What it is not
  *
- * This records file and directory work and the managed checkouts a document
- * selects to do it in: authored and generated writes, authored deletions, the
- * directory an authored `<Dir>` ensures, and the `<Repository>` and
- * `<Worktree>` selections that say where. There is no local Git operation —
- * no Add, Switch, Commit or Push — and nothing external. The components for
- * those stay declared where they already are and refuse through their own
- * unchanged missing-provider defaults, and the selection handlers installed
- * here are not the ordinary all-feature provider, which would enable them.
+ * This records file and directory work, the managed checkouts a document
+ * selects to do it in, and the three local Git operations: authored and
+ * generated writes, authored deletions, the directory an authored `<Dir>`
+ * ensures, the `<Repository>` and `<Worktree>` selections that say where, and
+ * `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` in the checkout those select.
+ * There is nothing external — no `<Git.Push>`, no pull request, no Issue. Those
+ * components stay declared where they already are and refuse through their own
+ * unchanged missing-provider defaults, and what is installed here is not the
+ * ordinary all-feature provider, which would enable them.
  *
  * ## Installing it reaches nothing
  *
- * No directory, no lease, no `git`, no filesystem read, and no managed root.
- * The ambient checkout is discovered by the first mutation that needs to know
- * whether it is inside one, and an entry that mutates nothing never looks. The
- * managed root is created by the first selection, and an entry that selects
- * nothing never makes one. Being outside a checkout is remembered as "there is
- * none" rather than refused, so an entry writing files beside the document runs
- * exactly as it would anywhere else.
+ * No directory, no lease, no `git`, no filesystem read, no commit identity and
+ * no managed root. The ambient checkout is discovered by the first mutation that
+ * needs to know whether it is inside one, and an entry that mutates nothing
+ * never looks. The managed root is created by the first selection, and an entry
+ * that selects nothing never makes one. The invoking person's author and
+ * committer are read by the first live `<Git.Commit>`, and an entry that
+ * commits nothing — or replays a completed commit — asks the host nothing about
+ * who it is. Being outside a checkout is remembered as "there is none" rather
+ * than refused, so an entry writing files beside the document runs exactly as it
+ * would anywhere else.
  */
 
 import { until, useScope } from "effection";
@@ -51,17 +55,23 @@ import type { GitAuthentication } from "../composition/authentication.ts";
 import { Repository } from "../../composition/api.ts";
 import type { RepositoryRequest, WorktreeRequest } from "../../composition/api.ts";
 import type { RepositorySelection } from "../../composition/selection.ts";
+import { Git } from "../../composition/git-api.ts";
 import { discoverAmbientCheckout, discoverAmbientRepository } from "../run-composition/ambient.ts";
 import type { AmbientRepository } from "../run-composition/ambient.ts";
+import { captureCommitIdentity, denoIdentityReader } from "../run-composition/identity.ts";
+import type { GitCommitIdentity, IdentityReader } from "../run-composition/identity.ts";
 import { lazily } from "../run-composition/lazy.ts";
 import { useLeases } from "../run-composition/leases.ts";
 import type { Leases, SlotKind } from "../run-composition/leases.ts";
+import type { RegisteredCheckout } from "../run-composition/operations.ts";
 import { selectionRegistry } from "../selections.ts";
 import { holdManagedPlacement, useCommonDirectoryLease } from "./leases.ts";
 import type { ReplAmbientCheckout } from "../../retained-repository/records.ts";
 import { currentCoroutine, selectedCheckout } from "./local.ts";
 import { replFileMiddleware } from "./files.ts";
 import type { ReplLocalRecorder, ReplManagedPlacement } from "./files.ts";
+import { replGitMiddleware } from "./git.ts";
+import type { ReplGitCheckout, ReplGitEntry } from "./git.ts";
 import {
   placementSubject,
   selectReplAmbientOwner,
@@ -93,6 +103,16 @@ export interface ReplRecordingOptions {
   readonly helper?: HelperAssembly;
   /** What this host lends a clone that needs to prove who it is. */
   readonly authentication?: GitAuthentication;
+  /**
+   * How this host reads the invoking person's effective Git identity.
+   *
+   * Absent uses native Git with the caller's own environment and the directory
+   * the entry started in, which is the whole question. A suite substitutes it to
+   * say what this host knows — including that it knows nothing — and to observe
+   * that a completed Commit asks nothing at all. Nothing a document, a prop or a
+   * Context value holds can select or replace it.
+   */
+  readonly identity?: IdentityReader;
 }
 
 /**
@@ -158,6 +178,13 @@ export function* useReplRepositoryRecording(options: ReplRecordingOptions = {}):
   // sibling renders at. Empty for an entry with no managed root, which is what
   // leaves PR 1's ambient routing the only route there.
   const placements: ReplManagedPlacement[] = [];
+
+  // The checkouts native Git may run in, which is a wider set than the one
+  // above: the ambient owner a root `<Worktree>` recorded is a checkout this
+  // entry can commit in, and it is deliberately not a managed placement for
+  // file coverage — registering it there would shadow the saved ambient record a
+  // coroutine consumes at its own cursor.
+  const gitCheckouts: ReplGitCheckout[] = [];
 
   const recorder: ReplLocalRecorder = {
     *selection(): Operation<ReplAmbientCheckout | undefined> {
@@ -275,6 +302,10 @@ export function* useReplRepositoryRecording(options: ReplRecordingOptions = {}):
     serialize,
     selections,
     remember(registration: ReplPlacementRegistration): void {
+      // Every successfully parsed placement, the ambient owner included: a
+      // Repository this entry authenticated is one its Git operations may run
+      // in, whether or not a managed root placed it.
+      rememberGitCheckout(registration);
       const slot = registration.slot;
       // The root this placement recorded, not the one configured now: a
       // restored placement's slot belongs to the root it was selected under,
@@ -305,9 +336,60 @@ export function* useReplRepositoryRecording(options: ReplRecordingOptions = {}):
     },
   };
 
-  // Repository selection, and nothing else this package can do. Installing the
-  // ordinary all-feature provider here would enable local Git, publication and
-  // external workers, none of which this delivery retains.
+  /**
+   * Remember where native Git may run, replacing an earlier registration of
+   * the same checkout.
+   *
+   * Routing data only, derived from the placement rather than read out of the
+   * journal: the repository's own name, the Worktree's display name for a
+   * linked checkout and `null` otherwise. No origin, because a local result
+   * confers no publication evidence and this provider publishes nothing.
+   *
+   * Repeated registration replaces equivalent routing data and never suppresses
+   * a durable call: which operations happened is the journal's answer, and this
+   * is only where they are allowed to happen.
+   */
+  function rememberGitCheckout(registration: ReplPlacementRegistration): void {
+    const placement = registration.placement;
+    const checkout: RegisteredCheckout = Object.freeze({
+      root: placement.checkoutRoot,
+      identity: placement.identity,
+      repositoryName: placement.identity.name,
+      worktreeName: placement.kind === "worktree" ? placement.displayName : null,
+      origin: undefined,
+    });
+    const held: ReplGitCheckout = Object.freeze({ checkout, registration });
+    const existing = gitCheckouts.findIndex((entry_) => entry_.checkout.root === checkout.root);
+    if (existing < 0) {
+      gitCheckouts.push(held);
+      return;
+    }
+    gitCheckouts[existing] = held;
+  }
+
+  // From the trusted host: the four strings a commit records about who made it,
+  // read from the directory this entry started in. A host that cannot say is
+  // remembered as not saying for the rest of the entry, and only `<Git.Commit>`
+  // refuses — so the read happens when a commit needs it, not before, and a
+  // completed Commit's replay never reaches it.
+  const useIdentity = lazily(entry, function* (): Operation<GitCommitIdentity | undefined> {
+    return yield* captureCommitIdentity(options.identity ?? denoIdentityReader(directory));
+  });
+
+  const gitEntry: ReplGitEntry = {
+    git: useGit,
+    identity: useIdentity,
+    holdSlot,
+    holdCommon: (commonDirectory: string) => holdCommon(commonDirectory),
+    serialize,
+    selections,
+    checkouts: () => gitCheckouts,
+  };
+
+  // Repository selection and the three local operations, and nothing else this
+  // package can do. Installing the ordinary all-feature provider here would
+  // enable publication and the external workers, neither of which this delivery
+  // retains.
   yield* Repository.around(
     {
       select: ([request]: [RepositoryRequest]): Operation<RepositorySelection> =>
@@ -323,4 +405,9 @@ export function* useReplRepositoryRecording(options: ReplRecordingOptions = {}):
     },
     { at: "min" },
   );
+
+  // The implementation slot, where the ordinary provider installs its own, so
+  // middleware a document or a host puts above this composes exactly as it does
+  // in an ordinary run.
+  yield* Git.around(replGitMiddleware(gitEntry), { at: "min" });
 }

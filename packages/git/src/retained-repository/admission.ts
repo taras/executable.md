@@ -45,12 +45,19 @@ import {
   replPlacementRecordName,
   REPL_REPOSITORY_PLACEMENT,
 } from "./placement-records.ts";
+import {
+  parseReplGitRecord,
+  replGitFingerprint,
+  replGitRecordName,
+  REPL_REPOSITORY_GIT,
+} from "./git-records.ts";
 
 /** The durable types this reader owns, and the only ones it reads. */
 const OWNED: ReadonlySet<string> = new Set([
   REPL_REPOSITORY_LOCAL,
   REPL_REPOSITORY_SELECTION,
   REPL_REPOSITORY_PLACEMENT,
+  REPL_REPOSITORY_GIT,
 ]);
 
 /** Why a history cannot be continued. */
@@ -97,6 +104,14 @@ export function* admitReplRepositoryHistory(retained: readonly DurableEvent[]): 
       continue;
     }
     if (event.result.status !== "ok") {
+      // A local Git operation's own refusals live inside its successful
+      // payload, so a failed protocol envelope under that type is not a record
+      // this host ever wrote — and what it says about work already done is
+      // unknown. The three older types keep their existing policy, where a
+      // non-ok envelope is the engine's own failure rather than theirs.
+      if (type === REPL_REPOSITORY_GIT) {
+        throw malformed(REPL_REPOSITORY_GIT);
+      }
       continue;
     }
     const payload = event.result.value;
@@ -116,7 +131,37 @@ export function* admitReplRepositoryHistory(retained: readonly DurableEvent[]): 
       yield* admitPlacement(payload, event.description.name);
       continue;
     }
+    if (type === REPL_REPOSITORY_GIT) {
+      yield* admitGit(payload, event.description.name);
+      continue;
+    }
     yield* admitLocal(payload, event.description.name);
+  }
+}
+
+/**
+ * Hold one recorded local Git operation to the request it carries.
+ *
+ * The same two questions the other records answer, over a record whose success
+ * side is an operation result: a saved result that does not describe the request
+ * beside it — another checkout's repository, another branch, another message, a
+ * transition the operation does not make — does not parse, so it is refused here
+ * rather than binding an object id on replay.
+ *
+ * It runs no `git` and opens nothing. Whether the branch a record names is still
+ * there is not this reader's question and is not a question a continuation asks.
+ */
+function* admitGit(payload: unknown, name: string): Operation<void> {
+  const record = parseReplGitRecord(payload);
+  if (record === undefined) {
+    throw malformed(REPL_REPOSITORY_GIT);
+  }
+  const fingerprint = yield* replGitFingerprint(record.request);
+  if (record.fingerprint !== fingerprint) {
+    throw changed(REPL_REPOSITORY_GIT);
+  }
+  if (name !== replGitRecordName({ operation: record.operation, fingerprint })) {
+    throw misnamed(REPL_REPOSITORY_GIT);
   }
 }
 

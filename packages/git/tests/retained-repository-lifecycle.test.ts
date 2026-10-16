@@ -43,6 +43,7 @@ import { Execution } from "@executablemd/core/api";
 import { executeInstalled } from "@executablemd/core/host";
 import { useAdvisoryLock } from "@executablemd/workflow/deno";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
+import type { GitInvocation, GitOutcome, RepositoryHost } from "../src/deno/composition/host.ts";
 import { gitSession } from "../src/deno/composition/git.ts";
 import { useReplRepositoryRecording } from "../src/deno/retained-repository/provider.ts";
 import { admitReplRepositoryHistory } from "../src/retained-repository/admission.ts";
@@ -52,6 +53,7 @@ import {
 } from "../src/deno/retained-repository/leases.ts";
 import {
   commonDirectoryLock,
+  lockOf,
   repositorySlot,
   worktreeSlot,
 } from "../src/deno/run-composition/placement.ts";
@@ -59,6 +61,7 @@ import { useLeases } from "../src/deno/run-composition/leases.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { REPL_REPOSITORY_LOCAL } from "../src/retained-repository/records.ts";
 import { REPL_REPOSITORY_PLACEMENT } from "../src/retained-repository/placement-records.ts";
+import { REPL_REPOSITORY_GIT } from "../src/retained-repository/git-records.ts";
 
 /** Let every ready task run, so "reached its wait" is about turns. */
 function* settled(turns = 8): Operation<void> {
@@ -110,10 +113,38 @@ interface Counters {
   reads: string[];
   writes: string[];
   deletes: string[];
+  /** Every `git` invocation this entry ran, as its argument list. */
+  commands: string[][];
 }
 
 function counters(): Counters {
-  return { reads: [], writes: [], deletes: [] };
+  return { reads: [], writes: [], deletes: [], commands: [] };
+}
+
+/**
+ * The production host, with every `git` it runs counted.
+ *
+ * Wrapped rather than replaced: what the Git rows below need to know is whether
+ * a performer ran at all, and the only honest way to answer is to let the real
+ * `add` happen and watch.
+ */
+function countingHost(counted: Counters): RepositoryHost {
+  const host = denoRepositoryHost();
+  return {
+    *git(invocation: GitInvocation): Operation<GitOutcome> {
+      counted.commands.push([...invocation.args]);
+      return yield* host.git(invocation);
+    },
+    useDirectory: () => host.useDirectory(),
+    ...(host.useAuthentication === undefined
+      ? {}
+      : { useAuthentication: host.useAuthentication.bind(host) }),
+  };
+}
+
+/** The Git subcommands one entry issued, in order. */
+function subcommands(counted: Counters): string[] {
+  return counted.commands.map((args) => args.find((arg) => !arg.startsWith("-")) ?? "");
 }
 
 function countingFiles(counted: Counters): FilesHandler {
@@ -208,7 +239,10 @@ function entry(
     yield* useCompositionComponents();
     yield* Execution.around({
       *init(_args, next): Operation<void> {
-        yield* useReplRepositoryRecording(root === undefined ? {} : { root });
+        yield* useReplRepositoryRecording({
+          host: countingHost(counted),
+          ...(root === undefined ? {} : { root }),
+        });
         yield* next();
       },
     });
@@ -246,6 +280,12 @@ function entry(
 function placementRecords(events: readonly DurableEvent[]): number {
   return events.filter(
     (event) => event.type === "yield" && event.description.type === REPL_REPOSITORY_PLACEMENT,
+  ).length;
+}
+
+function gitRecords(events: readonly DurableEvent[]): number {
+  return events.filter(
+    (event) => event.type === "yield" && event.description.type === REPL_REPOSITORY_GIT,
   ).length;
 }
 
@@ -971,6 +1011,185 @@ describe("an entry's hold on the checkout it is working in", () => {
       // And not closed a second time on the way out.
       expect(observed.events()).toEqual(["open", "lock-threw", "close"]);
     });
+  });
+
+  it("E5: refuses new Git in a restored placement whose slot is held, until teardown", function* () {
+    const fixture = yield* useFixture();
+    const managed = join(fixture.root, "repositories");
+    const origin = yield* useOrigin(fixture.root, "slot-origin");
+    // A managed Repository selected, left at a question, and reopened with a
+    // Git operation as the first genuinely new work inside it.
+    // A lexical `<Repository>` expands its content with the checkout as the
+    // contextual working directory, so the file and the staging below are
+    // inside the managed checkout rather than beside the document.
+    const source = [
+      `<Repository name="project" url=${JSON.stringify(origin)}>`,
+      '<File path="staged.md">staged</File>',
+      QUESTION,
+      '<Git.Add paths="staged.md" />',
+      "</Repository>",
+    ].join("\n");
+
+    const first = counters();
+    const prefix = yield* leftEntry(fixture.checkout, source, first, managed);
+    expect(placementRecords(prefix)).toBe(1);
+    expect(gitRecords(prefix)).toBe(0);
+
+    yield* scoped(function* (): Operation<void> {
+      // Another live entry holding the same managed slot.
+      const holding = counters();
+      const acquired = withResolvers<void>();
+      const release = withResolvers<void>();
+      yield* spawn(function* (): Operation<void> {
+        yield* entry(
+          fixture.elsewhere,
+          [
+            `<Repository name="project" url=${JSON.stringify(origin)} as="project" />`,
+            QUESTION,
+          ].join("\n"),
+          new InMemoryStream(),
+          holding,
+          function* (): Operation<void> {
+            acquired.resolve();
+            yield* release.operation;
+          },
+          managed,
+        );
+      });
+      yield* acquired.operation;
+
+      const blocked = counters();
+      const refused = yield* entry(
+        fixture.checkout,
+        source,
+        new InMemoryStream([...prefix]),
+        blocked,
+        answeringOnce(),
+        managed,
+      );
+      // Refused before the performer and before any append: no `git add` ran,
+      // and nothing was written down for an operation that never happened.
+      expect(refused.refusal).toContain("another process is working in the managed checkout");
+      expect(subcommands(blocked)).not.toContain("add");
+      expect(gitRecords(refused.events)).toBe(0);
+
+      release.resolve();
+    });
+
+    // The holder is gone, so the same first-new-Git operation runs — the
+    // positive control for the refusal above.
+    const after = counters();
+    const later = yield* entry(
+      fixture.checkout,
+      source,
+      new InMemoryStream([...prefix]),
+      after,
+      answeringOnce(),
+      managed,
+    );
+    expect(later.refusal).toBe(undefined);
+    expect(subcommands(after)).toContain("add");
+    expect(gitRecords(later.events)).toBe(1);
+  });
+
+  it("E5: holds the slot before the shared Git directory, and replay holds neither", function* () {
+    const fixture = yield* useFixture();
+    const managed = join(fixture.root, "repositories");
+    const origin = yield* useOrigin(fixture.root, "shared-git");
+    const commonDirectory = yield* until(realpath(join(origin, ".git")));
+    const commonLock = commonDirectoryLock(commonDirectory);
+
+    // One linked placement of the repository the entry was opened in, with a
+    // Git operation acknowledged inside it and a second one still to run.
+    const source = [
+      '<Worktree name="observed" branch="observed">',
+      '<File path="probe.md">probe</File>',
+      '<Git.Add paths="probe.md" />',
+      QUESTION,
+      '<File path="later.md">later</File>',
+      '<Git.Add paths="later.md" />',
+      "</Worktree>",
+    ].join("\n");
+
+    const first = counters();
+    const prefix = yield* leftEntry(origin, source, first, managed);
+    expect(gitRecords(prefix)).toBe(1);
+    expect(subcommands(first)).toContain("add");
+
+    // Derived from the canonical root the entry created and canonicalized, so
+    // these are the two sidecars the provider itself opens.
+    const canonical = yield* until(realpath(managed));
+    const slotLock = lockOf(
+      canonical,
+      "worktree",
+      worktreeSlot(canonical, commonDirectory, "observed"),
+    );
+
+    yield* scoped(function* (): Operation<void> {
+      // A different linked checkout of the same repository, held by another
+      // entry — which means the shared Git directory's mutation lease too.
+      const holding = counters();
+      const acquired = withResolvers<void>();
+      const release = withResolvers<void>();
+      yield* spawn(function* (): Operation<void> {
+        yield* entry(
+          origin,
+          [
+            '<Worktree name="held" branch="held">',
+            '<File path="held.md">held</File>',
+            QUESTION,
+            "</Worktree>",
+          ].join("\n"),
+          new InMemoryStream(),
+          holding,
+          function* (): Operation<void> {
+            acquired.resolve();
+            yield* release.operation;
+          },
+          managed,
+        );
+      });
+      yield* acquired.operation;
+
+      const observed = yield* useObservedDescriptors();
+      const blocked = counters();
+      const refused = yield* entry(
+        origin,
+        source,
+        new InMemoryStream([...prefix]),
+        blocked,
+        answeringOnce(),
+        managed,
+      );
+
+      // The completed Git operation replayed with no native work and no hold on
+      // the shared Git directory at all; the new one refused under the holder's
+      // mutation lease, before it ran and before it appended anything.
+      expect(refused.refusal).toContain("Another XMD entry or process holds this checkout");
+      expect(subcommands(blocked)).not.toContain("add");
+      expect(gitRecords(refused.events)).toBe(gitRecords(prefix));
+      const opened = observed.opened();
+      // The slot came back first and the shared directory second, which is the
+      // order the live path takes them in.
+      expect(opened.indexOf(slotLock) >= 0).toBe(true);
+      expect(opened.indexOf(commonLock) > opened.indexOf(slotLock)).toBe(true);
+
+      release.resolve();
+    });
+
+    // After the holder's joined release the same new work succeeds.
+    const after = counters();
+    const later = yield* entry(
+      origin,
+      source,
+      new InMemoryStream([...prefix]),
+      after,
+      answeringOnce(),
+      managed,
+    );
+    expect(later.refusal).toBe(undefined);
+    expect(subcommands(after)).toContain("add");
+    expect(gitRecords(later.events)).toBe(gitRecords(prefix) + 1);
   });
 });
 

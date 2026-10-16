@@ -23,7 +23,7 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import { type Operation, scoped, sleep, until } from "effection";
 import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { execFile } from "node:child_process";
-import { mkdir, readdir } from "node:fs/promises";
+import { chmod, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import { allocate, showing } from "./pty.ts";
@@ -593,6 +593,324 @@ export function replOrdinaryFileWork(repl: ReplCommand): Operation<void> {
     // through its last authored operation, so this one is absent because the
     // entry is waiting rather than because it has not got there yet.
     expect(yield* exists(join(checkout, "after.md"))).toBe(false);
+
+    yield* reach(pty, "[exit]");
+    yield* pty.type("\r");
+    expect(yield* ended(pty)).toBe(0);
+  });
+}
+
+/**
+ * A `git` on `PATH` that logs every invocation and forwards to the real one.
+ *
+ * The local Git journey's one new question is whether a reopened prefix runs
+ * `git` at all — including the apparently observational commands, `write-tree`
+ * and `git var` among them. Counting them from outside the process is the only
+ * way to answer it for a *packaged* binary, which has no seam a suite can
+ * substitute.
+ *
+ * It forwards unchanged to the real Git it resolved, so what runs is the real
+ * command with the real arguments. Only the `xmd` invocation gets it on `PATH`;
+ * this journey's own fixture commands keep the host's own Git, so the log holds
+ * what the document did and nothing this harness did.
+ */
+function* gitShim(home: string): Operation<{ readonly prefix: string; readonly log: string }> {
+  const real = yield* until(
+    new Promise<string>((resolve, reject) => {
+      execFile("sh", ["-c", "command -v git"], (error, stdout) =>
+        error === null ? resolve(stdout.trim()) : reject(error),
+      );
+    }),
+  );
+  if (real === "") {
+    throw new Error("this host has no git on PATH, so there is nothing to forward to");
+  }
+  const directory = join(home, "git-shim");
+  yield* until(mkdir(directory, { recursive: true }));
+  const log = join(home, "git-commands.log");
+  const shim = join(directory, "git");
+  yield* writeTextFile(
+    shim,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${shellQuote(log)}\nexec ${shellQuote(real)} "$@"\n`,
+  );
+  yield* until(chmod(shim, 0o755));
+  yield* writeTextFile(log, "");
+  return { prefix: `PATH=${shellQuote(directory)}:$PATH`, log };
+}
+
+/** Every `git` the shim has seen since it was last forgotten. */
+function* logged(log: string): Operation<string[]> {
+  const held = (yield* exists(log)) ? yield* readTextFile(log) : "";
+  return held.split("\n").filter((line) => line !== "");
+}
+
+/** One seeded checkout with a commit in it, so a Commit has a parent. */
+function* seedCommitted(home: string): Operation<string> {
+  const checkout = join(home, "checkout");
+  yield* until(mkdir(checkout, { recursive: true }));
+  yield* git(home, ["init", "-b", "main", checkout]);
+  yield* writeTextFile(join(checkout, "seed.md"), "seed\n");
+  yield* git(checkout, ["add", "seed.md"], home);
+  yield* git(checkout, ["commit", "-m", "seed"], home);
+  return checkout;
+}
+
+/** What one `git` command printed, for a fixture that reads the checkout. */
+function gitSaid(cwd: string, args: readonly string[], home: string): Operation<string> {
+  return until(
+    new Promise<string>((resolve, reject) => {
+      execFile(
+        "git",
+        [...args],
+        {
+          cwd,
+          env: {
+            ...process.env,
+            HOME: home,
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_AUTHOR_NAME: "Journey",
+            GIT_AUTHOR_EMAIL: "journey@example.test",
+            GIT_COMMITTER_NAME: "Journey",
+            GIT_COMMITTER_EMAIL: "journey@example.test",
+          },
+        },
+        (error, stdout) => (error === null ? resolve(stdout.trim()) : reject(error)),
+      );
+    }),
+  );
+}
+
+/** Wait until the checkout's HEAD names something other than this commit. */
+function* moved(checkout: string, home: string, from: string): Operation<string> {
+  const deadline = Date.now() + ACT_MS;
+  while (true) {
+    const head = yield* gitSaid(checkout, ["rev-parse", "HEAD"], home);
+    if (head !== from) {
+      return head;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`${checkout} never moved off ${from}`);
+    }
+    yield* sleep(200);
+  }
+}
+
+/** Where the local Git journey's entry works: the ambient checkout, or a worktree. */
+export type GitJourney = "ambient" | "worktree";
+
+const GIT_QUESTION =
+  '<Elicit schema={{ type: "object", properties: { decision: { type: "string", enum: ["continue"] } }, required: ["decision"], additionalProperties: false }} as="answer">Recorded commit: {commit}. Continue this experiment?</Elicit>';
+
+/** The entry this journey types, as the specification shows it. */
+function gitEntry(through: GitJourney, origin: string): string {
+  const body = [
+    '<File path="note.md">first</File>',
+    '<Git.Commit message="Record experiment" as="commit">',
+    '<Git.Add paths="note.md" />',
+    "</Git.Commit>",
+    GIT_QUESTION,
+    '<File path="after.md">continued</File>',
+  ];
+  if (through === "ambient") {
+    return body.join("\n");
+  }
+  // The self-closing spelling binds the checkout path, and a `<Dir>` sibling
+  // renders its descendants at exactly that path — while the enclosing
+  // `<Repository>` stays the owner every Git element below belongs to.
+  return [
+    `<Repository name="project" url=${JSON.stringify(origin)}>`,
+    '<Worktree name="experiment" branch="experiment" as="worktree" />',
+    "<Dir path={worktree}>",
+    ...body,
+    "</Dir>",
+    "</Repository>",
+  ].join("\n");
+}
+
+/** A new entry that stages and commits whatever the checkout holds now. */
+function gitLiveCommit(through: GitJourney, origin: string): string {
+  const body = [
+    '<Git.Add paths="note.md" />',
+    '<Git.Commit message="Record again" as="again" />',
+    "again is {again}",
+  ];
+  if (through === "ambient") {
+    return body.join("\n");
+  }
+  return [
+    `<Repository name="project" url=${JSON.stringify(origin)}>`,
+    '<Worktree name="experiment" branch="experiment" as="worktree" />',
+    "<Dir path={worktree}>",
+    ...body,
+    "</Dir>",
+    "</Repository>",
+  ].join("\n");
+}
+
+/**
+ * The whole journey again, through the three local Git operations.
+ *
+ * The one addition this delivery is about: the entry stages and commits, and
+ * the object id it bound is what the question still shows after the checkout
+ * has moved on. A reopened prefix runs no `git` at all, which the shim on
+ * `PATH` is what proves — and a *new* entry commits today's staged work, which
+ * is what says this is retention rather than a cache.
+ */
+export function replGitJourney(repl: ReplCommand, through: GitJourney): Operation<void> {
+  return scoped(function* (): Operation<void> {
+    const home = yield* useTempDirectory("xmd-repl-git-pty-");
+    const shim = yield* gitShim(home);
+    const ambient = yield* seedCommitted(home);
+    const origin = through === "ambient" ? "" : yield* seedOrigin(home);
+    // The ambient journey is typed from inside the checkout; the managed one
+    // from a directory inside no checkout, so what it works in is the placement
+    // it selected.
+    const away = join(home, "away");
+    yield* until(mkdir(away, { recursive: true }));
+    const from = through === "ambient" ? ambient : away;
+    const open = (args: readonly string[]): string =>
+      `cd ${shellQuote(from)} && ${shim.prefix} ${repl(args)}`;
+
+    const first = yield* allocate(open(["repl", "--deny-all"]), home);
+    yield* showing(first, "[exit]", REACH_MS);
+    yield* first.type(gitEntry(through, origin));
+    yield* sleep(500);
+    yield* first.type("\r");
+
+    const working = through === "ambient" ? ambient : yield* managedCheckout(home, "worktrees");
+
+    // The prefix ran: the file is there, the commit was made, and the write
+    // after the question is not.
+    yield* holding(join(working, "note.md"), "first");
+    yield* showing(first, "waiting for an answer", ACT_MS);
+    expect(yield* exists(join(working, "after.md"))).toBe(false);
+    const recorded = yield* gitSaid(working, ["rev-parse", "HEAD"], home);
+    expect(recorded).toMatch(/^[0-9a-f]{40}$/);
+    // The commit holds exactly what the staging child staged.
+    expect(yield* gitSaid(working, ["show", "HEAD:note.md"], home)).toBe("first");
+    // And the document's own Git really ran, which is what makes the empty log
+    // below say something.
+    expect((yield* logged(shim.log)).length > 0).toBe(true);
+
+    yield* reach(first, "[exit]");
+    yield* first.type("\r");
+    expect(yield* ended(first)).toBe(0);
+    const location = printedLocation((yield* first.shows()).join("\n"));
+
+    // Changed from outside: the file, the index and HEAD all move on, which is
+    // exactly what this execution model allows.
+    yield* writeTextFile(join(working, "note.md"), "second");
+    yield* gitSaid(working, ["add", "note.md"], home);
+    yield* writeTextFile(join(working, "staged.md"), "staged\n");
+    yield* gitSaid(working, ["add", "staged.md"], home);
+    yield* gitSaid(working, ["commit", "-m", "theirs"], home);
+    const theirs = yield* gitSaid(working, ["rev-parse", "HEAD"], home);
+    expect(theirs).not.toBe(recorded);
+    // And something is left staged and uncommitted, so "the index did not
+    // move" below is a fact about work a replayed Commit would have consumed.
+    yield* writeTextFile(join(working, "today.md"), "today");
+    yield* gitSaid(working, ["add", "today.md"], home);
+    const theirIndex = yield* gitSaid(working, ["write-tree"], home);
+    expect(theirIndex).not.toBe(yield* gitSaid(working, ["rev-parse", "HEAD^{tree}"], home));
+
+    // Forgotten here, so what the log holds afterwards is what *reopening* ran.
+    yield* writeTextFile(shim.log, "");
+
+    const second = yield* allocate(open(["repl", "--deny-all", location]), home);
+    yield* showing(second, "[exit]", REACH_MS);
+    yield* showing(second, "waiting for an answer", ACT_MS);
+
+    // No completed operation ran again, and no `git` ran at all — not a
+    // `write-tree`, not a `git var`, not a `rev-parse`.
+    expect(yield* logged(shim.log)).toEqual([]);
+    expect(yield* readTextFile(join(working, "note.md"))).toBe("second");
+    expect(yield* gitSaid(working, ["rev-parse", "HEAD"], home)).toBe(theirs);
+    expect(yield* gitSaid(working, ["write-tree"], home)).toBe(theirIndex);
+    expect(yield* exists(join(working, "after.md"))).toBe(false);
+
+    yield* reach(second, "[answer]");
+    yield* second.type("\r");
+    // The saved object id, which describes the earlier commit rather than
+    // today's HEAD.
+    yield* showing(second, `Recorded commit: ${recorded}`, ACT_MS);
+    yield* click(second, "( ) continue");
+    yield* showing(second, "[ok] entry-1", ACT_MS);
+
+    // The suffix write executed, for the first time, on the answer.
+    yield* holding(join(working, "after.md"), "continued");
+
+    yield* reach(second, "[exit]");
+    yield* second.type("\r");
+    expect(yield* ended(second)).toBe(0);
+
+    // A separate new entry: its Add and its Commit are new work, so they stage
+    // and commit what the checkout holds now.
+    const third = yield* allocate(open(["repl", "--deny-all", location]), home);
+    yield* showing(third, "[exit]", REACH_MS);
+    yield* third.type(gitLiveCommit(through, origin));
+    yield* sleep(500);
+    yield* third.type("\r");
+    const today = yield* moved(working, home, theirs);
+    yield* showing(third, `again is ${today}`, ACT_MS);
+    // Today's staged work, not the commit the earlier entry retained.
+    expect(today).not.toBe(recorded);
+    expect(yield* gitSaid(working, ["show", "HEAD:today.md"], home)).toBe("today");
+    expect(yield* gitSaid(working, ["show", "HEAD:note.md"], home)).toBe("second");
+
+    yield* reach(third, "[exit]");
+    yield* third.type("\r");
+    expect(yield* ended(third)).toBe(0);
+  });
+}
+
+/**
+ * What the three local Git operations do on a runtime with no native setup.
+ *
+ * Node and Bun start a REPL and do ordinary file and directory work; neither
+ * installs a Git provider, because the Deno adapter's module graph reaches
+ * `node:sqlite` and Bun has not got one. So `<Git.Add>`, `<Git.Switch>` and
+ * `<Git.Commit>` there say no provider is installed rather than reaching a
+ * native operation — and say it before anything is staged, switched or
+ * committed.
+ */
+export function replUnsupportedGit(repl: ReplCommand): Operation<void> {
+  return scoped(function* (): Operation<void> {
+    const home = yield* useTempDirectory("xmd-repl-git-pty-");
+    const shim = yield* gitShim(home);
+    const checkout = yield* seedCommitted(home);
+    const head = yield* gitSaid(checkout, ["rev-parse", "HEAD"], home);
+    const index = yield* gitSaid(checkout, ["write-tree"], home);
+    yield* writeTextFile(shim.log, "");
+
+    const pty = yield* allocate(
+      `cd ${shellQuote(checkout)} && ${shim.prefix} ${repl(["repl", "--deny-all"])}`,
+      home,
+    );
+    yield* showing(pty, "[exit]", REACH_MS);
+    // All three in one printing region, because an absent provider is an
+    // ordinary refusal a region recovers: each of them reports, and the
+    // ordinary file work after them still runs.
+    yield* pty.type(
+      [
+        "<PrintErrors>",
+        '<Git.Add paths="seed.md" />',
+        '<Git.Switch branch="experiment" />',
+        '<Git.Commit message="Record it" as="commit" />',
+        "</PrintErrors>",
+        '<File path="after.md">continued</File>',
+      ].join("\n"),
+    );
+    yield* sleep(500);
+    yield* pty.type("\r");
+
+    // Refused before a repository is in scope, which is before Git exists in
+    // the story at all. Either way nothing native was reached.
+    yield* showing(pty, "composition provider is installed", ACT_MS);
+    yield* holding(join(checkout, "after.md"), "continued");
+    expect(yield* logged(shim.log)).toEqual([]);
+    expect(yield* gitSaid(checkout, ["rev-parse", "HEAD"], home)).toBe(head);
+    expect(yield* gitSaid(checkout, ["write-tree"], home)).toBe(index);
+    expect(yield* exists(join(home, ".xmd", "repositories"))).toBe(false);
 
     yield* reach(pty, "[exit]");
     yield* pty.type("\r");

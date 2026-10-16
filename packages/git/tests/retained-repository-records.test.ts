@@ -53,6 +53,20 @@ import type {
   ReplPlacementRequest,
 } from "../src/retained-repository/placement-records.ts";
 import type { RepositoryIdentity } from "../src/composition/selection.ts";
+import {
+  parseReplGitRecord,
+  replGitFingerprint,
+  replGitRecordJson,
+  replGitRecordName,
+  ReplGitRefusal,
+  replGitRefusalOf,
+  REPL_REPOSITORY_GIT,
+} from "../src/retained-repository/git-records.ts";
+import type { ReplGitRequest, ReplGitValue } from "../src/retained-repository/git-records.ts";
+// From the root rather than from the source module: these result types are what
+// the package publishes, and reaching them by relative path would bypass the
+// export map the partition test holds every consumer to.
+import type { GitAddResult, GitCommitResult, GitSwitchResult } from "@executablemd/git";
 
 const WRITE: ReplLocalRequest = { cwd: "/work", path: "note.md", content: "first" };
 
@@ -663,3 +677,450 @@ function saved(event: DurableEvent): Json {
   }
   return event.result.value ?? null;
 }
+
+const GIT_PLACE = {
+  repository: IDENTITY,
+  selectionCheckout: "/work/checkout",
+  commonDirectory: "/work/checkout/.git",
+  workingDirectory: "/work/checkout",
+} as const;
+
+/**
+ * The checkout a native result names: an absolute host path.
+ *
+ * Which is the whole difference from the Workflow parsers beside these. A
+ * Workspace-relative path is what a workflow run retains, and an ordinary
+ * checkout is a directory on somebody's own filesystem.
+ */
+const GIT_CHECKOUT = Object.freeze({
+  repositoryName: "project",
+  worktreeName: null,
+  checkoutPath: "/work/checkout",
+});
+
+const AT_REST = Object.freeze({
+  branch: "main",
+  commit: "c".repeat(40),
+  headTree: "d".repeat(40),
+  indexTree: "d".repeat(40),
+});
+
+const ADD_REQUEST: ReplGitRequest = Object.freeze({
+  operation: "add",
+  ...GIT_PLACE,
+  paths: Object.freeze(["note.md", "note.md"]),
+});
+
+const ADD_RESULT: GitAddResult = Object.freeze({
+  checkout: GIT_CHECKOUT,
+  paths: Object.freeze(["note.md", "note.md"]),
+  before: AT_REST,
+  // Staging moves the index and nothing else.
+  after: Object.freeze({ ...AT_REST, indexTree: "e".repeat(40) }),
+});
+
+const SWITCH_REQUEST: ReplGitRequest = Object.freeze({
+  operation: "switch",
+  ...GIT_PLACE,
+  branch: "experiment",
+  base: null,
+});
+
+const SWITCH_RESULT: GitSwitchResult = Object.freeze({
+  checkout: GIT_CHECKOUT,
+  requestedBranch: "experiment",
+  resolvedBranch: "experiment",
+  requestedBase: null,
+  // Created, so it ends at the commit it was created from and on another branch.
+  resolvedBase: "c".repeat(40),
+  before: AT_REST,
+  after: Object.freeze({ ...AT_REST, branch: "experiment" }),
+});
+
+const STAGED = Object.freeze({ ...AT_REST, indexTree: "e".repeat(40) });
+
+const COMMIT_REQUEST: ReplGitRequest = Object.freeze({
+  operation: "commit",
+  ...GIT_PLACE,
+  messageSource: "prop",
+  messageDigest: "f".repeat(64),
+  messageLength: 18,
+});
+
+const COMMIT_RESULT: GitCommitResult = Object.freeze({
+  checkout: GIT_CHECKOUT,
+  messageSource: "prop",
+  messageDigest: "f".repeat(64),
+  messageLength: 18,
+  parent: "c".repeat(40),
+  tree: "e".repeat(40),
+  commit: "1".repeat(40),
+  committedAt: 1_700_000_000,
+  before: STAGED,
+  after: Object.freeze({
+    branch: "main",
+    commit: "1".repeat(40),
+    headTree: "e".repeat(40),
+    indexTree: "e".repeat(40),
+  }),
+});
+
+/** The payload one local Git record is journaled with. */
+function gitPayload(
+  request: ReplGitRequest,
+  outcome: Result<ReplGitValue>,
+): Operation<{ payload: Json; fingerprint: string }> {
+  return (function* () {
+    const fingerprint = yield* replGitFingerprint(request);
+    return { payload: replGitRecordJson({ fingerprint, request, outcome }), fingerprint };
+  })();
+}
+
+/** One journaled local Git operation, named the way the host names it. */
+function* gitEvent(
+  request: ReplGitRequest,
+  outcome: Result<ReplGitValue>,
+  name?: string,
+): Operation<DurableEvent> {
+  const { payload, fingerprint } = yield* gitPayload(request, outcome);
+  return {
+    type: "yield",
+    coroutineId: "root",
+    description: {
+      type: REPL_REPOSITORY_GIT,
+      name: name ?? replGitRecordName({ operation: request.operation, fingerprint }),
+    },
+    result: { status: "ok", value: payload },
+  };
+}
+
+/** The saved value one record's outcome carries, for editing it member by member. */
+function savedValue(payload: Json): Record<string, unknown> {
+  const outcome = Object(Object(payload)["outcome"]);
+  return { ...Object(outcome["value"]) };
+}
+
+/** That payload again, with this value in place of the one it carried. */
+function withValue(payload: Json, value: unknown): unknown {
+  return { ...Object(payload), outcome: { ok: true, value } };
+}
+
+describe("what one entry's local Git records say", () => {
+  it("names an operation by its complete request", function* () {
+    const add = yield* replGitFingerprint(ADD_REQUEST);
+    const elsewhere = yield* replGitFingerprint({
+      ...ADD_REQUEST,
+      workingDirectory: "/work/checkout/inside",
+    });
+    const other = yield* replGitFingerprint({ ...ADD_REQUEST, paths: ["other.md"] });
+    const ordered = yield* replGitFingerprint({ ...ADD_REQUEST, paths: ["note.md"] });
+    const switched = yield* replGitFingerprint(SWITCH_REQUEST);
+    const committed = yield* replGitFingerprint(COMMIT_REQUEST);
+
+    // The directory, the pathspecs, their repetitions and the operation are all
+    // identity.
+    expect(new Set([add, elsewhere, other, ordered, switched, committed]).size).toBe(6);
+    // And the same request twice is the same name, which is what makes two
+    // equal Adds one name at two ordered positions.
+    expect(yield* replGitFingerprint(ADD_REQUEST)).toBe(add);
+    // The name carries the operation beside the digest, so two operations can
+    // never share one.
+    expect(replGitRecordName({ operation: "add", fingerprint: add })).not.toBe(
+      replGitRecordName({ operation: "switch", fingerprint: add }),
+    );
+  });
+
+  it("reads back each operation's own result, and refuses another's", function* () {
+    for (const [request, result] of [
+      [ADD_REQUEST, ADD_RESULT],
+      [SWITCH_REQUEST, SWITCH_RESULT],
+      [COMMIT_REQUEST, COMMIT_RESULT],
+    ] as const) {
+      const { payload } = yield* gitPayload(request, Ok(result));
+      const record = parseReplGitRecord(payload);
+      expect(record?.operation).toBe(request.operation);
+      expect(record?.outcome.ok === true ? record.outcome.value : undefined).toEqual(result);
+    }
+
+    // A result of another operation standing where this one belongs is not an
+    // outcome of it, whatever else it is.
+    const { payload } = yield* gitPayload(ADD_REQUEST, Ok(ADD_RESULT));
+    expect(parseReplGitRecord(withValue(payload, { ...SWITCH_RESULT }))).toBe(undefined);
+  });
+
+  it("refuses a result carrying a wrong, extra or missing member", function* () {
+    const { payload } = yield* gitPayload(ADD_REQUEST, Ok(ADD_RESULT));
+    // The positive control: the record this host wrote parses.
+    expect(parseReplGitRecord(payload)).not.toBe(undefined);
+
+    const value = savedValue(payload);
+    expect(parseReplGitRecord(withValue(payload, { ...value, extra: 1 }))).toBe(undefined);
+    const { paths: _dropped, ...missing } = value;
+    expect(parseReplGitRecord(withValue(payload, missing))).toBe(undefined);
+    expect(parseReplGitRecord(withValue(payload, { ...value, paths: "note.md" }))).toBe(undefined);
+    expect(parseReplGitRecord(withValue(payload, { ...value, paths: [] }))).toBe(undefined);
+    // A host checkout path is read as the string it is; nothing else is one.
+    expect(
+      parseReplGitRecord(
+        withValue(payload, { ...value, checkout: { ...GIT_CHECKOUT, checkoutPath: 42 } }),
+      ),
+    ).toBe(undefined);
+    // And the repository a result names has to be the one the request
+    // authenticated.
+    expect(
+      parseReplGitRecord(
+        withValue(payload, {
+          ...value,
+          checkout: { ...GIT_CHECKOUT, repositoryName: "another" },
+        }),
+      ),
+    ).toBe(undefined);
+    // A whole record missing one of its five wire members is not one either.
+    const { outcome: _outcome, ...envelope } = Object(payload);
+    expect(parseReplGitRecord(envelope)).toBe(undefined);
+    expect(parseReplGitRecord({ ...Object(payload), surprise: true })).toBe(undefined);
+  });
+
+  it("refuses an object id of the wrong width for the request's format", function* () {
+    const { payload } = yield* gitPayload(COMMIT_REQUEST, Ok(COMMIT_RESULT));
+    const value = savedValue(payload);
+    // A sha1 repository names its objects in forty hex characters. A sixty-four
+    // character id is a real digest and still not one of this repository's.
+    expect(parseReplGitRecord(withValue(payload, { ...value, commit: "1".repeat(64) }))).toBe(
+      undefined,
+    );
+    expect(parseReplGitRecord(withValue(payload, { ...value, commit: "1".repeat(39) }))).toBe(
+      undefined,
+    );
+    expect(parseReplGitRecord(withValue(payload, { ...value, commit: "Z".repeat(40) }))).toBe(
+      undefined,
+    );
+    // A time and a byte length are whole and never negative.
+    expect(parseReplGitRecord(withValue(payload, { ...value, committedAt: -1 }))).toBe(undefined);
+    expect(parseReplGitRecord(withValue(payload, { ...value, messageLength: 1.5 }))).toBe(
+      undefined,
+    );
+  });
+
+  it("refuses a transition the operation does not make", function* () {
+    const add = yield* gitPayload(ADD_REQUEST, Ok(ADD_RESULT));
+    const moved = savedValue(add.payload);
+    // Staging moves the index. A result whose commit or HEAD tree moved
+    // across it describes something `git add` does not do.
+    expect(
+      parseReplGitRecord(
+        withValue(add.payload, {
+          ...moved,
+          after: { ...ADD_RESULT.after, commit: "9".repeat(40) },
+        }),
+      ),
+    ).toBe(undefined);
+
+    const commit = yield* gitPayload(COMMIT_REQUEST, Ok(COMMIT_RESULT));
+    const graph = savedValue(commit.payload);
+    // A commit continues the commit the checkout was on, and holds the tree the
+    // index described.
+    expect(
+      parseReplGitRecord(withValue(commit.payload, { ...graph, parent: "9".repeat(40) })),
+    ).toBe(undefined);
+    expect(parseReplGitRecord(withValue(commit.payload, { ...graph, tree: "9".repeat(40) }))).toBe(
+      undefined,
+    );
+    // Committing an index that already matched HEAD is the condition this
+    // operation refuses rather than one it records.
+    expect(
+      parseReplGitRecord(
+        withValue(commit.payload, {
+          ...graph,
+          before: { ...STAGED, indexTree: STAGED.headTree },
+        }),
+      ),
+    ).toBe(undefined);
+
+    const switched = yield* gitPayload(SWITCH_REQUEST, Ok(SWITCH_RESULT));
+    const branch = savedValue(switched.payload);
+    // A created branch ends at the commit it was created from and cannot be the
+    // branch the checkout was already on.
+    expect(
+      parseReplGitRecord(
+        withValue(switched.payload, {
+          ...branch,
+          after: { ...SWITCH_RESULT.after, commit: "9".repeat(40) },
+        }),
+      ),
+    ).toBe(undefined);
+    // And switching to the branch a checkout is already on moves nothing.
+    expect(
+      parseReplGitRecord(
+        withValue(switched.payload, {
+          ...branch,
+          resolvedBase: null,
+          after: { ...AT_REST, indexTree: "9".repeat(40) },
+        }),
+      ),
+    ).toBe(undefined);
+  });
+
+  it("refuses a result whose arguments are not the ones the request asked for", function* () {
+    const add = yield* gitPayload(ADD_REQUEST, Ok(ADD_RESULT));
+    // Order and repetitions are part of what was asked for, because each of
+    // them changes what Git stages.
+    expect(
+      parseReplGitRecord(
+        withValue(add.payload, { ...savedValue(add.payload), paths: ["note.md"] }),
+      ),
+    ).toBe(undefined);
+
+    const switched = yield* gitPayload(SWITCH_REQUEST, Ok(SWITCH_RESULT));
+    const branch = savedValue(switched.payload);
+    expect(
+      parseReplGitRecord(
+        withValue(switched.payload, {
+          ...branch,
+          requestedBranch: "other",
+          resolvedBranch: "other",
+          after: { ...SWITCH_RESULT.after, branch: "other" },
+        }),
+      ),
+    ).toBe(undefined);
+    expect(
+      parseReplGitRecord(withValue(switched.payload, { ...branch, requestedBase: "main" })),
+    ).toBe(undefined);
+
+    const commit = yield* gitPayload(COMMIT_REQUEST, Ok(COMMIT_RESULT));
+    const evidence = savedValue(commit.payload);
+    expect(
+      parseReplGitRecord(withValue(commit.payload, { ...evidence, messageDigest: "a".repeat(64) })),
+    ).toBe(undefined);
+    expect(
+      parseReplGitRecord(withValue(commit.payload, { ...evidence, messageSource: "children" })),
+    ).toBe(undefined);
+    expect(parseReplGitRecord(withValue(commit.payload, { ...evidence, messageLength: 19 }))).toBe(
+      undefined,
+    );
+  });
+
+  it("reads back a refusal, and refuses a word outside the closed set", function* () {
+    const { payload } = yield* gitPayload(
+      ADD_REQUEST,
+      Err(new ReplGitRefusal({ vocabulary: "native-git", reason: "ignored-pathspec" })),
+    );
+    const record = parseReplGitRecord(payload);
+    expect(record?.outcome.ok).toBe(false);
+    const carried =
+      record?.outcome.ok === false ? replGitRefusalOf(record.outcome.error) : undefined;
+    // The route stays the route it was. An ignored path native Git reported is
+    // not the Workflow formatter's condition, which claims the staging was
+    // discarded.
+    expect(carried).toEqual({ vocabulary: "native-git", reason: "ignored-pathspec" });
+
+    const refused = { ...Object(payload) };
+    for (const error of [
+      { vocabulary: "native-git", reason: "empty-index" },
+      { vocabulary: "composition-git", reason: "ignored-pathspec" },
+      { vocabulary: "somewhere-else", reason: "ignored-pathspec" },
+      { vocabulary: "native-git", reason: "something new" },
+      { vocabulary: "native-git" },
+      { vocabulary: "native-git", reason: "ignored-pathspec", sentence: "git said so" },
+    ]) {
+      expect(parseReplGitRecord({ ...refused, outcome: { ok: false, error } })).toBe(undefined);
+    }
+    // A settlement that states neither side, and one that states the wrong
+    // one, are both records this host did not write.
+    expect(parseReplGitRecord({ ...refused, outcome: { ok: true, error: {} } })).toBe(undefined);
+    expect(
+      parseReplGitRecord({
+        ...refused,
+        outcome: { ok: false, error: { vocabulary: "native-git", reason: "ignored-pathspec" } },
+      }),
+    ).not.toBe(undefined);
+
+    // Each route's own word, for the two the other vocabularies own.
+    const empty = yield* gitPayload(
+      COMMIT_REQUEST,
+      Err(new ReplGitRefusal({ vocabulary: "composition-git", reason: "empty-index" })),
+    );
+    expect(parseReplGitRecord(empty.payload)?.outcome.ok).toBe(false);
+    const unresolved = yield* gitPayload(
+      COMMIT_REQUEST,
+      Err(new ReplGitRefusal({ vocabulary: "ordinary-identity", reason: "unresolved-identity" })),
+    );
+    expect(parseReplGitRecord(unresolved.payload)?.outcome.ok).toBe(false);
+  });
+});
+
+describe("which local Git histories one entry will continue", () => {
+  it("admits its own records, including repeated equal names", function* () {
+    const first = yield* gitEvent(ADD_REQUEST, Ok(ADD_RESULT));
+    const second = yield* gitEvent(ADD_REQUEST, Ok(ADD_RESULT));
+    const refused = yield* gitEvent(
+      SWITCH_REQUEST,
+      Err(new ReplGitRefusal({ vocabulary: "native-git", reason: "overwrites-local-changes" })),
+    );
+    expect(yield* refusalOf([first, second, refused])).toBe(undefined);
+  });
+
+  it("refuses a local Git record it cannot read", function* () {
+    const event = yield* gitEvent(ADD_REQUEST, Ok(ADD_RESULT));
+    const broken: DurableEvent = {
+      ...event,
+      result: { status: "ok", value: { version: REPL_REPOSITORY_VERSION, operation: "add" } },
+    };
+    expect((yield* refusalOf([broken]))?.reason).toBe("malformed-record");
+  });
+
+  it("refuses a local Git record stating a version this host does not implement", function* () {
+    const event = yield* gitEvent(ADD_REQUEST, Ok(ADD_RESULT));
+    const stated: DurableEvent = {
+      ...event,
+      result: { status: "ok", value: { ...payloadOf(event), version: 2 } },
+    };
+    expect((yield* refusalOf([stated]))?.reason).toBe("unknown-version");
+  });
+
+  it("refuses a local Git record whose request no longer names it", function* () {
+    const event = yield* gitEvent(ADD_REQUEST, Ok(ADD_RESULT));
+    const changed: DurableEvent = {
+      ...event,
+      result: {
+        status: "ok",
+        value: {
+          ...payloadOf(event),
+          request: {
+            repository: { ...IDENTITY },
+            selectionCheckout: "/work/checkout",
+            commonDirectory: "/work/checkout/.git",
+            workingDirectory: "/somewhere/else",
+            paths: ["note.md", "note.md"],
+          },
+        },
+      },
+    };
+    expect((yield* refusalOf([changed]))?.reason).toBe("request-fingerprint");
+
+    const misnamed = yield* gitEvent(ADD_REQUEST, Ok(ADD_RESULT), "another name");
+    expect((yield* refusalOf([misnamed]))?.reason).toBe("request-fingerprint");
+  });
+
+  it("refuses a failed protocol envelope for a local Git record", function* () {
+    const event = yield* gitEvent(ADD_REQUEST, Ok(ADD_RESULT));
+    const failed: DurableEvent = {
+      ...event,
+      result: { status: "err", error: { name: "Error", message: "something went wrong" } },
+    };
+    // This operation's own refusals live inside its successful payload, so a
+    // failed envelope under this type is not a record this host ever wrote.
+    expect((yield* refusalOf([failed]))?.reason).toBe("malformed-record");
+  });
+
+  it("admits a history holding only the older record types", function* () {
+    const file = yield* localEvent("file-write", WRITE);
+    const placement = yield* placementEvent();
+    expect(yield* refusalOf([file, placement])).toBe(undefined);
+    // Together with a local Git record, which is what an entry that did both
+    // leaves behind.
+    expect(
+      yield* refusalOf([file, placement, yield* gitEvent(COMMIT_REQUEST, Ok(COMMIT_RESULT))]),
+    ).toBe(undefined);
+  });
+});

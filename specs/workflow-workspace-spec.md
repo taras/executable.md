@@ -150,13 +150,39 @@ now holds, so a continuation works after the checkout has been changed or
 removed, while new work meets the current filesystem. Nothing is inventoried,
 snapshotted or restored, and no managed checkout is deleted.
 
+`<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` are available to a REPL entry and
+are retained on the same terms. The performers are the ordinary ones §7
+describes — exactly the authored pathspecs, the ordinary branch rules, the
+current index and nothing else — against the caller's own checkout rather than
+an exported materialization, and the entry adds a record of what each produced.
+A completed one is answered from that record with no `git` invocation at all, and
+the object id a completed `<Git.Commit>` bound describes the commit that was made
+then rather than the checkout's current HEAD; nothing re-resolves it. A live
+`<Git.Commit>` reads the invoking person's own author and committer from the
+trusted host, once per entry and only when a commit really runs, captures the
+clock after deciding the index is nonempty, and commits exactly that index.
+
+The Workflow-specific guarantees in §§7.1–7.3 stay Workflow's. There is no
+transaction here, so an Add that native Git refused partway leaves what it had
+already matched staged, and the refusal says what `git` reported rather than
+claiming the staging was discarded. There is no exactly-once local effect
+either: native completion and acknowledgement are separate moments, so an
+interrupted entry whose commit object exists and whose result was never recorded
+runs that `<Git.Commit>` live again and may report `empty-index` instead.
+Nothing adopts, predicts, repairs or rolls back a local operation.
+
 So the three environments retain mutation differently, and none of the other two
-changes. `xmd run` journals no filesystem mutation at all. A workflow run's
-mutations are Workspace effects inside a transaction, ordered by the frontier
-§9 and §10 describe, and the REPL has none of that: no Workspace, no
-transaction, no frontier and no logical filesystem. The local Git operations,
-`<Issue>` and `<PullRequest>` are not available to a REPL entry and refuse there
-as they do under any host that installs no provider for them.
+changes. `xmd run` journals no filesystem mutation at all and replays nothing. A
+workflow run's mutations are Workspace effects inside a transaction, ordered by
+the frontier §9 and §10 describe, and the REPL has none of that: no Workspace,
+no transaction, no frontier and no logical filesystem — what it has is a
+historical record of each completed operation, which is neither of the other
+two. `<Git.Push>` and `<PullRequest>` are not available to a REPL entry and
+refuse there as they do under any host that installs no provider for them, and a
+retained local result authorizes neither. `<Issue>` is available, and what it
+retains is `specs/repl-spec.md`'s subject rather than this document's: it lives
+at a service rather than in a Workspace, so none of the transaction, frontier or
+materialization rules here reach it.
 
 ## 3. Workflow lifecycle
 
@@ -957,9 +983,9 @@ A REPL entry selects through that same ordinary selector, and records the answer
 rather than the checkout (§2.3). The hold lasts for the entry rather than for
 one document execution, so a later `<Dir>` inside the same entry is still
 protected, and a completed selection takes no hold at all — the first genuinely
-new file operation inside a restored placement reacquires it. None of the
-durability this section states applies there either: there is still no
-Workspace, no transaction and no fork.
+new file operation inside a restored placement reacquires it, and so does the
+first genuinely new Git operation. None of the durability this section states
+applies there either: there is still no Workspace, no transaction and no fork.
 
 What both share is the composition value a component observes: a Repository
 selection carries a provider-minted identifier, a display name, the
@@ -1181,9 +1207,9 @@ contextual way `<File>` writes one.
 
 ## 7. Git operations
 
-The four Git components are likewise one language with two providers. Which
-checkout one acts on is decided the same way in both: by the Repository in
-scope and by the contextual working directory, neither of which admits
+The four Git components are likewise one language behind several providers.
+Which checkout one acts on is decided the same way everywhere: by the Repository
+in scope and by the contextual working directory, neither of which admits
 anything.
 
 Under a workflow run each is a durable Workspace effect, or — for Push — a
@@ -1198,6 +1224,19 @@ invoking user's own effective identity, and a host that can name none refuses
 rather than substituting one. Push keeps the
 observe/adopt/fast-forward/refuse rules and, instead of a reconciliation
 record, leaves private evidence in the provider instance that verified it.
+
+A REPL entry performs Add, Switch and Commit through those same ordinary
+performers and keeps a historical record of what each produced (§2.3). The
+record is neither of the other two things: it is not a transaction, and it is
+not the absence of replay. A completed operation is answered from it with no
+`git` invocation at all, and the object id a completed Commit bound names the
+commit that was made then rather than the checkout's current HEAD. A live Commit
+there reads the invoking person's own identity on the ordinary run's terms,
+captures the clock after deciding the index is nonempty, and commits exactly
+that index. The rollback and identity clauses of §§7.1–7.3 remain Workflow's,
+and a REPL entry promises neither: an Add native Git refused partway leaves what
+it had already staged, and an operation that physically finished without being
+acknowledged may run again and answer differently.
 
 Git operations require a contextual Repository or Worktree checkout. They use
 the transactional Workspace Git implementation, not an implicit host command.
@@ -3578,6 +3617,7 @@ fetch operation requires its own language and durability contract.
 | the same twelve declarations under every runtime | built by #643: one shadowable array declared by the bundled Git Plugin and consumed wherever its profile is assembled — `xmd syntax`, `xmd plan`, an ordinary document execution and a workflow action that executes a document. `<Dir>` left that array when canonical core took the name, and is present under every runtime without it |
 | `<Repository>`, `<Worktree>` and the ambient Repository under an ordinary run | built by #643, Deno and compiled only: managed checkouts under `~/.xmd/repositories` with version 1 sidecars and execution-owned non-blocking locks, and the checkout the command was run in as the default Repository. Node and Bun install no operational provider |
 | `<Repository>` and `<Worktree>` inside a REPL entry | built on the #181 stack, Deno and compiled only: the ordinary managed selector above, with what it answered retained as a small routing record so a completed selection restores without a selector, a clone, a `worktree add`, a sidecar read, a credential or a lock — and only new work meets the current filesystem. One entry at a time owns a managed slot, held until the entry is torn down and reacquired lazily by the first new operation inside a restored placement; that hold is distinct from the shared Git directory's mutation lease. Nothing is inventoried, snapshotted, restored or deleted, and Node and Bun install no operational provider |
+| `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` inside a REPL entry | built on the #181 stack, Deno and compiled only: the ordinary performers above against the checkout the entry is working in, with what each produced retained as fixed-size evidence — the checkout, the branch, commit, HEAD tree and index tree on both sides, and the operation's own arguments and products. A completed operation is answered from that record with no `git` invocation of any kind, and a completed Commit's object id names the commit that was made then rather than today's HEAD. A live Commit reads the invoking person's own author and committer once per entry and only when a commit runs, captures the clock after deciding the index is nonempty, and commits exactly that index. A live operation takes the selected placement's slot and then the shared Git directory's mutation lease and keeps both until teardown; a completed one takes neither. An ordinary refusal is retained under the route that reported it, so a native ignored-path Add keeps what it staged and claims no rollback; native completion and acknowledgement are separate, so an unacknowledged operation may run again and answer differently. No transaction, no rollback, no exactly-once local effect, and no publication evidence |
 | local Git operations and `Git.Push` evidence under an ordinary run | built by #643, Deno and compiled only: the same authored transitions with no transaction and no replay, commits recorded under the invoking user's own captured Git identity with an actionable refusal when the host can name none, and a private per-execution Push evidence entry that authorizes `<PullRequest>` and crosses no run |
 | `<Issue>` and pull-request reads under an ordinary run | built by #643, Deno and compiled only: the same transports and ceilings with no durable envelope, keyed by this execution's own invocation identity |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
