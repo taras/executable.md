@@ -39,14 +39,14 @@ import { retainedWorkflowInstallation } from "@executablemd/workflow";
 import { WORKFLOW_RUN } from "../../workflow/src/journal.ts";
 import type { WorkflowRun } from "@executablemd/workflow";
 import { ISSUE_EFFECT } from "../src/issue/effect-type.ts";
-import { IssueApi } from "../src/issue/api.ts";
+import { IssueApi } from "@executablemd/git/api";
 import type {
   IssueDetails,
   IssueInput,
   IssueReadOptions,
   IssueReference,
   IssueUpsertOptions,
-} from "../src/issue/api.ts";
+} from "@executablemd/git/api";
 import { readOwnedIssue, upsertOwnedIssue } from "../src/issue/owned.ts";
 import { useRetainedIssueOperations } from "../src/issue/effect.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";

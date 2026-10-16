@@ -46,8 +46,8 @@ import type {
   IssueReadInvocation,
   IssueUpsertInvocation,
 } from "../../git/src/issue/operations.ts";
-import { IssueApi } from "../../git/src/issue/api.ts";
-import type { IssueDetails, IssueReference } from "../../git/src/issue/api.ts";
+import { IssueApi } from "@executablemd/git/api";
+import type { IssueDetails, IssueReference } from "@executablemd/git/api";
 import { replIssueInstallation } from "../../git/src/deno/retained-repository/issues.ts";
 import { gitHubSource } from "../../git/src/deno/composition/github.ts";
 import { useIssueTrackerServer } from "../../git/tests/support/issue-tracker-server.ts";
