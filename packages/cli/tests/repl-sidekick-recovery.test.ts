@@ -34,6 +34,7 @@ import { ensure, Ok, scoped, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { useTempFileCompiler } from "@executablemd/core";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
+import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
 import type { DurableEvent } from "@executablemd/durable-streams";
 
 import {
@@ -2116,6 +2117,77 @@ describe("Tier IN5 — a chat saved by the build before this one", () => {
     return chat;
   }
 
+  /**
+   * Every canonical turn this chat retains, with the native conversation it ran
+   * in.
+   *
+   * Read through the same typed readers the product reads these records with —
+   * `parseEntryRecords` for the mirrored durable event, `parsePromptRecord` for
+   * the Prompt record inside it — so what this names is the canonical account
+   * of a turn rather than a substring of the file.
+   */
+  function canonicalTurns(
+    records: readonly SidekickRecord[],
+  ): readonly { readonly name: string; readonly native: string | undefined }[] {
+    const turns: { name: string; native: string | undefined }[] = [];
+    for (const record of records) {
+      if (record.kind !== "event") {
+        continue;
+      }
+      for (const event of parseEntryRecords(record.event)) {
+        if (event.type !== "yield" || event.description.type !== AGENT_PROMPT) {
+          continue;
+        }
+        if (event.result.status !== "ok") {
+          continue;
+        }
+        const saved = parsePromptRecord(event.result.value);
+        turns.push({ name: event.description.name, native: saved?.agentSessionId });
+      }
+    }
+    return turns;
+  }
+
+  /** Each conversation record's phase, in append order. */
+  function conversationPhases(
+    records: readonly SidekickRecord[],
+  ): readonly { readonly conversation: string; readonly phase: string }[] {
+    const phases: { conversation: string; phase: string }[] = [];
+    for (const record of records) {
+      if (record.kind === "conversation") {
+        phases.push({ conversation: record.conversation, phase: record.phase });
+      }
+    }
+    return phases;
+  }
+
+  /**
+   * The kinds one phase reported its chat as, read rather than asserted.
+   *
+   * A phase answers across a process boundary as JSON, so what arrives is
+   * `unknown`: each item is narrowed and its `kind` read, and anything that is
+   * not an object with a string `kind` is reported as the unreadable item it
+   * is rather than being taken on trust.
+   */
+  function chatKinds(reported: unknown): readonly string[] {
+    if (!Array.isArray(reported)) {
+      throw new Error(`the phase reported no chat: ${JSON.stringify(reported)}`);
+    }
+    return reported.map((item) => {
+      if (typeof item !== "object" || item === null || Array.isArray(item)) {
+        throw new Error(`the phase reported a chat item that is not one: ${JSON.stringify(item)}`);
+      }
+      if (!("kind" in item)) {
+        throw new Error(`the phase reported a chat item with no kind: ${JSON.stringify(item)}`);
+      }
+      const { kind } = item;
+      if (typeof kind !== "string") {
+        throw new Error(`the phase reported a chat item with no kind: ${JSON.stringify(item)}`);
+      }
+      return kind;
+    });
+  }
+
   /** The admission markers one chat's mirrored durable events carry, in order. */
   function markersOf(records: readonly SidekickRecord[]): { sequence: string; marker: number }[] {
     const found: { sequence: string; marker: number }[] = [];
@@ -2177,12 +2249,7 @@ describe("Tier IN5 — a chat saved by the build before this one", () => {
     // The completed turn reads as a reply; the interrupted one reads as a turn
     // saved with no evaluated reply, which is what it is. Neither is invented
     // and neither is dropped.
-    expect((reopened.chat as { kind: string }[]).map((item) => item.kind)).toEqual([
-      "person",
-      "reply",
-      "person",
-      "saved",
-    ]);
+    expect(chatKinds(reopened.chat)).toEqual(["person", "reply", "person", "saved"]);
     expect(JSON.stringify(reopened.chat)).toContain("The first reply.");
     // The native conversation its retained turns name, read from the turns
     // themselves rather than from a mapping record — there is none, by design.
@@ -2195,7 +2262,16 @@ describe("Tier IN5 — a chat saved by the build before this one", () => {
     yield* seedOldChat(root, "chat");
 
     const sidekick = join(root.repository, PAIRED_DIRECTORY, "chat", SIDEKICK_FILE);
-    const old = markersOf(yield* readSidekickRecords(sidekick));
+    const seeded = yield* readSidekickRecords(sidekick);
+    const old = markersOf(seeded);
+    // What the fixture holds before anything is added to it, so each assertion
+    // below is about what the new message changed rather than about the file.
+    const before = canonicalTurns(seeded);
+    const phases = conversationPhases(seeded);
+    const opened = phases.at(0);
+    const prefix = yield* until(readFile(sidekick, "utf8"));
+    // The conversation this chat is active in, as a cold read reports it.
+    const { active } = yield* runPhase("chat-read", root, "chat");
     // The fixture's own shape, asserted before anything is added to it: two
     // old root sequences, both marker 2.
     expect(old).toEqual([
@@ -2217,10 +2293,21 @@ describe("Tier IN5 — a chat saved by the build before this one", () => {
     expect(said.output).toContain("Carrying on.");
 
     const records = yield* readSidekickRecords(sidekick);
-    // The same native conversation, continued rather than replaced: no second
-    // conversation is established and no migration or replacement record is
-    // written for the old one.
-    expect(JSON.stringify(said.turns)).toContain(NATIVE);
+    // The same native conversation, continued rather than replaced — read off
+    // the turn this message actually became rather than from the whole file.
+    // The fixture already names `native-old` twice, so a substring search over
+    // the complete history would hold even if the new turn ran somewhere else.
+    const turns = canonicalTurns(records);
+    expect(before.map((one) => one.name)).toEqual(["turn:1", "turn:2"]);
+    expect(turns.map((one) => one.name)).toEqual(["turn:1", "turn:2", "turn:3"]);
+    const appended = turns.at(-1);
+    expect(appended?.name).toBe("turn:3");
+    expect(appended?.native).toBe(NATIVE);
+
+    // And it is the conversation this chat was already active in: the same id,
+    // with no further preparation or activation appended for a second one.
+    expect(active).toBe(opened?.conversation);
+    expect(conversationPhases(records)).toEqual(phases);
     expect(records.filter((one) => one.kind === "owner")).toHaveLength(1);
     expect(records.some((one) => one.kind === "reference")).toBe(true);
 
@@ -2230,6 +2317,12 @@ describe("Tier IN5 — a chat saved by the build before this one", () => {
     expect(markers.at(-1)?.marker).toBe(5);
     // Past both of them, so nothing asked for a retained address again.
     expect(markers.at(-1)?.sequence).toBe("generated_root:3");
+
+    // The old history is still there, byte for byte, in front of what this
+    // message added: continuing a saved chat appends and rewrites nothing.
+    const now = yield* until(readFile(sidekick, "utf8"));
+    expect(now.startsWith(prefix)).toBe(true);
+    expect(JSON.stringify(canonicalTurns(records).slice(0, 2))).toBe(JSON.stringify(before));
 
     // And the interrupted response's control was not repeated: the fill that
     // happened in the old process happened once, and this turn did its own work.

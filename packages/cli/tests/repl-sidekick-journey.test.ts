@@ -1995,3 +1995,149 @@ describe("Tier SS — the Sessions facts one real conversation establishes", () 
     expect(projected.value.chat.map((item) => item.kind)).toEqual(["person"]);
   });
 });
+
+/**
+ * Tier R5 — IN6: one capture, many responses, each with its own records.
+ *
+ * The controls a reply writes are sealed once, when the conversation opens. So
+ * the two things a later response needs are not the same thing any more, and
+ * these rows separate them: the *control* is the one the capture sealed, and
+ * what it answers with is read now rather than remembered from setup. A frozen
+ * reading would be the obvious way to get this wrong — a reply asking what is
+ * published would be told what was published when its conversation opened.
+ *
+ * Beside that, the association: two responses in one conversation file their own
+ * ordered pairs and are told their own results, and an ordinary failure in the
+ * middle does not move either.
+ */
+describe("Tier R5 — one capture, and each response's own records", () => {
+  it("R5: a later response reads a fact that changed, through the captured control", function* () {
+    const held = yield* useHarness();
+
+    // Nothing is published yet, and the first response reads that.
+    held.fake.script({ reply: "<REPL.Bindings />\n" });
+    held.fake.script({ reply: "<Output>Nothing yet.</Output>\n" });
+    const first = yield* held.owner.message("what is published?");
+    if (!first.ok) {
+      throw first.error;
+    }
+    expect(JSON.parse(held.fake.prompts[1] ?? "")).toEqual({});
+
+    // A real entry runs and publishes a root binding. This is the REPL fact
+    // changing between responses — not a value this row injected.
+    const prepared = [
+      '<Let as="code" select="code">',
+      "````xmd",
+      "```js eval",
+      'const published = "after the entry";',
+      "```",
+      "",
+      "<Output>{published}</Output>",
+      "````",
+      "</Let>",
+      "<REPL.EntryInput>{code}</REPL.EntryInput>",
+      "<REPL.Submit />",
+      "<Output>Submitted it.</Output>",
+      "",
+    ].join("\n");
+    held.fake.script({ reply: prepared });
+    held.fake.script({ reply: "<Output>Thanks.</Output>\n" });
+    const ran = yield* held.owner.message("run a greeting");
+    if (!ran.ok) {
+      throw ran.error;
+    }
+    // Two writes are designated, so this message takes a second turn and the
+    // answer is the reply to the receipt. What matters here is that the entry
+    // really ran: its draft was filled and its submission was accepted.
+    expect(ran.value.output).toContain("Thanks.");
+
+    // A third response reads the same control again — the one sealed when this
+    // conversation opened — and is told the *new* value. A control closed over
+    // a reading taken at setup would still answer the empty map here.
+    held.fake.script({ reply: "<REPL.Bindings />\n" });
+    held.fake.script({ reply: "<Output>Read it again.</Output>\n" });
+    const again = yield* held.owner.message("what is published now?");
+    if (!again.ok) {
+      throw again.error;
+    }
+    // The feedback turn is the last one sent, and this response ran one
+    // designated control — so what it carries is that control's value with
+    // nothing round it, exactly as the single-result case always does.
+    const latest = held.fake.prompts.at(-1) ?? "";
+    expect(JSON.parse(latest)).toEqual({ published: "after the entry" });
+  });
+
+  it("R5: each response files its own ordered pairs, across an ordinary failure", function* () {
+    const held = yield* useHarness("fail-here");
+
+    // One response that runs a real control and then fails at its second fill.
+    // The control before the failure happened; what comes after it does not.
+    // A designated control that ran still owes its feedback, so the correction
+    // turn the product sends is scripted here — that is this conversation's own
+    // sequence rather than an arrangement around it.
+    held.fake.script({
+      reply: [
+        "<REPL.Bindings />",
+        "<REPL.EntryInput>fail-here</REPL.EntryInput>",
+        "<Output>Before.</Output>",
+        "",
+      ].join("\n"),
+    });
+    held.fake.script({ reply: "<Output>Carrying on from there.</Output>\n" });
+    const failed = yield* held.owner.message("read and then fail");
+    if (!failed.ok) {
+      throw failed.error;
+    }
+    expect(failed.value.output).toContain("Carrying on from there.");
+
+    // A second response, with its own control.
+    held.fake.script({ reply: "<REPL.Environment />\n" });
+    held.fake.script({ reply: "<Output>Done.</Output>\n" });
+    const next = yield* held.owner.message("and now the environment");
+    if (!next.ok) {
+      throw next.error;
+    }
+    expect(next.value.output).toContain("Done.");
+
+    const reading = held.owner.reading;
+    if (!reading.ok) {
+      throw reading.error;
+    }
+    // Each pair under the response that ran it, in the order that response
+    // admitted it — read off the retained history rather than counted from the
+    // prompts, because what is under test is which response a record belongs
+    // to and a count cannot say that.
+    expect(
+      reading.value.operations.map((one) => ({
+        response: one.response,
+        order: one.order,
+        component: one.component,
+        status: one.status,
+      })),
+    ).toEqual([
+      // Both of the failing response's own pairs, in the order it admitted
+      // them: the read that happened, then the fill that failed. A failure is
+      // recorded as the outcome it was rather than dropped.
+      { response: "response:1", order: 0, component: "REPL.Bindings", status: "ok" },
+      { response: "response:1", order: 1, component: "REPL.EntryInput", status: "failed" },
+      // And the next response's control, independently associated and ordered
+      // from zero again — its own response rather than a continuation of the
+      // one that failed.
+      { response: "response:3", order: 0, component: "REPL.Environment", status: "ok" },
+    ]);
+    // One conversation throughout, so these are three responses of the same
+    // chat rather than of two chats.
+    expect(new Set(reading.value.operations.map((one) => one.conversation)).size).toBe(1);
+    // Said as the failure it guards against: nothing the failing response ran
+    // is filed under the response that came after it.
+    expect(
+      reading.value.operations.filter(
+        (one) => one.response === "response:3" && one.component !== "REPL.Environment",
+      ),
+    ).toEqual([]);
+
+    // And what was delivered was delivered to this conversation, established by
+    // the canonical turn that carried it rather than by a record of ours.
+    expect(reading.value.delivered.map((one) => one.conversation)).toEqual([reading.value.active]);
+  });
+});

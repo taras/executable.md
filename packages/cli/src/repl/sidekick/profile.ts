@@ -28,9 +28,11 @@
  * about a single undifferentiated list.
  *
  * The question is Core's own component rather than one of this feature's, so
- * the entry is `pinnedElicit()` and the body a reply reaches is the body an
- * authored document reaches. What makes it the *Sidekick's* question is where
- * the provider is installed, which is the owner's scope and not the session's.
+ * `Elicit` is *selected* and not answered for: it is protected, canonical
+ * resolution answers it from core's own tier, and the body a reply reaches is
+ * the body an authored document reaches. What makes it the *Sidekick's*
+ * question is where the provider is installed, which is the owner's scope and
+ * not the session's.
  *
  * Everything else is unavailable, and unavailable by *absence* rather than by a
  * rule written here: `<Content>`, `<Return>`, executable fences, JavaScript

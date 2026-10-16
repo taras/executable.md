@@ -31,6 +31,7 @@
  */
 
 import { CORE_REGISTRY } from "../../core/src/components/registry.ts";
+import { isJsonObject } from "../../core/src/json.ts";
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { readFile } from "node:fs/promises";
@@ -38,9 +39,10 @@ import { Err, Ok, scoped, spawn, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
-import { retainedSource, useTempFileCompiler } from "@executablemd/core";
+import { Component, Execution, retainedSource, useTempFileCompiler } from "@executablemd/core";
+import type { FunctionComponentDefinition } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import type { GeneratedXmdRootResult } from "@executablemd/core/host";
+import type { ExecutionInstallation, GeneratedXmdRootResult } from "@executablemd/core/host";
 
 import { cwd, platform } from "@executablemd/runtime";
 
@@ -325,15 +327,137 @@ function reply(
  */
 function canonicalProps(name: string): readonly string[] {
   const definition = CORE_REGISTRY.get(name)?.default?.definition;
+  // `props` is a `PropsSchema`, which is a JSON object, so its members are
+  // ordinary JSON and `isJsonObject` is the narrowing core itself uses. A
+  // schema that is not an object, or whose `properties` is not one, describes
+  // no individual props — which is an answer rather than a failure here.
   const schema = definition?.props;
-  if (typeof schema !== "object" || schema === null) {
+  if (!isJsonObject(schema) || !isJsonObject(schema.properties)) {
     return [];
   }
-  const properties = (schema as { properties?: unknown }).properties;
-  if (typeof properties !== "object" || properties === null) {
-    return [];
-  }
-  return Object.keys(properties);
+  return Object.keys(schema.properties);
+}
+
+/**
+ * The same reply, with whatever else a row needs installed beside the ceiling.
+ *
+ * The extra installations go *after* the ceiling's, which is where a host's own
+ * later setup goes — and a row about interception needs its interception to be
+ * in the document's own chain rather than in a sibling of it.
+ */
+function replyWith(
+  source: string,
+  asked: Asked,
+  beside: readonly ExecutionInstallation[],
+  options: StubOptions = {},
+): Operation<Result<GeneratedXmdRootResult>> {
+  return scoped(function* () {
+    const ceiling = ceilingFor(asked, options);
+    const gate = withResolvers<void>();
+    const entered = withResolvers<void>();
+    const execution = yield* executeInstalled(
+      {
+        ...retainedSource("repl/sidekick.md", "<SidekickHost />\n"),
+        stream: new InMemoryStream(),
+      },
+      [
+        sidekickCeilingInstallation(ceiling),
+        ...beside,
+        {
+          components: [
+            {
+              name: "SidekickHost",
+              origin: "test://sidekick-host",
+              props: { type: "object", properties: {}, additionalProperties: false },
+              description: "Hold this execution open while its caller evaluates one reply.",
+              factory: () =>
+                function* (): Operation<string> {
+                  entered.resolve();
+                  yield* gate.operation;
+                  return "";
+                },
+            },
+          ],
+        },
+      ],
+    );
+    const watched = yield* spawn(() => execution);
+    yield* entered.operation;
+    const answer = yield* execution.evaluateGeneratedXmdRoot({
+      id: "turn-1",
+      source,
+      allow: [...ceiling.allow],
+    });
+    gate.resolve();
+    const ran = yield* watched;
+    if (!ran.ok) {
+      throw ran.error;
+    }
+    return answer;
+  });
+}
+
+/**
+ * One installation that tries to answer a control's name after the capture.
+ *
+ * Installed inside `Execution.document`, which is the scope the evaluation
+ * runner is attached in and the only position a replacement could reach a
+ * response from at all — a sibling of the caller could not, so a row using one
+ * would pass whether the capture held or not. `at: "min"` is where a provider
+ * installs, so this is the most an interception can be.
+ */
+function intercepting(name: string, reached: string[], invoked: string[]): ExecutionInstallation {
+  const substitute: FunctionComponentDefinition = {
+    kind: "function",
+    name,
+    props: { type: "object", properties: {}, additionalProperties: true },
+    generated: {
+      "self-closing": {
+        identity: "https://executable.md/components/substitute/read",
+        effect: "read",
+      },
+      paired: {
+        identity: "https://executable.md/components/substitute/write",
+        effect: "write",
+      },
+    },
+    // deno-lint-ignore require-yield
+    *fn(): Operation<Json> {
+      invoked.push(name);
+      return "the replacement answered";
+    },
+  };
+  return {
+    *install(): Operation<void> {
+      yield* Execution.around({
+        *document([claimed], next) {
+          yield* Component.around(
+            {
+              *importComponent([asked], nextImport) {
+                reached.push(asked);
+                if (asked === name) {
+                  return substitute;
+                }
+                return yield* nextImport(asked);
+              },
+            },
+            { at: "min" },
+          );
+          // A later selection as well, offering a wider vocabulary than the
+          // capture sealed: a host that composes one after setup must not widen
+          // what a response may write. `File` is the name to try it with — an
+          // ordinary component an *entry* may be given and this ceiling omits,
+          // so only the selection decides. A structural construct like `<Each>`
+          // would prove nothing here: the language refuses one wherever it is
+          // written, whatever any table says.
+          yield* Component.around({
+            generated: () => ({ "REPL.Bindings": ["self-closing"], File: ["self-closing"] }),
+          });
+          yield* next(claimed);
+        },
+      });
+    },
+  };
 }
 
 function rendered(answer: Result<GeneratedXmdRootResult>): string {
@@ -1594,5 +1718,109 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     expect(refused.ok ? "" : refused.error.message).toContain("taken the shared draft over");
     expect(state.draft).toBe("One: {token}\n");
     expect(applied).toHaveLength(1);
+  });
+});
+
+/**
+ * Tier R3 — IN6: two captures, and what cannot reach across them.
+ *
+ * The integration moved control construction from per-response definitions to
+ * definitions installed and sealed once per conversation. Two things follow that
+ * nothing else in this suite observes, and they are the rows below.
+ *
+ * **Two owners are two captures.** Each conversation's controls close over the
+ * request handle its own root answers, so a reply in one conversation cannot
+ * reach the other one's. With setup-time capture that is a property of *where
+ * the definition was sealed* rather than of what was passed with a call, which
+ * is why it needs saying here.
+ *
+ * **What is sealed is sealed.** A definition answer or a wider selection
+ * composed after setup reaches a response not at all: canonical capture
+ * resolved each selected name before the conversation's root import and an
+ * admitted control runs that snapshot. An interception may well refuse under
+ * Core's own contract — what it must never do is run.
+ */
+describe("Tier R3 — two captures, and what cannot reach across them", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("R3m: two owners' controls answer their own request handles", function* () {
+    const one = fresh();
+    const other = fresh();
+
+    // Two executions, each capturing its own ceiling over its own stub. The
+    // same source in both, so what tells the two apart is the handle each
+    // control closed over and nothing about the reply.
+    const first = yield* reply("<Output>\n<REPL.Bindings />\n</Output>\n", one);
+    const second = yield* reply("<Output>\n<REPL.Bindings />\n</Output>\n", other);
+
+    expect(rendered(first)).toContain("Ada");
+    expect(rendered(second)).toContain("Ada");
+    // Each owner was asked once, by its own reply. A control that had closed
+    // over a shared handle would show both reads against one of them.
+    expect(one.requests).toEqual(["bindings"]);
+    expect(other.requests).toEqual(["bindings"]);
+    expect(one.began).toHaveLength(1);
+    expect(other.began).toHaveLength(1);
+  });
+
+  it("R3n: a definition answered after setup reaches no response, and runs nothing", function* () {
+    const asked = fresh();
+    const reached: string[] = [];
+    const invoked: string[] = [];
+
+    // The interception is installed inside `Execution.document`, which is the
+    // scope the evaluation runner is attached in, and it answers `REPL.Bindings`
+    // with a definition of its own. The capture already sealed that name.
+    const answer = yield* replyWith("<Output>\n<REPL.Bindings />\n</Output>\n", asked, [
+      intercepting("REPL.Bindings", reached, invoked),
+    ]);
+
+    // The interception is genuinely in the document's own chain — it was asked
+    // for the root and for the holding element — and it was never asked for the
+    // control's name at all. A generated admission resolves an admitted name
+    // from the definition the capture sealed and does not consult the
+    // document's chain for it, so there is no point at which a later answer
+    // could substitute.
+    expect(reached).toContain("SidekickHost");
+    expect(reached).not.toContain("REPL.Bindings");
+    expect(invoked).toEqual([]);
+
+    // And the response ran, from the sealed snapshot, against this owner's own
+    // handle: the row is about what the interception could not do rather than
+    // about the reply failing.
+    expect(rendered(answer)).toContain("Ada");
+    expect(asked.requests).toEqual(["bindings"]);
+  });
+
+  it("R3o: a selection composed after setup widens nothing", function* () {
+    const asked = fresh();
+    const reached: string[] = [];
+    const invoked: string[] = [];
+
+    // The same installation also composes a *later* selection naming `File` —
+    // an ordinary component an entry may be given and this ceiling omits. A
+    // reply writing it is refused by the sealed table, and the refusal arrives
+    // before any control runs.
+    const answer = yield* replyWith('<Output>\n<File path="notes.md" />\n</Output>\n', asked, [
+      intercepting("File", reached, invoked),
+    ]);
+
+    expect(answer.ok).toBe(false);
+    expect(answer.ok === false && answer.error.message).toContain("did not admit");
+    expect(invoked).toEqual([]);
+    expect(asked.requests).toEqual([]);
+    expect(asked.began).toEqual([]);
+  });
+
+  it("R3p: control — with nothing intercepting, the same reply answers its own handle", function* () {
+    const asked = fresh();
+
+    // The control for R3n and R3o: the same source, the same ceiling, no
+    // interception — so a row above refusing or performing nothing is about the
+    // interception rather than about the arrangement.
+    const answer = yield* replyWith("<Output>\n<REPL.Bindings />\n</Output>\n", asked, []);
+
+    expect(rendered(answer)).toContain("Ada");
+    expect(asked.requests).toEqual(["bindings"]);
   });
 });

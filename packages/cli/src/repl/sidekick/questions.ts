@@ -30,7 +30,7 @@
  *
  * It cannot get one the ordinary way. Every other control is a definition this
  * CLI wrote, so `performed()` wraps its body; this one is *Core's* definition,
- * admitted by `pinnedElicit()`, and wrapping it is exactly what the canonical
+ * selected by name, and wrapping it is exactly what the canonical
  * grant forbids. The one piece of this CLI's code in an `<Elicit>` invocation
  * is the provider it asks — so the pair is written there, as ordinary
  * middleware in the band *outside* the implementation installed at `min`. That

@@ -51,7 +51,12 @@ import { Ok } from "effection";
 import type { Operation, Result } from "effection";
 import { content } from "@executablemd/core";
 import type { InvocationForm } from "@executablemd/core";
-import type { FunctionComponentDefinition } from "@executablemd/core";
+import type {
+  FunctionComponentDefinition,
+  GeneratedEffect,
+  GeneratedForm,
+  GeneratedForms,
+} from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
 
 import type { RetainedPrefix } from "./history.ts";
@@ -286,16 +291,13 @@ export interface SidekickControl {
 function reading(
   name: string,
   key: string,
-  definition: Omit<FunctionComponentDefinition, "generated">,
+  definition: FunctionComponentDefinition,
 ): SidekickControl {
   return {
     name,
     form: "self-closing",
     effect: "read",
-    definition: {
-      ...definition,
-      generated: { "self-closing": { identity: identity(key), effect: "read" } },
-    } as FunctionComponentDefinition,
+    definition: { ...definition, generated: offering(key, "self-closing", "read") },
   };
 }
 
@@ -304,17 +306,29 @@ function writing(
   name: string,
   key: string,
   form: InvocationForm,
-  definition: Omit<FunctionComponentDefinition, "generated">,
+  definition: FunctionComponentDefinition,
 ): SidekickControl {
   return {
     name,
     form,
     effect: "write",
-    definition: {
-      ...definition,
-      generated: { [form]: { identity: identity(key), effect: "write" } },
-    } as FunctionComponentDefinition,
+    definition: { ...definition, generated: offering(key, form, "write") },
   };
+}
+
+/**
+ * The generated use one control's declaration offers, for one spelling.
+ *
+ * The form is a value rather than a literal, so the table it keys is annotated
+ * as the partial record `GeneratedForms` already is. That is what makes the
+ * computed key check against `InvocationForm` instead of widening to a string
+ * table nothing would have verified.
+ */
+function offering(key: string, form: InvocationForm, effect: GeneratedEffect): GeneratedForms {
+  const offered: Partial<Record<InvocationForm, GeneratedForm>> = {
+    [form]: { identity: identity(key), effect },
+  };
+  return offered;
 }
 
 /**

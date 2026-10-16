@@ -1449,9 +1449,14 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
      * Send one turn, run what it answers with, and say what the next turn owes.
      *
      * Everything that belongs to one turn is here, which is why the ordinal,
-     * the response identity, the ceiling and the journal are all established
-     * inside it: two turns are two responses, and a ceiling shared between them
-     * would file one reply's controls under the other's response.
+     * the response identity and the journal are all established inside it: two
+     * turns are two responses, and a journal shared between them would file one
+     * reply's controls under the other's response.
+     *
+     * The *ceiling* is not among them any more. A root is admitted from the
+     * selection its execution captured, so the controls were installed and
+     * sealed when this conversation opened; what one turn still establishes is
+     * which response they answer for, which travels through `serving`.
      */
     function* respond(
       paired: PairedChatStorage,

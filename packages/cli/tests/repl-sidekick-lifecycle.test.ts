@@ -22,6 +22,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import type { SidekickOperation } from "../src/repl/sidekick/model.ts";
 import { ensure, Ok, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result, Task } from "effection";
 
@@ -360,6 +361,10 @@ describe("Tier R6 — Stop ends the asking and nothing else", () => {
       },
     });
     held.fake.script({ reply: "<REPL.EntryInput>held fill</REPL.EntryInput>\n" });
+    // The successor runs a control of its own, so the row can say which
+    // response each retained pair belongs to rather than only that a successor
+    // ran at all.
+    held.fake.script({ reply: "<REPL.Bindings />\n" });
     held.fake.script({ reply: "<Output>After Stop.</Output>\n" });
 
     const sent = yield* sending(held, "prepare something");
@@ -404,6 +409,41 @@ describe("Tier R6 — Stop ends the asking and nothing else", () => {
     expect(again.value.conversation).toBe(reading.value.active);
     const first = yield* sent;
     expect(first.ok).toBe(false);
+
+    // IN6's association half, read off the retained history rather than off
+    // this process. The controls were captured once when the conversation
+    // opened, so what tells these two pairs apart is the response each was
+    // filed under — and a late outcome moving to the successor is exactly what
+    // a holder cleared too early would produce.
+    const after = held.owner.reading;
+    if (!after.ok) {
+      throw after.error;
+    }
+    const described = (one: SidekickOperation) => ({
+      response: one.response,
+      order: one.order,
+      component: one.component,
+      status: one.status,
+    });
+    // The successor's read is the one answered pair, and it belongs to the
+    // successor's own response with its own order.
+    expect(after.value.operations.map(described)).toEqual([
+      { response: "response:2", order: 0, component: "REPL.Bindings", status: "ok" },
+    ]);
+    // The held fill began under the response that was stopped and never
+    // answered, and it stays there: an outcome arriving late is exactly what a
+    // response naming cleared before its cleanup had joined would have filed
+    // under the successor instead.
+    expect(after.value.unfinished.map(described)).toEqual([
+      { response: "response:1", order: 0, component: "REPL.EntryInput", status: "unfinished" },
+    ]);
+    // Said the other way round, because that is the failure that mattered:
+    // nothing of the stopped response's control is filed under the successor.
+    expect(
+      [...after.value.operations, ...after.value.unfinished].filter(
+        (one) => one.response === "response:2" && one.component === "REPL.EntryInput",
+      ),
+    ).toEqual([]);
   });
 
   it("R6: Stop leaves an entry it admitted running, and starts no further turn", function* () {

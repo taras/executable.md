@@ -33,6 +33,7 @@
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, race, scoped, sleep, spawn, suspend, useScope, withResolvers } from "effection";
+import { forEach } from "@effectionx/stream-helpers";
 import { pinnedComponent } from "../src/generated-xmd.ts";
 import type { GeneratedObservation } from "../src/generated-xmd.ts";
 import type { FunctionComponentDefinition } from "../src/types.ts";
@@ -199,6 +200,16 @@ describe("Tier E1 — only a live trusted handle evaluates a root", () => {
       ],
     );
     const watched = yield* spawn(() => execution);
+    // The document's own output stream, consumed while the run is live. A late
+    // subscriber receives the whole sequence, but subscribing here is what the
+    // row is about: a consumer watching the document throughout must never be
+    // handed a root's rendering.
+    const chunks: string[] = [];
+    const observed = yield* spawn(() =>
+      forEach(function* (chunk: string) {
+        chunks.push(chunk);
+      }, execution.output),
+    );
 
     // No conversation, and no journal around this caller either: the caller's
     // own scope carries no durable context, so the evaluation's sequence is the
@@ -224,14 +235,23 @@ describe("Tier E1 — only a live trusted handle evaluates a root", () => {
 
     gate.resolve();
     const completion = yield* watched;
+    const closed = yield* observed;
 
-    // Canonical main completion, after the document's own cleanup, and the
-    // output stream is the document's rather than the root's.
+    // Canonical main completion, after the document's own cleanup.
     expect(completion.ok).toBe(true);
     expect(String(completion.ok === true ? completion.value : "")).toContain(
       "the document finished",
     );
     expect(String(completion.ok === true ? completion.value : "")).not.toContain("probed");
+
+    // And the output stream is the document's rather than the root's — read off
+    // the chunks a consumer actually received, not off the completion value.
+    // The rendering a root answers with comes back from the method and reaches
+    // neither the stream nor its close value: a host showing somebody a reply
+    // is not the document printing one.
+    expect(chunks.join("")).toContain("the document finished");
+    expect(chunks.join("")).not.toContain("probed");
+    expect(String(closed)).not.toContain("probed");
   });
 
   it("E1b: ordinary execute exposes no evaluator, and the host module exports none", function* () {
