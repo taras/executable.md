@@ -22,6 +22,8 @@ import type { Operation } from "effection";
 import { StaleInputError } from "@executablemd/durable-streams";
 import { useAdvisoryLock } from "@executablemd/workflow/deno";
 import { commonDirectoryLock } from "../run-composition/placement.ts";
+import { ManagedCheckoutError } from "../run-composition/errors.ts";
+import type { ManagedCheckoutReason } from "../run-composition/errors.ts";
 
 /**
  * A checkout another live entry or another process is already working in.
@@ -60,5 +62,48 @@ export function* useCommonDirectoryLease(commonDirectory: string): Operation<voi
   const held = yield* useAdvisoryLock(commonDirectoryLock(commonDirectory));
   if (held === undefined) {
     throw new CommonDirectoryLeaseError();
+  }
+}
+
+/**
+ * A managed slot this entry cannot take back, raised where a file needed it.
+ *
+ * A restored placement acquires its slot at the first new operation inside it,
+ * which is a long way from where the selection was recorded — and by then the
+ * call is a `<File>` or a `<Dir>`, whose refusals are ordinary Files outcomes
+ * the journal keeps. This is not one of those: another entry holding the slot
+ * is a condition that lasts as long as their work, and recording it as this
+ * operation's answer would make it permanent.
+ *
+ * So the condition travels as a `StaleInputError` carrying the provider's own
+ * sentence. Core cannot turn it into a recorded File outcome, a document cannot
+ * print it away, and later siblings do not run as though the file had been
+ * written.
+ */
+export class ManagedPlacementHoldError extends StaleInputError {
+  override name = "ManagedPlacementHoldError";
+
+  readonly reason: ManagedCheckoutReason;
+
+  constructor(refusal: ManagedCheckoutError) {
+    super(refusal.message);
+    this.reason = refusal.reason;
+  }
+}
+
+/**
+ * Take a managed slot back for a restored placement, or raise it as fatal.
+ *
+ * Only the managed vocabulary's own refusal is translated. Anything else is not
+ * a condition this boundary has a word for and travels untouched.
+ */
+export function* holdManagedPlacement(acquire: () => Operation<void>): Operation<void> {
+  try {
+    yield* acquire();
+  } catch (error) {
+    if (error instanceof ManagedCheckoutError) {
+      throw new ManagedPlacementHoldError(error);
+    }
+    throw error;
   }
 }

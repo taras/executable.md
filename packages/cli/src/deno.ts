@@ -117,7 +117,7 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
       importPluginModule,
       () => useDenoWorkflowHost(HELPER),
       useMachineSessions(),
-      useDenoRepl,
+      () => useDenoRepl(HELPER),
     );
   });
 }

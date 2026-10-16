@@ -31,6 +31,7 @@
  */
 
 import { open, rename } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import { ensureDir, exists, readTextFile, readdir } from "@effectionx/fs";
 import { realpath } from "node:fs/promises";
 import { ensure, scoped, until, type Operation } from "effection";
@@ -97,18 +98,61 @@ function unusable(sentence: string): never {
  * already writing; atomic because a reader under the same lock must see either
  * the whole sidecar or none of it, and a partially written one would describe a
  * checkout nobody made.
+ *
+ * The release is armed before the open is started, and it joins the open rather
+ * than only closing what the open returned. Registering it afterwards would
+ * leave a window where a halt arrives while the descriptor is still being
+ * delivered: the cleanup has not been established, so nothing closes it, and
+ * the open completes into a scope that has already finished unwinding. Arming
+ * first is not enough on its own either — a cleanup that ran while the open was
+ * still in flight would find no handle to close and let teardown finish while
+ * one was still coming.
  */
-function* writeMetadata(slot: string, metadata: ManagedMetadata): Operation<void> {
+export function* writeMetadata(
+  slot: string,
+  metadata: ManagedMetadata,
+  /**
+   * How the exclusive temporary sibling is opened.
+   *
+   * Package-private, for the cancellation regression: the window this
+   * discipline exists for is between starting the open and being handed the
+   * descriptor, and holding that open is the only way to cut it. Production
+   * states none.
+   */
+  openExclusive: (path: string) => Promise<FileHandle> = (path) => open(path, "wx"),
+): Operation<void> {
   const temporary = `${metadataOf(slot)}.${randomUUID()}`;
   yield* scoped(function* () {
-    const handle = yield* until(open(temporary, "wx"));
-    // Registered before the write, so a halt closes the descriptor: closing is
-    // asynchronous, and a `finally` that suspended would not be guaranteed to
-    // finish.
-    yield* ensure(() => until(handle.close()));
+    let opening: Promise<FileHandle> | undefined;
+    yield* ensure(function* () {
+      if (opening === undefined) {
+        return;
+      }
+      const opened = yield* until(opening.then(settled, unopened));
+      if (opened !== undefined) {
+        yield* until(opened.close());
+      }
+    });
+    opening = openExclusive(temporary);
+    const handle = yield* until(opening);
     yield* until(handle.writeFile(metadataBytes(metadata), "utf8"));
   });
   yield* until(rename(temporary, metadataOf(slot)));
+}
+
+function settled(handle: FileHandle): FileHandle {
+  return handle;
+}
+
+/**
+ * What an open that failed delivered: nothing to close.
+ *
+ * The failure itself is the caller's, raised where the open was awaited. A
+ * cleanup that re-raised it would replace whatever ended the scope with a
+ * second account of the same thing.
+ */
+function unopened(): undefined {
+  return undefined;
 }
 
 /** The sidecar this slot holds, or `undefined` when it holds none. */

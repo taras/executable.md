@@ -22,19 +22,42 @@ import { exists } from "@effectionx/fs";
 import type { Operation } from "effection";
 import { fileURLToPath as fromFileUrl } from "node:url";
 import { join } from "node:path";
-import { replFilesJourney } from "../../packages/cli/tests/support/repl-files-journey.ts";
+import {
+  replFilesJourney,
+  replRepositoryJourney,
+} from "../../packages/cli/tests/support/repl-files-journey.ts";
 
 const ROOT = fromFileUrl(new URL("../..", import.meta.url));
 const BINARY = join(ROOT, "dist", "xmd");
 
+/** How this suite invokes the compiled `xmd`. */
+function compiled(args: readonly string[]): string {
+  return [shellQuote(BINARY), ...args].join(" ");
+}
+
+/** Refuse the row rather than skip it: a missing binary is missing evidence. */
+function* requireBinary(): Operation<void> {
+  if (!(yield* exists(BINARY))) {
+    throw new Error(
+      `this row drives the compiled binary and ${BINARY} is not there. Run \`deno task build\` ` +
+        "first; a skipped row is missing evidence rather than a passing behavior.",
+    );
+  }
+}
+
 describe("the compiled binary's REPL entry files", () => {
   it("E1: carries the entry host, so a completed prefix answers again", function* (): Operation<void> {
-    if (!(yield* exists(BINARY))) {
-      throw new Error(
-        `this row drives the compiled binary and ${BINARY} is not there. Run \`deno task build\` ` +
-          "first; a skipped row is missing evidence rather than a passing behavior.",
-      );
-    }
-    yield* replFilesJourney((args) => [shellQuote(BINARY), ...args].join(" "));
+    yield* requireBinary();
+    yield* replFilesJourney(compiled);
+  });
+
+  it("E1: carries the managed selectors, so a Repository answers again", function* (): Operation<void> {
+    yield* requireBinary();
+    yield* replRepositoryJourney(compiled, "repository");
+  });
+
+  it("E1: carries the managed selectors, so a Worktree's path routes a Dir", function* (): Operation<void> {
+    yield* requireBinary();
+    yield* replRepositoryJourney(compiled, "worktree");
   });
 });

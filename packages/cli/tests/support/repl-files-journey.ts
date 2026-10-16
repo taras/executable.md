@@ -23,7 +23,7 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import { type Operation, scoped, sleep, until } from "effection";
 import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { execFile } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import { allocate, showing } from "./pty.ts";
@@ -290,6 +290,279 @@ export function replFilesJourney(repl: ReplCommand): Operation<void> {
     yield* reach(third, "[exit]");
     yield* third.type("\r");
     expect(yield* ended(third)).toBe(0);
+  });
+}
+
+/**
+ * A source repository with one commit, for the managed journeys to clone.
+ *
+ * Seeded with a plain `git` for the same reason the checkout above is: the
+ * fixture has to be the same on every runtime this suite starts on.
+ */
+function* seedOrigin(home: string): Operation<string> {
+  const origin = join(home, "origin");
+  yield* until(mkdir(origin, { recursive: true }));
+  yield* git(home, ["init", "-b", "main", origin]);
+  yield* writeTextFile(join(origin, "README.md"), "origin\n");
+  yield* git(origin, ["add", "README.md"], home);
+  yield* git(origin, ["commit", "-m", "first"], home);
+  return origin;
+}
+
+/** One `git` command, in this journey's own isolated home. */
+function git(cwd: string, args: readonly string[], home = cwd): Operation<void> {
+  return until(
+    new Promise<void>((resolve, reject) => {
+      execFile(
+        "git",
+        [...args],
+        {
+          cwd,
+          env: {
+            ...process.env,
+            HOME: home,
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_AUTHOR_NAME: "Journey",
+            GIT_AUTHOR_EMAIL: "journey@example.test",
+            GIT_COMMITTER_NAME: "Journey",
+            GIT_COMMITTER_EMAIL: "journey@example.test",
+          },
+        },
+        (error) => (error === null ? resolve() : reject(error)),
+      );
+    }),
+  );
+}
+
+/**
+ * The one managed checkout this journey's entry created, once it is there.
+ *
+ * Found rather than predicted. A slot is a digest of the whole identity under a
+ * root this journey never names — the command decides where
+ * `~/.xmd/repositories` is from the home it was given — so looking for the one
+ * checkout beneath that layout is what asks the question the person asks:
+ * where did my Repository end up.
+ */
+function* managedCheckout(home: string, kind: "repositories" | "worktrees"): Operation<string> {
+  const base = join(home, ".xmd", "repositories", kind);
+  const depth = kind === "repositories" ? 1 : 2;
+  const deadline = Date.now() + ACT_MS;
+  while (true) {
+    const found = yield* slotsBeneath(base, depth);
+    if (found.length === 1 && (yield* exists(join(found[0] ?? "", "checkout")))) {
+      return join(found[0] ?? "", "checkout");
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `no single managed ${kind} slot appeared beneath ${base}; found ${JSON.stringify(found)}`,
+      );
+    }
+    yield* sleep(200);
+  }
+}
+
+/** Every slot directory at this depth beneath a managed layout root. */
+function* slotsBeneath(base: string, depth: number): Operation<string[]> {
+  if (!(yield* exists(base))) {
+    return [];
+  }
+  let level = [base];
+  for (let step = 0; step < depth; step += 1) {
+    const next: string[] = [];
+    for (const directory of level) {
+      for (const entry of yield* until(readdir(directory))) {
+        next.push(join(directory, entry));
+      }
+    }
+    level = next;
+  }
+  return level.sort();
+}
+
+/** Which managed journey this is, and what the entry it types looks like. */
+export type ManagedJourney = "repository" | "worktree";
+
+const QUESTION =
+  '<Elicit schema={{ type: "object", properties: { decision: { type: "string", enum: ["continue"] } }, required: ["decision"], additionalProperties: false }} as="answer">Recorded value: {held}. Continue this experiment?</Elicit>';
+
+/** The entry this managed journey types, as the specification shows it. */
+function managedEntry(through: ManagedJourney, origin: string): string {
+  const body = [
+    '<File path="note.md">first</File>',
+    '<File path="obsolete.md">remove me</File>',
+    '<File.Delete path="obsolete.md" />',
+    '<File path="note.md" as="held" />',
+    QUESTION,
+    '<File path="after.md">continued</File>',
+  ];
+  if (through === "repository") {
+    return [
+      `<Repository name="project" url=${JSON.stringify(origin)}>`,
+      '<Dir path="drafts">',
+      ...body,
+      "</Dir>",
+      "</Repository>",
+    ].join("\n");
+  }
+  // The self-closing spelling: it binds the checkout path, and a `<Dir>`
+  // sibling renders its descendants at exactly that path.
+  return [
+    `<Repository name="project" url=${JSON.stringify(origin)}>`,
+    '<Worktree name="experiment" branch="experiment" as="worktree" />',
+    "<Dir path={worktree}>",
+    ...body,
+    "</Dir>",
+    "</Repository>",
+  ].join("\n");
+}
+
+/** A new entry that selects the same placement afresh and reads live. */
+function managedLiveRead(through: ManagedJourney, origin: string): string {
+  if (through === "repository") {
+    return [
+      `<Repository name="project" url=${JSON.stringify(origin)}>`,
+      '<File path="drafts/note.md" as="live" />',
+      "live is {live}",
+      "</Repository>",
+    ].join("\n");
+  }
+  return [
+    `<Repository name="project" url=${JSON.stringify(origin)}>`,
+    '<Worktree name="experiment" branch="experiment" as="worktree" />',
+    "<Dir path={worktree}>",
+    '<File path="note.md" as="live" />',
+    "live is {live}",
+    "</Dir>",
+    "</Repository>",
+  ].join("\n");
+}
+
+/**
+ * The whole journey again, through a managed Repository the entry selected.
+ *
+ * Same shape as the ambient one and for the same reasons, with the one addition
+ * this delivery is about: the checkout the file work happens in is one the entry
+ * *selected*, under the root the command decides from the home it was given.
+ * Leaving at the question and coming back must not select it again — and the
+ * completed read must still answer with what it read the first time, while the
+ * file on disk says something else.
+ */
+export function replRepositoryJourney(repl: ReplCommand, through: ManagedJourney): Operation<void> {
+  return scoped(function* (): Operation<void> {
+    const home = yield* useTempDirectory("xmd-repl-managed-pty-");
+    const origin = yield* seedOrigin(home);
+    // Typed from a directory inside no checkout, so what the entry works in is
+    // the placement it selected rather than an ambient repository.
+    const away = join(home, "away");
+    yield* until(mkdir(away, { recursive: true }));
+    const outside = (args: readonly string[]): string => `cd ${shellQuote(away)} && ${repl(args)}`;
+
+    const first = yield* allocate(outside(["repl", "--deny-all"]), home);
+    yield* showing(first, "[exit]", REACH_MS);
+    yield* first.type(managedEntry(through, origin));
+    yield* sleep(500);
+    yield* first.type("\r");
+
+    // The checkout the selection created, found under the managed layout.
+    const checkout = yield* managedCheckout(
+      home,
+      through === "repository" ? "repositories" : "worktrees",
+    );
+    const working = through === "repository" ? join(checkout, "drafts") : checkout;
+
+    // The prefix ran, inside that checkout, and the write after the question
+    // has not.
+    yield* holding(join(working, "note.md"), "first");
+    yield* removed(join(working, "obsolete.md"));
+    expect(yield* exists(join(working, "after.md"))).toBe(false);
+    yield* showing(first, "waiting for an answer", ACT_MS);
+
+    yield* reach(first, "[exit]");
+    yield* first.type("\r");
+    expect(yield* ended(first)).toBe(0);
+    const location = printedLocation((yield* first.shows()).join("\n"));
+
+    // Changed from outside, which this execution model allows.
+    yield* writeTextFile(join(working, "note.md"), "second");
+    yield* writeTextFile(join(working, "obsolete.md"), "back again");
+
+    const second = yield* allocate(outside(["repl", "--deny-all", location]), home);
+    yield* showing(second, "[exit]", REACH_MS);
+    yield* showing(second, "waiting for an answer", ACT_MS);
+
+    // No completed operation ran again — the selection included. A reselected
+    // placement would have reached a selector; a replayed write would have
+    // overwritten the shell's edit, and a replayed read would have bound
+    // "second".
+    expect(yield* readTextFile(join(working, "note.md"))).toBe("second");
+    expect(yield* readTextFile(join(working, "obsolete.md"))).toBe("back again");
+    expect(yield* exists(join(working, "after.md"))).toBe(false);
+
+    yield* reach(second, "[answer]");
+    yield* second.type("\r");
+    yield* showing(second, "Recorded value: first", ACT_MS);
+    yield* showing(second, "Continue this experiment?", ACT_MS);
+    yield* click(second, "( ) continue");
+    yield* showing(second, "[ok] entry-1", ACT_MS);
+
+    // The suffix write executed, for the first time, on the answer — in the
+    // checkout the restored placement named.
+    yield* holding(join(working, "after.md"), "continued");
+
+    yield* reach(second, "[exit]");
+    yield* second.type("\r");
+    expect(yield* ended(second)).toBe(0);
+
+    // A separate new entry, selecting the same placement afresh: its selection
+    // is new work, so it reuses the checkout that is there, and its read is new
+    // work, so it reads what the file now holds.
+    const third = yield* allocate(outside(["repl", "--deny-all", location]), home);
+    yield* showing(third, "[exit]", REACH_MS);
+    yield* third.type(managedLiveRead(through, origin));
+    yield* sleep(500);
+    yield* third.type("\r");
+    yield* showing(third, "live is second", ACT_MS);
+
+    yield* reach(third, "[exit]");
+    yield* third.type("\r");
+    expect(yield* ended(third)).toBe(0);
+  });
+}
+
+/**
+ * What a managed selection does on a runtime that assembles no native setup.
+ *
+ * Node and Bun start a REPL and do ordinary file and directory work; neither
+ * installs a Repository provider, because the Deno adapter's module graph
+ * reaches `node:sqlite` and Bun has not got one. So a `<Repository>` there says
+ * no provider is installed rather than reaching a clone — and says it before
+ * anything local or remote is touched.
+ */
+export function replUnsupportedSelection(repl: ReplCommand): Operation<void> {
+  return scoped(function* (): Operation<void> {
+    const home = yield* useTempDirectory("xmd-repl-managed-pty-");
+    const origin = yield* seedOrigin(home);
+    const away = join(home, "away");
+    yield* until(mkdir(away, { recursive: true }));
+    const pty = yield* allocate(`cd ${shellQuote(away)} && ${repl(["repl", "--deny-all"])}`, home);
+    yield* showing(pty, "[exit]", REACH_MS);
+    yield* pty.type(
+      [
+        `<Repository name="project" url=${JSON.stringify(origin)}>`,
+        '<File path="note.md">first</File>',
+        "</Repository>",
+      ].join("\n"),
+    );
+    yield* sleep(500);
+    yield* pty.type("\r");
+
+    yield* showing(pty, "no Repository composition provider is installed", ACT_MS);
+    // Nothing was placed: no managed layout was created at all.
+    expect(yield* exists(join(home, ".xmd", "repositories", "repositories"))).toBe(false);
+
+    yield* reach(pty, "[exit]");
+    yield* pty.type("\r");
+    expect(yield* ended(pty)).toBe(0);
   });
 }
 

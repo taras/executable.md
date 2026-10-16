@@ -683,6 +683,12 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "packages/git/tests/retained-repository-selection.test.ts",
+    reason:
+      "the subject is a REPL entry's managed selection: it clones and adds worktrees with real `git` children, holds their slots under a kernel-released exclusive advisory lock taken through the Deno runtime, and interrupts those children to observe their close. The placement record and its admission are provider-neutral and are proven on every runtime by packages/git/tests/retained-repository-records.test.ts; that a runtime without the provider refuses a managed selector before it reaches a clone is proven by packages/cli/tests/repl-repositories-pty.test.ts, which runs everywhere",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "packages/git/tests/retained-repository-lifecycle.test.ts",
     reason:
       "holds a shared Git directory under a kernel-released exclusive advisory lock taken through the Deno runtime, and spawns a second Deno process to prove the cross-process half; Node and Bun expose no equivalent",
