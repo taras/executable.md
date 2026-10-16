@@ -58,7 +58,15 @@ import type {
 import { gitHubAccessFor } from "../../git/tests/support/issue-providers.ts";
 import type { GitHubIssuesOptions } from "@executablemd/git/deno";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
-import { useDenoReplRepositories } from "../src/deno-repositories.ts";
+import { assembleReplProfile } from "../src/repl-profile.ts";
+import type { ReplExecutionProfile } from "../src/repl-profile.ts";
+import { resolveAgentStack } from "../src/agent-stack.ts";
+import { NO_PLUGINS } from "../src/plugin-host.ts";
+import {
+  denoReplIssues,
+  selectReplEntryHost,
+  useDenoReplRepositories,
+} from "../src/deno-repositories.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
@@ -1421,6 +1429,46 @@ describe("how a REPL entry gets its issues", () => {
     expect(finished).toBe(true);
     expect(holding.count).toBeGreaterThan(0);
     expect(settledIssueRecords(yield* run.stream.readAll()).length).toBe(0);
+  });
+
+  it("E5: the REPL profile captures the host's selected entry factory, and absence", function* (): Operation<void> {
+    const flags = {
+      agentProvider: "acpx",
+      defaultAgent: "claude",
+      approveAll: false,
+      approveReads: false,
+      denyAll: true,
+    };
+    const planWriterRoot = yield* until(
+      realpath(yield* until(mkdtemp(join(tmpdir(), "repl-issues-profile-")))),
+    );
+
+    // With the host's selection in scope — made by the production selector, in
+    // the command scope, before the profile is assembled.
+    const selected = yield* scoped(function* (): Operation<ReplExecutionProfile> {
+      const stack = yield* resolveAgentStack(flags, undefined);
+      if (!stack.ok) {
+        throw stack.error;
+      }
+      yield* selectReplEntryHost();
+      return yield* assembleReplProfile(stack.value, NO_PLUGINS, { planWriterRoot });
+    });
+    expect(selected.entryInstallation).toBe(denoReplIssues);
+
+    // And without it: the same assembly, in a scope nothing selected in, leaves
+    // the member absent rather than reaching for a default.
+    const absent = yield* scoped(function* (): Operation<ReplExecutionProfile> {
+      const stack = yield* resolveAgentStack(flags, undefined);
+      if (!stack.ok) {
+        throw stack.error;
+      }
+      return yield* assembleReplProfile(stack.value, NO_PLUGINS, { planWriterRoot });
+    });
+    expect(absent.entryInstallation).toBe(undefined);
+
+    // Selecting reaches nothing: no issue host exists yet, because an
+    // installation is built per entry and this command has run none.
+    expect(typeof selected.entryInstallation).toBe("function");
   });
 
   it("E2: shadows the inherited default, and refuses where no host selected one", function* (): Operation<void> {

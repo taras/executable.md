@@ -83,6 +83,9 @@ await main(function* (args) {
     importPluginModule,
     unsupportedWorkflowHost,
     unassembledMachineSessions(),
-    useNodeRepl,
+    // A terminal and a history, and no entry capability: this runtime names
+    // no native adapter, so `<Issue>` in an entry reaches its ordinary
+    // missing-provider refusal.
+    { install: useNodeRepl },
   );
 });

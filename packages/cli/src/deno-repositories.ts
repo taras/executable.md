@@ -36,6 +36,7 @@ import {
 } from "@executablemd/git/deno";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { DEFAULT_REPOSITORY_ROOT } from "./run-repositories.ts";
+import { ReplEntryHost } from "./repl-entry-installation.ts";
 import type { ReplEntryInstallation } from "./repl-entry-installation.ts";
 
 /**
@@ -122,6 +123,18 @@ export function denoRunRepositories(
  */
 export const denoReplIssues: ReplEntryInstallation = (owner: string) =>
   replIssueInstallation(owner);
+
+/**
+ * Select that value for the REPL command that is about to assemble itself.
+ *
+ * Called by the shared command path at the one moment it belongs — before the
+ * profile that captures it — and reached from the entrypoints that may name
+ * this adapter. Setting it establishes nothing: the value is inert code, and
+ * what an entry does with it happens inside that entry.
+ */
+export function* selectReplEntryHost(): Operation<void> {
+  yield* ReplEntryHost.set(denoReplIssues);
+}
 
 /**
  * This deployment's helper configuration, copied by value.
