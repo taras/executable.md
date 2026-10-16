@@ -174,7 +174,7 @@ document argument of exactly `-` means standard input instead.
 Standard input is the one of the three the shared CLI cannot reach for itself. A
 process's own stdin is host-specific state, so each runtime-named entrypoint
 supplies the operation that reads it, as a value passed into the CLI beside the
-service installer, the upgrade assembly and the repository installer. It is not
+service installer and the upgrade assembly. It is not
 a Context, a contextual Api, a public export, a syntax entry, a component or a
 document capability: nothing an authored document can name reaches it, replaces
 it, or asks it for a second read. The CLI calls it at most once per invocation,

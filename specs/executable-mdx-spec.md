@@ -10887,9 +10887,9 @@ export function* useTerminalOutput(): Operation<void> {
 how an eval block compiles, how a service process is hosted, or which runtime
 it is on**. A runtime-named
 entrypoint — `deno.ts`, `node.ts`, `bun.ts`, `compiled.ts` — installs its
-`API.Env` providers with `{ at: "min" }` and passes the matching service
-installer, its own upgrade assembly and its own repository installer to
-`runXmd(args, installService, upgrade, installRepositories, ...)`:
+`API.Env` providers with `{ at: "min" }`, selects the bundled Plugin this host
+runs with, and passes the matching service installer and its own upgrade
+assembly to `runXmd(args, installService, upgrade, ...)`:
 
 ```typescript
 yield* API.Env.around(
@@ -10904,11 +10904,11 @@ yield* API.Env.around(
   },
   { at: "min" },
 );
+yield* BundledRunPlugin.set(denoRunRepositories(HELPER));
 yield* runXmd(
   args,
   useDenoService,
   UPGRADE,
-  denoRunRepositories(HELPER),
   () => useDenoWorkflowHost(HELPER),
   useMachineSessions(),
 );
@@ -10922,26 +10922,38 @@ document nothing through which a release could be read, downloaded or replaced,
 and inheriting those components by omission is impossible. The complete contract
 is [`xmd upgrade`](./upgrade-command-spec.md).
 
-The repository installer is required for the same reason and states a different
-fact: what this runtime can *operate*, rather than what it is. Deno and the
-compiled binary pass the live provider — `denoRunRepositories(HELPER)`, built
-from the same credential-helper assembly the workflow host uses — and Node and
-Bun pass `unsupportedRepositories`. Every runtime registers the same twelve
-declarations either way, so `xmd syntax` describes one language everywhere and a
-runtime that operates none of it reports an absent provider before a lock, a
-credential, a subprocess or a request exists (§5.3, §8.1). `<Dir>` is canonical
-core's rather than one of those declarations, so it is operational on every
-runtime that installs a Files provider.
+The bundled Plugin is a selection rather than a parameter, and it states a
+different fact: what this runtime can *operate*, rather than what it is. One
+CLI-private Context holds it and its default is the provider-neutral Git
+Plugin; Deno and the compiled binary bind a configured native variant —
+`denoRunRepositories(HELPER)`, built from the same credential-helper assembly
+the workflow host uses — before any command is dispatched, and Node and Bun
+leave the default in place. The shared command path reads the value and imports
+no adapter. What the Context holds is inert code and configuration, with no
+provider, lease, session or identity in it: the native variant delegates the
+neutral Plugin's whole install and adds ordinary initialization middleware for a
+run, so every runtime registers the same twelve declarations either way, `xmd
+syntax` describes one language everywhere, and a runtime that operates none of
+it reports an absent provider before a lock, a credential, a subprocess or a
+request exists (§5.3, §8.1). `<Dir>` is canonical core's rather than one of
+those declarations, so it is operational on every runtime that installs a Files
+provider.
 
-Being *supplied* by the entrypoint and being *used* are different things, and
-the commands differ:
+Being *selected* by the entrypoint and being *initialized* are different things,
+and the commands differ:
 
-- an ordinary `xmd run` installs a fresh provider instance for that execution;
-- `xmd test` installs none for its own root document, and hands the
-  entrypoint's installer to a `host="run"` child — which is an ordinary run
-  whatever command hosts it, and receives an instance of its own;
-- a workflow execution installs none at all, because its Workspace attachment
-  owns repositories for the run.
+- an ordinary `xmd run` initializes a fresh provider instance for that
+  execution;
+- `xmd test` activates no bundled Plugin for its own root document, and captures
+  the selected value into the settings a `host="run"` child builds its host
+  from — an ordinary run whatever command hosts it, which installs that value in
+  its own scope and receives an instance of its own;
+- a workflow execution initializes none at all, because its Workspace
+  attachment owns repositories for the run;
+- `xmd repl` initializes none either. What an entry does to files in the ambient
+  checkout it was started in is retained by the entry's own recording, which the
+  selected REPL host registers rather than this Plugin
+  ([the REPL](./repl-spec.md)).
 
 The service installer is invoked only for `xmd run` and `xmd test`, immediately
 before `execute()`. Help, inspection and agent-worker paths never install or

@@ -679,7 +679,7 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
   {
     path: "packages/git/tests/retained-repository-local.test.ts",
     reason:
-      "the subject is a REPL entry's native repository host: it discovers a real checkout with a `git` subprocess and records what a real filesystem answered. The record format, the owner and the admission are provider-neutral and are proven on every runtime by packages/git/tests/retained-repository-records.test.ts",
+      "the subject is a REPL entry's native repository host: it discovers a real checkout with a `git` subprocess and records what a real filesystem answered. The record format and the admission are provider-neutral and are proven on every runtime by packages/git/tests/retained-repository-records.test.ts",
     issue: DERIVED_SCOPE,
   },
   {
@@ -691,7 +691,7 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
   {
     path: "packages/cli/tests/repl-repositories.test.ts",
     reason:
-      "drives the production entry-host factory, which only Deno and the compiled binary supply: its module graph reaches @executablemd/git/deno and so Workflow's storage adapter and node:sqlite. That Node and Bun start a REPL and perform ordinary File and Dir work without it is proven by packages/cli/tests/repl-repositories-pty.test.ts, which runs everywhere",
+      "drives the production entry host, which only Deno and the compiled binary register: its module graph reaches @executablemd/git/deno and so Workflow's storage adapter and node:sqlite. That Node and Bun start a REPL and perform ordinary File and Dir work without it is proven by packages/cli/tests/repl-repositories-pty.test.ts, which runs everywhere",
     issue: DERIVED_SCOPE,
   },
 ];

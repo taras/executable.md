@@ -874,14 +874,14 @@ recorded output replaces it.
 Repository behavior belongs to the entry that is executing, and to nothing
 wider. The command selects it; the entry's own task prepares it, once, inside
 that task, and everything it takes — the Git session it reads through, where it
-looked for a checkout, the claim on that repository — is released when the entry
+looked for a checkout, the hold on that repository — is released when the entry
 is torn down. Each entry reads and writes its own range of the one history, so
 the same text typed twice is two sets of records rather than one replayed, and
 the entry after an interrupted one replays nothing of it however identical its
 text. No second name for the entry appears in a record: which history an entry
 may continue is the range it was given. Reading is not owning: a settled
 history, a frozen position and a refused location prepare nothing, look for no
-checkout and claim nothing. A host that registers no recording runs the same
+checkout and hold nothing. A host that registers no recording runs the same
 file work with nothing retained, which is what Node and Bun do.
 
 Components receive immutable view data and answer with a typed semantic action.
@@ -909,7 +909,7 @@ schedules no timer.
 ## Exclusions
 
 - Two processes writing one execution is unsupported. There is no lease protocol;
-  do not open the same location twice for writing. The claim on a checkout is a
+  do not open the same location twice for writing. The hold on a checkout is a
   different thing: it says one entry at a time may mutate one repository, and it
   says nothing about who may write this execution's history.
 - Repository components are not part of this. `<Repository>`, `<Worktree>`, the
