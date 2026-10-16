@@ -237,6 +237,9 @@ jobs:
       - name: A REPL entry's files across the compiled binary
         run: deno test --allow-all --frozen scripts/tests/repl-repositories-compiled.test.ts
 
+      - name: A REPL entry's issues across the compiled binary
+        run: deno test --allow-all --frozen scripts/tests/repl-issues-compiled.test.ts
+
       # Each package's `components.md` is a packaged asset on the same footing,
       # and the long-form documentation is the only thing that reports whether
       # one shipped — a binary missing them still lists every component and

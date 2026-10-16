@@ -16,7 +16,8 @@ import { importPluginModule } from "./host-plugin-modules.ts";
 import { compiledUpgradeAssembly } from "./compiled-upgrade.ts";
 import { useMachineSessions } from "./session-coordinator.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
-import { denoRunRepositories } from "./deno-repositories.ts";
+import { denoReplIssues, denoRunRepositories } from "./deno-repositories.ts";
+import { ReplEntryHost } from "./repl-entry-installation.ts";
 import { BundledRunPlugin } from "./run-profile.ts";
 import { isCredentialHelperMode, runCredentialHelper } from "@executablemd/git/credential-helper";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
@@ -90,6 +91,11 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
     // the value and imports no adapter, and an ordinary execution installs it
     // in its own scope.
     yield* BundledRunPlugin.set(denoRunRepositories(HELPER));
+    // The issue capability a REPL entry runs with, selected on the same terms
+    // and for the same reason: the adapter is this runtime's, and the entry that
+    // owns one is chosen by the session rather than by the host. Node and Bun
+    // select none, so `<Issue>` there reaches its missing-provider refusal.
+    yield* ReplEntryHost.set(denoReplIssues);
     yield* runXmd(
       args,
       useCompiledService,

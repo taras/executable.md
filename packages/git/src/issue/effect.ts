@@ -1,11 +1,11 @@
 /**
- * The durable envelope the two Issue operations run inside.
+ * The retained Issue lifecycle a workflow run installs.
  *
- * Each derives what it needs, wraps exactly one `IssueApi` call as this run's
- * next durable effect, validates what came back, and retains it. That is all
- * either does — and the shortness is the design. Reconciliation is knowledge
- * about what a particular service can prove, so it belongs to the middleware
- * that holds the credential rather than to a state machine here.
+ * The envelope itself is `owned.ts`, shared with the other profile that retains
+ * Issue work. What belongs here is the half that is a workflow run's own: that
+ * the run and the expansion are what name a durable effect, that an inherited
+ * prefix may lend an upsert the identity it was created under, and that a live
+ * attempt calls `IssueApi` directly.
  *
  * ## One effect type, two operations
  *
@@ -37,51 +37,20 @@
  */
 
 import type { Operation } from "effection";
-import {
-  createDurableOperation,
-  type EffectDescription,
-  type Json,
-  type Workflow,
-} from "@executablemd/durable-streams";
-import { getExpansion, sourceDescription } from "@executablemd/core";
+import { getExpansion } from "@executablemd/core";
 import { getWorkflowRun } from "@executablemd/workflow";
 import { retainedIssueIdentitiesHere } from "../identities.ts";
 import { claimRetainedIssueIdentity, exhaustRetainedIssueIdentities } from "./identities.ts";
-import { ISSUE_EFFECT } from "./effect-type.ts";
 import { IssueApi } from "./api.ts";
 import { IssueOperations } from "./operations.ts";
 import type { IssueReadInvocation, IssueUpsertInvocation } from "./operations.ts";
-import type { IssueDetails, IssueInput, IssueReference } from "./api.ts";
+import type { IssueDetails, IssueReference } from "./api.ts";
 import { IssueProtocolError } from "./errors.ts";
-import {
-  issueDetailsJson,
-  issueIdempotencyKey,
-  issueRecordJson,
-  issueRequestFingerprint,
-  issueRequestJson,
-  parseIssueDetails,
-  parseIssueRecord,
-  type IssueReadRequest,
-  type IssueRequest,
-  type IssueUpsertRequest,
-} from "./records.ts";
+import { issueIdempotencyKey } from "./records.ts";
+import { ownedUpsertRequest, readOwnedIssue, upsertOwnedIssue } from "./owned.ts";
+import type { IssueReadEffectRequest, IssueUpsertEffectRequest } from "./owned.ts";
 
-/** What one read asks the envelope for. */
-export interface IssueReadEffectRequest {
-  /** The canonical issue URL. */
-  readonly url: string;
-  /** The explicit discriminator, or `undefined` when the document named none. */
-  readonly provider: string | undefined;
-}
-
-/** What one upsert asks the envelope for. */
-export interface IssueUpsertEffectRequest {
-  /** The canonical container URL. */
-  readonly target: string;
-  /** The explicit discriminator, or `undefined` when the tracker named none. */
-  readonly provider: string | undefined;
-  readonly issue: IssueInput;
-}
+export type { IssueReadEffectRequest, IssueUpsertEffectRequest } from "./owned.ts";
 
 /**
  * Read one issue, as this run's next durable effect.
@@ -91,40 +60,15 @@ export interface IssueUpsertEffectRequest {
  * reaching one, or appending anything.
  */
 export function* readIssue(request: IssueReadEffectRequest): Operation<IssueDetails> {
-  const complete: IssueReadRequest = Object.freeze({
-    operation: "read" as const,
-    identity: yield* effectIdentity(),
-    url: request.url,
-    provider: request.provider ?? null,
-  });
-
-  const retained: unknown = yield* attempt(
-    yield* describe(complete),
-    function* (): Operation<Json> {
-      const answered = yield* IssueApi.operations.read(complete.url, {
-        ...(complete.provider === null ? {} : { provider: complete.provider }),
+  const identity = yield* effectIdentity();
+  return yield* readOwnedIssue(
+    { owner: identity.runId, site: identity.expansionId, request },
+    function* (): Operation<unknown> {
+      return yield* IssueApi.operations.read(request.url, {
+        ...(request.provider === undefined ? {} : { provider: request.provider }),
       });
-      // Validated before it is retained. A provider that answered with more
-      // than the shared fields answered with something this boundary will not
-      // carry, and reading it anyway is how a provider's own shape reaches a
-      // document.
-      const details = parseIssueDetails(answered);
-      if (details === undefined) {
-        throw new IssueProtocolError(
-          "the issue provider answered a read with something that is not an issue's shared " +
-            "fields, so nothing was retained",
-        );
-      }
-      return issueDetailsJson(details);
     },
   );
-  const details = parseIssueDetails(retained);
-  if (details === undefined) {
-    throw new IssueProtocolError(
-      "the journal holds a value that does not describe an issue's shared fields",
-    );
-  }
-  return details;
 }
 
 /**
@@ -136,13 +80,6 @@ export function* readIssue(request: IssueReadEffectRequest): Operation<IssueDeta
  */
 export function* upsertIssue(request: IssueUpsertEffectRequest): Operation<IssueReference> {
   const identity = yield* effectIdentity();
-  const live: IssueUpsertRequest = Object.freeze({
-    operation: "upsert" as const,
-    identity,
-    target: request.target,
-    provider: request.provider ?? null,
-    issue: request.issue,
-  });
 
   // A position this run already retains a record at is named by the identity
   // that record holds; everywhere else by this run's own. A fork inherits its
@@ -153,15 +90,20 @@ export function* upsertIssue(request: IssueUpsertEffectRequest): Operation<Issue
   // lending it an identity would buy nothing and cost the ordering the
   // inherited prefix is consumed in.
   const held = yield* retainedIssueIdentitiesHere();
-  const borrowed = claimRetainedIssueIdentity(held, live);
-  const complete: IssueUpsertRequest =
-    borrowed === undefined
-      ? live
-      : Object.freeze({ ...live, identity: { ...identity, runId: borrowed } });
+  const borrowed = claimRetainedIssueIdentity(
+    held,
+    ownedUpsertRequest({ owner: identity.runId, site: identity.expansionId, request }),
+  );
+  const owner = borrowed ?? identity.runId;
+  const key = issueIdempotencyKey(
+    { runId: owner, expansionId: identity.expansionId },
+    "upsert",
+    request.target,
+  );
 
-  const retained: unknown = yield* attempt(
-    yield* describe(complete),
-    function* (): Operation<Json> {
+  return yield* upsertOwnedIssue(
+    { owner, site: identity.expansionId, request },
+    function* (): Operation<unknown> {
       if (borrowed !== undefined) {
         // The request was named by a retained record, which cannot be a live
         // request: performing under a run this execution is not would repeat
@@ -173,28 +115,13 @@ export function* upsertIssue(request: IssueUpsertEffectRequest): Operation<Issue
             "here would repeat work that already happened outside this journal",
         );
       }
-      const answered = yield* IssueApi.operations.upsert(complete.issue, {
-        url: complete.target,
-        ...(complete.provider === null ? {} : { provider: complete.provider }),
-        idempotencyKey: issueIdempotencyKey(complete.identity, "upsert", complete.target),
+      return yield* IssueApi.operations.upsert(request.issue, {
+        url: request.target,
+        ...(request.provider === undefined ? {} : { provider: request.provider }),
+        idempotencyKey: key,
       });
-      const record = parseIssueRecord(answered);
-      if (record === undefined) {
-        throw new IssueProtocolError(
-          "the issue provider answered an upsert with something that is not a URL, so nothing " +
-            "was retained",
-        );
-      }
-      return issueRecordJson(record);
     },
   );
-  const record = parseIssueRecord(retained);
-  if (record === undefined) {
-    throw new IssueProtocolError(
-      "the journal holds a value that does not describe an issue reference",
-    );
-  }
-  return record;
 }
 
 function* effectIdentity(): Operation<{ runId: string; expansionId: string }> {
@@ -202,31 +129,6 @@ function* effectIdentity(): Operation<{ runId: string; expansionId: string }> {
   const expansion = yield* getExpansion();
   return { runId: run.runId, expansionId: expansion.id };
 }
-
-function* describe(request: IssueRequest): Operation<EffectDescription> {
-  const expansion = yield* getExpansion();
-  return {
-    type: ISSUE_EFFECT,
-    name: yield* issueRequestFingerprint(request),
-    // Carried in the description so a retained history describes what it asked
-    // for. The identity table reads it back to recognize a record a fork
-    // inherited, and it holds only what a document wrote.
-    request: issueRequestJson(request),
-    // Where the authored component asking for this effect was written —
-    // diagnostic journal data, never part of the fingerprint, the request, or
-    // the identity table.
-    ...sourceDescription(expansion.position),
-  };
-}
-
-function* attempt(
-  description: EffectDescription,
-  perform: () => Operation<Json>,
-): Workflow<unknown> {
-  return yield createDurableOperation<Json>(description, perform);
-}
-
-export { issueRequestJson };
 
 /**
  * Install the retained Issue lifecycle for the current scope and below.

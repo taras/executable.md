@@ -102,6 +102,15 @@ export interface ServerOptions {
    * observable while it is still running, and this is what holds one there.
    */
   readonly hold?: () => Operation<void>;
+  /**
+   * Run after the store has answered and before the answer is written.
+   *
+   * The other side of `hold`, and for the other interruption: a create this
+   * tracker accepted and the client never learned of. Holding here leaves the
+   * issue filed with no response on the wire, which is the one state a
+   * reconciliation key exists for.
+   */
+  readonly settle?: (answer: { readonly status: number }) => Operation<void>;
 }
 
 /**
@@ -162,6 +171,9 @@ export function useIssueTrackerServer(options: ServerOptions = {}): Operation<Is
           url,
           body,
         );
+        if (options.settle) {
+          yield* options.settle({ status: answer.status });
+        }
         // `Connection: close` on every answer, because `fetch` otherwise keeps
         // an idle keep-alive socket the client never reuses, and closing the
         // listener then waits on a connection nobody is using.

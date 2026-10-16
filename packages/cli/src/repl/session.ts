@@ -91,6 +91,8 @@ import {
   TerminalDivergenceError,
 } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
+import { canonicalJson } from "@executablemd/workflow";
+import type { ReplEntryInstallation } from "../repl-entry-installation.ts";
 
 import { useReplAgent } from "./agent.ts";
 import { filter } from "@effectionx/stream-helpers";
@@ -404,6 +406,14 @@ export interface ReplSessionOptions {
    * is what an execution with no configured mode already does.
    */
   readonly permissionMode?: PermissionMode;
+  /**
+   * What each executing entry installs for itself.
+   *
+   * Called once per entry, inside that entry's own task, with the owner its
+   * retained external work is named by. Absent is a session whose entries have
+   * no issue host, which is every runtime that selected none.
+   */
+  readonly entryInstallation?: ReplEntryInstallation;
 }
 
 /**
@@ -442,7 +452,15 @@ function* start(
   options: ReplSessionOptions,
   submitted: string | undefined,
 ): Operation<Result<ReplSession>> {
-  const { execution, includes, installations = [], generated, selection, permissionMode } = options;
+  const {
+    execution,
+    includes,
+    installations = [],
+    generated,
+    selection,
+    permissionMode,
+    entryInstallation,
+  } = options;
   const stream = execution.stream;
 
   const events = yield* stream.readAll();
@@ -947,6 +965,14 @@ function* start(
         // provider work come down first, then this attachment discards whatever it
         // never transferred, and only then is the session's entry slot freed.
         const installation = yield* agent.owning(key);
+        // This entry's own external capability, built here and nowhere else,
+        // for the exact execution and entry key its retained work is named by.
+        // It is built before the execution captures its installations, because
+        // what a host attaches is copied by value before anything installs:
+        // an entry that got one afterwards would be running under a capability
+        // the execution never admitted.
+        const owned =
+          entryInstallation === undefined ? [] : [entryInstallation(entryOwner(execution.id, key))];
         // This entry's own selection, offered in the scope this execution runs
         // in. Every entry installs it again: core reads the final contextual
         // answer once per execution, and a chain assembled in a scope that has
@@ -972,7 +998,7 @@ function* start(
           // Installed into this exact execution, and nowhere else: the live
           // observer and the permission policy are this session's, not the
           // process's, and the attachment carries the entry whose turns they are.
-          [...installations, lifecycle.installation, installation],
+          [...installations, lifecycle.installation, installation, ...owned],
           { initialBindings },
         );
         // Consumed as it arrives, inside this session's scope. Collecting until
@@ -1175,6 +1201,28 @@ function* preflight(
   return validation.outcome === "invalid"
     ? Err(new ReplPreflightError(validation.diagnostics))
     : Ok(undefined);
+}
+
+/**
+ * What one entry's retained external work is named by.
+ *
+ * The execution and the entry's admission-order key, and nothing else. Both
+ * survive a reopening — the execution id is in the printed location and the key
+ * is the position the history already holds — so an entry that was interrupted
+ * presents the same owner when it is continued, and the key an unfinished
+ * upsert was made under is the one its next attempt presents.
+ *
+ * Neither the source, a counter, the working directory, a tracker, a prop nor
+ * anything a document can write takes part in it: two entries that happen to
+ * hold the same text are two entries, and an entry of another execution is
+ * somebody else's.
+ *
+ * Derived here, in the session, because this is where both facts are known and
+ * where nothing composable can answer for them. It is handed to the host's
+ * factory as a string and appears in no Context, no prop and no request data.
+ */
+function entryOwner(execution: string, entry: string): string {
+  return canonicalJson(["executablemd.repl.issue-owner", 1, execution, entry]);
 }
 
 /** Every identity component these installations declare, in installation order. */

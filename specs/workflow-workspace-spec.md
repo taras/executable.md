@@ -2768,6 +2768,21 @@ with no envelope at all: identity is that execution's own opaque invocation
 identity together with the engine's expansion identity, an upsert presents an
 idempotency key derived from them, and nothing is retained.
 
+A REPL entry retains its issue work too, under this same effect type and these
+same records, and names it after the entry rather than after a run: a REPL entry
+is not a WorkflowRun and installs no synthetic one. What the entry adds is where
+the live attempt goes. One durable boundary encloses the operation; inside a
+live attempt the trusted implementation composes `IssueOperations` — so a
+document's own middleware answers, transforms, refuses and delegates there as it
+does anywhere — over a transport-facing default of its own that reaches the
+`IssueApi` provider and adds no second envelope. The composed answer is what the
+record holds, and a middleware answer is that composition's outcome rather than
+proof that a service was touched. A completed replay reaches none of it: not the
+middleware, not the transport, not the configuration and not a credential. The
+retained wrapper described below is the workflow run's own and is never nested
+beneath the entry's, because two envelopes over one operation would retain it
+twice.
+
 An **Issue provider** is an external service that owns a collection of issues.
 GitHub and Atlassian Cloud are Issue-provider adapters.
 

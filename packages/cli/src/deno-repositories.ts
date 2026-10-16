@@ -29,9 +29,14 @@ import type { Plugin, PluginInstallRequest, PluginInstallation } from "@executab
 import type { Operation } from "effection";
 import { cwd } from "@executablemd/runtime";
 import { gitPlugin } from "@executablemd/git";
-import { useReplRepositoryRecording, useRunComposition } from "@executablemd/git/deno";
+import {
+  replIssueInstallation,
+  useReplRepositoryRecording,
+  useRunComposition,
+} from "@executablemd/git/deno";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { DEFAULT_REPOSITORY_ROOT } from "./run-repositories.ts";
+import type { ReplEntryInstallation } from "./repl-entry-installation.ts";
 
 /**
  * The bundled Git Plugin, configured for this deployment.
@@ -101,6 +106,22 @@ export function denoRunRepositories(
     },
   };
 }
+
+/**
+ * The issue capability a REPL entry runs with on this host.
+ *
+ * Inert, and selected by the runtime entrypoint beside the bundled Plugin:
+ * naming the native GitHub adapter is a runtime-named module's business, and
+ * this is the value the shared command path carries without importing one. It
+ * reads no configuration and holds no credential — what an entry's issue work
+ * is allowed to reach is read by the invoked operation that needs it.
+ *
+ * The owner is supplied per entry by the session that derived it, which is why
+ * this is a factory rather than an installation: one value per host, one
+ * installation per entry.
+ */
+export const denoReplIssues: ReplEntryInstallation = (owner: string) =>
+  replIssueInstallation(owner);
 
 /**
  * This deployment's helper configuration, copied by value.

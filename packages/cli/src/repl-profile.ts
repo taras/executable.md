@@ -27,6 +27,8 @@ import { ordinaryGeneratedSelection } from "./evaluation-profile.ts";
 import { planComponentDeclaration } from "./plan-component.ts";
 import { planAgentContext } from "./plan-writer-profile.ts";
 import type { CommandPlugins } from "./plugin-host.ts";
+import { ReplEntryHost } from "./repl-entry-installation.ts";
+import type { ReplEntryInstallation } from "./repl-entry-installation.ts";
 
 /**
  * Where a REPL entry looks for components.
@@ -77,6 +79,19 @@ export interface ReplExecutionProfile {
   readonly generated: GeneratedSelection;
   /** How this REPL answers an Agent permission request. */
   readonly permissionMode: PermissionMode;
+  /**
+   * What each executing entry installs for itself, built per entry.
+   *
+   * The one thing here that is not a finished installation, because it cannot
+   * be: an entry's issue work is retained under an owner derived from the
+   * execution and the entry key, so the installation exists once that entry
+   * does. The factory is the host's selection, captured here with everything
+   * else this command decided once.
+   *
+   * Absent on a runtime that selected none, which is an entry with no issue
+   * host rather than one with a partly configured one.
+   */
+  readonly entryInstallation?: ReplEntryInstallation;
 }
 
 /**
@@ -119,6 +134,10 @@ export function* assembleReplProfile(
     installElicitation: noElicitationOfItsOwn,
   });
 
+  // The host's selection, read once in the command scope. A value read per
+  // entry would be a value a later installation could have changed.
+  const entryInstallation = yield* ReplEntryHost.get();
+
   return Object.freeze({
     includes: REPL_INCLUDES,
     installations: Object.freeze([
@@ -130,6 +149,7 @@ export function* assembleReplProfile(
     ]),
     generated: ordinaryGeneratedSelection(),
     permissionMode: stack.permissionMode,
+    ...(entryInstallation === undefined ? {} : { entryInstallation }),
   });
 }
 

@@ -208,6 +208,9 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
     installations: options.profile.installations,
     generated: options.profile.generated,
     permissionMode: options.profile.permissionMode,
+    ...(options.profile.entryInstallation === undefined
+      ? {}
+      : { entryInstallation: options.profile.entryInstallation }),
     ...(state.route.at === undefined ? {} : { selection: state.route.at }),
   });
 
