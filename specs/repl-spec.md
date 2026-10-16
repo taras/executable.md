@@ -799,22 +799,28 @@ is already done. Type a *new* entry that reads the same path and it reads what
 is there now. What is retained is each operation, not a value the session
 remembers for a path.
 
-A mutation anywhere else — beside the document, in a temporary directory, in any
-directory that is not inside the checkout the entry started in — is ordinary
-file work, is retained by nothing here, and happens again if the entry is
-continued. Reads, searches and temporary directories are ordinary throughout.
-The lexical path rules and the permission a `<File>` already answers to are
-unchanged, and they are not checkout validation: a path this run may not write
-is refused the same way it is anywhere else.
+Any of the four anywhere else — beside the document, in a temporary directory,
+in any directory that is not inside the checkout the entry started in — is
+ordinary file work, is retained by nothing here, and happens again if the entry
+is continued. That includes a read: what is retained is a read *inside* the
+checkout. Searches and temporary directories are ordinary throughout, wherever
+they point. The lexical path rules and the permission a `<File>` already answers
+to are unchanged, and they are not checkout validation: a path this run may not
+read or write is refused the same way it is anywhere else.
 
-One entry at a time works in one repository. A second entry — in this process or
-another — that needs the same checkout is told so immediately rather than
-waiting:
+One entry at a time *changes* one repository. A second entry — in this process
+or another — whose next new write, deletion or directory is in a checkout
+somebody else is changing is told so immediately rather than waiting:
 
 ```text
 Another XMD entry or process holds this checkout. End that work before trying
 again. Nothing was read and nothing was changed.
 ```
+
+Reading is not changing, so it is not excluded: an entry may read a file in a
+checkout another entry is holding, and reading takes nothing that would stop
+that entry carrying on. Only a new write, deletion or directory waits on the
+hold, and a completed operation of any kind takes nothing at all.
 
 Starting outside a checkout retains none of this and changes nothing else: the
 entry performs ordinary file work, exactly as it would anywhere else, and never

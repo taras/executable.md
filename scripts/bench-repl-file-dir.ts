@@ -3,8 +3,9 @@
  *
  * Three columns, over the same authored document and the same seeded layout:
  *
- * - **ordinary** — what `xmd run` assembles for file work: the host filesystem
- *   provider and this package's component declarations, and nothing else.
+ * - **ordinary** — what `xmd run` initializes: the host filesystem provider,
+ *   this package's component declarations and the ordinary repository
+ *   composition an ordinary run establishes through `Execution.init`.
  * - **entry** — the same, plus the executing entry's repository host. Every
  *   mutation inside the checkout is recorded, and the timing includes the host's
  *   assembly and its first lazy acquisitions, because a person waiting for the
@@ -21,6 +22,23 @@
  *
  * It states no budget and no pass/fail ratio. What it produces is raw samples,
  * medians and counters for a reviewer to read.
+ *
+ * ## What the counters are, and what they are not
+ *
+ * The document filesystem calls, the `git` invocations and the lock descriptors
+ * are observed at the boundaries this harness owns: middleware on `API.Files`,
+ * a counting repository host, and a wrapper around the one native function the
+ * advisory lock opens its descriptor with. Those are actual calls, not
+ * inferences — in particular the lease column counts descriptors this run
+ * opened on a sidecar, with the sidecar left exactly where it is, because a
+ * sidecar is persistent and its presence says nothing about who took it.
+ *
+ * `globs` counts the contextual `globFiles` calls a document made. It is *not*
+ * comprehensive traversal instrumentation: this harness does not observe
+ * `node:fs` directly, so it cannot say that nothing walked the tree by another
+ * route. Two columns with similar elapsed times are likewise not proof that
+ * neither traversed anything. What the content-size pair does say is that these
+ * observed counts and these times did not change when the checkout grew.
  */
 
 import { main, scoped, until } from "effection";
@@ -38,12 +56,15 @@ import { collect } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
+import { ensure, resource } from "effection";
+import { fileURLToPath } from "node:url";
 import { useCompositionComponents } from "../packages/git/src/composition/installation.ts";
+import { useRunComposition } from "../packages/git/src/deno/run-composition/provider.ts";
+import type { HelperAssembly } from "../packages/git/src/deno/composition/credential-helper.ts";
 import { Execution } from "@executablemd/core/api";
 import { useReplRepositoryRecording } from "../packages/git/src/deno/retained-repository/provider.ts";
 import { admitReplRepositoryHistory } from "../packages/git/src/retained-repository/admission.ts";
 import { denoRepositoryHost } from "../packages/git/src/deno/composition/host.ts";
-import { commonDirectoryLock } from "../packages/git/src/deno/run-composition/placement.ts";
 import {
   REPL_REPOSITORY_LOCAL,
   REPL_REPOSITORY_SELECTION,
@@ -121,8 +142,12 @@ interface Counters {
   records: number;
   /** The UTF-8 size of the whole journal this run produced. */
   journalBytes: number;
-  /** Whether the entry took the checkout's lease during this run. */
+  /** Lock descriptors this run opened on a common-directory sidecar. */
   lease: number;
+  /** Every durable event this run appended, engine events included. */
+  appends: number;
+  /** Of those, the ones that are this feature's own local results. */
+  localAppends: number;
 }
 
 function counters(): Counters {
@@ -137,6 +162,8 @@ function counters(): Counters {
     records: 0,
     journalBytes: 0,
     lease: 0,
+    appends: 0,
+    localAppends: 0,
   };
 }
 
@@ -206,8 +233,11 @@ function document(chosen: Settings): string {
   return lines.join("\n");
 }
 
-/** One checkout, seeded identically for every sample and every mode. */
-function* seed(chosen: Settings, unrelated: number): Operation<string> {
+/** One checkout and managed root, seeded identically for every sample and mode. */
+function* seed(
+  chosen: Settings,
+  unrelated: number,
+): Operation<{ readonly checkout: string; readonly managed: string }> {
   const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "xmd-bench-")))));
   const checkout = join(root, "checkout");
   yield* until(mkdir(checkout, { recursive: true }));
@@ -228,7 +258,11 @@ function* seed(chosen: Settings, unrelated: number): Operation<string> {
       yield* writeTextFile(join(elsewhere, `file-${index}.md`), payload);
     }
   }
-  return checkout;
+  // Where an ordinary run would keep a managed repository, inside this
+  // invocation's own fixture: nothing here selects one, and a root under the
+  // real home would be shared state this measurement has no business touching.
+  const managed = join(root, "repositories");
+  return { checkout, managed };
 }
 
 function run(command: string, args: readonly string[], cwd: string): Operation<void> {
@@ -241,6 +275,60 @@ function run(command: string, args: readonly string[], cwd: string): Operation<v
   );
 }
 
+/**
+ * Every lock descriptor this run opens, counted at the native function.
+ *
+ * `useAdvisoryLock` opens its descriptor with `Deno.openSync` and takes the
+ * lock on it, so wrapping that one function counts actual acquisitions. The
+ * sidecar is left where it is: it is persistent by design, and whether the file
+ * exists says nothing about whether this run took it.
+ *
+ * A resource, and the original is restored by cleanup registered before the
+ * substitution, so a cancelled sample cannot leave the runtime wrapped.
+ */
+function useObservedLocks(counted: Counters): Operation<{ stop: () => void }> {
+  return resource<{ stop: () => void }>(function* (provide) {
+    const runtime: unknown = Reflect.get(globalThis, "Deno");
+    const original: unknown = Reflect.get(Object(runtime), "openSync");
+    if (typeof original !== "function") {
+      throw new Error("this host opens no files, so there is no descriptor to observe");
+    }
+    let watching = true;
+    yield* ensure(() => {
+      Reflect.set(Object(runtime), "openSync", original);
+    });
+    Reflect.set(Object(runtime), "openSync", (...args: unknown[]) => {
+      const [path] = args;
+      if (watching && typeof path === "string" && path.endsWith(".lock")) {
+        counted.lease += 1;
+      }
+      return Reflect.apply(original as (...rest: unknown[]) => unknown, runtime, args);
+    });
+    yield* provide({
+      stop: () => {
+        watching = false;
+      },
+    });
+  });
+}
+
+/**
+ * The helper configuration an ordinary run is initialized with.
+ *
+ * The same shape the Deno entrypoint states. Nothing here reads a credential:
+ * what it describes is how a launcher would start this runtime, and no launcher
+ * is written unless an operation needs one.
+ */
+const HELPER: HelperAssembly = {
+  runtime: "source",
+  platform: process.platform === "win32" ? "windows" : "unix",
+  execPath: process.execPath,
+  modulePath: fileURLToPath(
+    new URL("../packages/cli/src/credential-helper-entry.ts", import.meta.url),
+  ),
+  launcherEnvironment: {},
+};
+
 /** One measured run: how long it took, and what it really did. */
 interface Measured {
   readonly ms: number;
@@ -252,11 +340,15 @@ interface Measured {
 function measure(
   mode: "ordinary" | "entry" | "continuation",
   checkout: string,
+  managed: string,
   source: string,
   retained: readonly DurableEvent[] = [],
 ): Operation<Measured> {
   return scoped(function* (): Operation<Measured> {
     const counted = counters();
+    // Every lock descriptor this run opens, observed at the one native function
+    // `useAdvisoryLock` reaches for. The sidecar itself is left alone.
+    const descriptors = yield* useObservedLocks(counted);
     const stream = new InMemoryStream([...retained]);
     const path = join(checkout, "entry.md");
     yield* writeTextFile(path, source);
@@ -284,13 +376,24 @@ function measure(
     );
     yield* useCompositionComponents();
 
-    const lock = commonDirectoryLock(yield* until(realpath(join(checkout, ".git"))));
-    const before = yield* exists(lock);
-
     // Timed from here, so the entry setup and its first lazy acquisitions are
     // inside the measurement rather than beside it.
     const started = performance.now();
     if (mode === "ordinary") {
+      // What an ordinary run establishes, through the same seam and inside the
+      // same timed region: the comparison is between two initialized
+      // executions, and a baseline that initialized nothing would be charging
+      // the entry column for work the ordinary one also does.
+      yield* Execution.around({
+        *init(_args, next): Operation<void> {
+          yield* useRunComposition({
+            root: managed,
+            cwd: checkout,
+            helper: HELPER,
+          });
+          yield* next();
+        },
+      });
       yield* collect(yield* executeInstalled({ path, stream }, []));
     } else {
       // Registered the way the REPL host registers it: core initialization is
@@ -310,10 +413,14 @@ function measure(
     }
     const ms = performance.now() - started;
 
-    if (!before && (yield* exists(lock))) {
-      counted.lease = 1;
-    }
     const events = yield* stream.readAll();
+    counted.appends = events.length - retained.length;
+    counted.localAppends = events
+      .slice(retained.length)
+      .filter(
+        (event) => event.type === "yield" && event.description.type === REPL_REPOSITORY_LOCAL,
+      ).length;
+    descriptors.stop();
     counted.journalBytes = new TextEncoder().encode(JSON.stringify(events)).length;
     counted.records = events.filter(
       (event) =>
@@ -352,8 +459,9 @@ function report(name: string, samples: readonly Measured[]): void {
       `globs ${counted.globs}`,
   );
   console.log(
-    `${"".padEnd(13)} git ${counted.commands}  lease ${counted.lease}  ` +
-      `records ${counted.records}  journal ${counted.journalBytes} bytes`,
+    `${"".padEnd(13)} git ${counted.commands}  lock descriptors ${counted.lease}  ` +
+      `appends ${counted.appends} (local results ${counted.localAppends})  ` +
+      `retained records ${counted.records}  journal ${counted.journalBytes} bytes`,
   );
 }
 
@@ -384,8 +492,8 @@ await main(function* (argv): Operation<void> {
     // One unreported warmup per live mode, so neither column is charged for the
     // module graph the other one already paid for.
     for (const mode of ["ordinary", "entry"] as const) {
-      const checkout = yield* seed(chosen, unrelated);
-      yield* measure(mode, checkout, source);
+      const { checkout, managed } = yield* seed(chosen, unrelated);
+      yield* measure(mode, checkout, managed, source);
       yield* rm(join(checkout, ".."), { recursive: true, force: true });
     }
 
@@ -399,18 +507,17 @@ await main(function* (argv): Operation<void> {
       const order =
         sample % 2 === 0 ? (["ordinary", "entry"] as const) : (["entry", "ordinary"] as const);
       for (const mode of order) {
-        const checkout = yield* seed(chosen, unrelated);
-        const measured = yield* measure(mode, checkout, source);
+        const { checkout, managed } = yield* seed(chosen, unrelated);
+        const measured = yield* measure(mode, checkout, managed, source);
         (mode === "ordinary" ? ordinary : entry).push(measured);
         if (mode === "entry") {
           // The continuation runs against the journal that entry just wrote, in
-          // the checkout it wrote it in, with the lease sidecar removed so a
-          // second acquisition would be visible. Nothing holds it: the live run
-          // has ended.
-          const lock = commonDirectoryLock(yield* until(realpath(join(checkout, ".git"))));
-          yield* rm(lock, { force: true });
+          // the checkout it wrote it in. The sidecar stays exactly where the
+          // live run left it: whether this run takes a lease is observed at the
+          // descriptor, so there is nothing to clear to make an acquisition
+          // visible.
           continuation.push(
-            yield* measure("continuation", checkout, source, unfinished(measured.events)),
+            yield* measure("continuation", checkout, managed, source, unfinished(measured.events)),
           );
         }
         yield* rm(join(checkout, ".."), { recursive: true, force: true });
@@ -425,8 +532,11 @@ await main(function* (argv): Operation<void> {
   }
   console.log("");
   console.log(
-    "A continuation performs no read, no mutation, no traversal, runs no `git` and takes no " +
-      "lease, which is what the zeroes above say. This states no budget and no ratio: it is raw " +
-      "evidence for a reviewer.",
+    "A continuation performs no observed document read, write, delete or ensure, runs no `git`, " +
+      "opens no lock descriptor and appends no local result; the appends it does make are the " +
+      "engine's own closing events, which is why that column is counted apart from local " +
+      "results. The `checks` it does make are pure lexical path checks, which touch no file. " +
+      "This states no budget and no ratio, and the `globs` column is contextual calls rather " +
+      "than comprehensive traversal instrumentation: it is raw evidence for a reviewer.",
   );
 });

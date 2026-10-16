@@ -100,19 +100,23 @@ function* held(directory: string): Operation<Error | undefined> {
 }
 
 interface Counters {
+  reads: string[];
   writes: string[];
   deletes: string[];
 }
 
 function counters(): Counters {
-  return { writes: [], deletes: [] };
+  return { reads: [], writes: [], deletes: [] };
 }
 
 function countingFiles(counted: Counters): FilesHandler {
   const host = hostFilesHandler();
   return {
     checkFilePath: (input) => host.checkFilePath(input),
-    readTextFile: (input) => host.readTextFile(input),
+    *readTextFile(input: FilePathInput) {
+      counted.reads.push(input.path);
+      return yield* host.readTextFile(input);
+    },
     globFiles: (input) => host.globFiles(input),
     temporaryDirectory: () => host.temporaryDirectory(),
     *writeTextFile(input: FileWriteInput) {
@@ -130,6 +134,8 @@ function countingFiles(counted: Counters): FilesHandler {
 interface Run {
   readonly refusal: string | undefined;
   readonly events: readonly DurableEvent[];
+  /** What the document rendered, for a row whose subject is a read's value. */
+  readonly output: string;
 }
 
 /**
@@ -199,16 +205,19 @@ function entry(
       });
     }
     let refusal: string | undefined;
+    let output = "";
     try {
-      yield* collect(
-        yield* executeInstalled({ path, stream }, [
-          { admissions: [(retained) => admitReplRepositoryHistory(retained)] },
-        ]),
+      output = String(
+        yield* collect(
+          yield* executeInstalled({ path, stream }, [
+            { admissions: [(retained) => admitReplRepositoryHistory(retained)] },
+          ]),
+        ),
       );
     } catch (error) {
       refusal = error instanceof Error ? error.message : String(error);
     }
-    return { refusal, events: yield* stream.readAll() };
+    return { refusal, events: yield* stream.readAll(), output };
   });
 }
 
@@ -325,6 +334,67 @@ describe("an entry's hold on the checkout it is working in", () => {
       expect(other.writes).toEqual(["free.md"]);
       release.resolve();
     });
+  });
+
+  it("E8: reads the held checkout, and takes no lease to do it", function* () {
+    const fixture = yield* useFixture();
+    const holding = counters();
+    const reading = counters();
+
+    yield* scoped(function* (): Operation<void> {
+      const acquired = withResolvers<void>();
+      const release = withResolvers<void>();
+      yield* spawn(function* (): Operation<void> {
+        yield* entry(
+          fixture.checkout,
+          ['<File path="held.md">held</File>', QUESTION].join("\n"),
+          new InMemoryStream(),
+          holding,
+          function* (): Operation<void> {
+            acquired.resolve();
+            yield* release.operation;
+          },
+        );
+      });
+      yield* acquired.operation;
+
+      // Watched from here, after the holder has its descriptor: what this row
+      // is about is whether the reader opens one of its own.
+      const observed = yield* useObservedDescriptors();
+      const stream = new InMemoryStream();
+      const read = yield* entry(
+        fixture.checkout,
+        '<File path="held.md" as="seen" />\n{seen}',
+        stream,
+        reading,
+      );
+
+      // The read happened, against a checkout somebody else is holding for
+      // mutation. A lease taken here would have refused it.
+      expect(read.refusal).toBe(undefined);
+      expect(reading.reads).toEqual(["held.md"]);
+      expect(String(read.output)).toContain("held");
+      // And it is retained, so a continuation answers it without looking.
+      expect(localRecords(read.events)).toBe(1);
+      // No descriptor at all: the lease is about one entry at a time changing a
+      // repository, and this one only looked.
+      expect(observed.events()).toEqual([]);
+
+      release.resolve();
+    });
+
+    // The holder is gone. A mutation now takes the lease it always did, which
+    // is the positive control for the observation above.
+    const after = counters();
+    const observed = yield* useObservedDescriptors();
+    const wrote = yield* entry(
+      fixture.checkout,
+      '<File path="later.md">later</File>',
+      new InMemoryStream(),
+      after,
+    );
+    expect(wrote.refusal).toBe(undefined);
+    expect(observed.events().includes("lock")).toBe(true);
   });
 
   it("E8: takes one handle for an entry's many mutations", function* () {

@@ -53,6 +53,13 @@ export function denoRunRepositories(
   helper: HelperAssembly,
   root: string = DEFAULT_REPOSITORY_ROOT,
 ): Plugin {
+  // Copied here, at construction, rather than held as the caller's object.
+  // What an execution initializes with has to be what this host selected: a
+  // caller that kept a reference and changed a field afterwards would be
+  // configuring every later execution, including a child's, from outside the
+  // selection the command already made. The caller's own object is neither
+  // mutated nor frozen — this is a copy, and the copy is what is used.
+  const configured = snapshot(helper);
   return {
     // The bundled name, because this *is* the bundled Plugin: an operator
     // selecting `--plugin git` is naming this value, and two values under one
@@ -85,7 +92,7 @@ export function denoRunRepositories(
             // isolated child that composed its own working directory is
             // discovered from that one.
             cwd: yield* cwd(),
-            helper,
+            helper: configured,
           });
           yield* next();
         },
@@ -93,6 +100,27 @@ export function denoRunRepositories(
       return declared;
     },
   };
+}
+
+/**
+ * This deployment's helper configuration, copied by value.
+ *
+ * Scalars and the nested launcher environment both: the environment is the one
+ * member whose contents a caller could change after handing it over, and
+ * copying the object while sharing that record would copy nothing that matters.
+ * Absent members stay absent, because `undefined` and "not stated" are
+ * different answers to `helperCommand`.
+ */
+function snapshot(helper: HelperAssembly): HelperAssembly {
+  return Object.freeze({
+    runtime: helper.runtime,
+    platform: helper.platform,
+    execPath: helper.execPath,
+    ...(helper.modulePath === undefined ? {} : { modulePath: helper.modulePath }),
+    ...(helper.launcherEnvironment === undefined
+      ? {}
+      : { launcherEnvironment: Object.freeze({ ...helper.launcherEnvironment }) }),
+  });
 }
 
 /**

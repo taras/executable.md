@@ -13,6 +13,11 @@
  * completed write answers from its receipt, each touching no file, however the
  * file has changed since.
  *
+ * A new mutation also takes the checkout's lease, and a new read does not.
+ * Being retained and being exclusive are different questions: what the lease
+ * answers is that one entry at a time changes a repository, so a read proceeds
+ * while another entry holds it and never holds it itself.
+ *
  * ## One route, one policy
  *
  * `<File>` reads and writes, `<File.Delete />` and `<Dir>` all arrive as
@@ -159,7 +164,13 @@ function* routed(
   if (checkout === undefined) {
     return yield* perform();
   }
-  yield* recorder.hold(checkout.commonDirectory);
+  // Only a mutation takes the lease. A read is retained like the rest, but the
+  // lease is about one entry at a time *changing* a checkout, and an
+  // observation is not a change: a read that took it would refuse while
+  // somebody else is working, and refuse them while it is only looking.
+  if (operation !== "file-read") {
+    yield* recorder.hold(checkout.commonDirectory);
+  }
   return yield* recordedLocalOperation({ operation, request, perform });
 }
 
