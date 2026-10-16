@@ -644,6 +644,30 @@ function* logged(log: string): Operation<string[]> {
   return held.split("\n").filter((line) => line !== "");
 }
 
+/**
+ * The author and committer this journey's entry commits under.
+ *
+ * `<Git.Commit>` borrows the *invoking person's* identity, read with `git var`
+ * from the environment the command was started in — and this journey starts it
+ * in an isolated `HOME` of its own. So that home gets a configuration, exactly
+ * as a person's would have one, and the commit is then held to it below.
+ *
+ * Without it the identity is whatever the host happens to auto-detect from its
+ * operating-system user, which a continuous-integration runner commonly cannot
+ * do at all: `git var` fails, `<Git.Commit>` reports its ordinary
+ * missing-identity refusal, and the row would be failing for a reason that is
+ * about the runner rather than about this feature.
+ */
+const JOURNEY_IDENTITY = { name: "Journey Author", email: "journey-author@example.test" };
+
+/** Give this journey's isolated home a Git identity to commit under. */
+function* seedIdentity(home: string): Operation<void> {
+  yield* writeTextFile(
+    join(home, ".gitconfig"),
+    `[user]\n\tname = ${JOURNEY_IDENTITY.name}\n\temail = ${JOURNEY_IDENTITY.email}\n`,
+  );
+}
+
 /** One seeded checkout with a commit in it, so a Commit has a parent. */
 function* seedCommitted(home: string): Operation<string> {
   const checkout = join(home, "checkout");
@@ -760,6 +784,7 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
   return scoped(function* (): Operation<void> {
     const home = yield* useTempDirectory("xmd-repl-git-pty-");
     const shim = yield* gitShim(home);
+    yield* seedIdentity(home);
     const ambient = yield* seedCommitted(home);
     const origin = through === "ambient" ? "" : yield* seedOrigin(home);
     // The ambient journey is typed from inside the checkout; the managed one
@@ -786,8 +811,14 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
     expect(yield* exists(join(working, "after.md"))).toBe(false);
     const recorded = yield* gitSaid(working, ["rev-parse", "HEAD"], home);
     expect(recorded).toMatch(/^[0-9a-f]{40}$/);
-    // The commit holds exactly what the staging child staged.
+    // The commit holds exactly what the staging child staged, and records the
+    // identity this home configured — the invoking person's own, read by the
+    // host rather than substituted.
     expect(yield* gitSaid(working, ["show", "HEAD:note.md"], home)).toBe("first");
+    expect(yield* gitSaid(working, ["log", "-1", "--format=%an <%ae>|%cn <%ce>"], home)).toBe(
+      `${JOURNEY_IDENTITY.name} <${JOURNEY_IDENTITY.email}>|` +
+        `${JOURNEY_IDENTITY.name} <${JOURNEY_IDENTITY.email}>`,
+    );
     // And the document's own Git really ran, which is what makes the empty log
     // below say something.
     expect((yield* logged(shim.log)).length > 0).toBe(true);
