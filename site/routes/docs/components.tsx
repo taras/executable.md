@@ -387,8 +387,8 @@ export default define.page(function Components() {
         <code>retain()</code> belongs to TypeScript components. An{" "}
         <code>eval</code>{" "}
         block is durable — a replay restores its values without running it — so
-        a resource saved from one would have nothing to re-establish it, and
-        the call is refused rather than silently succeeding.
+        a resource saved from one would have nothing to re-establish it, and the
+        call is refused rather than silently succeeding.
       </p>
 
       <h2>Scoped resources</h2>

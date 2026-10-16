@@ -1435,6 +1435,7 @@ describe("U2 — one action path, and one owner for a pending request", () => {
       check: { queued: true },
     });
     yield* until(session, "a request waiting", () => session.agent.requests.length === 1);
+    yield* until(session, "both started turns", () => started(session) === 2);
     const request = session.agent.requests[0];
     if (request === undefined) {
       throw new Error("no request was published");

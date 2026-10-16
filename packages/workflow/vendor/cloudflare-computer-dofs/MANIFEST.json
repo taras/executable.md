@@ -12,7 +12,7 @@
     {
       "path": "PROVENANCE.md",
       "kind": "provenance",
-      "sha256": "1e3edf8e2b7298a498d9aca63571a833ee6726ef8101628db4af1e05dad7b04f"
+      "sha256": "49db4013ed8ec4d19ffefa48145f4d94c5c5b61b294d6e91e40fca767af8ee00"
     },
     {
       "path": "generated/errors.d.ts",
