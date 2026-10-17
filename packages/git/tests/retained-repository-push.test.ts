@@ -51,7 +51,12 @@ import type { ElicitationRequest } from "@executablemd/core";
 import { cwd } from "@executablemd/runtime";
 import { Git, GitHost } from "@executablemd/git/api";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
-import type { GitInvocation, GitOutcome, RepositoryHost } from "../src/deno/composition/host.ts";
+import type {
+  GitInvocation,
+  GitOutcome,
+  RepositoryHost,
+  RepositoryHostOptions,
+} from "../src/deno/composition/host.ts";
 import { gitSession } from "../src/deno/composition/git.ts";
 import type { GitAuthenticationSession } from "../src/deno/composition/authentication.ts";
 import { UNAUTHENTICATED } from "../src/deno/composition/authentication.ts";
@@ -169,7 +174,7 @@ type GitBarrier = (invocation: GitInvocation) => Operation<void>;
  * remote.
  */
 function countingHost(counted: Counters, options: RunOptions = {}): RepositoryHost {
-  const host = denoRepositoryHost();
+  const host = denoRepositoryHost(options.hostOptions ?? {});
   const barrier = options.barrier;
   return {
     *git(invocation: GitInvocation): Operation<GitOutcome> {
@@ -213,6 +218,8 @@ interface RunOptions {
   readonly barrier?: GitBarrier;
   /** What this row changes about one invocation before the real host runs it. */
   readonly intercept?: (invocation: GitInvocation) => Partial<GitInvocation> | undefined;
+  /** What this row states about the native host it drives. */
+  readonly hostOptions?: RepositoryHostOptions;
   /** What this row does instead of acquiring an isolation directory. */
   readonly directories?: () => Operation<string>;
   /** What this row does instead of opening an authentication session. */
@@ -457,6 +464,22 @@ function requests(events: readonly DurableEvent[]): ReplPushRequestRecord[] {
     }
   }
   return found;
+}
+
+/** A promise this row resolves when it decides a pending acquisition may finish. */
+function gate(): { readonly released: Promise<void>; release(): void } {
+  let open = (): void => {};
+  const released = new Promise<void>((resolve) => {
+    open = () => resolve();
+  });
+  return { released, release: () => open() };
+}
+
+/** Let every ready task run, so "reached its wait" is about turns. */
+function* settled(turns = 8): Operation<void> {
+  for (let turn = 0; turn < turns; turn += 1) {
+    yield* sleep(0);
+  }
 }
 
 /** What a watched `git` child reported about its own lifetime. */
@@ -1664,77 +1687,104 @@ describe("one entry's publication", () => {
     expect(yield* remoteCommit(fixture, "review/resynthetic")).toBe(undefined);
   });
 
-  it("P20: a cancelled attempt delivers no scratch space, and removes one it received", function* () {
+  it("P20: halting a pending scratch delivery waits for it, and removes it", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
-    const held = withResolvers<void>();
-    const reached = withResolvers<void>();
-    const scratch: { path: string | undefined; removed: boolean } = {
-      path: undefined,
-      removed: false,
+
+    // The publication's own scratch space, and nothing earlier. Every
+    // acquisition before the request is acknowledged — the entry's Git session,
+    // the selector's — is delivered normally; the barrier is armed by the
+    // request append itself, so what this row holds pending is the attempt's.
+    const made: string[] = [];
+    const asked = withResolvers<void>();
+    const held = gate();
+    let armed = false;
+    const create = (prefix: string): Promise<string> => {
+      if (!armed) {
+        return mkdtemp(prefix);
+      }
+      asked.resolve();
+      return held.released
+        .then(() => mkdtemp(prefix))
+        .then((directory) => {
+          made.push(directory);
+          return directory;
+        });
     };
 
-    // The attempt's own scratch space, delivered only when this row lets it.
-    // Delivery is a resource of the attempt's scope, so what it hands over has
-    // to be removed before the halt settles.
-    const directories = (): Operation<string> =>
-      resource<string>(function* (provide) {
-        reached.resolve();
-        yield* held.operation;
-        const path = yield* until(mkdtemp(join(fixture.root, "scratch-")));
-        scratch.path = path;
-        yield* ensure(function* () {
-          scratch.removed = true;
-          yield* rm(path, { recursive: true, force: true });
-        });
-        yield* provide(path);
-      });
-
     const stream = new InMemoryStream();
+    stream.onAppend = (event) => {
+      if (event.type === "yield" && event.description.type === REPL_REPOSITORY_PUSH_REQUEST) {
+        armed = true;
+      }
+    };
+
+    let returned = false;
     yield* scoped(function* (): Operation<void> {
       const task = yield* spawn(() =>
         run(fixture, publishing(fixture, "review/scratch", "notes.md"), stream, counted, {
-          directories,
+          hostOptions: { directories: { create } },
         }),
       );
       yield* race([
-        reached.operation,
+        asked.operation,
         (function* (): Operation<never> {
           yield* sleep(30_000);
-          throw new Error("the publication never asked for its scratch space");
+          throw new Error("the publication never asked for its own scratch space");
         })(),
       ]);
-      // Halted while the delivery is pending, and released afterwards: the
-      // acquisition this attempt started is still its own to finish and tear
-      // down, and the halt waits for that.
-      const halting = yield* spawn(() => task.halt());
-      held.resolve();
+
+      // The boundary this row is about: the request is acknowledged, the Git
+      // host has not been asked anything, and the attempt is waiting for the
+      // scratch space it will read its objects through.
+      const atBarrier = yield* stream.readAll();
+      expect(requests(atBarrier)).toHaveLength(1);
+      expect(outcomes(atBarrier)).toEqual([]);
+      expect(subcommands(counted).filter((name) => name === "ls-remote")).toEqual([]);
+      expect(made).toEqual([]);
+
+      const halting = yield* spawn(function* (): Operation<void> {
+        yield* task.halt();
+        returned = true;
+      });
+      yield* settled();
+      // Teardown is waiting for the acquisition the attempt armed its release
+      // before: nothing has been delivered, and the halt has not finished.
+      expect(returned).toBe(false);
+      expect(made).toEqual([]);
+
+      held.release();
       yield* halting;
     });
 
-    // Nothing was published and nothing was left behind.
-    expect(outcomes(yield* stream.readAll())).toEqual([]);
+    // It waited for the delivery and removed what arrived.
+    expect(returned).toBe(true);
+    expect(made).toHaveLength(1);
+    expect(yield* exists(made[0] ?? "")).toBe(false);
+    // And the publication itself published nothing, while the request it had
+    // already acknowledged is still history for the next attempt.
+    const events = yield* stream.readAll();
+    expect(requests(events)).toHaveLength(1);
+    expect(outcomes(events)).toEqual([]);
     expect(subcommands(counted).filter((name) => name === "push")).toEqual([]);
     expect(yield* remoteCommit(fixture, "review/scratch")).toBe(undefined);
-    // Halted while the acquisition was still pending, nothing was delivered at
-    // all — which is the other half of the same ownership rule: a resource this
-    // attempt never received is not one it can leave behind.
-    expect(scratch.path).toBe(undefined);
-    expect(scratch.removed).toBe(false);
+  });
 
-    // And the delivered case: the scratch space this attempt did receive is
-    // removed before the halt settles. The cut is inside the first remote
-    // observation, which is after delivery and before any outcome.
+  it("P20b: a scratch space the attempt received is removed before the halt settles", function* () {
+    const fixture = yield* useFixture();
+    const counted = counters();
     const delivered: { path: string | undefined; removed: boolean } = {
       path: undefined,
       removed: false,
     };
     const observing = withResolvers<void>();
-    const second = new InMemoryStream();
-    const later = counters();
+    const stream = new InMemoryStream();
+
+    // The cut is inside the first remote observation, which is after delivery
+    // and before any outcome.
     yield* scoped(function* (): Operation<void> {
       const task = yield* spawn(() =>
-        run(fixture, publishing(fixture, "review/scratch2", "notes.md"), second, later, {
+        run(fixture, publishing(fixture, "review/scratch2", "notes.md"), stream, counted, {
           directories: () =>
             resource<string>(function* (provide) {
               const path = yield* until(mkdtemp(join(fixture.root, "delivered-")));
@@ -1766,7 +1816,9 @@ describe("one entry's publication", () => {
     expect(delivered.path).not.toBe(undefined);
     expect(delivered.removed).toBe(true);
     expect(yield* exists(delivered.path ?? "")).toBe(false);
-    expect(outcomes(yield* second.readAll())).toEqual([]);
+    const events = yield* stream.readAll();
+    expect(requests(events)).toHaveLength(1);
+    expect(outcomes(events)).toEqual([]);
     expect(yield* remoteCommit(fixture, "review/scratch2")).toBe(undefined);
   });
 
