@@ -440,6 +440,9 @@ describe("how a REPL entry gets its publication capability", () => {
       "Git.Push",
       "Issue",
       "PullRequest",
+      "PullRequest.Checks",
+      "PullRequest.Comments",
+      "PullRequest.Reviews",
     ]);
     expect((built.admissions ?? []).length).toBe(2);
     expect(yield* nothingUnder(fixture.managed)).toBe(true);

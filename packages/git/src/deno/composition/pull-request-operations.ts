@@ -76,7 +76,17 @@ const ELEMENT: Readonly<Record<PullRequestReadKind, string>> = Object.freeze({
   checks: "<PullRequest.Checks>",
 });
 
-function* describeRead(request: PullRequestReadRequest): Operation<EffectDescription> {
+/**
+ * The durable description one read is retained under.
+ *
+ * Shared with the entry's own retained reads: the name is already in journals a
+ * fork reads, so there is one algorithm for it and this is where it lives. The
+ * entry supplies its owner as the run and its authenticated invocation as the
+ * expansion; nothing else about it differs.
+ */
+export function* describePullRequestRead(
+  request: PullRequestReadRequest,
+): Operation<EffectDescription> {
   const expansion = yield* getExpansion();
   // The run is in the retained request, and deliberately not in this
   // fingerprint. A fork is a different run reaching the same position with the
@@ -116,7 +126,7 @@ function retainDurableRead(
   const element = ELEMENT[request.kind];
 
   return scoped(function* () {
-    const description = yield* describeRead(request);
+    const description = yield* describePullRequestRead(request);
 
     const stored = yield createDurableOperation<DurableJson>(
       description,
@@ -134,27 +144,49 @@ function retainDurableRead(
       },
     );
 
-    const result = parsePullRequestReadResult(
-      parseJsonValue(
-        stored,
-        "$",
-        (reason, path) =>
-          new PullRequestReadError(
-            "protocol",
-            element,
-            `what this run retained for it is not a value it can carry: ${reason} at ${path}.`,
-          ),
-      ),
-    );
-    if (result === undefined || result.kind !== request.kind) {
-      throw new PullRequestReadError(
-        "protocol",
-        element,
-        "what this run retained for it is not the evidence that read produces.",
-      );
-    }
-    return result;
+    return retainedPullRequestRead(stored, request.kind, element);
   });
+}
+
+/**
+ * The read this retained value describes, or the refusal that it describes none.
+ *
+ * Shared by both retained profiles, and applied on both of their paths: a live
+ * answer is held to it before it is appended, and a restored one before it is
+ * handed back. A retained value that is not the evidence that read produces,
+ * or that is a different collection than the one asked for, is refused rather
+ * than bound.
+ */
+export function retainedPullRequestRead(
+  stored: unknown,
+  kind: PullRequestReadKind,
+  element: string,
+): PullRequestReadResult {
+  const result = parsePullRequestReadResult(
+    parseJsonValue(
+      stored,
+      "$",
+      (reason, path) =>
+        new PullRequestReadError(
+          "protocol",
+          element,
+          `what this run retained for it is not a value it can carry: ${reason} at ${path}.`,
+        ),
+    ),
+  );
+  if (result === undefined || result.kind !== kind) {
+    throw new PullRequestReadError(
+      "protocol",
+      element,
+      "what this run retained for it is not the evidence that read produces.",
+    );
+  }
+  return result;
+}
+
+/** Which element a pull-request read refusal names, by its collection. */
+export function pullRequestReadElement(kind: PullRequestReadKind): string {
+  return ELEMENT[kind];
 }
 
 /**

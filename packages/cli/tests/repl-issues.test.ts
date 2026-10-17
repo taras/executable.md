@@ -1503,6 +1503,9 @@ describe("how a REPL entry gets its issues", () => {
       "Git.Push",
       "Issue",
       "PullRequest",
+      "PullRequest.Checks",
+      "PullRequest.Comments",
+      "PullRequest.Reviews",
     ]);
   });
 
