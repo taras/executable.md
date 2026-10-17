@@ -54,9 +54,12 @@ import type {
   GitHubHttpRequest,
   GitHubHttpResponse,
 } from "../src/deno/composition/github.ts";
-import { PullRequestAPI } from "../src/composition/pull-request-api.ts";
+// From the subpath that publishes them rather than from the source modules:
+// these are public, and reaching one by relative path would bypass the export
+// map the partition test holds every consumer to.
+import { PullRequestAPI } from "@executablemd/git/api";
+import type { PullRequestResult } from "@executablemd/git/api";
 import { PullRequestOperations } from "../src/composition/pull-request-operations.ts";
-import type { PullRequestResult } from "../src/composition/pull-request-records.ts";
 import { replRepositoryInstallation } from "../src/deno/retained-repository/provider.ts";
 import { admitReplRepositoryHistory } from "../src/retained-repository/admission.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect-type.ts";
