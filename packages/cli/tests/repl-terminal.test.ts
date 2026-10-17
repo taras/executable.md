@@ -223,9 +223,12 @@ describe("REPL terminal: responsive semantic frames", () => {
 
     expect(frame.manifest.profile).toBe("wide");
     expect(regions(frame)).toEqual(["sidebar", "transcript", "inspection", "footer"]);
-    expect(bounds(frame, "sidebar")).toEqual({ x: 0, y: 0, width: 32, height: 29 });
-    expect(bounds(frame, "transcript")).toEqual({ x: 32, y: 0, width: 92, height: 29 });
-    expect(bounds(frame, "inspection")).toEqual({ x: 124, y: 0, width: 36, height: 29 });
+    // #883's accepted shares: the sidebar is thirty-six at both profiles so its
+    // longest status and filtered control stay whole, and what is left is split
+    // equally between the Transcript and the right pane.
+    expect(bounds(frame, "sidebar")).toEqual({ x: 0, y: 0, width: 36, height: 29 });
+    expect(bounds(frame, "transcript")).toEqual({ x: 36, y: 0, width: 62, height: 29 });
+    expect(bounds(frame, "inspection")).toEqual({ x: 98, y: 0, width: 62, height: 29 });
     // Full width and pinned to the bottom, at every size.
     expect(bounds(frame, "footer")).toEqual({ x: 0, y: 29, width: 160, height: 7 });
     expect(frame.manifest.history.rows).toHaveLength(HISTORY_ROWS);
@@ -257,9 +260,11 @@ describe("REPL terminal: responsive semantic frames", () => {
 
     expect(frame.manifest.profile).toBe("medium");
     expect(regions(frame)).toEqual(["sidebar", "transcript", "inspection", "footer"]);
-    expect(bounds(frame, "sidebar")).toEqual({ x: 0, y: 0, width: 28, height: 23 });
-    expect(bounds(frame, "transcript")).toEqual({ x: 28, y: 0, width: 64, height: 23 });
-    expect(bounds(frame, "inspection")).toEqual({ x: 92, y: 0, width: 28, height: 23 });
+    // The same thirty-six, which is the point of the width: medium gives its
+    // cells up from the two main panes rather than from the sidebar.
+    expect(bounds(frame, "sidebar")).toEqual({ x: 0, y: 0, width: 36, height: 23 });
+    expect(bounds(frame, "transcript")).toEqual({ x: 36, y: 0, width: 42, height: 23 });
+    expect(bounds(frame, "inspection")).toEqual({ x: 78, y: 0, width: 42, height: 23 });
     expect(bounds(frame, "footer")).toEqual({ x: 0, y: 23, width: 120, height: 7 });
     expect(frame.manifest.history.rows).toHaveLength(HISTORY_ROWS);
   });

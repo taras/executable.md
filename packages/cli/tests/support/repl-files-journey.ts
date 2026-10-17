@@ -556,7 +556,9 @@ export function replUnsupportedSelection(repl: ReplCommand): Operation<void> {
     yield* sleep(500);
     yield* pty.type("\r");
 
-    yield* showing(pty, "no Repository composition provider is installed", ACT_MS);
+    // The refusal is a sentence, wrapped where the Transcript's own width
+    // cuts it, so it is read across those rows rather than off one of them.
+    yield* showingAcross(pty, "no Repository composition provider is installed", ACT_MS);
     // Nothing was placed: no managed layout was created at all.
     expect(yield* exists(join(home, ".xmd", "repositories", "repositories"))).toBe(false);
 
@@ -938,7 +940,7 @@ export function replUnsupportedGit(repl: ReplCommand): Operation<void> {
 
     // Refused before a repository is in scope, which is before Git exists in
     // the story at all. Either way nothing native was reached.
-    yield* showing(pty, "composition provider is installed", ACT_MS);
+    yield* showingAcross(pty, "composition provider is installed", ACT_MS);
     yield* holding(join(checkout, "after.md"), "continued");
     expect(yield* logged(shim.log)).toEqual([]);
     expect(yield* gitSaid(checkout, ["rev-parse", "HEAD"], home)).toBe(head);

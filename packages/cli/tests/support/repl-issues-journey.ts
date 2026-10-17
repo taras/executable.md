@@ -323,7 +323,8 @@ export function replIssuesUnsupported(repl: ReplCommand): Operation<void> {
     yield* sleep(500);
     yield* pty.type("\r");
 
-    yield* showing(pty, "no Issue provider is installed", ACT_MS);
+    // Wrapped by the Transcript's own width, so read across its rows.
+    yield* showingAcross(pty, "no Issue provider is installed", ACT_MS);
     // Configured and reachable, and never reached: what is absent is the host
     // that would have installed a lifecycle, not the operator's configuration.
     expect(server.requests).toEqual([]);
