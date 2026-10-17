@@ -1,1 +1,0 @@
-<Prompt text="permission request" />

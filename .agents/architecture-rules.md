@@ -39,10 +39,6 @@ configuration still follows that service's own update contract. A Context
 selects a trusted service, while authorization, durable identity,
 reconciliation and canonical outcomes stay with their owners.
 
-The [API selection record](../.reviewer/api-selection-pattern-proposal.md)
-contains examples and deferred review candidates. It assigns no refactor of
-existing APIs.
-
 The Architect applies these rules without another approval when they settle a
 design. A new concept, ambiguous fit, conflict or proposed exception returns to
 the Product Owner through the interview in
