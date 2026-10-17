@@ -97,6 +97,7 @@ import {
   replPushPlacesHeld,
   type ReplPushPlacement,
 } from "../../retained-repository/push-admission.ts";
+import type { ReplPublicationMemory } from "../../retained-repository/publication-evidence.ts";
 import {
   parseReplPushRequestRecord,
   replPushRequestJson,
@@ -151,6 +152,16 @@ export interface ReplPushEntry {
   readonly selections: SelectionRegistry<ReplPlacementRegistration>;
   /** The checkouts this entry has registered, as they stand now. */
   checkouts(): readonly ReplGitCheckout[];
+  /**
+   * What this entry has published and reached, for the pull requests that rest
+   * on it.
+   *
+   * Written here and read by the pull-request feature beside this one. It is
+   * private entry state for the same reason the registry is: a publication
+   * grant that a document, a prop, middleware or the CLI could name would be a
+   * grant anything could mint.
+   */
+  readonly publications: ReplPublicationMemory;
 }
 
 /**
@@ -163,9 +174,20 @@ export interface ReplPushEntry {
  */
 export type ReplPushAccess = () => ReplPushEntry | undefined;
 
-/** What this entry requires of the publication records its history holds. */
-export function replPushAdmission(owner: string): JournalAdmission {
-  return (retained) => admitReplPushHistory(owner, retained);
+/**
+ * What this entry requires of the publication records its history holds.
+ *
+ * The admission also establishes the order its publications were acknowledged
+ * in, which the entry's publication memory keeps. None of them authorizes a
+ * pull request yet: that takes execution actually reaching one.
+ */
+export function replPushAdmission(
+  owner: string,
+  publications: ReplPublicationMemory,
+): JournalAdmission {
+  return function* (retained) {
+    publications.admitted(yield* admitReplPushHistory(owner, retained));
+  };
 }
 
 /**
@@ -580,6 +602,18 @@ function* reconcile(
   if (outcome === undefined) {
     throw new GitOperationProtocolError(PUSH);
   }
+  // Reached, so usable. A publication becomes evidence for a pull request only
+  // once execution has actually arrived at its acknowledged receipt — live here,
+  // or by the shared worker replaying it above. The rank it keeps is the one its
+  // own acknowledgement had, not the order this replay happened to reach it in.
+  entry.publications.reach({
+    site: invocation.site,
+    repository: inputs.repository,
+    origin: record.resolved.origin,
+    branch: inputs.branch,
+    destinationRef: inputs.destinationRef,
+    sourceCommit: inputs.sourceCommit,
+  });
   return outcome;
 }
 

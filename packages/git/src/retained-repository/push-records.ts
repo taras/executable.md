@@ -145,7 +145,7 @@ export function replPushRequestName(request: ReplPushRequestName): Operation<str
     REPL_REPOSITORY_VERSION,
     request.owner,
     request.site,
-    placeJson(request.requested),
+    replPushPlaceJson(request.requested),
   ]);
 }
 
@@ -161,8 +161,8 @@ export function replPushRequestJson(record: {
     version: REPL_REPOSITORY_VERSION,
     owner: record.owner,
     site: record.site,
-    requested: placeJson(record.requested),
-    received: placeJson(record.received),
+    requested: replPushPlaceJson(record.requested),
+    received: replPushPlaceJson(record.received),
     resolved: {
       checkoutRoot: record.resolved.checkoutRoot,
       commonDirectory: record.resolved.commonDirectory,
@@ -205,8 +205,8 @@ function readRequestRecord(value: unknown): ReplPushRequestRecord | undefined {
   }
   const owner = text(read["owner"]);
   const site = text(read["site"]);
-  const requested = parsePlace(read["requested"]);
-  const received = parsePlace(read["received"]);
+  const requested = parseReplPushPlace(read["requested"]);
+  const received = parseReplPushPlace(read["received"]);
   if (
     owner === undefined ||
     site === undefined ||
@@ -229,8 +229,14 @@ function readRequestRecord(value: unknown): ReplPushRequestRecord | undefined {
   });
 }
 
-/** One reading of where a Push was asked for, or `undefined`. */
-function parsePlace(value: unknown): ReplPushPlace | undefined {
+/**
+ * One reading of where a Push was asked for, or `undefined`.
+ *
+ * Shared with the pull-request request codec beside this one: a pull request is
+ * asked for at the same four facts, and two implementations of one place would
+ * be two answers to where an entry's external work was asked for.
+ */
+export function parseReplPushPlace(value: unknown): ReplPushPlace | undefined {
   const read = members(value, PLACE_MEMBERS);
   if (read === undefined) {
     return undefined;
@@ -288,7 +294,8 @@ function parseResolution(value: unknown, received: ReplPushPlace): ReplPushResol
   return Object.freeze({ checkoutRoot, commonDirectory, origin, inputs });
 }
 
-function placeJson(place: ReplPushPlace): Json {
+/** The payload one reading of an entry's external-work place carries. */
+export function replPushPlaceJson(place: ReplPushPlace): Json {
   return {
     repository: repositoryIdentityJson(place.repository),
     selectionCheckout: place.selectionCheckout,
@@ -299,5 +306,5 @@ function placeJson(place: ReplPushPlace): Json {
 
 /** Whether two readings of one Push's place describe the same place. */
 export function sameReplPushPlace(left: ReplPushPlace, right: ReplPushPlace): boolean {
-  return canonicalJson(placeJson(left)) === canonicalJson(placeJson(right));
+  return canonicalJson(replPushPlaceJson(left)) === canonicalJson(replPushPlaceJson(right));
 }

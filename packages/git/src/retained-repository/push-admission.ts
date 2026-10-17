@@ -33,6 +33,28 @@
  * outcome answers the other's request. Nothing is matched by searching the
  * stream for a name: equal requests at two positions are two occurrences, and a
  * reader that deduplicated them would refuse a document that is allowed.
+ *
+ * ## One reader for two external protocols
+ *
+ * An entry retains two kinds of Git-host work — publication and pull-request
+ * upsert — and both settle through the same `git_host_effect` type. A failed
+ * envelope names no kind, because a refusal retains no request of its own, so
+ * nothing in the record itself says which protocol it belongs to. What says so
+ * is the request standing before it in the same coroutine: that request's own
+ * kind decides which worker name the outcome must carry, which inputs and
+ * natural key it must describe, and which result codec must be able to read it.
+ *
+ * This is why there is one reader rather than two. Two readers that each passed
+ * over the other's failures would each see an orphan where the other saw a
+ * pair, and a Push-only reader handed a refused pull request would check it
+ * against a publication name it never had. Classification belongs to the
+ * pairing, and the pairing is in one place.
+ *
+ * A pull-request request is held to one thing publication is not: the entry
+ * must already have published the head it names. That is what makes the pull
+ * request this entry's own work rather than a claim about somebody else's
+ * branch, and the publication it rests on has to be one this history actually
+ * acknowledged before it.
  */
 
 import { StaleInputError } from "@executablemd/durable-streams";
@@ -47,6 +69,14 @@ import {
   pushExpectation,
   type GitPushInputs,
 } from "../composition/git-push-records.ts";
+import {
+  parsePullRequestRecord,
+  PULL_REQUEST,
+  pullRequestInputsJson,
+  pullRequestNaturalKey,
+  pullRequestNaturalKeyJson,
+  type PullRequestInputs,
+} from "../composition/pull-request-records.ts";
 import { sameRepositoryIdentity, type RepositoryIdentity } from "../composition/selection.ts";
 import { GIT_HOST_EFFECT } from "../git-host/effect-type.ts";
 import {
@@ -61,6 +91,13 @@ import {
   REPL_REPOSITORY_PUSH_REQUEST,
   type ReplPushRequestRecord,
 } from "./push-records.ts";
+import type { RankedReplPublication } from "./publication-evidence.ts";
+import {
+  parseReplPullRequestRequestRecord,
+  replPullRequestRequestName,
+  REPL_REPOSITORY_PULL_REQUEST_REQUEST,
+  type ReplPullRequestRequestRecord,
+} from "./pull-request-records.ts";
 import { REPL_REPOSITORY_VERSION, statedReplRecordVersion } from "./records.ts";
 
 /** Why a publication history cannot be continued. */
@@ -79,8 +116,10 @@ export type ReplPushRefusal =
   | "orphan-outcome"
   /** A second outcome for a request one already answered. */
   | "duplicate-outcome"
-  /** A settled outcome that is not the result a Push produces. */
-  | "malformed-receipt";
+  /** A settled outcome that is not the result its own request produces. */
+  | "malformed-receipt"
+  /** A saved pull request whose head no publication before it published. */
+  | "unauthorized-pull-request";
 
 /**
  * A retained publication history this entry cannot continue from.
@@ -174,12 +213,91 @@ export function replPushOutcomeName(record: ReplPushRequestRecord): Operation<st
   });
 }
 
-/** The three words a Push outcome may fail under, as the journal holds them. */
+/** The three words a Git-host outcome may fail under, as the journal holds them. */
 const CLOSED_FAILURES: ReadonlySet<string> = new Set([
   "GitHostConflictError",
   "GitHostAmbiguousError",
   "GitHostUnavailableError",
 ]);
+
+/**
+ * One saved request of either protocol, with the kind that classifies it.
+ *
+ * The pairing carries the kind so an outcome's own envelope does not have to.
+ * A failed envelope says nothing about which protocol refused, and this is what
+ * answers it.
+ */
+type ReplExternalRequest =
+  | { readonly kind: typeof GIT_PUSH; readonly record: ReplPushRequestRecord }
+  | { readonly kind: typeof PULL_REQUEST; readonly record: ReplPullRequestRequestRecord };
+
+/**
+ * Whether some publication before this point put this pull request's head
+ * where the pull request says it is.
+ *
+ * The last relevant publication decides. A pull request naming head `B` is
+ * authorized by a publication of `B` to its own branch, and an earlier
+ * publication of `A` to that same branch does not authorize it — the branch
+ * holds whatever was published to it last. Finding any exact match anywhere in
+ * history would let a superseded publication keep authorizing work.
+ */
+function publicationAuthorizes(
+  record: ReplPullRequestRequestRecord,
+  publications: readonly RankedReplPublication[],
+): boolean {
+  const inputs = record.resolved.inputs;
+  const relevant = publications
+    .filter(
+      (publication) =>
+        publication.branch === inputs.headBranch &&
+        publication.origin === record.resolved.origin &&
+        sameRepositoryIdentity(publication.repository, inputs.repository),
+    )
+    .sort((left, right) => left.rank - right.rank);
+  const last = relevant.at(-1);
+  return last !== undefined && last.sourceCommit === inputs.headSha;
+}
+
+/** The Git-host request one saved pull-request request asks the worker to reconcile. */
+export function replPullRequestEffectRequest(inputs: PullRequestInputs): {
+  readonly kind: string;
+  readonly inputs: Json;
+  readonly naturalKey: Json;
+} {
+  return {
+    kind: PULL_REQUEST,
+    inputs: pullRequestInputsJson(inputs),
+    naturalKey: pullRequestNaturalKeyJson(pullRequestNaturalKey(inputs)),
+  };
+}
+
+/** The name the worker publishes one saved pull-request request's outcome under. */
+export function replPullRequestOutcomeName(
+  record: ReplPullRequestRequestRecord,
+): Operation<string> {
+  return gitHostRequestFingerprint({
+    identity: { runId: record.owner, expansionId: record.site },
+    ...replPullRequestEffectRequest(record.resolved.inputs),
+  });
+}
+
+/** The Git-host request one saved request of either protocol asks for. */
+function effectRequestOf(request: ReplExternalRequest): {
+  readonly kind: string;
+  readonly inputs: Json;
+  readonly naturalKey: Json;
+} {
+  return request.kind === GIT_PUSH
+    ? replPushEffectRequest(request.record.resolved.inputs)
+    : replPullRequestEffectRequest(request.record.resolved.inputs);
+}
+
+/** The name the worker publishes one saved request's outcome under. */
+function outcomeNameOf(request: ReplExternalRequest): Operation<string> {
+  return request.kind === GIT_PUSH
+    ? replPushOutcomeName(request.record)
+    : replPullRequestOutcomeName(request.record);
+}
 
 /**
  * Hold this entry's retained publication history to what this host can read.
@@ -191,13 +309,15 @@ const CLOSED_FAILURES: ReadonlySet<string> = new Set([
 export function* admitReplPushHistory(
   owner: string,
   retained: readonly DurableEvent[],
-): Operation<void> {
+): Operation<readonly RankedReplPublication[]> {
   /** Every place a successful placement record before this point described. */
   const placements: ReplPushPlacement[] = [];
+  /** Every publication acknowledged before this point, in that order. */
+  const publications: RankedReplPublication[] = [];
   /** Per coroutine, the requests no outcome has answered yet. */
-  const pending = new Map<string, ReplPushRequestRecord[]>();
+  const pending = new Map<string, ReplExternalRequest[]>();
   /** Per coroutine, the requests an outcome already answered. */
-  const answered = new Map<string, ReplPushRequestRecord[]>();
+  const answered = new Map<string, ReplExternalRequest[]>();
 
   for (const event of retained) {
     if (event.type !== "yield") {
@@ -210,14 +330,23 @@ export function* admitReplPushHistory(
     }
     if (type === REPL_REPOSITORY_PUSH_REQUEST) {
       const record = yield* admitRequest(owner, event, placements);
-      queue(pending, event.coroutineId).push(record);
+      queue(pending, event.coroutineId).push({ kind: GIT_PUSH, record });
+      continue;
+    }
+    if (type === REPL_REPOSITORY_PULL_REQUEST_REQUEST) {
+      const record = yield* admitPullRequest(owner, event, placements, publications);
+      queue(pending, event.coroutineId).push({ kind: PULL_REQUEST, record });
       continue;
     }
     if (type !== GIT_HOST_EFFECT) {
       continue;
     }
-    yield* admitOutcome(owner, event, pending, answered);
+    yield* admitOutcome(owner, event, pending, answered, publications);
   }
+  // The ordered publication facts this snapshot holds. None of them is usable
+  // until execution reaches it; that is the publication memory's question, and
+  // what this reader supplies is the order.
+  return publications;
 }
 
 /** Remember one successful placement's parsed facts, or pass over the record. */
@@ -242,14 +371,14 @@ function remember(placements: ReplPushPlacement[], event: DurableEvent): void {
 }
 
 function queue(
-  queues: Map<string, ReplPushRequestRecord[]>,
+  queues: Map<string, ReplExternalRequest[]>,
   coroutineId: string,
-): ReplPushRequestRecord[] {
+): ReplExternalRequest[] {
   const existing = queues.get(coroutineId);
   if (existing !== undefined) {
     return existing;
   }
-  const created: ReplPushRequestRecord[] = [];
+  const created: ReplExternalRequest[] = [];
   queues.set(coroutineId, created);
   return created;
 }
@@ -306,25 +435,129 @@ function* admitRequest(
 }
 
 /**
+ * One saved pull-request request, held to everything a publication request is
+ * held to, and to the publication that authorizes it.
+ *
+ * The first four questions are the same as publication's, for the same
+ * reasons. The fifth is this protocol's own: a pull request names a head, and
+ * an entry may only name a head it published itself. A saved request whose head
+ * no publication in this history put on that branch describes work this entry
+ * cannot account for — which is exactly what a copied, forged or cross-entry
+ * receipt would look like from here.
+ */
+function* admitPullRequest(
+  owner: string,
+  event: Yield,
+  placements: readonly ReplPushPlacement[],
+  publications: readonly RankedReplPublication[],
+): Operation<ReplPullRequestRequestRecord> {
+  if (event.result.status !== "ok") {
+    throw malformedPullRequest();
+  }
+  const payload = event.result.value;
+  const stated = statedReplRecordVersion(payload);
+  if (stated !== undefined && stated !== REPL_REPOSITORY_VERSION) {
+    throw refusal(
+      "unknown-version",
+      `a ${REPL_REPOSITORY_PULL_REQUEST_REQUEST} record states version ${stated}, and this host ` +
+        `implements version ${REPL_REPOSITORY_VERSION} only. Nothing is assumed about what the ` +
+        "rest of it means.",
+    );
+  }
+  const record = parseReplPullRequestRequestRecord(payload);
+  if (record === undefined) {
+    throw malformedPullRequest();
+  }
+  if (record.owner !== owner) {
+    throw refusal(
+      "foreign-owner",
+      "a saved pull-request request in this entry's history was written under another owner, so " +
+        "the pull request it asked for was not asked for by this entry and its request is not " +
+        "one this entry can present again.",
+    );
+  }
+  if (event.description.name !== (yield* replPullRequestRequestName(record))) {
+    throw refusal(
+      "request-fingerprint",
+      "a saved pull-request request is journaled under a name that is not the name its own " +
+        "request produces, so the record and the pull request it claims to be do not match.",
+    );
+  }
+  if (!replPullRequestPlacesHeld(record, placements)) {
+    throw refusal(
+      "unknown-placement",
+      "a saved pull-request request names a checkout no selection before it placed, so this " +
+        "history does not say where the pull request it asked for came from.",
+    );
+  }
+  if (!publicationAuthorizes(record, publications)) {
+    throw refusal(
+      "unauthorized-pull-request",
+      "a saved pull-request request names a head this entry's history never published to that " +
+        "branch, so the pull request it asked for was not this entry's own work to ask for.",
+    );
+  }
+  return record;
+}
+
+/**
+ * Whether every place a saved pull-request request names is one these
+ * placements hold.
+ *
+ * The same three readings publication is checked on, against the same
+ * placements: the selection the invocation authenticated, the selection the
+ * live dispatch received, and the checkout routing resolved.
+ */
+function replPullRequestPlacesHeld(
+  record: ReplPullRequestRequestRecord,
+  placements: readonly ReplPushPlacement[],
+): boolean {
+  const places: readonly (readonly [RepositoryIdentity, string, string])[] = [
+    [
+      record.requested.place.repository,
+      record.requested.place.selectionCheckout,
+      record.requested.place.commonDirectory,
+    ],
+    [
+      record.received.place.repository,
+      record.received.place.selectionCheckout,
+      record.received.place.commonDirectory,
+    ],
+    [
+      record.received.place.repository,
+      record.resolved.checkoutRoot,
+      record.resolved.commonDirectory,
+    ],
+  ];
+  return places.every(([identity, checkoutRoot, commonDirectory]) =>
+    placements.some(
+      (placement) =>
+        placement.checkoutRoot === checkoutRoot &&
+        placement.commonDirectory === commonDirectory &&
+        sameRepositoryIdentity(placement.identity, identity),
+    ),
+  );
+}
+
+/**
  * One Git-host outcome, paired with the request it answers.
  *
- * Only this entry's own Push effects are this reader's business. A successful
- * Git-host record of another kind belongs to a protocol this feature does not
- * retain and is passed over; one naming another owner is refused, because an
- * entry's segment holds its own work and borrowing somebody else's receipt is
- * exactly what must not be possible.
+ * The request standing before it in the same coroutine is what says which
+ * protocol it belongs to. A failed envelope names no kind, so nothing in the
+ * record itself could; and a successful one naming a kind the pairing does not
+ * expect describes different work than was asked for. An outcome naming another
+ * owner is refused, because an entry's segment holds its own work and borrowing
+ * somebody else's receipt is exactly what must not be possible.
  *
- * A failed envelope names no kind — a refusal retains no request of its own —
- * so every one of them in an entry's segment is read as a publication. That is
- * exactly what they are: publication is the one external protocol an entry
- * retains through this boundary, and the name the failure is journaled under
- * still has to be the one the request before it produces.
+ * A successful record of a kind neither protocol here owns belongs to something
+ * this reader does not retain, and is passed over without consuming a pairing.
  */
 function* admitOutcome(
   owner: string,
   event: Yield,
-  pending: Map<string, ReplPushRequestRecord[]>,
-  answered: Map<string, ReplPushRequestRecord[]>,
+  pending: Map<string, ReplExternalRequest[]>,
+  answered: Map<string, ReplExternalRequest[]>,
+  publications: RankedReplPublication[],
 ): Operation<void> {
   const settled = event.result.status === "ok" ? successOf(event.result.value) : undefined;
   if (event.result.status === "ok" && settled === undefined) {
@@ -333,18 +566,23 @@ function* admitOutcome(
     throw refusal(
       "malformed-receipt",
       "a Git-host record in this entry's history is not one this host can read, so what it says " +
-        "about work already published is unknown.",
+        "about work already done is unknown.",
     );
   }
-  if (settled !== undefined && settled.request.kind !== GIT_PUSH) {
-    // Another external protocol's record. This reader owns publication only.
+  if (
+    settled !== undefined &&
+    settled.request.kind !== GIT_PUSH &&
+    settled.request.kind !== PULL_REQUEST
+  ) {
+    // Another external protocol's record. This reader owns publication and
+    // pull requests, and consumes no pairing for anything else.
     return;
   }
   if (settled !== undefined && settled.request.identity.runId !== owner) {
     throw refusal(
       "foreign-owner",
-      "a publication outcome in this entry's history was reconciled under another owner, so the " +
-        "work it describes was not published by this entry.",
+      "a Git-host outcome in this entry's history was reconciled under another owner, so the " +
+        "work it describes was not done by this entry.",
     );
   }
 
@@ -355,21 +593,21 @@ function* admitOutcome(
     throw spent.length > 0
       ? refusal(
           "duplicate-outcome",
-          "a publication request in this entry's history is answered by more than one Git-host " +
-            "outcome, so this history does not say which of them describes what was published.",
+          "a saved request in this entry's history is answered by more than one Git-host " +
+            "outcome, so this history does not say which of them describes what was done.",
         )
       : refusal(
           "orphan-outcome",
-          "a publication outcome in this entry's history stands where no saved request asked for " +
+          "a Git-host outcome in this entry's history stands where no saved request asked for " +
             "one, so this history does not say what was asked of the Git host.",
         );
   }
   queue(answered, event.coroutineId).push(request);
 
-  if (event.description.name !== (yield* replPushOutcomeName(request))) {
+  if (event.description.name !== (yield* outcomeNameOf(request))) {
     throw refusal(
       "request-fingerprint",
-      "a publication outcome is journaled under a name that is not the name the request before " +
+      "a Git-host outcome is journaled under a name that is not the name the request before " +
         "it produces, so the outcome and the request it claims to answer do not match.",
     );
   }
@@ -378,35 +616,65 @@ function* admitOutcome(
     if (failed === undefined || !CLOSED_FAILURES.has(failed)) {
       throw refusal(
         "malformed-receipt",
-        "a refused publication is recorded under a condition this host has no word for, so what " +
-          "it says about the branch is unknown.",
+        "a refused Git-host effect is recorded under a condition this host has no word for, so " +
+          "what it says about the work is unknown.",
       );
     }
     return;
   }
-  if (settled.request.identity.expansionId !== request.site) {
+  if (settled.request.kind !== request.kind) {
     throw refusal(
-      "foreign-owner",
-      "a publication outcome names an invocation other than the one the request before it was " +
-        "made at, so the two describe different publications.",
+      "malformed-receipt",
+      "a Git-host outcome describes a different kind of work than the request before it asked " +
+        "for, so this history does not say what was done.",
     );
   }
-  const asked = replPushEffectRequest(request.resolved.inputs);
+  if (settled.request.identity.expansionId !== request.record.site) {
+    throw refusal(
+      "foreign-owner",
+      "a Git-host outcome names an invocation other than the one the request before it was " +
+        "made at, so the two describe different work.",
+    );
+  }
+  const asked = effectRequestOf(request);
   if (
     canonicalJson(settled.request.inputs) !== canonicalJson(asked.inputs) ||
     canonicalJson(settled.request.naturalKey) !== canonicalJson(asked.naturalKey)
   ) {
     throw refusal(
       "malformed-receipt",
-      "a publication outcome describes a push other than the one the request before it asked " +
-        "for, so this history does not say what was published.",
+      "a Git-host outcome describes work other than the one the request before it asked for, " +
+        "so this history does not say what was done.",
     );
   }
-  if (parseGitPushRecord(settled, pushExpectation(request.resolved.inputs)) === undefined) {
+  if (request.kind === GIT_PUSH) {
+    const inputs = request.record.resolved.inputs;
+    if (parseGitPushRecord(settled, pushExpectation(inputs)) === undefined) {
+      throw refusal(
+        "malformed-receipt",
+        "a publication outcome holds a result that is not the one a Push of that branch " +
+          "produces, so what it says was published is unknown.",
+      );
+    }
+    // What this publication proved, for whichever pull request rests on it.
+    // Remembered in acknowledgement order, because the last publication to a
+    // destination is the one that decides what is on that branch.
+    publications.push({
+      site: request.record.site,
+      rank: publications.length,
+      repository: inputs.repository,
+      origin: request.record.resolved.origin,
+      branch: inputs.branch,
+      destinationRef: inputs.destinationRef,
+      sourceCommit: inputs.sourceCommit,
+    });
+    return;
+  }
+  if (parsePullRequestRecord(settled, request.record.resolved.inputs) === undefined) {
     throw refusal(
       "malformed-receipt",
-      "a publication outcome holds a result that is not the one a Push of that branch produces, " +
-        "so what it says was published is unknown.",
+      "a pull-request outcome holds a result that is not the one an upsert of that pull request " +
+        "produces, so what it says exists is unknown.",
     );
   }
 }
@@ -426,6 +694,14 @@ function malformed(): ReplPushHistoryError {
     "malformed-record",
     `a ${REPL_REPOSITORY_PUSH_REQUEST} record in this entry's history is not one this host can ` +
       "read, so what it says about work already asked for is unknown.",
+  );
+}
+
+function malformedPullRequest(): ReplPushHistoryError {
+  return refusal(
+    "malformed-record",
+    `a ${REPL_REPOSITORY_PULL_REQUEST_REQUEST} record in this entry's history is not one this ` +
+      "host can read, so what it says about work already asked for is unknown.",
   );
 }
 
