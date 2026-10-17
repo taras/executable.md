@@ -686,6 +686,36 @@ describe("Tier LET — the retained publications a continuation will not read", 
     );
     expect(malformed.calls).toBe(0);
     expect(malformed.appended).toEqual([]);
+
+    // The same unreadable record, with the run's own recorded completion still
+    // behind it. Reusing a terminal reaches no expansion, so the publisher is
+    // never entered — which makes this the boundary the refusal has to be at
+    // rather than a second case of the one above.
+    const whole = original.snapshot();
+    expect(whole.some((event) => event.type === "close")).toBe(true);
+    const settled = yield* continuing(
+      withRecord(whole, {
+        version: 2,
+        binding: "saved",
+        publication: { kind: "json", value: "alpha" },
+      }),
+      { rootBindingPublications: "json-v1" },
+    );
+
+    expect(settled.outcome.ok).toBe(false);
+    expect(settled.outcome.ok ? "" : settled.outcome.error.message).toContain(
+      "cannot be read by this version",
+    );
+    expect(settled.calls).toBe(0);
+    expect(settled.appended).toEqual([]);
+
+    // And the control that keeps that refusal meaningful: the identical history
+    // with its record untouched reuses its recorded completion, runs nothing
+    // again and appends nothing.
+    const reused = yield* continuing(whole, { rootBindingPublications: "json-v1" });
+    expect(reused.outcome.ok).toBe(true);
+    expect(reused.calls).toBe(0);
+    expect(reused.appended).toEqual([]);
   });
 
   it("P9: a retained record whose binding is not the one it replayed under refuses", function* () {

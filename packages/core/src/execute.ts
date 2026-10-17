@@ -40,8 +40,11 @@ import {
   readRootBindingPublicationMode,
   recordedRootBindingPublicationMode,
   MISMATCHED_MODE,
+  parseRootBindingPublication,
+  ROOT_BINDING_PUBLICATION,
   rootBindingPublicationsDescription,
   UNREADABLE_MODE,
+  UNREADABLE_PUBLICATION,
 } from "./root-binding-publications.ts";
 import type {
   RootBindingPublicationMode,
@@ -1311,6 +1314,7 @@ function admitRootHistory(
   publications: RootBindingPublicationMode | undefined,
 ): void {
   const imports: Yield[] = [];
+  const retainedPublications: Yield[] = [];
   let terminal = false;
   for (const event of retained) {
     // The retained history has already settled every discriminator, so one that
@@ -1347,6 +1351,9 @@ function admitRootHistory(
     if (isRootImport(event)) {
       imports.push(event);
     }
+    if (isRootBindingPublication(event)) {
+      retainedPublications.push(event);
+    }
   }
 
   // A journal that recorded no completion replays what it has and then
@@ -1371,6 +1378,46 @@ function admitRootHistory(
     admitRootSelection(event, root);
     admitRootBindingPublications(event, publications);
   }
+
+  // The retained data as well as the retained mode, and here rather than only
+  // where a capture publishes: the publisher is reached by expansion, and a
+  // history standing behind a recorded completion reuses that terminal without
+  // expanding anything — so a publication this version cannot read would become
+  // accepted history, and its recorded outcome authoritative, without ever
+  // having been looked at.
+  for (const event of retainedPublications) {
+    admitRootBindingPublication(event);
+  }
+}
+
+/** Whether a retained event is recognizably a root binding publication. */
+function isRootBindingPublication(event: DurableEvent): boolean {
+  return (
+    attempt(() => event.type === "yield" && event.description.type === ROOT_BINDING_PUBLICATION) ===
+    true
+  );
+}
+
+/**
+ * Hold a resumed run to the publication data its journal retained.
+ *
+ * Read through the one parser the publisher and the projector are both held to,
+ * so a record one of them refuses is not a record the other continues through.
+ * It runs where every other root-history admission runs — inside the read each
+ * later phase depends on — which is ahead of terminal reuse, public replay
+ * policy, authored work and any append.
+ *
+ * A history holding no publication is unaffected, which is every ordinary run
+ * and every entry admitted before this existed.
+ */
+function admitRootBindingPublication(event: Yield): void {
+  if (parseRootBindingPublication(event).ok) {
+    return;
+  }
+  throw new StaleInputError(UNREADABLE_PUBLICATION, {
+    coroutineId: event.coroutineId,
+    description: event.description,
+  });
 }
 
 /**
