@@ -27,7 +27,7 @@
  * split the saved publication request keeps when it leaves its origin's
  * fingerprint to the provider that reads it back. So the caller computes the
  * name and this module answers everything a name cannot: what the record is,
- * whose it is, and whether its value is the evidence it claims.
+ * whose it is, and whether its value is the evidence that read produces.
  */
 
 import { StaleInputError } from "@executablemd/durable-streams";
@@ -103,7 +103,7 @@ export function replPullRequestReadNameRefusal(): ReplPullRequestReadHistoryErro
   return readRefusal(
     "request-fingerprint",
     "a retained evidence read is journaled under a name that is not the name its own question " +
-      "produces, so the record and the read it claims to be do not match.",
+      "produces, so the record and the read it names do not match.",
   );
 }
 
@@ -114,7 +114,7 @@ export function replPullRequestReadNameRefusal(): ReplPullRequestReadHistoryErro
  * The envelope has to be the one this question asked for, and a checks envelope
  * has to be internally consistent: every item about the head it recorded. That
  * is asked even of an empty collection, because an empty checks result still
- * says which head was read and that head is the whole of what it claims.
+ * says which head was read and that head is the whole of what it reports.
  */
 export function admitReplPullRequestReadResult(
   request: PullRequestReadRequest,

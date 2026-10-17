@@ -52,7 +52,7 @@
  *
  * A pull-request request is held to one thing publication is not: the entry
  * must already have published the head it names. That is what makes the pull
- * request this entry's own work rather than a claim about somebody else's
+ * request this entry's own work rather than a statement about somebody else's
  * branch, and the publication it rests on has to be one this history actually
  * acknowledged before it.
  */

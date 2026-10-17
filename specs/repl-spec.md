@@ -1537,6 +1537,62 @@ when you continue it — the commit it named, not today's HEAD — and an entry 
 push the remote accepted and whose result was never written down adopts that
 completion rather than repeating it. One publication happens, not two.
 
+### The pull request an entry opened, and the evidence it read
+
+A pull request is a statement about a branch the Git host already holds, so it
+is written after the publication it rests on. Type this, with the host
+credentials and allowed-read list an ordinary run uses:
+
+```xmd
+<Repository name="project" url="https://github.com/octo/project">
+  <Worktree name="review" branch="review/notes" as="worktree" />
+  <Dir path={worktree}>
+    <File path="notes.md">Ready for review.</File>
+    <Git.Add paths="notes.md" />
+    <Git.Commit message="Prepare notes" as="commit" />
+    <Git.Push />
+    <Elicit schema={{ type: "string", enum: ["continue"] }} as="firstAnswer">
+      The branch containing {commit} is published. Continue to its pull request?
+    </Elicit>
+    <PullRequest title="Prepare notes" as="pullRequest">Ready for review.</PullRequest>
+    <PullRequest.Reviews url={pullRequest.url} as="reviews" />
+    <PullRequest.Comments url={pullRequest.url} as="comments" />
+    <PullRequest.Checks url={pullRequest.url} as="checks" />
+    <Json value={{ reviews, comments, checks }} />
+    <Elicit schema={{ type: "string", enum: ["continue"] }} as="secondAnswer">
+      Continue to a new review read?
+    </Elicit>
+    <PullRequest.Reviews url={pullRequest.url} as="latestReviews" />
+    <Json value={latestReviews} />
+  </Dir>
+</Repository>
+```
+
+Leave at the first question and come back: answering opens the pull request and
+reads each collection once. Leave at the second, change the reviews, comments
+and checks at the host, and come back again. The pull request has the same
+identity it had, the three arrays are the ones that were saved, and nothing was
+mutated or read to produce them. Answering the second question performs the one
+read written after it, and *that* read sees the change.
+
+The two halves replay differently, and the difference is deliberate. A completed
+pull request answers from the receipt it acknowledged, reaching no provider, no
+configuration, no credential and no service. A completed read still passes
+today's provider matching, allowed list and target validation before it answers
+from its saved snapshot — so removing the repository from that list refuses to
+continue, even though the reviews were saved an hour ago, and the saved record
+stays in history rather than being erased by that refusal. An allowed completed
+read opens no authentication session and sends nothing.
+
+What `<PullRequest>` binds is evidence of what the upsert settled on, not
+freshness: the repository, the provider's own identity for the pull request, its
+number, its URL, its open state and the head and base commits. Reviews,
+comments, checks and later edits are the separate reads above, which is why a
+replayed entry hands back what it recorded rather than what the pull request
+looks like now.
+
+### What publication decides
+
 The decisions are the ones publication has everywhere else. A destination that
 does not exist yet, and one holding a commit this branch already contains, are
 published once with an exact non-force refspec. A destination already holding
@@ -2321,16 +2377,15 @@ resolved against the frame that published its coordinates.
   do not open the same location twice for writing. The hold on a checkout is a
   different thing: it says one entry at a time may mutate one repository, and it
   says nothing about who may write this execution's history.
-- Pull requests are not part of this. `<PullRequest>` refuses in a REPL entry
-  exactly as it does under any host that installs no provider for it, and
-  neither a retained local result nor a retained publication authorizes one.
-  What an entry retains is `<Repository>` and `<Worktree>` selection, the file
+- What an entry retains is `<Repository>` and `<Worktree>` selection, the file
   and directory work inside those checkouts and the one it was started in,
   `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` in them, the page each of
   `<Git.Files>`, `<Git.Changes>`, `<Git.Diff>` and `<Git.File>` answered with,
-  the branch `<Git.Push />` published, and the issues it filed and read. A
+  the branch `<Git.Push />` published, the pull request it opened or updated,
+  its reviews, comments and checks, and the issues it filed and read. A
   runtime that installs no repository provider — Node and Bun — refuses the Git
-  components, the four reads and publication included, before any native
+  components, the four checkout reads, publication and pull-request operations,
+  before any native
   operation or remote contact, while ordinary `<File>` and `<Dir>` work keeps
   working there.
 - A read confers nothing. Nothing a page holds authorizes a mutation, a
@@ -2343,6 +2398,26 @@ resolved against the frame that published its coordinates.
   as it promises: nothing locks the repository, watches it or compares every
   write that happened while it ran. What continuation checks is whether the
   *answer* changed, not whether the filesystem did.
+- A pull request rests on this entry's own publication and on nothing else. A
+  retained local result, a receipt-shaped value, a handler's synthetic
+  `Git.push` answer and another entry's history each authorize none, and the
+  last publication to that branch is the one that decides — so a head this entry
+  has since published past no longer authorizes one. Reopening an entry whose
+  pull request is complete restores the identity it acknowledged without
+  contacting the service; a pull request whose request was written but never
+  answered is reconciled from that saved request, not from wherever the checkout
+  has moved to.
+- A retained evidence read stays under the live ceiling. The three reads need no
+  Repository, working directory or checkout — a read names a URL — but provider
+  matching, the configured allowed list and target validation run on every
+  execution, including the one that reopens a read already saved. Removing the
+  repository from that list refuses to continue; the saved record stays in
+  history and is simply not reachable while it says so, and no new record is
+  written for a question the host did not permit. What a reopened read restores
+  is the answer the provider gave inside that boundary: middleware composed
+  above it runs again and may bind a different array from the same saved
+  snapshot, and an answer a handler produced without ever reaching the provider
+  is retained not at all and runs again.
 - `<Issue>` is the same component here as under every other host: one
   implementation, the same props, forms and return contract, asking a semantic
   issue operation for its work. The `repl` command registers it as an ordinary

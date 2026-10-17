@@ -615,6 +615,12 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/567",
   },
   {
+    path: "scripts/tests/repl-pull-request-compiled.test.ts",
+    reason:
+      "drives the compiled `dist/xmd` through a real terminal: it publishes a branch, opens its pull request, reads reviews, comments and checks, leaves at a question, lets the Git host's evidence change and reopens the printed location to prove the binary restores the pull request it opened and the snapshots it saved. Only `deno compile` produces it and no test shard builds it, so it belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
+    issue: "https://github.com/taras/executable.md/issues/567",
+  },
+  {
     path: "scripts/tests/repl-push-compiled.test.ts",
     reason:
       "drives the compiled `dist/xmd` through a real terminal: it publishes a branch to a bare remote, leaves at a question, advances the checkout from a shell and reopens the printed location to prove the binary publishes the commit its saved request named. Only `deno compile` produces it and no test shard builds it, so it belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",

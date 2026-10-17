@@ -10442,12 +10442,22 @@ configuration or a credential. An interrupted upsert presents the key it used
 the first time, which is what lets the provider answer with the issue it
 already accepted rather than filing a second one; a read has no key.
 
-What the entry provider installs nothing of is pull requests, so
-`<PullRequest>` refuses there exactly as it does under a host that installs no
-provider for it, and neither a retained local result nor a retained publication
-authorizes one. Constructing it acquires nothing, including no managed root, no
-commit identity, no credential and no configuration read, and a passive reading
-of a settled history initializes nothing at all.
+`<PullRequest>` is retained on those terms too, and rests on the publication
+beside it: what authorizes one is a completely validated saved Push request
+paired with its own acknowledged receipt and reached by this execution, with the
+last publication to that branch deciding. A completed upsert answers with the
+result it acknowledged, reaching no native, provider, configuration or
+credential path; an interrupted one reconciles the complete request it wrote
+before any service contact rather than rereading a checkout that has moved. Its
+three evidence reads are retained under the existing read records and need no
+Repository, working directory or checkout at all, so they are installed for an
+entry holding none — but they stay under today's configured allowed list on
+every execution, including the one that reopens a read already saved, and what
+a reopened read answers with is the snapshot the provider gave inside that
+boundary rather than whatever composition above it now returns. Constructing the
+provider acquires nothing, including no managed root, no commit identity, no
+credential and no configuration read, and a passive reading of a settled history
+initializes nothing at all.
 
 The identity an entry's publication and issue work are named by is the entry's
 own: the execution and the entry's admission-order position, derived by the host
@@ -14496,6 +14506,29 @@ acknowledgement.
 | EPB7 | Acknowledgement, not completion | A refused request append contacts nothing, publishes nothing and fences the work after it; a refused outcome append leaves the remote as it is with no false receipt and no compensating Close, and the next attempt adopts that completion; accepted definitive failures replay provider-free; an unauthored throw is withheld rather than published |
 | EPB8 | Resources and ownership | A fresh and a pending publication each take the selected placement's managed slot before any native read, and contention appends neither a request nor an outcome while preserving a previously saved pending one; a publication proceeds while another entry holds only the shared Git directory's mutation lease; the checkout's own `pushurl`, hooks and credential helpers reach nothing because the transport runs in a control repository with a read-only alternate; one attempt's scratch transport, object source and credential session survive both phases and are closed and joined before publication, and a cleanup that failed acknowledges neither a success nor a worker-authored refusal; a publication cancelled while its scratch space or its credential session is still pending delivers nothing it then leaves behind, releases what it did receive before the halt settles, publishes no outcome and preserves any acknowledged request, and a cancelled blocked native child closes before the entry settles |
 | EPB9 | Assembly and unsupported runtimes | The per-entry factory is inert — no directory, no `git`, no credential and no managed root — and declares exactly this entry's publication and issue components; exactly one core initialization happens per executing entry; a passive reading, a frozen position and a refused location initialize nothing; the file work, selections, local Git and issues of the same entry survive the combined assembly; an entry with no managed root and a runtime that installs no entry capability each report an absent provider for `<Git.Push />` before any remote contact or managed root |
+
+### Tier EPR — Pull requests and evidence inside a REPL entry (§5.3, §8.1)
+
+Bounded to what one executing entry asks a Git host for about a pull request and
+what it reads back about one. Everything the shared reconciliation and the
+existing read adapter already prove — the create, adopt, numbered update and
+no-op decisions, the conflict, ambiguity and unavailability refusals, the
+pagination walks and the item and subject contracts — stays in their own tiers.
+The rows below are about what authorizes a pull request, the saved request, the
+value the dispatch binds, where retention begins for a read, and who each read
+belongs to.
+
+| # | Test | Verify |
+|---|------|--------|
+| EPR1 | The public journey | A real-terminal source and compiled `xmd repl` each publish a branch, leave at a question, reopen the printed location and answer it to open one pull request and read reviews, comments and checks once each, then leave at a second question; after the host's three collections change, reopening restores the same pull-request identity and the three saved arrays while asking the host nothing at all — no mutation and no read — and answering performs the one later explicit read, which is that session's only request and sees the change; the repository's primary branch is untouched throughout and the published branch still holds the commit that was published |
+| EPR2 | What authorizes a pull request | A fresh pull request at a moved head refuses with only the earlier publication of that branch, and the same entry publishing the new head permits it; a prior entry's history, a bare or forged receipt, a local `<File>` or `<Git.Commit>` result, a synthetic `Git.push` answer and an unrelated authenticated checkout each authorize none; missing, conflicting and unreadable evidence are distinct refusals raised before any request, credential or service contact; the last relevant acknowledged publication wins over an earlier exact one, in the journal's acknowledgement order rather than the order replay revisits two concurrent children, and a publication standing after the current position authorizes nothing until execution reaches it |
+| EPR3 | A pending request keeps what it asked for | A request acknowledged before any service contact is reconciled after the checkout it published from is gone, using its saved head, base, number, title, body and draft with zero native checkout reads; a remote creation and a numbered update each accepted before the outcome was recorded are adopted with zero repeated mutation; a cut taken before the request was acknowledged resolves live state instead and refuses conflicting publication evidence rather than recording the superseded one |
+| EPR4 | What a reopened entry reaches, and what it does not | A real unfinished prefix left at a second question restores the completed upsert and the completed reads; the upsert reaches no native, provider, configuration or credential path; the reads still pass today's provider matching, configured ceiling and target validation yet open no session and send nothing; removing the repository from the allowed list refuses a saved read without writing a new read record and without erasing the existing one; a URL or provider transformation before admission is what the record says was asked; a changed transformation after delegation reruns over the saved snapshot and may bind a different array; an answer a handler produced without reaching the admitted-read boundary is unretained and runs again |
+| EPR5 | The value a dispatch binds | The existing create, adopt, numbered update, no-op, conflict, ambiguity, unavailability and multi-call update behaviour is unchanged; at each of the two middleware chains one valid answer that never delegated binds the closed result contract and writes no request and no receipt; after delegation a rewritten return cannot bind another pull request and a swallowed delegated failure cannot become a success; an ordinary outer throw after a success keeps ordinary surrounding failure handling while a persistence failure stays fatal; one transforming delegation records both the original and the received question and a saved continuation bypasses it; a duplicate or stale delegation performs no second owned call; a child effect in the body settles before the parent's request exists and a body that refuses contacts nothing |
+| EPR6 | Coordinated admission | One reader admits mixed publication and pull-request successes and the three existing definitive failure names across two interleaved durable children plus a trailing pending request, because a failed envelope names no kind and the preceding unconsumed request in the same coroutine with that request's own expected worker name is what classifies it; it refuses an unknown version, a missing or extra member, a misnamed request, a foreign owner or site, an unplaced or unauthorized saved request, an orphan or duplicate outcome and a wrong kind, fingerprint, natural key or receipt; read admission refuses a foreign `input.runId` independently of the owner-omitting name, including on a failed read's description; both object-id formats round-trip and one vector per algorithm — the canonical-JSON request digest and the length-prefixed UTF-16 read fingerprint — carries a null and text outside ASCII |
+| EPR7 | One read, one identity | A denied target writes no read record and opens no session; a multipage success is complete; a walk that cannot finish retains a failed read and binds no array; a wrong subject or check head is refused before any success is appended; two concurrent authored reads completing in reverse order each keep their own URL, collection, owner and invocation; a nested authored read cannot consume its parent's handoff and a duplicate or stale handoff runs no second read; the final result after any outer composition is validated before its items bind |
+| EPR8 | Acknowledgement, not completion | A refused request append contacts nothing and fences the work after it; a refused outcome append binds no success, appends no compensating Close and leaves the remote completion for the next attempt to adopt; a refused read append binds no array and leaves the read safe to repeat; each first persistence failure is preserved; a cancelled blocked admitted read, a session still being acquired and a cleanup that throws after either a success or an expected failure each publish no invented outcome and join their cleanup |
+| EPR9 | Assembly and unsupported runtimes | The per-entry factory is inert and declares exactly this entry's publication, pull-request, evidence-read and issue components with one admission for each history it reads; exactly one core initialization happens per executing entry and a passive reading initializes nothing; the file work, selections, local Git, publication and issues of the same entry survive the combined assembly; the three reads are declared and installed for an entry holding no managed root and acquire no checkout, discovery, hold, Git session or authentication; a direct upsert acquires no retained identity and a direct read keeps ordinary provider behaviour; shadowing stays ordinary and a kept first-party registration gains no successor identity; a runtime that installs no entry capability reports an absent provider for the upsert and all three reads before any native or service work; the workflow profile's own pull request, reads and forks are unchanged |
 
 ---
 

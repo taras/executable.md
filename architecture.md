@@ -7126,13 +7126,13 @@ persistence failure with its first cause: no success binding is offered, no
 later sibling runs as though the commit succeeded, and no compensating Close is
 appended.
 
-A pull request is not here: `<PullRequest>` stays declared where it already is
-and refuses through its own unchanged missing-provider default, and a local
-result confers no publication evidence. Publication itself is the next
-subsection's subject, and `<Issue>` the section's after it — the first because
-it belongs to a checkout and to a remote at once, the second because it belongs
-to no checkout at all. Nothing inventories the managed root, snapshots a
-checkout's contents or restores one.
+A pull request is not here, and a local result confers no publication evidence.
+Publication itself is the next subsection's subject, the pull request that rests
+on it the one after that, and `<Issue>` the last — the first because it belongs
+to a checkout and to a remote at once, the second because it is a statement
+about a branch a remote already holds, and the third because it belongs to no
+checkout at all. Nothing inventories the managed root, snapshots a checkout's
+contents or restores one.
 
 #### What one entry asked to publish, and what the Git host did about it
 
@@ -7220,13 +7220,103 @@ before publication may acknowledge anything, so a cleanup that failed publishes
 neither a success nor a refusal the worker had already decided.
 
 An entry's retained publication history is admitted before any of it is
-replayed: every saved request parses, states this version, is named by its own
+replayed, together with the pull requests that rest on it. That admission is one
+reader rather than two, because both protocols settle through one
+`git_host_effect` type and a failed envelope names no kind: what says which
+protocol a refusal belongs to is the request standing before it in the same
+coroutine, and that request's own expected worker name. Two readers that each
+passed over the other's failures would each see an orphan where the other saw a
+pair. Every saved request parses, states this version, is named by its own
 question and names a checkout a placement before it described; every outcome
-stands after the request it answers, carries that request's own fingerprint and
-reads back as a Push of exactly what was asked. A trailing request with no
-outcome is valid partial history — it is the state this protocol exists for — and
-an orphan outcome, a request answered twice and a receipt this build cannot read
-are fatal unreadable history.
+stands after the request it answers, describes that request's kind, carries its
+fingerprint and reads back as the result that request's protocol produces. A
+trailing request with no outcome is valid partial history — it is the state this
+protocol exists for — and an orphan outcome, a request answered twice and a
+receipt this build cannot read are fatal unreadable history.
+
+#### The pull request that rests on what this entry published
+
+`<PullRequest>` is a statement about a branch a Git host already holds, and this
+entry never makes one exist. So before anything is written down it has to show
+that *this entry* published the head the pull request names. An ordinary run
+proves that by scanning its own journal; an entry cannot, because its segment is
+reopened hours later beside other entries and what has to be proven is narrower:
+this entry asked for that publication, its own request was answered by its own
+acknowledged receipt, and this execution has actually reached it. A bare
+receipt, a local `<Git.Commit>` result, a handler's synthetic `Git.push` answer
+and another entry's history are each not that, and none of them appears in the
+memory the admission builds.
+
+The last relevant publication decides, because a branch holds whatever was
+published to it last — so an earlier publication of that branch at another
+commit does not keep authorizing work the entry has since published past. The
+admitted snapshot establishes the order those publications were acknowledged in,
+and each becomes usable only when execution reaches it: a publication standing
+after the position execution is at is not evidence, because a previous session
+getting further than this one does not authorize this one. Replay is free to
+revisit two concurrent children in either order, so arrival order is not that
+order and ordering by it would let a replayed history authorize a superseded
+head.
+
+Everything after that follows publication's shape. The invocation is
+authenticated, then the body is rendered completely — before the Repository is
+observed and before this upsert has a position of its own, so a child durable
+operation in that content finishes at its own earlier position and a body that
+failed to render stops everything this component owns. Then the checkout is
+routed, the origin is held to the Repository's fingerprint, the managed slot is
+taken, the branch and head are read inside the entry's own short native turn,
+and the complete request is written down before the service is contacted. A
+pending request is reconciled from its saved head, base, number, title, body and
+draft: it rereads no HEAD and needs no checkout export merely to ask the
+service, because current checkout state does not re-authorize external work this
+entry already admitted.
+
+A fresh call composes both ordinary middleware chains through invocation-local
+defaults, so what a document or a plugin installed still answers, transforms,
+refuses and delegates. What a handler may decide is what to ask for; what it may
+not decide is what was answered. An answer that never delegated has answered the
+document and nothing more — no request, no receipt, and none of the stability a
+retained result has — and it may bind only the closed result contract. Once the
+owned terminal has run, its outcome is held privately and that outcome binds or
+fails: a rewritten return cannot bind a different pull request, and a delegated
+failure a handler caught and answered past stays a failure. An outer throw after
+a success is ordinary surrounding failure; a persistence failure stays fatal.
+
+#### The evidence reads an entry retains, and the ceiling they stay under
+
+The three evidence reads are the cheapest retained operations here and the least
+like the others: a read names a URL, so it needs no Repository, no working
+directory, no managed root, no Git session and no native hold. Their identities
+are therefore declared and installed for an entry that holds no checkout at all.
+
+Retention begins at the admitted-read seam and nowhere earlier. The adapter
+decides on *every* execution whether it recognizes the request, whether this
+deployment's allowed list authorizes the target and whether the URL names a pull
+request it can read — including the execution that reopens an entry whose read is
+already saved. Removing the repository from that list therefore refuses to
+continue, which is the accepted contract: the saved record stays in history and
+is simply not reachable while the ceiling says so. Wrapping the public dispatch
+in a durable envelope instead would serialize those refusals as read outcomes,
+recording questions the run was never permitted to ask.
+
+What is retained is the normalized answer produced inside that seam. A URL or
+provider transformation *before* admission changed which read was admitted, so
+the record says so. One *after* delegation is ordinary composition: it runs again
+on continuation and may bind a different array from the same saved snapshot, and
+nothing presents those transformations as saved. A handler that never reaches
+the seam retains nothing and runs again.
+
+Who is asking travels nowhere public. Each authored read installs a bridge in a
+scope of its own, holding the owner and the invocation it authenticated and
+permitting exactly one admitted handoff. Installing it there is what makes
+nesting and concurrency work without coordination: a nested read's bridge is
+deeper and wins for the invocation inside it, two concurrent reads finishing in
+either order each keep their own question, and a finished read has no bridge to
+borrow. An entry-wide pointer, a value on `next` or a Context identity would
+each have to be correct about an ordering nothing guarantees. The read's own
+durable name deliberately omits the owner, so a fork can inherit it; ownership
+is therefore checked explicitly from the record, including on a failed read's
+description, which is the only thing a refusal retains.
 
 ### What one entry retains about the issue it filed
 
@@ -8600,6 +8690,8 @@ Status is measured against main.
 | `<Repository>` / `<Worktree>` composition under a workflow run | names a Git repository and its linked checkouts inside the run-owned Workspace, installs each as contextual working directory, and retains creation identity beside the retained Git bytes [Interface and evidence](specs/workflow-workspace-spec.md#6-repository-and-worktree). | built on the #293 stack, Deno provider only |
 | `<Dir path>` | Creates or adopts its target before content, scopes cwd without changing Repository selection, and restores cwd without deleting created directories. [Invariant](#the-document-filesystem-boundary); [Interface and evidence](specs/executable-mdx-spec.md#6132-entering-a-directory-dir). | Directory-creation contract added by #643; host and workflow Files providers. |
 | transactional Git effects (`Git.Switch` / `Git.Add` / `Git.Commit`) under a workflow run | publish local Git mutations with their journal result; the enclosing Repository and the contextual working directory select which retained checkout one runs in, and neither observation admits anything — the observed record is compared with the retained row and the directory with the checkouts that row holds, so a failure of admission, of retained state or of an unrecognized native condition fails the run instead of publishing a result [Invariant](#workspace-local-transactions); [Interface and evidence](specs/workflow-workspace-spec.md#7-git-operations). | built on the #294 stack, Deno provider only |
+| REPL entry retained pull request | one executing REPL entry's own `<PullRequest>`, retained as a complete `repl_repository_pull_request_request` record written before the service is contacted and the shared `git_host_effect` outcome that answers it. The only publication grant is a completely validated saved Push request paired with its own acknowledged receipt and reached by this execution; the last relevant publication to that destination decides, in the order the journal acknowledged them rather than the order replay revisits them, and a publication standing after the current position grants nothing. A bare receipt, a local Commit or File result, a synthetic `Git.push` answer, a failed Push and another entry's history each grant nothing. The request keeps the question asked, the reading the live dispatch received and what routing resolved — pinning head branch, head commit and base branch — with no selection identifier, credential, endpoint, provider handle or checkout snapshot. A pending request is reconciled from its saved inputs without rereading HEAD or needing a checkout; a completed one restores its acknowledged worker result before any native, provider, configuration or credential path. Both ordinary middleware chains compose on a fresh call through invocation-local defaults: a wholly synthetic answer binds only a valid closed result and retains nothing, one occurrence permits one owned delegation, and after delegation the actual outcome controls binding or failure [Reference](#the-pull-request-that-rests-on-what-this-entry-published). | built on the #181 stack |
+| REPL entry retained evidence reads | one executing REPL entry's own `<PullRequest.Reviews>`, `.Comments` and `.Checks`, retained under the existing `pull_request_read` description and name. They need no Repository, working directory, managed root, Git session or native hold, so they are declared and installed for an entry holding no checkout. Provider matching, the configured allowed list and target validation run on every execution, including one that reopens a saved read — so removing the repository from that list refuses continuation while leaving the record in history — and none of those refusals is retained. What is retained is the normalized answer produced inside the admitted-read seam: a transformation before admission changes the recorded question, one after delegation reruns live over the saved snapshot, and an answer that never reaches the seam is unretained. Each read installs its own scoped bridge permitting one admitted handoff, so nested and concurrent reads cannot exchange identities; the name omits the owner for fork compatibility, and ownership is checked explicitly from the record including a failed read's description [Reference](#the-evidence-reads-an-entry-retains-and-the-ceiling-they-stay-under). | built on the #181 stack |
 | `Git.Push` under a workflow run | Publishes or adopts the selected named branch through authenticated non-force reconciliation. [Authored contract](specs/workflow-workspace-spec.md#74-push) and [effect mechanics](#replay-and-effect-transactions). | built on the #370 stack, Deno provider only |
 | `<PullRequest>` under a workflow run | Upserts the exact published branch and returns stable evidence only after this run proves matching Push history. [Props, results and refusals](specs/workflow-workspace-spec.md#75-pull-request); [positive-integer number and reconciliation](#issue-effects). | built on the #295 stack, Deno provider only |
 | repository composition vocabulary | Declares sixteen ordinary shadowable defaults for every command that carries it, without installing an operational provider; an execution that retains one of the six external operations declares that name again with its own policy over the default. [Names and profile ownership](#ordinary-repository-vocabulary). | built on the #643 stack |

@@ -34,7 +34,7 @@
  * read was admitted. A transformation *after* delegation is outside the
  * snapshot: it is ordinary composition, it runs again on continuation, and it
  * may produce a different array from the same saved provider answer. Nothing
- * here wraps that composition in a second envelope and claims it was saved. A
+ * here wraps that composition in a second envelope and presents it as saved. A
  * handler that answers without ever reaching the seam has retained nothing at
  * all.
  *
