@@ -116,9 +116,22 @@ describe("Tier L — the reading one entry leaves behind", () => {
           'required: ["note"], additionalProperties: false }} as="answer">Answer this.</Elicit>\n',
       ),
     );
-    // Several turns: the phases a consumer is told travel through its own
-    // queue, and the question itself is published from inside the element.
-    for (let turn = 0; turn < 5; turn += 1) {
+    // Waited for rather than sampled after a fixed number of turns. The phases
+    // a consumer is told travel through its own queue and the question is
+    // published from inside the element, so how many turns that takes depends
+    // on what else the runner has queued — and a fixed count samples whichever
+    // phase had arrived by then, which is `Elicit:enter:` whenever another
+    // suite is running beside this one.
+    //
+    // The signal is deliberately narrower than the claim below: this waits only
+    // for *some* element to report that it is waiting on something, and what it
+    // reports — which element, which phase, what it waits on, and that it is
+    // the only one — is then asserted whole. A wait for the expected value
+    // would assert nothing.
+    for (let turn = 0; turn < 1000; turn += 1) {
+      if (session.lifecycle.occurrences.some((one) => one.waiting.length > 0)) {
+        break;
+      }
       yield* sleep(0);
     }
 
