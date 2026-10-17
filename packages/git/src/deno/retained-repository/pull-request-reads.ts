@@ -84,7 +84,9 @@ import {
   REVIEWS_ELEMENT,
 } from "../../composition/components/PullRequestReads.ts";
 import { PullRequestReadError } from "../../composition/errors.ts";
+import { PullRequestAPI } from "../../composition/pull-request-api.ts";
 import { PullRequestOperations } from "../../composition/pull-request-operations.ts";
+import type { PullRequestReadInvocation } from "../../composition/pull-request-operations.ts";
 import { PullRequestReadExecution } from "../../composition/pull-request-read-execution.ts";
 import type {
   AdmittedPullRequestRead,
@@ -109,6 +111,7 @@ import {
   describePullRequestRead,
   PULL_REQUEST_READ,
   pullRequestReadElement,
+  pullRequestReadName,
   retainedPullRequestRead,
 } from "../composition/pull-request-operations.ts";
 
@@ -342,8 +345,10 @@ export function replPullRequestReadAdmission(owner: string): JournalAdmission {
         continue;
       }
       const request = admitReplPullRequestReadRequest(owner, event.description["input"]);
-      const described = yield* describePullRequestRead(request);
-      if (event.description.name !== described.name) {
+      // The name alone, not the whole description: this runs over a retained
+      // history before any element is expanding, and the source position a
+      // description also carries is only available there.
+      if (event.description.name !== pullRequestReadName(request).name) {
         throw replPullRequestReadNameRefusal();
       }
       if (event.result.status !== "ok") {
@@ -355,4 +360,34 @@ export function replPullRequestReadAdmission(owner: string): JournalAdmission {
       admitReplPullRequestReadResult(request, event.result.value);
     }
   };
+}
+
+/**
+ * Forward this entry's profile-level reads to the transport surface.
+ *
+ * The profile surface's own default refuses, which is what distinguishes a host
+ * that installed no pull-request lifecycle from one whose pull request is
+ * merely unreachable. An entry has installed one, so its reads have to reach
+ * the adapter beneath — and they reach it straight through, because the
+ * adapter is what decides when a read is admitted and retention begins after
+ * that. Wrapping the dispatch here would put the ceiling and the URL refusals
+ * inside a durable effect.
+ *
+ * Upsert is deliberately not forwarded. Its retention is identity-bearing and
+ * belongs to the authored component's own invocation-local defaults, so a
+ * standalone `PullRequestOperations.upsert(...)` keeps the absent-provider
+ * refusal rather than acquiring this entry's lifecycle.
+ */
+export function useReplPullRequestReadOperations(): Operation<void> {
+  return PullRequestOperations.around(
+    {
+      *read([invocation]: [PullRequestReadInvocation]): Operation<PullRequestReadResult> {
+        return yield* PullRequestAPI.operations.read(invocation.url, {
+          kind: invocation.kind,
+          ...(invocation.provider === undefined ? {} : { provider: invocation.provider }),
+        });
+      },
+    },
+    { at: "min" },
+  );
 }

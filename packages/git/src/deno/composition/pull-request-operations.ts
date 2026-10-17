@@ -84,25 +84,42 @@ const ELEMENT: Readonly<Record<PullRequestReadKind, string>> = Object.freeze({
  * entry supplies its owner as the run and its authenticated invocation as the
  * expansion; nothing else about it differs.
  */
-export function* describePullRequestRead(
-  request: PullRequestReadRequest,
-): Operation<EffectDescription> {
-  const expansion = yield* getExpansion();
-  // The run is in the retained request, and deliberately not in this
-  // fingerprint. A fork is a different run reaching the same position with the
-  // same question, and a name that carried the run would make every inherited
-  // read a different effect — which is to say, unforkable. What the name has to
-  // separate is different *questions*, and the four members below are what a
-  // question is made of.
+/**
+ * The name one read is published under, and the configuration it covers.
+ *
+ * Separate from the description below because a name has to be computable
+ * where a description is not. An entry's admission recomputes it over a
+ * retained history, before any element is expanding, and the source position a
+ * description also carries is diagnostic and only available there.
+ *
+ * The run is in the retained request, and deliberately not in this
+ * fingerprint. A fork is a different run reaching the same position with the
+ * same question, and a name that carried the run would make every inherited
+ * read a different effect — which is to say, unforkable. What the name has to
+ * separate is different *questions*, and the four members below are what a
+ * question is made of.
+ */
+export function pullRequestReadName(request: PullRequestReadRequest): {
+  readonly name: string;
+  readonly configuration: string;
+} {
   const configuration = gitOperationFingerprint([
     request.operation,
     request.url,
     request.provider,
     request.kind,
   ]);
+  return { name: `${request.expansionId}:${configuration}`, configuration };
+}
+
+export function* describePullRequestRead(
+  request: PullRequestReadRequest,
+): Operation<EffectDescription> {
+  const expansion = yield* getExpansion();
+  const { name, configuration } = pullRequestReadName(request);
   return {
     type: PULL_REQUEST_READ,
-    name: `${request.expansionId}:${configuration}`,
+    name,
     input: pullRequestReadRequestJson(request),
     configuration,
     ...sourceDescription(expansion.position),
