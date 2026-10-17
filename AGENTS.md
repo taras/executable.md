@@ -489,6 +489,8 @@ the corpus or enabling in-shard concurrency is not an answer to a miss.
 
 ## Writing Guide
 
+In Codex, always use ASCII diagrams in fenced text blocks; Mermaid diagrams are not readable in the user's client.
+
 1. Write for the reader's understanding, not as a transcript of the reasoning
    that produced the design. Preserve conclusions, contracts, and consequential
    constraints. Include rationale only when a surprising decision would
@@ -511,6 +513,12 @@ the corpus or enabling in-shard concurrency is not an answer to a miss.
 Avoid words in the canonical [banned-words list](scripts/banned-words.js) when
 writing architecture prose or JSDoc. Choose wording for the specific meaning;
 keep literal code references intact. `deno task lint` enforces the list.
+
+### Writing for agents
+
+Before writing or changing agent-facing guides or instructions, read
+[the writing-for-agents rules](.agents/agent-writing.md). Use its approved rules
+and common guide format for initial prompts and on-demand reference chapters.
 
 ### Component descriptions
 

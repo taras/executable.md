@@ -146,6 +146,8 @@ concept to explain itself.
 ## Communication rules
 
 1. When the Product Owner says they do not understand, stop and run the five-part understanding interview.
+2. Before proposing a new abstraction, show the concrete problem, why existing APIs cannot solve it, and what decision requires the Product Owner.
+3. Explain behavior with familiar words and a concrete example before introducing technical terms; use only terms needed for the current decision.
 
 When the Product Owner says they do not understand, stop the current design
 discussion and run this interview before continuing:

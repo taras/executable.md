@@ -9,6 +9,9 @@ shape the product's output.
 Component descriptions also follow the specialized additions in
 [component-descriptions.md](component-descriptions.md).
 
+Guides and instructions written for agents also follow
+[agent-writing.md](agent-writing.md).
+
 ## Approved rules
 
 1. Design public XMD interfaces so people understand what to write, what will happen, what it affects and what they receive.

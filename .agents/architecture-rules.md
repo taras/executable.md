@@ -28,6 +28,7 @@ the system itself; this file governs how new architecture is designed.
 19. Renderer output is copied out of the engine before returning, and a refused frame is redrawn on a renderer rebuilt for that frame's dimensions without changing selection, focus, actions or the frame itself.
 20. A contextual adapter owns terminal modes, listeners and readers, registers their release before taking them, and restores them exactly once on every exit.
 21. A narrow surface displays the one route selected; every other surface is absent from the frame, its map and its targets rather than hidden within them.
+22. Never mutate `next` or attach metadata to it; keep the continuation callable unchanged.
 23. Use methods on an owned handle for operations tied to that instance.
 24. Use a Context to select a scoped service; capture it for any lifetime that requires a fixed provider.
 25. Use middleware when per-call interception or transformation is an intended extension point.
@@ -37,6 +38,10 @@ service keeps provider selection fixed for its consumer's lifetime; its mutable
 configuration still follows that service's own update contract. A Context
 selects a trusted service, while authorization, durable identity,
 reconciliation and canonical outcomes stay with their owners.
+
+The [API selection record](../.reviewer/api-selection-pattern-proposal.md)
+contains examples and deferred review candidates. It assigns no refactor of
+existing APIs.
 
 The Architect applies these rules without another approval when they settle a
 design. A new concept, ambiguous fit, conflict or proposed exception returns to
