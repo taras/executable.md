@@ -88,7 +88,7 @@ import {
   type ReplPlacementRefusalData,
   type ReplPlacementRequest,
 } from "../../retained-repository/placement-records.ts";
-import { admitLocator, locatorFingerprint } from "../../composition/locator.ts";
+import { admitLocator, locatorFingerprint } from "../composition/locator.ts";
 import { GitRefusal, type GitSession } from "../composition/git.ts";
 import type { RepositoryHost } from "../composition/host.ts";
 import {

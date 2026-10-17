@@ -3,17 +3,24 @@
  *
  * A locator is ordinary document input: it arrives from a prop or an
  * expression, and nothing about it has been checked. Two questions are asked
- * here and they are different questions. **Admission** decides whether this
- * provider will hand the string to Git at all. **Fingerprinting** produces the
- * stable name the journal, the record and every compatibility comparison use,
- * so a changed locator diverges without the bytes of either one being retained
- * outside the single column that holds them.
+ * here and they are different questions. **Admission**, which is this module,
+ * decides whether this provider will hand the string to Git at all.
+ * **Fingerprinting** produces the stable name the journal, the record and every
+ * compatibility comparison use, so a changed locator diverges without the bytes
+ * of either one being retained outside the single column that holds them.
  *
- * Both questions are pure string arithmetic over one closed grammar, which is
- * why they live beside the records rather than inside an adapter: the native
- * providers admit a locator a document wrote, and the retained Push codec holds
- * a saved origin to the same grammar and the same fingerprint without importing
- * a provider to do it.
+ * Admission is pure string arithmetic over one closed grammar, which is why it
+ * lives beside the records rather than inside an adapter: the native providers
+ * admit a locator a document wrote, and the retained Push codec holds a saved
+ * origin to the same grammar without importing a provider to do it.
+ *
+ * Fingerprinting is next door, in `../deno/composition/locator.ts`, and not
+ * because it is a provider's question. It is the digest: this surface names no
+ * runtime, and the only digest a surface like that can reach is Web Crypto's,
+ * which is asynchronous — while the retained paths that recompute a fingerprint
+ * to check a path or a locator answer without performing anything at all. One
+ * implementation of one digest, in the half that has a synchronous one, and the
+ * codec here decides every question that does not need it.
  *
  * Admission is a closed allowlist rather than a search for bad shapes. Git's
  * locator grammar reaches well past URLs — `ext::sh -c …` runs a command, a
@@ -23,8 +30,6 @@
  * locator that carries one is a secret the caller put in a durable input, and
  * quietly editing it would retain a run nobody asked for.
  */
-
-import { createHash } from "node:crypto";
 
 /** Schemes this provider hands to Git. Everything else is refused. */
 const SCHEMES = new Set(["https", "http", "ssh", "git", "file"]);
@@ -95,9 +100,4 @@ export function admitLocator(locator: string): string | undefined {
     return locator;
   }
   return undefined;
-}
-
-/** The stable name an admitted locator is known by everywhere but its own column. */
-export function locatorFingerprint(locator: string): string {
-  return createHash("sha256").update(locator, "utf8").digest("hex");
 }

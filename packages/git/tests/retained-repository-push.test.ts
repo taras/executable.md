@@ -148,6 +148,29 @@ function subcommands(counted: Counters): string[] {
   return counted.commands.map((args) => args.find((arg) => !arg.startsWith("-")) ?? "");
 }
 
+/**
+ * The author and committer this suite's host states.
+ *
+ * These rows commit before they publish, and `<Git.Commit>` borrows the
+ * *invoking person's* identity: the production reader asks native Git for it in
+ * the environment the command was started in. A developer's machine
+ * auto-detects one from the operating-system user; a continuous-integration
+ * runner whose hostname carries no domain detects nothing, `git var` fails, and
+ * every row here would report the ordinary missing-identity refusal instead of
+ * reaching the publication it is about. Stating it is also what keeps the
+ * commits these rows make from carrying whoever happened to run them.
+ */
+const STATED_IDENTITY: Record<string, string> = {
+  GIT_AUTHOR_IDENT: "Entry Author <author@example.test> 1700000000 +0000",
+  GIT_COMMITTER_IDENT: "Entry Committer <committer@example.test> 1700000000 +0000",
+};
+
+/** That identity, as the host reads one. */
+// deno-lint-ignore require-yield
+function* statedIdentity(variable: string): Operation<string | undefined> {
+  return STATED_IDENTITY[variable];
+}
+
 /** The host filesystem, as the production one. */
 function hostFiles(): FilesHandler {
   const host = hostFilesHandler();
@@ -289,6 +312,7 @@ function run(
     // entry's own task, for the owner the CLI derived.
     const installation = yield* replRepositoryInstallation(options.owner ?? OWNER, {
       host: countingHost(counted, options),
+      identity: statedIdentity,
       ...(managed === undefined ? {} : { root: managed }),
     });
     let refusal: string | undefined;
@@ -1020,6 +1044,41 @@ describe("one entry's publication", () => {
     // Admission runs before replay policy and before anything native.
     expect(refused.commands).toEqual([]);
     expect(refused.sessions).toEqual([]);
+
+    // And the same history with an origin this host *would* hand to Git, which
+    // is not the one the Repository identity was fingerprinted from: the codec
+    // admits the grammar and the provider asks the digest, because reconciling a
+    // restored request uses the origin it recorded rather than today's.
+    const elsewhere = [...prefix].map((event) => {
+      if (event.type !== "yield" || event.description.type !== REPL_REPOSITORY_PUSH_REQUEST) {
+        return event;
+      }
+      if (event.result.status !== "ok") {
+        return event;
+      }
+      const payload = event.result.value as Record<string, Json>;
+      const resolved = payload["resolved"] as Record<string, Json>;
+      return {
+        ...event,
+        result: {
+          status: "ok" as const,
+          value: { ...payload, resolved: { ...resolved, origin: join(fixture.root, "other.git") } },
+        },
+      };
+    });
+    const foreign = counters();
+    const named = yield* run(
+      fixture,
+      publishing(fixture, "review/unreadable", "notes.md", QUESTION),
+      new InMemoryStream(elsewhere),
+      foreign,
+      { answer: { choice: "continue" } },
+    );
+    expect(named.refusal).not.toBe(undefined);
+    // Refused before the request is reconciled: nothing was pushed and the
+    // origin it named was never contacted.
+    expect(subcommands(foreign)).not.toContain("push");
+    expect(foreign.sessions).toEqual([]);
 
     // And an outcome standing where no request asked for one.
     const orphaned = new InMemoryStream(

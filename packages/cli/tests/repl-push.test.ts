@@ -78,6 +78,28 @@ function useFixture(): Operation<Fixture> {
   });
 }
 
+/**
+ * The author and committer this suite's host states.
+ *
+ * `<Git.Commit>` borrows the *invoking person's* identity, which the production
+ * reader asks native Git for in the environment the command was started in. On
+ * a developer's machine Git auto-detects one from the operating-system user; a
+ * continuous-integration runner whose hostname carries no domain can detect
+ * nothing, `git var` fails, and the commit in these entries would report its
+ * ordinary missing-identity refusal — failing the row for a reason that is
+ * about the runner rather than about the assembly these rows are measuring.
+ */
+const STATED_IDENTITY: Record<string, string> = {
+  GIT_AUTHOR_IDENT: "Entry Author <author@example.test> 1700000000 +0000",
+  GIT_COMMITTER_IDENT: "Entry Committer <committer@example.test> 1700000000 +0000",
+};
+
+/** That identity, as the host reads one. */
+// deno-lint-ignore require-yield
+function* statedIdentity(variable: string): Operation<string | undefined> {
+  return STATED_IDENTITY[variable];
+}
+
 /** The host half a runtime entrypoint owns, installed here by the suite. */
 function useNodeReplHost(name: string): Operation<void> {
   return ReplHost.around(
@@ -199,6 +221,7 @@ function submit(
                 seen.owners.push(owner);
                 return replRepositoryInstallation(owner, {
                   host: denoRepositoryHost(),
+                  identity: statedIdentity,
                   ...(managed === undefined ? {} : { root: managed }),
                 });
               },
@@ -237,6 +260,7 @@ function reopen(
           seen.owners.push(owner);
           return replRepositoryInstallation(owner, {
             host: denoRepositoryHost(),
+            identity: statedIdentity,
             ...(managed === undefined ? {} : { root: managed }),
           });
         },

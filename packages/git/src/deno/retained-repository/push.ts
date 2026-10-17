@@ -99,7 +99,7 @@ import {
   type GitPushInputs,
   type GitPushOutcome,
 } from "../../composition/git-push-records.ts";
-import { locatorFingerprint } from "../../composition/locator.ts";
+import { locatorFingerprint } from "../composition/locator.ts";
 import { sameRepositoryIdentity } from "../../composition/selection.ts";
 import type { RepositorySelection } from "../../composition/selection.ts";
 import { reconcileOwnedGitHostEffect } from "../../git-host/effect.ts";
@@ -547,11 +547,18 @@ function* restored(
 /**
  * The record this value is for this invocation, or the fatal failure it is not.
  *
- * The same four questions on both paths, which is the point: a resolved request
+ * The same five questions on both paths, which is the point: a resolved request
  * is held to them before it is published, and a restored one before it is
  * reconciled. The payload parses, it is this entry's and this invocation's, it
- * asks the question this position is asking, and every place it names is one
- * this entry's own registry holds.
+ * asks the question this position is asking, every place it names is one this
+ * entry's own registry holds, and the origin it says it asked for is the one
+ * the Repository identity in it was fingerprinted from.
+ *
+ * That last question is asked here rather than in the codec because the digest
+ * is this half of the package's: a surface naming no runtime has no synchronous
+ * one, and a restored request is reconciled against the origin it recorded
+ * rather than against today's — so an edited one would publish this branch to a
+ * repository nothing authenticated, and nothing later would notice.
  */
 function readback(
   entry: ReplPushEntry,
@@ -571,6 +578,12 @@ function readback(
     throw new GitOperationProtocolError(PUSH);
   }
   if (!replPushPlacesHeld(record, placements(entry))) {
+    throw new GitOperationProtocolError(PUSH);
+  }
+  if (
+    locatorFingerprint(record.resolved.origin) !==
+    record.resolved.inputs.repository.locatorFingerprint
+  ) {
     throw new GitOperationProtocolError(PUSH);
   }
   return record;

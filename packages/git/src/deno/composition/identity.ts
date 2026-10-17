@@ -12,7 +12,7 @@ import { RepositoryStaleStateError } from "../../composition/errors.ts";
 import type { RepositoryRecord, WorktreeRecord } from "../../composition/records.ts";
 import type { GitCheckoutIdentity } from "../../composition/git-records.ts";
 import type { StoredRepository } from "../repositories.ts";
-import { admitLocator, locatorFingerprint } from "../../composition/locator.ts";
+import { admitLocator, locatorFingerprint } from "./locator.ts";
 import { repositoryCheckoutPath, worktreeCheckoutPath } from "./checkout-paths.ts";
 
 /**

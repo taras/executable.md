@@ -31,7 +31,7 @@ import {
   refspecFor,
   type GitPushInputs,
 } from "../src/composition/git-push-records.ts";
-import { locatorFingerprint } from "../src/composition/locator.ts";
+import { locatorFingerprint } from "../src/deno/composition/locator.ts";
 import type { RepositoryIdentity } from "../src/composition/selection.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect-type.ts";
 import {
@@ -372,9 +372,12 @@ describe("Tier RP — a REPL entry's saved publication request", () => {
     expect(parseReplPushRequestRecord(hostile)).toBe(undefined);
   });
 
-  it("RP4: refuses an origin this host would not hand to Git, or that names elsewhere", function* () {
+  it("RP4: refuses an origin this host would not hand to Git", function* () {
     // Each of these is a locator the closed grammar refuses, so a saved request
-    // carrying one is not one this host can act on.
+    // carrying one is not one this host can act on. Whether an *admitted* origin
+    // is the one the identity was fingerprinted from needs the provider's own
+    // digest, so the provider asks it of every record it reads back: P8 in
+    // packages/git/tests/retained-repository-push.test.ts is that row.
     for (const origin of [
       "ext::sh -c 'id'",
       "-upload-pack=payload",
@@ -397,12 +400,6 @@ describe("Tier RP — a REPL entry's saved publication request", () => {
         ),
       ).toBe(undefined);
     }
-
-    // An admitted origin that is not the one the identity was fingerprinted
-    // from would publish this branch to a repository nothing authenticated.
-    expect(
-      parseReplPushRequestRecord(request({ resolved: { origin: "/srv/remotes/other.git" } })),
-    ).toBe(undefined);
   });
 
   it("RP5: refuses inputs that do not belong to the Repository the dispatch received", function* () {

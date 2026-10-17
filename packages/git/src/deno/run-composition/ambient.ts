@@ -41,7 +41,7 @@ import { realpath } from "node:fs/promises";
 import { basename } from "node:path";
 import { until, type Operation } from "effection";
 import type { GitObjectFormat } from "../../composition/records.ts";
-import { admitLocator, locatorFingerprint } from "../../composition/locator.ts";
+import { admitLocator, locatorFingerprint } from "../composition/locator.ts";
 import { currentBranch, readObjectFormat, resolveCommit } from "../composition/git.ts";
 import type { GitSession } from "../composition/git.ts";
 

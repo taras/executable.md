@@ -46,7 +46,7 @@ import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { canonicalJson } from "@executablemd/workflow";
 import { members, text } from "../composition/parse.ts";
-import { admitLocator, locatorFingerprint } from "../composition/locator.ts";
+import { admitLocator } from "../composition/locator.ts";
 import {
   gitPushInputsJson,
   parseGitPushInputs,
@@ -254,11 +254,13 @@ function parsePlace(value: unknown): ReplPushPlace | undefined {
  * What routing resolved, held to the reading it resolved from.
  *
  * The origin is admitted through the same closed grammar a document's locator
- * passes, and its digest has to be the fingerprint the Repository identity
- * already carries: a saved origin that names another repository would publish
- * this branch somewhere this entry never authenticated. `remote` stays the
- * literal label `origin` and the destination stays the branch's own ref, both
- * of which the shared Push parser decides.
+ * passes, so a saved origin this host would not hand to Git is refused here.
+ * Whether an admitted one is the origin the Repository identity was
+ * fingerprinted from is the other half of that question, and the digest it
+ * needs belongs to the runtime-named half of this package: the provider asks it
+ * of every record it reads back, before the record may be reconciled. `remote`
+ * stays the literal label `origin` and the destination stays the branch's own
+ * ref, both of which the shared Push parser decides.
  */
 function parseResolution(value: unknown, received: ReplPushPlace): ReplPushResolution | undefined {
   const read = members(value, RESOLUTION_MEMBERS);
@@ -278,9 +280,6 @@ function parseResolution(value: unknown, received: ReplPushPlace): ReplPushResol
     return undefined;
   }
   if (admitLocator(origin) !== origin) {
-    return undefined;
-  }
-  if (locatorFingerprint(origin) !== inputs.repository.locatorFingerprint) {
     return undefined;
   }
   if (!sameRepositoryIdentity(inputs.repository, received.repository)) {

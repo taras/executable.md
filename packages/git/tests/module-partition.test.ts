@@ -150,6 +150,7 @@ const DENO_ADAPTER: readonly string[] = [
   "src/deno/composition/github-host.ts",
   "src/deno/composition/host.ts",
   "src/deno/composition/identity.ts",
+  "src/deno/composition/locator.ts",
   "src/deno/composition/materialize.ts",
   "src/deno/composition/object-source.ts",
   "src/deno/composition/operations.ts",

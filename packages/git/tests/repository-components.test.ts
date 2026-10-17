@@ -46,7 +46,7 @@ import {
   runWorkflowDocument,
 } from "./support/composition.ts";
 import { RepositoryCompositionError, WorktreeCompositionError } from "../src/composition/errors.ts";
-import { admitLocator, locatorFingerprint } from "../src/composition/locator.ts";
+import { admitLocator, locatorFingerprint } from "../src/deno/composition/locator.ts";
 
 function isProviderError(value: unknown): value is RepositoryCompositionProviderError {
   return value instanceof RepositoryCompositionProviderError;
