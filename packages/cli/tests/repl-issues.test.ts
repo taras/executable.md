@@ -62,11 +62,8 @@ import { assembleReplProfile } from "../src/repl-profile.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
 import { resolveAgentStack } from "../src/agent-stack.ts";
 import { NO_PLUGINS } from "../src/plugin-host.ts";
-import {
-  denoReplIssues,
-  selectReplEntryHost,
-  useDenoReplRepositories,
-} from "../src/deno-repositories.ts";
+import { selectReplEntryHost } from "../src/deno-repositories.ts";
+import type { HelperAssembly } from "../../git/src/deno/composition/credential-helper.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
@@ -75,6 +72,29 @@ import type { ReplExecution, RetainedStream } from "../src/repl/journal.ts";
 
 /** The tracker every row files in, as a document writes it. */
 const TRACKER = "https://github.com/octo/project";
+
+/** The credential-helper assembly these rows' host selects. Never invoked. */
+const SUITE_HELPER: HelperAssembly = Object.freeze({
+  runtime: "source",
+  platform: "unix",
+  execPath: "/nonexistent/xmd",
+});
+
+/**
+ * The repository recording an entry's execution initializes.
+ *
+ * Registered on the same seam the per-entry factory registers it on, because
+ * what these rows are about is an entry's issue work beside its checkouts
+ * rather than which host assembled either.
+ */
+function useReplRepositories(root: string): Operation<void> {
+  return Execution.around({
+    *init(_args, next): Operation<void> {
+      yield* useReplRepositoryRecording({ helper: SUITE_HELPER, root });
+      yield* next();
+    },
+  });
+}
 
 /**
  * What a command contributes to an entry's execution.
@@ -175,7 +195,8 @@ function entryHost(
   seen: Counted,
   options: GitHubIssuesOptions = {},
 ): ReplEntryInstallation {
-  return (owner: string) => {
+  // deno-lint-ignore require-yield
+  return function* (owner: string): Operation<ExecutionInstallation> {
     seen.owners.push(owner);
     return replIssueInstallation(owner, {
       access: gitHubSource(gitHubAccessFor(fixture.server.url, { credential: "valid" })),
@@ -242,10 +263,7 @@ function submit(
     yield* useHostFiles();
     yield* useWorkingDirectory(options.cwd ?? fixture.checkout);
     if (options.repositories !== undefined) {
-      yield* useDenoReplRepositories(
-        { runtime: "source", platform: "unix", execPath: "/nonexistent/xmd" },
-        options.repositories,
-      );
+      yield* useReplRepositories(options.repositories);
     }
     const installations = [...(yield* replInstallations()), ...(options.installations ?? [])];
     const session = opened(
@@ -275,10 +293,7 @@ function reopen(fixture: Fixture, run: ReplExecution, options: RunOptions = {}):
     yield* useHostFiles();
     yield* useWorkingDirectory(options.cwd ?? fixture.checkout);
     if (options.repositories !== undefined) {
-      yield* useDenoReplRepositories(
-        { runtime: "source", platform: "unix", execPath: "/nonexistent/xmd" },
-        options.repositories,
-      );
+      yield* useReplRepositories(options.repositories);
     }
     const installations = [...(yield* replInstallations()), ...(options.installations ?? [])];
     const session = opened(
@@ -1450,10 +1465,14 @@ describe("how a REPL entry gets its issues", () => {
       if (!stack.ok) {
         throw stack.error;
       }
-      yield* selectReplEntryHost();
+      yield* selectReplEntryHost(SUITE_HELPER, planWriterRoot);
       return yield* assembleReplProfile(stack.value, NO_PLUGINS, { planWriterRoot });
     });
-    expect(selected.entryInstallation).toBe(denoReplIssues);
+    // Behavioural rather than by identity: the production selector builds the
+    // factory from this host's own configuration, so what the profile carries
+    // is a closure over it rather than a module-level value to compare against.
+    const factory = selected.entryInstallation;
+    expect(typeof factory).toBe("function");
 
     // And without it: the same assembly, in a scope nothing selected in, leaves
     // the member absent rather than reaching for a default.
@@ -1466,9 +1485,19 @@ describe("how a REPL entry gets its issues", () => {
     });
     expect(absent.entryInstallation).toBe(undefined);
 
-    // Selecting reaches nothing: no issue host exists yet, because an
-    // installation is built per entry and this command has run none.
-    expect(typeof selected.entryInstallation).toBe("function");
+    // Selecting reaches nothing, and what it selected declares both halves of
+    // an entry's external capability: an installation is built per entry, and
+    // this command has run none.
+    const built = yield* scoped(function* (): Operation<ExecutionInstallation> {
+      if (factory === undefined) {
+        throw new Error("the production selector selected no entry capability");
+      }
+      return yield* factory('["executablemd.repl.issue-owner",1,"execution-1","1"]');
+    });
+    expect([...(built.components ?? [])].map((component) => component.name).sort()).toEqual([
+      "Git.Push",
+      "Issue",
+    ]);
   });
 
   it("E2: shadows the inherited default, and refuses where no host selected one", function* (): Operation<void> {

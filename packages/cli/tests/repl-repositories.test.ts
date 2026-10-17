@@ -43,7 +43,7 @@ import {
 import { Execution } from "@executablemd/core/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
-import { useDenoReplRepositories } from "../src/deno-repositories.ts";
+import { useReplRepositoryRecording } from "../../git/src/deno/retained-repository/provider.ts";
 import type { HelperAssembly } from "../../git/src/deno/composition/credential-helper.ts";
 import { gitPlugin } from "../../git/src/plugin.ts";
 import { ReplHost } from "../src/repl/host.ts";
@@ -149,7 +149,14 @@ function* useCountedRecording(counted: Counted, root: string): Operation<void> {
       yield* next();
     },
   });
-  yield* useDenoReplRepositories(SUITE_HELPER, root);
+  // The same seam the per-entry factory registers on, because what this suite
+  // is about is what an entry records rather than which host assembled it.
+  yield* Execution.around({
+    *init(_args, next): Operation<void> {
+      yield* useReplRepositoryRecording({ helper: SUITE_HELPER, root });
+      yield* next();
+    },
+  });
 }
 
 /**

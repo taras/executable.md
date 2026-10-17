@@ -6741,9 +6741,11 @@ managed one it selected. A read is retained because a document binds its text
 and a continuation has to offer the same binding; a glob, a path check and a
 temporary directory bind nothing a continuation must answer again, and are left
 alone. Three local Git operations are retained beside them — `<Git.Add>`,
-`<Git.Switch>` and `<Git.Commit>` — and those counts are separate: the file
-rules below are about the four, and the Git rules further down are about the
-three. A call outside every such checkout is ordinary filesystem behavior,
+`<Git.Switch>` and `<Git.Commit>` — and one publication, `<Git.Push />`, whose
+request and whose external outcome are two records of their own. Those counts
+are separate: the file rules below are about the four, the local Git rules
+further down are about the three, and the publication rules after them are about
+the one. A call outside every such checkout is ordinary filesystem behavior,
 recorded by nothing — a record would place the call in a checkout it is not in —
 so it runs again during a partial continuation. A managed placement is looked
 for first and the most specific one wins; the ambient route answers everything no
@@ -6759,7 +6761,10 @@ display name and the owner checkout. A root-level `<Worktree>` records the
 Repository it belongs to as its own answer, so a continuation learns that
 without asking Git. Nothing else is retained: no origin, no publication
 evidence, no object source, no Git session, no authentication, no lock and no
-opaque selection identifier.
+opaque selection identifier. A publication therefore reauthenticates its
+destination from what the entry can see now — the locator the document in front
+of it wrote, or the ambient checkout's own admitted origin — and holds it to the
+fingerprint the retained identity already carries.
 
 Answering a completed selection calls no selector, clones nothing, adds no
 worktree, reads no sidecar, opens no credential and takes no lock. The parsed
@@ -6997,12 +7002,106 @@ persistence failure with its first cause: no success binding is offered, no
 later sibling runs as though the commit succeeded, and no compensating Close is
 appended.
 
-Publication is not here: `<Git.Push>` and `<PullRequest>` stay declared where
-they already are and refuse through their own unchanged missing-provider
-defaults, and a local result confers no publication evidence. `<Issue>` is the
-one external effect an entry does retain, and it is the next section's subject
-because it belongs to no checkout. Nothing inventories the managed root,
-snapshots a checkout's contents or restores one.
+A pull request is not here: `<PullRequest>` stays declared where it already is
+and refuses through its own unchanged missing-provider default, and a local
+result confers no publication evidence. Publication itself is the next
+subsection's subject, and `<Issue>` the section's after it — the first because
+it belongs to a checkout and to a remote at once, the second because it belongs
+to no checkout at all. Nothing inventories the managed root, snapshots a
+checkout's contents or restores one.
+
+#### What one entry asked to publish, and what the Git host did about it
+
+`<Git.Push />` publishes the branch the selected checkout is on to that
+Repository's origin, and it is the one operation here whose outcome no local
+record can settle: the branch belongs to a Git host. So it is retained as two
+records at two journal positions. The first is the **request** — written down
+before anything is contacted — and the second is the Git host's own
+reconciliation outcome, under the same `git_host_effect` contract a workflow
+run's Push uses.
+
+That order is the whole feature. An entry that published a branch, left at a
+question and is reopened an hour later reconciles the request it already made:
+the same branch, the same commit and the same destination, however far the
+checkout has moved since. A completed publication answers from its saved
+receipt and reaches no provider, no credential and no remote. A *new* `<Git.Push
+/>` after the question resolves today's branch and commit, which is what makes
+this retention rather than a cache.
+
+The request is resolved from the checkout rather than from a document. The
+authenticated Repository selection, the checkout it named and its common Git
+directory come from this entry's own private registry; the covering checkout is
+chosen by the ordinary selector over the received working directory; the origin
+is the admitted credential-free locator, held to the identity's own fingerprint;
+and the branch and the commit are read inside this entry's existing native turn.
+A detached HEAD is the existing actionable refusal and a checkout recording no
+usable origin is an admission refusal — both before a request exists and before
+anything is contacted. The record keeps three readings of one place: the
+question the invocation asked, the reading the live dispatch received, and what
+routing resolved. Equal readings still occupy both fields. No opaque selection
+identifier, source object, credential, Git output, HEAD inventory or publication
+flag is retained, and host paths are kept as the bytes they arrived as.
+
+Identity is the entry's own owner and the invocation identity canonical core
+minted, encoded in the same two record fields a workflow run uses for its run
+and expansion. The trusted body takes that invocation once and owns the pair
+throughout; neither reaches public Git input, so a replacement registration and
+a direct `Git.operations.push(...)` name no durable work of this entry's and
+reach the ordinary missing-provider refusal.
+
+Composition is ordinary. A fresh invocation dispatches through an
+operation-local default under the stable Git Api name, so every public handler a
+document or a plugin composed still answers, transforms, refuses and delegates.
+A handler that answers without delegating has answered the document: no request
+is written down, no Git host is asked, and a returned value is never read as
+publication. A second delegation of one invocation is refused rather than
+published twice, and the default is revoked when the invocation ends. On a
+continuation the saved request is consumed *before* any dispatch, because a
+changed handler must not retarget external work this entry has already
+admitted.
+
+Ownership differs from local Git by exactly one hold. A publication takes the
+selected placement's managed slot — on a fresh request before it reads the
+checkout, and on a saved one before it reads an object — and takes no mutation
+lease at all: it changes no checkout, index, branch or tracking configuration,
+so another entry holding that lease does not stop it. Contention is decided
+before the request exists and is never written down.
+
+What the provider may read is the object database this entry authenticated, and
+it reads it through a bare repository this run created with a read-only
+alternate — never the selected checkout, whose own configuration could name
+another destination or another program. The authenticated common directory
+covers a primary checkout, a linked worktree and a repository whose
+administration lives elsewhere alike. A pending request is reconciled against
+the exact commit it named: a missing object fails rather than being fetched, a
+moved HEAD or branch alone refuses nothing, and a wrong origin, common
+directory or unreadable source stops without remote contact.
+
+The decisions are the shared engine's, unchanged: a destination proven absent
+and one holding a proven ancestor are published once with an exact non-force
+refspec, a destination already holding this commit is adopted without pushing,
+and divergence, permanent ambiguity and temporary unavailability are the
+existing definitive failures that replay as themselves. A nonzero push earns
+exactly one more observation and nothing else; Git's own output is never read as
+evidence.
+
+Both appends are fenced. A failed request append contacts nothing and fences
+every later operation; a failed outcome append leaves the remote as it is, with
+no false receipt and no compensating Close — the next attempt observes the
+destination and adopts the completion rather than repeating it. Every
+per-attempt resource — the scratch transport, the control repository and the
+credential session — belongs to the attempt's own scope and is closed and joined
+before publication may acknowledge anything, so a cleanup that failed publishes
+neither a success nor a refusal the worker had already decided.
+
+An entry's retained publication history is admitted before any of it is
+replayed: every saved request parses, states this version, is named by its own
+question and names a checkout a placement before it described; every outcome
+stands after the request it answers, carries that request's own fingerprint and
+reads back as a Push of exactly what was asked. A trailing request with no
+outcome is valid partial history — it is the state this protocol exists for — and
+an orphan outcome, a request answered twice and a receipt this build cannot read
+are fatal unreadable history.
 
 ### What one entry retains about the issue it filed
 
@@ -8310,7 +8409,8 @@ Status is measured against main.
 | REPL entry retained file work | one executing REPL entry's own recording, established by core initialization in the scope the invocation owns and ending with it: it retains the `<File>` reads, `<File>` writes, `<File.Delete />` deletions and `<Dir>` ensures that land inside a checkout the entry is working in — the ambient one it was started in, or a managed one it selected — authored and admitted-generated alike, because both cross the one document filesystem. A completed operation answers from its saved result without live path canonicalization, ambient discovery, a lease, a permission lookup or a filesystem call — so only *new* work needs the environment, a continuation still binds the text its read answered with while the file says something else, and a new entry reading that path sees what is there now. A record's name is the digest of the record version, the operation kind and the complete received request, so two equal requests in one entry are one name at two ordered positions and the durable engine's positional matching tells them apart; equal work in two entries is the same name, and each entry executing against its own stream segment is what keeps those apart. Recording is ordinary ancestor-max `Files` middleware, so a provider beneath that answers directly or transforms and delegates is kept as provider behavior while the received request stays the operation's identity. A shared Git directory admits one live *mutating* entry at a time, held lazily for as long as the execution lasts and refused rather than queued; no read acquires it, so a new read proceeds while another entry holds it. The local Git and issue work an entry retains have rows of their own beside this one; work outside every checkout the entry is working in stays ordinary and unrecorded, and a passive reading initializes nothing [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
 | REPL entry retained selection | one executing REPL entry's own `<Repository>` and `<Worktree>` selections, recorded beside its file work as small routing records: the canonical managed root, the checkout root, the common Git directory, the credential-free repository identity, the display name and the owner checkout, with a root-level `<Worktree>`'s ambient owner recorded as its own answer. The selector is the ordinary managed one, with its own creation, compatible-reuse, conflict and interrupted-adoption policy; what this adds is that a completed selection answers from its record, calling no selector and reaching no clone, `worktree add`, sidecar, credential or lock — so a continuation works in a checkout somebody has since changed or removed, while only new work meets today's filesystem. Parsed facts are held to the call they stand at with pure slot arithmetic against the root the record itself carries, registered in entry-private state and minted as a fresh selection, so a copied or edited Repository value can misname a target and never reach one. One entry at a time *owns* a managed slot, held until teardown and reacquired lazily by the first new operation inside a restored placement; that is a different hold from the shared Git directory's mutation lease, which only a new `<Worktree>` selector and a new mutation take. A selection is acknowledged before its path is bound, and native work that was never acknowledged runs live again under the ordinary partial-creation policy [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
 | REPL entry retained issue work | one executing REPL entry's own `<Issue>` work, retained under the ordinary `issue_effect` records beside its file work and needing no checkout at all: no repository is discovered for it, no managed root is made and no hold is taken. A completed read answers with the snapshot it saw and a completed upsert with the URL it was filed under, neither resolving a provider, reading configuration nor opening a credential. What names it is the entry's own owner — derived by the session from the execution and the entry's admission-order position — with the identity canonical execution minted where it selected this implementation for this invocation; the `runId` and `expansionId` spellings are a compatibility encoding of those two, and a REPL entry installs no synthetic WorkflowRun. Neither member is reachable from a prop, a tracker, a Context, a middleware request or a record field a document can write, and the entry's `<Issue>` is an ordinary shadowable registration a repository component still outranks. One durable boundary encloses the operation and the live attempt inside it composes `IssueOperations` over a transport-facing default of the entry's own, bound in the attempt's own scope under the attempt's own idempotency key and gone before the envelope publishes; canonical form dispatch selects which of the two effects an invocation asks for. An upsert the service accepted and this end never acknowledged retains nothing and presents the same key next time, which is what the provider adopts under; a read has no key and may be made again. The entry's retained issue records are held to its own owner before any of them are replayed [Reference](#what-one-entry-retains-about-the-issue-it-filed). | built on the #181 stack |
-| REPL entry retained local Git | one executing REPL entry's own `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>`, recorded beside its file work and its selections. The performers are the ordinary ones — exactly the pathspecs a document wrote, the ordinary branch rules, the current index and nothing else — installed as ordinary Git dispatch at the implementation slot, so middleware above may answer, refuse, or transform and delegate, and a call answered wholly by a replacement acquires no retention. One durable operation per call and no outer envelope, so a staging child inside a Commit is an earlier journal operation of its own. A completed operation answers from its saved result and runs no `git` at all, writing no tree and reading no identity; a saved commit object id names the commit that was made then and is never re-resolved against today's HEAD. A result is fixed-size evidence — the checkout, the branch, commit, HEAD tree and index tree on both sides, and the operation's own arguments and products — never a file list, a checkout snapshot or Git output, and a commit message appears as a digest and a byte length rather than a second copy of the text. Routing is private and live-only: the received working directory is canonicalized and the ordinary selector chooses the longest covering checkout among this entry's registrations under the whole authenticated Repository identity, and a saved result's checkout is held to those registrations with parsed facts alone. The invoking person's author and committer are read once per entry, lazily, and only by a genuinely live Commit; a host that cannot say becomes the existing Commit-only refusal. A live operation takes the selected placement's managed slot and then the shared Git directory's mutation lease, keeps both until teardown and takes neither on replay, with this entry's own native attempts serialized per shared Git directory. An ordinary refusal is retained under the route that reported it, so a native ignored-path Add says what `git` reported and promises no rollback; contention, admission and infrastructure failures are fatal and unrecorded. Native completion and acknowledgement are separate: an unacknowledged Commit runs live again and may instead refuse empty-index, and a failed append fences later work with no success binding and no compensating Close. Nothing external is here, and a local result confers no publication evidence [Reference](#the-three-local-git-operations-and-what-a-saved-object-id-means). | built on the #181 stack |
+| REPL entry retained local Git | one executing REPL entry's own `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>`, recorded beside its file work and its selections. The performers are the ordinary ones — exactly the pathspecs a document wrote, the ordinary branch rules, the current index and nothing else — installed as ordinary Git dispatch at the implementation slot, so middleware above may answer, refuse, or transform and delegate, and a call answered wholly by a replacement acquires no retention. One durable operation per call and no outer envelope, so a staging child inside a Commit is an earlier journal operation of its own. A completed operation answers from its saved result and runs no `git` at all, writing no tree and reading no identity; a saved commit object id names the commit that was made then and is never re-resolved against today's HEAD. A result is fixed-size evidence — the checkout, the branch, commit, HEAD tree and index tree on both sides, and the operation's own arguments and products — never a file list, a checkout snapshot or Git output, and a commit message appears as a digest and a byte length rather than a second copy of the text. Routing is private and live-only: the received working directory is canonicalized and the ordinary selector chooses the longest covering checkout among this entry's registrations under the whole authenticated Repository identity, and a saved result's checkout is held to those registrations with parsed facts alone. The invoking person's author and committer are read once per entry, lazily, and only by a genuinely live Commit; a host that cannot say becomes the existing Commit-only refusal. A live operation takes the selected placement's managed slot and then the shared Git directory's mutation lease, keeps both until teardown and takes neither on replay, with this entry's own native attempts serialized per shared Git directory. An ordinary refusal is retained under the route that reported it, so a native ignored-path Add says what `git` reported and promises no rollback; contention, admission and infrastructure failures are fatal and unrecorded. Native completion and acknowledgement are separate: an unacknowledged Commit runs live again and may instead refuse empty-index, and a failed append fences later work with no success binding and no compensating Close. A local result confers no publication evidence, and publication is the row below rather than part of these three [Reference](#the-three-local-git-operations-and-what-a-saved-object-id-means). | built on the #181 stack |
+| REPL entry retained publication | one executing REPL entry's own `<Git.Push />`, retained as a request record written before anything is contacted and the shared `git_host_effect` outcome that answers it. The request is resolved from the checkout — the authenticated selection, its common Git directory, the covering checkout for the received working directory, the admitted credential-free origin held to the identity's own fingerprint, and the branch and commit read inside the entry's native turn — and keeps the question asked, the reading the live dispatch received and what routing resolved, with no selection identifier, source object, credential, Git output, HEAD inventory or publication flag. Identity is the entry's owner and core's minted invocation identity, encoded in the run and expansion fields the workflow profile uses; a replacement registration and a direct `Git.operations.push(...)` reach the ordinary missing-provider refusal. Dispatch is ordinary Git composition through an operation-local default: a synthetic answer retains nothing, a second delegation of one invocation is refused, and a continuation consumes the saved request before any dispatch. A publication takes the managed slot and no mutation lease, reads objects through a bare control repository with a read-only alternate rather than through the checkout, reconciles a pending request against the exact commit it named without fetching, and publishes only after every per-attempt resource has closed. A completed publication reaches no provider, credential or remote; a failed request append contacts nothing and a failed outcome append leaves no false receipt [Reference](#what-one-entry-asked-to-publish-and-what-the-git-host-did-about-it). | built on the #181 stack |
 | live durable-operation coordinator | explicitly coordinates structured live execution with existing Yield publication while leaving replay and callback effects unchanged [Invariant](#live-effect-coordination). | built on the #365 stack |
 | Workspace coordination API | fails closed by default; replaceable context routes only a one-use provider selection, while the selected provider directly invokes an execution-owned credentialed capability for execution, publication and failure activation [Invariant](#live-effect-coordination). | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
 | shared Git-host reconciliation | Reconciles Git push and pull-request upsert through one request-only boundary whose private terminal alone settles the retained outcome. [Invariant](#external-effects-and-git-host-mutations); [Invariant](#issue-effects). | Built on #297; Push (#370) and PullRequest (#295) consume it. Issue (#296) has its own middleware boundary. |

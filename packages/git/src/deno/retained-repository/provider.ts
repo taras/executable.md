@@ -18,19 +18,23 @@
  * ## What it is not
  *
  * This records file and directory work, the managed checkouts a document
- * selects to do it in, and the three local Git operations: authored and
- * generated writes, authored deletions, the directory an authored `<Dir>`
- * ensures, the `<Repository>` and `<Worktree>` selections that say where, and
- * `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` in the checkout those select.
- * There is nothing external — no `<Git.Push>`, no pull request, no Issue. Those
- * components stay declared where they already are and refuse through their own
- * unchanged missing-provider defaults, and what is installed here is not the
- * ordinary all-feature provider, which would enable them.
+ * selects to do it in, the three local Git operations — authored and generated
+ * writes, authored deletions, the directory an authored `<Dir>` ensures, the
+ * `<Repository>` and `<Worktree>` selections that say where, and `<Git.Add>`,
+ * `<Git.Switch>` and `<Git.Commit>` in the checkout those select — and, for an
+ * entry whose capability was built per entry below, the publication an authored
+ * `<Git.Push />` asks for.
+ *
+ * A pull request and an Issue tracker are not here: each has its own protocol
+ * and its own evidence, and a local result and a publication authorize neither.
+ * `<PullRequest>` stays declared where it already is and refuses through its
+ * own unchanged missing-provider default, and what is installed here is not the
+ * ordinary all-feature provider, which would enable it.
  *
  * ## Installing it reaches nothing
  *
- * No directory, no lease, no `git`, no filesystem read, no commit identity and
- * no managed root. The ambient checkout is discovered by the first mutation that
+ * No directory, no lease, no `git`, no filesystem read, no commit identity, no
+ * managed root, no credential and no remote. The ambient checkout is discovered by the first mutation that
  * needs to know whether it is inside one, and an entry that mutates nothing
  * never looks. The managed root is created by the first selection, and an entry
  * that selects nothing never makes one. The invoking person's author and
@@ -41,7 +45,7 @@
  * would anywhere else.
  */
 
-import { until, useScope } from "effection";
+import { ensure, until, useScope } from "effection";
 import type { Operation, Scope } from "effection";
 import { realpath } from "node:fs/promises";
 import { ensureDir } from "@effectionx/fs";
@@ -72,6 +76,12 @@ import { replFileMiddleware } from "./files.ts";
 import type { ReplLocalRecorder, ReplManagedPlacement } from "./files.ts";
 import { replGitMiddleware } from "./git.ts";
 import type { ReplGitCheckout, ReplGitEntry } from "./git.ts";
+import { replPushAdmission, replPushComponent } from "./push.ts";
+import type { ReplPushEntry } from "./push.ts";
+import { replIssueInstallation } from "./issues.ts";
+import { Execution } from "@executablemd/core/api";
+import type { ExecutionInstallation } from "@executablemd/core/host";
+import type { IdentityComponent, JournalAdmission } from "@executablemd/core/host";
 import {
   placementSubject,
   selectReplAmbientOwner,
@@ -125,7 +135,98 @@ export interface ReplRecordingOptions {
  * working in that one, and a nested execution that composed its own working
  * directory is discovered from that.
  */
-export function* useReplRepositoryRecording(options: ReplRecordingOptions = {}): Operation<void> {
+export function useReplRepositoryRecording(options: ReplRecordingOptions = {}): Operation<void> {
+  return initializeReplRepository(options);
+}
+
+/**
+ * The repository capability one REPL entry runs with, as a per-entry factory.
+ *
+ * Called by the CLI inside the entry task, for the exact execution and entry
+ * key the owner was derived from. Calling it registers this entry's
+ * `Execution.init` middleware in that task and answers with the declarations,
+ * the admissions and the installation callback the execution runs in its own
+ * scope. It acquires nothing and initializes nothing: no directory, no lease,
+ * no `git`, no credential and no managed root.
+ *
+ * Registration belongs to the entry task and initialized state belongs to the
+ * execution scope beneath it, which is why nothing here is wrapped in a scope
+ * of its own: a scope that closed when this factory returned would take the
+ * registration with it before the execution that needs it had started.
+ *
+ * ## One initializer, and one holder of what it makes
+ *
+ * The init middleware establishes the recording this host has always
+ * established, and delivers the minimal private entry state into this closure.
+ * Revocation is armed before that state can be used and runs on success,
+ * failure and cancellation alike, including a partial initialization — so a
+ * body that kept the accessor past its own entry reaches nothing. The state is
+ * never returned to the CLI, published through Context or reachable from a
+ * document.
+ *
+ * The issue capability an entry runs with is composed in whole, declarations,
+ * admissions and installation together, because one entry installs one
+ * capability and neither feature's internals belong to the other.
+ */
+export function* replRepositoryInstallation(
+  owner: string,
+  options: ReplRecordingOptions = {},
+): Operation<ExecutionInstallation> {
+  const held: { entry?: ReplPushEntry } = {};
+  let usable = false;
+
+  yield* Execution.around({
+    *init(_args, next): Operation<void> {
+      // Armed before anything is delivered, and before `next()`: an execution
+      // halted while it initializes revokes what it had, and one that failed
+      // halfway through leaves nothing usable behind.
+      yield* ensure(() => {
+        usable = false;
+        delete held.entry;
+      });
+      yield* initializeReplRepository(options, (entry) => {
+        held.entry = entry;
+        usable = true;
+      });
+      yield* next();
+    },
+  });
+
+  const issues = replIssueInstallation(owner);
+  const components: IdentityComponent[] = [
+    ...(issues.components ?? []),
+    replPushComponent(owner, () => (usable ? held.entry : undefined)),
+  ];
+  const admissions: JournalAdmission[] = [...(issues.admissions ?? []), replPushAdmission(owner)];
+  const install = issues.install;
+  return {
+    components,
+    admissions,
+    ...(install === undefined ? {} : { install: () => install.call(issues) }),
+  };
+}
+
+/**
+ * Establish one entry's recording, and hand its own private state to whoever
+ * initialized it.
+ *
+ * The one initializer both routes use. `useReplRepositoryRecording()` above
+ * takes no delivery and keeps its `void` contract, which is what the host-only
+ * identity seam and every existing consumer are written against. The per-entry
+ * factory below states one, and what it receives is the minimal set of
+ * functions a publication needs: this entry's Git session and native host, its
+ * private selection registry and registered checkouts, its single-flight slot
+ * acquisition and its native turn.
+ *
+ * The delivery is a call rather than a value anything can read. Nothing is
+ * returned, published through Context, or registered anywhere a document, a
+ * prop, a plugin or middleware could reach: the only holder is the closure that
+ * asked for it, and that closure is revoked with this execution.
+ */
+function* initializeReplRepository(
+  options: ReplRecordingOptions,
+  deliver?: (entry: ReplPushEntry) => void,
+): Operation<void> {
   const host =
     options.host ??
     denoRepositoryHost({
@@ -410,4 +511,18 @@ export function* useReplRepositoryRecording(options: ReplRecordingOptions = {}):
   // middleware a document or a host puts above this composes exactly as it does
   // in an ordinary run.
   yield* Git.around(replGitMiddleware(gitEntry), { at: "min" });
+
+  // Last, and only for the route that asked: everything above is in place, so
+  // what a publication reaches is an initialized entry rather than a
+  // half-assembled one. An entry with no managed root returns before this,
+  // which is what leaves `<Git.Push />` the same missing-provider refusal it
+  // reaches when nothing selected a checkout.
+  deliver?.({
+    host,
+    git: useGit,
+    holdSlot,
+    serialize,
+    selections,
+    checkouts: () => gitCheckouts,
+  });
 }

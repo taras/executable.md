@@ -190,9 +190,10 @@ export interface ReplGitEntry {
  * the request recorded. A call answered wholly by a replacement never reaches
  * this provider and acquires none of its retention.
  *
- * Push is absent. Publication has its own protocol and its own evidence, and a
- * local result authorizes none of it, so `<Git.Push>` reaches the ordinary
- * missing-provider refusal it reaches today.
+ * Push is not one of these. Publication has its own protocol and its own
+ * evidence, and a local result authorizes none of it, so it is recorded by
+ * `push.ts` beside this: one request written down before a remote is contacted,
+ * and the Git host's own answer reconciled afterwards.
  */
 export function replGitMiddleware(entry: ReplGitEntry): Partial<Around<GitApi>> {
   return {

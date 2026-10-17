@@ -615,6 +615,12 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/567",
   },
   {
+    path: "scripts/tests/repl-push-compiled.test.ts",
+    reason:
+      "drives the compiled `dist/xmd` through a real terminal: it publishes a branch to a bare remote, leaves at a question, advances the checkout from a shell and reopens the printed location to prove the binary publishes the commit its saved request named. Only `deno compile` produces it and no test shard builds it, so it belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
+    issue: "https://github.com/taras/executable.md/issues/567",
+  },
+  {
     path: "scripts/tests/repl-repositories-compiled.test.ts",
     reason:
       "drives the compiled `dist/xmd` through a real terminal: it starts a REPL inside a seeded checkout, leaves at a question and reopens the printed location to prove the binary carries the same entry host the source does. Only `deno compile` produces it and no test shard builds it, so it belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
@@ -722,6 +728,18 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     path: "packages/cli/tests/repl-issues.test.ts",
     reason:
       "drives the production entry issue host, which only Deno and the compiled binary select: its module graph reaches @executablemd/git/deno and so Workflow's storage adapter and node:sqlite. The durable envelope and its record encodings are provider-neutral and are proven on every runtime by packages/git/tests/issue-owned.test.ts; that a runtime selecting no entry host reports no Issue provider is proven by packages/cli/tests/repl-issues-pty.test.ts, which runs everywhere",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/git/tests/retained-repository-push.test.ts",
+    reason:
+      "the subject is a REPL entry's native publication: it clones a managed checkout, reads and pushes to a real bare remote with real `git` children, holds that checkout's managed slot under a kernel-released exclusive advisory lock taken through the Deno runtime, and cuts an entry mid-command. The saved request, its admission and the owner-specified worker are provider-neutral and are proven on every runtime by packages/git/tests/retained-repository-push-records.test.ts and packages/git/tests/git-host-owned.test.ts; that a runtime without the provider refuses <Git.Push /> before any native operation is proven by packages/cli/tests/repl-push-pty.test.ts, which runs everywhere",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/cli/tests/repl-push.test.ts",
+    reason:
+      "drives the production per-entry capability, which only Deno and the compiled binary select: its module graph reaches @executablemd/git/deno and so Workflow's storage adapter and node:sqlite, and its rows publish to a real bare remote with real `git` children. That a runtime selecting no entry capability reports no Git provider for <Git.Push /> is proven by packages/cli/tests/repl-push-pty.test.ts, which runs everywhere",
     issue: DERIVED_SCOPE,
   },
 ];

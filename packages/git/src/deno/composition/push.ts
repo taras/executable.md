@@ -255,18 +255,19 @@ function prepareRequestSource(
 /**
  * The provider that answers this exact reconciliation, and no other.
  *
- * Installed around one `reconcileGitHostEffect()` call and reachable only from
- * inside it. Its closure holds the retained locator and the object source; what
+ * Installed around one reconciliation and reachable only from inside it — a
+ * workflow run's, or a REPL entry's, which reuses this exact provider rather
+ * than writing a second Push state machine. Its closure holds the retained locator and the object source; what
  * it receives from the engine is the frozen request, which it parses and holds
  * to the inputs this invocation admitted. A request naming another Repository,
  * branch or commit is not this invocation's, and answering one would publish a
  * completion for something this operation never admitted.
  */
-function pushProvider(
+export function pushProvider(
   source: PushObjectSource,
   locator: string,
   admitted: GitPushInputs,
-  session: GitAuthenticationSession,
+  session: () => Operation<GitAuthenticationSession>,
 ): GitHostProvider {
   function admit(request: CompleteGitHostEffectRequest): GitPushInputs {
     const inputs = parseGitPushInputs(request.inputs);
@@ -302,7 +303,7 @@ function pushProvider(
         locator,
         inputs.destinationRef,
         inputs.repository.objectFormat,
-        session,
+        yield* session(),
       );
 
       if (observed.state === "unreachable") {
@@ -354,7 +355,8 @@ function pushProvider(
       const directory = yield* source.ready();
       const refspec = refspecFor(inputs.sourceCommit, inputs.destinationRef);
 
-      if (yield* pushRefspec(source.git, directory, locator, refspec, session)) {
+      const authenticated = yield* session();
+      if (yield* pushRefspec(source.git, directory, locator, refspec, authenticated)) {
         return Ok(completion(inputs.sourceCommit));
       }
 
@@ -368,7 +370,7 @@ function pushProvider(
         locator,
         inputs.destinationRef,
         inputs.repository.objectFormat,
-        session,
+        authenticated,
       );
       if (observed.state === "present" && observed.commit === inputs.sourceCommit) {
         return Ok(completion(observed.commit));
@@ -379,6 +381,18 @@ function pushProvider(
       unusable("native Git did not publish the branch, and the remote does not hold it");
     },
   };
+}
+
+/**
+ * The session this operation already holds, as the provider's lazy accessor.
+ *
+ * A workflow run opens one for the whole reconciliation before the provider
+ * exists; a REPL entry opens one the first time a phase needs it. The provider
+ * asks either way, which is what keeps one implementation for both.
+ */
+// deno-lint-ignore require-yield
+function* acquired(session: GitAuthenticationSession): Operation<GitAuthenticationSession> {
+  return session;
 }
 
 function resultOf(inputs: GitPushInputs, observedRemoteCommit: string): GitPushResult {
@@ -484,7 +498,7 @@ export function* createGitPush(
     const session = yield* useGitAuthentication(host, locator);
 
     const record = yield* withGitHostProvider(
-      pushProvider(source, locator, inputs, session),
+      pushProvider(source, locator, inputs, () => acquired(session)),
       reconcileGitHostEffect({
         kind: GIT_PUSH,
         inputs: gitPushInputsJson(inputs),

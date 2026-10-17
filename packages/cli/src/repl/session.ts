@@ -1324,8 +1324,15 @@ function* start(
         // what a host attaches is copied by value before anything installs:
         // an entry that got one afterwards would be running under a capability
         // the execution never admitted.
+        //
+        // Yielded in this task, after the Agent attachment above and before the
+        // execution below, so what the capability registers for the execution —
+        // the initialization its own private state is created by — belongs to
+        // the entry rather than to a scope that has already closed.
         const owned =
-          entryInstallation === undefined ? [] : [entryInstallation(entryOwner(execution.id, key))];
+          entryInstallation === undefined
+            ? []
+            : [yield* entryInstallation(entryOwner(execution.id, key))];
         // This entry's own selection, offered in the scope this execution runs
         // in. Every entry installs it again: core reads the final contextual
         // answer once per execution, and a chain assembled in a scope that has

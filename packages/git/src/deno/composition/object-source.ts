@@ -406,17 +406,14 @@ function* containedAlternates(
 }
 
 /**
- * The object database this checkout publishes from, once it is contained.
+ * The Git administration directory an exported checkout family shares.
  *
- * Three questions in one order, and the order is what makes each answerable.
- * The database has to be the retained Repository's own — a linked worktree
- * shares it, which is why one proof covers both kinds of checkout. It has to be
- * a real directory that resolves to itself, so the walk below is walking the
- * export rather than somewhere a link led. And then everything Git may traverse
- * from it — every entry beneath it, and every object directory the alternates
- * chain names — has to resolve inside it.
+ * The Workflow proof, kept with the caller that needs it: a workflow run
+ * materializes a checkout under the repository directory it exported, so the
+ * directory Git reports as common has to be that export's own. A linked
+ * worktree shares it, which is why one proof covers both kinds of checkout.
  */
-function* containedObjectDatabase(checkout: GitCheckout, operation: string): Operation<string> {
+function* exportedFamily(checkout: GitCheckout, operation: string): Operation<string> {
   const administration = `${checkout.repositoryDirectory}/.git`;
   if ((yield* commonDirectory(checkout.git, checkout.directory)) !== administration) {
     uncontained(
@@ -424,7 +421,27 @@ function* containedObjectDatabase(checkout: GitCheckout, operation: string): Ope
       "the checkout it ran in does not share the retained repository's object database",
     );
   }
+  return administration;
+}
 
+/**
+ * The object database beneath one authenticated administration directory, once
+ * it is contained.
+ *
+ * Two questions in one order, and the order is what makes each answerable. The
+ * database has to be a real directory that resolves to itself, so the walk
+ * below is walking the administration this run authenticated rather than
+ * somewhere a link led. And then everything Git may traverse from it — every
+ * entry beneath it, and every object directory the alternates chain names — has
+ * to resolve inside it.
+ *
+ * Which administration directory that is belongs to the caller. A workflow run
+ * proves its exported family above; a REPL entry hands over the canonical
+ * common directory its own private placement already authenticated, which is
+ * the same answer for a primary checkout, a linked worktree and a repository
+ * whose administration lives somewhere else entirely.
+ */
+function* containedObjectDatabase(administration: string, operation: string): Operation<string> {
   const objects = `${administration}/objects`;
   if ((yield* entry(objects))?.isDirectory() !== true) {
     uncontained(operation, "the retained repository holds no object database to publish from");
@@ -456,6 +473,50 @@ export function objectSource(
   format: GitObjectFormat,
   operation: string,
 ): PushObjectSource {
+  return controlPlaneSource(
+    host,
+    root,
+    () => exportedFamily(checkout, operation),
+    format,
+    operation,
+  );
+}
+
+/**
+ * A source for one push from an administration directory the caller
+ * authenticated.
+ *
+ * The same control repository, the same read-only alternate and the same
+ * containment proof as above. What differs is who decided which administration
+ * directory this is: here it arrives already authenticated, so nothing asks
+ * Git where the checkout's common directory is.
+ */
+export function objectSourceAt(
+  host: RepositoryHost,
+  root: string,
+  administration: string,
+  format: GitObjectFormat,
+  operation: string,
+): PushObjectSource {
+  // deno-lint-ignore require-yield
+  return controlPlaneSource(
+    host,
+    root,
+    function* () {
+      return administration;
+    },
+    format,
+    operation,
+  );
+}
+
+function controlPlaneSource(
+  host: RepositoryHost,
+  root: string,
+  administration: () => Operation<string>,
+  format: GitObjectFormat,
+  operation: string,
+): PushObjectSource {
   const git = gitSession(host, root);
   const directory = `${root}/control`;
   let built = false;
@@ -463,7 +524,7 @@ export function objectSource(
     git,
     *ready(): Operation<string> {
       if (!built) {
-        const objects = yield* containedObjectDatabase(checkout, operation);
+        const objects = yield* containedObjectDatabase(yield* administration(), operation);
         yield* initControlPlane(git, root, directory, format);
         yield* ensureDir(`${directory}/objects/info`);
         yield* writeTextFile(`${directory}/objects/info/alternates`, `${objects}\n`);

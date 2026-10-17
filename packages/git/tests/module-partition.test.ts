@@ -63,6 +63,7 @@ const PROVIDER_NEUTRAL: readonly string[] = [
   "src/composition/git-push-records.ts",
   "src/composition/git-records.ts",
   "src/composition/installation.ts",
+  "src/composition/locator.ts",
   "src/composition/parse.ts",
   "src/composition/pull-request-api.ts",
   "src/composition/pull-request-operations.ts",
@@ -95,6 +96,8 @@ const PROVIDER_NEUTRAL: readonly string[] = [
   "src/retained-repository/admission.ts",
   "src/retained-repository/git-records.ts",
   "src/retained-repository/placement-records.ts",
+  "src/retained-repository/push-admission.ts",
+  "src/retained-repository/push-records.ts",
   "src/retained-repository/records.ts",
 ];
 
@@ -167,6 +170,7 @@ const DENO_ADAPTER: readonly string[] = [
   "src/deno/retained-repository/leases.ts",
   "src/deno/retained-repository/local.ts",
   "src/deno/retained-repository/provider.ts",
+  "src/deno/retained-repository/push.ts",
   "src/deno/retained-repository/selections.ts",
   "src/deno/run-composition/ambient.ts",
   "src/deno/run-composition/checkouts.ts",
