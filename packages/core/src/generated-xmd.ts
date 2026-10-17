@@ -108,12 +108,18 @@
 
 import { createDurableOperation } from "@executablemd/durable-streams";
 import type { Json as DurableJson } from "@executablemd/durable-streams";
-import { scoped } from "effection";
-import type { Operation } from "effection";
+import { ensure, Err, Ok, scoped } from "effection";
+import type { Operation, Result } from "effection";
 
 import { ExecutionDeclarationCatalog } from "./execution-declarations.ts";
 import { Component } from "./component-api.ts";
-import { ErrorMode } from "./errors.ts";
+import {
+  documentationFailure,
+  durabilityFailure,
+  ErrorMode,
+  filesFatalFailure,
+  firstCause,
+} from "./errors.ts";
 import { CanonicalImports, retain } from "./components/component-resolution.ts";
 import type { ComponentResolution, ImportedDefinition } from "./components/component-resolution.ts";
 import { isComponentName } from "./components/registration.ts";
@@ -122,7 +128,10 @@ import { fixedFilesystemDefinition } from "./components/fixed-filesystem.ts";
 import { admitGeneratedForms, isGeneratedIdentity } from "./components/generated-metadata.ts";
 import type { GeneratedForms } from "./components/generated-metadata.ts";
 import { acceptedForms, formsRefusal } from "./invocation-forms.ts";
-import { createBlockCounter, expandSegmentsWithin } from "./expand.ts";
+import { createBlockCounter, expandBody, expandSegmentsWithin } from "./expand.ts";
+import type { ExecutionEnvironment } from "./execution-environment.ts";
+import { propsEnvironment } from "./eval-env.ts";
+import { liveEnvironment } from "./live-env.ts";
 import { extendPath } from "./expansion.ts";
 import { isJsonObject, parseJson } from "./json.ts";
 import { markGeneratedRequestRefusal } from "./generated-request-refusal.ts";
@@ -134,6 +143,11 @@ import { sourceDescription } from "./source-position.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
 // The ordinary source rules, read rather than reimplemented: a construct means
 // one thing whether a person wrote it or an Agent did.
+import { InvocationTeardownError } from "./invocation.ts";
+import { SecretDetectedError, SecretScannerError } from "./secrets/findings.ts";
+import { admittedSymbols } from "./syntax-admitted.ts";
+import type { CapturedEntry } from "./evaluation-profile.ts";
+import { bodyHasOutput, outputPropsViolation } from "./body-structure.ts";
 import {
   allStructure,
   answersViolations,
@@ -160,6 +174,7 @@ import type { SyntaxReference } from "./syntax-reference.ts";
 import { useNarrowedSyntax } from "./syntax-api.ts";
 import type {
   ComponentElement,
+  FunctionComponent,
   FunctionComponentDefinition,
   Json,
   JsonObject,
@@ -594,8 +609,15 @@ export function pinnedMutation(
   return { name, definition, form, ...(kind === undefined ? {} : { kind }) };
 }
 
-/** What a trusted host asks this evaluator to admit. */
-export interface GeneratedXmdRequest {
+/**
+ * What canonical `<Evaluate>` asks this evaluator to admit.
+ *
+ * Core-private, and the authored site's own handoff: the tables arrive with
+ * the call because `<Evaluate>` resolves them from the captured profile at the
+ * element it was written on. A trusted host states none of this — the public
+ * root request is {@link GeneratedXmdRequest}, which carries no table at all.
+ */
+export interface GeneratedFragmentRequest {
   /** Which fragment this is. It names the durable admission record. */
   readonly id: string;
   /** The candidate source, exactly as it was generated. */
@@ -615,6 +637,125 @@ export interface GeneratedXmdRequest {
    * takes no part in the durable name, the policy comparison, or admission.
    */
   readonly position?: Readonly<SourcePosition>;
+}
+
+/**
+ * What a host asks a generated **root** to evaluate.
+ *
+ * Deliberately smaller than a fragment's handoff: a root is admitted from the
+ * selection its owning execution already captured, so there is no table, no
+ * inventory and no Workspace basis for a caller to state. What is left is which
+ * evaluation this is, the candidate bytes, which classes it may draw on and
+ * where the asking element was written.
+ */
+export interface GeneratedXmdRequest {
+  /** Which root this is. It names the durable admission record. */
+  readonly id: string;
+  /** The candidate source, exactly as it was generated. */
+  readonly source: string;
+  /**
+   * Which effect classes this root may draw on. Omitted selects `read` alone,
+   * which is what a host stating no class at all is asking for.
+   */
+  readonly allow?: readonly GeneratedEffectClass[];
+  /** Where the element asking for this admission was written. Journal data. */
+  readonly position?: Readonly<SourcePosition>;
+}
+
+/** What a generated root rendered, and whether it chose what to render. */
+export interface GeneratedXmdRootResult {
+  /** The root's canonical rendered text after evaluation completes. */
+  readonly output: string;
+  /** Whether this root declares an explicit Output region. */
+  readonly hasOutput: boolean;
+}
+
+/**
+ * An ordinary failure of one generated root, and what it had rendered.
+ *
+ * `partial` is present only for a root that began evaluating: an admission
+ * refusal performed nothing, so there is nothing truthful to report about what
+ * it rendered. The rendering is what the root actually produced before the
+ * failure reached it — no further source is evaluated to complete a region or
+ * summarize one.
+ */
+export class GeneratedXmdRootError extends Error {
+  override name = "GeneratedXmdRootError";
+  readonly partial?: GeneratedXmdRootResult;
+
+  constructor(message: string, partial?: GeneratedXmdRootResult) {
+    super(message);
+    if (partial !== undefined) {
+      this.partial = partial;
+    }
+  }
+}
+
+/** Where a root's rendering goes, and what the admitted source said about it. */
+interface RootRendering {
+  readonly owner: Segment[];
+  /** Called once, with what the admitted source declared. */
+  readonly declared: (hasOutput: boolean) => void;
+}
+
+/**
+ * What the owning execution lends one root evaluation.
+ *
+ * Core-private, and data rather than authority: the captured tables it was
+ * selected from, the execution's own route and descriptive reference, and the
+ * liveness of the implementations behind them. Nothing here is a Context, a
+ * callback protocol or a token a document could reach — the owning execution
+ * hands it over across one Core-private call and keeps it.
+ */
+export interface GeneratedRootBinding {
+  /**
+   * The execution's captured selection, resolved for the classes one root asks
+   * for.
+   *
+   * A function because `allow` is the request's and the tables are the
+   * execution's: the selection runs per evaluation, through the one machinery
+   * the authored site also goes through, so neither kind can admit a row the
+   * other would not. It is closed over the captured profile by canonical
+   * execution and reaches nothing a document could read.
+   */
+  readonly select: (allow: readonly GeneratedEffectClass[]) => RootSelection;
+  /** The execution's own route, narrowed here to what this root admitted. */
+  readonly componentRouting: ComponentRouting;
+  /** The vocabulary this execution captured, or none where it captured any. */
+  readonly reference: SyntaxReference | undefined;
+  /** Whether the captured implementations still belong to a live execution. */
+  readonly live: () => boolean;
+}
+
+/**
+ * One root evaluation, with its selection already resolved.
+ *
+ * What the shared body needs and no more: the entries this root's vocabulary is
+ * described with, the route and reference to narrow, and the liveness of the
+ * implementations behind them. The binding it came from stays with canonical
+ * execution.
+ */
+interface ResolvedRoot {
+  readonly describing: readonly CapturedEntry[];
+  readonly componentRouting: ComponentRouting;
+  readonly reference: SyntaxReference | undefined;
+  readonly live: () => boolean;
+}
+
+/**
+ * One selection, as both the admitting tables and the describing entries.
+ *
+ * Complete as it arrives, canonical `<Syntax />` included. The execution that
+ * captured the selection is the one place that knows whether it captured
+ * `<Syntax />` already — a host may select it, and what it captured then is the
+ * same protected implementation behind that execution's own routed guard. So
+ * the one row is decided where that is known, rather than added again here,
+ * where a second copy would offer a root one name under two definitions.
+ */
+export interface RootSelection {
+  readonly observations: readonly GeneratedObservation[];
+  readonly mutations: readonly GeneratedMutation[];
+  readonly describing: readonly CapturedEntry[];
 }
 
 /**
@@ -942,7 +1083,7 @@ function selection(allow: readonly GeneratedEffectClass[] | undefined): Generate
  * cannot be stated.
  */
 function selectedEntries(
-  request: GeneratedXmdRequest,
+  request: GeneratedFragmentRequest,
   allow: readonly GeneratedEffectClass[],
 ): Entry[] {
   const entries: Entry[] = [];
@@ -1266,9 +1407,9 @@ function currentPolicy(allow: readonly GeneratedEffectClass[], entries: readonly
  * effective timeout are decided where the request is performed, so retaining
  * them would compare a continuation against values that legitimately move.
  */
-function policyRecord(policy: Policy): JsonObject {
+function policyRecord(policy: Policy, marker: RecordMarker): JsonObject {
   return {
-    version: RECORD_VERSION,
+    version: marker,
     allow: [...policy.allow],
     allowed: policy.allowed.map((entry) => ({
       name: entry.name,
@@ -1318,11 +1459,13 @@ function exactly(
  * carrying an extra member — describes a shape whose rules this build does not
  * know, so it is refused rather than read as whichever shape it most resembles.
  */
-function readPolicy(value: Json): Policy | undefined {
+function readPolicy(value: Json, marker: RecordMarker): Policy | undefined {
   if (!isJsonObject(value)) {
     return undefined;
   }
-  if (value.version !== RECORD_VERSION) {
+  // The expected marker, not merely a marker this build knows: a policy
+  // carrying the other kind's is a grant for the other kind.
+  if (value.version !== marker) {
     return undefined;
   }
   if (!exactly(value, ["version", "allow", "allowed"])) {
@@ -1476,6 +1619,7 @@ function* preflight(
   id: string,
   source: string,
   table: ReadonlyMap<string, Entry[]>,
+  language: AdmissionLanguage,
 ): Operation<Preflight> {
   const named: Planned[] = [];
   // Scanned as the fragment it is: generated text has no path, so every
@@ -1486,7 +1630,7 @@ function* preflight(
   const segments = scanSegments(source, { generatedSource: id, baseOffset: 0, baseLine: 1 });
   // A generated fragment starts with no bindings: it imports none from the
   // document that admitted it, and exports none back to it.
-  yield* walk(segments, table, named, new Set<string>());
+  yield* walk(segments, table, named, new Set<string>(), topLevelLexical(language));
   return { segments, named };
 }
 
@@ -1507,12 +1651,24 @@ function* walk(
   table: ReadonlyMap<string, Entry[]>,
   named: Planned[],
   scope: Set<string>,
-  lexical: Lexical = ROOT_LEXICAL,
+  lexical: Lexical,
 ): Operation<void> {
   for (const segment of segments) {
     switch (segment.type) {
       case "text": {
-        if (reads(segment.content)) {
+        // A fragment is admitted *into* a document and expands against that
+        // document's environment, so a brace it writes could name a binding
+        // the document holds — which is why a fragment may not read one at
+        // all, and why that refusal is about disclosure rather than syntax.
+        //
+        // A root inherits no environment. It begins with empty bindings, empty
+        // meta and empty props, so the only names it can resolve are the ones
+        // it bound itself and text naming anything else stays exactly as
+        // written. Refusing interpolation here would refuse the response its
+        // own `<Let>` capture — and with it the one way a response has of
+        // writing an entry draft, whose source is entry text that legitimately
+        // carries braces of its own.
+        if (lexical.language !== "root" && reads(segment.content)) {
           throw new Refusal("interpolation");
         }
         break;
@@ -1579,7 +1735,7 @@ function* walk(
         // body rather than a transparent region, so the lexical facts reset:
         // a `<Break>` written in a component's own body cannot break a loop
         // that encloses the invocation.
-        yield* walk(segment.children, table, named, new Set(scope), ROOT_LEXICAL);
+        yield* walk(segment.children, table, named, new Set(scope), rootLexical(lexical.language));
         // After the element, because a component's result does not exist until
         // it has run: `<File as="x" />` beside `<Json value={x} />` is ordered,
         // and `<Json value={x} as="x" />` names nothing.
@@ -1608,6 +1764,28 @@ function* walk(
  */
 interface Lexical {
   readonly insideLoop: boolean;
+  /**
+   * Which constructs this admission's own language allows.
+   *
+   * A root and a fragment admit different constructs, so what may be written is
+   * a property of the evaluation rather than of the record: the record's marker
+   * says which kind it is, and this says what that kind may name. It travels
+   * with the walk because every nested position is admitted under the same
+   * language as the source that contains it.
+   */
+  readonly language: AdmissionLanguage;
+  /**
+   * Whether the next segment is written as a direct child of the source's own
+   * top level.
+   *
+   * What decides whether a root's `<Output>` is a declaration or a misplaced
+   * element, and the same lexical question `validateOutputPlacement()` answers
+   * for an authored body: only a direct top-level child declares a region. It
+   * is false everywhere inside anything — a construct's branches, a loop body, a
+   * component's children — because none of those is the top level, whatever runs
+   * there.
+   */
+  readonly topLevel: boolean;
 }
 
 /**
@@ -1618,7 +1796,22 @@ interface Lexical {
  * `<Output>` to select, and no value body for `<Return>` to answer. It is also
  * not inside a loop.
  */
-const ROOT_LEXICAL: Lexical = Object.freeze({ insideLoop: false });
+function rootLexical(language: AdmissionLanguage): Lexical {
+  return Object.freeze({ insideLoop: false, language, topLevel: false });
+}
+
+/**
+ * What encloses the source's own top level.
+ *
+ * The one place a root may declare an output region. Everything else about it
+ * is what `rootLexical` says.
+ */
+function topLevelLexical(language: AdmissionLanguage): Lexical {
+  return Object.freeze({ insideLoop: false, language, topLevel: true });
+}
+
+/** Which constructs one admission's own language allows. */
+type AdmissionLanguage = "fragment" | "root";
 
 /** A typed empty table, so an absent one reads as no expressions rather than as `{}`. */
 const NO_EXPRESSIONS: Record<string, string> = {};
@@ -1657,7 +1850,14 @@ const CONSUMED_BY_PARENT: ReadonlySet<string> = new Set(["Else", "Case", "Answer
  * than as a withheld permission, because nothing about the host's tables would
  * make one of them work.
  */
-const NO_GENERATED_CONTEXT: ReadonlySet<string> = new Set(["Content", "Output", "Return"]);
+/**
+ * The constructs no generated source has a caller for.
+ *
+ * `<Output>` is not among them any more: a root declares its own regions with
+ * it. `<Content>` and `<Return>` stay unavailable to both kinds, because
+ * neither has a caller to take content from nor a value body to answer.
+ */
+const NO_GENERATED_CONTEXT: ReadonlySet<string> = new Set(["Content", "Return"]);
 
 /**
  * One structural construct, held to the ordinary source rules.
@@ -1687,6 +1887,29 @@ function* structural(
   if (CONSUMED_BY_PARENT.has(name) || NO_GENERATED_CONTEXT.has(name)) {
     throw new Refusal("structure");
   }
+  // Whatever this construct encloses is not the top level, whichever construct
+  // it is. Settled once here so no branch below has to remember it.
+  const inner: Lexical = lexical.topLevel ? { ...lexical, topLevel: false } : lexical;
+
+  if (name === "Output") {
+    // A root's own output declaration, and only there: a fragment renders what
+    // it renders, and an `<Output>` written anywhere below the top level
+    // declares nothing in an authored body either (`body-structure.ts`). The
+    // props rule is that body's as well, read from the same function rather
+    // than restated, because `<Output>` accepting a prop here and refusing one
+    // there would be two contracts.
+    if (lexical.language !== "root" || !lexical.topLevel) {
+      throw new Refusal("structure");
+    }
+    if (outputPropsViolation(segment) !== undefined) {
+      throw new Refusal("structure");
+    }
+    // Transparent, because expansion expands the regions and the documentation
+    // around them against one live environment in source order — so a binding a
+    // region produces is visible after it, and preflight says the same.
+    yield* transparent(segment.children, table, named, scope, inner);
+    return;
+  }
 
   // The construct's own props, over the bindings in effect where it was
   // written.
@@ -1712,7 +1935,7 @@ function* structural(
       table,
       named,
       scope,
-      lexical,
+      inner,
     );
     return;
   }
@@ -1730,7 +1953,7 @@ function* structural(
       table,
       named,
       scope,
-      lexical,
+      inner,
     );
     return;
   }
@@ -1757,14 +1980,20 @@ function* structural(
     // above already refused a `<Break>` or `<Return>` that would cross it.
     const incoming: ReadonlySet<string> = new Set(scope);
     for (const spawn of structure.spawns) {
-      yield* walk(spawn.element.children, table, named, new Set(incoming), ROOT_LEXICAL);
+      yield* walk(
+        spawn.element.children,
+        table,
+        named,
+        new Set(incoming),
+        rootLexical(lexical.language),
+      );
     }
     return;
   }
 
   if (name === "PrintErrors") {
     refuseStructure(printErrorsViolations(segment));
-    yield* transparent(segment.children, table, named, scope, lexical);
+    yield* transparent(segment.children, table, named, scope, inner);
     return;
   }
 
@@ -1779,20 +2008,20 @@ function* structural(
       if (child.type === "component" && child.name === "Answer") {
         refuseStructure(answerViolations(child));
         stated(child, scope);
-        yield* transparent(child.children, table, named, scope, lexical);
+        yield* transparent(child.children, table, named, scope, inner);
         continue;
       }
       if (!isBlankText(child)) {
         body.push(child);
       }
     }
-    yield* transparent(body, table, named, scope, lexical);
+    yield* transparent(body, table, named, scope, inner);
     return;
   }
 
   if (name === "Let") {
     refuseStructure(letViolations(segment));
-    yield* transparent(segment.children, table, named, scope, lexical);
+    yield* transparent(segment.children, table, named, scope, inner);
     // After its own body, like a component's `as`: a `<Let>` cannot name the
     // binding it is producing.
     const bound = letBindingName(segment);
@@ -1816,7 +2045,7 @@ function* structural(
     // caller is the one capture it was asked for.
     const body = new Set(scope);
     body.add(item);
-    yield* walk(segment.children, table, named, body, lexical);
+    yield* walk(segment.children, table, named, body, inner);
     const capture = eachCaptureBinding(segment);
     if (capture !== undefined) {
       scope.add(capture);
@@ -1918,7 +2147,7 @@ function refuseStructure(
 const GENERATED_XMD = "generated_xmd";
 
 /**
- * The one record shape this build writes and reads.
+ * The two record shapes this build writes and reads.
  *
  * A fixed marker rather than a version to negotiate: every record carries it,
  * and a record carrying anything else — the untagged #369 shape, the tagged one
@@ -1927,8 +2156,25 @@ const GENERATED_XMD = "generated_xmd";
  * shape whose rules this build does not know. Such a record is refused as
  * unreadable history, before the admission it would have restored performs
  * anything, rather than being migrated or read in part.
+ *
+ * A fragment and a root hold the same ordered fields and differ by marker
+ * alone. That is deliberate: the two admit different constructs, so they are
+ * different grants, and the marker is what says which one a record is. A
+ * marker-4 record cannot authorize a root and a marker-5 record cannot
+ * authorize a fragment — including when their source and selected rows are
+ * equal — so neither needs a context member, a defaulted field or a
+ * conversion to tell them apart, and marker 4's closed shape is exactly what
+ * it already was.
  */
-const RECORD_VERSION = 4;
+/** What a root whose captured implementations no longer belong to a run refuses with. */
+const REVOKED_IMPLEMENTATIONS =
+  "the generated components this root was admitted under belong to an execution that has ended.";
+
+const FRAGMENT_RECORD = 4;
+const ROOT_RECORD = 5;
+
+/** Which of the two a record is expected to be, at the result and its policy. */
+type RecordMarker = typeof FRAGMENT_RECORD | typeof ROOT_RECORD;
 
 /**
  * What the durable admission records for this source.
@@ -1943,11 +2189,13 @@ function* admitSource(
   source: string,
   table: ReadonlyMap<string, Entry[]>,
   policy: Policy,
+  marker: RecordMarker,
+  language: AdmissionLanguage,
 ): Operation<DurableJson> {
   try {
-    const { named } = yield* preflight(id, source, table);
+    const { named } = yield* preflight(id, source, table, language);
     return parseJson({
-      version: RECORD_VERSION,
+      version: marker,
       decision: "admitted",
       source,
       named: named.map((entry) => ({
@@ -1955,12 +2203,12 @@ function* admitSource(
         identity: entry.identity,
         form: entry.form,
       })),
-      policy: policyRecord(policy),
+      policy: policyRecord(policy, marker),
     });
   } catch (error) {
     if (error instanceof Refusal) {
       return parseJson({
-        version: RECORD_VERSION,
+        version: marker,
         decision: "refused",
         construct: error.construct,
       });
@@ -1981,15 +2229,17 @@ function* persistAdmission(
   table: ReadonlyMap<string, Entry[]>,
   policy: Policy,
   position: Readonly<SourcePosition> | undefined,
+  marker: RecordMarker,
+  language: AdmissionLanguage,
 ): Operation<Json> {
   const stored = yield createDurableOperation<DurableJson>(
     {
       type: GENERATED_XMD,
       name: `generated:${id}`,
-      input: policyRecord(policy),
+      input: policyRecord(policy, marker),
       ...sourceDescription(position),
     },
-    () => admitSource(id, source, table, policy),
+    () => admitSource(id, source, table, policy, marker, language),
   );
   return parseJson(stored);
 }
@@ -2001,14 +2251,15 @@ function* persistAdmission(
  * and a record somebody else wrote is not an admission because it happens to
  * have the right keys.
  */
-function readAdmission(value: Json): RetainedAdmission | undefined {
+function readAdmission(value: Json, marker: RecordMarker): RetainedAdmission | undefined {
   if (!isJsonObject(value)) {
     return undefined;
   }
   // Marked at the result level as well as inside the policy, and both have to
-  // be this build's: a record missing either marker, or carrying another
-  // build's, describes no shape this one has.
-  if (value.version !== RECORD_VERSION) {
+  // be the expected one: a record missing either marker, carrying another
+  // build's, or carrying the other evaluation kind's describes no shape this
+  // call has. Cross-kind refuses here, before anything is performed.
+  if (value.version !== marker) {
     return undefined;
   }
   const { decision } = value;
@@ -2032,7 +2283,7 @@ function readAdmission(value: Json): RetainedAdmission | undefined {
     return undefined;
   }
   const invocations = readNamed(value.named);
-  const retained = readPolicy(value.policy);
+  const retained = readPolicy(value.policy, marker);
   if (invocations === undefined || retained === undefined) {
     return undefined;
   }
@@ -2061,11 +2312,41 @@ function expand(
   id: string,
   segments: Segment[],
   named: readonly Planned[],
+  language: AdmissionLanguage,
   componentRouting: ComponentRouting | undefined,
   syntax: SyntaxReference | undefined,
+  /**
+   * Where a root's rendering accumulates.
+   *
+   * Allocated by the caller so a failure partway still leaves it holding what
+   * the root produced before it — the same reason the document root allocates
+   * its own owner outside the expansion.
+   */
+  owner: Segment[] | undefined,
 ): Operation<string> {
   return scoped(function* () {
-    yield* ErrorMode.set("throw");
+    // A root selects what it renders, so a failure inside it renders as the
+    // document's own partial output rather than throwing the whole evaluation
+    // away. A fragment is admitted *into* a document and keeps throwing.
+    yield* ErrorMode.set(language === "root" ? "output" : "throw");
+    if (language === "root") {
+      // A root begins with an empty binding environment, and this is what makes
+      // that true rather than assumed. Interpolation reads whatever environment
+      // it finds through the component Api, so a root evaluated inside a host
+      // component's invocation would otherwise resolve *that* document's
+      // bindings: a response could read one by naming it, and a captured entry
+      // draft could carry one out. With an environment of its own the only
+      // names a root resolves are the ones it bound itself, and every other
+      // brace renders exactly as written.
+      //
+      // A fragment is deliberately left as it was. It is admitted into a
+      // document and expands against that document's environment, which is why
+      // its own rule is that it may not read a binding through interpolation at
+      // all; changing what it sees would change released fragment behavior.
+      const isolated = propsEnvironment({});
+      liveEnvironment(isolated);
+      yield* Component.around({ env: () => isolated }, { at: "min" });
+    }
     // The admission this fragment was evaluated under, reported for the length
     // of the fragment. Named documentation stays with the enclosing owner, so a
     // generated body can still be told about a component it may not run.
@@ -2087,31 +2368,65 @@ function expand(
       },
       { at: "min" },
     );
+    // No enclosing identity table: protected invocation domains travel only
+    // through the narrowed route. Import and form selection belong to this
+    // source, while the reference preserves the admitting site's documentation.
+    //
+    // Named once because both expansion paths below pass the same one: a
+    // declaring root and everything else have to run under one environment or
+    // they are two languages.
+    const environment: ExecutionEnvironment = {
+      componentResolution: resolution,
+      forms: resolution.forms,
+      // Generated source writes the admitted composition table and nothing
+      // else, so it declares none. The empty catalog states that explicitly
+      // rather than inheriting the host's: a generated execution environment
+      // admits no installed structural syntax.
+      declarations: new ExecutionDeclarationCatalog([], []),
+      invokeGeneratedComponent: (
+        fn: unknown,
+        invocation: ComponentInvocation,
+        body: Operation<unknown>,
+      ) => resolution.invoke(fn, invocation, body),
+      ...(componentRouting === undefined ? {} : { componentRouting }),
+      ...(syntax === undefined ? {} : { syntax }),
+    };
+    const path = extendPath("", { f: "gen", id });
+    const counter = createBlockCounter();
+    if (language === "root" && bodyHasOutput(segments)) {
+      // A root declaring top-level `<Output>` selects what renders, and
+      // selecting needs the whole body: `expandBody` executes the
+      // documentation around the regions and emits the regions, exactly as the
+      // document root does, so one rule decides what a root renders.
+      yield* expandBody(
+        segments,
+        [],
+        {},
+        {},
+        new Set<string>(),
+        counter,
+        undefined,
+        undefined,
+        owner,
+        path,
+        undefined,
+        environment,
+        undefined,
+        undefined,
+      );
+      return renderSegments(owner ?? []);
+    }
     const expanded = yield* expandSegmentsWithin(
       segments,
       {},
       {},
       new Set<string>(),
-      createBlockCounter(),
-      undefined,
-      extendPath("", { f: "gen", id }),
+      counter,
+      owner,
+      path,
       0,
       undefined,
-      // No enclosing identity table: protected invocation domains travel only
-      // through the narrowed route. Import and form selection belong to this
-      // fragment, while the reference preserves the admitting site's documentation.
-      {
-        componentResolution: resolution,
-        forms: resolution.forms,
-        // A fragment writes the admitted composition table and nothing else, so
-        // it declares none. The empty catalog states that explicitly rather than
-        // inheriting the host's: a generated fragment's execution environment
-        // admits no installed structural syntax.
-        declarations: new ExecutionDeclarationCatalog([], []),
-        invokeGeneratedComponent: (fn, invocation, body) => resolution.invoke(fn, invocation, body),
-        ...(componentRouting === undefined ? {} : { componentRouting }),
-        ...(syntax === undefined ? {} : { syntax }),
-      },
+      environment,
       // No execution terminal: this fragment's imports are answered by the
       // narrowed provider installed above, and it inherits nothing of the
       // document execution that admitted it.
@@ -2137,20 +2452,78 @@ function expand(
  *
  * What it answers with is the fragment's rendered text.
  */
-export function evaluateGeneratedXmd(request: GeneratedXmdRequest): Operation<string> {
+export function evaluateGeneratedXmd(request: GeneratedFragmentRequest): Operation<string> {
   return evaluateProtectedGeneratedXmd(request, undefined, undefined);
 }
 
 /** Canonical Evaluate's internal handoff; absent from the public host surface. */
 export function* evaluateProtectedGeneratedXmd(
-  request: GeneratedXmdRequest,
+  request: GeneratedFragmentRequest,
   componentRouting: ComponentRouting | undefined,
   syntax: SyntaxReference | undefined,
+): Operation<string> {
+  return yield* evaluateGenerated(
+    request,
+    "fragment",
+    FRAGMENT_RECORD,
+    componentRouting,
+    syntax,
+    undefined,
+  );
+}
+
+/**
+ * Admit one generated source and perform what it asks for.
+ *
+ * One body for both kinds, because they are one admission: the same durable
+ * record, the same exact-terms comparison and the same pinned resolution. What
+ * differs is the language the walk admits, the marker the record carries, and
+ * where a root's rendering goes — and a root's route and reference are derived
+ * here rather than handed in, because this is where its admitted table exists.
+ */
+function* evaluateGenerated(
+  request: GeneratedFragmentRequest,
+  language: AdmissionLanguage,
+  marker: RecordMarker,
+  componentRouting: ComponentRouting | undefined,
+  syntax: SyntaxReference | undefined,
+  rendering: RootRendering | undefined,
+  /** What this root was resolved to, for a root evaluation. */
+  resolved?: ResolvedRoot,
 ): Operation<string> {
   const allow = selection(request.allow);
   const entries = selectedEntries(request, allow);
   const table = admitted(entries);
   const policy = currentPolicy(allow, entries);
+  // A fragment's pair arrives already narrowed, from the protected site
+  // canonical `<Evaluate>` holds. A root's is derived here.
+  let narrowed = componentRouting;
+  let reference = syntax;
+  if (resolved !== undefined) {
+    if (!resolved.live()) {
+      throw new GeneratedXmdError(REVOKED_IMPLEMENTATIONS);
+    }
+    // Seeded with the exact implementations this root admitted. Closed rather
+    // than revoked, and registered before anything expands: cleanups
+    // registered later unwind first, so the route outlives every body inside
+    // it and a wrapper kept past this root answers for nothing while the
+    // execution stays open for the next one.
+    const route = resolved.componentRouting.narrow(entries.map((entry) => entry.definition.fn));
+    yield* ensure(() => {
+      route.close();
+    });
+    narrowed = route;
+    // Narrowing is the reference's own operation, exactly as a fragment's is,
+    // and for the same reason: what this source may *write* is its admitted
+    // table, while what it may *read about* is the vocabulary its execution
+    // captured — every bootstrapped package's chapter included, each entry
+    // reported with its availability here.
+    // The captured entries this root was selected from, which is the shape
+    // `admittedSymbols` already describes an evaluation's vocabulary with — the
+    // same call the authored site makes, so one description mechanism answers
+    // for both kinds.
+    reference = resolved.reference?.available(admittedSymbols(resolved.describing));
+  }
 
   const stored = yield* persistAdmission(
     request.id,
@@ -2158,8 +2531,10 @@ export function* evaluateProtectedGeneratedXmd(
     table,
     policy,
     request.position,
+    marker,
+    language,
   );
-  const decided = readAdmission(stored);
+  const decided = readAdmission(stored, marker);
   if (decided === undefined) {
     throw new GeneratedXmdError(UNREADABLE);
   }
@@ -2191,6 +2566,178 @@ export function* evaluateProtectedGeneratedXmd(
 
   // The retained source is what expands, so a continuation runs exactly the
   // bytes this run admitted rather than a caller's copy of them.
-  const restored = yield* preflight(request.id, decided.source, table);
-  return yield* expand(request.id, restored.segments, restored.named, componentRouting, syntax);
+  const restored = yield* preflight(request.id, decided.source, table, language);
+  // Read from the admitted segments, which is the same reading `expand` selects
+  // regions with, and reported before the first effect so a failure partway
+  // still describes the root truthfully.
+  rendering?.declared(bodyHasOutput(restored.segments));
+  return yield* expand(
+    request.id,
+    restored.segments,
+    restored.named,
+    language,
+    // Core-private arguments, as a fragment's narrowed pair already are: a
+    // root's route holds its one canonical implementation and nothing else,
+    // and neither reaches the environment by any other path.
+    narrowed,
+    reference,
+    rendering?.owner,
+  );
+}
+
+/**
+ * Whether this failure is the request's own rather than this run's.
+ *
+ * Almost everything that leaves the expansion of an admitted root is the
+ * request's: source core refused, an element that failed on its own terms, a
+ * host control that declined what the source asked for. Those are what a
+ * caller decides about, so they come back as a value.
+ *
+ * Four kinds are not, and each keeps the classification it already has. They
+ * are asked about by kind rather than by position, because every one of them
+ * can arrive wrapped around a failure of the root's own, and the wrapper's
+ * shape must not decide which is reported (`errors.ts`):
+ *
+ * - a **durability failure** — the journal no longer describes this run, so
+ *   there is no root whose outcome this could be;
+ * - a **Files infrastructure failure** — a provider is absent or broke its own
+ *   contract, which is not something generated source could have caused;
+ * - a **secret-policy failure** — the one decision that must not become a
+ *   correctable answer, because correcting it is asking again for the
+ *   publication it refused; and
+ * - a **teardown failure** — work the root owned did not finish unwinding, and
+ *   a rendering reported beside that would describe a root still running.
+ */
+function ordinaryGeneratedFailure(error: unknown): boolean {
+  if (error instanceof InvocationTeardownError) {
+    return false;
+  }
+  if (durabilityFailure(error) !== undefined || filesFatalFailure(error) !== undefined) {
+    return false;
+  }
+  return firstCause(error, secretPolicyFailure) === undefined;
+}
+
+/** The secret-policy refusal this failure carries, if any. */
+function secretPolicyFailure(candidate: unknown): Error | undefined {
+  return candidate instanceof SecretDetectedError || candidate instanceof SecretScannerError
+    ? candidate
+    : undefined;
+}
+
+/**
+ * What a host is told about an ordinary failure.
+ *
+ * The canonical sentence and nothing around it. A stack names host paths, a
+ * cause graph carries whatever the elements were holding, and the generated
+ * source is the one thing a diagnostic about generated source must not echo.
+ * A document failure answers with the sentence the error mode already settled,
+ * which is what an operator reading a printed error would have read.
+ */
+function safeDiagnostic(error: unknown): string {
+  const documented = documentationFailure(error);
+  if (documented !== undefined) {
+    return documented.message;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+/**
+ * Admit one generated root and perform what it asks for.
+ *
+ * The same admission, the same durable record and the same pinned resolution a
+ * fragment gets, in the one context that supplies `<Output>`. What it answers
+ * with is the root's canonical rendering and whether the root chose it, so a
+ * host can tell an empty region from no region at all without reading the
+ * source itself.
+ *
+ * An ordinary failure of the request — source core refused, or work the root's
+ * own elements failed at — comes back as `Err` carrying a
+ * {@link GeneratedXmdRootError}, because deciding what to do about generated
+ * source that did not work is the caller's. A failure of *this run* does not:
+ * a journal that no longer describes the run, a Files provider that is not
+ * there and a teardown that failed each keep the classification they already
+ * have, so a host cannot mistake one for a response worth correcting.
+ */
+function* evaluateRoot(
+  request: GeneratedXmdRequest,
+  binding: GeneratedRootBinding,
+): Operation<Result<GeneratedXmdRootResult>> {
+  // Allocated out here, so a failure partway leaves this frame holding exactly
+  // what the root rendered before it. The flag is read from the source core
+  // admitted rather than from the caller's copy, and it is the same reading
+  // `expand` selects regions with.
+  const owner: Segment[] = [];
+  let hasOutput = false;
+  try {
+    // Resolved inside the boundary, and once. Once, because the tables this
+    // root is admitted from and the entries its vocabulary is described with
+    // are two readings of one selection, and a second call could answer
+    // differently. Inside, because resolving a class the host installed
+    // nothing for refuses *this request*: the caller asked for something the
+    // captured selection does not offer, which is an answer about the request
+    // rather than a failure of the execution holding it.
+    const selected = binding.select(selection(request.allow));
+    const output = yield* scoped(function* (): Operation<string> {
+      return yield* evaluateGenerated(
+        {
+          id: request.id,
+          source: request.source,
+          // The selection its execution captured, resolved for the classes
+          // this root asked for, canonical `<Syntax />` already among them.
+          observations: selected.observations,
+          ...(selected.mutations.length === 0 ? {} : { mutations: selected.mutations }),
+          ...(request.allow === undefined ? {} : { allow: request.allow }),
+          ...(request.position === undefined ? {} : { position: request.position }),
+        },
+        "root",
+        ROOT_RECORD,
+        undefined,
+        undefined,
+        {
+          owner,
+          declared: (value) => {
+            hasOutput = value;
+          },
+        },
+        {
+          describing: selected.describing,
+          componentRouting: binding.componentRouting,
+          reference: binding.reference,
+          live: binding.live,
+        },
+      );
+    });
+    return Ok({ output, hasOutput });
+  } catch (error) {
+    if (!ordinaryGeneratedFailure(error)) {
+      throw error;
+    }
+    // Only for a root that began rendering. An admission refusal performed
+    // nothing, so reporting an empty rendering for it would be reporting
+    // something that never happened.
+    const partial: GeneratedXmdRootResult | undefined =
+      hasOutput || owner.length > 0 ? { output: renderSegments(owner), hasOutput } : undefined;
+    return Err(new GeneratedXmdRootError(safeDiagnostic(error), partial));
+  }
+}
+
+/**
+ * Bind one execution's root evaluator to the authority that execution captured.
+ *
+ * Core-private, and the whole of the handoff: canonical execution calls this
+ * once, with the values it alone holds, and what comes back is one operation. A
+ * trusted host handle receives that operation and nothing behind it — no
+ * protected definition, no route, no domain, no identity holder and no
+ * documentation index — so the public method can evaluate a root and cannot
+ * describe, re-register or widen what it evaluates under.
+ *
+ * There is no siteless form. A root that narrowed from nothing would have to
+ * mint a second Syntax implementation and read core's own asset for its
+ * chapters, which is exactly the arrangement that reported a bootstrapped
+ * package's component as undocumented.
+ */
+export function bindGeneratedRootEvaluator(
+  binding: GeneratedRootBinding,
+): (request: GeneratedXmdRequest) => Operation<Result<GeneratedXmdRootResult>> {
+  return (request) => evaluateRoot(request, binding);
 }

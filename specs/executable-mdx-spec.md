@@ -1966,6 +1966,10 @@ run but are absent from the diagnostic trace.
 | `src/components/component-resolution.ts` | `CanonicalImports`, `ComponentResolution` — the witness a closed execution issues for the definition it produced and verifies where it is invoked, and the per-invocation request a provider publishes its definition through |
 | `src/components/generated-metadata.ts` | `GeneratedForm`, `GeneratedForms`, `admitGeneratedForms()`, `generatedRefusal()`, `definitionGeneratedRefusal()`, `offeredForm()` — what a declaration says about the generated use of each of its authored spellings: the absolute `https://executable.md/` identity a continuation is compared against, and whether that spelling observes or mutates. One pass reads each member once, validates it and answers with the copy a caller retains, and every live admission reads a definition through it (§5.3) |
 | `src/invocation-forms.ts` | `formsRefusal()`, `acceptedForms()` — the canonical authored-forms declaration both a registration and its generated metadata are held to (§5.3) |
+| `src/generated-root-owner.ts` | `createGeneratedRootOwner()`, `isGeneratedRootEvent()`, `HostExecutionError`, `BoundRootEvaluator` — the live owner of one execution's explicit root evaluations. It allocates each evaluation a durable sequence of its own past every evaluation the retained history holds, partitions it from the document's continuation through Core-owned views of one journal, and holds the bound operation a trusted handle exposes. The operation refuses rather than waits where the execution ended without activating the runner, and an authoritative failure one evaluation raised becomes the execution's own outcome rather than being raised into the document's scope |
+| `src/generated-xmd-preview.ts` | `previewGeneratedXmdRoot()`, `GeneratedXmdRootPreview`, `GeneratedXmdPreviewError` — projecting the literal top-level `<Output>` text a response prefix already says. It takes the whole accumulated prefix and returns `Result<GeneratedXmdRootPreview>` directly rather than an `Operation`, because it performs no suspended work: no file is read, no name resolved, no component invoked, no expression evaluated, no admission granted and no history written. A prefix still arriving is a success stating `incomplete`, and source the language does not allow where it is written is an `Err` — told apart by the scan's own report of the constructs it began and could not finish. Only settled meaning projects: an expression, an interpolation and a nested component wait, and a passive fence is the literal example it looks like |
+| `src/generated-interpolation.ts` | `readsBinding()` — the one rule deciding whether a piece of text would read a binding, shared by admission, which refuses such text in a fragment, and by the prefix preview, which leaves it out. Text one of them called literal and the other called a read would be two readings of one rule |
+| `src/agent/conversation.ts` | `useAgentConversation()`, `AgentConversation`, `AgentConversationRequest`, `AgentConversationError` — one retained agent conversation a trusted host holds open over the history stream it supplies, under the installations it captured through `executeInstalled()`. A host-declared identity component in a synthetic root core owns, because a provider and its placement coordinator are installed inside `Execution.document`; the session is placed under the engine's own claimant-issued identity and the host's conversation id names the history alone. The element serves turns and does not return, so the root records no terminal and reopening resumes a partial continuation. Each turn is one journaled Prompt under its own durable name, run in a task of its own, reaching the same `runPrompt()` the component does rather than a copy. `evaluateGeneratedXmdRoot()` is a third job on the same mailbox, sharing its admission guard and cancellation-join protocol: the element obtains the actual method on its own execution's handle through a private readiness bridge before announcing the conversation ready, and an evaluation sends no provider prompt, changes no configuration, and runs on a durable sequence distinct from the conversation's turns |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
 | `src/invocation-identity.ts` | `ComponentInvocation`, `IdentityComponent`, `IdentityClaimant`, `ImportSelection`, `installIdentities()`, `issueInvocation()`, `ComponentInvocationError` — what a trusted host declares to an execution, the domains that execution mints for it, and the one-use issuance a claimant answers for (§5.6) |
@@ -2003,6 +2007,9 @@ run but are absent from the diagnostic trace.
 | `packages/cli/src/deno-workflow.ts` | the Deno run store and Workspace attachment; Node and Bun install the refusing host instead |
 | `packages/workflow/src/deno/workspace/files.ts` | the transaction-bound `API.Files` provider — one durable Workspace effect per document read, write, directory ensure and search |
 | `packages/workflow/src/deno/workspace/host.ts` | `withWorkflowWorkspace()` — the run's effect coordinator, logical cwd `/`, and Files provider installed together inside one execution |
+| `src/generated-xmd-preview.ts` | `previewGeneratedXmdRoot()`, `GeneratedXmdRootPreview`, `GeneratedXmdPreviewError` — projecting the literal top-level `<Output>` text a response prefix already says. It takes the whole accumulated prefix and returns `Result<GeneratedXmdRootPreview>` directly rather than an `Operation`, because it performs no suspended work: no file is read, no name resolved, no component invoked, no expression evaluated, no admission granted and no history written. A prefix still arriving is a success stating `incomplete`, and source the language does not allow where it is written is an `Err` — told apart by the scan's own report of the constructs it began and could not finish, through the same walk that decides what a fence, a quoted `>`, an inline code span and a tag-like expression are. Only settled meaning projects: an expression, an interpolation and a nested component wait, and a passive fence is the literal example it looks like |
+| `src/generated-interpolation.ts` | `readsBinding()` — the one rule deciding whether a piece of text would read a binding, shared by admission, which refuses such text, and by the prefix preview, which leaves it out. Text one of them called literal and the other called a read would be two readings of one rule |
+| `src/agent/conversation.ts` | `useAgentConversation()`, `AgentConversation`, `AgentConversationRequest`, `AgentConversationError` — one retained agent conversation a trusted host holds open over the history stream it supplies, under the installations it captured through `executeInstalled()`. A host-declared identity component in a synthetic root core owns, because a provider and its placement coordinator are installed inside `Execution.document` and a durable preparation precedes both; the session is therefore placed under the engine's own claimant-issued identity and the host's conversation id names the history alone. The element serves turns and does not return, so the root records no terminal and reopening resumes a partial continuation. Each turn is one journaled Prompt under its own durable name, run in a task of its own, reaching the same `runPrompt()` the component does rather than a copy. `evaluateGeneratedXmdRoot()` is a third job on the same mailbox, sharing its admission guard and cancellation-join protocol: the element obtains the actual method on its own execution's handle through a private readiness bridge before announcing the conversation ready, and an evaluation sends no provider prompt, changes no configuration, and runs on a durable sequence distinct from the conversation's turns. A failure of the run that a caller caught is raised again by the release that ends the conversation, because a root that records no terminal leaves no completion for it to travel through |
 | `packages/workflow/src/generated-observations.ts` | `evaluateGeneratedFragment()` — the workflow policy adapter over `evaluateGeneratedXmd()`, returning its rendered text directly as `Operation<string>`; `GeneratedObservation` remains the read-table entry type, not an output envelope |
 | `packages/workflow/src/journal.ts` | the `workflow_run` record, canonical-record recognition, and the refusals that name differing fields without their values |
 | `packages/workflow/src/run.ts` | `retainedWorkflowInstallation()` and `getWorkflowRun()` — associating one execution with a run already created, as the `ExecutionInstallation` a trusted host passes to `executeInstalled()`, contributing a mandatory run-identity admission and the `prepare` hook that reopens the run inside the durable root. The association resolves no revision and imports no Git feature, and a run retains the bytes it executes, so nothing afterwards reaches a repository for its Markdown |
@@ -4523,6 +4530,32 @@ describing one is not permission to run it.
 at capture: being shown what a fragment may write is a different grant from
 evaluation inside evaluation.
 
+**Generated source is admitted as a fragment or as a root, and the two are
+different grants.** A fragment is admitted *into* a document and expands against
+that document's environment, which is why it may not read a binding through
+interpolation and why `<Output>` is not among the constructs it may write. A
+root is admitted by the execution that captured the selection it runs under; it
+begins with an empty environment, so the only names it resolves are the ones it
+bound itself, and a direct top-level `<Output>` declares the region it renders.
+`<Content>` and `<Return>` are unavailable to both: neither has a caller to
+claim content from nor a value body to answer, and an `<Output>` written
+anywhere below the top level declares nothing in either kind.
+
+The admission record carries which kind it is as its own marker, at the result
+and inside its policy, and an evaluation reads only its own. A fragment record
+is marker 4 and keeps exactly the closed shape and members it already had; a
+root record is marker 5 with the same ordered fields. So a retained fragment
+admission cannot authorize a root and a retained root admission cannot
+authorize a fragment — including when their source and selected rows are equal —
+and no context member, defaulted field or conversion is needed to tell them
+apart. Every fragment record written before roots existed stays readable exactly
+as it is.
+
+There is no siteless root evaluator. A root is evaluated by the execution that
+holds its captured selection, through that execution's own handle or the same
+method on a retained host conversation, so the vocabulary it may write and the
+vocabulary it may read about both come from one capture.
+
 **What it renders** is the generated fragment's ordinary output. Evaluate does
 not inspect component results and does not synthesize an observation or result
 envelope. A component without `as` contributes its ordinary output. A component
@@ -4686,6 +4719,17 @@ Evaluate returns only after its generated projection and all teardown finish.
 The [generated-work ownership and admission rules](../architecture.md#agent-permissions-and-generated-xmd)
 and [typed recovery boundary](../architecture.md#typed-candidate-recovery-around-evaluate)
 own the identity, publication and settlement mechanics.
+
+**A generated root is owned the same way, by the execution that evaluates it.**
+Each explicit `evaluateGeneratedXmdRoot()` call runs on a durable sequence of
+that execution's own, allocated past every evaluation the retained history
+holds, so reopening an execution never re-enters an interrupted evaluation: the
+suffix it left behind is a fact about what happened, and the next call is new
+work on a new address. The document's continuation and the evaluations are
+partitioned through Core-owned views of one journal, so neither replays the
+other. A root's admission and every generated effect inside it use
+occurrence-owned identities in that sequence, with no `ephemeral()` bridge,
+staging or result envelope.
 
 ### 5.4 The root document is a component
 
@@ -10383,7 +10427,20 @@ a host resolves a selector to one exact target before anything runs.
 
 `DocumentExecution` is an `Operation<Result<Json>>`: `yield* execution`
 completes with `Ok(value)` on success and `Err(error)` on document,
-infrastructure, or middleware failure. The successful value is the document's
+infrastructure, or middleware failure. `executeInstalled()` answers with
+`HostExecution`, which is that handle plus `evaluateGeneratedXmdRoot()`; the
+ordinary `execute()` handle carries no evaluator at runtime, including through
+its prototype, so the boundary is the object rather than the annotation.
+Evaluating a root neither completes nor replaces the main document: its
+rendering comes back from the method and reaches neither the output stream nor
+the completion value, and the method works only while that execution is live —
+a completed or closed handle refuses rather than reopening it, including when
+the invocation ended before its document body, and therefore its evaluation
+runner, ever existed. A refusal of availability is a value the call carries,
+not a failure of the document holding the handle: an execution whose host
+selected no generated components, and an evaluation asking for an effect class
+that host installed no table for, each answer `Err` and leave the main document
+to complete on its own terms. The successful value is the document's
 return value — its rendered Markdown for a text root, its validated JSON for a
 value root (§5.4). `collect(execution)` unwraps that same value and throws on
 `Err`. Once `execute` has returned a handle, completion never throws — every

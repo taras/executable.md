@@ -280,6 +280,72 @@ export { installInvocationAgentProvider } from "./src/agent/launch-install.ts";
 export { GeneratedXmdError } from "./src/generated-xmd.ts";
 
 /**
+ * Evaluating generated source as a **root** rather than as a fragment — see
+ * `src/generated-xmd.ts`.
+ *
+ * The same admission, the same durable record and the same pinned resolution,
+ * in the one context that supplies `<Output>`: a root selects what it renders,
+ * and the host is told whether it selected anything so an empty region and no
+ * region at all are different answers. `<Content>` and `<Return>` stay
+ * unavailable in both — neither has a caller to take content from nor a value
+ * body to answer.
+ *
+ * Which kind an admission was made as is carried by the record's own marker, so
+ * a retained root admission does not resume as a fragment or the reverse, and
+ * every fragment record this build and the one before it wrote stays readable
+ * exactly as it is.
+ *
+ * There is no siteless form: a root is evaluated by the execution that captured
+ * the selection it runs under, through `HostExecution.evaluateGeneratedXmdRoot`
+ * or the same method on an `AgentConversation`.
+ *
+ * `GeneratedXmdRequest` is the whole of what a caller states: which evaluation
+ * this is, the candidate bytes, which of the captured effect classes it may
+ * draw on, and where the asking element was written. There is no table, no
+ * inventory and no Workspace basis to pass — a root is admitted from the
+ * selection its execution already captured, so a caller has nothing to say
+ * about those. `GeneratedEffectClass` is here because that request names it.
+ */
+export { GeneratedXmdRootError } from "./src/generated-xmd.ts";
+export type {
+  GeneratedEffectClass,
+  GeneratedXmdRequest,
+  GeneratedXmdRootResult,
+} from "./src/generated-xmd.ts";
+export type { HostExecution } from "./src/execute.ts";
+export { HostExecutionError } from "./src/generated-root-owner.ts";
+export { AgentConversationError, useAgentConversation } from "./src/agent/conversation.ts";
+export type { AgentConversation, AgentConversationRequest } from "./src/agent/conversation.ts";
+
+/**
+ * What an arriving generated root already says — see
+ * `src/generated-xmd-preview.ts`.
+ *
+ * A host streaming a reply holds a prefix rather than a document, and showing
+ * the person what it says is a different question from deciding whether it may
+ * run. This answers the first and nothing else: a pure projection over the
+ * accumulated prefix, with no `Operation`, because it reads no file, resolves
+ * no name, invokes no component, evaluates no expression and grants no
+ * admission. A prefix that projects cleanly has been granted nothing, and the
+ * provider's own completion and `evaluateGeneratedXmdRoot()` remain the only
+ * things that decide a root runs.
+ *
+ * It is core's because the alternative is a second reading of one syntax. A
+ * host recognizing `<Output>` with a regular expression would have to re-decide
+ * what a fence, a quoted `>`, an inline code span and a tag-like expression
+ * are, and the two readings would disagree the first time one of them was
+ * wrong.
+ *
+ * `incomplete` says the prefix ends in syntax still arriving, which is a
+ * success rather than a refusal; invalid source — a region the language does
+ * not allow where it is written — answers `Err`. The two are deliberately
+ * distinct, and `incomplete: false` says only that this prefix is whole, never
+ * that the provider has finished or that anything may execute.
+ */
+export { GeneratedXmdPreviewError, previewGeneratedXmdRoot } from "./src/generated-xmd-preview.ts";
+export type { GeneratedXmdRootPreview } from "./src/generated-xmd-preview.ts";
+
+/**
  * Where a completed Prompt publishes, for a host that retains something beside
  * it.
  *

@@ -159,6 +159,15 @@ import {
   ProtectedImports,
 } from "./components/protected.ts";
 import { coreComponentDefinition, CORE_ORIGIN } from "./components/registry.ts";
+import { bindGeneratedRootEvaluator, pinnedComponent } from "./generated-xmd.ts";
+import type { GeneratedXmdRequest, GeneratedXmdRootResult } from "./generated-xmd.ts";
+import {
+  createGeneratedRootOwner,
+  HostExecutionError,
+  isGeneratedRootEvent,
+} from "./generated-root-owner.ts";
+import type { BoundRootEvaluator, GeneratedRootOwner } from "./generated-root-owner.ts";
+import { SYNTAX_COMPONENT, SYNTAX_PROTECTED } from "./components/Syntax.ts";
 import { rootSyntaxReference } from "./syntax-reference.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
 import { useRootSyntaxReference } from "./syntax-api.ts";
@@ -167,6 +176,7 @@ import {
   captureEvaluationProfile,
   evaluationLifetime,
   EvaluationProfileError,
+  selectedTables,
 } from "./evaluation-profile.ts";
 import type {
   EvaluationLifetime,
@@ -957,6 +967,22 @@ const DIFFERENT_PRE_ROOT_DOCUMENT =
 const ROOT_COROUTINE = "root";
 
 /**
+ * What a root evaluation is refused with when this execution established no
+ * authority for one.
+ *
+ * Values rather than failures, in the classification a closed and a busy
+ * execution already refuse with: a host that asked an execution for something
+ * it does not offer has an answer to act on, and its document goes on.
+ */
+const NO_ROOT_SELECTION =
+  "this host selected no generated components, so nothing established what a generated root " +
+  "may do";
+
+const NO_ROOT_VOCABULARY =
+  "this execution minted no canonical Syntax implementation, so a generated root has no " +
+  "vocabulary to describe";
+
+/**
  * What a recorded event turned out to be.
  *
  * "Not the root import" and "the root import, malformed" are deliberately
@@ -1215,8 +1241,16 @@ function guardedJournal(
       // or empty the history in place, and every later admission, root-history
       // validation and the replay itself would consume what it left behind.
       // The events themselves are the retained graph's own, already sealed.
+      //
+      // And an explicit root evaluation's events are not in it. They belong to
+      // a sequence of this execution's own, beside the document's continuation
+      // rather than inside it, so this history is the document's alone: a
+      // retained response is not an admission the document is standing behind,
+      // and its terminal is not this run having recorded a completion. The
+      // partition is applied to the *retained* snapshot, so each event's
+      // coroutine is read exactly once however many phases ask about it.
       const retained: readonly DurableEvent[] = Object.freeze(
-        retainEvents(yield* stream.readAll()),
+        retainEvents(yield* stream.readAll()).filter((event) => !isGeneratedRootEvent(event)),
       );
       // What the trusted host required of this history, on that exact snapshot,
       // in the order it was captured and stopping at the first refusal. Ahead of
@@ -2077,6 +2111,15 @@ function* documentWorkflow(
    * own detached copy. Ordinary mutable values from here on.
    */
   initialBindings: Readonly<JsonObject>,
+  /**
+   * The owner of this execution's explicit root evaluations.
+   *
+   * Handed over as an argument beside the expansion inputs, for the reason the
+   * import terminal is: it is the execution's own, not something the
+   * environment describes, and nothing a document, a component or middleware
+   * can name reaches it.
+   */
+  roots: GeneratedRootOwner,
 ): Workflow<DocumentResult> {
   // This run's memory of a checked command failure it never authorized. Passed
   // by value into core's own expansion and reachable from nowhere else, so no
@@ -2167,6 +2210,15 @@ function* documentWorkflow(
   const rootPath = "";
 
   const scopedExpansion: Operation<DocumentResult> = scoped(function* () {
+    // Before any authored work, and in this scope rather than outside
+    // `durableRun`: this is the scope `Execution.document` has already
+    // installed the document's runtime services in — its Agent provider, its
+    // placement coordinator, whatever middleware a trusted host wrapped the
+    // document in — so an explicit root evaluation reaches exactly what the
+    // document's own elements reach. A host that calls the method sooner waits
+    // for this rather than running somewhere else, and this scope ending is
+    // what stops the owner admitting work after the document is over.
+    yield* roots.activate();
     yield* Component.around({ env: () => rootEnv }, { at: "min" });
     // A text root is fail-capable. An undecided error no boundary handled is
     // the run's own outcome, and `<Output>` decides which regions render rather
@@ -2342,6 +2394,46 @@ function* documentWorkflow(
 export interface DocumentExecution extends Operation<Result<Json>> {
   /** Stream of output chunks. Close value is the full (or partial) output. */
   output: Stream<string, string>;
+}
+
+/**
+ * The same execution, as the trusted host that assembled it holds it.
+ *
+ * Everything a `DocumentExecution` is, and one thing more: this execution will
+ * evaluate a generated root. That is a method rather than a module export
+ * because of what evaluating one requires — the documentation this execution
+ * captured before its root import, the guarded route its canonical
+ * `<Syntax />` is entered through, and the runtime services its own document
+ * installed. All three belong to one live execution, and the only honest way
+ * for a caller to ask for them is to ask the execution that has them.
+ *
+ * Its main completion is untouched. `yield* execution` still observes the
+ * canonical document's own result after cleanup, and evaluating a root neither
+ * completes nor replaces it: the generated rendering comes back from the method
+ * and reaches the main output stream not at all.
+ *
+ * The method works while this execution is live. A host that means to evaluate
+ * repeatedly keeps its execution open; a completed or closed one refuses rather
+ * than reopening, because reopening a finished document to run a response in it
+ * would be running that response somewhere the document no longer is.
+ */
+export interface HostExecution extends DocumentExecution {
+  /**
+   * Evaluate one complete generated root under this execution's captured
+   * reference.
+   *
+   * One at a time: an overlapping call refuses rather than queuing, because
+   * there is one next sequence and two evaluations in flight have no single
+   * one. Cancelling the call cancels the work and waits for it to finish
+   * unwinding, so a caller whose halt has returned knows the evaluation is
+   * over.
+   *
+   * An ordinary failure of the request comes back as `Err`, carrying what the
+   * root had rendered. A failure of the *run* does not: it leaves this
+   * operation as itself, and it is this execution's outcome as well, so
+   * catching it cannot leave the document looking successful.
+   */
+  evaluateGeneratedXmdRoot(request: GeneratedXmdRequest): Operation<Result<GeneratedXmdRootResult>>;
 }
 
 /**
@@ -2618,7 +2710,7 @@ function* executeDocument(
    * *against*, and these are values the document's own namespace starts with.
    */
   initialBindings: Readonly<JsonObject> = NO_INITIAL_BINDINGS,
-): Operation<DocumentExecution> {
+): Operation<CanonicalInvocation> {
   const {
     stream,
     props = {},
@@ -2675,6 +2767,19 @@ function* executeDocument(
   // required (spec §9; see replay-stream.ts).
   const channel = createReplayStream<string, string>();
   const { operation, resolve } = withResolvers<Result<Json>>();
+
+  // Created before the run it belongs to, because the handle is published
+  // before the document workflow has installed anything: a trusted host holds
+  // the operation immediately, and what that operation can do begins when the
+  // document scope activates this owner. Nothing is read, allocated or
+  // installed by creating it.
+  const roots = createGeneratedRootOwner();
+  // Registered in the invocation's scope, before the run task exists, so the
+  // operation a host is already holding is closed however this invocation ends
+  // — including the ways it ends without ever entering the document body, when
+  // the runner's own closure is never reached. Closing a handle does not
+  // require having activated its runner first.
+  yield* roots.attend();
 
   yield* spawn(function* () {
     let emitted = false;
@@ -2865,13 +2970,116 @@ function* executeDocument(
       // execution that owns it.
       const journal = yield* useSecretDetection(secretDetection, stream);
 
+      // The three values a generated root is evaluated under, handed over here
+      // by value and reaching the public handle only as one bound operation.
+      //
+      // The *minted* implementation rather than the static declaration, because
+      // the guarded route answers for the exact function it built: a second
+      // implementation of the same declaration is a different function and
+      // reaches no body. The execution's own route, because the narrowing a
+      // root does has to descend from it. And the reference built above from
+      // the documentation this execution captured before its root import,
+      // because that is the one thing holding every bootstrapped package's
+      // chapter — a root that read core's own asset instead would report a
+      // package's component as undocumented.
+      // Absent, not fatal. Most executions never evaluate a root, and a host
+      // that selected no generated components established nothing a root may
+      // do — so the operation a trusted handle already holds refuses when it is
+      // called rather than this execution failing to start. The same is true of
+      // an execution that minted no canonical `<Syntax />`: there is then no
+      // vocabulary for a root to describe itself with.
+      //
+      // And it refuses with a *result*, in the classification a closed and a
+      // busy execution already refuse with. An absent selection is an answer
+      // about what this execution offers, which a host catches, acts on and
+      // goes on holding a live document for; raising it would make the
+      // document's own completion fail for a question somebody asked it.
+      const guardedSyntax = identity.protected.get(SYNTAX_COMPONENT);
+      const profile = evaluationProfile;
+      const bound: BoundRootEvaluator =
+        profile === undefined || guardedSyntax === undefined
+          ? // deno-lint-ignore require-yield
+            function* (): Operation<Result<GeneratedXmdRootResult>> {
+              return Err(
+                new HostExecutionError(
+                  profile === undefined ? NO_ROOT_SELECTION : NO_ROOT_VOCABULARY,
+                ),
+              );
+            }
+          : bindGeneratedRootEvaluator({
+              // The selection this execution captured, resolved per evaluation
+              // through the one machinery the authored site also goes through, and
+              // complete: canonical `<Syntax />` is in the table a root is admitted
+              // from and among the entries it is *described* with, so a root asking
+              // what it may write is told about the one protected answer it may
+              // write.
+              //
+              // Once, though. A host may select `Syntax` itself, and main's capture
+              // then holds this execution's own protected implementation behind its
+              // routed guard — adding core's copy beside it would offer a root one
+              // name under two definitions, which admission refuses. So a captured
+              // row this execution's route answered for is kept as it stands.
+              //
+              // Recognized by that provenance rather than by its name or its URL:
+              // `protectedOrigin` is set by `ComponentRouting.project`, which
+              // answers only for an implementation this execution's own route
+              // built, and core mints one protected implementation per name. A
+              // definition the route did not build is a different implementation
+              // under a protected name, and stays the collision it is.
+              select: (allow) => {
+                const tables = selectedTables(profile, allow);
+                const captured = tables.admitted.some(
+                  (entry) =>
+                    entry.name === SYNTAX_COMPONENT && entry.protectedOrigin === CORE_ORIGIN,
+                );
+                if (captured) {
+                  return {
+                    observations: tables.observations,
+                    mutations: tables.mutations,
+                    describing: tables.admitted,
+                  };
+                }
+                return {
+                  observations: [
+                    ...tables.observations,
+                    pinnedComponent(SYNTAX_COMPONENT, guardedSyntax),
+                  ],
+                  mutations: tables.mutations,
+                  describing: [
+                    ...tables.admitted,
+                    {
+                      name: SYNTAX_COMPONENT,
+                      origin: CORE_ORIGIN,
+                      protectedOrigin: CORE_ORIGIN,
+                      forms: SYNTAX_PROTECTED.forms ?? ["self-closing"],
+                      props: SYNTAX_PROTECTED.props,
+                      kind: "component-answer" as const,
+                      definition: guardedSyntax,
+                      ...(SYNTAX_PROTECTED.description === undefined
+                        ? {}
+                        : { description: SYNTAX_PROTECTED.description }),
+                    },
+                  ],
+                };
+              },
+              componentRouting: identity.componentRouting,
+              reference: derivedSyntax,
+              live: profile.live,
+            });
+      roots.supply({ journal, evaluator: bound });
+
       // The journal is wrapped before it reaches `durableRun`, so the identity
       // check happens inside the read that every phase downstream depends on
       // rather than in middleware anything could replace.
+      //
+      // And the document reads its *own* history rather than the whole journal:
+      // an explicit root evaluation owns a sequence of its own, so its events
+      // are not history this continuation has to align with, and a terminal it
+      // left behind is not this run having recorded a completion.
       const returned = yield* durableRun(
         function* (): Operation<DocumentResult> {
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
-            documentWorkflow(claimed, environment, resolveComponentImport, initialBindings),
+            documentWorkflow(claimed, environment, resolveComponentImport, initialBindings, roots),
           );
           try {
             return yield* beforeAnyImport(issued);
@@ -2980,7 +3188,11 @@ function* executeDocument(
         resolve(Err(failure instanceof Error ? failure : new Error(String(failure))));
         return;
       }
-      resolve(settleCompletion(Ok(result.value), completions));
+      // The execution's own evaluation policy first, then whatever the host
+      // registered. An authoritative failure one of this execution's root
+      // evaluations raised is this run's outcome: a host that caught the
+      // failure on the call cannot read a successful main result around it.
+      resolve(settleCompletion(Ok(result.value), [roots.completion, ...completions]));
     } catch (error) {
       // Close with everything already emitted — printed errors produced before
       // an abort stay visible to consumers of the close value.
@@ -2990,11 +3202,40 @@ function* executeDocument(
   });
 
   return {
-    *[Symbol.iterator]() {
-      return yield* operation;
+    execution: {
+      *[Symbol.iterator]() {
+        return yield* operation;
+      },
+      output: channel,
     },
-    output: channel,
+    evaluateGeneratedXmdRoot: roots.evaluate,
+    evaluation: roots.completion,
   };
+}
+
+/**
+ * What canonical execution produces, before a public entrypoint decides how
+ * much of it to publish.
+ *
+ * Three members rather than one object with methods on it. The document handle
+ * is what every caller gets, and the bound evaluator travels beside it so that
+ * the ordinary `execute()` surface can hand over the handle alone — its runtime
+ * object then has no evaluator to find, by its own name or through its
+ * prototype, rather than one hidden behind a narrower annotation.
+ */
+interface CanonicalInvocation {
+  readonly execution: DocumentExecution;
+  readonly evaluateGeneratedXmdRoot: BoundRootEvaluator;
+  /**
+   * The authoritative failure one of this execution's root evaluations raised.
+   *
+   * Travels out of canonical execution because it has to be reconciled on
+   * paths canonical execution does not decide. A document that produced its
+   * own outcome has it ranked against that outcome, and an invocation that was
+   * cancelled before producing one — which is how a conversation's held
+   * document always ends — has nothing of its own for it to be additive to.
+   */
+  readonly evaluation: CompletionFailure;
 }
 
 /**
@@ -3214,7 +3455,7 @@ function* runInvocation(
   observed?: () => void,
   /** What a trusted host initializes this execution's root bindings with. */
   initialization?: ExecutionInitialization,
-): Operation<DocumentExecution> {
+): Operation<CanonicalInvocation> {
   // Parsed, name-validated and copied here, before the owner task exists: an
   // input this execution cannot have refuses before an installation has run,
   // before a document has been read, and before there is a handle to report it
@@ -3222,7 +3463,7 @@ function* runInvocation(
   // afterwards; nothing is frozen, so the values stay as ordinary to work with
   // as any other binding.
   const initialBindings = initialRootBindings(initialization);
-  const ready = withResolvers<DocumentExecution>();
+  const ready = withResolvers<CanonicalInvocation>();
   const settled = withResolvers<Result<Json>>();
   const state: { finished: boolean; document: Result<Json> | undefined } = {
     finished: false,
@@ -3236,26 +3477,43 @@ function* runInvocation(
     }
   };
 
+  // This execution's own evaluation policy, reachable from every settlement
+  // path rather than only from the one canonical execution reaches. Defaulted
+  // to no failure for the window before a handle exists, which is also the
+  // window in which no evaluation can have been asked for.
+  let evaluation: CompletionFailure = () => undefined;
+
   const owner = yield* spawn(function* () {
     // Whatever ends this task — completion, failure, or a cancelled handle —
     // leaves no observer waiting on a run that is over. A document that already
     // produced an outcome keeps it: cancelling a handle during teardown ends the
     // run, it does not erase what the run decided.
     yield* ensure(() => {
+      const fatal = evaluation();
       finish(
-        state.document === undefined
-          ? Err(new Error("the document execution was cancelled"))
-          : reconcile(state.document, undefined),
+        reconcile(
+          // A cancelled invocation decided nothing of its own, so an
+          // authoritative evaluation failure it is holding is the only outcome
+          // it has. The placeholder is what a caller reads when there is not
+          // even that.
+          state.document ??
+            (fatal === undefined
+              ? Err(new Error("the document execution was cancelled"))
+              : undefined),
+          undefined,
+          fatal,
+        ),
       );
     });
 
     let published = false;
     try {
       yield* scoped(function* () {
-        const execution = yield* invoke(options, installations, readAsset, initialBindings);
+        const invoked = yield* invoke(options, installations, readAsset, initialBindings);
         published = true;
-        ready.resolve(execution);
-        state.document = yield* execution;
+        evaluation = invoked.evaluation;
+        ready.resolve(invoked);
+        state.document = yield* invoked.execution;
       });
     } catch (error) {
       const teardown = error instanceof Error ? error : new Error(String(error));
@@ -3265,32 +3523,40 @@ function* runInvocation(
         ready.reject(fatalOf(teardown) ?? teardown);
         return;
       }
-      finish(reconcile(state.document, teardown));
+      finish(reconcile(state.document, teardown, evaluation()));
       return;
     }
-    finish(reconcile(state.document, undefined));
+    finish(reconcile(state.document, undefined, evaluation()));
   });
 
-  const execution = yield* ready.operation;
+  const invoked = yield* ready.operation;
   return {
-    output: execution.output,
-    *[Symbol.iterator]() {
-      // Registered in the *consumer's* scope, so halting a consumer that is
-      // still waiting takes the invocation down with it. After settlement this
-      // does nothing, which is what lets a completed handle be read again.
-      yield* ensure(function* () {
-        if (!state.finished) {
-          yield* owner.halt();
-        }
-      });
-      // The callback this invocation was started with, captured by value at
-      // the boundary rather than reread from a record the caller still holds —
-      // so replacing that record afterwards changes nothing here. It exists so
-      // a test can cancel a consumer at the one moment that matters, after this
-      // observation is cancellable, without waiting a scheduler turn and calling
-      // that a proof. It carries nothing and decides nothing.
-      observed?.();
-      return yield* settled.operation;
+    evaluateGeneratedXmdRoot: invoked.evaluateGeneratedXmdRoot,
+    // Carried through unchanged. The completion this handle publishes has
+    // already been reconciled with it, so nothing above reads it again; it
+    // stays on the handle because it is this invocation's policy and a handle
+    // that dropped it would be the one object that could not answer for it.
+    evaluation: invoked.evaluation,
+    execution: {
+      output: invoked.execution.output,
+      *[Symbol.iterator]() {
+        // Registered in the *consumer's* scope, so halting a consumer that is
+        // still waiting takes the invocation down with it. After settlement this
+        // does nothing, which is what lets a completed handle be read again.
+        yield* ensure(function* () {
+          if (!state.finished) {
+            yield* owner.halt();
+          }
+        });
+        // The callback this invocation was started with, captured by value at
+        // the boundary rather than reread from a record the caller still holds —
+        // so replacing that record afterwards changes nothing here. It exists so
+        // a test can cancel a consumer at the one moment that matters, after this
+        // observation is cancellable, without waiting a scheduler turn and calling
+        // that a proof. It carries nothing and decides nothing.
+        observed?.();
+        return yield* settled.operation;
+      },
     },
   };
 }
@@ -3352,35 +3618,58 @@ function fatalOf(error: unknown): Error | undefined {
 }
 
 /**
- * The one result of a document whose invocation also failed to tear down.
+ * The one result of a document whose invocation also failed to tear down, or
+ * whose own root evaluations did.
  *
- * Both outcomes are kept until the scope has closed, and then ranked. A fatal
+ * Every outcome is kept until the scope has closed, and then ranked. A fatal
  * failure is reported by identity from wherever it came — a durability failure
  * first, then a Files infrastructure failure — because the engine's fences
  * match on the exact object. Below that a document that already failed keeps
- * its own failure, and only a success is converted by teardown.
+ * its own failure, and only a success is converted.
+ *
+ * Within one kind the earliest is the one reported. An evaluation runs only
+ * while the document is still live, so its failure precedes whatever the
+ * document went on to produce, which in turn precedes the invocation's
+ * teardown. That ordering is why an evaluation whose journal stopped
+ * describing the run is this execution's outcome even when the document then
+ * failed for an ordinary reason of its own: the caller that caught the
+ * evaluation failure must not be able to read a main result that looks like
+ * the only thing that went wrong.
  */
-function reconcile(document: Result<Json> | undefined, teardown: Error | undefined): Result<Json> {
+function reconcile(
+  document: Result<Json> | undefined,
+  teardown: Error | undefined,
+  /** The authoritative failure one of this execution's evaluations raised. */
+  evaluation?: Error | undefined,
+): Result<Json> {
   const failed = document !== undefined && !document.ok ? document.error : undefined;
 
-  // Kind first, then occurrence *within* that kind. The document's outcome
-  // happened before the invocation was torn down, so when both carry the same
-  // kind of fatal failure the document's is the one reported — by identity,
-  // because the engine's fences match the exact object rather than a rebuilt
-  // one.
+  // Kind first, then occurrence *within* that kind — by identity, because the
+  // engine's fences match the exact object rather than a rebuilt one.
   const durable =
+    (evaluation === undefined ? undefined : durabilityFailure(evaluation)) ??
     (failed === undefined ? undefined : durabilityFailure(failed)) ??
     (teardown === undefined ? undefined : durabilityFailure(teardown));
   if (durable !== undefined) {
     return Err(durable);
   }
   const files =
+    (evaluation === undefined ? undefined : filesFatalFailure(evaluation)) ??
     (failed === undefined ? undefined : filesFatalFailure(failed)) ??
     (teardown === undefined ? undefined : filesFatalFailure(teardown));
   if (files !== undefined) {
     return Err(files);
   }
 
+  // Below the classified kinds, occurrence still decides, and an evaluation's
+  // failure happened first. Core already classified it as a failure of the
+  // *run* rather than a reply worth correcting — a failed teardown, a refused
+  // secret policy — and a failure of that standing is not discarded merely
+  // because the document went on to fail for an ordinary reason of its own.
+  // Returned as the object the caller was handed, never rebuilt.
+  if (evaluation !== undefined) {
+    return Err(evaluation);
+  }
   if (document !== undefined && !document.ok) {
     return document;
   }
@@ -3525,7 +3814,7 @@ function* invoke(
    * not have before this function was reached.
    */
   initialBindings: Readonly<JsonObject> = NO_INITIAL_BINDINGS,
-): Operation<DocumentExecution> {
+): Operation<CanonicalInvocation> {
   const admissions = Object.freeze(
     installations.flatMap((installation) => [...(installation.admissions ?? [])]),
   );
@@ -3749,9 +4038,16 @@ export interface InvocationObservers {
   observed?: () => void;
 }
 
-/** The ordinary entrypoint: one execution, nothing installed around it. */
-export function execute(options: ExecuteOptions): Operation<DocumentExecution> {
-  return runInvocation(options, []);
+/**
+ * The ordinary entrypoint: one execution, nothing installed around it.
+ *
+ * What comes back is the document handle alone. The bound root evaluator stays
+ * in the private invocation result, so this object has no evaluator to find —
+ * by name or through its prototype — rather than one a narrower annotation
+ * merely declines to mention.
+ */
+export function* execute(options: ExecuteOptions): Operation<DocumentExecution> {
+  return (yield* runInvocation(options, [])).execution;
 }
 
 /**
@@ -3761,14 +4057,19 @@ export function execute(options: ExecuteOptions): Operation<DocumentExecution> {
  * `@executablemd/core/host` exports it, and the observers it takes belong to
  * this call alone rather than to a slot every execution shares.
  */
-export function executeObserved(
+export function* executeObserved(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
   observers: InvocationObservers,
 ): Operation<DocumentExecution> {
   // The callback is read here, once, and passed on as a value. What the caller
   // does to its own record afterwards is its own business.
-  return runInvocation(options, [...installations], packagedAssetReader, observers.observed);
+  return (yield* runInvocation(
+    options,
+    [...installations],
+    packagedAssetReader,
+    observers.observed,
+  )).execution;
 }
 
 /**
@@ -3871,12 +4172,30 @@ function initialRootBindings(
  * host holds and passes, so a separately loaded workflow package composes by
  * handing its closure over rather than by agreeing on a name.
  */
-export function executeInstalled(
+export function* executeInstalled(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
   initialization?: ExecutionInitialization,
-): Operation<DocumentExecution> {
-  return runInvocation(options, [...installations], packagedAssetReader, undefined, initialization);
+): Operation<HostExecution> {
+  const invoked = yield* runInvocation(
+    options,
+    [...installations],
+    packagedAssetReader,
+    undefined,
+    initialization,
+  );
+  const { execution } = invoked;
+  // Assembled here, at the trusted boundary, and nowhere else. The document
+  // handle this delegates to is the authoritative one: the consumer's own
+  // `ensure` is registered in the consumer's scope exactly as before, so
+  // halting a consumer still takes the invocation down with it.
+  return {
+    output: execution.output,
+    *[Symbol.iterator]() {
+      return yield* execution;
+    },
+    evaluateGeneratedXmdRoot: invoked.evaluateGeneratedXmdRoot,
+  };
 }
 
 /**
@@ -3893,12 +4212,12 @@ export function executeInstalled(
  * different cancellation boundary from cancelling inside symbol discovery, and
  * there is no other point in that operation a test can stand at.
  */
-export function executeReadingAssetsWith(
+export function* executeReadingAssetsWith(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
   readAsset: DocumentationReader,
 ): Operation<DocumentExecution> {
-  return runInvocation(options, [...installations], readAsset);
+  return (yield* runInvocation(options, [...installations], readAsset)).execution;
 }
 
 /**

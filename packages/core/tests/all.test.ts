@@ -33,7 +33,7 @@ import { useEchoExec, useStubFs } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { executeInstalled } from "../host.ts";
 import { evaluateGeneratedXmd, pinnedComponent } from "../src/generated-xmd.ts";
-import type { GeneratedObservation, GeneratedXmdRequest } from "../src/generated-xmd.ts";
+import type { GeneratedObservation, GeneratedFragmentRequest } from "../src/generated-xmd.ts";
 import type { DurablePreparation, ExecutionInstallation } from "../host.ts";
 import { forEach } from "@effectionx/stream-helpers";
 import { collect } from "../src/collect.ts";
@@ -1252,7 +1252,7 @@ function generatedProbe(): GeneratedObservation {
   return pinnedComponent("Probe", GENERATED_PROBE, "component-answer");
 }
 
-function generatedRequest(source: string): GeneratedXmdRequest {
+function generatedRequest(source: string): GeneratedFragmentRequest {
   return { id: "turn-1", source, observations: [generatedProbe()] };
 }
 
