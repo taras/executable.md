@@ -93,7 +93,7 @@ await main(function* (args) {
   yield* useHostFiles();
   // The assembly this host selects, stated here as an entrypoint states it.
   // Inert: this fixture selects no repository, so nothing ever reaches it.
-  yield* useDenoRepl({ runtime: "source", platform: "unix", execPath: process.execPath });
+  yield* useDenoRepl();
 
   const ran = yield* runReplProgram({
     profile: {

@@ -9,6 +9,12 @@
  * so a changed locator diverges without the bytes of either one being retained
  * outside the single column that holds them.
  *
+ * Both questions are pure string arithmetic over one closed grammar, which is
+ * why they live beside the records rather than inside an adapter: the native
+ * providers admit a locator a document wrote, and the retained Push codec holds
+ * a saved origin to the same grammar and the same fingerprint without importing
+ * a provider to do it.
+ *
  * Admission is a closed allowlist rather than a search for bad shapes. Git's
  * locator grammar reaches well past URLs — `ext::sh -c …` runs a command, a
  * leading `-` is read as an option, and a transport helper is whatever is on

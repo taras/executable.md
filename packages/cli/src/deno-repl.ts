@@ -14,13 +14,11 @@ import { homedir } from "node:os";
 import { sep } from "node:path";
 import process from "node:process";
 import type { Operation } from "effection";
-import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { installReplHost, platformDataRoot, replHostFacts } from "./repl-assembly.ts";
 import { XMD_VERSION } from "./cli.ts";
 import { useDenoReplTerminal } from "./deno-repl-terminal.ts";
-import { useDenoReplRepositories } from "./deno-repositories.ts";
 
-export function* useDenoRepl(helper: HelperAssembly): Operation<void> {
+export function* useDenoRepl(): Operation<void> {
   yield* installReplHost({
     dataRoot: () => platformDataRoot(process.platform, homedir(), process.env, sep),
     // What this process is, stated here because this is where it is known.
@@ -39,13 +37,5 @@ export function* useDenoRepl(helper: HelperAssembly): Operation<void> {
     createExclusive: (path) => open(path, "wx").then((handle) => handle.close()),
     appendRecord: (path, record) => appendFile(path, record),
   });
-  // What an entry's execution initializes: the recording of the File and Dir
-  // work it does, and of the managed Repository and Worktree selections that
-  // say where it does it. Registered here, in the runtime scope the selected
-  // REPL host owns, because only a runtime-named module may name the native
-  // adapter and this runtime's own credential-helper assembly — and registering
-  // it acquires nothing, so a session that only reads history discovers no
-  // checkout, creates no managed root and takes no lease.
-  yield* useDenoReplRepositories(helper);
   yield* useDenoReplTerminal();
 }

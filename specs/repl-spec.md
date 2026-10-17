@@ -1346,6 +1346,68 @@ completed Git operation takes neither. A no-op Add, a same-branch Switch and a
 Commit that will refuse take them too: whether `git` will change anything is not
 predicted.
 
+### The branch an entry published
+
+Inside a lexical `<Repository>` — or a `<Worktree>` of one, including a
+self-closing Worktree's captured path entered through `<Dir>` — type this:
+
+```xmd
+<Repository name="project" url="/absolute/path/to/remote.git">
+  <Git.Switch branch="review/push" />
+  <File path="notes.md">Ready for review.</File>
+  <Git.Add paths="notes.md" />
+  <Git.Commit message="Prepare notes" as="commit" />
+  <Git.Push />
+  <Elicit schema={{ type: "string", enum: ["continue"] }} as="answer">
+    The branch containing {commit} was published. Continue?
+  </Elicit>
+  <File path="after.md">Continued.</File>
+</Repository>
+```
+
+`<Git.Push />` takes no props and no content, renders nothing and binds nothing.
+It publishes the branch the selected checkout is on to that Repository's origin,
+without forcing and without changing upstream tracking.
+
+Leave at the question, make another commit on that branch from a shell, then come
+back to the printed location. The branch on the remote still holds the commit
+the entry published, nothing was pushed a second time, and no `git` ran at all.
+Answering performs the write after the question for the first time. A *new*
+`<Git.Push />` after that publishes what the checkout holds now, which is what
+makes this retention rather than a cache.
+
+What is written down before anything is contacted is the *request*: the branch,
+the commit, the destination ref and the origin this publication asked for. So an
+entry interrupted between asking and hearing back publishes that same request
+when you continue it — the commit it named, not today's HEAD — and an entry whose
+push the remote accepted and whose result was never written down adopts that
+completion rather than repeating it. One publication happens, not two.
+
+The decisions are the ones publication has everywhere else. A destination that
+does not exist yet, and one holding a commit this branch already contains, are
+published once with an exact non-force refspec. A destination already holding
+this exact commit is adopted and nothing is pushed. A destination holding work
+this branch does not contain is a conflict: nothing is published, nothing is
+forced and nothing is fetched. Permanent ambiguity and a host that could not
+answer are their own refusals, and an acknowledged refusal replays as itself
+rather than being retried for you.
+
+A detached HEAD refuses before anything is contacted, because a commit is not
+somewhere to publish it. A checkout that records no usable origin refuses on the
+same terms. Neither writes a request down, and neither reads a credential.
+
+Your checkout's own configuration cannot redirect a publication: the transport
+runs in a repository this run created, reading your objects through a read-only
+door, so a `pushurl`, a URL rewrite, a `pre-push` hook or a credential helper
+written into the checkout reaches nothing. The commit a saved request named has
+to still be readable — a missing object refuses rather than being fetched — and a
+moved branch or HEAD alone refuses nothing.
+
+A publication takes ownership of the managed checkout it reads from, and takes
+no hold on the repository itself: it changes no file, index, branch or
+configuration there. Another entry committing in that repository does not stop
+it; another entry holding the checkout does, before a request exists.
+
 ### The issue an entry filed, and the one it read
 
 An entry files and reads issues wherever you started the REPL, inside a checkout
@@ -1450,16 +1512,16 @@ text. No second name for the entry appears in a record: which history an entry
 may continue is the range it was given. Reading is not owning: a settled
 history, a frozen position and a refused location prepare nothing, look for no
 checkout and hold nothing. A host that registers no recording runs the same
-file work with nothing retained, which is what Node and Bun do; `<Issue>` there
-reports that no provider is installed, exactly as it does under any other host
-that installs none.
+file work with nothing retained, which is what Node and Bun do; `<Issue>` and
+`<Git.Push />` there report that no provider is installed, exactly as they do
+under any other host that installs none.
 
-An entry's issue work is named by the execution and the entry's own position in
-it, and by nothing else. Two entries holding identical text are two entries; an
-entry of another execution is somebody else's; and a tracker URL, a prop, a
-component answer and anything else a document can write take no part in it. That
-is what makes the interrupted upsert above answerable: the key is derived from
-facts that survive leaving and coming back.
+An entry's publication and issue work are named by the execution and the
+entry's own position in it, and by nothing else. Two entries holding identical
+text are two entries; an entry of another execution is somebody else's; and a
+tracker URL, a prop, a component answer and anything else a document can write
+take no part in it. That is what makes the interrupted upsert above answerable:
+the key is derived from facts that survive leaving and coming back.
 
 Components receive immutable view data and answer with a typed semantic action.
 They hold no events, no history, no session, no repository and no host operation,
@@ -2014,15 +2076,16 @@ resolved against the frame that published its coordinates.
   do not open the same location twice for writing. The hold on a checkout is a
   different thing: it says one entry at a time may mutate one repository, and it
   says nothing about who may write this execution's history.
-- Publication is not part of this. `<Git.Push>` and `<PullRequest>` refuse in a
-  REPL entry exactly as they do under any host that installs no provider for
-  them, and a retained local result authorizes neither. What an entry retains is
-  `<Repository>` and `<Worktree>` selection, the file and directory work inside
-  those checkouts and the one it was started in, `<Git.Add>`, `<Git.Switch>` and
-  `<Git.Commit>` in them, and the issues it filed and read; nothing is pushed or
-  published. A runtime that installs no repository provider — Node and Bun —
-  refuses the Git components before any native operation, while ordinary
-  `<File>` and `<Dir>` work keeps working there.
+- Pull requests are not part of this. `<PullRequest>` refuses in a REPL entry
+  exactly as it does under any host that installs no provider for it, and
+  neither a retained local result nor a retained publication authorizes one.
+  What an entry retains is `<Repository>` and `<Worktree>` selection, the file
+  and directory work inside those checkouts and the one it was started in,
+  `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` in them, the branch
+  `<Git.Push />` published, and the issues it filed and read. A runtime that
+  installs no repository provider — Node and Bun — refuses the Git components,
+  publication included, before any native operation or remote contact, while
+  ordinary `<File>` and `<Dir>` work keeps working there.
 - `<Issue>` is an ordinary shadowable default here, as it is under every other
   host. A repository component of that name keeps its ordinary precedence over
   it, and what such a component does not get is the identity an entry's own

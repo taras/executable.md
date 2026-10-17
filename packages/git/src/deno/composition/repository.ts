@@ -39,7 +39,7 @@ import {
 } from "./git.ts";
 import { useGitAuthentication } from "./host.ts";
 import type { RepositoryHost } from "./host.ts";
-import { admitLocator, locatorFingerprint } from "./locator.ts";
+import { admitLocator, locatorFingerprint } from "../../composition/locator.ts";
 import {
   exportTree,
   importTree,

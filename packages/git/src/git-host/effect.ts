@@ -9,10 +9,19 @@
  * remote mutation and local publication, the same external identity lets observation
  * adopt completion without repeating it.
  *
- * Run and expansion identify the effect; the complete detached request's digest
- * names the durable operation so changed inputs cannot consume an earlier answer.
- * Retained identities and abandoned-history enforcement remain checked on the live
- * path before provider work.
+ * Two entrypoints reach that machinery, and they differ only in where the
+ * identity comes from and what a live attempt is.
+ * {@link reconcileGitHostEffect} derives it from the workflow run and the
+ * engine's expansion, and borrows a retained identity where this run already
+ * holds a record. {@link reconcileOwnedGitHostEffect} uses exactly the owner
+ * and site its caller states, borrows nothing, and runs that caller's provider
+ * and validation inside one scope joined before publication. Both share the
+ * complete-request parse, the attempt, the decision, the coordinator and the
+ * readback; abandoned-history enforcement is checked on either live path before
+ * provider work.
+ *
+ * The complete detached request's digest names the durable operation, so changed
+ * inputs cannot consume an earlier answer.
  *
  * {@link GitHost} exposes one frozen, one-use routing request. Public middleware
  * may observe, refuse, narrow policy or delegate; it receives no credential,
@@ -538,16 +547,42 @@ function errorOf(value: unknown): Error {
 
 function* attempt(
   description: EffectDescription,
-  request: CompleteGitHostEffectRequest,
   borrowed: BorrowedIdentity | undefined,
+  execute: (settlement: GitHostSettlement) => Operation<Json>,
 ): Workflow<unknown> {
   // One settlement per attempt, created here and reachable only from the two
   // halves of this operation. Nothing a document, a provider or a handler holds
   // can put a decision in it.
   const settlement: GitHostSettlement = {};
-  return yield createDurableOperation(description, () => reconcile(request, settlement), {
+  return yield createDurableOperation(description, () => execute(settlement), {
     coordinator: gitHostCoordinator(settlement, borrowed),
   });
+}
+
+/**
+ * The record this retained value is for this request, or the refusal it is not.
+ *
+ * The same two questions on both entrypoints: the journal's value parses as a
+ * reconciliation record, and the request inside it is the request being made
+ * now. A retained result is consumed by the effect that produced it rather than
+ * by whatever arrives at the same journal position.
+ */
+function readback(
+  retained: unknown,
+  request: CompleteGitHostEffectRequest,
+): GitHostReconciliationRecord {
+  const record = parseGitHostReconciliationRecord(retained);
+  if (record === undefined) {
+    throw new GitHostProtocolError(
+      "the journal holds a value that does not describe a Git-host reconciliation record",
+    );
+  }
+  if (!sameGitHostEffectRequest(record.request, request)) {
+    throw new GitHostProtocolError(
+      "the journal holds a Git-host reconciliation record for a different request",
+    );
+  }
+  return record;
 }
 
 /**
@@ -560,7 +595,7 @@ function* attempt(
 function completeRequest(
   runId: string,
   expansionId: string,
-  request: GitHostEffectRequest,
+  request: unknown,
 ): CompleteGitHostEffectRequest {
   const complete = parseCompleteGitHostEffectRequest({
     identity: { runId, expansionId },
@@ -570,7 +605,7 @@ function completeRequest(
   });
   if (complete === undefined) {
     throw new Error(
-      "reconcileGitHostEffect() needs a non-empty kind and JSON inputs and natural key. A " +
+      "a Git-host effect needs a non-empty kind and JSON inputs and natural key. A " +
         "request missing one of them, or holding a value JSON cannot express, names no " +
         "Git-host effect.",
     );
@@ -619,21 +654,207 @@ export function* reconcileGitHostEffect(
 
   let retained: unknown;
   try {
-    retained = yield* attempt(description, complete, borrowed);
+    retained = yield* attempt(description, borrowed, (settlement) =>
+      reconcile(complete, settlement),
+    );
   } catch (error) {
     throw gitHostFailure(error);
   }
 
+  return readback(retained, complete);
+}
+
+/**
+ * Whose retained history one external effect belongs to, and which invocation
+ * inside it this is.
+ *
+ * Named for what the two members are rather than for the profile that first
+ * supplied them, exactly as the Issue envelope beside this names them. A
+ * workflow run supplies its run id and the engine's expansion; a REPL entry
+ * supplies the owner its host derived and the invocation identity canonical
+ * core minted. The `runId`/`expansionId` field spellings in the record and the
+ * fingerprint are an encoding of exactly those two, so one reader reads a
+ * history written under either profile.
+ *
+ * Neither member comes from a document, a prop, a Context value, middleware or
+ * a provider, for the reason neither ever did: a party that could name the
+ * identity could reconcile somebody else's external work.
+ */
+export interface OwnedGitHostEffect {
+  readonly owner: string;
+  readonly site: string;
+  readonly request: GitHostEffectRequest;
+}
+
+/**
+ * What one live owned attempt is, as private trusted code.
+ *
+ * Both members are the caller's own closure rather than anything composable.
+ * `provider` is invoked once, inside the attempt's live execution, and the
+ * handler it answers with is installed at the terminal end for the whole
+ * reconciliation. `validate` is the caller's effect-specific reading of the
+ * complete record, run before the coordinator publishes it, so a completion the
+ * caller cannot account for is never acknowledged.
+ *
+ * A completed replay invokes neither. No provider is constructed, no credential
+ * is read, nothing is contacted, and the record comes back through the ordinary
+ * parsed readback below.
+ */
+export interface OwnedGitHostLive {
+  provider(): Operation<GitHostProvider>;
+  validate(record: GitHostReconciliationRecord): void;
+}
+
+/**
+ * Reconcile one external effect under the identity its owner states.
+ *
+ * The same complete-request, attempt, decision and readback machinery
+ * {@link reconcileGitHostEffect} uses, with two differences and no others. The
+ * identity is exactly the supplied owner and site — nothing is derived from a
+ * workflow run and no retained identity is borrowed — and the live attempt
+ * installs the caller's provider and runs the caller's validation inside one
+ * scope that is torn down and joined before publication can acknowledge
+ * anything.
+ *
+ * That ordering is the whole of what this entrypoint adds. A successful
+ * outcome, and an ordinary conflict, ambiguity or unavailability the worker
+ * authored, are published only after every per-attempt resource has closed: a
+ * cleanup that fails replaces what was raised, so the attempt is no longer
+ * holding the object it authored and nothing is published at all.
+ */
+export function* reconcileOwnedGitHostEffect(
+  input: OwnedGitHostEffect,
+  live: OwnedGitHostLive,
+): Operation<GitHostReconciliationRecord> {
+  // Read before the first suspension, and through the same total parse a
+  // journal value gets. The caller's object is its own, and this operation
+  // suspends — hashing the request, and then reconciling it — across which
+  // whoever handed it over could still change what it says.
+  const owner = ownedMember(input, "owner");
+  const site = ownedMember(input, "site");
+  const complete = completeRequest(owner, site, readMember(input, "request"));
+
+  const expansion = yield* getExpansion();
+  const description: EffectDescription = {
+    type: GIT_HOST_EFFECT,
+    name: yield* gitHostRequestFingerprint(complete),
+    // Where the authored component asking for this effect was written —
+    // diagnostic journal data, never part of the fingerprint, the request, or
+    // the reconciliation record.
+    ...sourceDescription(expansion.position),
+  };
+
+  let retained: unknown;
+  try {
+    // No borrowed identity: this owner and site are the ones supplied, and a
+    // name taken from a retained record is not something this entrypoint can
+    // be asked to perform under. The abandoned-history guard inside the
+    // coordinator still applies.
+    retained = yield* attempt(description, undefined, (settlement) =>
+      owned(complete, settlement, live),
+    );
+  } catch (error) {
+    throw gitHostFailure(error);
+  }
+
+  return readback(retained, complete);
+}
+
+/**
+ * One live owned attempt: the caller's provider, the shared decision, and the
+ * caller's own reading of what it produced.
+ *
+ * Scoped around the whole reconciliation, so a resource the provider opened to
+ * observe is still open when it performs and every one of them is closed before
+ * this operation returns to the coordinator that publishes.
+ *
+ * The attempt's outcome is *held* across that teardown rather than raised
+ * through it. Both halves of this are deliberate. A successful outcome and an
+ * ordinary conflict, ambiguity or unavailability are only handed on once the
+ * scope has finished unwinding, so publication acknowledges work whose
+ * resources have actually finished. And teardown that fails raises from the
+ * scope instead, before anything held here is handed on: that failure is
+ * nobody's authored outcome, so a cleanup that failed publishes neither a
+ * success nor a refusal the worker had already decided.
+ *
+ * Cancellation stays cancellation. A halted scope unwinds without raising, so
+ * nothing is held, nothing is re-raised and nothing is published.
+ */
+function* owned(
+  request: CompleteGitHostEffectRequest,
+  settlement: GitHostSettlement,
+  live: OwnedGitHostLive,
+): Operation<Json> {
+  let held: Result<Json> | undefined;
+  yield* scoped(function* (): Operation<void> {
+    const provider = yield* live.provider();
+    held = yield* trapped(withGitHostProvider(provider, validated(request, settlement, live)));
+  });
+  if (held === undefined) {
+    throw new GitHostProviderError(
+      "this attempt's own scope ended before it reached an answer, so nothing was reconciled",
+    );
+  }
+  if (!held.ok) {
+    // The exact object the attempt authored, so the coordinator still reads its
+    // authorship by identity and publishes only what the Git host said.
+    throw held.error;
+  }
+  return held.value;
+}
+
+/**
+ * The attempt's own outcome as a value, so teardown happens before it is acted
+ * on.
+ *
+ * Only a raised failure is caught. Cancellation unwinds a coroutine rather than
+ * raising into it, so a halted attempt produces no held outcome at all.
+ */
+function* trapped(operation: Operation<Json>): Operation<Result<Json>> {
+  try {
+    return Ok(yield* operation);
+  } catch (error) {
+    return Err(errorOf(error));
+  }
+}
+
+function* validated(
+  request: CompleteGitHostEffectRequest,
+  settlement: GitHostSettlement,
+  live: OwnedGitHostLive,
+): Operation<Json> {
+  const retained = yield* reconcile(request, settlement);
+  // Parsed and held to the caller's own expectation here, where there is still
+  // nothing published. A completion whose shape this boundary cannot read, or
+  // that the caller cannot account for, is the boundary failing: it is authored
+  // as this attempt's own non-outcome, so its exact sentence survives and no
+  // outcome is written down.
   const record = parseGitHostReconciliationRecord(retained);
   if (record === undefined) {
-    throw new GitHostProtocolError(
-      "the journal holds a value that does not describe a Git-host reconciliation record",
+    throw author(
+      settlement,
+      new GitHostProtocolError(
+        "this attempt produced a value that does not describe a Git-host reconciliation record",
+      ),
+      false,
     );
   }
-  if (!sameGitHostEffectRequest(record.request, complete)) {
-    throw new GitHostProtocolError(
-      "the journal holds a Git-host reconciliation record for a different request",
+  try {
+    live.validate(record);
+  } catch (error) {
+    throw author(settlement, errorOf(error), false);
+  }
+  return retained;
+}
+
+/** One stated identity member, read exactly once, or a refusal naming it. */
+function ownedMember(input: unknown, member: "owner" | "site"): string {
+  const read = readMember(input, member);
+  if (typeof read !== "string" || read === "") {
+    throw new Error(
+      `reconcileOwnedGitHostEffect() needs a non-empty ${member}. An effect with no ${member} ` +
+        "names no retained history, so nothing about it could be reconciled.",
     );
   }
-  return record;
+  return read;
 }

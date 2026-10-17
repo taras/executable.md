@@ -51,6 +51,17 @@ export type { RunCompositionOptions } from "./src/deno/run-composition/provider.
 export { useReplRepositoryRecording } from "./src/deno/retained-repository/provider.ts";
 export type { ReplRecordingOptions } from "./src/deno/retained-repository/provider.ts";
 /**
+ * One REPL entry's repository capability, as the per-entry factory the CLI
+ * calls inside that entry's own task.
+ *
+ * The factory alone. What it establishes — the recorder, the selection
+ * registry, the registered checkouts, the managed slots, the native turn and
+ * the publication's own request records — stays inside the closure it delivers
+ * to: a package that could reach one of those could publish a branch under an
+ * entry it does not own, or read back the receipt of one.
+ */
+export { replRepositoryInstallation } from "./src/deno/retained-repository/provider.ts";
+/**
  * One REPL entry's issue capability, as the inert value the CLI selects.
  *
  * The installation alone. What it builds — the entry's own `<Issue>`

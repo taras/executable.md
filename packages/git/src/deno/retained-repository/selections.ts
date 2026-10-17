@@ -88,7 +88,7 @@ import {
   type ReplPlacementRefusalData,
   type ReplPlacementRequest,
 } from "../../retained-repository/placement-records.ts";
-import { admitLocator, locatorFingerprint } from "../composition/locator.ts";
+import { admitLocator, locatorFingerprint } from "../../composition/locator.ts";
 import { GitRefusal, type GitSession } from "../composition/git.ts";
 import type { RepositoryHost } from "../composition/host.ts";
 import {
@@ -127,6 +127,23 @@ export interface ReplPlacementRegistration {
    * recorded root, never read out of the journal.
    */
   readonly slot: { readonly kind: SlotKind; readonly path: string } | undefined;
+  /**
+   * Where a branch of this checkout would be published, or absence.
+   *
+   * Private entry state, and deliberately not part of any record: a saved
+   * placement carries a locator *fingerprint* and never the bytes, so a
+   * publication reauthenticates its destination from what this entry can see
+   * now rather than from what a journal says. A managed selection answers with
+   * the locator the document wrote and this provider admitted; a linked
+   * checkout answers with its owner's; an ambient owner answers from the
+   * discovery this entry already shares, which is why this is an operation
+   * rather than a value — a replayed publication asks it nothing.
+   *
+   * Absence is an ordinary answer. A checkout that records no usable origin has
+   * nowhere to publish to, and that is a refusal a document can act on rather
+   * than something to invent a destination for.
+   */
+  origin(): Operation<string | undefined>;
 }
 
 /** What a recorded selection needs from the entry that owns it. */
@@ -184,6 +201,9 @@ export function* selectReplRepository(
 
   const registration = yield* recordedPlacement(entry, recorded, {
     slot: (root) => repositorySlot(root, locator, request.name),
+    // The locator this invocation admitted, which is where a branch of this
+    // Repository publishes to. Nothing is read for it and nothing is recorded.
+    origin: () => admitted(locator),
     // The slot lease, before anything inspects or creates the checkout, and
     // held until this entry tears down.
     acquire: (root, slot) =>
@@ -236,10 +256,11 @@ export function* selectReplWorktree(
   repository: RepositorySelection,
   request: WorktreeRequest,
 ): Operation<RepositorySelection> {
-  const owner = entry.selections.authenticate(
+  const held = entry.selections.authenticate(
     repository,
     () => new RepositorySelectionError("<Worktree>"),
-  ).placement;
+  );
+  const owner = held.placement;
   const recorded: ReplPlacementRequest = Object.freeze({
     kind: "worktree" as const,
     name: request.name,
@@ -252,6 +273,9 @@ export function* selectReplWorktree(
 
   const registration = yield* recordedPlacement(entry, recorded, {
     slot: (root) => worktreeSlot(root, owner.commonDirectory, request.name),
+    // A linked checkout publishes where its own repository does, so this is
+    // the owner's answer and never a second admission of anything.
+    origin: () => held.origin(),
     *acquire(root, slot) {
       yield* entry.holdSlot(root, "worktree", slot, `worktree ${JSON.stringify(request.name)}`);
       // Before the selector, not after: `worktree add` writes refs and linked
@@ -314,6 +338,12 @@ export function* selectReplAmbientOwner(
     slot: () => undefined,
     // Nothing is held for it: this is the checkout the person was already in.
     acquire: () => nothing(),
+    // The ambient repository's own recorded origin, admitted when it was
+    // discovered. Asked through the entry's shared discovery and only when a
+    // publication needs it, so a replayed selection reaches no `git`.
+    *origin(): Operation<string | undefined> {
+      return (yield* entry.ambient())?.origin;
+    },
     *perform() {
       const ambient = yield* entry.ambient();
       if (ambient === undefined) {
@@ -383,7 +413,7 @@ function* recordedPlacement(
   if (!parsed.outcome.ok) {
     throw placementFailure(request, refusalOf(parsed.outcome.error));
   }
-  return registered(request, parsed.outcome.value, selector.slot);
+  return registered(request, parsed.outcome.value, selector.slot, selector.origin);
 }
 
 /**
@@ -401,6 +431,15 @@ interface ReplPlacementSelector {
   acquire(root: string, slot: string): Operation<void>;
   /** Call the ordinary selector, and describe what it selected. */
   perform(root: string, slot: string): Operation<ReplPlacement>;
+  /**
+   * Where a publication from this checkout would go, asked only when one is.
+   *
+   * Live and replayed selections share it, because it is not a fact about
+   * either: it is what this entry can see about the destination now, and a
+   * selection that was answered from a record still knows the locator the
+   * document in front of it wrote.
+   */
+  origin(): Operation<string | undefined>;
 }
 
 /**
@@ -605,6 +644,7 @@ function registered(
   request: ReplPlacementRequest,
   placement: ReplPlacement,
   slotOf: (root: string) => string | undefined,
+  origin: () => Operation<string | undefined>,
 ): ReplPlacementRegistration {
   if (placement.kind !== request.kind) {
     throw mismatch(request);
@@ -613,7 +653,7 @@ function registered(
     if (placement.managedRoot !== undefined || placement.ownerCheckout !== placement.checkoutRoot) {
       throw mismatch(request);
     }
-    return Object.freeze({ placement, slot: undefined });
+    return Object.freeze({ placement, slot: undefined, origin });
   }
   const root = placement.managedRoot;
   if (root === undefined || placement.displayName !== request.name) {
@@ -645,7 +685,14 @@ function registered(
   return Object.freeze({
     placement,
     slot: Object.freeze({ kind: request.kind, path }),
+    origin,
   });
+}
+
+/** A locator this provider already admitted, as an answer rather than a read. */
+// deno-lint-ignore require-yield
+function* admitted(locator: string): Operation<string> {
+  return locator;
 }
 
 function mismatch(request: ReplPlacementRequest): ReplPlacementRecordError {

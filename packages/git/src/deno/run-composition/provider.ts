@@ -85,7 +85,7 @@ import {
 } from "../../issue/operations.ts";
 import { issueIdempotencyKey, parseIssueDetails, parseIssueRecord } from "../../issue/records.ts";
 import { IssueProtocolError } from "../../issue/errors.ts";
-import { locatorFingerprint } from "../composition/locator.ts";
+import { locatorFingerprint } from "../../composition/locator.ts";
 import { currentBranch, gitSession, resolveCommit, type GitSession } from "../composition/git.ts";
 import { denoRepositoryHost, type RepositoryHost } from "../composition/host.ts";
 import type { GitAuthentication } from "../composition/authentication.ts";

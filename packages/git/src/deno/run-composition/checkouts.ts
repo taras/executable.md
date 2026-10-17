@@ -37,7 +37,7 @@ import { realpath } from "node:fs/promises";
 import { ensure, scoped, until, type Operation } from "effection";
 import { randomUUID } from "node:crypto";
 import type { GitObjectFormat } from "../../composition/records.ts";
-import { admitLocator, locatorFingerprint } from "../composition/locator.ts";
+import { admitLocator, locatorFingerprint } from "../../composition/locator.ts";
 import {
   addWorktree,
   branchExists,

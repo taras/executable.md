@@ -10202,6 +10202,30 @@ one. A live operation takes the selected placement's managed slot and then the
 hold on the repository it changes, keeps both until the entry is torn down, and
 takes neither to answer a completed one.
 
+It answers one publication beside them. `<Git.Push />` publishes the branch the
+selected checkout is on to that Repository's origin through the shared Git-host
+reconciliation, and what the entry adds beneath it is the request it asked for.
+That request — the authenticated Repository identity, the checkout the selection
+named and its common Git directory, the covering checkout for the received
+working directory, the admitted credential-free origin held to the identity's own
+fingerprint, and the branch and commit read inside the entry's own native turn —
+is published before anything is contacted, so a continuation reconciles that
+exact request rather than resolving a new one and a push the remote accepted
+before the journal recorded it is adopted rather than repeated. A completed
+publication is answered from its receipt with no provider constructed, no
+credential read and nothing contacted. A detached HEAD and a checkout recording
+no usable origin refuse before a request exists. The objects a publication reads
+come from the authenticated common directory through a control repository with a
+read-only alternate, so the checkout's own `pushurl`, URL rewrites, hooks and
+credential helpers reach nothing, and a missing saved source commit refuses
+rather than being fetched. A publication takes the selected placement's managed
+slot and no mutation lease, because it changes nothing in the repository.
+Dispatch is ordinary Git composition through an operation-local default under
+the stable Api name: a handler that answers without delegating retains nothing
+and is not publication evidence, a second delegation of one invocation is
+refused, the default is revoked when the invocation ends, and a saved request is
+consumed before any dispatch.
+
 It installs one external capability beside those: the issue adapter, so
 `<Issue>` files and reads in an entry and its answers are retained on the same
 terms — a completed read answers with the snapshot it saw and a completed
@@ -10210,21 +10234,23 @@ configuration or a credential. An interrupted upsert presents the key it used
 the first time, which is what lets the provider answer with the issue it
 already accepted rather than filing a second one; a read has no key.
 
-What the entry provider installs nothing of is publication and the external
-worker, so `<Git.Push>` and `<PullRequest>` refuse there exactly as they do
-under a host that installs no provider for them, and a retained local result
-authorizes neither. Constructing it acquires nothing, including no managed
-root, no commit identity and no configuration read, and a passive reading of a
-settled history initializes nothing at all.
+What the entry provider installs nothing of is pull requests, so
+`<PullRequest>` refuses there exactly as it does under a host that installs no
+provider for it, and neither a retained local result nor a retained publication
+authorizes one. Constructing it acquires nothing, including no managed root, no
+commit identity, no credential and no configuration read, and a passive reading
+of a settled history initializes nothing at all.
 
-The identity an entry's issue work is named by is the entry's own: the execution
-and the entry's admission-order position, derived by the host that opened the
-session and reaching the component as a trusted closure rather than as a prop, a
-Context value, a tracker or a middleware answer. The authored site inside it is
-the identity canonical core minted where it selected that implementation. The
-`<Issue>` an entry runs is an ordinary shadowable registration of the name the
-Plugin already declares, so a repository component of that name keeps its
-ordinary precedence and obtains no identity of the entry's.
+The identity an entry's publication and issue work are named by is the entry's
+own: the execution and the entry's admission-order position, derived by the host
+that opened the session and reaching the component as a trusted closure rather
+than as a prop, a Context value, a tracker or a middleware answer. The authored
+site inside it is the identity canonical core minted where it selected that
+implementation. The `<Issue>` and the `<Git.Push />` an entry runs are ordinary
+shadowable registrations of names the Plugin already declares, so a repository
+component of either name keeps its ordinary precedence and obtains no identity
+of the entry's — and a direct `Git.operations.push(...)` outside the trusted
+invocation reaches the ordinary missing-provider refusal.
 
 Node and Bun install none of them. They register the same declarations (§5.3), and
 every repository operation there reports an absent provider before a lock, a
@@ -14218,6 +14244,28 @@ native completion and acknowledgement.
 | ERC12 | One result boundary | Two equal Adds at two positions produce and consume two results; a nested Add is an earlier journal operation than the Commit enclosing it, and the commit holds exactly the tree that child staged; two same-repository callers share one ownership acquisition and serialize their native attempts with distinct results; two spawned branches in two repositories resume in reverse order sharing no cursor or result; equal entry sources in two journals stay independent |
 | ERC13 | Local-Git acknowledgement | A live Commit gated before its append and then cancelled leaves no completion and no later sentinel, and the continuation runs live and reports ordinary `empty-index` rather than adopting the object id that was really written; one acknowledged and then cancelled replays with no native work; a rejected result append preserves the first persistence failure with no success binding, no later work and no compensating Close; an interrupted Add whose descendant holds the inherited pipes is joined before the entry settles; an unclassified performer failure is fatal and unrecorded |
 | ERC14 | Local-Git admission | Portable success and refusal codec rows refuse a wrong, extra or missing member, an unknown version, a mismatched fingerprint or name, an object id of the wrong width, a transition the operation does not make, mismatched operation arguments and a refusal word outside the closed set, and refuse a failed protocol envelope for this type; admission accepts repeated equal names and histories holding only the older record types |
+
+### Tier EPB — Publication inside a REPL entry (§5.3, §8.1)
+
+Bounded to what one executing entry asks to publish and what the Git host does
+about it. Everything the shared reconciliation itself proves — the observe,
+adopt, fast-forward and refuse decisions, the one-use routing request and the
+closed provider answers — stays in the Git-host effect tier: the rows below are
+about the saved request, the identity it is named by, the dispatch that produces
+it, the resources around it and the window between remote completion and
+acknowledgement.
+
+| # | Test | Verify |
+|---|------|--------|
+| EPB1 | The public journey | A real-terminal source and compiled `xmd repl` each select a managed Repository and a Worktree, commit inside the captured path through `<Dir>`, publish the branch to a bare remote, leave at the question, have that branch advanced from a shell, reopen the printed location and reach the question with the remote still holding the commit that was published and no second push, then answer and run the suffix once; a private `git` on `PATH` forwarding unchanged to the real one records that the reopened prefix ran no command at all, the repository's primary branch is untouched throughout, and a new entry's `<Git.Push />` advances the destination to what the checkout holds now |
+| EPB2 | Completed publication reaches nothing | An unfinished prefix holding an acknowledged request and outcome replays with zero `git` invocations, isolation-directory acquisitions, authentication sessions, object-source builds, provider constructions and live Git-host middleware calls, after the checkout and the remote have changed; a genuinely new publication at another position takes the live path |
+| EPB3 | A pending request keeps what it asked for | A request acknowledged before any remote contact is reconciled after HEAD and the branch have moved, publishing the commit it named and not today's; a remote that accepted the branch before the outcome was recorded is adopted with zero second push; a cut taken before the request was acknowledged resolves live inputs instead |
+| EPB4 | The decisions, unchanged | Absent, equal, proven-ancestor and divergent destinations keep the shared engine's decisions; permanent ambiguity and temporary unavailability stay distinct definitive failures that replay as themselves without reaching a provider; a nonzero push earns exactly one further observation and an inconclusive completion is fatal; every assertion reads the remote's own refs and the full retained record |
+| EPB5 | Identity and dispatch | The owner and the invocation identity name the work, are stable across a reopen and distinct for repeated invocations, concurrent branches and another entry; a synthetic middleware answer retains no request and no receipt; a transforming delegation is retained as both readings; a second delegation of one invocation is refused without repeating acknowledged work; a saved request bypasses the chain it already passed; an independent `Git.operations.push(...)` keeps the ordinary missing-provider refusal |
+| EPB6 | Admission | Portable codec rows refuse an unknown version, a hostile or malformed value, an origin outside the closed locator grammar, an origin that does not name the repository the inputs name, inputs belonging to another Repository and an object id of the wrong width, and round-trip both object-id formats; history admission refuses a misnamed request, a foreign owner, a saved place no placement described, an orphan outcome, a request answered twice, a mismatched receipt and a refusal word outside the closed set, while accepting a trailing request with no outcome; a live validation refusal rejects a completion before its append |
+| EPB7 | Acknowledgement, not completion | A refused request append contacts nothing, publishes nothing and fences the work after it; a refused outcome append leaves the remote as it is with no false receipt and no compensating Close, and the next attempt adopts that completion; accepted definitive failures replay provider-free; an unauthored throw is withheld rather than published |
+| EPB8 | Resources and ownership | A fresh and a pending publication each take the selected placement's managed slot before any native read, and contention appends neither a request nor an outcome while preserving a previously saved pending one; a publication proceeds while another entry holds only the shared Git directory's mutation lease; the checkout's own `pushurl`, hooks and credential helpers reach nothing because the transport runs in a control repository with a read-only alternate; one attempt's scratch transport, object source and credential session survive both phases and are closed and joined before publication, and a cleanup that failed acknowledges neither a success nor a worker-authored refusal |
+| EPB9 | Assembly and unsupported runtimes | The per-entry factory is inert — no directory, no `git`, no credential and no managed root — and declares exactly this entry's publication and issue components; exactly one core initialization happens per executing entry; a passive reading, a frozen position and a refused location initialize nothing; the file work, selections, local Git and issues of the same entry survive the combined assembly; an entry with no managed root and a runtime that installs no entry capability each report an absent provider for `<Git.Push />` before any remote contact or managed root |
 
 ---
 

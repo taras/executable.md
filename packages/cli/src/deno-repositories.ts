@@ -29,11 +29,7 @@ import type { Plugin, PluginInstallRequest, PluginInstallation } from "@executab
 import type { Operation } from "effection";
 import { cwd } from "@executablemd/runtime";
 import { gitPlugin } from "@executablemd/git";
-import {
-  replIssueInstallation,
-  useReplRepositoryRecording,
-  useRunComposition,
-} from "@executablemd/git/deno";
+import { replRepositoryInstallation, useRunComposition } from "@executablemd/git/deno";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { DEFAULT_REPOSITORY_ROOT } from "./run-repositories.ts";
 import { ReplEntryHost } from "./repl-entry-installation.ts";
@@ -109,20 +105,29 @@ export function denoRunRepositories(
 }
 
 /**
- * The issue capability a REPL entry runs with on this host.
+ * What a REPL entry runs with on this host: its checkouts, its local Git, its
+ * publications and its issues.
  *
  * Inert, and selected by the runtime entrypoint beside the bundled Plugin:
- * naming the native GitHub adapter is a runtime-named module's business, and
- * this is the value the shared command path carries without importing one. It
- * reads no configuration and holds no credential — what an entry's issue work
- * is allowed to reach is read by the invoked operation that needs it.
+ * naming the native adapter and this runtime's own credential-helper assembly
+ * is a runtime-named module's business, and this is the value the shared
+ * command path carries without importing one. It reads no configuration and
+ * holds no credential — what an entry's work is allowed to reach is read by the
+ * invoked operation that needs it.
  *
  * The owner is supplied per entry by the session that derived it, which is why
  * this is a factory rather than an installation: one value per host, one
- * installation per entry.
+ * capability per entry. One factory, because an entry initializes its
+ * repository state once; two registrations of it would be two providers.
  */
-export const denoReplIssues: ReplEntryInstallation = (owner: string) =>
-  replIssueInstallation(owner);
+export function denoReplEntry(helper: HelperAssembly, root: string): ReplEntryInstallation {
+  // Copied here, at selection, rather than held as the caller's object. What an
+  // entry initializes with has to be what this host selected: a caller that
+  // kept a reference and changed a field afterwards would be configuring every
+  // later entry from outside the selection the command already made.
+  const configured = snapshot(helper);
+  return (owner: string) => replRepositoryInstallation(owner, { helper: configured, root });
+}
 
 /**
  * Select that value for the REPL command that is about to assemble itself.
@@ -132,8 +137,11 @@ export const denoReplIssues: ReplEntryInstallation = (owner: string) =>
  * this adapter. Setting it establishes nothing: the value is inert code, and
  * what an entry does with it happens inside that entry.
  */
-export function* selectReplEntryHost(): Operation<void> {
-  yield* ReplEntryHost.set(denoReplIssues);
+export function* selectReplEntryHost(
+  helper: HelperAssembly,
+  root: string = DEFAULT_REPOSITORY_ROOT,
+): Operation<void> {
+  yield* ReplEntryHost.set(denoReplEntry(helper, root));
 }
 
 /**
@@ -154,38 +162,5 @@ function snapshot(helper: HelperAssembly): HelperAssembly {
     ...(helper.launcherEnvironment === undefined
       ? {}
       : { launcherEnvironment: Object.freeze({ ...helper.launcherEnvironment }) }),
-  });
-}
-
-/**
- * What this registration gives a REPL entry's execution: recording, selection
- * and local Git.
- *
- * Registered by the selected REPL host rather than by the bundled Plugin,
- * because an entry is not an ordinary run: it retains the file work it does, the
- * managed checkouts it selects to do that work in, and the staging, branch
- * switches and commits it performs in them — and it installs no publication and
- * no external worker. The issue capability an entry runs with is selected
- * separately, above, because it belongs to no checkout. Each executing entry initializes its own, in the scope
- * below its Agent attachment, so a passive view — a settled history, a frozen
- * position — initializes nothing, creates no managed root, reads no commit
- * identity and takes no lease.
- *
- * The root and the helper are copied here, at registration, rather than held as
- * the caller's object. What an entry initializes with has to be what this host
- * selected: a caller that kept a reference and changed a field afterwards would
- * be configuring every later entry from outside the selection the command
- * already made.
- */
-export function* useDenoReplRepositories(
-  helper: HelperAssembly,
-  root: string = DEFAULT_REPOSITORY_ROOT,
-): Operation<void> {
-  const configured = snapshot(helper);
-  yield* Execution.around({
-    *init(_args, next): Operation<void> {
-      yield* useReplRepositoryRecording({ helper: configured, root });
-      yield* next();
-    },
   });
 }

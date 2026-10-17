@@ -44,7 +44,10 @@ import GitCommit, {
   props as gitCommitProps,
   returns as gitCommitReturns,
 } from "./components/GitCommit.ts";
-import GitPush, { props as gitPushProps } from "./components/GitPush.ts";
+import GitPush, {
+  documentation as gitPushDocumentation,
+  props as gitPushProps,
+} from "./components/GitPush.ts";
 import PullRequest, {
   props as pullRequestProps,
   returns as pullRequestReturns,
@@ -147,11 +150,7 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     origin: COMPOSITION_ORIGIN,
     props: gitPushProps,
     fn: GitPush,
-    ...documented({
-      description: `Publish the current branch. \`<Git.Push />\` pushes its current commit to the same branch on \`origin\` without forcing.`,
-      as: null,
-      context: null,
-    }),
+    ...documented(gitPushDocumentation),
   },
   {
     name: "PullRequest",

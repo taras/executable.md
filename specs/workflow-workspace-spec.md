@@ -177,12 +177,26 @@ workflow run's mutations are Workspace effects inside a transaction, ordered by
 the frontier §9 and §10 describe, and the REPL has none of that: no Workspace,
 no transaction, no frontier and no logical filesystem — what it has is a
 historical record of each completed operation, which is neither of the other
-two. `<Git.Push>` and `<PullRequest>` are not available to a REPL entry and
-refuse there as they do under any host that installs no provider for them, and a
-retained local result authorizes neither. `<Issue>` is available, and what it
-retains is `specs/repl-spec.md`'s subject rather than this document's: it lives
-at a service rather than in a Workspace, so none of the transaction, frontier or
-materialization rules here reach it.
+two.
+
+`<Git.Push />` is available to a REPL entry, and what it retains is
+`specs/repl-spec.md`'s subject rather than this document's. The reconciliation
+is the same one §7.4 and the Git-host effect contract describe — observe, adopt,
+publish a proven absence or a proven ancestor once, refuse divergence and
+permanent ambiguity, report unavailability — reached under the entry's own owner
+and invocation identity instead of a run and an expansion. What an entry adds
+beneath it is the *request* it published before contacting anything: the branch,
+the commit, the destination ref and the admitted origin it asked for, so an
+interrupted publication reconciles that exact request rather than resolving a
+new one. None of the transaction, frontier or materialization rules here reach
+it: the objects a publication reads come from the caller's own checkout through a
+read-only door rather than from an exported Workspace family, and no Workspace
+root, savepoint or frontier takes part.
+
+`<PullRequest>` is not available to a REPL entry and refuses there as it does
+under any host that installs no provider for it; neither a retained local result
+nor a retained publication authorizes one. `<Issue>` is available on the same
+terms as publication, and lives at a service rather than in a Workspace.
 
 ## 3. Workflow lifecycle
 
@@ -3618,6 +3632,7 @@ fetch operation requires its own language and durability contract.
 | `<Repository>`, `<Worktree>` and the ambient Repository under an ordinary run | built by #643, Deno and compiled only: managed checkouts under `~/.xmd/repositories` with version 1 sidecars and execution-owned non-blocking locks, and the checkout the command was run in as the default Repository. Node and Bun install no operational provider |
 | `<Repository>` and `<Worktree>` inside a REPL entry | built on the #181 stack, Deno and compiled only: the ordinary managed selector above, with what it answered retained as a small routing record so a completed selection restores without a selector, a clone, a `worktree add`, a sidecar read, a credential or a lock — and only new work meets the current filesystem. One entry at a time owns a managed slot, held until the entry is torn down and reacquired lazily by the first new operation inside a restored placement; that hold is distinct from the shared Git directory's mutation lease. Nothing is inventoried, snapshotted, restored or deleted, and Node and Bun install no operational provider |
 | `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` inside a REPL entry | built on the #181 stack, Deno and compiled only: the ordinary performers above against the checkout the entry is working in, with what each produced retained as fixed-size evidence — the checkout, the branch, commit, HEAD tree and index tree on both sides, and the operation's own arguments and products. A completed operation is answered from that record with no `git` invocation of any kind, and a completed Commit's object id names the commit that was made then rather than today's HEAD. A live Commit reads the invoking person's own author and committer once per entry and only when a commit runs, captures the clock after deciding the index is nonempty, and commits exactly that index. A live operation takes the selected placement's slot and then the shared Git directory's mutation lease and keeps both until teardown; a completed one takes neither. An ordinary refusal is retained under the route that reported it, so a native ignored-path Add keeps what it staged and claims no rollback; native completion and acknowledgement are separate, so an unacknowledged operation may run again and answer differently. No transaction, no rollback, no exactly-once local effect, and no publication evidence |
+| `<Git.Push />` inside a REPL entry | built on the #181 stack, Deno and compiled only: the same observe/adopt/fast-forward/refuse reconciliation §7.4 describes, reached under the entry's own owner and core's minted invocation identity rather than a run and an expansion. The request the entry asked for — branch, commit, destination ref and admitted credential-free origin — is published before anything is contacted, so an interrupted publication reconciles that exact request and an accepted push whose result was never recorded is adopted rather than repeated. Objects are read from the caller's own checkout through a control repository with a read-only alternate rather than from an exported Workspace family; no Workspace root, savepoint or frontier takes part, a completed publication reaches no provider, credential or remote, and the publication takes the managed slot and no mutation lease |
 | local Git operations and `Git.Push` evidence under an ordinary run | built by #643, Deno and compiled only: the same authored transitions with no transaction and no replay, commits recorded under the invoking user's own captured Git identity with an actionable refusal when the host can name none, and a private per-execution Push evidence entry that authorizes `<PullRequest>` and crosses no run |
 | `<Issue>` and pull-request reads under an ordinary run | built by #643, Deno and compiled only: the same transports and ceilings with no durable envelope, keyed by this execution's own invocation identity |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |

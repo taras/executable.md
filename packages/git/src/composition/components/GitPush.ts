@@ -19,7 +19,7 @@
 
 import { cwd } from "@executablemd/runtime";
 import { hasContent } from "@executablemd/core";
-import type { PropsSchema } from "@executablemd/core";
+import type { FirstPartyDocumentation, PropsSchema } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { Git } from "../git-api.ts";
@@ -33,6 +33,21 @@ export const props: PropsSchema = {
   type: "object",
   properties: {},
   additionalProperties: false,
+};
+
+/**
+ * What a reader is told about this component, in one place.
+ *
+ * Declared here rather than beside a registration because there are two: the
+ * bundled vocabulary's, and the one a REPL entry installs with its own identity
+ * behind it. Inspection describes one `Git.Push`, so both read this.
+ */
+export const documentation: FirstPartyDocumentation = {
+  description:
+    `Publish the current branch. \`<Git.Push />\` pushes its current commit to the same branch ` +
+    `on \`origin\` without forcing.`,
+  as: null,
+  context: null,
 };
 
 export default function* GitPush(_props: Record<string, Json>): Operation<string> {

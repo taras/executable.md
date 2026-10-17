@@ -118,9 +118,10 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
       () => useDenoWorkflowHost(HELPER),
       useMachineSessions(),
       // What this host selects for a REPL command, and what it installs for
-      // one. The selection is the issue capability an entry runs with; Node
-      // and Bun supply neither half.
-      { select: selectReplEntryHost, install: () => useDenoRepl(HELPER) },
+      // one. The selection is the capability an entry runs with — its
+      // checkouts, its local Git, its publications and its issues; Node and Bun
+      // supply neither half.
+      { select: () => selectReplEntryHost(HELPER), install: () => useDenoRepl() },
     );
   });
 }

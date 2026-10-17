@@ -96,7 +96,10 @@ export interface GitApi {
   push(invocation: GitPushInvocation): Operation<GitPushOutcome>;
 }
 
-export const Git: Api<GitApi> = createApi<GitApi>("executablemd.git", {
+/** The stable name every loaded copy composes Git operations through. */
+export const GIT_API = "executablemd.git";
+
+export const Git: Api<GitApi> = createApi<GitApi>(GIT_API, {
   // deno-lint-ignore require-yield
   *switch(_invocation: GitSwitchInvocation): Operation<GitSwitchResult> {
     throw new GitCompositionProviderError("<Git.Switch>");
