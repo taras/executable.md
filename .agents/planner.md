@@ -166,3 +166,26 @@ End every planning handoff with the exact base, produced artifact paths,
 settled decisions, unresolved blockers and the next Implementor action. An
 implementation review records the exact reviewed SHA and the focused commands
 it rests on.
+
+When passing a sequence of changes to a new Planner, carry the context of the
+whole sequence, including prerequisites and parallel work. The handoff includes
+a self-contained snapshot of:
+
+- the overall outcome and why the work is split;
+- every delivery's purpose, status, dependencies and remaining scope;
+- landed PRs and exact merge commits, the verified current base, and any
+  difference between reviewed revisions and published or merged revisions;
+- accepted product and architecture decisions that constrain later deliveries,
+  including superseded approaches that must not return;
+- parallel tracks, their overlap, owners or known assignment status, and their
+  governing plans;
+- unresolved decisions, preserved worktrees and evidence, and the exact next
+  action and authorization boundary.
+
+Maintain a shared sequence record and link its governing plans and reviews.
+Include the concise sequence snapshot in the new handoff itself; do not rely
+on conversation history or a chain of earlier handoffs to supply it. Separate
+verified facts from reported or unknown status and mark historical snapshots.
+The receiving Planner refreshes the record against current evidence and carries
+it forward again at the next Planner transition. Planning one delivery does
+not silently discard the dependencies or accepted decisions of the others.

@@ -68,8 +68,9 @@ Determinism is two properties:
 - **Behavioral predictability** — a key product feature: generate a plan as a
   program where ~80% is deterministic and ~20% is probabilistic.
 - **Replay determinism** — the journal doesn't lose the execution chain:
-  replaying the journal arrives at the same state, where execution can
-  continue.
+  replaying the journal restores the recorded execution state, where execution
+  can continue. Whether the live environment matches that state is a separate
+  host contract.
 
 ### State ownership
 
@@ -6069,6 +6070,36 @@ than a test fixture's list of components: adding a component cannot make
 validation effectful.
 
 
+## REPL execution model
+
+The REPL is a foreground interactive environment for experimenting with and
+testing components. It assumes a user or agent is available to inspect what
+happened, orient to the current environment and adjust the script for further
+work. Workflows supply the persistence and recovery contracts for background
+automation.
+
+Replay fast-forwards execution through the retained history to its latest
+recorded state. Recorded results restore execution values and progress without
+re-executing the effects that produced them. Once that history is consumed, new
+work acts on the live environment.
+
+The recorded execution state and the live environment may disagree. The REPL
+accepts that disconnect: replay neither restores the environment nor requires
+it to match historical results before continuing. Environmental mismatch alone
+does not justify repeating a completed effect or blocking continuation. The
+user or agent addresses the mismatch through inspection, orientation and
+changes to subsequent work.
+
+For example, an entry writes `A` to a file and records the result. The user then
+changes the file to `B`. Replay returns the recorded write result without
+writing `A` again; the file remains `B`. A subsequent new operation observes
+and acts on `B`.
+
+This execution model retains journal integrity, configured permissions, entry
+ownership and external-effect reconciliation. Workflow-specific environmental
+validation and recovery belong to the workflow host; REPL history alone creates
+no requirement to snapshot, validate or recover an entire checkout.
+
 ## The private REPL composition kernel
 
 `packages/cli/src/repl/` is a private CLI feature, not a package boundary and
@@ -8115,10 +8146,15 @@ and categorization rather than clarify them, so both stay exactly as written.
 | Term | Meaning |
 | --- | --- |
 | behavioral predictability | a plan as a program: ~80% deterministic, ~20% probabilistic [Reference](#three-axes). |
-| replay determinism | the journal doesn't lose the execution chain: replaying arrives at the same state, where execution can continue [Reference](#three-axes). |
+| replay determinism | the journal preserves the execution chain: replay restores the recorded execution state from which execution can continue; correspondence with the live environment is a separate host contract [Reference](#three-axes). |
 | replay | using the durable journal to restore the recorded portion of a document execution without repeating durable effects; after the recorded entries are consumed, execution may continue live [Reference](#replay-and-effect-transactions). |
 | divergence | reserved for replay: a replay that departs from the recorded journal [Reference](#replay-and-effect-transactions). |
+| foreground execution | interactive work designed around the available attention of a user or agent, who inspects the environment, addresses mismatches and adjusts subsequent work |
+| background automation | work designed to proceed without ongoing user or agent attention, with its persistence and recovery guarantees supplied by the workflow host |
+| REPL | the foreground interactive environment for experimenting with and testing components; replay restores recorded execution state, while the user or agent handles differences between that state and the live environment |
 | REPL history | the immutable ordered execution records the REPL reads from the durable journal and projects into `ReplModel`; the History surface presents this read model and is not itself a journal [Reference](#the-private-repl-composition-kernel). |
+| message ID | the number Sidekick retains to identify a saved person message within its conversation; fixed once saved, possibly noncontiguous, and independent of the turn numbers recorded by Core. The conversation and message ID together form its lookup key |
+| turn | one request to an agent, together with the response or failure from that request |
 | middleware | applied by the lexical structure, used by runtime execution [Reference](#two-layers). |
 | workflow run | a workflow being carried out with its progress and outcome recorded durably; document executions perform its work, while ongoing effects remain scoped to the document execution in which they run [Reference](#workflow-runs). |
 | document execution | one evaluation of a root document initiated through `execute()`, producing one output stream and one completion result while reading and appending a durable journal; its ongoing effects belong to the Effection scope in which the evaluation runs [Reference](#workflow-runs). |
@@ -8202,9 +8238,9 @@ and categorization rather than clarify them, so both stay exactly as written.
 | trusted host | the code that decides what an execution is for — a CLI entrypoint or a workflow runner — as distinct from the document, the components it expands, and the middleware packages composed around it [Reference](#trusted-host-orchestration). |
 | native session launch | Construction and ownership handoff of one durable session to its provider-native interactive UI. [Owning rule](#native-agent-sessions). |
 | provider-native session identity | The provider conversation identity, distinct from XMD and ACP identifiers [Full contract](#native-agent-sessions). |
-| pending session placement | One operation-local placement before its first consumer constructs a session [Full contract](#native-agent-sessions). |
-| session materialization | The backend acceptance that makes a new conversation available to native resume [Full contract](#native-agent-sessions). |
-| established session | An immutable route and asserted conversation identity [Full contract](#native-agent-sessions). |
+| agent session | The session is created when it is first used. [Full contract](#native-agent-sessions). |
+| session creation | Creating the provider session so it can be reopened. [Full contract](#native-agent-sessions). |
+| existing session | An agent session that has already been created. [Full contract](#native-agent-sessions). |
 | instruction layer | Provider-native instructions installed before user content [Full contract](#native-agent-sessions). |
 | foreground-terminal lease | The exclusive execution-owned right to inherit the foreground terminal [Full contract](#native-agent-sessions). |
 | native launcher | The host adapter that launches a provider UI and reports only its status [Full contract](#native-agent-sessions). |
