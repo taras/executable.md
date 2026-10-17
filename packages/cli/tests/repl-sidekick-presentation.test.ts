@@ -161,7 +161,16 @@ describe("Tier MP — one Sidekick per command, acquired without working", () =>
 
     // Focus is the draft's, not the Sidekick's: the pane being the one showing
     // is a reading, and somebody who starts typing is typing their entry.
-    expect(focusedField(repl.terminal, DRAFT_PROMPT)).toBe(true);
+    //
+    // Waited for rather than read off the first drawn frame. A startup focus
+    // claim is resolved when the frame that carries it is built, and on a
+    // loaded machine that is not always the frame that arrives first — so a
+    // row that read it immediately reported "the Sidekick took the focus" for
+    // a screen that had simply not caught up. Nothing is pressed either way.
+    yield* awaiting(repl.terminal, "the draft holding focus with nothing pressed", (one) =>
+      focusedField(one, DRAFT_PROMPT),
+    );
+    expect(focusedField(repl.terminal, MESSAGE_PROMPT)).toBe(false);
 
     // Selecting the Sidekick is what focuses its box, because that is somebody
     // asking to type into it.
@@ -289,8 +298,14 @@ describe("Tier MP — the first explicit message is what upgrades the history", 
     yield* running.started();
 
     // The entry is admitted and is still going: its source left the draft, and
-    // the record it is writing has not landed.
-    expect(draftText(repl.terminal)).toBe("");
+    // the record it is writing has not landed. Waited for, because the
+    // admission clears the draft in the frame after it and this row is about
+    // *that* the source left rather than about which frame carried it away.
+    yield* awaiting(
+      repl.terminal,
+      "the admitted source leaving the draft",
+      (one) => draftText(one) === "",
+    );
 
     // Now ask the Sidekick, through its own box and its own control.
     yield* activate(repl.terminal, "Sidekick");
