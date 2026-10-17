@@ -767,6 +767,12 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "packages/cli/tests/repl-pull-request.test.ts",
+    reason:
+      "drives the production per-entry capability, which only Deno and the compiled binary select: its module graph reaches @executablemd/git/deno and so Workflow's storage adapter and node:sqlite, and its rows build real checkouts with real `git` children. That a runtime selecting no entry capability reports no provider for <PullRequest> and all three reads is proven by packages/cli/tests/repl-pull-request-pty.test.ts, which runs everywhere",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "packages/cli/tests/repl-push.test.ts",
     reason:
       "drives the production per-entry capability, which only Deno and the compiled binary select: its module graph reaches @executablemd/git/deno and so Workflow's storage adapter and node:sqlite, and its rows publish to a real bare remote with real `git` children. That a runtime selecting no entry capability reports no Git provider for <Git.Push /> is proven by packages/cli/tests/repl-push-pty.test.ts, which runs everywhere",
