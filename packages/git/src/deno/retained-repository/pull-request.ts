@@ -49,8 +49,8 @@
  */
 
 import { createApi } from "@effectionx/context-api";
-import { Err, Ok, until, useScope } from "effection";
-import type { Operation, Result, Scope } from "effection";
+import { Err, Ok, until } from "effection";
+import type { Operation, Result } from "effection";
 import { realpath } from "node:fs/promises";
 import { createDurableOperation } from "@executablemd/durable-streams";
 import type {
@@ -734,14 +734,14 @@ function* upstreamProvider(
     );
   }
 
-  const attempt: Scope = yield* useScope();
   // Where the API lives is configuration, read here rather than at
   // installation, so an entry that writes no `<PullRequest>` reads none of it.
   const source = yield* invocation.upstream();
   // One session for this whole reconciliation, shared by its observations and
   // its mutation, so a pull request is not created under one identity and
-  // observed under another. It is a resource of the attempt's own scope.
-  const access = yield* attempt.run(() => source.open());
+  // observed under another. Acquired here, which is inside the attempt, so it
+  // is released and joined with the attempt rather than outliving it.
+  const access = yield* source.open();
   return pullRequestProvider(access, resolved.origin, resolved.inputs);
 }
 

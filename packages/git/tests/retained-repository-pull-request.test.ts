@@ -67,6 +67,7 @@ import {
 } from "../src/retained-repository/pull-request-records.ts";
 import { REPL_REPOSITORY_LOCAL } from "../src/retained-repository/records.ts";
 import { gitOutput } from "./support/git-remotes.ts";
+import { useGitHubServer } from "./support/github.ts";
 import {
   creations,
   fakeGitHubAccess,
@@ -169,6 +170,8 @@ interface RunOptions {
   readonly allowed?: readonly string[];
   /** A gated transport, when a row cuts around the Git host. */
   readonly access?: GitHubAccess;
+  /** A configured endpoint instead of an injected transport. */
+  readonly endpoint?: string;
   readonly between?: () => Operation<void>;
 }
 
@@ -784,5 +787,20 @@ describe("one entry's pull request, composed", () => {
     expect(refused.refusal).toBeDefined();
     expect(requests(yield* failing.readAll()).length).toBe(0);
     expect(mutations(failingForge)).toEqual([]);
+  });
+});
+
+describe("one entry's pull request, over a configured transport", () => {
+  it("V9a: reaches a configured endpoint rather than an injected transport", function* () {
+    const fixture = yield* useFixture();
+    const forge = store(fixture);
+    const endpoint = yield* useGitHubServer(forge);
+    const stream = new InMemoryStream();
+    const ran = yield* run(fixture, opening(), stream, forge, { endpoint });
+    expect(ran.refusal).toBeUndefined();
+    // The adapter read where the API lives from configuration, built the
+    // platform's own transport for it, and opened one pull request through it.
+    expect(creations(forge)).toBe(1);
+    expect(requests(ran.events).length).toBe(1);
   });
 });
