@@ -21,9 +21,10 @@
  * selects to do it in, the three local Git operations — authored and generated
  * writes, authored deletions, the directory an authored `<Dir>` ensures, the
  * `<Repository>` and `<Worktree>` selections that say where, and `<Git.Add>`,
- * `<Git.Switch>` and `<Git.Commit>` in the checkout those select — and, for an
- * entry whose capability was built per entry below, the publication an authored
- * `<Git.Push />` asks for.
+ * `<Git.Switch>` and `<Git.Commit>` in the checkout those select — the four
+ * local Git reads `<Git.Files>`, `<Git.Changes>`, `<Git.Diff>` and
+ * `<Git.File>`, and, for an entry whose capability was built per entry below,
+ * the publication an authored `<Git.Push />` asks for.
  *
  * A pull request and an Issue tracker are not here: each has its own protocol
  * and its own evidence, and a local result and a publication authorize neither.
@@ -76,6 +77,9 @@ import { replFileMiddleware } from "./files.ts";
 import type { ReplLocalRecorder, ReplManagedPlacement } from "./files.ts";
 import { replGitMiddleware } from "./git.ts";
 import type { ReplGitCheckout, ReplGitEntry } from "./git.ts";
+import { replObservationMiddleware } from "./observations.ts";
+import type { ReplObservationEntry } from "./observations.ts";
+import { GitQuery } from "../../git.ts";
 import { replPushAdmission, replPushComponent } from "./push.ts";
 import type { ReplPushEntry } from "./push.ts";
 import { replIssueInstallation } from "./issues.ts";
@@ -511,6 +515,19 @@ function* initializeReplRepository(
   // middleware a document or a host puts above this composes exactly as it does
   // in an ordinary run.
   yield* Git.around(replGitMiddleware(gitEntry), { at: "min" });
+
+  // The four reads, at the same slot and on the same terms. They share this
+  // entry's registry, its registered checkouts, its slot acquisition and its
+  // native turn, and take no mutation lease: a read changes nothing, so there
+  // is nothing for one to protect.
+  const observationEntry: ReplObservationEntry = {
+    host,
+    holdSlot,
+    serialize,
+    selections,
+    checkouts: () => gitCheckouts,
+  };
+  yield* GitQuery.around(replObservationMiddleware(observationEntry), { at: "min" });
 
   // Last, and only for the route that asked: everything above is in place, so
   // what a publication reaches is an initialized entry rather than a

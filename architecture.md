@@ -1181,6 +1181,17 @@ capability, and the workflow package calls none of it. Ordinary `execute()`
 remains Git-independent, and so does starting, resuming, forking or exporting a
 run.
 
+The same Api answers four **selected-checkout reads** — `files`, `changes`,
+`diff` and `file` — which are what `<Git.Files>`, `<Git.Changes>`, `<Git.Diff>`
+and `<Git.File>` ask. They differ from the four questions above in what decides
+which repository answers: each carries the `GitInvocationPlace` the component
+observed, so the installed provider authenticates a Repository selection and
+routes to a checkout rather than reading whatever directory the process is in.
+Each returns a bounded page and a `next` holding the complete arguments of the
+read that continues it. There is no host-less default: a host that installs no
+selected-repository provider refuses, and nothing falls back to the caller's
+own filesystem.
+
 **The workflow package imports no Git feature, and a retained run reaches no
 repository either.** The CLI establishes a candidate from filesystem bytes, and
 the retained lifecycle re-derives the source from the run's own store, so a run
@@ -1246,7 +1257,7 @@ it is doing rather than of the machinery behind it:
 | `Repository` | `executablemd.git.repository` | `select`, `worktree`, `ambient` |
 | `RepositoryContext` | `executablemd.git.repository.current` | `current` |
 | `Git` | `executablemd.git` | `switch`, `add`, `commit`, `push` |
-| `GitQuery` | `executablemd.git.query` | `resolve`, `root`, `format`, `read` |
+| `GitQuery` | `executablemd.git.query` | `resolve`, `root`, `format`, `read`, `files`, `changes`, `diff`, `file` |
 | `PullRequestAPI` | `executablemd.git.pull-request` | `read`, `upsert` |
 | `IssueApi` | `executablemd.git.issue` | `read`, `upsert` |
 | `IssueTrackerContext` | `executablemd.git.issue-tracker.current` | `current` |
@@ -1255,9 +1266,13 @@ it is doing rather than of the machinery behind it:
 `Git` and `GitQuery` are two seams and never one. `Git` performs the four
 authored durable transitions a document writes as `<Git.Switch>`,
 `<Git.Add>`, `<Git.Commit>` and `<Git.Push>`, and what lifecycle they have is
-the installed provider's. `GitQuery` asks read-only questions of the checkout
-containing the contextual working directory and mutates nothing, so replacing
-it answers questions rather than becoming a route to a transition.
+the installed provider's. `GitQuery` asks read-only questions and mutates
+nothing — four of the checkout containing the contextual working directory, and
+four of the checkout a Repository selected — so replacing it answers questions
+rather than becoming a route to a transition. A selected-checkout read reaches
+the same provider instance the transitions do, at the same implementation slot,
+and confers none of their evidence: nothing a read returns authorizes a
+mutation, a publication or a pull request.
 
 These names and identities are a break from `@executablemd/workflow@0.12.1`,
 taken deliberately and without compatibility aliases. A provider compiled
@@ -5161,9 +5176,10 @@ makes a run child of `xmd test` the run profile while the test root is not.
 
 #### Ordinary repository vocabulary
 
-The bundled Git Plugin declares twelve ordinary shadowable defaults:
+The bundled Git Plugin declares sixteen ordinary shadowable defaults:
 `Repository`, `Worktree`, `Git.Switch`, `Git.Add`, `Git.Commit`, `Git.Push`,
-`PullRequest`, `PullRequest.Reviews`, `PullRequest.Comments`,
+`Git.Files`, `Git.Changes`, `Git.Diff`, `Git.File`, `PullRequest`,
+`PullRequest.Reviews`, `PullRequest.Comments`,
 `PullRequest.Checks`, `IssueTracker` and `Issue`. Dir is core-protected and
 remains available without this Plugin. One declaration array serves execution,
 syntax inspection, Plan validation/generation and executing workflow actions.
@@ -8492,7 +8508,7 @@ Status is measured against main.
 | transactional Git effects (`Git.Switch` / `Git.Add` / `Git.Commit`) under a workflow run | publish local Git mutations with their journal result; the enclosing Repository and the contextual working directory select which retained checkout one runs in, and neither observation admits anything — the observed record is compared with the retained row and the directory with the checkouts that row holds, so a failure of admission, of retained state or of an unrecognized native condition fails the run instead of publishing a result [Invariant](#workspace-local-transactions); [Interface and evidence](specs/workflow-workspace-spec.md#7-git-operations). | built on the #294 stack, Deno provider only |
 | `Git.Push` under a workflow run | Publishes or adopts the selected named branch through authenticated non-force reconciliation. [Authored contract](specs/workflow-workspace-spec.md#74-push) and [effect mechanics](#replay-and-effect-transactions). | built on the #370 stack, Deno provider only |
 | `<PullRequest>` under a workflow run | Upserts the exact published branch and returns stable evidence only after this run proves matching Push history. [Props, results and refusals](specs/workflow-workspace-spec.md#75-pull-request); [positive-integer number and reconciliation](#issue-effects). | built on the #295 stack, Deno provider only |
-| repository composition vocabulary | Declares twelve ordinary shadowable defaults without installing an operational provider. [Names and profile ownership](#ordinary-repository-vocabulary). | built on the #643 stack |
+| repository composition vocabulary | Declares sixteen ordinary shadowable defaults without installing an operational provider. [Names and profile ownership](#ordinary-repository-vocabulary). | built on the #643 stack |
 | `<Repository>` / `<Worktree>` composition under an ordinary run | Selects an authenticated persistent checkout under an execution-owned exclusive lock [Full contract](#ordinary-repository-ownership). | built on the #643 stack, Deno and compiled only |
 | local Git operations (`Git.Switch` / `Git.Add` / `Git.Commit`) under an ordinary run | Performs explicit local transitions against the authenticated checkout without rollback or replay [Full contract](#ordinary-repository-ownership). | built on the #643 stack, Deno and compiled only |
 | `Git.Push` under an ordinary run | Publishes or adopts a non-force branch result and keeps invocation-private evidence [Full contract](#ordinary-repository-ownership). | built on the #643 stack, Deno and compiled only |

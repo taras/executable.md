@@ -1,12 +1,23 @@
 /**
  * One child process, run to completion, as an operation.
  *
- * Three callers need the same four things — a built environment rather than an
- * inherited one, output read to the end rather than to the exit, a nonzero exit
- * treated as an answer rather than a throw, and a cancellation that finishes
- * rather than merely starts. Native Git is one of them, the credential broker
- * is another and the Git-host login command is the third, so the discipline
- * lives here and each of them says only what it is running.
+ * Several callers need the same four things — a built environment rather than
+ * an inherited one, output read to the end rather than to the exit, a nonzero
+ * exit treated as an answer rather than a throw, and a cancellation that
+ * finishes rather than merely starts. Native Git is one of them, the credential
+ * broker is another and the Git-host login command is the third, so the
+ * discipline lives here and each of them says only what it is running.
+ *
+ * ## Two captures, one discipline
+ *
+ * `runProcess` decodes standard output as UTF-8 with replacement, which is what
+ * every existing caller is written against. `runProcessBytes` keeps the bytes
+ * instead, because a path listing is NUL-framed and a blob may not be text at
+ * all: a replacement character substituted during capture would make a
+ * malformed file indistinguishable from one holding U+FFFD, and the read has to
+ * be able to tell those apart. Everything else — the built environment, the
+ * detached group, the `close` wait, the listener removal and the cancellation
+ * that joins rather than signals — is the one implementation below.
  */
 
 import { ensure, type Operation, withResolvers } from "effection";
@@ -50,14 +61,37 @@ export interface ProcessInvocation {
   ) => void;
 }
 
-export function* runProcess({
-  command,
-  args,
-  cwd,
-  env,
-  input,
-  observe,
-}: ProcessInvocation): Operation<ProcessOutcome> {
+/** What one invocation reported, with standard output kept as bytes. */
+export interface ProcessBytes {
+  readonly code: number;
+  readonly stdout: Uint8Array;
+  /** Still decoded: a failing command explains itself here, and that is text. */
+  readonly stderr: string;
+}
+
+/** Run this command and decode its standard output as UTF-8 with replacement. */
+export function* runProcess(invocation: ProcessInvocation): Operation<ProcessOutcome> {
+  const captured = yield* run(invocation, "text");
+  return { code: captured.code, stdout: captured.text, stderr: captured.stderr };
+}
+
+/** Run this command and keep its standard output as the bytes it wrote. */
+export function* runProcessBytes(invocation: ProcessInvocation): Operation<ProcessBytes> {
+  const captured = yield* run(invocation, "bytes");
+  return { code: captured.code, stdout: captured.bytes, stderr: captured.stderr };
+}
+
+interface Captured {
+  readonly code: number;
+  readonly text: string;
+  readonly bytes: Uint8Array;
+  readonly stderr: string;
+}
+
+function* run(
+  { command, args, cwd, env, input, observe }: ProcessInvocation,
+  capture: "text" | "bytes",
+): Operation<Captured> {
   // `node:child_process` rather than the runtime's own global: this adapter is
   // selected by the host, not written against one, and `spawn` replaces the
   // child's environment outright when `env` is given — which is the whole point
@@ -85,12 +119,31 @@ export function* runProcess({
   // process ended; it does not say the pipes this operation inherited have.
   let closed = false;
   let stdout = "";
+  const chunks: Uint8Array[] = [];
   let stderr = "";
+  // Joined only once the command has closed, so a partial multi-byte character
+  // at a chunk boundary is never decoded as two.
+  const bytes = (): Uint8Array => {
+    let length = 0;
+    for (const chunk of chunks) {
+      length += chunk.length;
+    }
+    const joined = new Uint8Array(length);
+    let at = 0;
+    for (const chunk of chunks) {
+      joined.set(chunk, at);
+      at += chunk.length;
+    }
+    return joined;
+  };
   // Declared after what it reads, so an observer may call it at once rather
   // than only from a later turn.
-  const captured = () => ({ stdout, stderr });
+  const captured = () => ({
+    stdout: capture === "text" ? stdout : new TextDecoder().decode(bytes()),
+    stderr,
+  });
 
-  const outcome = withResolvers<ProcessOutcome>();
+  const outcome = withResolvers<Captured>();
 
   // A pipe the command stops reading is the command's answer, and its exit
   // status is what says so — but the write still fails, and an unhandled
@@ -100,8 +153,12 @@ export function* runProcess({
   const onStdinError = (error: Error): void => {
     outcome.reject(error);
   };
-  const onStdout = (chunk: string): void => {
-    stdout += chunk;
+  const onStdout = (chunk: string | Uint8Array): void => {
+    if (typeof chunk === "string") {
+      stdout += chunk;
+      return;
+    }
+    chunks.push(chunk);
   };
   const onStderr = (chunk: string): void => {
     stderr += chunk;
@@ -111,7 +168,7 @@ export function* runProcess({
   // whatever had arrived when it stopped.
   const onExit = (code: number | null): void => {
     closed = true;
-    outcome.resolve({ code: code ?? -1, stdout, stderr });
+    outcome.resolve({ code: code ?? -1, text: stdout, bytes: bytes(), stderr });
   };
   const onFailure = (error: Error): void => {
     outcome.reject(error);
@@ -185,7 +242,12 @@ export function* runProcess({
 
   observe?.(child, captured);
 
-  child.stdout.setEncoding("utf8");
+  // Text mode decodes at the stream, which is what every existing caller reads.
+  // Byte mode deliberately does not: chunks arrive as buffers and are joined
+  // once, so nothing is substituted for a character split across two of them.
+  if (capture === "text") {
+    child.stdout.setEncoding("utf8");
+  }
   child.stderr.setEncoding("utf8");
   child.on("close", onExit);
   child.on("error", onFailure);

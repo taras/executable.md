@@ -2,7 +2,9 @@
  * Whether one entry's retained history may be continued at all.
  *
  * Two questions, and only two. **Integrity**: every record of this feature's
- * own types parses and is named by the request it carries. **Nothing else**: no
+ * own types — the file work, the ambient routing, the placements, the local Git
+ * transitions and the local Git observations — parses and is named by the
+ * request it carries. **Nothing else**: no
  * checkout is inspected, no saved path is compared with the live one, and no
  * result is handed out — replaying a completed operation is the durable engine's
  * own positional matching, and this runs before any of it.
@@ -51,6 +53,12 @@ import {
   replGitRecordName,
   REPL_REPOSITORY_GIT,
 } from "./git-records.ts";
+import {
+  parseReplObservationRecord,
+  replObservationFingerprint,
+  replObservationRecordName,
+  REPL_REPOSITORY_OBSERVATION,
+} from "./observation-records.ts";
 
 /** The durable types this reader owns, and the only ones it reads. */
 const OWNED: ReadonlySet<string> = new Set([
@@ -58,6 +66,7 @@ const OWNED: ReadonlySet<string> = new Set([
   REPL_REPOSITORY_SELECTION,
   REPL_REPOSITORY_PLACEMENT,
   REPL_REPOSITORY_GIT,
+  REPL_REPOSITORY_OBSERVATION,
 ]);
 
 /** Why a history cannot be continued. */
@@ -109,8 +118,8 @@ export function* admitReplRepositoryHistory(retained: readonly DurableEvent[]): 
       // this host ever wrote — and what it says about work already done is
       // unknown. The three older types keep their existing policy, where a
       // non-ok envelope is the engine's own failure rather than theirs.
-      if (type === REPL_REPOSITORY_GIT) {
-        throw malformed(REPL_REPOSITORY_GIT);
+      if (type === REPL_REPOSITORY_GIT || type === REPL_REPOSITORY_OBSERVATION) {
+        throw malformed(type);
       }
       continue;
     }
@@ -133,6 +142,10 @@ export function* admitReplRepositoryHistory(retained: readonly DurableEvent[]): 
     }
     if (type === REPL_REPOSITORY_GIT) {
       yield* admitGit(payload, event.description.name);
+      continue;
+    }
+    if (type === REPL_REPOSITORY_OBSERVATION) {
+      yield* admitObservation(payload, event.description.name);
       continue;
     }
     yield* admitLocal(payload, event.description.name);
@@ -162,6 +175,33 @@ function* admitGit(payload: unknown, name: string): Operation<void> {
   }
   if (name !== replGitRecordName({ operation: record.operation, fingerprint })) {
     throw misnamed(REPL_REPOSITORY_GIT);
+  }
+}
+
+/**
+ * Hold one recorded observation to the request it carries.
+ *
+ * The same two questions the other records answer, over a record whose success
+ * side is one page: a saved page that does not describe the request beside it —
+ * another query, another comparison, a continuation on another commit, more
+ * records than the limit asked for — does not parse, so it is refused here
+ * rather than binding a listing on replay.
+ *
+ * It runs no `git` and opens nothing. Whether the paths a record names are
+ * still tracked is not this reader's question, and not a question a
+ * continuation asks either.
+ */
+function* admitObservation(payload: unknown, name: string): Operation<void> {
+  const record = parseReplObservationRecord(payload);
+  if (record === undefined) {
+    throw malformed(REPL_REPOSITORY_OBSERVATION);
+  }
+  const fingerprint = yield* replObservationFingerprint(record.request);
+  if (record.fingerprint !== fingerprint) {
+    throw changed(REPL_REPOSITORY_OBSERVATION);
+  }
+  if (name !== replObservationRecordName({ operation: record.operation, fingerprint })) {
+    throw misnamed(REPL_REPOSITORY_OBSERVATION);
   }
 }
 

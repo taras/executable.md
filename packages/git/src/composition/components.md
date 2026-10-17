@@ -1,6 +1,6 @@
 Long-form documentation for the repository-composition components.
 
-Twelve components for working with repositories, branches, pull requests and
+Sixteen components for working with repositories, branches, pull requests and
 issues from inside a document. They are mostly *regions*: `<Repository>` and
 `<Worktree>` establish where the work happens, and the `Git.*`,
 `PullRequest.*` and issue components act inside whatever those established.
@@ -93,6 +93,79 @@ Publishes the current branch.
 Self-closing. Pushes the branch the working tree is on, to the remote the
 repository was cloned from — so which branch is decided by `<Git.Switch>` above
 it rather than repeated here.
+
+## Git.Files
+
+Lists the tracked files of the repository in scope.
+
+```mdx
+<Git.Files prefix="packages/core/" limit={100} as="files" />
+```
+
+`as` is required: this is a read, and the paths are the result. Only tracked
+files are listed — an untracked file, and anything inside a nested or sibling
+checkout, is not part of this repository's index and does not appear. `prefix`
+is literal text, so `packages/co` lists everything whose path starts that way
+and a prefix containing `*` matches a path with a `*` in its name.
+
+A page holds 100 paths unless you ask for more, and `next` holds the complete
+arguments of the read that continues it — pass them straight back. When the
+listing has changed in between, the continuation says so and asks you to start
+again rather than stitching two different answers together.
+
+## Git.Changes
+
+Reports what changed, path by path.
+
+```mdx
+<Git.Changes compare="staged" as="changes" />
+<Git.Changes compare="commits" base={release.commit} head="HEAD" as="shipped" />
+```
+
+Three comparisons: `unstaged` is the index against the working tree, `staged` is
+HEAD against the index, and `commits` compares the two commits `base` and `head`
+name directly — not their merge base. Each change carries Git's own letter for
+what happened to it, and a rename carries the path it came from, so a document
+can tell a move from a delete and an add.
+
+`paths` narrows the result to literal files and directories. A rename matches on
+either side, and `paths={[]}` selects nothing at all — which is different from
+leaving it out, and means it.
+
+## Git.Diff
+
+Reads the patch one comparison produces.
+
+```mdx
+<Git.Diff compare="staged" paths={["packages/core/"]} offset={0} limit={4096} as="diff" />
+```
+
+The same three comparisons as `<Git.Changes>`, answering with unified diff text
+instead of a list. A window holds 4096 characters unless you ask for more, and
+`length` is how long the whole patch is, so a document can tell how much it has.
+Binary changes keep Git's binary marker and a mode change shows as patch
+metadata: this is the patch, not a summary of it.
+
+Use it to show a reviewer what a comparison contains. For deciding *which*
+files to look at, `<Git.Changes>` answers that with a list rather than text to
+search.
+
+## Git.File
+
+Reads a file as one commit holds it.
+
+```mdx
+<Git.File commit="HEAD~1" path="packages/core/src/expand.ts" offset={0} limit={4096} as="source" />
+```
+
+The commit's own bytes, not the working copy — which is what lets a document
+compare what shipped with what is there now, after somebody has already edited
+the file. The result names the full commit id the revision resolved to, and a
+continuation stays on that exact commit even if the branch moves under it.
+
+A window holds 4096 characters unless you ask for more, counted so that a
+character is never split across two reads. A path the commit does not hold, a
+directory, and a file that is not text each refuse and say which it was.
 
 ## PullRequest
 

@@ -344,3 +344,60 @@ export class GitOperationProtocolError extends WorkflowStorageError {
     );
   }
 }
+
+/**
+ * A word from the fixed vocabulary a local Git observation refuses under.
+ *
+ * Every one of them is a condition the document can act on by writing
+ * something else: a revision that names no commit, a path the commit does not
+ * hold, a blob that is not text, a repository this host could not read, a
+ * continuation whose observation has since changed. What a read never reports
+ * is what Git printed — a refusal names the condition and the correction, so a
+ * document cannot tell which Git version answered.
+ *
+ * `invalid-invocation` and `unexpected-content` are decided before a provider
+ * is reached and are therefore never retained: no observation happened.
+ */
+export type GitObservationReason =
+  | "invalid-invocation"
+  | "unexpected-content"
+  | "invalid-revision"
+  | "absent-path"
+  | "nontext-blob"
+  | "unusable-repository"
+  | "stale-continuation";
+
+/**
+ * An observation the document asked for and did not get.
+ *
+ * An ordinary refusal rather than a stale-state failure: the read changed
+ * nothing, so a `<PrintErrors>` region may print it and carry on. What a
+ * continuation retains is the word and the sentence, so a replayed refusal is
+ * the same refusal the live read raised.
+ */
+export class GitObservationError extends Error {
+  override name = "GitObservationError";
+
+  /** The component that was written, as a document writes it. */
+  readonly element: string;
+  readonly reason: GitObservationReason;
+
+  constructor(element: string, reason: GitObservationReason, sentence: string) {
+    super(sentence);
+    this.element = element;
+    this.reason = reason;
+  }
+}
+
+/** No provider answers local Git observations in this scope. */
+export class GitObservationProviderError extends WorkflowStorageError {
+  override name = "GitObservationProviderError";
+
+  constructor(element: string) {
+    super(
+      `no provider answers local Git observations, so ${element} cannot read anything. A host ` +
+        "that selects repositories on a native checkout installs one; a host with no native " +
+        "checkout to read has none, and nothing here falls back to the caller's own filesystem.",
+    );
+  }
+}

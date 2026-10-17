@@ -2,9 +2,9 @@
  * The ordinary run's repository provider: what `xmd run` installs under Deno
  * and inside the compiled binary.
  *
- * It answers the same four Apis the workflow provider answers, so a document
- * writes the same thirteen components either way. What differs is everything
- * about lifetime and ownership.
+ * It answers the same Apis the workflow provider answers, so a document writes
+ * the same repository vocabulary either way — the four selected-checkout reads
+ * included. What differs is everything about lifetime and ownership.
  *
  * A workflow run's checkouts are rows in its own database, restored from
  * retained history under a WorkflowRun the document must never be able to name.
@@ -47,13 +47,42 @@ import { getExpansion } from "@executablemd/core";
 import { Repository } from "../../composition/api.ts";
 import type { RepositoryRequest, WorktreeRequest } from "../../composition/api.ts";
 import { Git } from "../../composition/git-api.ts";
+import { GitQuery } from "../../git.ts";
+import {
+  admitChangesInvocation,
+  admitDiffInvocation,
+  admitFileInvocation,
+  admitFilesInvocation,
+} from "../../composition/observation-api.ts";
+import type {
+  GitChangesInvocation,
+  GitChangesResult,
+  GitDiffInvocation,
+  GitDiffResult,
+  GitFileInvocation,
+  GitFileResult,
+  GitFilesInvocation,
+  GitFilesResult,
+} from "../../composition/observation-api.ts";
+import {
+  CHANGES_ELEMENT,
+  DIFF_ELEMENT,
+  FILE_ELEMENT,
+  FILES_ELEMENT,
+} from "../../composition/components/GitReads.ts";
+import { performGitObservation } from "../composition/observations.ts";
+import type { ObservationPlace } from "../composition/observations.ts";
 import type {
   GitAddInvocation,
   GitCommitInvocation,
   GitPushInvocation,
   GitSwitchInvocation,
 } from "../../composition/git-api.ts";
-import { GitOperationAdmissionError, RepositorySelectionError } from "../../composition/errors.ts";
+import {
+  GitOperationAdmissionError,
+  GitOperationProtocolError,
+  RepositorySelectionError,
+} from "../../composition/errors.ts";
 import type {
   GitAddResult,
   GitCommitResult,
@@ -328,6 +357,23 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
     workingDirectory: string,
     operation: string,
   ): Operation<RegisteredCheckout> {
+    return (yield* routed(invocationRepository, workingDirectory, operation)).checkout;
+  }
+
+  /**
+   * Which registered checkout this invocation selects, and the Git directory
+   * that checkout shares.
+   *
+   * The common directory comes from the authenticated selection rather than
+   * from the route, because every checkout of one repository shares it and the
+   * selection is what was authenticated. A read needs it: the objects it may
+   * traverse are the ones beneath that directory and nothing else.
+   */
+  function* routed(
+    invocationRepository: RepositorySelection,
+    workingDirectory: string,
+    operation: string,
+  ): Operation<{ readonly checkout: RegisteredCheckout; readonly commonDirectory: string }> {
     const selected = selections.authenticate(
       invocationRepository,
       () =>
@@ -341,12 +387,29 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
     // temporary directory under macOS `/var`, a home directory somebody linked
     // — is the same place under another name. Comparing the two as written
     // would report a document standing in its own checkout as standing in none.
-    return selectCheckout(
-      registered,
-      selected.checkout.identity,
-      yield* canonicalPath(workingDirectory),
-      operation,
-    );
+    return {
+      checkout: selectCheckout(
+        registered,
+        selected.checkout.identity,
+        yield* canonicalPath(workingDirectory),
+        operation,
+      ),
+      commonDirectory: selected.commonDirectory,
+    };
+  }
+
+  /** Where one read runs, once this execution has authenticated and routed it. */
+  function* observationPlace(
+    invocationRepository: RepositorySelection,
+    workingDirectory: string,
+    element: string,
+  ): Operation<ObservationPlace> {
+    const target = yield* routed(invocationRepository, workingDirectory, element);
+    return {
+      repository: target.checkout.identity,
+      root: target.checkout.root,
+      commonDirectory: target.commonDirectory,
+    };
   }
 
   yield* Git.around(
@@ -407,6 +470,87 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
         // it did authorizes a pull request.
         evidence.push(published.evidence);
         return published.outcome;
+      },
+    },
+    { at: "min" },
+  );
+
+  // The four reads, at the implementation slot where the four transitions
+  // install their own. Each admits the request it received before it suspends,
+  // routes through the registry above, and performs one contained observation
+  // that changes nothing in the checkout it read.
+  yield* GitQuery.around(
+    {
+      *files([invocation_]: [GitFilesInvocation]): Operation<GitFilesResult> {
+        const request = admitFilesInvocation(FILES_ELEMENT, invocation_.request);
+        const value = yield* performGitObservation(
+          host,
+          FILES_ELEMENT,
+          request,
+          yield* observationPlace(
+            invocation_.repository,
+            invocation_.workingDirectory,
+            FILES_ELEMENT,
+          ),
+        );
+        if (!("paths" in value)) {
+          throw answered(FILES_ELEMENT);
+        }
+        return value;
+      },
+
+      *changes([invocation_]: [GitChangesInvocation]): Operation<GitChangesResult> {
+        const request = admitChangesInvocation(CHANGES_ELEMENT, invocation_.request);
+        const value = yield* performGitObservation(
+          host,
+          CHANGES_ELEMENT,
+          request,
+          yield* observationPlace(
+            invocation_.repository,
+            invocation_.workingDirectory,
+            CHANGES_ELEMENT,
+          ),
+        );
+        if (!("changes" in value)) {
+          throw answered(CHANGES_ELEMENT);
+        }
+        return value;
+      },
+
+      *diff([invocation_]: [GitDiffInvocation]): Operation<GitDiffResult> {
+        const request = admitDiffInvocation(DIFF_ELEMENT, invocation_.request);
+        const value = yield* performGitObservation(
+          host,
+          DIFF_ELEMENT,
+          request,
+          yield* observationPlace(
+            invocation_.repository,
+            invocation_.workingDirectory,
+            DIFF_ELEMENT,
+          ),
+        );
+        if (!("text" in value) || "commit" in value) {
+          throw answered(DIFF_ELEMENT);
+        }
+        return value;
+      },
+
+      *file([invocation_]: [GitFileInvocation]): Operation<GitFileResult> {
+        const request = admitFileInvocation(FILE_ELEMENT, invocation_.request);
+        const value = yield* performGitObservation(
+          host,
+          FILE_ELEMENT,
+          request,
+          yield* observationPlace(
+            invocation_.repository,
+            invocation_.workingDirectory,
+            FILE_ELEMENT,
+          ),
+        );
+        if (!("commit" in value)) {
+          throw answered(FILE_ELEMENT);
+        }
+        return value;
       },
     },
     { at: "min" },
@@ -549,6 +693,11 @@ export function* useRunComposition(options: RunCompositionOptions): Operation<vo
     },
     { at: "min" },
   );
+}
+
+/** The performer answered with a result for another read than the one asked. */
+function answered(element: string): Error {
+  return new GitOperationProtocolError(element);
 }
 
 /** Register a checkout, replacing an earlier registration of the same root. */
