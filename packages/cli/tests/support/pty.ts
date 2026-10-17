@@ -464,5 +464,50 @@ function* showing(pty: Pty, what: string, within: number): Operation<void> {
   }
 }
 
+/**
+ * Wait until the screen shows this text, wrapped wherever the frame wrapped it.
+ *
+ * For one case and one reason: a reading's column is narrower than a long
+ * unbroken token — a URL, a Git object id — so the frame cuts that token across
+ * rows, and the text a document printed is whole on the screen without being
+ * whole on any row of it. The single-row question {@link showing} asks is the
+ * right one for a label, a control or a status, and it is the wrong one here.
+ *
+ * What it proves: every non-space character of the expected text, in order,
+ * within four adjacent rows. What it gives up: the spacing between words, since
+ * a wrap consumes the space it happened at and the rails between columns are
+ * removed to rejoin a cut token. It does not give up completeness — an elided
+ * row keeps its `…`, so a truncated token still fails here, which is the whole
+ * point of asking about a long one.
+ */
+function* showingAcross(pty: Pty, what: string, within: number): Operation<void> {
+  /** The same text with every space and column rail taken out of it. */
+  const bare = (line: string): string => line.replaceAll("\u2502", "").replace(/\s+/g, "");
+  const wanted = bare(what);
+  const deadline = Date.now() + within;
+  while (true) {
+    const screen = yield* pty.shows();
+    // Four, because a token this long is cut at most once in a column this
+    // wide and the label before it may sit on its own row above.
+    const joined = screen.map((_, at) =>
+      screen
+        .slice(at, at + 4)
+        .map(bare)
+        .join(""),
+    );
+    if (joined.some((rows) => rows.includes(wanted))) {
+      return;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `the terminal never showed ${what} within ${within}ms, on one row or across four. ` +
+          "screen=" +
+          JSON.stringify(screen.map((line) => line.trimEnd()).filter((line) => line.length > 0)),
+      );
+    }
+    yield* sleep(150);
+  }
+}
+
 export type { Pty };
-export { allocate, showing };
+export { allocate, showing, showingAcross };

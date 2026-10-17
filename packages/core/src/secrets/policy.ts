@@ -223,9 +223,12 @@ export function* scanSecrets(content: string): Operation<SecretFinding[]> {
  * answer `false`. Only an execution whose host explicitly disabled detection
  * clears everything, without a scanner existing to invoke.
  *
- * Package-private: the one caller is the output bridge `execute()` owns, and
- * exporting it publicly would advertise a screen whose answer is worth nothing
- * outside that bridge.
+ * Package-private, with two callers, both of them bridges out of an
+ * execution's own source: the output bridge `execute()` owns, and the live
+ * observation a canonical prompt offers an observing host. Each asks the same
+ * question — may this leave — about the execution it is running in, which is
+ * why neither may answer for the other. Exporting it publicly would advertise
+ * a screen whose answer is worth nothing outside those bridges.
  */
 export function* clearsLiveOutput(content: string): Operation<boolean> {
   let detection: ExecutionDetection;

@@ -95,7 +95,7 @@ import {
   useSegmentCauses,
 } from "./errors.ts";
 import type { ImportSelection, InvocationForm } from "./invocation-identity.ts";
-import { structuralPlacement } from "./execution-declarations.ts";
+import { analyzeStructure } from "./execution-declarations.ts";
 import type {
   AdmittedStructural,
   ExpansionChunk,
@@ -868,7 +868,7 @@ export function expandSegments(
 export function* expandSegmentsWithin(
   ...expansion: Parameters<typeof expandListSegments>
 ): Operation<Segment[]> {
-  // Placement, for a harness that reads a construct's children in two passes.
+  // Structure, for a harness that reads a construct's children in two passes.
   // A declaration written beside the others and one a construct expanded on its
   // own are told apart by how many lists are open, and only expansion knows
   // that. Bracketed once here rather than at each construct, so a construct
@@ -1197,7 +1197,7 @@ function* expandListSegments(
               imports,
               returnBody,
             );
-          // Which placement this is, answered by identity rather than by name:
+          // Which state this is, answered by identity rather than by name:
           // a trusted harness knows which expansions its own declaration scan
           // reached, and a region it never reached is an ordinary one.
           //
@@ -1207,10 +1207,10 @@ function* expandListSegments(
           // in both passes.
           const scanner = yield* DeclarationScan.get();
           const site = elementSite(segment.position, indexBase + index);
-          const placement = scanner?.declaresAnswers(site);
-          if (scanner !== undefined && placement !== undefined) {
+          const state = scanner?.declaresAnswers(site);
+          if (scanner !== undefined && state !== undefined) {
             result.push(
-              ...(yield* declareChildAnswers(segment, expandWithin, scanner, site, placement)),
+              ...(yield* declareChildAnswers(segment, expandWithin, scanner, site, state)),
             );
             break;
           }
@@ -2968,9 +2968,9 @@ function* expandComponent(
     // than from the name alone.
     const bodyEnvironment = environmentForBody(environment, name, definition);
 
-    const placementError = validateBodyStructure(definition.bodySegments, definition.returns);
-    if (placementError) {
-      return [yield* raise(placementError)];
+    const structureError = validateBodyStructure(definition.bodySegments, definition.returns);
+    if (structureError) {
+      return [yield* raise(structureError)];
     }
 
     const asExpression = asExpressionViolation(name, expressions);
@@ -4729,12 +4729,12 @@ function* expandInstalledStructural(
 ): Operation<void> {
   const name = segment.name;
 
-  // Placement first. A region reached on its own is outside the construct that
+  // Structure first. A region reached on its own is outside the construct that
   // declares it — the accepted ones never arrive here, because their construct
   // consumed them — so the shared analysis is asked with no enclosing name.
-  const placement = structuralPlacement(segment, declaration, undefined);
-  if (placement.violations.length > 0) {
-    for (const violation of placement.violations) {
+  const analysis = analyzeStructure(segment, declaration, undefined);
+  if (analysis.violations.length > 0) {
+    for (const violation of analysis.violations) {
       owner.push(
         yield* raise({
           type: "error",
@@ -4765,7 +4765,7 @@ function* expandInstalledStructural(
   // settling every one of them first means no expression a construct or region
   // carries evaluates for an occurrence that was never going to be admitted.
   const declared = new Map<ComponentElement, AdmittedStructural>();
-  for (const element of placement.regions) {
+  for (const element of analysis.regions) {
     const region = environment.declarations.structural(element.name);
     if (region === undefined) {
       throw new Error(`${element.name} was accepted as a region nothing declares`);
@@ -4793,7 +4793,7 @@ function* expandInstalledStructural(
   // Every region's props are evaluated and validated before the handler starts,
   // in the order they were authored: a construct is one occurrence, and half of
   // one having run is not a state a handler should be able to observe.
-  for (const element of placement.regions) {
+  for (const element of analysis.regions) {
     const region = declared.get(element)!;
     const props = yield* structuralProps(element, region, owner);
     if (props === undefined) {

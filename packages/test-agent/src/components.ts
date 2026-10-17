@@ -147,7 +147,7 @@ function resolvePinned(
  * session. A sibling boundary naming the same agent, session and directory
  * reaches its own of each.
  *
- * Shared by both placements of `<TestAgent>`. The wrapper provisions one of
+ * Shared by both positions of `<TestAgent>`. The wrapper provisions one of
  * these per enclosing `<Test>`; nested-run configuration provisions one for the
  * ordinary child and a private one for each controlled Plan invocation. Each is
  * acquired inside the child it belongs to and remains its own world.
@@ -445,10 +445,10 @@ export function* Scenario(props: Record<string, Json>): Operation<unknown> {
  *
  * The containment root is the directory the source was found in, which is what
  * the controller serves the document's own Markdown dependencies from. Shared
- * by both placements, so a nested-run declaration resolves `src` exactly as the
+ * by both positions, so a nested-run declaration resolves `src` exactly as the
  * wrapper does — from the outer test document, never from the child.
  *
- * A refusal comes back rather than being thrown, because the two placements
+ * A refusal comes back rather than being thrown, because the two positions
  * report it differently: a wrapper is reading while a document runs and lets
  * the failure travel, while a declaration is configuring a child that has not
  * started and reports it as that child's refusal.

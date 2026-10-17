@@ -15,13 +15,24 @@ import { sep } from "node:path";
 import process from "node:process";
 import type { Operation } from "effection";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
-import { installReplHost, platformDataRoot } from "./repl-assembly.ts";
+import { installReplHost, platformDataRoot, replHostFacts } from "./repl-assembly.ts";
+import { XMD_VERSION } from "./cli.ts";
 import { useCompiledReplTerminal } from "./compiled-repl-terminal.ts";
 import { useDenoReplRepositories } from "./deno-repositories.ts";
 
 export function* useCompiledRepl(helper: HelperAssembly): Operation<void> {
   yield* installReplHost({
     dataRoot: () => platformDataRoot(process.platform, homedir(), process.env, sep),
+    // What this process is, stated here because this is where it is known.
+    // A reply reads these as the host's own facts; nothing downstream sniffs
+    // for a runtime global to work them out again.
+    environment: () =>
+      replHostFacts({
+        runtime: `a compiled binary built with deno ${process.versions.deno ?? "unknown"}`,
+        version: XMD_VERSION,
+        platform: process.platform,
+        architecture: process.arch,
+      }),
     // Sixteen random bytes as hex: URL-safe, opaque, and not derived from a
     // path, a clock or a counter, none of which a location should leak.
     identify: () => randomBytes(16).toString("hex"),

@@ -9,7 +9,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped } from "effection";
+import { ensure, Ok, scoped } from "effection";
 import type { Operation, Result, Stream } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
@@ -21,7 +21,16 @@ import { Agent } from "../src/agent/agent-api.ts";
 import { sessionOf } from "../src/agent/session-use.ts";
 import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent/agent-api.ts";
 import { AgentPromptError } from "../src/agent/errors.ts";
+import {
+  AgentProviderInstallError,
+  installAgentProvider,
+  registerAgentProvider,
+} from "../src/agent/provider-api.ts";
 import type { AgentProviderFactory, AgentProviderOptions } from "../src/agent/provider-api.ts";
+import type { AgentLaunchCoordinator } from "../src/agent/launch-coordinator.ts";
+import type { AgentSessionSetup } from "../src/agent/session-setup.ts";
+import type { ProviderSessionConfiguration } from "../src/agent/provider-configuration.ts";
+import { openSessionRequest } from "../src/agent/session-request.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
 import type { Json } from "@executablemd/core";
 
@@ -217,5 +226,150 @@ describe("Tier RP — root-provider lifecycle", () => {
     // The non-throwing finalizer still ran despite the throwing one.
     expect(state.extraRan).toBe(true);
     expect(state.cleanupDone).toBe(true);
+  });
+});
+
+describe("Tier RP — what the delivery adapter carries to a provider", () => {
+  interface Asked {
+    provider: string;
+    agentCommand: string;
+    configuration: ProviderSessionConfiguration | undefined;
+  }
+
+  /**
+   * A delivered handle that can only be used as itself.
+   *
+   * The private field is the point: it is readable through this exact object
+   * and throws through any other receiver, so a bridge that forwarded the
+   * operation unbound — or bound to the adapter it built around it — fails
+   * here rather than appearing to work.
+   */
+  class DeliveredSetup {
+    readonly #asked: Asked[];
+
+    constructor(asked: Asked[]) {
+      this.#asked = asked;
+    }
+
+    // deno-lint-ignore require-yield
+    *activate(
+      provider: string,
+      agentCommand: string,
+      configuration?: ProviderSessionConfiguration,
+    ): Operation<Result<void>> {
+      this.#asked.push({ provider, agentCommand, configuration });
+      return Ok(undefined);
+    }
+
+    // deno-lint-ignore require-yield
+    *finish(session: Session): Operation<Session> {
+      return session;
+    }
+  }
+
+  const CONFIGURATION: ProviderSessionConfiguration = Object.freeze({
+    providerTools: Object.freeze([]),
+    mcpServers: Object.freeze([]),
+    permissions: Object.freeze({ permissionMode: "deny-all", routing: "strict" }),
+    systemPrompt: null,
+  });
+
+  /**
+   * A coordinator shaped the way the terminal delivers one.
+   *
+   * What it answers with crosses the real structural adapter in
+   * `provider-api.ts`, which is what these rows are about: the provider never
+   * receives this object, it receives whatever that adapter made of it.
+   */
+  function coordinatorAnswering(setup: () => AgentSessionSetup): AgentLaunchCoordinator {
+    return {
+      // deno-lint-ignore require-yield
+      *perform(): Operation<never> {
+        throw new Error("this probe performs no launch");
+      },
+      // deno-lint-ignore require-yield
+      *refuse(): Operation<never> {
+        throw new Error("this probe refuses no launch");
+      },
+      sessionSetup: () => setup(),
+      checkpoint: () => {},
+      sessionUse: () => undefined,
+    };
+  }
+
+  it("SC5: activate crosses the delivery adapter bound to the handle that answered", function* () {
+    const asked: Asked[] = [];
+    let delivered: AgentSessionSetup | undefined;
+    const issuance = openSessionRequest("expansion:1", "review");
+
+    yield* scoped(function* () {
+      yield* registerAgentProvider(
+        "probe",
+        // deno-lint-ignore require-yield
+        function* (_options, launchCoordinator): Operation<void> {
+          delivered = launchCoordinator.sessionSetup(issuance.request);
+        },
+      );
+      yield* installAgentProvider(
+        "probe",
+        OPTIONS,
+        coordinatorAnswering(() => new DeliveredSetup(asked)),
+      );
+    });
+
+    if (delivered === undefined) {
+      throw new Error("the provider was delivered no session setup");
+    }
+    // It reaches the handle that answered, once, with exactly what the provider
+    // said. An unbound forward would have thrown reading the private field.
+    const authorized = yield* delivered.activate("acpx", "scribe-cmd", CONFIGURATION);
+    expect(authorized.ok).toBe(true);
+    expect(asked).toEqual([
+      { provider: "acpx", agentCommand: "scribe-cmd", configuration: CONFIGURATION },
+    ]);
+  });
+
+  it("SC5: a delivered setup that authorizes nothing is refused", function* () {
+    const issuance = openSessionRequest("expansion:1", "review");
+    let refusal: Error | undefined;
+
+    yield* scoped(function* () {
+      yield* registerAgentProvider(
+        "probe",
+        // deno-lint-ignore require-yield
+        function* (_options, launchCoordinator): Operation<void> {
+          try {
+            launchCoordinator.sessionSetup(issuance.request);
+          } catch (error) {
+            refusal = error instanceof Error ? error : new Error(String(error));
+          }
+        },
+      );
+      yield* installAgentProvider(
+        "probe",
+        OPTIONS,
+        coordinatorAnswering(() => {
+          const handle: AgentSessionSetup = {
+            // deno-lint-ignore require-yield
+            *activate(): Operation<Result<void>> {
+              return Ok(undefined);
+            },
+            // deno-lint-ignore require-yield
+            *finish(session: Session): Operation<Session> {
+              return session;
+            },
+          };
+          // Removed before delivery: the untyped embedder this adapter exists
+          // for, reached without claiming an incomplete object is a handle.
+          expect(Reflect.deleteProperty(handle, "activate")).toBe(true);
+          return handle;
+        }),
+      );
+    });
+
+    // It settles a conversation and authorizes nothing, and there is no
+    // fallback that reads that as authorized.
+    expect(refusal).toBeInstanceOf(AgentProviderInstallError);
+    expect(refusal?.message).toContain("authorizes nothing");
   });
 });

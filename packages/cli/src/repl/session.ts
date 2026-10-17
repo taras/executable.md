@@ -240,6 +240,27 @@ export interface ExpansionView {
  * which is what happens when a frame reads the content, suspends to measure
  * the terminal, and then reads the navigation again.
  */
+/**
+ * The entry running in this process, and what it has printed so far.
+ *
+ * Separate from {@link ReplOverlay} because the overlay is a *view*: it answers
+ * at the position this session was opened at, and a recorded outcome at that
+ * position wins over anything this process remembers. That is right for a
+ * screen and wrong for a caller that has to say which entry printed what — a
+ * session opened at a historical location would otherwise report an earlier
+ * entry's retained text as the output of the entry running now.
+ *
+ * Absent whenever nothing is running, which is also what makes a running
+ * entry's text attributable: the key is the task's own, not a position in a
+ * list, so nothing is credited to an entry that merely happens to be last.
+ */
+export interface ReplPrinting {
+  /** The entry this text belongs to, by its admission-order key. */
+  readonly entry: string;
+  /** Everything it has printed so far, buffering respected. */
+  readonly output: string;
+}
+
 export interface ReplReading {
   /** The model of the requested prefix. */
   readonly model: ReplModel;
@@ -341,6 +362,13 @@ export interface ReplSession {
   /** Whether an entry's execution is still running in this process. */
   readonly live: boolean;
   /**
+   * The entry running in this process and what it has printed, or none.
+   *
+   * The process's own fact rather than the screen's reading of it. See
+   * {@link ReplPrinting} for why the overlay is not this.
+   */
+  readonly printing: ReplPrinting | undefined;
+  /**
    * What this process is doing element by element, for the entry that is open.
    *
    * Ephemeral and detached, like the Agent reading beside it: a cold process
@@ -366,6 +394,20 @@ export interface ReplSession {
   /** Wait for the entry running in this process to finish, and answer how. */
   join(): Operation<Result<unknown>>;
   /**
+   * Whether this session will take an entry at all, right now.
+   *
+   * The same three refusals a submission would get — ending, an entry already
+   * running, an unsettled last entry — asked without proposing anything. It
+   * exists because a caller that has to write something down *before* it
+   * submits cannot learn this from the submission: by then the record is on
+   * disk, recording an attempt that was refused on terms the caller could have
+   * asked about first.
+   *
+   * Not a reservation and not a promise. It answers about this moment, and the
+   * submission asks again on its own terms.
+   */
+  admits(): Result<void>;
+  /**
    * Admit one more entry into this execution, or refuse and start nothing.
    *
    * Answers once that entry's work has reached past what the history retained —
@@ -374,7 +416,57 @@ export interface ReplSession {
    * a moment to submit and leaves the history, the running entry and the proposed
    * source exactly as they were.
    */
-  submit(source: string): Operation<Result<void>>;
+  submit(
+    source: string,
+    pausing?: PendingPause,
+    starting?: StartingCheck,
+  ): Operation<Result<ReplSubmission>>;
+}
+
+/**
+ * Whether the caller still wants this submission's entry held before it expands.
+ *
+ * A question rather than a value, and asked at the moment the entry starts
+ * rather than at the moment it was submitted. Preflight suspends — a component
+ * read, an import, a provider — and Pause can be pressed while it does, so a
+ * flag copied at the call would be the answer to a question nobody had asked
+ * yet. The caller owns the request; this is how the entry collects it.
+ */
+export type PendingPause = () => boolean;
+
+/**
+ * Whether the caller still wants this entry, asked as it starts.
+ *
+ * The session checks its own readiness before and after the preflight, and this
+ * is the other half: the route a person is standing at, the revision the draft
+ * is on and whether the request has been withdrawn are the screen's facts, not
+ * the session's, and all three can move while a preflight suspends. A refusal
+ * here starts nothing, appends nothing and is the submission's own outcome.
+ */
+export type StartingCheck = () => Result<void>;
+
+/**
+ * The entry one submission admitted, and that one only.
+ *
+ * Handed back rather than left for {@link ReplSession.join} to find, because
+ * the two answer different questions. `join()` answers "is this session busy",
+ * which is about whatever is running now; this answers "did the entry I
+ * submitted finish", which is about one task that may well have been replaced
+ * by the time anybody asks. A caller that admitted Entry 3 and waited on the
+ * session would be handed Entry 4's outcome the moment Entry 3 ended and
+ * another began — and a reply waiting to read what *its* entry printed would
+ * read somebody else's.
+ */
+export interface ReplSubmission {
+  /** The admission-order key of the entry this submission became. */
+  readonly entry: string;
+  /**
+   * Wait for this entry's execution to finish and its task to join.
+   *
+   * Bound to the task that was started, so the answer is this entry's outcome
+   * whenever it is asked for — including after the session has moved on.
+   */
+  join(): Operation<Result<unknown>>;
 }
 
 /** What starting or reopening a session needs. */
@@ -446,6 +538,28 @@ interface ReplEntryTask {
   readonly finished: Operation<Result<unknown>>;
   admit(outcome: Result<void>): void;
   settle(outcome: Result<unknown>): void;
+  /**
+   * Record that the history now holds this exact entry.
+   *
+   * Called from the one transition that establishes it, beside {@link arm}, and
+   * separate from {@link admit} because `admit` also carries a refusal: a task
+   * whose admission answered `Err` admitted nothing. This is the fact that
+   * decides whether an interrupted task was an *entry* being interrupted or a
+   * startup that never became one.
+   */
+  place(): void;
+  /** Whether that acknowledgement has happened. */
+  placed(): boolean;
+  /**
+   * Take whatever hold this entry's submission is still asking for.
+   *
+   * Called once, at the moment the history is known to hold this exact entry,
+   * and before that admission is acknowledged. The request is read here rather
+   * than carried from the submission because Pause can be pressed throughout a
+   * preflight and a startup that both suspend: a flag copied at the call would
+   * be the answer to a question nobody had asked yet.
+   */
+  arm(): void;
 }
 
 function* start(
@@ -568,6 +682,16 @@ function* start(
     let output = "";
     /** Whether an entry's execution is still running in this process. */
     let live = false;
+    /**
+     * Whether the entry that is running is one the acknowledged history holds.
+     *
+     * Separate from `live`, because the two answer different questions: `live`
+     * says work is in flight, which it is from the moment a task is allocated,
+     * and this says the entry that work is for has a durable position. Only the
+     * second one makes a hold mean anything, so only the second one decides
+     * whether the controller is offered.
+     */
+    let positioned = false;
     /** The one entry task this session owns, or none. */
     let running: ReplEntryTask | undefined;
     /** Whether this session still starts entry tasks. */
@@ -739,7 +863,16 @@ function* start(
         // The capability, not a disabled copy of it: once nothing is expanding
         // there is no continuation for Continue to release, and offering one
         // would be offering an action that cannot act.
-        return live ? expansion : undefined;
+        //
+        // And only once the running entry is one the history holds. A task that
+        // has been allocated is busy, not admitted: the setup import that gives
+        // the entry its position is crossed before the record naming it is
+        // appended, so a controller offered on the strength of `live` alone
+        // would let a hold land on that import — paused expansion above an
+        // entry list that says nothing was submitted, and no position to walk
+        // back to. Until then the request belongs to the reservation that made
+        // it, and {@link ReplEntryTask.arm} is what collects it.
+        return live && positioned ? expansion : undefined;
       },
       elicitation,
       get agent() {
@@ -750,6 +883,13 @@ function* start(
       get live() {
         return live;
       },
+      get printing(): ReplPrinting | undefined {
+        // The task's own key, so the text is credited to the entry that is
+        // actually producing it. `live` is what ends it: a task whose entry
+        // reached an outcome is no longer printing, and what it printed is in
+        // the record that outcome carries.
+        return live && running !== undefined ? { entry: running.key, output } : undefined;
+      },
       get lifecycle() {
         return lifecycle.reading();
       },
@@ -759,8 +899,16 @@ function* start(
       join(): Operation<Result<unknown>> {
         return joining();
       },
-      submit(source: string): Operation<Result<void>> {
-        return submitting(source);
+      admits(): Result<void> {
+        const answer = admissible();
+        return answer.ok ? Ok(undefined) : answer;
+      },
+      submit(
+        source: string,
+        pausing?: PendingPause,
+        starting?: StartingCheck,
+      ): Operation<Result<ReplSubmission>> {
+        return submitting(source, pausing, starting);
       },
     };
 
@@ -779,8 +927,64 @@ function* start(
      * that were already there.
      */
     function reached(): void {
-      running?.admit(Ok(undefined));
+      // Only an actual admission answers the submission. A record arriving is
+      // not an entry existing: a startup refused before its document was
+      // delegated writes that entry's settlement and never writes the record
+      // admitting it, and acknowledging on the strength of *any* appended event
+      // hands the caller a completion handle for an entry the history does not
+      // have — and cannot have, because that history is refused. What answers
+      // such a submission is the task's own failure, which carries the
+      // authoritative startup error.
+      //
+      // Read from the projection the reprojection above just took, so the one
+      // thing consulted is the same immutable reading every pane sees. A
+      // refused projection names no entries at all, which is the case this is
+      // about; a readable one names exactly the entries the file admitted.
+      const held = running;
+      if (held !== undefined && admits(held.key)) {
+        // Three things in one transition, in this order, and nothing suspends
+        // between them.
+        //
+        // The record is already persisted and the durable continuation that
+        // will resume into authored expansion has not run yet — that is the
+        // property this whole handoff rests on. So the entry both has a
+        // position and has expanded nothing, which is the one moment a hold is
+        // both meaningful and early enough to be worth asking for.
+        //
+        // The controller is offered first, then the request this submission is
+        // still carrying is collected, and only then is the admission
+        // acknowledged. Acknowledging first would hand the caller its handle
+        // while the request was still unread, and the loop could clear the
+        // reservation holding it before anything had asked.
+        positioned = true;
+        // Recorded on the task itself as well, before anything is offered or
+        // acknowledged. It is what tells a cancelled *entry* from a cancelled
+        // startup, and from here on this entry is the session's rather than its
+        // submission's.
+        held.place();
+        held.arm();
+        held.admit(Ok(undefined));
+      }
+      // Unconditional, because the session's own opening is a different
+      // question: a history that cannot be read has already answered it with
+      // the refusal, and this is a no-op once either answer has been given.
       open();
+    }
+
+    /**
+     * Whether the whole file now holds the entry this key names.
+     *
+     * By key rather than by count, because a count answers "how many" and this
+     * asks "is mine there". Two entries' records interleave in no legal
+     * history, but an admission that counted would be answering about whichever
+     * entry the file happened to hold rather than about the one that asked.
+     */
+    function admits(key: string): boolean {
+      return (
+        memo !== undefined &&
+        memo.projected.ok &&
+        memo.projected.value.whole.entries.some((entry) => entry.key === key)
+      );
     }
 
     function* joining(): Operation<Result<unknown>> {
@@ -835,7 +1039,30 @@ function* start(
       return prefix;
     }
 
-    function* submitting(source: string): Operation<Result<void>> {
+    /**
+     * One entry's own completion, bound to the task rather than to the slot.
+     *
+     * The same two moments `joining()` waits for — the outcome, and then the
+     * teardown that halting an already-settled task waits for — over a task
+     * this closure captured. Nothing here reads `running`, which is what makes
+     * it answer for this entry after the session has started another.
+     */
+    function submissionOf(held: ReplEntryTask): ReplSubmission {
+      return {
+        entry: held.key,
+        *join(): Operation<Result<unknown>> {
+          const outcome = yield* held.finished;
+          yield* held.task.halt();
+          return outcome;
+        },
+      };
+    }
+
+    function* submitting(
+      source: string,
+      pausing?: PendingPause,
+      starting?: StartingCheck,
+    ): Operation<Result<ReplSubmission>> {
       const before = admissible();
       if (!before.ok) {
         return before;
@@ -852,6 +1079,14 @@ function* start(
       if (!after.ok) {
         return after;
       }
+      // And the caller's own terms, asked here for the same reason: validating
+      // suspended, so the route, the draft and whether anybody still wants this
+      // can all have moved while it did. The session cannot answer those — they
+      // are the screen's — so it asks, and a refusal starts nothing.
+      const wanted = starting?.() ?? Ok(undefined);
+      if (!wanted.ok) {
+        return wanted;
+      }
       const started = begin(
         entryKey(after.value.entries.length + 1),
         source,
@@ -860,8 +1095,32 @@ function* start(
         // this process remembers of the entry that just ran, and not from the
         // prefix somebody happens to be inspecting.
         entryInitialBindings(after.value),
+        pausing,
       );
-      return yield* started.admitted;
+      return yield* scoped(function* (): Operation<Result<ReplSubmission>> {
+        // Registered before the wait below, so it covers the whole interval in
+        // which this task is allocated and its entry is not yet admitted. The
+        // task is the session's — it has to be, so that an admitted entry
+        // outlives the submission that asked for it — and until the admission
+        // is acknowledged there is nothing for it to outlive. A caller that
+        // stops wanting this in that interval would otherwise walk away from a
+        // startup that goes on to admit and run an entry nobody is waiting for.
+        //
+        // Halting joins, so this does not return while that startup could still
+        // continue behind it. Past the acknowledgement it does nothing at all:
+        // the entry is the session's then, and cancelling a caller's wait is
+        // not cancelling an entry.
+        yield* ensure(function* () {
+          if (!started.placed()) {
+            yield* started.task.halt();
+          }
+        });
+        const admission = yield* started.admitted;
+        // The handle only for an entry that was actually admitted. A refusal
+        // started nothing, so there is no entry to hand anybody a completion
+        // for.
+        return admission.ok ? Ok(submissionOf(started)) : admission;
+      });
     }
 
     /**
@@ -876,11 +1135,34 @@ function* start(
       source: string,
       view: EntrySegmentStream,
       initialBindings: Readonly<Record<string, Json>>,
+      /**
+       * Whether the submission that asked for this entry wants it held.
+       *
+       * Asked at this entry's own admission, which is the earliest moment a
+       * hold means anything and still earlier than every authored effect.
+       * Asking at the call would ask before anyone could have pressed Pause;
+       * asking once expansion was under way would ask about a walk that had
+       * already crossed its first gate.
+       */
+      pausing?: PendingPause,
     ): ReplEntryTask {
       const admission = withResolvers<Result<void>>();
       const completion = withResolvers<Result<unknown>>();
       let admitted = false;
       let settled = false;
+      /**
+       * Whether the history holds this exact entry.
+       *
+       * The one fact that distinguishes an entry from a startup. A task is
+       * allocated before the record that gives its entry a position, and the
+       * interval between the two is real: the execution installs its providers
+       * and composes its envelope in it. Within that interval there is no entry
+       * — nothing to wait for, nothing to follow, and nothing for a later
+       * reading to find.
+       */
+      let placed = false;
+      /** Whether this entry put the session into a stop it must undo. */
+      let armed = false;
       function admit(outcome: Result<void>): void {
         if (!admitted) {
           admitted = true;
@@ -894,10 +1176,41 @@ function* start(
           completion.resolve(outcome);
         }
       }
+      /**
+       * Collect the hold this submission is still asking for, if it is.
+       *
+       * The cleanup that undoes an arming is registered inside the task below,
+       * and this cannot run before it: the earliest thing that calls it is the
+       * admission of a record this entry appends, and the entry does not append
+       * until its body is well past that registration. So an arming always has
+       * its disarm already in place.
+       *
+       * Collected once, which is what makes it a request and not a mode. The
+       * transition that calls this runs for every record the entry appends, and
+       * the reservation it reads goes on saying what was asked for long after it
+       * was given — so a second reading would re-apply a hold the person had
+       * already released, and the entry would stop again at every record it
+       * wrote.
+       */
+      let collected = false;
+      function arm(): void {
+        if (collected) {
+          return;
+        }
+        collected = true;
+        if (pausing?.() === true) {
+          armed = true;
+          expansion.pause();
+        }
+      }
       // This entry's own overlay, from here: what the entry before it printed is
       // not what this one has printed, and the Journal holds that one's anyway.
       output = "";
       live = true;
+      // Busy, and not yet anywhere: the record that gives this entry a position
+      // has not been appended, so whatever the entry before it established about
+      // where the file stands says nothing about this one.
+      positioned = false;
       lifecycle.open(key);
       const task = owner.run(function* () {
         // Registered before anything this task acquires, and therefore released
@@ -908,13 +1221,17 @@ function* start(
         // That is what makes the next entry's start a start rather than an
         // overlap.
         //
-        // And released only for an entry that reached an outcome of its own. A
-        // task halted — by this session's teardown, or by a failure that
-        // withdrew its authority — leaves the slot occupied, so nothing can
-        // follow an entry that was interrupted, whatever order the surrounding
-        // destructors happen to run in.
+        // And released for an entry that reached an outcome of its own, or for a
+        // task that never became an entry at all. An *entry* halted — by this
+        // session's teardown, or by a failure that withdrew its authority —
+        // leaves the slot occupied, because nothing may follow an entry that
+        // was interrupted, whatever order the surrounding destructors happen to
+        // run in. A task cancelled before its admission was acknowledged is not
+        // that: it admitted nothing, the history holds nothing of it, and there
+        // is no entry for anything to follow — so holding the slot against it
+        // would wedge the session over work that never happened.
         yield* ensure(() => {
-          if (running?.task === task && settled) {
+          if (running?.task === task && (settled || !placed)) {
             running = undefined;
           }
         });
@@ -931,6 +1248,37 @@ function* start(
           // and a reader waiting for that is waiting for this.
           changes.send(model);
         });
+        // Registered before the controller is armed, and therefore run before
+        // the two above it: an arming that never reached a hold must not outlive
+        // the entry that asked for it. A startup that fails after this point —
+        // a refused document policy, a provider that will not install — leaves
+        // the session-wide mode asking for a stop no walk of this entry will
+        // ever reach, and the entry after it would hold at its first gate for a
+        // request nobody made of it. The interval is real and not narrow: once
+        // the setup import is retained this entry is admitted, and root metadata
+        // and the document envelope are composed before the body expands, so a
+        // refusal there fails an entry that is armed and holds nothing.
+        //
+        // Only while this entry is still the session's: an older entry tearing
+        // down after another has started must not disarm the newer one's
+        // controller. And only where this entry armed it — a hold the person
+        // asked for through the live control is theirs to release.
+        yield* ensure(() => {
+          if (armed && running?.task === task) {
+            // Disarming, not a Continue nobody asked for: by the time this runs
+            // the walks below have unwound through their own holds, so there is
+            // no continuation left to release and the release count of a
+            // torn-down controller stays zero. What this clears is the mode.
+            expansion.resume();
+          }
+        });
+        // Nothing waits for the admission here. `arm()` is called from the
+        // transition that establishes it — the append observer, which runs after
+        // the record is persisted and before the durable continuation resumes —
+        // so the hold is in place before any authored step can run. A task
+        // scheduled to notice the admission instead would be ordered by the
+        // scheduler rather than by the record, and the continuation it was
+        // racing has no reason to lose.
         const outcome = yield* runEntry(key, source, view, initialBindings);
         settle(outcome);
         // A settled entry is past whatever its segment retained, whichever way
@@ -945,6 +1293,11 @@ function* start(
         finished: completion.operation,
         admit,
         settle,
+        arm,
+        place: () => {
+          placed = true;
+        },
+        placed: () => placed,
       };
       running = started;
       return started;

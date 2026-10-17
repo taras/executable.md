@@ -1,7 +1,7 @@
 /**
  * Holding a retained record to the identity that names it.
  *
- * Placement is a function of identity — a name decides a slot, a slot decides a
+ * A checkout path is a function of identity — a name decides a slot, a slot decides a
  * path — so a retained path is checkable rather than merely plausible. None of
  * it is this provider's word by the time it is read back: a column is whatever
  * the database holds, and every disagreement found here is stale retained state
@@ -13,7 +13,7 @@ import type { RepositoryRecord, WorktreeRecord } from "../../composition/records
 import type { GitCheckoutIdentity } from "../../composition/git-records.ts";
 import type { StoredRepository } from "../repositories.ts";
 import { admitLocator, locatorFingerprint } from "./locator.ts";
-import { repositoryCheckoutPath, worktreeCheckoutPath } from "./placement.ts";
+import { repositoryCheckoutPath, worktreeCheckoutPath } from "./checkout-paths.ts";
 
 /**
  * What attachment found, when what it found is not what the record says.
@@ -26,7 +26,7 @@ export type StaleReason =
   | "checkout"
   | "administration"
   | "repository"
-  | "placement"
+  | "checkout-path"
   | "locator"
   | "origin"
   | "object-format"
@@ -38,7 +38,7 @@ const STALE_SENTENCES: ReadonlyMap<StaleReason, string> = new Map([
   ["checkout", "the Workspace no longer holds a checkout at the path it recorded"],
   ["administration", "what the Workspace holds there is no longer a readable Git checkout"],
   ["repository", "the repository it belongs to is no longer retained"],
-  ["placement", "the path it recorded is not the one this run's placement gives its identity"],
+  ["checkout-path", "the path it recorded is not the one this run gives its identity"],
   ["locator", "the url retained for it is not the one its identity names"],
   ["origin", "the checkout it holds came from a different repository"],
   ["object-format", "the checkout it holds names its objects with a different algorithm"],
@@ -53,7 +53,7 @@ export function stale(subject: string, reason: StaleReason): RepositoryStaleStat
 /**
  * The retained record, once it still agrees with the identity that names it.
  *
- * Placement is a function of identity: a name decides a slot, and the slot
+ * A checkout path is a function of identity: a name decides a slot, and the slot
  * decides the path. So a retained path is checkable rather than merely
  * plausible — recomputing it from the record's own name and comparing the whole
  * string is the difference between "this looks like a Workspace path" and "this
@@ -71,14 +71,14 @@ export function stale(subject: string, reason: StaleReason): RepositoryStaleStat
  */
 export function agreedRepository(record: RepositoryRecord, subject: string): RepositoryRecord {
   if (record.checkoutPath !== repositoryCheckoutPath(record.name)) {
-    throw stale(subject, "placement");
+    throw stale(subject, "checkout-path");
   }
   return record;
 }
 
 export function agreedWorktree(record: WorktreeRecord, subject: string): WorktreeRecord {
   if (record.checkoutPath !== worktreeCheckoutPath(record.repositoryName, record.name)) {
-    throw stale(subject, "placement");
+    throw stale(subject, "checkout-path");
   }
   return record;
 }
@@ -112,11 +112,11 @@ export function agreedStored(stored: StoredRepository, subject: string): StoredR
 }
 
 /**
- * Whether this checkout identity is the one this run's placement gives that name.
+ * Whether this checkout identity is the one this run's paths give that name.
  *
- * The half of a retained result the shared protocol cannot check. Placement is a
+ * The half of a retained result the shared protocol cannot check. The path is a
  * function of identity and the function is this provider's, so a name and a path
- * that arrive together have to still be the pair placement produces: a result
+ * that arrive together have to still be the pair those paths produce: a result
  * naming one Worktree at another's path, or naming a Worktree at all where the
  * path is the Repository's own, is describing a checkout this run never had.
  *
@@ -124,7 +124,7 @@ export function agreedStored(stored: StoredRepository, subject: string): StoredR
  * reading anything — which is what makes it answerable on the path that performs
  * no effect at all.
  */
-export function placedCheckout(
+export function checkoutPathAgrees(
   identity: GitCheckoutIdentity,
   repository: RepositoryRecord,
 ): boolean {

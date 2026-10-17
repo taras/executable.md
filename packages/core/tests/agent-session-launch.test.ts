@@ -136,15 +136,22 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
               sessionKey: `stub:${typeof name === "string" ? name : "default"}`,
               cwd: "/repo",
             };
-            // Every session this stub issues is a fresh placement: there is no
+            // Every session this stub issues is a new session: there is no
             // conversation yet, so nothing is applied here and the launch
             // beneath it constructs and configures.
             if (!isSessionRequest(name)) {
               return session;
             }
-            return yield* launchCoordinator
-              .sessionPlacement(name)
-              .complete(session, { kind: "fresh" });
+            const setup = launchCoordinator.sessionSetup(name);
+            // Authorized before anything is settled, where a real provider
+            // asks. An ordinary request belongs to no retained conversation, so
+            // there is nothing to be held to: it authorizes the work and saves
+            // nothing.
+            const authorized = yield* setup.activate("stub", "stub-cmd");
+            if (!authorized.ok) {
+              throw authorized.error;
+            }
+            return yield* setup.finish(session, { kind: "new" });
           },
           *launch([request]) {
             const agent = request.agent;

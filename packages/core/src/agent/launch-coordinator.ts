@@ -18,13 +18,13 @@
 import type { Operation } from "effection";
 import { sessionOf } from "./session-use.ts";
 import type { AgentPromptEvent, Session, SessionLaunchResult } from "./agent-api.ts";
-import { createSessionPlacementOwner } from "./session-placement.ts";
-import type { AgentSessionPlacement, SessionPlacementOwner } from "./session-placement.ts";
+import { createSessionSetupOwner } from "./session-setup.ts";
+import type { AgentSessionSetup, SessionSetupOwner } from "./session-setup.ts";
 import type { ReadSessionUse } from "./session-use.ts";
 import { associateCheckpoint } from "./checkpoint.ts";
 import { AgentLaunchProtocolError } from "./launch-request.ts";
 import type { AgentLaunchRequest, IssuedLaunch } from "./launch-request.ts";
-import { readPlacement } from "./session-request.ts";
+import { consumeSessionRequest } from "./session-request.ts";
 import type { AgentSessionRequest } from "./session-request.ts";
 import type {
   DetachedLaunchRecord,
@@ -77,25 +77,25 @@ export interface AgentLaunchCoordinator {
    */
   refuse(request: AgentLaunchRequest, preparation: PreparedLaunchRecord): Operation<void>;
   /**
-   * The engine identity a routed session placement carries.
+   * The engine identity a routed session request carries.
    *
    * Delivered rather than published, for the same reason `perform` is: the
    * authored name travels the public chain where a handler may change it, and
    * this does not travel there at all. A provider asks the coordinator it was
    * installed with; a handler holding the same request reads only the name.
    *
-   * It retains nothing, but it is not repeatable: a placement is bound to the
+   * It retains nothing, but it is not repeatable: a request is bound to the
    * element that opened it and is read once, so a value kept from an earlier
    * `<Session>` or already read refuses here.
    */
   /**
-   * Accept the exact live final placement, once, and answer with its handle.
+   * Accept the exact live final request, once, and answer with its handle.
    *
    * The handle is where the engine identity is read and where the conversation
    * the provider resolves is settled. It reaches the installed provider and
    * nothing else, because this coordinator does.
    */
-  sessionPlacement(request: AgentSessionRequest): AgentSessionPlacement;
+  sessionSetup(request: AgentSessionRequest): AgentSessionSetup;
   /**
    * Say which provider turn a successful Prompt completion was.
    *
@@ -131,7 +131,7 @@ export interface AgentLaunchCoordinator {
    * continuation its factory captured, so the only thing that can register a
    * session is the provider that issued it. Core uses the registration to
    * refuse issuing a configured use around a session no provider registered,
-   * and to configure an established one in place.
+   * and to configure an existing one in place.
    */
 }
 
@@ -212,7 +212,7 @@ function crossCheck(request: AgentLaunchRequest, record: PreparedLaunchRecord): 
 export function createLaunchCoordinator(
   generation: object,
   live: () => readonly LiveLaunch[],
-  owner: SessionPlacementOwner = createSessionPlacementOwner(),
+  owner: SessionSetupOwner = createSessionSetupOwner(),
 ): AgentLaunchCoordinator {
   function locate(request: AgentLaunchRequest): LiveLaunch {
     const found = live().find((candidate) => candidate.issued.owns(request));
@@ -226,11 +226,11 @@ export function createLaunchCoordinator(
 
   return {
     // Resolved from the request itself, exactly as a launch is: what the
-    // placement carries lives inside the value core issued, and a rebuilt or
+    // request carries lives inside the value core issued, and a rebuilt or
     // foreign look-alike reaches none of it. The handle that comes back is the
     // provider's alone, because this coordinator is.
-    sessionPlacement(request) {
-      return owner.placement(request);
+    sessionSetup(request) {
+      return owner.setup(request);
     },
     // Nothing to locate: the completion names itself. Every refusal — a turn
     // that did not complete, a token that is not one, a second association —

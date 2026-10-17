@@ -2817,7 +2817,7 @@ it to decide whether a write's children may expand, and the later write repeats
 the same admission from the same authored path. Nothing is handed between them,
 so a check that was skipped or answered elsewhere authorizes nothing.
 
-Directory placement is one semantic act of its own. `<Dir>` gives
+Creating a directory is one semantic act of its own. `<Dir>` gives
 `ensureDirectory` the enclosing working directory and the path the author
 selected; a relative path is resolved against that directory and an absolute
 path keeps the component's existing meaning and is used as written. The
@@ -4212,11 +4212,19 @@ no one-off Plan timer and does not depend on that issue.
 
 What Plan composes around the public component is recovery, not limiting:
 
-```mdx
-<Let as="findings">
-  <Evaluate text={agentResponse} allow={["read"]} />
-</Let>
-```
+Canonical core enforces it, and where it is enforced is the point. What a test *does*
+arrives through public middleware a handler may legitimately answer without
+delegating — that is how a second loaded copy supplies behavior — so a
+requirement asked inside that chain is a requirement a handler can skip by never
+letting it be asked. The decision is therefore taken by the invocation itself,
+before the harness is minted and before the behavior chain is dispatched,
+through a seam the testing package installs its guard on. Core supplies no
+policy there: it dispatches through a private per-invocation terminal and
+refuses an invocation whose decision was never taken, so blocking that chain
+refuses the test rather than admitting it. With nothing installed the terminal
+is reached immediately, which is what keeps core-only use of the behavior
+surface working.
+
 
 Plan owns one fixed recovery policy: after the child's structured teardown it
 turns the one narrow, typed generated-request refusal into retry context and rethrows
@@ -4897,7 +4905,7 @@ through two more declarations in that same prefix. `<TestAgent>` contains only
 its `<TestAgent.Scenario>` declarations there, and `<Answers>` contains only its
 `<Answer>` matchers. Each wrapper may appear at most once for one `<Execution>`.
 They reuse the existing TestAgent scenario and Answers matcher contracts; this
-placement changes where those declarations apply, not what either language
+position changes where those declarations apply, not what either language
 means. `<Answers delegate={true}>` is refused in this position: a test that
 supplied answers does not fall through to the run profile's live WebForm.
 The TestAgent declaration is recognized only when ordinary resolution selected
@@ -5532,7 +5540,7 @@ a private closure name, and a reserved registration already holding the name are
 configuration failures refused where they are installed rather than precedence
 questions resolved by order.
 
-**Placement is decided from source.** A construct holds whitespace and the
+**Structure is decided from source.** A construct holds whitespace and the
 regions it declares and nothing else; a region is written directly inside its
 own construct and is an error anywhere else; a self-closing construct has no
 regions and is accepted when that form is declared. The analysis is pure and
@@ -5549,7 +5557,7 @@ construct never enters the branch that belongs to the engine's table.
 
 **The symbols stay version 2.** A construct and each of its regions contribute
 one entry to the structural category, sorted by code point beside the engine's
-own and carrying the declared forms, props schema, placement, syntax examples,
+own and carrying the declared forms, props schema, structure, syntax examples,
 description and origin. The two structural entry shapes are a closed union: an
 engine entry keeps exactly the fields it always had, neither shape can inhabit a
 component entry, and no category, order or existing member changed — so a
@@ -5569,7 +5577,7 @@ shared analysis, and everything else is the component import it always was. An
 expansion carrying no execution environment declares nothing and reaches none
 of this.
 
-**The handler is entered once, with everything already settled.** Placement
+**The handler is entered once, with everything already settled.** Structure
 first, then the authored form of the construct and of every accepted region —
 each against its own declaration, because a region declares the forms it accepts
 and does not inherit its construct's — then `as` and `slot` —
@@ -6060,6 +6068,7 @@ operation the document authored. Those prohibitions are one boundary rather
 than a test fixture's list of components: adding a component cannot make
 validation effectful.
 
+
 ## The private REPL composition kernel
 
 `packages/cli/src/repl/` is a private CLI feature, not a package boundary and
@@ -6238,7 +6247,19 @@ Composition is keyed. A parent describes its complete child set; the reconciler
 judges all of it before mutating any of it, adds and updates before removing,
 then sets canonical order, and acknowledges the offer only after that commit.
 Identity is parent, key and type, so redescription preserves a node and its
-running lifetime while a changed key or type replaces it. Freedom owns the one
+running lifetime while a changed key or type replaces it.
+
+That judgment is one function, and the mounted tree publishes two methods over
+it. `validate()` answers synchronously about a described set without mounting
+it: nothing is attached, updated, drawn or removed, focus does not move and the
+frame does not advance. `apply()` makes the same judgment again on the values it
+is actually given, so an accepted judgment is an answer rather than a
+reservation and a caller that never asks is protected exactly as much. What is
+judged is what the tree owns — whether each child is a description it issued,
+whether siblings share a key, whether two children request focus, and whether a
+focus request sits inside the innermost modal. A child's layout is its parent's
+own and takes no part in it: there is no caller-supplied policy over a layout
+and no second validator. Freedom owns the one
 mounted lifetime tree and the one focus store, and a component's capabilities
 live in its own node's `NodeData` — an absent description therefore leaves no
 node, no input, no focus, no frame contribution and no output anywhere.
@@ -6254,14 +6275,23 @@ Freedom is vendored from a pinned unpublished commit under
 `packages/cli/src/repl/vendor/freedom/`, as a pristine copy and a patched copy
 whose every difference belongs to one named patch. See its `PROVENANCE.md`.
 
-### One chronology, and the authority that answers it
+### Two owners, and the authority that answers them
 
-The Sessions reading is one list, not two appended: every Prompt this process
-observes takes a slot when it is scheduled and keeps it through publication, so
-a turn that becomes durable stays the same mounted node in the same place, and
-concurrent Prompts that publish out of order do not reorder each other. The
-slot, its order and its live key are process-local — no route, model, Journal
-record or public Core Api carries one.
+**Sessions has one section per owner, in a fixed order: Entry agents, then
+Sidekick.** The two histories are two files with no shared persisted scheduling
+number, so one interleaved list would have to present a timestamp, a completion
+order or an append order as a global start order. Each section keeps its own
+history's order instead, and the root composes the two detached readings rather
+than merging them into a model — Sidekick records never enter `ReplModel` and
+never acquire a fabricated entry key, marker or History position. An execution
+with no Sidekick installation keeps the entry-only reading unchanged.
+
+The Entry agents reading is one list, not two appended: every Prompt this
+process observes takes a slot when it is scheduled and keeps it through
+publication, so a turn that becomes durable stays the same mounted node in the
+same place, and concurrent Prompts that publish out of order do not reorder each
+other. The slot, its order and its live key are process-local — no route, model,
+Journal record or public Core Api carries one.
 
 A Prompt's sequence number is local to the execution that recorded it, so it
 restarts with every entry and two entries may each hold sequence `0`. Turns are
@@ -6272,13 +6302,127 @@ the pair — a durable Prompt name says where it was written, so two entries
 running one source hold the same name at the same position, and correlating by
 the name alone shows one turn twice and the other not at all.
 
-Sessions stays one execution-wide chronology grouped by the provider's session
-key and by nothing else. Selecting an entry changes which transcript is being
-read and never which conversations are listed.
+Each section stays grouped by the provider's session key and by nothing else.
+Selecting an entry changes which transcript is being read and never which
+conversations are listed.
 
 Filtering is by the conversation key a provider actually issued; an authored
 `<Session>` name is not one. Selecting or clearing changes `route.session` and
-nothing else, and background Agent work never changes it.
+nothing else, and background Agent work never changes it. It filters both
+sections, and rows are never merged across them: entry and Sidekick identities
+have separate owner domains, so an equal provider conversation or an equal turn
+number leaves one filter choice and two rows.
+
+**A Sidekick turn's filter evidence is its own saved record or its own
+publication, and nothing else.** A nonempty `sessionKey` read through
+`parsePromptRecord()` from an acknowledged canonical Prompt is evidence for that
+turn — a failed or cancelled record included — and an exact successful
+`AgentPromptPublication.association` supplies the key for its own live turn
+before append acknowledgement without making that turn saved. A prepared or
+activated CLI association, a message id, a response name, a turn number and an
+agent name are none of them a provider conversation, and an earlier turn's key
+is never substituted for a later one's. Because a chat has no position in the
+entry history, the Sidekick's complete saved facts and its exact live
+publication facts are applicable beside any entry checkpoint, while entry facts
+still come only from the selected prefix and live entry facts only from the
+head. A key absent from every applicable fact refuses rather than producing an
+apparently empty conversation. A key this owner genuinely observed stays known
+for the owner's lifetime so a selected filter does not become guessed emptiness
+after a Stop; the saved files establish none of it, so a cold reopening of a
+location naming an exclusively ephemeral key refuses.
+
+**The owner each section reads is its own.** `sidekick/model.ts` projects the
+saved turns purely from the records a pair holds, and `sidekick/owner.ts`
+remains the sole publisher in each Sidekick execution: its existing `begin()`
+announces the Sessions row even for a turn that produces no literal `<Output>`,
+its `observe()` reads a cleared prefix through the pure preview reader, and its
+one `publication.append()` is what acknowledges a turn. Progress and recording
+are separate facts — a pending request, a generating turn and an evaluation in
+progress are what this owner observes, and a saved Prompt is not evidence that
+the program it returned was evaluated. Publication replaces the live row exactly
+once under the same mounted identity and a later evaluation updates that same
+row; a Stop with no acknowledged Prompt creates no saved turn, marker or
+acceptance. No second publisher, provider subscription, observer middleware or
+Core hook is added for any of it.
+
+**The Sidekick adds three location members, and they are independent of the
+surface and of each other.** `view=sidekick` names it as the reading while the
+entries or sessions surface underneath stays selected, and `right=bindings` or
+`right=sidekick` retains which right-hand pane was being read; an omitted
+`view` selects the surface itself and an omitted `right` means the Sidekick, so
+every location written before they existed decodes to the view it described and
+re-encodes to exactly its own bytes. Selecting the Sidekick sets both and
+disturbs no surface, scope, position or draft, because a reading is what
+somebody comes back *from*; selecting Entries or Sessions clears the reading and
+selects that surface, since asking for a surface is asking to read it; and
+selecting Bindings retains the pane while putting the saved surface back. Both
+carry data and no authority — no agent, no provider, no request and no focus —
+each names one of a closed set, so an unknown, empty or repeated value is
+refused by the grammar rather than carried as a string a layout would have to
+interpret, and a resize rewrites neither. The Sidekick's own question and
+Configure drawers stay process-local and have no spelling here at all.
+
+`sidekick=<saved-chat-id>` is the third, and the one durable reading selection
+in the location. It names a CLI conversation this execution's Sidekick history
+already holds — including one whose setup was only prepared or failed, and which
+therefore has no provider conversation at all — so it is a different question
+from `session`, which names a provider key and filters the list. Its owner is
+the root and its lifetime is the location's reading selection; it grants no
+provider or execution capability, and no action trusts it as authority. Omission
+follows the current chat, an explicit identifier pins the reading, and that
+reading has the usual controls only while it *is* the active association:
+every other saved chat has no composer, Send, Retry, Configure, pending
+question or Stop addressing it, absent from the description, the focus order and
+the target map rather than drawn and refused, with a current-chat modal hidden
+and its typed values preserved. An unknown identifier refuses without falling
+back to the current chat, missing or unreadable history keeps the established
+storage refusal, and a legacy single-file execution has no saved chat to select
+and is not upgraded by being read. Resolution happens in the pure cold
+validation `runReplProgram()` already performs before `openReplSession()`, from
+the chat records the repository opened the execution with — so a mistyped
+selector cannot be discovered only after replay or resumption could append, and
+no conversation is opened to obtain the facts.
+
+A chat whose setup was prepared or failed opens on its own setup status, read
+from that chat's own conversation record: the phase it was left in, and for a
+failure the agent's own reason. That is what such a chat holds. Reporting an
+absence of messages instead would describe a conversation that was never set up
+as one that simply said nothing, which is the same substitution the storage
+refusal exists to prevent.
+
+Activating a Sidekick row sets `view`, `right` and that row's exact chat, and
+preserves `session`, the left surface, the entry and its scopes, the History
+position and both drafts. Bringing the chosen turn into view is ordinary
+process-local window navigation over the chat's own measured window, so a copied
+location promises the same chat and no scroll offset. **[Back to current chat]**
+clears only this member, keeps the pane selected and restores the current
+message. A successful agent change asked for from the chat being read returns to
+the new current chat by clearing it; a failure preserves the reading and the
+association, under the existing conversation and revision checks on late
+reports. Background work and resizing never retarget an explicitly selected
+chat and never take focus.
+
+The *request* is what the reduction keeps — the chat and the canonical turn, in
+process-local root state beside the window offsets — because the frame answering
+an activation is the frame being left: a narrow Sessions reading, and a pane
+showing Bindings, have no chat viewport, so there is no offset either of them
+could compute. The destination frame's own admission turns that request into an
+offset; it lands on the turn's evaluated reply or inert anchor rather than on the
+first message carrying its number, and the next deliberate move of that window
+spends it. No location member, guessed rectangle or second focus store is
+involved.
+
+That offset is chosen from the same composed and fitted rows the frame will
+draw, so a reveal cannot target a row nothing paints. It is what makes a
+successful control-only reply safe to leave out of the chat: such a reply
+contributes no utterance, and the turn's visible associated context is the
+request it answered instead — read from the request boundaries the chat
+projection already establishes, which is the only thing that owns a turn, and
+reached for an automatic follow-up through the person request its chain began
+with. A turn whose containing request the history cannot bound reveals nothing,
+because composing a row to be landed on would make navigation appear to succeed
+by inventing the thing it arrived at. The association is derived presentation:
+no record, URL member or durable map holds it.
 
 A pending request is a fact on the turn that is waiting. Arrival mounts it and
 does nothing else. Activating it records that request's opaque key in
@@ -6289,7 +6433,7 @@ settled and a stale, unknown or unoffered action settles nothing. A retained
 permission audit is an inert reading, and a historical prefix has no live
 requests to answer.
 
-Both readings are windowed at the layout region that will place them, rather
+Every reading is windowed at the layout region that will place it, rather
 than described whole and clipped: only what the window holds is described, so
 only that is mounted, focusable, drawn and pointable. A window moves from the
 position its frame is drawing rather than from the number stored, because a
@@ -6331,6 +6475,46 @@ facts declared once; where a row lands and how many rows a region holds are
 answers the engine gives. Nothing computes a cell coordinate or a capacity
 twice, because a question asked in two places is a question answered two ways.
 
+**A column's width can be a legibility requirement rather than a share.** The
+sidebar is a fixed thirty-six columns at both shared profiles, because the rows
+in it are text whose meaning is lost when it is cut: the fitter keeps a turn's
+state whole and degrades to a hard cut only when even that does not fit, so the
+column has to be wide enough that it never does. The Transcript and the right
+pane divide what is left. A geometry change that narrows this column is a change
+to what the product can say.
+
+**A row's surface comes from its semantic role, never from its key or its
+label.** `surfaceOf()` maps roles to backgrounds, and a window's two navigation
+controls have a role of their own — they are activated like any action and read
+in the same ink, but they return no surface, so the pane they navigate shows
+through. The renderer is not asked to infer this from a key prefix or from the
+text of a label, and no background is corrected after a frame is prepared.
+
+**Each shared column publishes two widths, and they answer different
+questions.** The pane is the border-free inside, which is what a heading band
+spans; the body is the inset two cells further in on each side, which is what
+every row under that heading is built to. Both are real boxes the engine
+measures, and the manifest says which of the two each one answers for — a lookup
+that took whichever came first would build a header as narrow as the reading
+beneath it. The body is found by its own identifier rather than by its region,
+because the narrow outlet is one region for all three readings and is given no
+inset at all. Guidance, refusal, reading, label and chat fitting, the row boxes,
+the window counts and the published targets all read the body that actually
+contains them.
+
+One shared-column fact is measured rather than declared: a route drawer's top.
+Each column keeps a blank row above its first heading, and that row moved the
+contextual guidance into the rectangle the drawer's size alone used to state —
+so the preparation settles the drawer below the whole *fitted* guidance block,
+which is as many rows as its words need at that width. The extent comes from the
+rows the frame published and the engine's own bounds, never from a second
+arithmetic; the resulting rectangle is carried through the presentation context
+and read back by the layer's box, its window's admission, its cells and its
+targets alike. The columns and bottom edge are the declared ones, so the
+difference is spent on drawer-window height. One bounded measurement settles it,
+because a floating layer takes no row out of any column's flow and so cannot
+move what it was moved clear of.
+
 **Measurement comes first, and it is not a frame.** The application builds inert
 ordered candidates and a paired manifest from one semantic reading, and the
 measuring pass draws that manifest with every scrolling viewport genuinely
@@ -6355,6 +6539,13 @@ survives whole and the name keeps what is left in front of it, because a state
 cut in half says something untrue and two rows that are only their state are two
 rows a reader cannot tell apart.
 
+Whatever a column states *around* its window — a heading, both window controls,
+the placeholder for a reading that holds nothing — it states in the measuring
+pass too, and a row stated around a window is not one of that window's own rows.
+A placeholder described only once the window had been admitted would take a row
+the measurement had already given away, and the column would then overflow by
+exactly that row.
+
 **Admission decides what exists.** One pure adapter clamps the
 application's own offsets against the measured capacity, selects the visible
 range, and admits action controls as a contiguous priority prefix — stopping at
@@ -6367,7 +6558,7 @@ described at all, so neither is a cell, a pointer target or a keyboard stop.
 The same admission reaches the reducer, so a scroll moves from the clamp the
 screen is showing rather than from a number a resize or a filter left behind.
 
-Placement is still presentation and tells the tree nothing about meaning:
+Layout is still presentation and tells the tree nothing about meaning:
 resizing changes which rows are admitted, never the identity of a row that
 remains, the selection, a model object or an action. Four sizes are decided —
 wide, medium, narrow, and a refusal below the narrow minimum that recovers when
@@ -6431,10 +6622,29 @@ hands out a view into its own memory and an `info` that the next render
 invalidates. An older frame therefore keeps answering exactly what it answered.
 Recovery changes nothing above it.
 
-Placement at narrow describes and mounts only the surface the route selected.
-The unselected surface has no node, cell, frame-map entry, focus stop or pointer
-target; both surface controls remain available, and application and journal
-state are retained. The inspection reading is different, and is not described there at all: a
+**Width measurement asks in bounded batches, under ids it reuses.** An engine
+takes a bounded number of elements, and a finished reading is as long as the
+entry that produced it: a viewport limits what is drawn, never what exists. So
+the request is bounded rather than the reading. Each batch is one render whose
+answers are read before the next one, and the elements of every batch carry the
+same ids as the last, because the measuring instance accumulates state per
+distinct id across renders — measured, a run of four thousand freshly named
+elements left the last of them with no bounds at all, reported as no error.
+Batch-local ids keep that set as small as one batch. This bounds the request,
+not the document: nothing is truncated to make an engine accept it, and the
+answers come back one per candidate in the order they were asked for.
+
+An engine that is asked for too much at once does not say so usefully. It
+reports unbalanced structure for a list whose opens and closes are exactly
+paired, which is not a capacity refusal — so it is not reclassified as one
+anywhere, and rebuilding an instance of the same capacity would not have
+bounded the request that overran it.
+
+The layout at narrow shows the one surface the route selected. The other surface
+stays mounted and stays off the frame, which is what makes it unreachable rather
+than merely hidden: it is in no cell, in no frame map, and no pointer resolves to
+it. The inspection reading is different, and is not described there at all: a
+
 narrow frame has no inspection region to put a binding row or a recorded answer
 in, and a row described into a region that does not exist is mounted, focusable
 and placed nowhere — a Tab stop drawing no cell and a pointer target behind
@@ -6819,6 +7029,7 @@ An entry's history is held to its own owner before any of it is replayed: a
 retained Issue record that parses, is named by the request it carries and
 carries a valid normalized result for its own operation is readable, and one
 written under another owner is refused rather than borrowed.
+
 ### What the screen teaches, and what leaving it costs
 
 Presentation guidance, visual emphasis and the contextual status a person reads
@@ -6872,17 +7083,98 @@ Selection keeps an independent surface. Neither repairs, stores or grants focus.
 **One builder decorates both passes.** The measurement pass and the committed
 pass run through the same op builder, so pane edges, surfaces and headings
 participate in measurement and a measured region cannot disagree with the region
-drawn into it. A pane's own edges are not part of the room inside it: a bordered
+drawn into it. A column divider and the edge that closes a header or opens the
+footer are separate roles with separate values, because one rule cannot carry
+both a column separation and a header's: a single shared constant is what the
+accepted separation rules out. A pane's title sits in a band with a surface of
+its own, and that band's bottom border is the header's accepted edge: the engine
+takes that row out of the band, so the rows below are built to what it leaves and
+the two passes account for the same decoration. A titled column therefore holds
+one row fewer of its reading than an untitled one, and the footer keeps its seven
+rows — the edge belongs to the header, not to the footer. A pane's own edges are not part of the room inside it: a bordered
 pane carries a border-free content box, and rows are built to the width the engine
 reports for that box rather than to the pane's outer bound. A drawer's own
 decoration is held to the same rule: the rule along the top of its rectangle and
 the one-cell inset on each side are elements of that rectangle, so the content
 window is measured at what they leave and admission answers from that measurement
-rather than from the undecorated rectangle. The renderer stays
+rather than from the undecorated rectangle.
+
+The Sidekick's chat is prepared the same way and for the same reason: its
+messages are fitted to the pane's measured width before any of them is counted,
+and the descriptions, the window's own row count and a Sessions turn reveal all
+read that one fitted list — so a drawn row and the row a scroll clamps against
+cannot be different rows. A fitted continuation is a display row under its
+message, carrying that message's style and a derived key, and is never a new
+message, turn, response or record. Where the window sits is derived rather than
+stored: the chat follows its newest rows until somebody scrolls away from them,
+because what "the bottom" is changes with every arrival and a stored offset
+could only ever describe the bottom the list had before it.
+
+**The cuts of that fitting are retained for the command's lifetime.** A running
+command owns one store for the entry reading's geometry and a second, separate
+one for the chat's plain-text cuts; they are independent because the reading's
+geometry reserves a rail and a status column that plain text has neither of, and
+one shared slot would make a reader looking at either pane evict the other. A
+cut is retained against the exact text, the measured room and the terminal size
+it was computed from, and reused only for all three — so a line answers for
+itself and nothing else. Retention is per line rather than per list, because a
+growing message changes its own line and an appended one adds a line, and an
+answer for a whole list would remeasure everything in front of either. When a
+preparation completes, what is retained becomes the set that preparation
+prepared, which is how a replaced candidate and a message that is gone leave
+rather than accumulating; a preparation that failed or was cancelled publishes
+no set, and the individual cuts it completed remain exact. A room or terminal
+size that moves discards what was held at the old one. A frame whose measured
+manifest publishes no chat window fits nothing at all and may keep what it has
+without adding to it, and showing or revealing the chat fits its current text
+against its current geometry before any row is admitted or drawn. None of this
+is durable, global or observable outside the command, and every width still
+comes from the engine.
+
+**Contextual guidance and a refusal's explanation are fitted the same way.**
+Each is one inert block of the rows its own words need, fitted at the surface it
+is drawn on before anything is admitted against what it leaves. The guidance
+keeps every part it has — state, what focus does, the way back, movement — at
+the profile's own vocabulary; there is no third wording and nothing is dropped
+or elided to reach a row budget, because the column it shares is not a reason to
+stop giving a direction. A refusal's reason is cut at whole words rather than at
+code units, and each row is padded so a shorter row leaves nothing of the last
+one behind. Neither block takes focus or input.
+
+**The Sidekick's body is inset from its pane, and measured there.** Two cells of
+gutter on each side, through the engine's own padding, with the room inside
+published as a content box of its own — so the width the chat, the composer and
+the body's controls are built to is a measured answer rather than a subtraction.
+The pane's own content width stays separate and is what the header rows span: a
+title narrowed to the chat would read as one more line of it. The gutter carries
+the pane's surface, holds no text and is no part of any message.
+
+That body is published only for the reading it belongs to. Bindings shares the
+pane and keeps the layout it has always had, so a frame showing it publishes no
+inset body at all and the measured body width falls back to the pane's own
+interior — which is the width a binding row is written to. A line of source
+indented to match a conversation would narrow what it quotes without saying so.
+
+**The message composer is fitted the same way, and sized before the chat is
+admitted.** It is one field: its name and focus marker are a row of their own
+and its value is fitted into rows beneath them, under that one field's node, so
+the continuation rows add no focus stop and nothing but that field answers for
+the value. Its cuts are retained in storage of the command's own, separate from
+the chat's, because settling composer lines into the chat's store would evict
+the chat on every keystroke. The height is chosen from a measurement rather than
+assumed: the frame is measured carrying the label and one value row, the chat
+window's capacity in that frame is what growing may spend, and the value takes
+the smaller of its fitted rows and that allowance — never more than six, and
+never the row that would leave the chat none. A taller composer is measured once
+more so the capacity the chat is admitted against is the capacity of the frame
+that is drawn; there is no convergence loop. Wrapping is display only: the
+retained value and the string a submission carries hold no break the pane drew.
+
+The renderer stays
 model-blind — it receives ops and geometry, classifies no row text, and no
 production string carries an escape sequence.
 
-Placement owns where things are, and the footer's seven rows are fixed in one
+The layout owns where things are, and the footer's seven rows are fixed in one
 order: the contextual status and action row, the five History rows, and the draft.
 Each is stated as geometry rather than inferred from a list's length, because the
 one thing on that screen that is not a mounted cell is the History band — its
@@ -6940,8 +7232,794 @@ Permission announcement follows the same rule in the other direction: the fact
 that a request is waiting is presentation, and the authority that answers it is
 Sessions'. Saying where a request is answered moves no route, opens no drawer and
 takes no focus. And a frozen prefix reads none of it — not the running entry, not
-the waiting question, not the pause capability — because a prefix is a reading of
-the file and the live head is not part of that file's past.
+the waiting question, not the pause capability, and not a submission being
+prepared — because a prefix is a reading of the file and the live head is not
+part of that file's past.
+
+**Submitting is off the input loop, and the pause request that can arrive during
+it belongs to the submission rather than to the screen.** Validating a document
+and starting an entry both suspend, so the slot for the next entry is reserved
+synchronously and the work is spawned: the keyboard stays with the person, and
+what the work finishes with is reported back for the loop to apply, because the
+draft and the reading have one writer. The root owns the pause request as
+process-local state on the exact reservation — nothing durable, no location and
+no restored model carries one — and resolves a Pause action against the real
+target, which is the live expansion where there is one and the reservation
+otherwise. An entry already expanding therefore keeps its own control, and a
+submission refused behind it cannot retarget Pause at a successor. A task that
+has merely been allocated is busy rather than admitted, and the session offers no
+controller for one: starting an entry imports `__root__` first, and a hold taken
+there would hold the very operation the entry's position comes from.
+
+**The session takes the request in the transition that establishes its entry's
+admission, and takes it once.** Retaining the setup import appends the record
+that admits the entry, and the stream notifies the session synchronously —
+after the record is committed and before the durable continuation that would
+expand the authored body resumes. So that one transition is where the entry both
+has a position and has expanded nothing, which makes it the earliest coherent
+hold and still earlier than every authored effect; the ordering comes from the
+record rather than from a scheduled waiter, a frame or whichever entry happens to
+be latest, and the request is consumed there rather than re-read from a
+reservation that goes on saying what was asked for. Past that point the
+controller owns the hold. An entry armed there can still fail before any
+boundary is crossed — its root metadata and document envelope are composed in
+that interval — so cleanup registered before the arming clears the mode for a
+successor without releasing a continuation nobody is standing in.
+
+**A reply's entry reservation is durable; a person's is not.** Both go through
+one gate, and the gate performs nothing either way. What differs is who will read
+the result back: a reply asked for an entry from inside a retained response, so
+its Submit intent is appended — binding the entry id, the exact source, the
+draft revision, the ordinal of the slot, and separately the entry journal that
+ordinal was counted in, as a record count with the byte count and digest of
+exactly those records — before the slot is acted on, and its outcome is appended
+once the entry has one. The ordinal and the binding are not the same fact: an
+ordinal names a slot and cannot say which records preceded it, so a different
+valid history of the same length satisfies it. The binding is measured off the
+file, because re-encoding parsed records produces a valid encoding of the same
+history rather than the same bytes — and off an *acknowledged* file: owning the
+slot stops a competing submitter, not an append already issued, so the root
+establishes the session's own terms, settles the entry writer, binds, and only
+then acknowledges the intent. A busy, ending or unsettled session refuses before
+any of it rather than queueing behind the entry in flight. A person pressing
+Run is present and nothing is waiting on an answer, so nothing is written for
+them. The gate's decision is taken again at the entry's actual start, because
+validating suspends: route, draft revision and request liveness are the screen's
+facts, the session asks for them rather than holding an opinion about them, and a
+refusal there starts nothing.
+
+The ordinal both of them count is the acknowledged history's, never the prefix
+the screen was opened at. A session keeps its model projected at its opening
+position, which is right for what a frozen screen shows and wrong for what the
+next entry is called: a screen opened at an earlier entry would otherwise
+reserve a slot that entry already holds, and name an entry that exists. So the
+count is read from the whole history at the one moment the slot is taken —
+after the writer has settled, with nothing suspending between the count and the
+reservation — and both submitters read it the same way, so they cannot disagree
+about what the next entry is. That read can fail, and then nothing is reserved:
+a history this process cannot read is not a history with no entries in it.
+
+An intent with no outcome is a readable state, and reopening resolves it before
+admitting anything else — resolving *which history* first. A journal that no
+longer begins with the bound records refuses before either finding, because
+reporting that nothing took a slot the reading cannot locate is as much an assertion
+about that history as reporting that something did. Once the binding holds, the
+reservation is matched by ordinal *and* entry id *and* source, because no two of
+the three establish it: an ordinal names a slot rather than what took it, an id
+names something whose position the reservation cannot vouch for, and the right id
+at the right position under other bytes is the one case that looks correct from
+both. Either the slot holds the entry that was reserved or nothing took it;
+anything else is the two files disagreeing, and that refuses. Records after the
+bound prefix are ordinary. The finding is projected cold — records and
+entries already on disk, nothing appended, no conversation opened — and retained
+at the next explicit mutating action. It is never acted on: an unadmitted source
+is not submitted later and an admitted entry is not re-run. Cold means the whole
+acknowledged history as well: the question is asked of every entry the file
+holds, because a reading of a shorter prefix would find a disagreement that only
+the opening position created — while the screen that opened there goes on
+showing exactly the position it named.
+
+**What a reply reads answers about the history, not about the screen.** A person
+standing at a recorded position, inside a nested scope or on either tab has
+changed nothing the file says, so every read is taken from the acknowledged head
+rather than from the prefix the route selected — and the bindings read goes
+through the projection's own record projection rather than the Bindings pane,
+which is a view with a position, a filter and a width. The read half of the root
+is a named set of observations carrying no route, observer, controller,
+permission authority or terminal, which is how that stays true rather than being
+remembered. A running entry's text is the one fact no record holds, and it is
+credited by the key of the task producing it: the overlay a screen shows answers
+at the position its session was opened at, so it would report an earlier entry's
+retained output as the output of the entry running now.
+
+The reply's vocabulary and the entry's are described separately because they
+differ — `<Each>` is ordinary in an entry and unavailable in a reply. What a
+reply may write is the compact surface derived from the pinned ceiling; what an
+entry may write is a read, answered through the same construction and renderer
+`xmd syntax` answers from, over this command's own includes and Plugin assembly.
+Describing resolves nothing and admits nothing.
+
+The host's facts are contextual at the ask and stated at the entrypoint. The
+working directory and the platform are read through the host APIs when the read
+happens, so a reply that asks twice across a directory change is told the truth
+both times. The runtime, the build and the release it belongs to come from the
+REPL host a runtime-named entrypoint installed, because only the program that is
+running knows which program is running — shared code that sniffed for a global
+would report whichever runtime it recognized. The command's own facts come last:
+where a declared name is looked for, which Plugins it installed, and how an
+Agent permission request is answered here. The Plugin selection is retained off
+the admitted assembly as **names** in the command's own order, separately from
+the installations and declarations that act, so the read surface describes which
+vocabulary is in play without reaching the values that provide it. A fact the
+host cannot state is reported as an explicit unknown rather than omitted or
+defaulted; an empty Plugin selection is reported as `none`, because a command
+that installed none has said something and an omitted line would be
+indistinguishable from a host that could not tell; and a host that describes
+itself not at all refuses the read rather than answering with a partial
+snapshot.
+
+**The Sidekick is owned by the execution, and one explicit message is the only
+thing that makes it act.** Reopening restores its conversation and its chat
+without opening a handle, sending a turn or writing a record, which is what
+keeps restoring a chat pane free of provider work — and an execution still held
+in the older single file is upgraded by that first message rather than by being
+looked at. The owner holds one conversation open for its own lifetime, in a task
+of its own, so "open" is a lifetime rather than a call: releasing the owner
+closes the conversation and joins whatever it was running, and a conversation
+that stops being the active one is released before another is opened.
+
+One message runs one cycle: establish storage, resolve the conversation, open
+it, deliver the orientation if this conversation has not been oriented, write
+down what the person said, send one turn, evaluate what came back.
+`prompt`, `options` and `evaluateGeneratedXmdRoot` share one mailbox inside the
+conversation, so an overlapping call refuses rather than queueing; above that
+the owner runs one message at a time, because two cycles writing one chat
+history are two accounts of one conversation. A fresh conversation is recorded
+as prepared before it is opened and activated only once setup succeeded, and a
+failed setup is recorded as failed and activates no replacement.
+
+**Which agent a *fresh* conversation opens under is this command's own
+selection, settled with the profile.** `xmd repl --sidekick-agent <name>` names
+it; unstated, it falls back to the contextual `DEFAULT_AGENT_NAME` and then to
+the ACP package's own default. `--default-agent` is never its fallback: that
+one is the agent a `<Session>` an entry writes means, and the two are
+independent selections on one line over the one selected provider. It is
+carried as a name on the immutable profile and nothing more — assembling a
+profile resolves no agent command, inspects no options and opens no session, so
+whether anybody answers to that name is the first explicit message's question,
+asked where there is somebody to answer it. No permission option an entry runs
+under grants the Sidekick a tool of its own.
+
+**The Sidekick installs a provider of its own, with its constraints stated.**
+Its conversations do not inherit the entry stack's: an entry runs a document a
+person wrote, and a chat about those documents is allowed what this host
+decides rather than what the command line happened to configure. The profile
+assembles one installation from the command's own resolved provider
+dependencies — the same runtime, store and registry — replacing exactly what
+the Sidekick decides: no coding-agent tools, no MCP servers, strict permission
+routing with `deny-all` and noninteractive denial, and no customization of the
+agent's own system prompt. Each is supplied explicitly, because an omitted
+option leaves the agent whatever it has; `[]` is this host configuring none, and
+that distinction is what the saved configuration can later be compared on.
+
+**A Sidekick conversation is continued only under the configuration it was
+created with.** The first turn's activation commits the provider, the resolved
+command and that complete configuration into the conversation's own canonical
+history before any native work may begin, and a later explicit message compares
+against it. A reopening alone activates nothing. One unsupported difference —
+a tool, a server, a permission setting or a system prompt this build cannot
+apply and verify on a conversation that already exists — refuses before the
+provider reattaches, and the chat, its turns, its native identity and its
+configuration all stand; nothing is created in their place. These values are
+configuration rather than identity: a future supported change applies and
+verifies on the same native conversation and is saved before anything relies on
+it, and configuration capture is never a native assertion.
+
+**Which agent a conversation runs under is the conversation's own, and an agent
+change is a new conversation.** It is recorded when the conversation is prepared
+and never changes in place, so continuing one — including after a reopen — uses
+the agent that conversation was opened with rather than whichever this process
+was started with. A change prepares a replacement naming the association it
+supersedes, and activates it only once the new agent has answered for itself:
+opening a conversation places no session and performs no turn, so a replacement
+that was merely opened would activate under an agent nobody had heard from. An
+inspection is what reaches an agent without asking it for a turn, so that is
+what setup means here; its failure records the replacement as failed and leaves
+the prior association active, with no fallback and nothing sent.
+
+**A model and effort are a request the history holds, applied and verified by
+the next turn.** They are recorded when a person asks and asked of the agent
+where they can be — a turn puts its conversation under the request before the
+prompt is sent, so a refusal leaves the turn unsent rather than half-applied,
+and the record stays so nothing runs under a configuration nobody chose. The
+request is carried by every turn of that conversation rather than only the next
+one, because it is a standing fact about the conversation and the provider
+writes nothing for a setting already selected. What a person may choose between
+is read only on explicit interaction, through the provider's own inspection
+session: it sends no prompt and journals nothing, it keeps the agent's exact ids,
+labels, descriptions and grouping, it answers effort for the model asked about
+rather than the one in use, and a setting the agent does not offer at all is
+`null` rather than an empty set.
+
+The orientation travels with a turn when the conversation has **no canonically
+completed turn** — the only fact that establishes that an agent has been told
+anything, since an ordinary ordinal is not evidence and a record of this CLI's
+own is not either. What was delivered is retained with a digest of exactly those
+bytes. The draft travels with every turn.
+
+**A message carries its own ID, and which turn it became is read from its own
+request's records.** The ID is written before the turn and never rewritten; the
+turn is whatever Core saved among the records from that message up to the next
+message or feedback text in the same conversation. A request whose records hold
+none has no turn association — unknown rather than unsent — and one whose
+records hold two is refused rather than chosen between, because one request is
+one turn. Nothing is matched by text across that boundary and nothing is
+inferred from the two numbers agreeing. The live owner reads the same boundary
+the detached projection does, so a successful turn with no saved outcome of its
+own publishes no reply rather than attributing one to a guessed number, and a
+cycle that failed before anything was saved reports no turn at all.
+
+**A delivery is reconciled from the conversation, and an interrupted response is
+reported once.** The record written before a delivery turn states nothing and
+names no turn; what establishes it is the first completed turn recorded after it
+that was sent exactly that text, so a delivery whose acknowledging marker never
+landed is still established, and one that cannot be matched stays unresolved
+rather than being promoted or dropped. Nothing resends an unresolved delivery.
+An explicit message additionally carries what an interrupted response of that
+conversation did — its answered operations and the question nobody answered, in
+operation order, rendered by the same per-control machinery an ordinary delivery
+uses — so the reply plans from the state the conversation is actually in. It is
+an ordinary turn, carried once and established the same way any other delivery
+is.
+
+**A conversation continued by a newer build is re-oriented once.** The digests
+of the last orientation it was *delivered* are compared with the ones this build
+would give, and a difference re-delivers the orientation before the next
+explicit turn. Delivery is established the way a feedback delivery is, and for
+the same reason: the `reference` record is written before the turn that carries
+it, so on its own it records an intention. What establishes it is a canonically
+**completed** turn whose retained input actually carried that text — an ordinal
+with a completion but the wrong context describes a different turn, and a record
+with no completed turn is an offer that failed. A refresh whose turn fails
+therefore remains owed by the next explicit message, and the record it left is
+readable without asserting that it superseded the last established one. Nothing inside a single run can differ — the assets ship with the
+build and the admitted ceiling is assembled from the same code — so the
+comparison exists for exactly one case: a chat reopened by a process whose
+bootstrap, derived index or compact surface has moved, leaving an agent holding
+a description of what it may write that is no longer true. Comparison is by
+digest rather than by text, which is what the retained versions were for. A
+refresh re-orients and nothing else: chapter bodies remain on demand, the
+response ceiling is untouched, and neither response admission nor provider
+creation widens. It is recorded as that turn's own orientation, so the turn after
+it carries none — a build that re-oriented on every turn would spend the context
+window restating what it had just said.
+
+A successful complete reply is evaluated as a root through the conversation's own
+execution, under the ceiling built from the requests the root answers, on a
+durable sequence separate from the turn that produced it: sending and running
+are different acts. Only the root's `<Output>` becomes chat, and a response that
+only read renders nothing rather than being padded with a fallback. The turn
+ordinal, the reply's right to be published and the text a failed turn streamed
+are all read from Core's own records; nothing is established by this process
+having remembered it.
+
+**A turn the provider did not finish is an incomplete attempt, and nothing is
+written down for it.** It runs no control, because it is source nobody finished
+writing. It also gets no `response` record: a response is the outcome of a
+*completed* turn, the projection refuses one whose owning turn the canonical
+journal does not hold, and writing one anyway makes the history unreadable from
+that point on — which blocks the next explicit message as surely as it blocks
+reopening. There is nothing to write, either: the canonical Prompt record
+already holds that turn's status and whatever it streamed, so the projection
+reads it and shows it as the attempt it was, in its own place in the chronology
+and under its own chat kind. The failure takes its turn ordinal and establishes
+neither a completed response nor a delivered orientation, so the next explicit
+message continues the same conversation at the next ordinal and carries the
+orientation again.
+
+**Only an explicit `<Output>` region is chat, and the body of a response that
+declared none is not published.** Such a response still ran its controls and
+still rendered — a read returns its chapter into the body, a Submit its receipt
+— and showing that to the person would be a fallback chat message nobody wrote,
+displaying an agent's scratch work as though it were an answer.
+
+**A conversation's controls are captured once, when it opens.** A generated root
+is admitted from the selection its *execution* captured, so the controls a reply
+may write are installed and resolved before the conversation reports itself
+ready: each control this CLI defines is published as a component answer under its
+own name, the selection naming them is offered from the same installation, and
+canonical capture resolves and seals them before any response exists. A
+response's request therefore carries no table at all — only which evaluation it
+is, the bytes, and the classes it may draw on. A later registration, a
+middleware replacement or a second selection changes nothing a response runs
+under, and a control a reply names that the capture did not seal reaches no body.
+
+Two conversations are two captures. The controls close over the requests the root
+answers, so a reply in one conversation cannot reach the other's root — and what
+is still *per response* is where a control's pair is filed and which slot a
+Submit binds, which travels through the owner rather than through the selection.
+That naming is given up only after the response's work and every cleanup it
+registered have joined, so a control settling late still files under the response
+that ran it, and a control invoked when no response is running refuses rather
+than filing under whichever response came next.
+
+One name this CLI does not define: `Elicit` is selected and not answered for.
+It is a protected component, so canonical resolution answers it from core's own
+tier and the capture retains that definition — which is what makes a reply's
+question the question an authored document asks, and what keeps a repository,
+registered or middleware component of the same name from receiving a reply's
+permission. Its form and its class are its declaration's: paired, and a write.
+
+**What the reply asked for comes back to it, and that is what the next turn is
+for.** After the response finishes and its scope joins, the designated results
+go to the same conversation as one turn, in admission order read back out of the
+records they were retained in — so what is delivered is what the history holds
+rather than what a collector remembered. **Every control in the response ceiling
+is designated, writes included.** A write is designated for the same reason a
+read is: the reply asked the root to do something, and the answer is what it
+needs to continue — a Submit that admitted `entry-3` has to be told so, and told
+which entry, and a reply that asked somebody a question has to be told what they
+said. Canonical `<Syntax />` is the single exception, and it is an exception
+about interception rather than admission: it describes this response context and
+its return is the reply's own. An ordinary component return creates no feedback
+at all.
+
+**A reply may ask the person, and the question is the conversation's.** The
+conversation's captured selection names `Elicit`, so canonical paired `<Elicit>`
+is in the write class a response may draw on — the same component an entry
+writes and an authored document writes: the bounded form
+this REPL draws, the compiled schema, the validated answer and the durable record
+of it are all the ones an entry's question uses, and nothing is reimplemented for
+a reply. It is in the write class because asking is not reading — a reply
+admitted to read alone promises nobody will be interrupted — and paired because
+the question is its content.
+
+What makes it the *Sidekick's* question is where the provider is installed, and
+nothing else. A conversation is held open by a task in the owner's scope and a
+reply's root is evaluated inside that conversation's own execution, so the
+provider the response reaches is the owner's; an entry's questions keep reaching
+the session's, which lives in the session's scope and dies with it. Two owners,
+two pending questions, two answers. Answering one is not answering the other,
+Stop withdraws the response's without touching the entry's, and neither can be
+drawn from the other's slot.
+
+The validated answer is an operation result like any other, so it is retained
+like one: an intent before anybody is asked and an outcome once they have
+answered. That pair is written by the provider rather than by the control
+wrapper, for the reason Submit's is written by the root — the admitted component
+is Core's own, so there is no CLI body to wrap, and the provider is the one piece
+of this host in the invocation. It is a journal of operation feedback and not a
+second question journal: the answer's own durability stays the canonical
+elicitation record's. A question waiting when a process stops therefore leaves
+an intent with nothing beside it, which is what an interrupted operation looks
+like everywhere else here — never a receipt saying it was answered. A question
+this surface cannot draw is refused before anybody is asked, and the refusal goes
+back to the reply that wrote the schema, because what it says is which schemas
+this surface accepts.
+
+**Saving a preference and inspecting an agent are different operations, and
+only the second is something a conversation does.** A preference is a record in
+the chat history: `configure()` captures the active conversation and the scalar
+settings before anything can suspend, writes one complete preference through the
+shared writer, and asks the provider nothing — no handle, no options read, no
+turn. So it is taken while the Sidekick is working, and the turn already in
+flight keeps the settings it was handed. Inspection and agent replacement are
+the conversation's own work and still refuse while it is busy. A save during a
+first setup that has no active conversation yet is refused rather than queued:
+attaching it afterwards to whichever setup won would be saving a preference for
+a conversation nobody saw.
+
+**A turn takes its preference immediately before it hands its request over.**
+After the message or feedback is retained and its acknowledgement applied, the
+response reads the latest acknowledged records and derives the preference for
+its own conversation from them — not from the snapshot it opened with, which
+predates everything that suspended in between. An unreadable reading refuses
+rather than falling back to an older preference. Nothing suspends between that
+choice and `prompt`, which makes the handoff the exact turn boundary: a save
+acknowledged before it is included, and one acknowledged after belongs to the
+next turn even while this one is still generating.
+
+That boundary is why the chat writer serializes. Its physical append and its
+in-memory publication are one operation for every caller — a person's message, a
+reply's feedback and controls, the wrapped canonical events of a turn, and a
+preference saved while all of that runs — because the preference a turn takes is
+the last one *acknowledged*, and memory disagreeing with the file is a turn sent
+under settings nobody asked for. Callers queue in arrival order, and leaving the
+queue and giving up the writer are different things: a caller cancelled while
+waiting takes out only its own place, and the one holding the writer goes on
+holding it. Ownership passes directly to the longest waiter, so nothing between
+the two moments can take it. The hold is never kept across a prompt, an
+evaluation, a question, an entry's completion, an inspection or a setup — a save
+meant to coexist with a running cycle must not queue behind it.
+
+**Requested and verified are two facts, and the screen shows them as two.** A
+preference says what somebody asked for. What an agent was actually running
+under is Core's own saved `PromptRecord.configuration`, which it writes only
+once the provider said the turn started — so a turn that started and then failed
+still carries it, and one that failed while its settings were being applied
+carries none. The CLI projects the latest such turn per conversation and shows
+it beside the request. An inspection's selected value is neither: it is what the
+agent happened to be on while it was being read.
+
+**The root owns one explicit configuration job at a time.** Inspection, Apply
+and agent replacement are things a person asked for, reserved synchronously
+before anything is spawned, so two activations in one input burst cannot both
+start and a second refuses rather than queuing. `busy` reserves nothing by
+itself: an idle inspection needs protecting from a Send arriving beside it just
+as much, so the message cycle and the one job are one admission in both
+directions and the refusal is reported into the drawer that was pressed rather
+than beside the chat. A preference Apply is admitted alongside an
+already-running message *cycle*, because saving is not the cycle's work; it is
+not admitted beside another job, which would take the one slot from whatever is
+already in it. Stop joins the cycle and leaves
+an acknowledged preference standing. Leaving joins that job before the loop
+returns, which is before the scope holding the writer and the provider unwinds:
+a save whose record has reached the file is seen through to the file and to this
+writer's memory of it, and one still waiting its turn is cancelled and publishes
+nothing.
+
+**A host that shows live work is told by the canonical turn itself.** The
+consumer that already reads one provider turn into the record the journal keeps
+is the one place the exact turn and every arriving delta are both known, so the
+publisher installed inside the conversation's execution gained an optional
+`observe()` beside its `begin()` and `publish()`. It is offered the whole source
+received so far — a snapshot, never a delta — after each piece and once more
+when the stream returns something the pieces did not say, including nothing at
+all. The journal's own result is the stream's return, untouched. A publisher
+that declares no `observe()` accumulates no prefix and is scanned for nothing,
+and a replayed turn tells nobody, because nothing is happening.
+
+Every candidate is cleared before it leaves Core, by the execution the turn runs
+in, through the same authenticated disclosure operation the output bridge uses.
+The accumulation is what is scanned: a secret split between two pieces is found
+in the whole it became, which is a thing neither piece says. Doubt withdraws and
+stays withdrawn — a finding, a scanner that failed, and a policy that is absent
+or not this execution's all send `null` once and then silence for that turn. It
+is a decision about a screen: the journal's pre-append gate still decides
+whether the turn may be persisted, and no scan failure is serialized into an
+agent terminal.
+
+Observation is a trusted host operation, like publication. A host that raises
+from it has not described an agent failure, so the original error bypasses both
+the consumer's provider-failure classification and the coordinator's result
+serialization and activates the run's durability failure before anything is
+appended. The provider's own per-turn cleanup runs with the scope that owned it.
+
+**A response is one item on the screen from its first word.** What the Sidekick
+is saying is drawn from the literal Output the pure preview reader projects from
+that cleared prefix, labelled a preview, and the owner keeps only that
+projection — not source, not a handle, not a writer. The response that asked for
+the turn is what an update belongs to: the owner registers its response before
+handing the request over, `begin()` consumes that registration and returns a
+fresh object, and everything after is addressed by that exact object rather than
+by text, recency or a guessed ordinal. A notification for a response that was
+stopped, replaced or already answered changes nothing.
+
+It stays a preview while the response runs its controls, and the acknowledged
+evaluated reply replaces that same item — the response it was registered under
+is what the reply's own record holds, so neither of them has to be inferred —
+including the partial Output an ordinary runtime failure leaves, with the
+effects performed before it standing.
+Generation that ends without a reply leaves an attempt instead, and that attempt
+stays in the item it was being shown in. Acknowledgement supplies which saved
+turn the item is now showing — read from this request's own records rather than
+predicted — and the item keeps the response it was registered under, so the
+saved account takes the live one's place inside one row rather than beside it;
+the response's own cleanup leaves that association alone, having nothing of its
+own to add. The association is display bookkeeping of the process that made the
+attempt, and is written down nowhere. A reader that has no live item for it —
+a cold reopen, another command — addresses the same attempt by the turn it was,
+which is what its record holds. What is never done is reconstruct one of those
+names from the other: the owner names a response from the history's own next
+ordinal, which counts saved requests as well as attempted turns, while Core
+numbers its turns from what it journaled — so one interrupted message is enough
+to make them different numbers, and inferring either from the other hands an
+attempt somebody else's row. A saved failed turn projects its own source through
+the same reader; a Stop that saved nothing keeps what was shown as process-local
+Incomplete naming no turn, acceptance, reply or failure. Nothing is written down to preserve a screen, so a cold
+read of that conversation has no account of it; a new explicit message replaces
+it.
+
+**A retry is offered only where this history decides which request to send.**
+The control carries that request's own conversation and message id rather than
+its text, because two requests may read identically, and it is drawn only where
+the history establishes the turn that request became, that the turn failed, and
+that nothing asked afterwards has since been answered. Unknown acceptance is not
+unsent work, and a failure the conversation has moved past would be sent from
+behind a reply the agent has already given. Both stay in the chat; what goes is
+the offer. The root resolves the text and re-checks eligibility when the control
+is activated, so a row drawn a moment ago sends nothing that has since been
+superseded.
+
+**An Apply's answer belongs to the selection that asked for it.** Each drawer's
+selection is counted, and the number travels with the job and comes back with
+its outcome; opening the drawer, choosing a model or an effort and editing the
+agent name each make the next one. So a success closes the selection that asked
+and a failure keeps that selection open with its reason, while an answer naming
+an earlier one leaves the screen alone. Values cannot stand in for that
+identity: a drawer reopened after a save holds exactly what that save asked
+with, and a drawer whose agent was edited while a save ran still holds its
+model and its effort. The two operations also report separately, because a
+replacement asks for no model and no effort: one answer shape for both would
+make its success indistinguishable from a save that asked for nothing. None of
+this rolls an acknowledged save back — what a late answer loses is the screen,
+not the record.
+
+**Configure is the Sidekick pane's other drawer, and which drawer is drawn
+decides where keys go.** It and the question form are alternative contents of
+one pane, so opening either hides the other's presentation and keeps everything
+in it. One frame-derived answer says which of the two is presented, and the
+reducer routes typing by it rather than by an open flag — a drawer held open
+while the screen shows something else owns nothing. Agent is an exact-name field
+because which agents exist is the provider's to answer, and `select()` validates
+what was typed against the real one. Model and effort are the provider's own
+ids on their actions, with the provider's words as labels. Its content is
+windowed like every other drawer's and scrolled by the same two controls, which
+move Configure's own offset: an agent may advertise more choices than a pane
+can draw, and a choice nobody can scroll to is a choice the drawer removed.
+
+**On the screen that question is a form in the pane that owns it, and the two
+owners' forms are two pieces of state.** The owner publishes its pending
+question on its own stream and the loop subscribes to it for the life of the
+screen, so a question reaches a person who is not pressing anything; the
+notification carries nothing, and the loop reads the pending question afresh.
+What the view is given is the message, the parsed form and this process's own
+name for the exact pending object — never `submit`, which stays the root's.
+That name is bound to the object rather than to its text, its shape or a count,
+because a reply may answer one question and ask another with the same words:
+only the root performs an answer, and only after checking that the name still
+names what it holds. A keystroke that arrived late therefore submits nothing.
+
+The form's own state — which question it belongs to, whether it is open, what
+has been typed into it and what the last attempt was told — sits beside the
+entry's rather than sharing it. The two rules are different, and sharing one
+slot would make either wrong for the other owner: an entry's drawer *is* its
+question, so closing it discards the form, while the Sidekick's is a
+presentation of a question that goes on existing without it, so closing keeps
+every value. Selecting another pane hides it on the same terms, and returning
+selects the reading alone — nothing reopens a modal somebody navigated away
+from. A different pending question starts empty, and a question that ends takes
+its form and its presentation with it. None of it is in the location or in any
+record: it is a fact about this process holding a suspended request.
+
+It is drawn through the existing drawer — the same opaque coverage, bounded
+ordered window, fixed title, scroll and close controls and the same form rows —
+over the rectangle of the pane that owns the question rather than over the body.
+One calculation answers where that rectangle is, for measurement, admission,
+description, drawing and hit testing alike, so a cell and a target cannot
+disagree about it. One question drawer is presented at a time and a route
+drawer takes precedence, which is what keeps a permission request from being
+answered by something underneath it. While the form is in front of that pane the
+pane describes none of its own body, because a control behind an opaque modal is
+a focus stop and a pointer target with nothing on it — so Stop is a row of the
+form, where somebody looking at the question can still reach it, and the way out
+of the reading is the form's own close.
+
+Each answer is rendered in its own terms rather than through one envelope,
+because the controls answer different kinds of thing. The binding map is the
+detached map, with no provenance or status injected into it as though those were
+published names. A filled draft is an acknowledgement, never the program it was
+given — a reply handed its own source back would spend a turn reading what it had
+just written, and the rendered source and draft revision stay in the intent
+record for correlation. A submission is the exact admitted entry's terminal
+outcome once its task teardown has joined, followed by that entry's own read
+invocation, with no output body, preview or summary; its entry comes from the
+intent that reserved it and its status from the outcome that observed it, because
+neither record holds the whole of it. An output read is the window the control
+itself renders, so what a reply reads where it asked and what it is sent
+afterwards are one window rather than two accounts of it.
+
+The shape follows how much there is to say. One result is its own raw value: a
+binding map delivered alone is the map, directly parseable, with no heading,
+fence or envelope round it. Several get a short heading each naming the control
+that produced them, and whether a result was *serialized* travels with it — so a
+JSON value under a heading is fenced, in a fence measured against the longest
+backtick run inside it, while a chapter or an environment snapshot keeps its own
+formatting. Guessing the kind by trying to parse rendered text would fence
+whatever happened to look like JSON. No correlation id, `Result` wrapper, order
+number or success status becomes agent-facing.
+
+**An operation that answered with bad news still answered.** A submission whose
+entry ran and failed produced that entry's receipt — the entry, its safe reason
+and that entry's read instruction — and the receipt is the answer: labelling it
+a refused submission would tell a reply its draft was still sitting there and
+send it to submit again. Only an operation that did not happen is refused. The
+distinction is made from the retained facts, the intent that reserved the entry
+together with the outcome that observed its terminal status, before any wording
+is chosen — never by reading the prose that wording produces. A refused
+submission names no entry at all. The response's own ordinary failure
+travels with the results, which is how a correction becomes possible at all,
+together with the statement that what already happened stands — so the reply
+continues rather than repeating effects, and earlier successes are not replayed.
+
+**Stop ends the asking and nothing else.** The cycle runs in a task of its own
+precisely so Stop has something to halt: it suspends in three places a person
+may want out of — provider generation, a response's controls, and a Submit
+waiting for its entry — and none of them can be interrupted by a flag read
+between them. Halting cancels whichever it is and joins its teardown, so Stop
+returns only once the work is down rather than once the request has stopped
+being interesting. It then re-reads the history, because the cycle was writing
+to it and its own refresh never ran, and releases the owner itself rather than
+waiting for the stopped caller's bookkeeping — a person who has stopped the
+Sidekick can speak to it immediately.
+
+What it leaves alone is the point. The conversation stays open, held by a task
+in the *owner's* scope rather than by whichever message opened it, so the next
+message continues it. The chat, the drafts and every record stand. An admitted
+entry belongs to the session's own task and goes on running; what came down was
+only the waiting, and the submission's intent stays retained with no outcome —
+an operation that began and whose result nobody knows, which is exactly the
+state Stop leaves.
+
+**The boundary is the exact entry's acknowledged admission, and an allocated
+task is not it.** A submission's task is started *before* the record that gives
+its entry a position, and that interval is real: the execution installs its
+providers and composes its envelope in it, and a held installation can suspend
+there indefinitely. Within it there is no entry — nothing to wait for, nothing
+to follow, nothing for a reading to find — so a caller that stops wanting the
+submission cancels that startup and joins it, rather than walking away from work
+that would go on to admit and run an entry nobody is waiting for. Neither a
+passed validation, nor a taken slot, nor `live`, nor the existence of a task
+stands in for the acknowledgement; the cleanup is registered before the wait it
+covers, so it is in place for the whole interval. Past the acknowledgement it
+does nothing at all, which is what keeps an admitted entry independent.
+
+Two consequences follow. A cancelled startup frees the slot it held, because it
+admitted nothing and there is no entry for anything to follow — whereas an
+*entry* that was interrupted still occupies it, since nothing may follow an
+entry without an outcome; the two are told apart by that same acknowledgement
+and by nothing else. And the reservation withdraws itself as its submission
+unwinds: `live` means the asker still wants this, and a cancelled submission is
+the asker not wanting it, so the reservation answers for itself instead of being
+revoked by a separate call that would have to be sequenced correctly.
+
+**A turn's ordinal is the conversation's, not this host's to predict.** An open
+conversation counts the turns it has *created*, and that count advances before
+any record lands — so a turn interrupted before it retained anything has taken
+its ordinal with nothing in the file to show it. This host's own pre-send
+records therefore state an ordinal, monotonically over what the history already
+states so that two messages are never written down as the same turn; and every
+statement about what a turn actually carried — the reply that belongs to it, the
+feedback it delivered — is read back from that turn's canonical record, matched
+by the input it was sent. A response record written against a predicted ordinal
+is a reply attributed to whichever turn happened to be in that position, which
+the projection refuses outright.
+
+**A Submit refused before it reserved anything writes nothing and still reaches
+the next turn.** Writing a pair for it would assert an attempt the entry history
+has no trace of, which is why the root does not — so the refusal is carried in
+memory to the owner instead, with the order the next pair would have taken, and
+sorts into the place it happened. It names no entry and reserves no slot.
+Raised durability, Files, secret-policy and teardown failures keep their
+authoritative owner and are never turned into ordinary corrections.
+
+An exchange ends when a response asks for nothing and fails at nothing, because
+then the next move is the person's; and when the provider does not finish a
+turn, because a turn that produced nothing is not a reply to correct. In that
+case the response that *did* answer is the one the message is answered by, and
+the unfinished attempt is in the chat beside it. No iteration cap is imposed:
+each pass costs a provider turn, a response that asks for nothing ends it, and a
+terminal provider failure pauses for a person.
+
+**A delivery is recorded before it is sent and established afterwards.** The
+marker written ahead of the turn states no ordinal at all, so an interrupted
+compose is readable and asserts nothing; the one written after names the turn
+and the exact text, and the projection establishes it only when the canonical
+completed turn says it was sent that text. An ordinal alone would count a
+delivery against whatever turn happened to be in that position, and a local sent
+marker is never what authorizes a resend.
+
+**An ordinary root failure keeps what the root had rendered.** `partial` on
+Core's own root error is present exactly when the root began evaluating, and it
+is what the reply shows: the actual partial output and whether an output region
+was declared, retained as the evaluator answered them rather than recomputed or
+blanked. Controls that ran before the failure stay retained in their own
+records; nothing after it runs. An admission refusal performed nothing and
+carries no partial, so nothing is invented for it, and a durability, Files,
+secret-policy or teardown failure keeps its own classification rather than being
+read as a root that rendered something.
+
+**Submit's control pair is written by the root, not by the control wrapper.**
+Every other control records its intent before its work and its outcome after,
+out in the wrapper. Submit cannot: its intent *binds the reservation it took*,
+and the reservation does not exist until the session's terms are established,
+the entry writer has settled and the slot is held — all inside the work. An
+intent recorded out in the wrapper would be written before there was anything to
+bind, and the history would hold two intents for one submission, so an
+interrupted Submit would read as two attempts. A submission refused before the
+slot was taken therefore writes nothing at all, which is correct: a reservation
+that never existed has no outcome to record.
+
+Filling the shared draft starts nothing, and it is a separate request from
+submitting, so a reply that only prepared is readable as one that admitted
+nothing. The loop applies it, because the draft is the loop's and one writer is
+the point of having a loop — and the request waits for it to land, so a Submit
+after a fill reserves the text that fill put there. A fill while a person has
+taken the draft over refuses, and the takeover lasts until they ask the Sidekick
+for something: overwriting what somebody is in the middle of typing is the one
+thing a shared draft must never do.
+
+**One Sidekick is acquired per running command, inside the screen's own
+lifetime.** It is acquired after the root's wake queue, its shared admission
+slot and its reopening callbacks exist and before the first frame is composed,
+and it belongs to the execution rather than to the first entry, the selected
+History position, a tab, a message or a provider turn — so changing any of those
+reaches the same conversation and nothing creates a second one. Both storage
+shapes are acquired the same way: a published pair is opened as the chat it
+already has, and an execution still held in the older single file is acquired
+with no chat and no writes at all. Acquisition projects the acknowledged history
+and does nothing else — no provider, no options inspection, no prompt, no
+control, no upgrade — and a chat history this build cannot read stays an explicit
+refusal rather than being shown as an empty conversation. The owner resource and
+every root job and subscription are children of that screen scope, so Exit,
+Control-C, end of input and failure all unwind and join the Sidekick's work
+before the command reports its outcome and the terminal is released.
+
+**The owner reports its own changes to the loop, and that report carries no
+authority.** A reply arriving, an automatic follow-up starting, a cycle failing
+and a joined Stop are things no keystroke announces, so the owner owns a signal
+the loop subscribes to for the life of that scope; being woken by it, the loop
+reads a fresh immutable snapshot of the reading rather than being handed one. No
+polling and no filesystem watcher is involved, and the notification grants
+nothing: what it says is "look again".
+
+**An explicit message is cleared by the record that saved it, not by the
+keystroke that asked for it.** Send synchronously captures the exact text, the
+message revision and the draft revision and reserves the screen's one message
+cycle, so a second Send in the same input burst finds the cycle held and starts
+nothing. The owner writes that captured text at that captured revision, and once
+the record is physically in the file — and before it sends a turn or evaluates
+anything a reply asks for — it asks the root to acknowledge that revision and
+waits. The root queues the acknowledgement with its other reports and applies it
+before any fill waiting behind it, which is what lets a reply that came straight
+back fill a draft the instruction had just released. Clearing is then exact:
+only the submitted message revision is cleared, so text typed while the save was
+in flight survives, and an existing draft takeover is released only if no newer
+draft edit happened since Send — a later edit by hand still owns the draft. A
+message that was refused or never acknowledged clears no text and releases no
+takeover.
+
+**The storage handoff holds the entry writer for the whole publication, not
+just at the start of it.** An execution's first explicit message asks the root
+to publish a pair for a history still in the older single file; the root stops
+admitting new entries for the duration, and an entry already running keeps the
+movable writer it was handed. Waiting only for the append in flight is not
+enough, because a running entry writes again: a record issued after the bytes
+were copied would reach the superseded file alone, leaving the published pair
+without it and the retained origin no longer matching the fingerprint taken from
+it — which makes the execution refuse to reopen at all rather than merely losing
+a record. So the writer holds every further record from before the snapshot
+until after it has moved, and releases them onto whichever file the handoff left:
+the new entries file when the pair was published, the original when the
+publication refused or was cancelled. The release is established before the hold
+is taken rather than around the publication, because the hold is marked before it
+waits for the record already in flight — so a handoff cancelled in that interval
+would otherwise leave a writer nothing would ever release, and the entry's next
+record would wait forever. Input and Stop stay usable throughout, because the handoff
+is root-owned work rather than anything on the keyboard's path.
+
+**On the screen the Sidekick is a reading, one input and two controls.** The
+components receive detached facts — the acknowledged chat, whether it is busy,
+which agent it is and any refusal — and no owner, session, writer, repository or
+operation; they emit typed actions and the root alone changes route or state and
+performs work. Message is a distinct single-line destination with a revision of
+its own: typing and Backspace reach only it while it holds focus, Enter there or
+Send asks for that text, Draft's Enter still means Run, and an empty Message
+sends nothing. While the Sidekick is working, Message stays editable, Send has
+no admitted activation target and Stop is offered in its place, and finishing
+sends nothing that was prepared meanwhile. Both texts survive tab switches,
+History navigation and resizing; the message is process-local and absent from the
+printed location. Send and Stop are spawned on the screen's own task, so a slow
+provider, an admission waiting on an entry, a joined entry outcome or Stop's
+cleanup never block ordinary input.
+
+A burst of input is one frame but not one tree. An action that changes which
+controls are offered mounts them — the frame pipeline's own measurement and
+description application, nothing else — before the next event of that burst is
+dispatched, because the tree is what answers that event. It presents nothing,
+acknowledges no timestamp and publishes no target map, so a pointer arriving
+later in the burst is still resolved against the frame that produced its
+coordinates and cannot activate a control by stale geometry.
 
 **Terminal input is an owned stream, and that ownership is what makes leaving
 possible.** A runtime supplies the REPL's input as an Effection `Stream` whose

@@ -14,7 +14,7 @@ import { race, suspend, useScope, withResolvers, type Operation, type Scope } fr
 import { useAdvisoryLock } from "@executablemd/workflow/deno";
 import type { AdvisoryLockFile } from "@executablemd/workflow/deno";
 import { ManagedCheckoutError } from "./errors.ts";
-import { lockOf } from "./placement.ts";
+import { lockOf } from "./checkout-layout.ts";
 
 export type SlotKind = "repository" | "worktree";
 

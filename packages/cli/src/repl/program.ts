@@ -37,6 +37,7 @@ import {
   scoped,
   spawn,
   type Subscription,
+  type Task,
   withResolvers,
 } from "effection";
 import type { ReplExecutionProfile } from "../repl-profile.ts";
@@ -46,50 +47,110 @@ import {
   admitsSubmission,
   admitted,
   answered,
+  applied,
+  askingFor,
   elicitWithdrawn,
   ENTRIES_WINDOW,
   entriesRowCount,
+  filled,
   focusSettled,
   initialState,
+  instructed,
   permissionSettled,
+  offering,
   permissionWithdrawn,
   presentationFor,
+  presentedDrawer,
+  previewedMessage,
+  MESSAGE_VALUE_ROWS,
+  guidanceSentence,
   readinessOf,
   readingOf,
+  SIDEBAR_BODY,
+  SIDEKICK_BODY,
+  SIDEKICK_WINDOW,
+  sidekickChatLines,
   readsGeometry,
   reduceRepl,
   refusedView,
+  replacedAgent,
   stateFor,
+  TRANSCRIPT_BODY,
+  unavailable,
   viewFor,
   withoutAbsentEntry,
   withoutLiveDrawers,
 } from "./application.ts";
-import type { Json, NormalizedIssue } from "@executablemd/core";
+import type { AgentOptions, Json, NormalizedIssue, SessionConfiguration } from "@executablemd/core";
+import { previewGeneratedXmdRoot } from "@executablemd/core/host";
+import type { ReplQuestion } from "./elicitation.ts";
 import type {
   ReplAction,
   ReplFormMessage,
   ReplIntent,
   ReplLive,
   ReplMeasuredWidths,
+  ReplPreparing,
   ReplPresentation,
   ReplPresentationContext,
+  ReplPresented,
+  ReplSidekickChatRow,
+  ReplSidekickQuestion,
+  ReplSidekickReading,
+  ReplSidekickSetup,
+  ReplSidekickTurnRow,
   ReplState,
   ReplView,
 } from "./application.ts";
-import { decodeLocation, encodeLocation, resolveLocation } from "./route.ts";
-import { replRepository } from "./journal.ts";
+import { decodeLocation, encodeLocation, NO_LIVE, resolveLocation } from "./route.ts";
+import type { ReplSidekickAvailability } from "./route.ts";
+import { entryKey } from "./entries.ts";
+// The one gate, shared with the reduction. A pure decision module: the root
+// adds the slot it owns and nothing else crosses it.
+import {
+  admitting as newAdmitting,
+  blocking,
+  coldReservation,
+  retainResolution,
+  submitForSidekick,
+  take,
+} from "./sidekick/admission.ts";
+import type { Admitting, ColdReservation, Reported } from "./sidekick/admission.ts";
+import { fillable, stillAdmissible } from "./sidekick/gate.ts";
+import type { DraftFacts, Instruction, Reservation } from "./sidekick/gate.ts";
+import { rootReads } from "./sidekick/requests.ts";
+import type { RootReading } from "./sidekick/requests.ts";
+import type { SubmitReceipt } from "./sidekick/controls.ts";
+import { pairedReplRepository } from "./sidekick/repository.ts";
+import type { SidekickWriter } from "./sidekick/history.ts";
+import type {
+  PairedChatStorage,
+  PairedReplExecution,
+  PairedReplRepository,
+} from "./sidekick/repository.ts";
+import { useSidekickOwner } from "./sidekick/owner.ts";
+import type { SidekickLiveTurn, SidekickOwner, SidekickPreview } from "./sidekick/owner.ts";
+import { projectSidekick, retryable, SAVED_WITHOUT_REPLY } from "./sidekick/model.ts";
+import type { SidekickReading, SidekickSavedTurn } from "./sidekick/model.ts";
 import type { ReplExecution } from "./journal.ts";
 import { lifecycleRefusal, openReplSession } from "./session.ts";
-import type { ReplReading, ReplSession } from "./session.ts";
+import type { ReplReading, ReplSession, ReplSubmission } from "./session.ts";
 import { useReplFrames } from "./frame.ts";
 import type { ReplFrames } from "./frame.ts";
-import { committedOps, flatten, profileFor, skeletonOps } from "./layout.ts";
-import { createFitStore, fitPlain, prepareReading } from "./fitting.ts";
-import type { ReplFitStore } from "./fitting.ts";
+import {
+  committedOps,
+  drawerRect,
+  flatten,
+  profileFor,
+  routeDrawerRect,
+  skeletonOps,
+} from "./layout.ts";
+import { createFitStore, createPlainFitStore, fitPlain, prepareReading } from "./fitting.ts";
+import type { ReplFitStore, ReplPlainFitStore } from "./fitting.ts";
 import { prepareRail } from "./history-rail.ts";
 import { readingLines } from "./source-reading.ts";
 import { sourceRuns } from "./presentation-text.ts";
-import type { ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
+import type { ReplBounds, ReplBox, ReplLayoutManifest, ReplRegion } from "./layout.ts";
 import { capacityOf, NOTHING_ADMITTED } from "./layout-admission.ts";
 import type { ReplAdmission } from "./layout-admission.ts";
 import { resolvePointer, useReplRenderer } from "./renderer.ts";
@@ -167,13 +228,17 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
   }
 
   const root = options.root ?? (yield* useReplRoot());
-  const repository = replRepository(root);
+  // Paired, so a new execution publishes its chat history beside its entries
+  // from the start and an older single-file one opens exactly as it is. Which
+  // shape this execution is in travels on it as `chat`, for the Sidekick owner
+  // to read; nothing here starts a conversation or writes a chat record.
+  const repository = pairedReplRepository(root);
 
   // Opening a retained history reads and validates the whole file, and a file
   // that is not one raises. That is a location this command cannot show rather
   // than a failure of the command, so it becomes the refusal screen — with no
   // session, no provider and no observer ever created.
-  let execution: ReplExecution;
+  let execution: PairedReplExecution;
   try {
     execution =
       options.location === undefined
@@ -220,7 +285,11 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
     return yield* refuse(state, opened.error.message);
   }
 
-  return yield* drive(opened.value, state, execution, options);
+  // The repository goes with it. Establishing a pair for an execution still
+  // held in the older single file replaces the execution this command owns, so
+  // the thing that can do it is the thing that owns it — and it is passed
+  // privately rather than reached from anywhere a view or a reply could.
+  return yield* drive(opened.value, state, execution, options, repository);
 }
 
 /**
@@ -231,13 +300,50 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
  * selects, the scopes it walks and the drawers it opens are all answers the
  * retained records already hold.
  */
-function* resolvable(execution: ReplExecution, state: ReplState): Operation<Result<void>> {
+function* resolvable(execution: PairedReplExecution, state: ReplState): Operation<Result<void>> {
   const projected = projectRepl(yield* execution.stream.readAll(), state.route.at);
   if (!projected.ok) {
     return projected;
   }
-  const resolved = resolveLocation(projected.value, state.route);
+  // The chat records this execution was *opened* with, which is the whole of
+  // what its Sidekick history holds before anything explicit happens. No
+  // conversation is opened to obtain them and no provider is created: a
+  // selector naming a chat nobody ever held has to be answered here, where the
+  // only cost of the wrong URL is being told so, rather than after resumption
+  // has appended to somebody's history.
+  const chat = coldSidekick(execution);
+  const resolved = resolveLocation(projected.value, state.route, {
+    ...NO_LIVE,
+    ...(chat === undefined ? {} : { sidekick: chat }),
+  });
   return resolved.ok ? Ok(undefined) : Err(resolved.error);
+}
+
+/**
+ * What this execution's saved Sidekick history says, read cold.
+ *
+ * None for an execution still held in the older single file: it has no chat
+ * history at all, so there is no saved chat to select and reading one does not
+ * upgrade it — a location naming one refuses. A pair this version cannot read
+ * keeps its own refusal, which is the established storage answer rather than a
+ * manufactured empty reading.
+ *
+ * Nothing live is here, and that is deliberate: a cold open holds no owner, so
+ * an exclusively ephemeral provider key the files never recorded is a key this
+ * execution cannot establish.
+ */
+function coldSidekick(execution: PairedReplExecution): ReplSidekickAvailability | undefined {
+  if (execution.chat.form !== "paired") {
+    return undefined;
+  }
+  const read = projectSidekick(execution.chat.records);
+  return read.ok
+    ? sidekickAvailability(read.value)
+    : Object.freeze({
+        chats: Object.freeze([]),
+        sessions: Object.freeze([]),
+        refusal: read.error.message,
+      });
 }
 
 /** The execution segment of a location that has already been decoded once. */
@@ -411,14 +517,73 @@ type Wake =
   | { readonly kind: "screen"; readonly event: ReplScreenEvent }
   | { readonly kind: "session" };
 
+/**
+ * What a reopened history still owes, and what the screen is true of now.
+ *
+ * Three things the submit path needs and cannot read for itself: whether a
+ * disagreement between the two files forbids admitting anything, the write that
+ * answers a reservation a dead process left, and a fresh reading of the draft
+ * for the recheck at the entry's actual start.
+ */
+interface Reopening {
+  /** Why nothing may be admitted, when that is the case. */
+  readonly blocked: string | undefined;
+  /** Retain any unanswered reservation. Acts on nothing it finds. */
+  settle(): Operation<void>;
+  /** The draft facts as they stand, read when they are asked for. */
+  facts(): DraftFacts;
+}
+
+/**
+ * The root's own end of what a reply asks for.
+ *
+ * {@link RootReading} is what a reply's requests see; the drain below is what
+ * the loop does about the one of them that writes. They are one object because
+ * they are one owner: the thing that answers a reply about the draft is the
+ * thing that holds it.
+ *
+ * The conversation half — which response asked, and the reservation its Submit
+ * binds — is not here. A submission is written into the chat history that asked
+ * for it, so it belongs to the owner of that conversation rather than to the
+ * loop, and the loop's part in it is the slot it already keeps.
+ */
+interface SidekickRoot extends RootReading {
+  /**
+   * Apply every fill a reply has asked for, and answer each of them.
+   *
+   * Drained by the loop rather than applied from inside the response, for the
+   * reason every other report is: the draft is the loop's, and one writer is
+   * the whole point of having a loop. A reply's request waits here, so a fill
+   * that has returned is a fill the draft actually holds — which is what makes
+   * the submission after it reserve the text the reply just wrote rather than
+   * whatever was there before.
+   */
+  applyFills(): void;
+}
+
 /** Run the screen for one opened session. */
 function* drive(
   session: ReplSession,
   start: ReplState,
-  execution: ReplExecution,
+  // The paired shape, because reopening has to ask the chat history whether a
+  // previous process left a reservation unanswered. A legacy execution has no
+  // chat history to have left one in.
+  opened: PairedReplExecution,
   options: ReplProgramOptions,
+  /** Where this execution lives, for the one write that replaces it. */
+  repository: PairedReplRepository,
 ): Operation<Result<ReplOutcome>> {
   let state = start;
+  /**
+   * The execution as it stands, which an upgrade replaces.
+   *
+   * Reassigned exactly once, by the handoff an explicit message asks for: a
+   * legacy execution becomes a paired one, keeping its id, its route, its entry
+   * task and the same movable writer. Everything that reads storage reads this
+   * rather than the object this function was handed, because the original is
+   * the superseded one from that moment on.
+   */
+  let execution: PairedReplExecution = opened;
   // One session for the whole command: it owns the file, the observer and each
   // entry task in turn, so submitting an entry does not replace it.
   const current: ReplSession = session;
@@ -426,10 +591,30 @@ function* drive(
   // separately. Everything below assigns both halves together or neither.
   let reading: ReplReading = { model: session.model, navigation: session.navigation };
   let rendered: ReplRendered | undefined;
+  /**
+   * The Sidekick question whose form the frame on screen is presenting.
+   *
+   * Kept beside the frame it was read from, because that is the frame a person
+   * is acting against: which input a key reaches depends on what was drawn when
+   * it was pressed, and the state alone cannot say — a form held open is not a
+   * form on screen.
+   */
+  let presenting: ReplPresented | undefined;
   // The reading geometry this command has already measured. Owned here, so it
   // lives exactly as long as the command does and no frame outside it can
   // reach one process's cuts.
   const fits = createFitStore();
+  // The chat's own line cuts, in storage of its own beside that one. Two stores
+  // rather than one slot shared: the entry reading's geometry reserves a rail
+  // and a status column that plain text has neither of, and one slot would make
+  // the two evict each other every time a reader looked at the other pane.
+  const chatFits = createPlainFitStore();
+  // And the composer's own, for the same reason again: its lines are not the
+  // chat's, and settling them into the chat's store would evict the chat on
+  // every keystroke.
+  const messageFits = createPlainFitStore();
+  // And the directions', which change when focus or readiness does.
+  const guidanceFits = createPlainFitStore();
 
   const outcome = yield* scoped(function* (): Operation<Result<ReplOutcome>> {
     const screen = yield* useReplScreen();
@@ -470,6 +655,629 @@ function* drive(
     let refusedByReadiness = false;
 
     /**
+     * The next entry slot, and the submission preparing to take it.
+     *
+     * Loop-local for the same reason the readiness bookkeeping above is: it is
+     * about what this screen has in flight, and nothing durable or canonical
+     * carries it. One slot, so the person and a reply contend for it rather
+     * than each believing they hold the draft.
+     */
+    const admitting: Admitting = newAdmitting();
+
+    /**
+     * The fills a reply has asked for and the loop has not applied yet.
+     *
+     * A queue with an answer attached, rather than a flag: the request suspends
+     * until its fill has actually landed, so two fills in one response land in
+     * the order the response wrote them and a submission after one reserves the
+     * text it put there.
+     */
+    const fills: { readonly source: string; settle(outcome: Result<void>): void }[] = [];
+
+    /**
+     * What a reply reads, and what the root does about the draft it writes.
+     *
+     * Assembled here because this is where the state is. The reads answer from
+     * the acknowledged head rather than from `reading` — the prefix a person
+     * has navigated to — because where somebody is looking is not a fact about
+     * the history, and a reply handed the selected prefix would write an entry
+     * against bindings that were replaced several entries ago.
+     */
+    const sidekickRoot: SidekickRoot = {
+      // The reads, from the module a reply's requests are built over, rather
+      // than a second implementation of them here. What a reply is told has to
+      // be the same whether it is asked through the loop or through a proof.
+      ...rootReads(current, options.profile),
+      *fill(source: string): Operation<Result<void>> {
+        const answer = withResolvers<Result<void>>();
+        fills.push({ source, settle: answer.resolve });
+        wakes.send({ kind: "session" });
+        return yield* answer.operation;
+      },
+      applyFills(): void {
+        for (const held of fills.splice(0)) {
+          // Decided at the moment it is applied rather than when it was asked
+          // for: a person can take the draft over while a response is still
+          // being evaluated, and the answer a reply is owed is about the draft
+          // it is actually replacing.
+          const allowed = fillable(state);
+          if (!allowed.ok) {
+            held.settle(allowed);
+            continue;
+          }
+          state = filled(state, held.source);
+          held.settle(Ok(undefined));
+        }
+      },
+    };
+
+    /**
+     * A reservation a previous process left unanswered, and what became of it.
+     *
+     * Read once, from records that were already on disk, before this screen
+     * admits anything. A reply's Submit is written down before the slot it took
+     * is acted on, so a process that stopped in between left a question the
+     * entry history can answer — and it has to be answered before anything else
+     * takes that slot, or the answer stops being findable.
+     *
+     * Held rather than resolved here, because resolving it is a write and
+     * reopening a history writes nothing. It is retained at the first explicit
+     * mutating action, which is where a person has asked for something.
+     */
+    let unresolved: ColdReservation | undefined;
+    /** Why nothing may be admitted, when the two files disagree about one. */
+    let disagreement: string | undefined;
+    if (execution.chat.form === "paired") {
+      // The whole acknowledged history, not the prefix this screen opened at.
+      // Reopening at an earlier position asks the same question about the same
+      // reservation, and the entries that answer it are every entry the file
+      // holds — a reading of a shorter prefix would find a disagreement that
+      // only the opening position created.
+      const acknowledged = current.reading(undefined);
+      const cold = acknowledged.ok
+        ? yield* coldReservation(
+            execution.chat.records,
+            acknowledged.value.model.entries,
+            // The entry journal itself: what the reservation bound is its bytes,
+            // and a reading of parsed records cannot establish those.
+            execution.chat.location.entries,
+          )
+        : acknowledged;
+      if (cold.ok) {
+        unresolved = cold.value;
+      } else {
+        // Refused, and refused standing: the chat says one thing about the next
+        // entry slot and the entry history says another, and no reading of
+        // either establishes which. Admitting on top of that would be choosing.
+        disagreement = blocking(cold.error);
+        state = Object.freeze({ ...state, refusal: disagreement });
+      }
+    }
+
+    /**
+     * Write down any unanswered reservation, before this action takes effect.
+     *
+     * Called by every path that admits, because every one of them is an
+     * explicit mutating action and the finding has to be on disk before the
+     * slot it is about is reused. It acts on nothing it finds: an entry that was
+     * never admitted is not submitted now, and one that was is not re-run.
+     */
+    function* settleReservation(): Operation<void> {
+      const held = unresolved;
+      if (held === undefined || execution.chat.form !== "paired") {
+        return;
+      }
+      // Cleared first, so a failed append is not retried by the next keystroke
+      // ahead of the action that asked for it. The finding is still in the file
+      // it came from, so the next process asks the same question again.
+      unresolved = undefined;
+      yield* retainResolution(execution.chat.writer, held);
+    }
+
+    /**
+     * The draft facts as they stand, for a question asked now or asked later.
+     *
+     * A function rather than a value because the two callers want different
+     * moments of it: the reduction reserves against the text the person
+     * submitted, and the recheck at the entry's actual start wants whatever is
+     * true by then. A copy taken at the keystroke and reused for both would
+     * make the second one answer the first one's question.
+     */
+    function draftFacts(): DraftFacts {
+      return {
+        live: state.route.at === undefined,
+        revisions: state.revisions,
+        takenOver: state.takenOver,
+        draft: state.draft,
+      };
+    }
+
+    /**
+     * Why nothing may be admitted while a storage handoff is in progress.
+     *
+     * An upgrade publishes a pair for an execution still held in the older
+     * single file and moves the entry writer to it. An entry admitted in that
+     * window would be admitted against a file that is about to be superseded,
+     * so the root holds new admissions rather than racing them — the entry
+     * already running keeps going through the same movable writer, which is
+     * what the handoff exists to preserve.
+     */
+    let upgrading: string | undefined;
+
+    /** What reopening still requires, and what the screen is now true of. */
+    const reopening: Reopening = {
+      get blocked(): string | undefined {
+        return disagreement ?? upgrading;
+      },
+      settle: settleReservation,
+      facts: draftFacts,
+    };
+
+    /**
+     * The one message cycle this screen has in flight, and what it was asked at.
+     *
+     * Reserved synchronously by the reduction's intent, before anything is
+     * spawned, so a second Send in the same input burst finds it held rather
+     * than starting a second conversation turn. It also carries the revisions
+     * the message was asked at, which is what the acknowledgement below clears
+     * against.
+     */
+    let cycle: Instruction | undefined;
+
+    /**
+     * The one explicit configuration job this screen has in flight.
+     *
+     * Inspection, a preference Apply and an agent replacement are all things a
+     * person explicitly asked for, and the root owns one at a time: a second
+     * refuses rather than queuing, because a queued action is one somebody has
+     * stopped watching. Reserved synchronously by the reduction's intent,
+     * before anything is spawned, so two activations in one input burst cannot
+     * both start.
+     *
+     * This is about explicit operations, not about whether the Sidekick is
+     * busy. A preference save is admitted alongside a running message cycle —
+     * saving is neither inspecting nor stopping — and `owner.busy` alone
+     * reserves nothing: an idle inspection has to be protected from a Send
+     * arriving beside it just as much.
+     */
+    let configuring:
+      | {
+          readonly kind: "inspect" | "save" | "replace";
+          /** The conversation it was asked of, so a late result cannot outlive it. */
+          readonly conversation: string | undefined;
+          /**
+           * The task doing it, once it has been spawned.
+           *
+           * The reservation is taken before the spawn, so there is one moment in
+           * which this job is held and has no task: nothing can run in it, and a
+           * departure that found it would have nothing to join.
+           */
+          task: Task<void> | undefined;
+        }
+      | undefined;
+
+    /**
+     * Why an explicit thing cannot start right now, or nothing.
+     *
+     * One answer for both reservations, because they are one admission: a
+     * person asks the Sidekick for one thing at a time, and an inspection or a
+     * replacement running beside a message is two. A *preference save* is the
+     * one exception the ruling carves out — it is a record in this history
+     * rather than work the conversation does — so it is admitted beside a
+     * running cycle and asks nothing of the agent.
+     */
+    function occupied(kind: "message" | "inspect" | "save" | "replace"): string | undefined {
+      // A replacement is the one explicit job whose whole purpose is to end the
+      // cycle: it stops the Sidekick and joins it before setting another
+      // conversation up, so a running cycle is what it is *for* rather than
+      // something standing in its way. A save coexists with one by design.
+      if (kind !== "save" && kind !== "replace" && cycle !== undefined) {
+        return "the Sidekick is already working on a message.";
+      }
+      if (configuring === undefined) {
+        return undefined;
+      }
+      if (kind === "save" && configuring.kind === "save") {
+        return "the Sidekick is already saving a setting.";
+      }
+      // One explicit configuration job at a time, a save included. What a save
+      // is exempt from is the *message cycle*, not the one job slot: admitting
+      // it beside another job would take that slot from the job already in it,
+      // and the replacement or inspection holding it would finish into a slot
+      // somebody else owned.
+      return "the Sidekick is already doing something you asked for.";
+    }
+
+    /** The chat writer as it stands, for a departure that has to join a write. */
+    function chatWriter(): SidekickWriter | undefined {
+      return execution.chat.form === "paired" ? execution.chat.writer : undefined;
+    }
+
+    /**
+     * Let go of the configuration job this screen admitted, truthfully.
+     *
+     * Established before the loop returns and before anything is cancelled,
+     * because this scope is what owns the writer and the provider: once it
+     * unwinds they are gone. A save whose record has reached the file is
+     * *joined* — its bytes are on their way and this writer's memory of them is
+     * not there yet, so letting go between the two would leave the file holding
+     * a record nothing acknowledged and the next append free to overtake it. A
+     * job still waiting its turn has written nothing, so it is cancelled and
+     * publishes nothing.
+     */
+    function* releasing(): Operation<void> {
+      const held = configuring;
+      if (held === undefined) {
+        return;
+      }
+      configuring = undefined;
+      const task = held.task;
+      if (task === undefined) {
+        return;
+      }
+      if (held.kind === "save" && chatWriter()?.appending === "preferences") {
+        yield* task;
+        return;
+      }
+      yield* task.halt();
+    }
+
+    /**
+     * What the Sidekick's own work has for the loop, in the order it arrived.
+     *
+     * The same discipline as the submission reports and the fills: the state is
+     * the loop's, so work that happened elsewhere asks here and waits. An
+     * acknowledgement in particular has to be applied before the fills queued
+     * behind it, because a reply that filled the draft did so after the message
+     * that produced it was saved.
+     */
+    const sidekickReports: (
+      | { readonly kind: "acknowledged"; readonly held: Instruction; settle(): void }
+      | { readonly kind: "refused"; readonly refusal: string }
+      | {
+          readonly kind: "inspected";
+          readonly conversation: string | undefined;
+          /** The model its effort levels were read for, as the read asked. */
+          readonly model: string | undefined;
+          readonly read: Result<AgentOptions>;
+        }
+      | {
+          readonly kind: "unavailable";
+          readonly conversation: string | undefined;
+          readonly reason: string;
+        }
+      | {
+          /**
+           * A preference save answered.
+           *
+           * Its own member rather than one answer shape for everything Apply
+           * does: a replacement asks for no model and no effort, so one shape
+           * for both would make its success indistinguishable from a save that
+           * asked for nothing.
+           */
+          readonly kind: "saved";
+          /** The conversation and the selection that asked, so a late one is ignored. */
+          readonly conversation: string | undefined;
+          readonly revision: number;
+          readonly answer: Result<void>;
+        }
+      | {
+          /** A replacement answered, by the selection that asked for it. */
+          readonly kind: "replaced";
+          readonly conversation: string | undefined;
+          readonly revision: number;
+          readonly answer: Result<void>;
+        }
+    )[] = [];
+
+    function applySidekickReports(): void {
+      for (const report of sidekickReports.splice(0)) {
+        if (report.kind === "acknowledged") {
+          state = instructed(state, report.held);
+          report.settle();
+          continue;
+        }
+        if (report.kind === "inspected") {
+          state = offering(state, report.conversation, report.model, report.read, sidekick.agent);
+          continue;
+        }
+        if (report.kind === "unavailable") {
+          state = unavailable(state, report.conversation, report.reason);
+          continue;
+        }
+        if (report.kind === "saved") {
+          state = applied(state, report.conversation, report.revision, report.answer);
+          continue;
+        }
+        if (report.kind === "replaced") {
+          // The same drawer transition, plus the one thing a replacement
+          // changes that a preference does not: which conversation is current.
+          // A reader who was explicitly in the chat that was replaced is put in
+          // the new one; a failure leaves them exactly where they were.
+          state = replacedAgent(state, report.conversation, report.revision, report.answer);
+          continue;
+        }
+        state = Object.freeze({ ...state, refusal: report.refusal });
+      }
+    }
+
+    /**
+     * This execution's own Sidekick, acquired once.
+     *
+     * Here, in the screen's own scope, after the slot, the fills and the
+     * reopening callbacks exist and before the first frame is composed. It
+     * belongs to the execution rather than to an entry, a tab, a History
+     * position or a turn — so changing any of those reaches this same
+     * conversation, and nothing creates a second one.
+     *
+     * Acquiring it projects the acknowledged chat and does nothing else: no
+     * provider, no options inspection, no prompt, no control and no upgrade. A
+     * chat history this version cannot read stays an explicit refusal.
+     */
+    const sidekick: SidekickOwner = yield* useSidekickOwner({
+      assembly: options.profile.sidekickAssembly,
+      chat: execution.chat,
+      *establish(): Operation<Result<PairedChatStorage>> {
+        const held = execution.chat;
+        if (held.form === "paired") {
+          return Ok(held);
+        }
+        // Held from here, so nothing is admitted against the file that is about
+        // to be superseded. An entry already running is untouched: it writes
+        // through the movable writer, which the handoff moves.
+        upgrading = "this execution's chat history is being published; the next entry waits for it";
+        try {
+          execution = yield* repository.upgrade(execution);
+        } catch (error) {
+          return Err(error instanceof Error ? error : new Error(String(error)));
+        } finally {
+          upgrading = undefined;
+          // The screen says something different now: there is a chat history
+          // where there was none.
+          wakes.send({ kind: "session" });
+        }
+        const established = execution.chat;
+        if (established.form !== "paired") {
+          return Err(
+            new Error(
+              "this execution's chat history was not published, so there is nothing for the " +
+                "Sidekick to write to",
+            ),
+          );
+        }
+        return Ok(established);
+      },
+      root: sidekickRoot,
+      submit(at, journal): Operation<Result<SubmitReceipt>> {
+        return submitForSidekick(at, {
+          session: {
+            // The whole acknowledged history, read at the moment the
+            // reservation asks for it. `current.model` is the projection of
+            // the location this session was *opened* at, which is right for
+            // what a frozen screen shows and wrong for what the next entry is
+            // called: opening at an earlier position would otherwise reserve a
+            // slot two entries ago and name an entry that already exists.
+            entries() {
+              const read = current.reading(undefined);
+              if (!read.ok) {
+                return read;
+              }
+              return Ok(
+                read.value.model.entries.map((entry) => ({
+                  key: entry.key,
+                  source: entry.source,
+                })),
+              );
+            },
+            admits: () => current.admits(),
+            // The start check travels through to the session, which is the only
+            // thing that knows when this entry actually starts: it asks after
+            // the preflight, and a reply's submission is held to the same terms
+            // there as a person's Run.
+            submit: (source, starting) => current.submit(source, undefined, starting),
+          },
+          // Asked rather than carried: a reply's submission is reserved against
+          // the draft as it stands when it asks — the same moment a person's
+          // Run is — and asked again, from the same place, when its entry
+          // starts.
+          facts: draftFacts,
+          held: admitting,
+          journal,
+          // The writer as it stands, which an upgrade may have moved. The
+          // original object would be a writer to a superseded path.
+          writer: execution.stream,
+          woke: () => {
+            wakes.send({ kind: "session" });
+          },
+        });
+      },
+      revision: () => cycle?.message ?? state.revisions.message,
+      draft: () => state.draft,
+      *acknowledge(revision: number): Operation<void> {
+        const held = cycle;
+        if (held === undefined || held.message !== revision) {
+          // Not a cycle this screen started, so there is nothing of this
+          // screen's to clear. It answers rather than refusing: the message is
+          // saved either way, and the owner is not waiting for permission.
+          return;
+        }
+        const answer = withResolvers<void>();
+        sidekickReports.push({ kind: "acknowledged", held, settle: answer.resolve });
+        wakes.send({ kind: "session" });
+        yield* answer.operation;
+      },
+    });
+
+    /**
+     * This process's own name for each Sidekick question it has seen.
+     *
+     * Keyed on the exact pending object, because that is what an answer has to
+     * target: a reply may answer one question and ask another with the same
+     * words and the same schema, and text, shape or a count would all name
+     * whichever one happened to be pending when a keystroke arrived. Weak, so
+     * a question that has ended is forgotten with it; counted, so two live
+     * questions never share a name.
+     */
+    const questionNames = new WeakMap<ReplQuestion, string>();
+    let questionsNamed = 0;
+
+    /** What this screen calls the Sidekick's pending question, if it has one. */
+    function askingNow(): ReplSidekickQuestion | undefined {
+      const pending = sidekick.questions.pending;
+      if (pending === undefined) {
+        return undefined;
+      }
+      let key = questionNames.get(pending);
+      if (key === undefined) {
+        questionsNamed += 1;
+        key = `sidekick-question:${questionsNamed}`;
+        questionNames.set(pending, key);
+      }
+      return Object.freeze({ key, message: pending.message, form: pending.form });
+    }
+
+    /**
+     * What this execution's Sidekick says, for one state's own reading.
+     *
+     * The state rather than the loop's, because a navigation that has not been
+     * adopted yet composes its candidate against its own selector: the reading
+     * a route is being validated at has to be the reading that route names.
+     */
+    function sidekickReading(held: ReplState): ReplSidekickReading {
+      return sidekickReadingOf(sidekick, askingNow(), held.route.sidekick);
+    }
+
+    /**
+     * The question this key names, and only while it is still the pending one.
+     *
+     * The check an answer turns on: a key for a question that has been answered,
+     * withdrawn or replaced names nothing, so a keystroke that arrived late
+     * submits nothing rather than answering whatever is open now.
+     */
+    function askedBy(key: string): ReplQuestion | undefined {
+      const pending = sidekick.questions.pending;
+      if (pending === undefined || questionNames.get(pending) !== key) {
+        return undefined;
+      }
+      return pending;
+    }
+
+    // Its own questions, into the same queue. A reply asking one is published
+    // by a provider in the owner's scope while the loop is waiting on a key
+    // that is not coming: without this the question would sit unannounced until
+    // somebody happened to press something. Subscribed before any message can
+    // publish one, and released with this scope.
+    yield* spawn(function* asking(): Operation<void> {
+      const changes = yield* sidekick.questions.changes;
+      while (true) {
+        const next = yield* changes.next();
+        if (next.done === true) {
+          return;
+        }
+        wakes.send({ kind: "session" });
+      }
+    });
+
+    // Its own changes, into the one queue the loop waits on. A reply arriving,
+    // an automatic follow-up starting, a cycle failing and a joined Stop are
+    // all things no keystroke announces — without this they would sit unseen
+    // until the person happened to press a key. The notification carries
+    // nothing and grants nothing: the loop reads the owner afresh.
+    yield* spawn(function* chat(): Operation<void> {
+      const changes = yield* sidekick.changes;
+      while (true) {
+        const next = yield* changes.next();
+        if (next.done === true) {
+          return;
+        }
+        wakes.send({ kind: "session" });
+      }
+    });
+
+    /**
+     * Apply whatever the submission work finished with.
+     *
+     * Drained by the loop rather than applied from inside that work, because
+     * the draft and the reading are the loop's: one writer is the whole point
+     * of having a loop. Called once per batch, after the wakes in it have been
+     * taken, so a submission that finished while nobody was typing is applied
+     * on the same pass as one that finished under a keystroke.
+     *
+     * It is the last word on the refusal showing, because it is the newest
+     * fact: an action taken earlier in the batch did not know how this ended.
+     */
+    function applyReports(): void {
+      for (const report of admitting.reported.splice(0)) {
+        if (admitting.held === report.held) {
+          admitting.held = undefined;
+        }
+        if (report.kind === "admitted") {
+          reading = { model: current.model, navigation: current.navigation };
+          // The entry exists now, so the draft that became it is finished — and
+          // only the revision it was taken from. Somebody who typed while the
+          // preflight was running keeps what they typed.
+          state = admitted(state, report.held);
+          continue;
+        }
+        // A refusal leaves the draft exactly as it was and the history as it
+        // was: nothing was admitted, so there is nothing to undo.
+        //
+        // Two different refusals arrive here and only one of them goes stale.
+        // The readiness refusing is true of a moment: the entry it named
+        // finishes and it stops being true. A document that cannot be admitted
+        // is true of the document, and readiness moving on does not make it
+        // admissible — dropping that one would take away the only explanation
+        // of why the draft is still sitting there.
+        state = Object.freeze({ ...state, refusal: report.refusal });
+        refusedByReadiness = report.byReadiness;
+      }
+    }
+
+    /**
+     * Mount the controls this screen now offers, without drawing a frame.
+     *
+     * The two steps a commit takes before it draws — measure, then apply the
+     * admitted descriptions — and no others. Nothing is presented, no target
+     * map is published and no frame is acknowledged: the batch still owns the
+     * frame it paints at the end, and a pointer arriving later in this burst is
+     * still resolved against the frame that produced its coordinates, so a
+     * control mounted here cannot be activated by stale coordinates.
+     *
+     * It exists because a burst is one frame but not one tree. Run and the
+     * Shift-Tab that reaches back for Pause arrive together, and the tree is
+     * what answers the second of them.
+     */
+    function* remount(): Operation<void> {
+      const at = yield* screen.size();
+      const ready = yield* prepareFrame(
+        renderer,
+        yield* build(
+          state,
+          reading,
+          current,
+          at,
+          focused,
+          preparingOf(admitting),
+          sidekickReading(state),
+        ),
+        fits,
+        chatFits,
+        messageFits,
+        guidanceFits,
+      );
+      if (!ready.ok) {
+        throw ready.error;
+      }
+      // Only what was admitted, exactly as a commit mounts it: a control the
+      // measured row cannot hold whole is not in the tree here either, so what
+      // the next key can reach is what the next frame will draw.
+      const applied = yield* tree.apply(ready.value.presentation.descriptions);
+      if (!applied.ok) {
+        throw applied.error;
+      }
+    }
+
+    /**
      * Take one normalized event through the tree and apply whatever it asked for.
      *
      * One place, because a keystroke and a pointer landing on the same control
@@ -506,8 +1314,19 @@ function* drive(
       if (readsGeometry(dispatched.value.action)) {
         const ready = yield* prepareFrame(
           renderer,
-          yield* build(state, reading, current, yield* screen.size(), focused),
+          yield* build(
+            state,
+            reading,
+            current,
+            yield* screen.size(),
+            focused,
+            preparingOf(admitting),
+            sidekickReading(state),
+          ),
           fits,
+          chatFits,
+          messageFits,
+          guidanceFits,
         );
         if (!ready.ok) {
           throw ready.error;
@@ -518,16 +1337,122 @@ function* drive(
         state,
         dispatched.value.action,
         reading.model,
-        liveOf(current),
+        liveOf(current, preparingOf(admitting), sidekickReading(state)),
         geometry,
+        presenting,
       );
       state = transition.state;
-      const performed = yield* perform(transition.intent, current, execution, options, wakes);
-      if (performed.submitted === true) {
-        reading = { model: current.model, navigation: current.navigation };
-        // The entry exists now, so the draft that became it is finished.
-        state = admitted(state);
-      }
+      const performed = yield* perform(
+        transition.intent,
+        current,
+        execution,
+        options,
+        wakes,
+        // The facts the reduction just decided on, not a fresh read: the slot
+        // is reserved against the text the person actually submitted.
+        draftFacts(),
+        admitting,
+        reopening,
+        {
+          owner: sidekick,
+          reserve(held: Instruction): string | undefined {
+            // Before anything is written or sent, which is the whole point: a
+            // message refused after its record was retained is a message this
+            // history claims somebody sent.
+            const blocked = occupied("message");
+            if (blocked !== undefined) {
+              return blocked;
+            }
+            cycle = held;
+            return undefined;
+          },
+          release(): void {
+            cycle = undefined;
+          },
+          refuse(refusal: string): void {
+            sidekickReports.push({ kind: "refused", refusal });
+          },
+          asked: askedBy,
+          *admit(kind, conversation, work): Operation<string | undefined> {
+            const busy = occupied(kind);
+            if (busy !== undefined) {
+              return busy;
+            }
+            // The conversation it names has to be the one this owner is
+            // continuing, checked before the job starts rather than stored and
+            // trusted: a drawer opened for one conversation cannot be applied
+            // to another, and a reply that finished and opened a new one while
+            // somebody was reaching for Apply would otherwise be configured by
+            // it.
+            if (conversation !== undefined) {
+              const known = sidekick.reading;
+              if (!known.ok || known.value.active !== conversation) {
+                return "the Sidekick is no longer on that conversation.";
+              }
+            }
+            // Reserved before the spawn, so nothing between the check above and
+            // the task below can take the job.
+            const job: {
+              readonly kind: "inspect" | "save" | "replace";
+              readonly conversation: string | undefined;
+              task: Task<void> | undefined;
+            } = { kind, conversation, task: undefined };
+            configuring = job;
+            job.task = yield* spawn(function* (): Operation<void> {
+              try {
+                yield* work();
+              } finally {
+                if (configuring === job) {
+                  configuring = undefined;
+                }
+                wakes.send({ kind: "session" });
+              }
+            });
+            return undefined;
+          },
+          inspected(conversation, model, read): void {
+            sidekickReports.push({ kind: "inspected", conversation, model, read });
+          },
+          unavailable(conversation, reason): void {
+            sidekickReports.push({ kind: "unavailable", conversation, reason });
+          },
+          saved(conversation, revision, answer): void {
+            sidekickReports.push({ kind: "saved", conversation, revision, answer });
+          },
+          replaced(conversation, revision, answer): void {
+            sidekickReports.push({ kind: "replaced", conversation, revision, answer });
+          },
+          retrying(conversation, message): Result<string> {
+            const blocked = occupied("message");
+            if (blocked !== undefined) {
+              // Refused before the saved text is even resolved: a retry that
+              // wrote its record and then failed would leave this history
+              // claiming a request nobody could have sent.
+              return Err(new Error(blocked));
+            }
+            const known = sidekick.reading;
+            if (!known.ok) {
+              return known;
+            }
+            const saved = retryable(known.value, conversation, message);
+            if (!saved.ok) {
+              return saved;
+            }
+            // The same one cycle a Send takes, at the draft revision this
+            // instruction was given at: a retry is an explicit instruction, so
+            // it acknowledges before a reply's fill under the existing rule.
+            const held: Instruction = {
+              message: state.revisions.message,
+              draft: state.revisions.draft,
+              // Out of the history, not out of the box: this acknowledgement
+              // clears no message text, because it never carried any.
+              from: "saved",
+            };
+            cycle = held;
+            return saved;
+          },
+        },
+      );
       if (performed.answered !== undefined) {
         // The question took it, so the drawer that was asking is over. The model
         // here is the history without this answer in it yet, which is what makes
@@ -547,6 +1472,31 @@ function* drive(
           form: Object.freeze({ ...state.form, messages: Object.freeze([...performed.messages]) }),
         });
       }
+      if (performed.askingAnswered === true) {
+        // The question took it, so the form is over and its drawer with it.
+        // Focus goes back to the box: the answer control has gone, and the
+        // Sidekick's own composer is where somebody is next.
+        state = Object.freeze({
+          ...state,
+          asking: undefined,
+          restore: Object.freeze({ kind: "message" }),
+          refusal: undefined,
+        });
+      }
+      if (performed.askingMessages !== undefined && state.asking !== undefined) {
+        // Still the same question. What the schema said goes under that form,
+        // and every value stays where it was typed.
+        state = Object.freeze({
+          ...state,
+          asking: Object.freeze({
+            ...state.asking,
+            form: Object.freeze({
+              ...state.asking.form,
+              messages: Object.freeze([...performed.askingMessages]),
+            }),
+          }),
+        });
+      }
       if (performed.refusal !== undefined) {
         state = Object.freeze({ ...state, refusal: performed.refusal });
         refusedByReadiness = performed.refusedByReadiness === true;
@@ -554,6 +1504,13 @@ function* drive(
         // The action was taken, or refused for its own reasons and then cleared.
         // Either way whatever the readiness last refused is not what is showing.
         refusedByReadiness = false;
+      }
+      if (performed.remounted === true) {
+        // Before this call returns, so the next event of the burst is dispatched
+        // against the controls that are now offered rather than the ones that
+        // were. Waiting for the end-of-batch paint is too late: the key that
+        // reaches for the new control has already been taken out of the queue.
+        yield* remount();
       }
       return performed.exited === true;
     }
@@ -568,16 +1525,48 @@ function* drive(
     let broken: string | undefined;
     const compose: ReplCompose = function* (at): Operation<ReplView> {
       return broken === undefined
-        ? yield* build(state, reading, current, at, focused)
+        ? yield* build(
+            state,
+            reading,
+            current,
+            at,
+            focused,
+            preparingOf(admitting),
+            sidekickReading(state),
+          )
         : refusedView(state, broken, at, focused);
     };
-    rendered = (yield* paint(frames, tree, renderer, screen, compose, fits)).rendered;
+    const first = yield* paint(
+      frames,
+      tree,
+      renderer,
+      screen,
+      compose,
+      fits,
+      chatFits,
+      messageFits,
+      guidanceFits,
+    );
+    rendered = first.rendered;
+    presenting = presentedDrawer(first.view);
     // The first frame has the same obligation as every other one: draw again
     // only if the tree settled focus somewhere the frame did not mark.
     const settled = keyOfFocus(tree);
     if (settled !== focused) {
       focused = settled;
-      rendered = (yield* paint(frames, tree, renderer, screen, compose, fits)).rendered;
+      const marked = yield* paint(
+        frames,
+        tree,
+        renderer,
+        screen,
+        compose,
+        fits,
+        chatFits,
+        messageFits,
+        guidanceFits,
+      );
+      rendered = marked.rendered;
+      presenting = presentedDrawer(marked.view);
     }
 
     while (true) {
@@ -652,7 +1641,32 @@ function* drive(
         }
       }
 
+      // Before the reports, because a fill raises the draft revision and an
+      // admission clears only the revision it admitted: applied in this order, a
+      // reply that filled the draft while its own submission was being prepared
+      // keeps what it wrote, exactly as a person typing in that window does.
+      // The acknowledgement first: a reply that filled the draft did so after
+      // the message that produced it was saved, so the instruction that message
+      // settles is applied before the fill queued behind it. Then the fills,
+      // then the admissions — a fill raises the draft revision and an admission
+      // clears only the revision it admitted, so in this order a reply that
+      // filled while its own submission was being prepared keeps what it wrote.
+      applySidekickReports();
+      sidekickRoot.applyFills();
+      applyReports();
+      // And the question, once this batch has been applied: a question that
+      // ended takes its form and its presentation with it, a different one
+      // starts empty, and the same one keeps both — through close, tab changes,
+      // History selection and resizing alike. Here rather than in a reduction
+      // because publication is the owner's, not a keystroke's.
+      state = askingFor(state, askingNow());
+
       if (departing) {
+        // The configuration job first, before the return below unwinds the scope
+        // that owns the writer and the provider. A save already reaching the
+        // file is seen through to its record and this writer's memory of it; one
+        // still waiting its turn is cancelled and publishes nothing.
+        yield* releasing();
         // Asked for, so there is nothing more to show: the next thing this person
         // sees is their shell. Returning here unwinds the scope that owns the
         // session, the observer, every entry task, the reader and the frame
@@ -712,7 +1726,7 @@ function* drive(
           : viewFor(
               adopting,
               candidate.model,
-              liveOf(current),
+              liveOf(current, preparingOf(admitting), sidekickReading(adopting)),
               drawnAt,
               focused,
               candidate.navigation,
@@ -727,7 +1741,7 @@ function* drive(
           const without = viewFor(
             cleared,
             candidate.model,
-            liveOf(current),
+            liveOf(current, preparingOf(admitting), sidekickReading(cleared)),
             drawnAt,
             focused,
             candidate.navigation,
@@ -766,8 +1780,19 @@ function* drive(
           reading = back.reading;
         }
       }
-      const painted = yield* paint(frames, tree, renderer, screen, compose, fits);
+      const painted = yield* paint(
+        frames,
+        tree,
+        renderer,
+        screen,
+        compose,
+        fits,
+        chatFits,
+        messageFits,
+        guidanceFits,
+      );
       rendered = painted.rendered;
+      presenting = presentedDrawer(painted.view);
       // Focus is read against the view that was committed, which a resize may
       // have rebuilt from the one resolved above.
       const view = painted.view;
@@ -783,8 +1808,19 @@ function* drive(
       state = focusSettled(view, settledFocus, painted.admission);
       if (settledFocus !== focused) {
         focused = settledFocus;
-        const again = yield* paint(frames, tree, renderer, screen, compose, fits);
+        const again = yield* paint(
+          frames,
+          tree,
+          renderer,
+          screen,
+          compose,
+          fits,
+          chatFits,
+          messageFits,
+          guidanceFits,
+        );
         rendered = again.rendered;
+        presenting = presentedDrawer(again.view);
         settledFocus = keyOfFocus(tree);
         state = focusSettled(again.view, settledFocus, again.admission);
         focused = settledFocus;
@@ -855,7 +1891,12 @@ function keyOfFocus(tree: ReplTree<ReplAction>): string | undefined {
  * a recorded position leaves out of it is stated once, in `viewFor`, rather
  * than decided again here.
  */
-function liveOf(session: ReplSession): ReplLive {
+function liveOf(
+  session: ReplSession,
+  preparing?: ReplPreparing,
+  /** What this execution's Sidekick says, where the screen has one. */
+  sidekick?: ReplSidekickReading,
+): ReplLive {
   return {
     output: session.overlay.output,
     question: session.overlay.question,
@@ -864,7 +1905,518 @@ function liveOf(session: ReplSession): ReplLive {
     running: session.live,
     agent: session.agent,
     lifecycle: session.lifecycle,
+    // Only where a submission is actually in flight, because the facts and the
+    // capability come from different owners: the session answers for the entry
+    // it is running, and this screen answers for the submission it has not got
+    // an answer about yet.
+    ...(preparing === undefined ? {} : { preparing }),
+    ...(sidekick === undefined ? {} : { sidekick }),
   };
+}
+
+/** How far one chat's setup got, as its own conversation record says. */
+function setupOf(
+  known: SidekickReading,
+  reading: string | undefined,
+): ReplSidekickSetup | undefined {
+  const found = known.conversations.find((one) => one.id === reading);
+  if (found === undefined) {
+    return undefined;
+  }
+  return Object.freeze({ phase: found.phase, failure: found.failure });
+}
+
+/**
+ * What the Sidekick says, as detached rows the screen can draw.
+ *
+ * Read afresh every time a frame is built, and copied out of the owner's
+ * projection rather than carried: a snapshot held beside the loop would be one
+ * frame behind the chat it is drawing. Only the active conversation's chat, in
+ * record order — a reader is in one conversation, and the earlier ones are its
+ * history rather than its transcript.
+ *
+ * Nothing here is a capability. No handle, no response, no operation and no
+ * writer: a row carries what it says and the root is the only thing that can
+ * act on it.
+ */
+function sidekickReadingOf(
+  owner: SidekickOwner,
+  /** The question this conversation is waiting on, as the screen names it. */
+  question: ReplSidekickQuestion | undefined,
+  /**
+   * The saved chat this location selected, or none to follow the current one.
+   *
+   * The route's, because which chat is read is a route decision and this is
+   * where the two readings are composed. It is validated before a session is
+   * opened and again by every navigation, so a selector that reaches here
+   * names a chat this history actually holds.
+   */
+  selected: string | undefined,
+): ReplSidekickReading {
+  const read = owner.reading;
+  if (!read.ok) {
+    return Object.freeze({
+      chat: Object.freeze([]),
+      turns: Object.freeze([]),
+      busy: owner.busy,
+      agent: owner.agent,
+      refusal: read.error.message,
+      question,
+      // An unreadable history says nothing about what was asked for or applied.
+      // Reporting a remembered preference beside a refusal would be reporting
+      // it out of a history this process can no longer read.
+      requested: undefined,
+      verified: undefined,
+      conversation: undefined,
+      reading: undefined,
+      // An unreadable history establishes no chat's setup either.
+      setup: undefined,
+      // There is no chat to be current, and nothing a location may name: a
+      // refusal is carried through as the refusal it is rather than as an
+      // execution that happens to hold no conversations.
+      current: true,
+      availability: Object.freeze({
+        chats: Object.freeze([]),
+        sessions: Object.freeze([]),
+        refusal: read.error.message,
+      }),
+    });
+  }
+  const active = read.value.active;
+  // Which chat these rows are of. The selector pins it; omission follows the
+  // current association, which is what a person who has not chosen is reading.
+  const reading = selected ?? active;
+  return Object.freeze({
+    chat: sidekickChatRows(read.value, owner.previewing),
+    turns: sidekickTurnRows(read.value, owner.live),
+    busy: owner.busy,
+    // The agent of the chat being read, which is that chat's own: a
+    // conversation never changes agent in place, so an older one says what
+    // actually answered in it rather than what is selected now.
+    agent: read.value.conversations.find((one) => one.id === reading)?.agent ?? owner.agent,
+    refusal: undefined,
+    question,
+    // What was asked for, read back out of the history rather than out of
+    // anything this process remembered.
+    requested: requestedBy(read.value, active),
+    // And what an agent was actually verified on, which is Core's own saved
+    // account of a turn that started. Two different facts, shown as two.
+    verified: read.value.conversations.find((one) => one.id === active)?.verified,
+    conversation: active,
+    reading,
+    // The setup facts of the chat being read, which an older or interrupted
+    // one carries as much as the current one does.
+    setup: setupOf(read.value, reading),
+    // Omission follows the current chat, so it is always current — including
+    // before this Sidekick has opened one at all, where the composer is for
+    // the conversation the first message would establish. An explicit selector
+    // is current only where it names the actual active association; every
+    // other saved chat is a reading of acknowledged history and is read-only.
+    current: selected === undefined || selected === active,
+    availability: sidekickAvailability(read.value, owner.observed, owner.live),
+  });
+}
+
+/**
+ * What a location may name about one Sidekick reading.
+ *
+ * One function for the cold validation before a session is opened and for the
+ * running screen, so a key a filter offers is a key a location resolves and a
+ * chat a row opens is a chat a copied location reopens.
+ *
+ * Saved chats come from this history's own order. Provider conversations come
+ * from the saved turns that actually name one, then from this owner's exact
+ * live facts — an ephemeral key stays known for the owner's lifetime so a
+ * selected filter does not become guessed emptiness when its attempt stops,
+ * and a cold reader of the files establishes none of it.
+ */
+function sidekickAvailability(
+  known: SidekickReading,
+  observed: readonly string[] = [],
+  live: SidekickLiveTurn | undefined = undefined,
+): ReplSidekickAvailability {
+  const sessions: string[] = [];
+  for (const turn of known.turns) {
+    if (turn.sessionKey !== undefined && !sessions.includes(turn.sessionKey)) {
+      sessions.push(turn.sessionKey);
+    }
+  }
+  for (const key of [...observed, ...(live?.sessionKey === undefined ? [] : [live.sessionKey])]) {
+    if (!sessions.includes(key)) {
+      sessions.push(key);
+    }
+  }
+  return Object.freeze({
+    chats: Object.freeze(known.conversations.map((one) => one.id)),
+    sessions: Object.freeze(sessions),
+    refusal: undefined,
+  });
+}
+
+/**
+ * The Sessions rows one Sidekick reading and the turn in flight compose into.
+ *
+ * Exported for the same reason the chat rows are: this is where the screen's
+ * own account of a Sidekick turn is decided — which rows exist, and which of
+ * them are the same item — and that is worth checking without a
+ * terminal under it.
+ *
+ * The live row carries the response it was registered under, and a saved turn
+ * that produced an evaluated reply carries that same response from its own
+ * record — so one turn is one row from the moment it began to the account that
+ * replaces it, with nothing inferred. A saved turn with no response record is
+ * addressed by the turn it was, except while this process is the one that
+ * attempted it: then the row somebody is already watching keeps its identity,
+ * which is the same bridge the chat rows use.
+ */
+export function sidekickTurnRows(
+  known: SidekickReading,
+  live: SidekickLiveTurn | undefined,
+): readonly ReplSidekickTurnRow[] {
+  const addressed =
+    live !== undefined && live.turn !== null
+      ? { conversation: live.conversation, turn: live.turn, response: live.response }
+      : undefined;
+  const rows: ReplSidekickTurnRow[] = known.turns.map((turn) => {
+    const own =
+      turn.reply?.response ??
+      (addressed !== undefined &&
+      addressed.conversation === turn.conversation &&
+      addressed.turn === turn.turn
+        ? addressed.response
+        : undefined);
+    const failed = turn.status !== "completed" || turn.reply?.failure !== undefined;
+    return Object.freeze({
+      key:
+        own === undefined
+          ? `sidekick:turn:${turn.conversation}:${turn.turn}`
+          : `sidekick:${turn.conversation}:${own}`,
+      conversation: turn.conversation,
+      agent: turn.agent,
+      turn: turn.turn,
+      title: titleOf(turn.asked, turn.title),
+      state: savedState(turn),
+      running: false,
+      failed,
+      sessionKey: turn.sessionKey,
+      // What it said to a person: the evaluated Output where a reply recorded
+      // one, and the literal Output of what an unfinished attempt streamed.
+      // Never its source, its chapters or its feedback envelope.
+      text: turn.reply?.hasOutput === true ? turn.reply.output : (turn.incomplete?.output ?? ""),
+      failure: turn.reply?.failure ?? turn.incomplete?.failure,
+    });
+  });
+  if (live === undefined) {
+    return Object.freeze(rows);
+  }
+  // The turn in flight, where the acknowledged history does not already hold
+  // the row it belongs to. One row either way: the live row carries the key
+  // its acknowledged counterpart will, so the two are never both drawn.
+  const key = `sidekick:${live.conversation}:${live.response}`;
+  if (!rows.some((row) => row.key === key)) {
+    rows.push(
+      Object.freeze({
+        key,
+        conversation: live.conversation,
+        agent: live.agent,
+        turn: live.turn,
+        title: titleOf(live.asked, live.title),
+        state:
+          live.phase === "pending"
+            ? "asking"
+            : live.phase === "generating"
+              ? "generating"
+              : "evaluating the reply",
+        running: true,
+        failed: false,
+        sessionKey: live.sessionKey,
+        text: live.output,
+        failure: undefined,
+      }),
+    );
+  }
+  return Object.freeze(rows);
+}
+
+/** What one Sidekick turn is called, from what it was actually asked for. */
+function titleOf(asked: "person" | "automatic" | undefined, title: string | undefined): string {
+  if (asked === "automatic") {
+    // Agent work, said as agent work. Its request is this host's own account of
+    // what a previous reply did, so it is labelled and never quoted.
+    return "Automatic feedback";
+  }
+  // A turn whose request this history cannot bound says so. Substituting the
+  // most recent message would attribute somebody's words to a turn that may
+  // never have carried them.
+  return title ?? "(request not recorded)";
+}
+
+/**
+ * How far one saved Sidekick turn got, in words a reader can act on.
+ *
+ * Three answers, because those are the three a reader has to tell apart. A
+ * turn that failed or was cancelled is that, in its own terms. A turn whose
+ * evaluated reply was recorded is the result they came for. And a completed
+ * turn with no evaluated-response record is neither: the provider finished and
+ * nothing says the program it returned was ever run, so the row says exactly
+ * that rather than reporting a reply nobody recorded.
+ */
+function savedState(turn: SidekickSavedTurn): string {
+  if (turn.status !== "completed") {
+    return turn.status;
+  }
+  if (turn.reply === undefined) {
+    return SAVED_WITHOUT_REPLY;
+  }
+  return turn.reply.failure === undefined ? "completed" : "reply failed";
+}
+
+/**
+ * The chat rows one reading and whatever is being said right now compose into.
+ *
+ * Exported because this is where the screen's own account of a response is
+ * decided — which rows exist, and which of them are the same item — and that
+ * is worth checking without a terminal under it. It reads facts and
+ * returns frozen display data: no record, no handle, no writer, no source.
+ */
+export function sidekickChatRows(
+  known: SidekickReading,
+  /** What the response in flight is saying, where one is saying anything. */
+  previewing: SidekickPreview | undefined,
+): readonly ReplSidekickChatRow[] {
+  const active = known.active;
+  /**
+   * The item this process already has on the screen for a saved attempt.
+   *
+   * Display bookkeeping and nothing else: a failed turn produces no response
+   * record, so the only thing that can keep the row somebody is already
+   * watching is this process's own memory of which response it registered for
+   * the request that became that turn. Acknowledgement says what the item is
+   * showing; it does not rename it. A reader without a live item of its own —
+   * a cold reopen, another command — has none of this and addresses the same
+   * attempt by the turn it was, which is truthful and distinct either way.
+   *
+   * It names one conversation as well as one turn. Every chat is composed here,
+   * each numbering its turns from one, so a name matched on the number alone
+   * would reach the same ordinal in an older chat — and an older chat whose
+   * message and turn counts diverged may already hold a saved reply under
+   * exactly that response.
+   */
+  const addressed =
+    previewing !== undefined && previewing.conversation === active && previewing.turn !== null
+      ? {
+          conversation: previewing.conversation,
+          turn: previewing.turn,
+          response: previewing.response,
+        }
+      : undefined;
+  const chat: ReplSidekickChatRow[] = known.chat
+    // Every chat, because which of them is drawn is the reading the location
+    // selects: an older chat is read-only and still has to be readable, and a
+    // list filtered to the active association could not show one.
+    .map((item) => {
+      if (item.kind === "incomplete") {
+        // What that turn actually streamed, read as a root by the pure preview
+        // reader. The record crossed the durable disclosure gate on its way in,
+        // so projecting it starts no scan, no provider and no write — and what
+        // comes out is literal Output or nothing, never source.
+        const projected = previewGeneratedXmdRoot(item.text);
+        return Object.freeze({
+          // The item this attempt is already being shown in, where this process
+          // is the one that attempted it in this chat, and otherwise the saved
+          // turn's own identity. A response name is never *recovered* from a
+          // turn, and never carried across chats: the
+          // owner names a response from the history's own next ordinal, which
+          // counts saved requests as well as attempted turns, and Core numbers
+          // its turns independently — so an interrupted message is all it takes
+          // for the two to differ, and inferring one from the other hands this
+          // attempt somebody else's row.
+          key:
+            addressed !== undefined &&
+            addressed.conversation === item.conversation &&
+            addressed.turn === item.turn
+              ? itemKey(item.conversation, addressed.response)
+              : attemptKey(item.conversation, item.turn),
+          conversation: item.conversation,
+          turn: item.turn,
+          kind: item.kind,
+          text: projected.ok ? projected.value.output : "",
+          hasOutput: false,
+          failure: item.failure,
+          // The request this attempt failed, where the history can establish
+          // which one it was. Asked of the same resolver the activation will
+          // use, so a row that offers a retry is a row whose retry can start.
+          ...retryOf(known, item.conversation, item.turn),
+        });
+      }
+      if (item.kind === "saved") {
+        // A turn the provider finished and whose evaluated reply nobody
+        // recorded. Addressed by the turn it was, because that is the only
+        // thing its own records hold: there is no response record to name it
+        // by, and the response this process registered is this process's name.
+        return Object.freeze({
+          key: `chat:${item.conversation}:turn:${item.turn}:saved`,
+          conversation: item.conversation,
+          turn: item.turn,
+          kind: item.kind,
+          text: item.status,
+          hasOutput: false,
+          failure: undefined,
+          automatic: item.automatic,
+        });
+      }
+      return Object.freeze({
+        key:
+          item.kind === "person"
+            ? messageKey(item.conversation, item.message)
+            : itemKey(item.conversation, item.response),
+        conversation: item.conversation,
+        turn: item.turn,
+        kind: item.kind,
+        text: item.text,
+        hasOutput: item.kind === "reply" ? item.hasOutput : false,
+        // The reply's own retained failure, carried through rather than
+        // dropped. Whether a failure is visible is a fact about the evaluation,
+        // so it cannot depend on whether the response that failed happened to
+        // select any Output.
+        failure: item.kind === "reply" ? item.failure : undefined,
+        // And the request it answered, where this history establishes one: a
+        // reply that says nothing to a person draws no row of its own, and the
+        // request is the visible thing a reader sent to that turn can be shown.
+        ...(item.kind === "reply" ? requestOf(known, item.conversation, item.turn) : {}),
+      });
+    });
+  // What the response in flight is saying, where the acknowledged history does
+  // not already hold the item it belongs to. One item either way: a live row
+  // carries the key its acknowledged counterpart will, so the two are never
+  // both mounted.
+  if (previewing !== undefined && previewing.conversation === active) {
+    // Its own identity, settled before the request was handed over and never
+    // changed by what became of it: the saved account above takes this row's
+    // place by being *in* it, which is why this one is simply not drawn again.
+    const key = itemKey(previewing.conversation, previewing.response);
+    if (!chat.some((row) => row.key === key)) {
+      chat.push(
+        Object.freeze({
+          key,
+          conversation: previewing.conversation,
+          turn: previewing.turn,
+          kind: "preview",
+          text: previewing.output,
+          hasOutput: true,
+          failure: undefined,
+          incomplete: previewing.incomplete,
+        }),
+      );
+    }
+  }
+  return Object.freeze(chat);
+}
+
+/**
+ * One attempt's own identity on the screen, by the turn it was.
+ *
+ * A saved turn is the only thing a reader can address a failed attempt by when
+ * it has no live item for it: the attempt produced no response record, and the
+ * response the owner had registered is this process's own name rather than
+ * anything the history holds. So a cold reopen, or any other command reading
+ * this history, says this — and says it of an attempt whichever response the
+ * process that made it had in mind.
+ */
+function attemptKey(conversation: string, turn: number): string {
+  return `chat:${conversation}:turn:${turn}:incomplete`;
+}
+
+/**
+ * One response's own identity on the screen, from its first word to its reply.
+ *
+ * Process-local view data. The response is registered before the request is
+ * handed over and is what the reply records, so Preview, the evaluation and
+ * that reply are one item without anything being inferred. It names nothing
+ * durable, and it is not a turn — an attempt it ends up showing stays in this
+ * item while this process is showing it, and is addressed by the turn it was
+ * by everyone else, because that is what its own record holds.
+ */
+function itemKey(conversation: string, response: string): string {
+  return `chat:${conversation}:${response}`;
+}
+
+/** One saved message's own identity on the screen, by the ID it was written with. */
+function messageKey(conversation: string, message: number): string {
+  return `chat:${conversation}:message:${message}`;
+}
+
+/**
+ * The person request one reply answered, as the row that holds it.
+ *
+ * For the reveal a Sessions selection asks for, and for nothing else. A
+ * successful reply that said nothing to a person has no row of its own, so the
+ * visible associated context is the request it answered — its own, or, for a
+ * turn carrying a previous response's results, the person request that chain
+ * began with. Read from the projection's own request boundaries rather than
+ * matched on text or ordinal, and absent wherever the history cannot bound it.
+ */
+function requestOf(
+  known: SidekickReading,
+  conversation: string,
+  turn: number,
+): { readonly request?: string } {
+  const answered = known.answers.find(
+    (one) => one.conversation === conversation && one.turn === turn,
+  );
+  return answered === undefined ? {} : { request: messageKey(conversation, answered.message) };
+}
+
+/**
+ * The saved request one failed turn belongs to, where that is established.
+ *
+ * Nothing where it is not. A turn whose association is unknown, one that did
+ * not fail, or one whose conversation is no longer being continued offers no
+ * retry — so a row that shows the control is a row whose control can start,
+ * rather than one that refuses when it is pressed.
+ */
+function retryOf(
+  known: SidekickReading,
+  conversation: string,
+  turn: number,
+): { readonly retry?: { readonly conversation: string; readonly message: number } } {
+  const asked = known.chat.find(
+    (item) => item.kind === "person" && item.conversation === conversation && item.turn === turn,
+  );
+  if (asked === undefined || asked.kind !== "person") {
+    return {};
+  }
+  return retryable(known, conversation, asked.message).ok
+    ? { retry: { conversation, message: asked.message } }
+    : {};
+}
+
+/** What one conversation has been asked to run under, where it has been. */
+function requestedBy(
+  known: SidekickReading,
+  conversation: string | undefined,
+): SessionConfiguration | undefined {
+  const asked = known.preferences;
+  if (conversation === undefined || asked === undefined || asked.conversation !== conversation) {
+    return undefined;
+  }
+  const request: SessionConfiguration = {
+    ...(asked.model === null ? {} : { model: asked.model }),
+    ...(asked.effort === null ? {} : { effort: asked.effort }),
+  };
+  return request.model === undefined && request.effort === undefined ? undefined : request;
+}
+
+/**
+ * What the screen says about the submission in flight, if there is one.
+ *
+ * Read from the reservation each time rather than stored beside it: the
+ * reservation is the one record of what is being prepared, and a copy of its
+ * pause request would be a second answer to "has this been asked to stop".
+ */
+function preparingOf(admitting: Admitting): ReplPreparing | undefined {
+  const held = admitting.held;
+  return held === undefined ? undefined : { requested: held.pausing };
 }
 
 /** The view for the state that stands, or a refusal naming why there is none. */
@@ -874,10 +2426,26 @@ function* build(
   session: ReplSession,
   size: ReplTerminalSize,
   focused: string | undefined,
+  preparing?: ReplPreparing,
+  /**
+   * What this execution's Sidekick says, read when the frame is asked for.
+   *
+   * The reading rather than the owner: naming the pending question is the
+   * loop's, because the name has to be the same one every frame and every
+   * action uses, and only the loop holds that mapping.
+   */
+  sidekick?: ReplSidekickReading,
 ): Operation<ReplView> {
   // Both halves from the reading that was resolved, never from the session
   // again. A resize recomposes at a new size, not at a new snapshot.
-  const view = viewFor(state, reading.model, liveOf(session), size, focused, reading.navigation);
+  const view = viewFor(
+    state,
+    reading.model,
+    liveOf(session, preparing, sidekick),
+    size,
+    focused,
+    reading.navigation,
+  );
   return view.ok ? view.value : refusedView(state, view.error.message, size);
 }
 
@@ -975,8 +2543,6 @@ function isObject(value: Json): value is { [key: string]: Json } {
 
 /** What performing one intent produced. */
 interface Performed {
-  /** Whether a submission admitted one more entry into this session. */
-  readonly submitted?: true;
   /**
    * The exact object a question took, when one did and is now over.
    *
@@ -991,6 +2557,17 @@ interface Performed {
    * state so the form a person is looking at can say what is wrong with it.
    */
   readonly messages?: readonly ReplFormMessage[];
+  /**
+   * Whether the Sidekick's own question took the object it was given.
+   *
+   * A flag rather than the object, unlike the entry's: an entry's answer
+   * appends a record this screen then focuses, and the Sidekick's is delivered
+   * to the reply by the existing feedback cycle — there is nothing here for the
+   * screen to go and find.
+   */
+  readonly askingAnswered?: true;
+  /** Why the Sidekick's form is not yet an answer, for the form to say. */
+  readonly askingMessages?: readonly ReplFormMessage[];
   /**
    * The turn a permission request was really settled for, when one was.
    *
@@ -1022,6 +2599,20 @@ interface Performed {
    * the action somebody took and stands until they take another.
    */
   readonly refusedByReadiness?: true;
+  /**
+   * Whether this action changed which controls the screen offers.
+   *
+   * Reported so the loop can mount them before it dispatches the next event of
+   * the same burst. A burst is one frame — that is what keeps a paste from
+   * drawing a hundred of them — but it is *not* one tree: a person who presses
+   * Run and reaches straight back for Pause sends both keys before anything is
+   * drawn, and a tree still describing the screen as it was before Run would
+   * answer the second key with whatever control used to be there.
+   *
+   * Only the actions that change the offer report it. Nothing is redrawn and no
+   * frame is acknowledged; the batch still owns the frame it paints at the end.
+   */
+  readonly remounted?: true;
 }
 
 /**
@@ -1038,6 +2629,84 @@ function* perform(
   execution: ReplExecution,
   options: ReplProgramOptions,
   wakes: Wakes,
+  /**
+   * The draft facts the gate decides on, as the reduction that produced this
+   * intent saw them. Carried rather than re-derived: a root that read the draft
+   * again could reserve a different text from the one the person submitted.
+   */
+  facts: DraftFacts,
+  /** The slot, which the loop owns. */
+  admitting: Admitting,
+  /** What a reopened history still requires, and the state as it stands. */
+  reopening: Reopening,
+  /**
+   * This execution's Sidekick, and the one cycle the screen reserves for it.
+   *
+   * The owner is handed in rather than reached: the loop acquired it and the
+   * loop owns the task its work is spawned on, so this performs the asking and
+   * owns neither the conversation nor the slot.
+   */
+  chat: {
+    readonly owner: SidekickOwner;
+    /**
+     * Take the one message cycle, or say why it cannot be taken.
+     *
+     * A reason rather than a flag, because a person whose action does nothing
+     * has to be told which of the Sidekick's own jobs is in the way.
+     */
+    reserve(held: Instruction): string | undefined;
+    /** Give it back, however the cycle ended. */
+    release(): void;
+    /** Say why the Sidekick refused, on the next pass of the loop. */
+    refuse(refusal: string): void;
+    /**
+     * Start one explicit configuration job, or say why it cannot start.
+     *
+     * Reserved synchronously before anything is spawned: two activations in one
+     * input burst find the job taken rather than both starting, and a person
+     * whose action refuses is told rather than left watching a queue.
+     */
+    admit(
+      kind: "inspect" | "save" | "replace",
+      conversation: string | undefined,
+      work: () => Operation<void>,
+    ): Operation<string | undefined>;
+    /**
+     * The pending question this key names, or none because it names no longer.
+     *
+     * The root's own mapping, asked rather than carried: which object a name
+     * belongs to is the loop's, and a copy handed down here would answer for a
+     * question that had already ended.
+     */
+    asked(question: string): ReplQuestion | undefined;
+    /** Apply what an explicit inspection advertised, for the conversation it was read of. */
+    inspected(
+      conversation: string | undefined,
+      model: string | undefined,
+      read: Result<AgentOptions>,
+    ): void;
+    /** Say in the drawer why an explicit action could not start at all. */
+    unavailable(conversation: string | undefined, reason: string): void;
+    /**
+     * Apply what a preference save answered: closes on success, says why on failure.
+     *
+     * The selection that asked travels rather than the values it asked with: a
+     * drawer reopened on the saved preference holds the same values, and an
+     * answer may not close it.
+     */
+    saved(conversation: string | undefined, revision: number, answer: Result<void>): void;
+    /** Apply what a replacement answered, for the selection that asked for it. */
+    replaced(conversation: string | undefined, revision: number, answer: Result<void>): void;
+    /**
+     * The exact text of the saved failed request this names, or why not.
+     *
+     * Resolved here, against the history as it stands, and reserving the one
+     * message cycle in the same breath: a retry that resolved its text and then
+     * waited would be sending whatever that message id meant by the time it
+     * started.
+     */
+    retrying(conversation: string, message: number): Result<string>;
+  },
 ): Operation<Performed> {
   switch (intent.kind) {
     case "none":
@@ -1047,14 +2716,82 @@ function* perform(
       // person leaving has not decided anything that was waiting, and an entry
       // whose root never closed stays unfinished because that is what it is.
       return { exited: true };
-    case "pause":
-      session.controller?.pause();
+    case "pause": {
+      // The live entry first, always. An entry that is already expanding keeps
+      // its own control, so a submission sitting refused behind it cannot
+      // retarget Pause at a successor — and the reservation below is only ever
+      // the target while there is no expansion to stop.
+      const expanding = session.controller;
+      if (expanding !== undefined) {
+        expanding.pause();
+        wakes.send({ kind: "session" });
+        return {};
+      }
+      if (admitting.held !== undefined) {
+        // Recorded against the exact reservation, and read again when that
+        // submission's entry starts. Asking twice records the same request, so
+        // Pause is idempotent; it withdraws nothing and cancels no work.
+        admitting.held.pausing = true;
+        wakes.send({ kind: "session" });
+        // The row beside Pause now says `pausing` rather than `preparing`, and
+        // the next event in this burst is dispatched against what is mounted.
+        return { remounted: true };
+      }
+      // Neither a live expansion nor a preparation: the reduction refuses this
+      // before it reaches here, so there is nothing to ask and nothing to say.
       wakes.send({ kind: "session" });
       return {};
+    }
     case "continue":
       session.controller?.resume();
       wakes.send({ kind: "session" });
       return {};
+    case "send-message": {
+      // Synchronously, before anything is spawned: a second Send arriving in
+      // the same input burst finds the cycle held and asks for nothing. One
+      // conversation takes one turn at a time, and queueing a second would be
+      // sending a message nobody could still see the answer to in order.
+      const blocked = chat.reserve(intent.held);
+      if (blocked !== undefined) {
+        // Said rather than silently dropped, and said *before* anything is
+        // written: a message refused after its record was retained is a message
+        // this history claims somebody sent.
+        return { refusal: blocked };
+      }
+      // On the loop's own task, so the keyboard comes back immediately. A
+      // provider turn, an admission waiting on an entry and a reply's controls
+      // all suspend, and a person must be able to keep typing, press Stop or
+      // walk back through their history while they do.
+      yield* spawn(function* (): Operation<void> {
+        try {
+          const sent = yield* chat.owner.message(intent.text);
+          if (!sent.ok) {
+            // An ordinary refusal — a busy conversation, an unreadable
+            // history, feedback whose acceptance cannot be established — is
+            // said beside the chat rather than raised. The message box keeps
+            // what was typed, because nothing was saved.
+            chat.refuse(sent.error.message);
+          }
+        } finally {
+          chat.release();
+          wakes.send({ kind: "session" });
+        }
+      });
+      // The row beside the box is `[stop]` now rather than `[send]`, and the
+      // next event in this burst is dispatched against what is mounted.
+      return { remounted: true };
+    }
+    case "stop-sidekick": {
+      // Spawned for the same reason Send is: Stop joins everything the
+      // Sidekick had in flight — the generation, the response's controls, the
+      // wait for an entry's outcome — and returns only once all of it has come
+      // down. A person who pressed it keeps a usable keyboard while it does.
+      yield* spawn(function* (): Operation<void> {
+        yield* chat.owner.stop();
+        wakes.send({ kind: "session" });
+      });
+      return { remounted: true };
+    }
     case "answer": {
       // An object the schema rejects is not an answer: the question stays open,
       // nothing is appended, and the drawer stays up holding what was filled in
@@ -1072,6 +2809,112 @@ function* perform(
         ? { answered: outcome.answer }
         : { messages: reported(outcome) };
     }
+    case "answer-sidekick": {
+      // The one question this key names, checked here and nowhere else. A key
+      // for a question that has since been answered, withdrawn or replaced
+      // names nothing — so a keystroke that arrived late submits nothing rather
+      // than answering whatever is open now with values typed for something
+      // else.
+      const asked = chat.asked(intent.question);
+      wakes.send({ kind: "session" });
+      if (asked === undefined) {
+        return {};
+      }
+      // The schema decides, through the same compiled validator the request
+      // carries, and the existing canonical operation writes the answer. This
+      // reads no form and judges no value.
+      const outcome = asked.submit(intent.values);
+      return outcome.kind === "answered"
+        ? { askingAnswered: true }
+        : { askingMessages: reported(outcome) };
+    }
+    case "inspect-configuration": {
+      const asked = intent.model;
+      const refused = yield* chat.admit("inspect", intent.conversation, function* () {
+        // Explicitly asked for, and it is the one thing here that really
+        // contacts the agent: the provider takes a session of its own for it,
+        // sends no prompt and journals nothing. The model travels because
+        // effort belongs to one: asked about a model, the agent answers with
+        // that model's levels.
+        const read = yield* chat.owner.options(asked === undefined ? undefined : { model: asked });
+        chat.inspected(intent.conversation, asked, read);
+      });
+      if (refused !== undefined) {
+        // Said in the drawer, which is what the person pressed: a reason that
+        // appeared beside the chat instead would read as the control doing
+        // nothing at all.
+        chat.unavailable(intent.conversation, refused);
+        wakes.send({ kind: "session" });
+        return {};
+      }
+      return { remounted: true };
+    }
+    case "save-configuration": {
+      const desired = {
+        ...(intent.model === undefined ? {} : { model: intent.model }),
+        ...(intent.effort === undefined ? {} : { effort: intent.effort }),
+      };
+      const refused = yield* chat.admit("save", intent.conversation, function* () {
+        // A record in this history and nothing else: no handle, no provider
+        // call and no turn. So it is taken while a message cycle runs, and the
+        // turn already in flight keeps the settings it was handed.
+        const saved = yield* chat.owner.configure(desired);
+        chat.saved(intent.conversation, intent.revision, saved);
+      });
+      if (refused !== undefined) {
+        chat.unavailable(intent.conversation, refused);
+        wakes.send({ kind: "session" });
+        return {};
+      }
+      return { remounted: true };
+    }
+    case "replace-agent": {
+      const refused = yield* chat.admit("replace", intent.conversation, function* () {
+        // Stop first, and joined, whenever there is something running. An
+        // established conversation never changes agent in place, so what was in
+        // flight has to come down before another conversation starts — and
+        // `select()` refuses outright while it is still up, which is why this
+        // waits rather than trying and reporting the refusal.
+        if (chat.owner.busy) {
+          yield* chat.owner.stop();
+        }
+        // Explicitly a new conversation. The old chat and its association stay
+        // where they are; a failed setup leaves the old one active and says why.
+        const switched = yield* chat.owner.select(intent.agent);
+        chat.replaced(intent.conversation, intent.revision, switched);
+      });
+      if (refused !== undefined) {
+        chat.unavailable(intent.conversation, refused);
+        wakes.send({ kind: "session" });
+        return {};
+      }
+      return { remounted: true };
+    }
+    case "retry-message": {
+      // The same one cycle a Send reserves, synchronously and before anything
+      // is spawned: a second Retry in the same burst finds it held.
+      const asked = chat.retrying(intent.conversation, intent.message);
+      if (!asked.ok) {
+        return { refusal: asked.error.message };
+      }
+      yield* spawn(function* (): Operation<void> {
+        try {
+          const sent = yield* chat.owner.message(asked.value);
+          if (!sent.ok) {
+            chat.refuse(sent.error.message);
+          } else if (sent.value.failure !== undefined) {
+            // An answered call is not an answered request: a successful Result
+            // may carry a turn that failed, and saying otherwise would report a
+            // retry that did not happen.
+            chat.refuse(sent.value.failure);
+          }
+        } finally {
+          chat.release();
+          wakes.send({ kind: "session" });
+        }
+      });
+      return { remounted: true };
+    }
     case "settle-permission": {
       // The authority's answer, once. It is asked here and nowhere else: a
       // surface that could settle a request would hold the capability that
@@ -1088,38 +2931,90 @@ function* perform(
       return settled ? { settled: intent.turn } : {};
     }
     case "submit": {
-      // The session this command already owns, rather than a second one. It
-      // holds the one observer on the file and the one entry task, so an entry
-      // is admitted *into* it — there is nothing here to watch again.
-      const submitted = yield* session.submit(intent.source);
-      wakes.send({ kind: "session" });
-      if (!submitted.ok) {
-        // A refusal leaves the draft exactly as it was and the history as it
-        // was: nothing was admitted, so there is nothing to undo.
-        //
-        // Two different refusals arrive here and only one of them goes stale.
-        // The readiness refusing is true of a moment: the entry it named
-        // finishes and it stops being true. A document that cannot be admitted
-        // is true of the document, and readiness moving on does not make it
-        // admissible — dropping that one would take away the only explanation of
-        // why the draft is still sitting there.
-        //
-        // Read from the structural mark the throw site installed, not from the
-        // class and not from the name: `instanceof` answers no across loaded
-        // copies, and `name` is writable, so any error at all could claim to be
-        // a refusal this session never gave.
-        //
-        // And the *reason* comes from the mark as well, not from `message`. The
-        // mark carries the sentence the session normalized when it refused;
-        // `message` is an ordinary writable property that anything holding the
-        // error can change afterwards. Showing one and authenticating the other
-        // would let the screen display text the session never said.
-        const readiness = lifecycleRefusal(submitted.error);
-        return readiness === undefined
-          ? { refusal: submitted.error.message }
-          : { refusal: readiness, refusedByReadiness: true };
+      // The slot first, and synchronously: nothing between this decision and
+      // the reservation suspends, so a second submitter arriving in the same
+      // turn finds the slot held rather than taking it alongside.
+      if (reopening.blocked !== undefined) {
+        // The two files disagree about what became of a reservation a previous
+        // process took, and admitting on top of that would be choosing between
+        // them. The draft stays exactly where it is.
+        return { refusal: reopening.blocked };
       }
-      return { submitted: true };
+      // Named from the acknowledged history as it stands, which is what a
+      // reopening reconciles the reservation against — and the same basis the
+      // Sidekick reserves on, so the two submitters cannot disagree about what
+      // the next entry is called. Not `session.model`: that is the projection
+      // of wherever this session was opened, and merely having opened at an
+      // earlier position does not rename the next entry.
+      const acknowledged = session.reading(undefined);
+      if (!acknowledged.ok) {
+        // Read and refused, before the slot is touched. A history this process
+        // cannot read is not an empty one.
+        return { refusal: acknowledged.error.message };
+      }
+      const preceding = acknowledged.value.model.entries.length;
+      const taken = take(
+        "person",
+        facts,
+        {
+          entry: entryKey(preceding + 1),
+          ordinal: preceding,
+        },
+        admitting,
+      );
+      if (!taken.ok) {
+        return { refusal: taken.error.message };
+      }
+      const held = taken.value;
+      // Spawned, so the loop returns to the keyboard now. Preflight suspends —
+      // a component read, an import, a provider — and the person who pressed
+      // Run must be able to keep typing, press Stop, or walk back through the
+      // history while it does.
+      //
+      // Attached to the loop's own task rather than to this call, so the work
+      // outlives the keystroke that asked for it and dies with the command.
+      yield* spawn(function* () {
+        // The session this command already owns, rather than a second one. It
+        // holds the one observer on the file and the one entry task, so an
+        // entry is admitted *into* it — there is nothing here to watch again.
+        //
+        // Readiness stays the session's to answer, and it answers it again at
+        // the moment the entry actually starts. This gate decided the slot and
+        // the draft; it does not hold a second opinion about whether the entry
+        // before this one has finished.
+        // The pause request goes with the submission, as a question the entry
+        // asks when it starts rather than a flag copied now: Pause can be
+        // pressed throughout the preflight this call is about to suspend in.
+        // Before the entry this action is about to admit, so the question the
+        // next process would ask is answered while its answer is still
+        // findable. It submits nothing and re-runs nothing.
+        yield* reopening.settle();
+        const submitted = yield* session.submit(
+          held.source,
+          () => held.pausing,
+          // Asked at the entry's actual start, against the draft as it is by
+          // then. Everything the reservation rested on can have moved while the
+          // preflight was suspended — the person may have walked to a frozen
+          // position or typed into the draft — and admitting on the strength of
+          // the earlier answer admits what nobody is asking for any more.
+          () => stillAdmissible(held, reopening.facts()),
+        );
+        admitting.reported.push(
+          submitted.ok
+            ? { kind: "admitted", held, submission: submitted.value }
+            : {
+                kind: "refused",
+                held,
+                refusal: lifecycleRefusal(submitted.error) ?? submitted.error.message,
+                byReadiness: lifecycleRefusal(submitted.error) !== undefined,
+              },
+        );
+        wakes.send({ kind: "session" });
+      });
+      // The slot is held, so Pause has a target: the control has to be mounted
+      // before the next event of this burst is dispatched, or a person who
+      // pressed Run and reached straight back for Pause reaches past it.
+      return { remounted: true };
     }
   }
 }
@@ -1158,9 +3053,22 @@ function* paint(
   screen: ReplScreen,
   compose: ReplCompose,
   store?: ReplFitStore,
+  chat?: ReplPlainFitStore,
+  message?: ReplPlainFitStore,
+  guidance?: ReplPlainFitStore,
 ): Operation<ReplPainted> {
   while (true) {
-    const painted = yield* prepared(frames, tree, renderer, screen, compose, store);
+    const painted = yield* prepared(
+      frames,
+      tree,
+      renderer,
+      screen,
+      compose,
+      store,
+      chat,
+      message,
+      guidance,
+    );
     if (painted !== undefined) {
       return painted;
     }
@@ -1184,6 +3092,9 @@ function* prepared(
   screen: ReplScreen,
   compose: ReplCompose,
   store?: ReplFitStore,
+  chat?: ReplPlainFitStore,
+  message?: ReplPlainFitStore,
+  guidance?: ReplPlainFitStore,
 ): Operation<ReplPainted | undefined> {
   return yield* scoped(function* (): Operation<ReplPainted | undefined> {
     const held = yield* frames.subscribe({ owner: "repl", participants: [["repl"]] });
@@ -1213,6 +3124,9 @@ function* prepared(
         undefined,
         () => screen.size(),
         store,
+        chat,
+        message,
+        guidance,
       );
       if (committed.ok) {
         // 5. Present the copied bytes. 6. The caller retains the returned map.
@@ -1335,11 +3249,14 @@ export function* commitReplFrame(
    */
   sizeNow?: () => Operation<ReplTerminalSize>,
   store?: ReplFitStore,
+  chat?: ReplPlainFitStore,
+  message?: ReplPlainFitStore,
+  guidance?: ReplPlainFitStore,
 ): Operation<Result<ReplCommitted>> {
   // Measure before anything is mounted: this asks the engine how much room each
   // region has, so what a window shows is the frame's answer rather than this
   // boundary's guess. It mounts nothing and publishes nothing.
-  const prepared = yield* prepareFrame(renderer, view, store);
+  const prepared = yield* prepareFrame(renderer, view, store, chat, message, guidance);
   if (!prepared.ok) {
     return prepared;
   }
@@ -1430,6 +3347,12 @@ function drawnBoxesOf(
   return found;
 }
 
+/** The chat window this frame published, or a name nothing measured. */
+function sidekickViewportOf(manifest: ReplLayoutManifest): string {
+  const slot = manifest.viewports.find((one) => one.window === SIDEKICK_WINDOW);
+  return slot === undefined ? "box:no-chat-window" : slot.id;
+}
+
 /** What one bounded preparation measured, and the frame it decided on. */
 export interface ReplPrepared {
   readonly context: ReplPresentationContext;
@@ -1442,6 +3365,31 @@ function measuringAt(
   widths: ReplMeasuredWidths | undefined,
   entriesWindowed: boolean,
   entriesRows: number | undefined,
+  /**
+   * How many rows the contextual guidance block takes in this pass.
+   *
+   * Blank, like the composer's below: the count is the geometry question and
+   * the words are not, and the pass that asks how wide the surface is cannot
+   * already have fitted them to it.
+   */
+  guidanceRows = 1,
+  /**
+   * How many rows of the message's own value this pass is asking about.
+   *
+   * Blank rows: their count is the geometry question and their text is not,
+   * and a pass still asking how wide the pane is would be fitting text to
+   * nothing. One of them for the minimum composer, which is what the height
+   * below is chosen against.
+   */
+  messageRows = 1,
+  /**
+   * Where a route drawer goes, once this preparation has settled it.
+   *
+   * Absent until the guidance block has been fitted and measured. The passes
+   * before that answer widths and counts and admit nothing into a drawer, so
+   * the rectangle the size states is the right one for them.
+   */
+  drawer: ReplBounds | undefined = undefined,
 ): ReplPresentationContext {
   return {
     widths,
@@ -1451,12 +3399,59 @@ function measuringAt(
     entriesRows,
     capture: "capture",
     // The measuring pass describes no width-dependent text, so it has no
-    // fitted reading or preview either: text prepared against a width this
-    // pass is still asking for would be text fitted to nothing.
+    // fitted reading, preview or chat either: text prepared against a width
+    // this pass is still asking for would be text fitted to nothing.
     reading: undefined,
     preview: undefined,
+    chat: undefined,
+    message: Object.freeze(Array.from({ length: Math.max(1, messageRows) }, () => "")),
+    guidance: Object.freeze(Array.from({ length: Math.max(1, guidanceRows) }, () => "")),
+    refusal: undefined,
     rail: undefined,
+    drawer,
   };
+}
+
+/** Whether these two rectangles are the same one, or both absent. */
+function sameBounds(one: ReplBounds | undefined, two: ReplBounds | undefined): boolean {
+  if (one === undefined || two === undefined) {
+    return one === two;
+  }
+  return one.x === two.x && one.y === two.y && one.width === two.width && one.height === two.height;
+}
+
+/**
+ * The row below the whole fitted guidance block, as the engine placed it.
+ *
+ * Read from the boxes the frame actually published rather than counted from the
+ * column's parts: the block is as many rows as its words need at this width, and
+ * a second arithmetic for where it ends is a second answer to a question the
+ * measurement has already given. Half-open, so a layer beginning here covers
+ * none of it.
+ *
+ * None where this frame drew no guidance — a refusal gives its own explanation
+ * in that position instead, and a frame below the minimum draws neither.
+ */
+function guidanceBottomOf(
+  manifest: ReplLayoutManifest,
+  measured: ReplMeasured,
+): number | undefined {
+  let bottom: number | undefined;
+  for (const box of flatten(manifest.root)) {
+    if (box.key === undefined) {
+      continue;
+    }
+    if (box.key !== "guidance" && !box.key.startsWith("guidance:row:")) {
+      continue;
+    }
+    const bounds = measured.boundsOf(box.id);
+    if (bounds === undefined) {
+      continue;
+    }
+    const edge = Math.ceil(bounds.y + bounds.height);
+    bottom = bottom === undefined ? edge : Math.max(bottom, edge);
+  }
+  return bottom;
 }
 
 /**
@@ -1484,6 +3479,31 @@ export function* prepareFrame(
    * for its own sake — which measures everything every time.
    */
   store?: ReplFitStore,
+  /**
+   * Where this command is holding the chat cuts it has already measured.
+   *
+   * Separate from `store` and for the same reason it exists: a typed key moves
+   * neither the entry reading nor the chat, and refitting every chat line was
+   * what a keystroke came to cost once a conversation had any length to it.
+   */
+  chatStore?: ReplPlainFitStore,
+  /**
+   * Where this command is holding the message's own cuts.
+   *
+   * Its own storage, never the chat's: settling composer lines into the chat
+   * store would evict the whole chat on every keystroke, which is the cost
+   * that store exists to avoid.
+   */
+  messageStore?: ReplPlainFitStore,
+  /**
+   * Where this command is holding the directions' own cuts.
+   *
+   * The guidance block and a refusal's explanation both, because a frame gives
+   * one or the other and never both. Its own storage again: directions change
+   * when focus or readiness does, which is not when the chat changes, and one
+   * store for both would evict the chat every time a reader moved.
+   */
+  guidanceStore?: ReplPlainFitStore,
 ): Operation<Result<ReplPrepared>> {
   // No widths at all for the pass that answers what the widths are. Every row
   // whose text has to fit a region is left out of it, because a growing column
@@ -1508,8 +3528,74 @@ export function* prepareFrame(
   const windowed = catalog > capacityOf(second.value.boundsOf(entriesViewportOf(trial.manifest)));
   const entriesRows = windowed ? undefined : catalog;
 
-  const measured = presentationFor(view, measuringAt(widths, windowed, entriesRows));
-  const third = yield* renderer.measure(skeletonOps(measured.manifest.root), view.size);
+  // The directions, fitted to the surface they are drawn on. Before the frame
+  // below, because they are fixed content: the room the composer may grow into
+  // is what is left once they have taken theirs.
+  const guidance =
+    widths.surfaceBody < 1
+      ? Ok(undefined)
+      : yield* fitPlain(
+          renderer,
+          view.size,
+          [{ key: "guidance", text: guidanceSentence(view) }],
+          widths.surfaceBody,
+          guidanceStore,
+        );
+  if (!guidance.ok) {
+    return guidance;
+  }
+  const guidanceRows =
+    guidance.value === undefined
+      ? undefined
+      : Object.freeze(guidance.value.map((own) => `${" ".repeat(own.indent)}${own.text}`));
+  // A refusal's own explanation, through the same fitter. It and the guidance
+  // never share a frame — a refusal is the whole of what its screen says — so
+  // one store holds whichever of them this frame is giving.
+  const refused =
+    view.refusal === undefined || widths.surfaceBody < 1
+      ? Ok(undefined)
+      : yield* fitPlain(
+          renderer,
+          view.size,
+          [{ key: "refusal", text: view.refusal }],
+          widths.surfaceBody,
+          guidanceStore,
+        );
+  if (!refused.ok) {
+    return refused;
+  }
+  const refusalRows =
+    refused.value === undefined
+      ? undefined
+      : Object.freeze(refused.value.map((own) => `${" ".repeat(own.indent)}${own.text}`));
+  const probed = presentationFor(
+    view,
+    measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1),
+  );
+  const fitted = yield* renderer.measure(skeletonOps(probed.manifest.root), view.size);
+  if (!fitted.ok) {
+    return fitted;
+  }
+  // Where a route drawer goes, now that the block it must stay clear of has
+  // been fitted and placed. The guidance is as many rows as its words need, so
+  // this is read from the rows the frame published rather than counted here.
+  //
+  // One more measurement under that envelope, and only when it actually moved:
+  // the drawer's own window admits rows against this rectangle, so the pass
+  // that counts them has to be a pass that knows where it starts. Bounded, not
+  // a loop — a floating layer takes no row out of any column's flow, so the
+  // guidance it was moved clear of cannot move because it moved.
+  const envelope = routeDrawerRect(view.size, guidanceBottomOf(probed.manifest, fitted.value));
+  const settled = sameBounds(envelope, drawerRect(view.size));
+  const measured = settled
+    ? probed
+    : presentationFor(
+        view,
+        measuringAt(widths, windowed, entriesRows, guidanceRows?.length ?? 1, 1, envelope),
+      );
+  const third = settled
+    ? fitted
+    : yield* renderer.measure(skeletonOps(measured.manifest.root), view.size);
   if (!third.ok) {
     return third;
   }
@@ -1527,13 +3613,13 @@ export function* prepareFrame(
   // region to fit one to. That is different from a pane too narrow to hold a
   // grapheme, which is a refusal and stays one.
   const reading =
-    widths.surface < 1
+    widths.surfaceBody < 1
       ? Ok(undefined)
       : yield* prepareReading(
           renderer,
           view.size,
           readingLines(readingOf(view)),
-          widths.surface,
+          widths.surfaceBody,
           store,
         );
   if (!reading.ok) {
@@ -1543,14 +3629,16 @@ export function* prepareFrame(
   // here for the same reason the reading is: a drawer row is one row, so a
   // long preview line is only reachable if it was cut into rows before the
   // window counted them.
-  const asked = view.live.question;
+  // Whichever question the presented drawer is showing: the entry's where a
+  // route drawer is open, and the Sidekick's own where its pane-local form is.
+  const asked = previewedMessage(view);
   const preview =
     asked === undefined || widths.drawer < 1
       ? Ok(undefined)
       : yield* fitPlain(
           renderer,
           view.size,
-          asked.message.split("\n").map((text, offset) => ({
+          asked.split("\n").map((text, offset) => ({
             key: `message:${offset}`,
             text,
             runs: sourceRuns(text),
@@ -1560,6 +3648,105 @@ export function* prepareFrame(
   if (!preview.ok) {
     return preview;
   }
+  // The chat, fitted to the pane that holds it. The width is the pane's own:
+  // wide and medium draw the chat in the right-hand column, and a narrow frame
+  // routes it into the one outlet it has, which is the width the lists use.
+  // The body's own width, which is the pane less its gutter — and what every
+  // row inside the inset is built to.
+  const chatRoom = widths.body;
+  // And only where this frame has a chat window to put it in, which the frame
+  // it just measured already answers. A wide frame showing Bindings still has a
+  // positive inspection width and describes no chat row at all, so fitting one
+  // there measured text nobody was going to draw — and measured it again on
+  // every keystroke. Showing or revealing the chat publishes that window again,
+  // and this is the pass that fits it against the geometry it has now.
+  const presentsChat = measured.manifest.viewports.some((slot) => slot.window === SIDEKICK_WINDOW);
+  const chatLines =
+    chatRoom < 1 || !presentsChat ? undefined : sidekickChatLines(view.live.sidekick);
+  const chat =
+    chatLines === undefined
+      ? Ok(undefined)
+      : yield* fitPlain(renderer, view.size, chatLines, chatRoom, chatStore);
+  if (!chat.ok) {
+    return chat;
+  }
+  // The message's own value, cut to the same pane. Its rows are what the
+  // composer is as tall as, so this is fitted before the height is chosen and
+  // the height is chosen before the chat is admitted against what is left.
+  //
+  // Soft wrapping is display only: the string below is the one the person is
+  // editing, and the cuts put no newline into it.
+  // The composer exists where the chat being read is the one being continued:
+  // an older chat is read-only and has none. The reading's own fact, not a
+  // second pane rule.
+  const composing = presentsChat && view.live.sidekick?.current === true;
+  const messageLines =
+    chatRoom < 1 || !composing
+      ? undefined
+      : view.state.message.split("\n").map((own, at) => ({ key: `message:${at}`, text: own }));
+  const message =
+    messageLines === undefined
+      ? Ok(undefined)
+      : yield* fitPlain(renderer, view.size, messageLines, chatRoom, messageStore);
+  if (!message.ok) {
+    return message;
+  }
+  // How tall the composer may be on this screen, and how tall it is.
+  //
+  // `C` is the chat capacity of the frame just measured, which carries the
+  // label and exactly one value row — the minimum composer. Growing to `h`
+  // value rows takes `h - 1` rows from the chat, so `h` at most `C` leaves it
+  // one row. Six is the accepted cap, and the fitted rows may be fewer.
+  const capacity = capacityOf(third.value.boundsOf(sidekickViewportOf(measured.manifest)));
+  const fittedRows = message.value?.length ?? 0;
+  const height =
+    message.value === undefined
+      ? 1
+      : Math.max(1, Math.min(fittedRows, MESSAGE_VALUE_ROWS, Math.max(1, capacity)));
+  // The newest rows, because the end is where somebody is typing.
+  const shown =
+    message.value === undefined
+      ? undefined
+      : Object.freeze(message.value.slice(fittedRows - height).map((own) => own.text));
+  // One more structural measurement when the composer is taller than the
+  // minimum, so the capacity the chat is admitted against is the capacity of
+  // the frame that will actually be drawn. Bounded: one pass, never a loop.
+  const geometry =
+    shown === undefined || shown.length <= 1
+      ? third
+      : yield* renderer.measure(
+          skeletonOps(
+            presentationFor(
+              view,
+              measuringAt(
+                widths,
+                windowed,
+                entriesRows,
+                guidanceRows?.length ?? 1,
+                shown.length,
+                envelope,
+              ),
+            ).manifest.root,
+          ),
+          view.size,
+        );
+  if (!geometry.ok) {
+    return geometry;
+  }
+  const placed =
+    shown === undefined || shown.length <= 1
+      ? measured
+      : presentationFor(
+          view,
+          measuringAt(
+            widths,
+            windowed,
+            entriesRows,
+            guidanceRows?.length ?? 1,
+            shown.length,
+            envelope,
+          ),
+        );
   // The History band, measured against the terminal's own width. Prepared
   // beside the reading: where a mark lands is a proportion of the rail's
   // measured columns, so the pass that asks how wide the band is cannot
@@ -1583,11 +3770,12 @@ export function* prepareFrame(
   }
   const admission = admissionFor({
     view,
-    manifest: measured.manifest,
+    manifest: placed.manifest,
     widths,
     reading: reading.value,
     preview: preview.value,
-    boundsOf: (id: string) => third.value.boundsOf(id),
+    chat: chat.value,
+    boundsOf: (id: string) => geometry.value.boundsOf(id),
   });
   const context: ReplPresentationContext = {
     widths,
@@ -1598,7 +3786,12 @@ export function* prepareFrame(
     capture: "capture",
     reading: reading.value,
     preview: preview.value,
+    chat: chat.value,
+    message: shown,
+    guidance: guidanceRows,
+    refusal: refusalRows,
     rail: rail.value,
+    drawer: envelope,
   };
   return Ok({ context, admission, presentation: presentationFor(view, context) });
 }
@@ -1611,9 +3804,16 @@ function widthsOf(manifest: ReplLayoutManifest, measured: ReplMeasured): ReplMea
   // row wider than its column widens that column and publishes a hit box
   // reaching into the one beside it. The outer bounds stay in `regions`, which
   // is what the pane geometry contract keeps asking.
-  const of = (...names: readonly ReplRegion[]): number => {
+  // The pane's own content, asked for by what it answers rather than by which
+  // box happens to come first. Every shared column publishes two: the pane the
+  // heading band spans, and the body inset inside it that the rows under that
+  // heading are built to. A lookup that took either one would build a header as
+  // narrow as the reading beneath it, or a reading as wide as its heading.
+  const paneOf = (...names: readonly ReplRegion[]): number => {
     for (const name of names) {
-      const inside = manifest.contents.find((content) => content.region === name);
+      const inside = manifest.contents.find(
+        (content) => content.region === name && content.kind === "pane",
+      );
       if (inside !== undefined) {
         return widthOf(measured, inside.id);
       }
@@ -1624,12 +3824,30 @@ function widthsOf(manifest: ReplLayoutManifest, measured: ReplMeasured): ReplMea
     }
     return 0;
   };
+  /**
+   * One named body's own width, or the pane's where this frame drew no body.
+   *
+   * By its own id and not by its region, because the narrow outlet is one
+   * region for all three readings: a frame routing the Sidekick there publishes
+   * that chat's inset body under `content`, and a lookup by region would hand
+   * the Transcript's directions the chat's width. Falling back to the pane is
+   * what keeps the narrow outlet's rows exactly as wide as they have always
+   * been — it draws no Transcript or sidebar inset and is not given one.
+   */
+  const bodyOf = (id: string, ...names: readonly ReplRegion[]): number => {
+    const found = manifest.contents.find((content) => content.id === id);
+    return found === undefined ? paneOf(...names) : widthOf(measured, found.id);
+  };
   return {
     // Narrow has one routed outlet and no columns, so every row that would land
     // in a column lands there instead.
-    surface: of("transcript", "content"),
-    list: of("sidebar", "content"),
-    inspection: of("inspection", "content"),
+    surface: paneOf("transcript", "content"),
+    list: paneOf("sidebar", "content"),
+    inspection: paneOf("inspection", "content"),
+    // Each column's body, which is its pane less the gutter on each side.
+    surfaceBody: bodyOf(TRANSCRIPT_BODY, "transcript", "content"),
+    listBody: bodyOf(SIDEBAR_BODY, "sidebar", "content"),
+    body: bodyOf(SIDEKICK_BODY, "inspection", "content"),
     drawer: widthOf(measured, manifest.viewports.find((slot) => slot.region === "drawer")?.id),
   };
 }

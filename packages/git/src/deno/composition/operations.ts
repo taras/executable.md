@@ -43,7 +43,7 @@
  * ## Verified before, evidence after
  *
  * Between materialization and native Git, the retained identity is proven
- * against what was exported: placement, origin, object format, creation commit,
+ * against what was exported: the checkout path, origin, object format, creation commit,
  * and — for a linked worktree — that it really is a worktree of the Repository
  * it names. Then the checkout's branch, commit, HEAD tree and index tree are
  * read, the operation runs, and they are read again. What the run retains is
@@ -198,7 +198,7 @@ function refuseAdmission(operation: string, reason: string): never {
  * Which retained checkout the observed Repository and working directory select.
  *
  * Every row read here is held to the identity that names it before it is used
- * for anything, so a placement or a locator that no longer agrees is found
+ * for anything, so a checkout path or a locator that no longer agrees is found
  * before a host path is joined and before Git exists in the story. The observed
  * record is then compared with the retained one member for member: a name can
  * only be looked up, and looking one up is what a replaced context would rely
@@ -233,7 +233,7 @@ export function selectGitCheckout(
   }
 
   // The longest match rather than the first: a checkout nested inside another
-  // one is the checkout its own paths belong to. Placement keeps worktrees out
+  // one is the checkout its own paths belong to. The path layout keeps worktrees out
   // of the Repository's tree, so this is a proof rather than a preference.
   const worktree = worktrees
     .filter((candidate) => beneath(candidate.checkoutPath, directory))

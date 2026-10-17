@@ -10,7 +10,7 @@
  * What travels contextually is the installation — composition data, so a
  * document and the components it expands find the same one. What it holds does
  * not: the coordinator is handed to a provider factory directly, and the owner
- * that settles placements and issues configured uses is a closure inside the
+ * that settles session setups and issues configured uses is a closure inside the
  * installing operation. A replaced installation therefore produces requests the
  * real coordinator has never heard of, which is a refusal rather than a way
  * in.
@@ -36,8 +36,8 @@ import { AgentInternal } from "./internal.ts";
 import { installPermissionMode } from "./permission.ts";
 import { installAgentProvider } from "./provider-api.ts";
 import type { AgentProviderOptions } from "./provider-api.ts";
-import { createSessionPlacementOwner } from "./session-placement.ts";
-import { configurePlacement, sessionPlacement } from "./session-request.ts";
+import { createSessionSetupOwner } from "./session-setup.ts";
+import { configureSessionRequest, openSessionRequest } from "./session-request.ts";
 
 interface LaunchInstallation {
   registry: LaunchRegistry;
@@ -62,11 +62,11 @@ export function* useLaunchInstallation(): Operation<void> {
 /**
  * Build the coordinator one installed provider is handed, and own it.
  *
- * The placement owner is created here, in the operation that installs the
+ * The setup owner is created here, in the operation that installs the
  * provider, and closed immediately after that provider's own finalizers —
  * cleanups registered later unwind first, so a provider is fully dismantled
  * before the thing that could still configure its conversations goes away. A
- * placement settled after that refuses rather than reaching a provider that is
+ * setup settled after that refuses rather than reaching a provider that is
  * no longer there.
  */
 export function* useInstalledCoordinator(): Operation<AgentLaunchCoordinator> {
@@ -74,7 +74,7 @@ export function* useInstalledCoordinator(): Operation<AgentLaunchCoordinator> {
   if (!installation) {
     throw new Error("an agent provider is installable only inside a document execution");
   }
-  const owner = createSessionPlacementOwner();
+  const owner = createSessionSetupOwner();
   yield* ensure(() => owner.close());
   return createLaunchCoordinator(
     installation.generation,
@@ -136,16 +136,16 @@ export function* useConfiguredSession(
     );
   }
   if (typeof name === "object") {
-    // An element that already opened its placement is only now saying what it
+    // An element that already opened its request is only now saying what it
     // asks of the conversation. Sealed before anything routes, so the provider
     // is told what the document authored rather than what a handler left.
-    configurePlacement(name, configuration);
+    configureSessionRequest(name, configuration);
     return yield* Agent.operations.session(name);
   }
   // A programmatic caller has no element, so there is nothing durable to name:
-  // this placement exists for the length of this call and describes only the
+  // this request exists for the length of this call and describes only the
   // name it was given.
-  const issuance = sessionPlacement(undefined, name);
+  const issuance = openSessionRequest(undefined, name);
   issuance.configure(configuration);
   try {
     return yield* Agent.operations.session(issuance.request);

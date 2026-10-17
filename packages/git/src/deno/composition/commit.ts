@@ -52,7 +52,7 @@ import {
   performGitOperation,
   type GitCheckout,
 } from "./operations.ts";
-import { placedCheckout } from "./identity.ts";
+import { checkoutPathAgrees } from "./identity.ts";
 
 /** The effect type one commit is recorded under. */
 export const WORKSPACE_GIT_COMMIT = "workspace_git_commit";
@@ -289,7 +289,7 @@ export function* createGitCommit(
   // Read for this request rather than merely read: a result whose checkout,
   // message evidence or object graph does not describe this invocation is not
   // this invocation's result, whatever else it is. The identity it names is then
-  // held to this provider's own placement, which is the half of it the shared
+  // held to this provider's own paths, which is the half of it the shared
   // protocol has no way to decide.
   const result = parseGitCommitResult(outcome, {
     repository: admitted.repository,
@@ -298,7 +298,7 @@ export function* createGitCommit(
     messageDigest: evidence.digest,
     messageLength: evidence.length,
   });
-  if (result === undefined || !placedCheckout(result.checkout, admitted.repository)) {
+  if (result === undefined || !checkoutPathAgrees(result.checkout, admitted.repository)) {
     throw new GitOperationProtocolError(COMMIT);
   }
   return result;

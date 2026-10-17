@@ -206,7 +206,7 @@ export interface GitSwitchExpectation extends GitCheckoutExpectation {
  *
  * What it cannot decide is where a name is placed. A checkout path is a function
  * of identity, and whose function it is belongs to the provider, so the caller
- * holds the parsed identity to its own placement before using it.
+ * holds the parsed identity to its own checkout path before using it.
  */
 export function parseGitSwitchResult(
   value: unknown,

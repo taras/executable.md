@@ -274,7 +274,7 @@ describe("PA4 — the Agent Api composes from the Plugin entrypoint", () => {
       return [yield* Agent.operations.session("review"), yield* Agent.operations.options("codex")];
     });
 
-    // The placement, and nothing else: no settings object travels this route.
+    // The request, and nothing else: no settings object travels this route.
     expect(seen).toEqual([["review"]]);
     expect(composed[0]).toEqual({ sessionKey: "plugin:review", cwd: "/repo" });
     expect(composed[1].model?.options[0]?.group).toEqual({ id: "frontier", name: "Frontier" });

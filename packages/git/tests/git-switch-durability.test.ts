@@ -367,8 +367,8 @@ describe("workflow Git.Switch durability", () => {
   /**
    * A retained Worktree identity is a name *and* the place that name is given.
    *
-   * Placement is a function of identity, so the two travel together and have to
-   * still be the pair placement produces. A result naming one Worktree at
+   * A checkout path is a function of identity, so the two travel together and have
+   * to still be the pair those paths produce. A result naming one Worktree at
    * another's path, or at a path no name is given, describes a checkout this run
    * never had — and nothing about the shape of it says so.
    */
@@ -380,7 +380,7 @@ describe("workflow Git.Switch durability", () => {
       },
     },
     {
-      name: "names a path this run's placement gives no Worktree",
+      name: "names a path this run gives no Worktree",
       damage: (record) => {
         Object(record.checkout).checkoutPath = "/worktrees";
       },

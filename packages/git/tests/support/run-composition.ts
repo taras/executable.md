@@ -44,7 +44,7 @@ import {
   metadataOf,
   repositorySlot,
   worktreeSlot,
-} from "../../src/deno/run-composition/placement.ts";
+} from "../../src/deno/run-composition/checkout-layout.ts";
 import { git } from "./git-remotes.ts";
 import type { BareRemote } from "./git-remotes.ts";
 

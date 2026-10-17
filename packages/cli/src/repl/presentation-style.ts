@@ -62,6 +62,16 @@ export type ReplPresentationRole =
   | "waiting"
   /** Something activating does. */
   | "action"
+  /**
+   * The way through a window: the two controls that move one of its readings.
+   *
+   * An action in every other respect — it is activated, it is a Tab stop, and it
+   * reads in the action's own ink — but it belongs to the pane it scrolls rather
+   * than standing apart from it. A dark strip across the top and bottom of a
+   * reading reads as a bar between two things, and there is only one thing: the
+   * reading and the way along it.
+   */
+  | "navigate"
   /** The name of the reading a drawer is showing. */
   | "drawer-title"
   /** The name of a drawer holding something nobody has answered yet. */
@@ -182,11 +192,30 @@ export const REPL_PALETTE = Object.freeze({
   /** The transcript's own surface. */
   centreSurface: 0x0c0e11,
   /** The sidebar's. */
-  sideSurface: 0x090b0c,
-  /** The bindings and recorded-answer column's. */
-  bindingsSurface: 0x0a0c0e,
-  /** A pane's edge. */
-  edge: 0x161c21,
+  sideSurface: 0x101820,
+  /** The right column's, under whichever of its two tabs is selected. */
+  rightSurface: 0x131d26,
+  /**
+   * What a pane's own title row is drawn on.
+   *
+   * A surface of its own rather than the pane's, because a title that shared
+   * the surface under it is a line of the reading rather than the band naming
+   * it — and this screen's two titles name two different columns, so they are
+   * two values.
+   */
+  transcriptHeaderSurface: 0x17212a,
+  inspectionHeaderSurface: 0x1b2935,
+  /**
+   * What parts one reading from the next, in the two roles that need it.
+   *
+   * One constant served both until #883, and that is exactly what it could not
+   * do: a column divider runs the height of the body and separates two columns
+   * a reader navigates between, while a chrome edge is the single rule that
+   * closes a header or opens the footer. The accepted separation gives the
+   * divider the stronger value, so neither can be derived from the other.
+   */
+  columnDivider: 0x60788a,
+  chromeEdge: 0x3f5363,
   /** An element one call of which has been entered. */
   lifecycleEnter: 0x5aa87c,
   /** One that is expanding. */
@@ -309,6 +338,13 @@ export function surfaceOf(style: ReplRowStyle): number | undefined {
   if (style.role === "action") {
     return REPL_PALETTE.draftSurface;
   }
+  // A window's own two controls take the pane they navigate, which is what
+  // `undefined` means here: no surface of their own, so the column's shows
+  // through. They keep the action's foreground and its focus cue, because what
+  // they are has not changed — only where they look like they belong.
+  if (style.role === "navigate") {
+    return undefined;
+  }
   if (style.role === "history") {
     return REPL_PALETTE.historySurface;
   }
@@ -334,6 +370,7 @@ function colourOf(role: ReplPresentationRole, inspected: boolean): number {
     case "pane-heading":
     case "drawer-title":
     case "action":
+    case "navigate":
       return REPL_PALETTE.heading;
     case "field-label":
     case "json-null":

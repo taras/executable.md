@@ -1321,7 +1321,7 @@ describe("child configuration declarations", () => {
    * never resolves a component, so recognizing the definition is not enough to
    * tell a declaration written beside the others from one a construct reached.
    * One representative is the whole of what this needs — the rule is about the
-   * placement, not about which construct produced it.
+   * structure, not about which construct produced it.
    */
   const INDIRECT: readonly { name: string; body: readonly string[]; says: string }[] = [
     {

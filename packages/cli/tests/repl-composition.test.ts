@@ -175,14 +175,14 @@ function child(
   key: string,
   text: string,
   children: readonly ReplDescription<Act>[] = [],
-  options: { placement?: { slot: string }; modal?: true; focus?: true } = {},
+  options: { layout?: { slot: string }; modal?: true; focus?: true } = {},
 ): ReplDescription<Act> {
   return describeNode<Act>({
     key,
     component: kind,
     input: { label: text },
     children,
-    ...(options.placement === undefined ? {} : { placement: options.placement }),
+    ...(options.layout === undefined ? {} : { layout: options.layout }),
     ...(options.modal === undefined ? {} : { modal: options.modal }),
     ...(options.focus === undefined ? {} : { focus: options.focus }),
   });
@@ -314,7 +314,7 @@ describe("REPL composition: reconciling a described tree", () => {
   it("C1: a refused set changes nothing at all", function* () {
     const journal: Journal = [];
     const kind = panel(journal);
-    const tree = yield* useReplTree<Act>((placement) => placement["slot"] !== "nowhere");
+    const tree = yield* useReplTree<Act>();
 
     committed(yield* tree.apply([child(kind, "one", "a"), child(kind, "two", "b")]));
     const mounted = tree.mounted();
@@ -332,14 +332,156 @@ describe("REPL composition: reconciling a described tree", () => {
         ]),
       ).message,
     ).toContain("two descriptions claim focus");
-    expect(
-      refused(yield* tree.apply([child(kind, "a", "x", [], { placement: { slot: "nowhere" } })]))
-        .message,
-    ).toContain("does not accept");
 
     expect(tree.mounted()).toEqual(mounted);
     expect(cells(tree)).toEqual(drawn);
     expect(journal).toEqual([]);
+  });
+
+  it("RV1: validating a set judges it and mounts nothing", function* () {
+    const journal: Journal = [];
+    const kind = panel(journal);
+    const leaf = control(journal);
+    const tree = yield* useReplTree<Act>();
+
+    committed(
+      yield* tree.apply([
+        child(kind, "one", "a", [child(leaf, "pick", "p", [], { focus: true })]),
+        child(kind, "two", "b"),
+      ]),
+    );
+    // Everything a commit would have moved, as it stands before any judging.
+    const mounted = tree.mounted();
+    const focused = tree.focused();
+    const frame = tree.frame();
+    const drawn = cells(tree);
+    journal.length = 0;
+
+    // A change the tree would accept. Judged, not performed.
+    expect(
+      tree.validate([
+        child(kind, "one", "a", [child(leaf, "pick", "p", [], { focus: true })]),
+        child(kind, "two", "b"),
+        child(kind, "three", "c"),
+      ]).ok,
+    ).toBe(true);
+
+    expect(
+      refused(tree.validate([child(kind, "dup", "x"), child(kind, "dup", "y")])).message,
+    ).toContain("two children keyed dup");
+    expect(
+      refused(
+        tree.validate([
+          child(kind, "a", "x", [], { focus: true }),
+          child(kind, "b", "y", [], { focus: true }),
+        ]),
+      ).message,
+    ).toContain("two descriptions claim focus");
+    expect(
+      refused(
+        tree.validate([
+          child(kind, "a", "x", [], { modal: true }),
+          child(kind, "b", "y", [], { modal: true }),
+        ]),
+      ).message,
+    ).toContain("neither contains the other");
+
+    // Nothing was attached, updated, drawn or removed; focus is where it was
+    // and the frame is the same frame rather than a new one that looks alike.
+    expect(tree.mounted()).toEqual(mounted);
+    expect(tree.focused()).toBe(focused);
+    expect(tree.frame().id).toBe(frame.id);
+    expect(cells(tree)).toEqual(drawn);
+    expect(journal).toEqual([]);
+  });
+
+  it("RV2: a commit judges what it was given, asked for or not", function* () {
+    const journal: Journal = [];
+    const kind = panel(journal);
+    const leaf = control(journal);
+    const tree = yield* useReplTree<Act>();
+
+    committed(
+      yield* tree.apply([
+        child(kind, "one", "a", [child(leaf, "pick", "p", [], { focus: true })]),
+        child(kind, "two", "b"),
+      ]),
+    );
+    const mounted = tree.mounted();
+    const focused = tree.focused();
+    const frame = tree.frame();
+    const drawn = cells(tree);
+    journal.length = 0;
+
+    // Nothing validated these first: the commit's own judgment is what refuses
+    // them, so a caller that never asks is protected exactly as much.
+    expect(
+      refused(yield* tree.apply([child(kind, "dup", "x"), child(kind, "dup", "y")])).message,
+    ).toContain("two children keyed dup");
+    expect(
+      refused(
+        yield* tree.apply([
+          child(kind, "a", "x", [], { focus: true }),
+          child(kind, "b", "y", [], { focus: true }),
+        ]),
+      ).message,
+    ).toContain("two descriptions claim focus");
+
+    expect(tree.mounted()).toEqual(mounted);
+    expect(tree.focused()).toBe(focused);
+    expect(tree.frame().id).toBe(frame.id);
+    expect(cells(tree)).toEqual(drawn);
+    expect(journal).toEqual([]);
+  });
+
+  it("RV3: an accepted judgment reserves nothing for the commit that follows", function* () {
+    const journal: Journal = [];
+    const kind = panel(journal);
+    const tree = yield* useReplTree<Act>();
+
+    committed(yield* tree.apply([child(kind, "one", "a")]));
+    const mounted = tree.mounted();
+    const frame = tree.frame();
+    const drawn = cells(tree);
+    journal.length = 0;
+
+    // Asked about one set, then handed another. The answer was about the values
+    // it was given, so it cannot admit the values it was not.
+    expect(tree.validate([child(kind, "one", "a"), child(kind, "two", "b")]).ok).toBe(true);
+    expect(
+      refused(yield* tree.apply([child(kind, "dup", "x"), child(kind, "dup", "y")])).message,
+    ).toContain("two children keyed dup");
+
+    expect(tree.mounted()).toEqual(mounted);
+    expect(tree.frame().id).toBe(frame.id);
+    expect(cells(tree)).toEqual(drawn);
+    expect(journal).toEqual([]);
+
+    // And the refusal left a tree that still commits, so this is not a test
+    // that would pass by refusing everything.
+    committed(yield* tree.apply([child(kind, "one", "a"), child(kind, "two", "b")]));
+    expect(cells(tree)).toEqual(["[a]", "[b]"]);
+    // The new child mounted and the kept one was redescribed rather than
+    // replaced. `running:two` is its lifetime's own scope and arrives whenever
+    // that scope is scheduled, so it is not what this asserts.
+    expect(journal).toContain("mount:two");
+    expect(journal.filter((entry) => entry.startsWith("unmount:"))).toEqual([]);
+  });
+
+  it("RV4: a layout is the parent's own, and no caller judges it", function* () {
+    const journal: Journal = [];
+    const kind = panel(journal);
+    const tree = yield* useReplTree<Act>();
+
+    // What the retired custom slot case refused. There is no predicate to
+    // supply and nothing in the tree's judgment reads a layout, so a layout
+    // the tree has never heard of is admitted and mounts.
+    const described = [child(kind, "a", "x", [], { layout: { slot: "nowhere" } })];
+    expect(tree.validate(described).ok).toBe(true);
+    committed(yield* tree.apply(described));
+
+    expect(cells(tree)).toEqual(["[x]"]);
+    expect(tree.mounted().map((id) => tree.keyOf(id))).toEqual(["a"]);
   });
 
   it("C1: an absent description leaves no node, focus, frame or state", function* () {
@@ -453,7 +595,7 @@ describe("REPL composition: a description is issued, not written", () => {
       key: "forged",
       component: panel(journal),
       input: { label: "x" },
-      placement: {},
+      layout: {},
       children: [],
       modal: false,
       focus: false,

@@ -300,7 +300,7 @@ const runConfig = object({
 const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive terminal.";
 
 /**
- * `xmd repl` — one entry, one terminal, one retained history.
+ * `xmd repl` — a sequence of entries, one terminal, one retained history.
  *
  * The optional positional is a location this command printed earlier. With one,
  * the command reopens exactly that retained history and selects exactly what the
@@ -312,6 +312,12 @@ const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive te
  * configures is absent — this command renders no file, takes no document
  * reference and writes no journal of its own, so an exec deadline, a props file
  * and a trace each configure work it never performs.
+ *
+ * The one option of its own is `--sidekick-agent`, because this command has a
+ * Sidekick and a run has none. It is a separate selection from
+ * `--default-agent` rather than a second spelling of it: that one is what a
+ * `<Session>` an entry writes means by default, and who a person talks to about
+ * their entries is not the same choice as who their entries talk to.
  */
 const replConfig = object({
   location: {
@@ -321,6 +327,10 @@ const replConfig = object({
     ...field(z.string().optional(), cli.argument()),
   },
   ...agentFields,
+  sidekickAgent: {
+    description: "agent name for the Sidekick's own conversations",
+    ...field(z.string().optional()),
+  },
 });
 
 /** What `xmd --help` says the plan command is for. */
@@ -569,22 +579,28 @@ const UPGRADE_OPTIONS: readonly string[] = [...UPGRADE_SWITCHES, UPGRADE_JOURNAL
 /**
  * What `xmd repl --help` says beyond its argument list.
  *
- * The one-entry limit is stated because it is the product, not a restriction to
- * be worked around: an execution admits one entry, and reopening its location
- * shows that entry's history rather than offering a second.
+ * How entries follow one another is stated because it is the product: an entry
+ * is submitted, runs and settles before the next is admitted, and each one
+ * starts from what the entries before it published. A reader who expected a
+ * scratch buffer would otherwise be surprised that their second entry can read
+ * the first one's values.
  */
 const REPL_HELP = [
-  "ONE ENTRY",
+  "ENTRIES",
   "",
-  "  xmd repl opens an empty draft in a full-screen terminal. Type or paste one",
+  "  xmd repl opens an empty draft in a full-screen terminal. Type or paste an",
   "  XMD entry and submit it; the REPL runs it, and you can pause its expansion,",
   "  look at an earlier point in its history, answer a question it asks and read",
   "  what it produced.",
   "",
-  "  An execution admits exactly one entry. The screen always shows a location",
-  "  of the form xmd://repl/<execution>/<surface>..., and when the command ends it",
-  "  prints the whole xmd repl <location> that reopens the one it ended at. Running",
-  "  it reopens the same retained history and selects the same view — in this",
+  "  An execution admits one entry at a time and keeps every entry it has run.",
+  "  Each one starts from the bindings the entries before it published, so a",
+  "  later entry can read and revise what an earlier one left behind.",
+  "",
+  "  The screen always shows a location of the form",
+  "  xmd://repl/<execution>/<surface>..., and when the command ends it prints the",
+  "  whole xmd repl <location> that reopens the one it ended at. Running it",
+  "  reopens the same retained history and selects the same view — in this",
   "  process or another one, from the history file alone.",
 ].join("\n");
 
@@ -630,13 +646,24 @@ export interface ReplHostAssembly {
  * What fixed grammar refuses about one `xmd repl` command line.
  *
  * Pure over argv: it reads nothing, so a malformed line is answered before this
- * command has taken a directory, a file or a terminal. `xmd repl` defines no
- * option of its own, which is why anything option-shaped is refused rather than
- * ignored — a caller who wrote `--json` asked for something, and silence would
- * let them believe they got it.
+ * command has taken a directory, a file or a terminal. Everything this command
+ * defines is listed here, which is why anything else option-shaped is refused
+ * rather than ignored — a caller who wrote `--json` asked for something, and
+ * silence would let them believe they got it.
  */
-/** The two REPL options that carry a value, by the spelling a caller writes. */
-const REPL_VALUES: readonly string[] = ["--agent-provider", "--default-agent"];
+/**
+ * The three REPL options that carry a value, by the spelling a caller writes.
+ *
+ * Exported because the documentation check reads this command's own examples,
+ * and a token after one of these is that option's value rather than a location.
+ * A second roster beside this one would be a reader that disagreed with the
+ * command about what it had been handed.
+ */
+export const REPL_VALUES: readonly string[] = [
+  "--agent-provider",
+  "--default-agent",
+  "--sidekick-agent",
+];
 
 /** The three REPL switches, which carry none. */
 const REPL_SWITCHES: readonly string[] = ["--approve-all", "--approve-reads", "--deny-all"];
@@ -677,22 +704,25 @@ export function replGrammarError(
       // counted it as one would refuse `--default-agent claude` for naming two
       // things.
       const value = rest[at + 1];
-      if (value === undefined || value.startsWith("-")) {
+      // An empty token is a value nobody can have meant, and it is the same
+      // refusal as writing none: an agent with no name is not an agent, and
+      // accepting it here would carry the emptiness to whatever read it.
+      if (value === undefined || value.length === 0 || value.startsWith("-")) {
         return `xmd repl: ${name} requires a value`;
       }
       at += 1;
       continue;
     }
     return (
-      `unrecognized option for xmd repl: ${name} — xmd repl takes one optional location and ` +
+      `unrecognized option for xmd repl: ${name} — xmd repl takes one optional location, ` +
       "the agent options --agent-provider, --default-agent, --approve-all, --approve-reads " +
-      "and --deny-all"
+      "and --deny-all, and --sidekick-agent for the Sidekick's own conversations"
     );
   }
   if (positional.length > 1) {
     return (
-      "xmd repl takes at most one location. This REPL admits one entry per execution, so " +
-      "there is no second document to name."
+      "xmd repl takes at most one location. A location names the one retained " +
+      "execution to reopen, so there is no second one to name."
     );
   }
   if (location !== undefined) {
@@ -2894,8 +2924,9 @@ function* dispatch(
       break;
     }
     case "repl": {
-      // The command's whole grammar is one optional location, so anything else
-      // on the line is refused here — before a per-user directory is formed,
+      // The command's whole grammar is one optional location and the options it
+      // defines, so anything else on the line is refused here — and so is a
+      // value option written without one, before a per-user directory is formed,
       // before a history file is created or opened, and before the terminal's
       // modes are touched. A refusal that had already taken the terminal would
       // print into an alternate screen nobody is looking at.
@@ -2942,7 +2973,15 @@ function* dispatch(
       if (replHost.select !== undefined) {
         yield* replHost.select();
       }
-      const profile = yield* assembleReplProfile(replStack, plugins);
+      // The Sidekick's own agent selection travels with it, as the name this
+      // line carried and nothing more: the profile settles the fallback, and
+      // whether anybody answers to that name is the first explicit message's
+      // question rather than this command's.
+      const profile = yield* assembleReplProfile(replStack, plugins, {
+        ...(command.config.sidekickAgent === undefined
+          ? {}
+          : { sidekickAgent: command.config.sidekickAgent }),
+      });
       yield* replHost.install();
       const ran = yield* runReplProgram({
         profile,

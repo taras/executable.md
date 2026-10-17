@@ -299,7 +299,7 @@ describe("compiled xmd", { sanitizeOps: false, sanitizeResources: false }, () =>
    * while this one announces Preparing, builds the catalog through the protected
    * `<Syntax />` it also embeds, and only then cannot find an agent.
    *
-   * `HOME` is a directory this case made, so the session placement the command
+   * `HOME` is a directory this case made, so the session the command
    * derives is under it and never the developer's own tree.
    */
   it("embeds the command document, not just the Component it declares", function* () {

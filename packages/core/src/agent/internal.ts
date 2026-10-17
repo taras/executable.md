@@ -40,7 +40,7 @@ interface AgentInternalApi {
   /** Permission mode inherited by `<AgentProvider>`. */
   permissionMode: PermissionMode;
   /**
-   * Which conversation the enclosing `<Session>` placed. Undefined outside one.
+   * Which conversation the enclosing `<Session>` resolved. Undefined outside one.
    *
    * For a configured element this is the authentic use that element was issued,
    * which is that session and also the only value that can say what it runs

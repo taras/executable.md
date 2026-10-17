@@ -675,7 +675,7 @@ export function* useFlatWorld(cwdPath: string): Operation<void> {
 
 /**
  * A world with a mutable contextual cwd and a Git root at `gitRoot`, so
- * the session-placement walk reaches a common ancestor — different
+ * the session-candidate walk reaches a common ancestor — different
  * caller cwds under the root resolve to the same nearest session.
  */
 export function* useGitWorld(cwdRef: { value: string }, gitRoot: string): Operation<void> {

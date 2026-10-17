@@ -145,7 +145,7 @@ function renderEngineStructural(entry: EngineSyntaxEntry): string[] {
  * It prints the engine's shape first — the syntax a reader copies — and then
  * the forms, the props schema and where the construct sits, because unlike a
  * construct the engine owns this one has a schema somebody else wrote and a
- * placement a document has to get right.
+ * structure a document has to get right.
  */
 function renderInstalledStructural(entry: InstalledStructuralSyntaxEntry): string[] {
   const blocks = [heading(entry.name), entry.description];
@@ -153,8 +153,8 @@ function renderInstalledStructural(entry: InstalledStructuralSyntaxEntry): strin
   blocks.push(`**Forms:** ${entry.forms.map((form) => invocation(entry.name, form)).join(", ")}`);
   blocks.push(
     entry.parent === null
-      ? "**Placement:** written wherever a document may write structure."
-      : `**Placement:** written directly inside ${code(`<${entry.parent}>`)}, and nowhere else.`,
+      ? "**Structure:** written wherever a document may write structure."
+      : `**Structure:** written directly inside ${code(`<${entry.parent}>`)}, and nowhere else.`,
   );
   blocks.push(...renderProps(entry.props));
   blocks.push(...prose(entry));

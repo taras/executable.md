@@ -1779,7 +1779,7 @@ interface Lexical {
    * top level.
    *
    * What decides whether a root's `<Output>` is a declaration or a misplaced
-   * element, and the same lexical question `validateOutputPlacement()` answers
+   * element, and the same lexical question `validateOutputStructure()` answers
    * for an authored body: only a direct top-level child declares a region. It
    * is false everywhere inside anything — a construct's branches, a loop body, a
    * component's children — because none of those is the top level, whatever runs

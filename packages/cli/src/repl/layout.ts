@@ -178,7 +178,20 @@ export interface ReplLayoutManifest {
    * for the pane itself: where a pane landed and how much room it has inside are
    * two different questions.
    */
-  readonly contents: readonly { readonly region: ReplRegion; readonly id: string }[];
+  readonly contents: readonly {
+    readonly region: ReplRegion;
+    readonly id: string;
+    /**
+     * Which of a column's two widths this box answers for.
+     *
+     * `"pane"` is the border-free inside, which is what a heading band spans.
+     * `"body"` is the inset inside that, which is what the rows under the
+     * heading are built to. A column has both, they are four cells apart, and a
+     * lookup that took whichever came first would build a header as narrow as
+     * the reading under it.
+     */
+    readonly kind: "pane" | "body";
+  }[];
   /** The History band, which comes from the model rather than from a node. */
   readonly history: ReplHistoryBand;
 }
@@ -200,17 +213,25 @@ export const FOOTER_ROWS = 7;
 /** The History band's own five rows. */
 export { HISTORY_ROWS } from "./history-rail.ts";
 
-/** Five, at every size — imported for this module's own placement. */
+/** Five, at every size — imported for this module's own layout. */
 import { HISTORY_ROWS } from "./history-rail.ts";
 
-/** How wide a column is at each profile that has one. */
-interface ColumnWidths {
-  readonly wide: number;
-  readonly medium: number;
-}
-
-const SIDEBAR: ColumnWidths = { wide: 32, medium: 28 };
-const INSPECTION: ColumnWidths = { wide: 36, medium: 28 };
+/**
+ * How wide the sidebar is, at every profile that has one.
+ *
+ * Thirty-six at both, rather than a share of the terminal. The two readings in
+ * this column are rows of text that must be legible whole: the longest state a
+ * turn carries is `completed, not recorded yet`, and `All conversations
+ * (filtered)` is the widest control. Thirty-six leaves thirty-two inside the
+ * body's gutter and thirty past the focus marker, which is exactly the room the
+ * old full-width wide sidebar had — so a row that fitted before fits now, at the
+ * medium profile too, where it did not.
+ *
+ * This is the Product Owner's answer to a real conflict: an inset sidebar at the
+ * old widths cut a turn's state in half, and `fitLabel` says a state cut in half
+ * is a row saying something untrue. Width was chosen over shorter vocabulary.
+ */
+const SIDEBAR_COLUMNS = 36;
 
 /**
  * How far the drawer sits in from the body it covers, as a share of it.
@@ -265,19 +286,28 @@ export function bodyRows(size: ReplTerminalSize): number {
 /** How wide the sidebar is, or none at a profile that has no columns. */
 export function sidebarWidth(size: ReplTerminalSize): number | undefined {
   const profile = profileFor(size);
-  if (profile === "wide") {
-    return SIDEBAR.wide;
-  }
-  return profile === "medium" ? SIDEBAR.medium : undefined;
+  return profile === "wide" || profile === "medium" ? SIDEBAR_COLUMNS : undefined;
 }
 
-/** How wide the inspection column is, or none at a profile that has none. */
+/**
+ * How wide the inspection column is, or none at a profile that has none.
+ *
+ * Half of whatever the sidebar leaves, in whole cells. A share rather than a
+ * number, so the column grows with the terminal instead of staying the width
+ * one terminal happened to be — and the right pane holds a conversation, which
+ * is the reading that wants the room.
+ *
+ * The spare cell of an odd remainder goes to the Transcript, which takes what
+ * is left of the row: one of them has to have it, and fractional geometry is
+ * not an option. So 160 gives 62 and 62, and 161 gives 63 and 62.
+ */
 export function inspectionWidth(size: ReplTerminalSize): number | undefined {
   const profile = profileFor(size);
-  if (profile === "wide") {
-    return INSPECTION.wide;
+  const sidebar = sidebarWidth(size);
+  if (sidebar === undefined || (profile !== "wide" && profile !== "medium")) {
+    return undefined;
   }
-  return profile === "medium" ? INSPECTION.medium : undefined;
+  return Math.floor((size.columns - sidebar) / 2);
 }
 
 /**
@@ -298,6 +328,75 @@ export function drawerRect(size: ReplTerminalSize): ReplBounds | undefined {
     y,
     width: size.columns - 2 * x,
     height: body - 2 * y,
+  });
+}
+
+/**
+ * A route drawer's rectangle, moved clear of the guidance it must not cover.
+ *
+ * The body gained a row above each column's heading, and this layer floats at a
+ * rectangle the terminal's size alone decides — so the row the gap pushed down
+ * is a row the drawer would cover. The contextual guidance is in that position,
+ * and a screen that stopped saying how to close the drawer in front of it is a
+ * screen with no way out that it admits to.
+ *
+ * `guidanceBottom` is the row below the whole fitted block, measured by the
+ * engine rather than counted here: the block is as many rows as its words need
+ * at this width, so protecting a fixed number of them would protect the first
+ * row of a wrapped block and hide the rest. The new top is the later of the old
+ * top plus the gap and that bottom, which keeps the gap's own translation where
+ * the guidance is shorter than it.
+ *
+ * The horizontal bounds and the bottom edge are the ones this drawer has always
+ * had, so moving down spends the drawer's own window rather than reaching into
+ * the footer. Half-open: a drawer beginning exactly at the block's bottom covers
+ * none of it.
+ *
+ * None of this applies to the narrow outlet, which has no shared column and
+ * takes no gap, or to the Sidekick's pane-local rectangles, which are its own.
+ */
+export function routeDrawerRect(
+  size: ReplTerminalSize,
+  guidanceBottom: number | undefined,
+): ReplBounds | undefined {
+  const base = drawerRect(size);
+  if (base === undefined || profileFor(size) === "narrow" || guidanceBottom === undefined) {
+    return base;
+  }
+  const bottom = base.y + base.height;
+  const top = Math.min(bottom, Math.max(base.y + COLUMN_TOP_GAP, guidanceBottom));
+  return Object.freeze({ x: base.x, y: top, width: base.width, height: bottom - top });
+}
+
+/**
+ * The Sidekick question form's rectangle, inside the pane that owns it.
+ *
+ * Pane-local rather than whole-body, because the question belongs to the
+ * Sidekick reading: a modal over the entire screen would cover the transcript
+ * and the catalog a person is reading *about*, and would read as the entry's
+ * drawer rather than this conversation's. In a wide or medium frame that pane is
+ * the inspection column, so the rectangle starts where that column starts and
+ * is exactly as wide. A narrow frame routes one outlet, so the pane is the body.
+ *
+ * Above the footer in every case, like every other drawer: the seven rows that
+ * hold the way out, the band and the draft are never covered.
+ *
+ * One calculation, read back by measurement, admission, description, committed
+ * drawing and hit testing alike — a second opinion about where this rectangle
+ * is would be a drawer whose cells and whose targets disagreed.
+ */
+export function sidekickDrawerRect(size: ReplTerminalSize): ReplBounds | undefined {
+  const profile = profileFor(size);
+  if (profile === "too-small") {
+    return undefined;
+  }
+  const inspection = inspectionWidth(size);
+  const width = inspection ?? size.columns;
+  return Object.freeze({
+    x: size.columns - width,
+    y: 0,
+    width,
+    height: bodyRows(size),
   });
 }
 
@@ -390,7 +489,147 @@ export function bodyProps(edged: boolean): ReplBoxProps {
   if (!edged) {
     return { layout };
   }
-  return { layout, border: { color: terminalColour(REPL_PALETTE.edge), bottom: 1 } };
+  return { layout, border: { color: terminalColour(REPL_PALETTE.chromeEdge), bottom: 1 } };
+}
+
+/** How far a column's body sits in from the pane that holds it, on each side. */
+export const BODY_GUTTER = 2;
+
+/**
+ * One column's body, inset from the pane that holds it.
+ *
+ * Two cells of gutter on each side, through the engine's own padding, so the
+ * width every row inside is built to is the width the engine reports for this
+ * box rather than a number subtracted somewhere else. The gutter is geometry:
+ * it carries the pane's surface, holds no text and is no part of any row.
+ *
+ * The same inset for the Sidekick's chat, the Transcript's reading and the
+ * sidebar's two lists, because they are the same thing — the part of a column a
+ * person reads — and the Product Owner asked for them to match.
+ *
+ * The heading rows above are deliberately not in here. A column says what it is
+ * across its whole width, and a heading indented to match the reading under it
+ * would read as one more line of that reading.
+ */
+export function insetBodyProps(): ReplBoxProps {
+  return {
+    layout: {
+      width: grow(),
+      height: grow(),
+      direction: "ttb",
+      padding: { left: BODY_GUTTER, right: BODY_GUTTER },
+    },
+  };
+}
+
+/**
+ * One row of a pane's header, on the surface that names the column.
+ *
+ * The same single row {@link rowProps} measures, with a background: what makes
+ * it read as a header is the fill across the measured width, including the
+ * cells the title's own text does not reach.
+ */
+export function headerRowProps(width: number | undefined, surface: number): ReplBoxProps {
+  return { ...rowProps(width), bg: terminalColour(surface) };
+}
+
+/**
+ * The gutter a header's own title sits in, inside a band that stays full width.
+ *
+ * A column's name lines up with what is under it, so the title is inset by the
+ * same two cells the body is. The band keeps the whole inner width — it is what
+ * draws the header surface and the rule that closes it — and only the row
+ * holding the text moves, through the engine's padding rather than through
+ * spaces put in front of the name.
+ */
+export function headerTitleProps(surface: number): ReplBoxProps {
+  return {
+    layout: {
+      width: grow(),
+      height: fit(),
+      direction: "ttb",
+      padding: { left: BODY_GUTTER, right: BODY_GUTTER },
+    },
+    bg: terminalColour(surface),
+  };
+}
+
+/**
+ * The band a pane's header rows sit in, closed by the accepted edge.
+ *
+ * `rows` is how many title rows it holds; the edge is one more, because a
+ * border here is a real row the engine takes out of this box exactly as the
+ * body's own rule is taken out of the body. That is what keeps the two passes
+ * honest: the rows below are built to what the engine leaves after the edge,
+ * so a measured region and the region drawn into it account for the same
+ * decoration rather than one of them guessing it.
+ *
+ * The band carries the header surface too, so the edge row is drawn on the
+ * header's own ground rather than on the reading beneath it.
+ */
+export function headerBandProps(rows: number, surface: number, topGap = 0): ReplBoxProps {
+  return {
+    layout: {
+      width: grow(),
+      height: fixed(rows + topGap + 1),
+      direction: "ttb",
+      padding: { top: topGap },
+    },
+    bg: terminalColour(surface),
+    border: { color: terminalColour(REPL_PALETTE.chromeEdge), bottom: 1 },
+  };
+}
+
+/** How far apart the two tabs of the right pane's header sit. */
+export const TAB_GAP = 2;
+
+/**
+ * How many blank rows each shared column keeps above its first heading.
+ *
+ * Space asked for at the top of the three columns, taken as real layout padding
+ * so the engine's own remainder is what the rows below are measured against. A
+ * gap spent as a described blank row would be a mounted node with a hit box and
+ * a Tab stop, and a reader would find a row there that selects nothing.
+ *
+ * Where a column has a header band, the band owns this space and paints it with
+ * the header's own surface: the gap reads as the top of that band rather than as
+ * a strip of the reading pushed down. The sidebar has no band and keeps it on
+ * the pane, which is its own surface either way. Which box owns it changes no
+ * vertical coordinate — the heading, the rule and the first body row are where
+ * they were.
+ */
+export const COLUMN_TOP_GAP = 1;
+
+/**
+ * The right pane's header: both of its readings named once, side by side.
+ *
+ * One row and a gap, like the action row, because these two tabs are the same
+ * kind of thing — controls that take exactly their own label and sit beside each
+ * other. It is the pane's heading as well as the way between its readings, so it
+ * carries the header surface across the whole measured width rather than only
+ * the cells the two names reach.
+ *
+ * Clipped horizontally for the reason the action row is: a tab the column has no
+ * room for must stop at the trailing edge instead of painting into the reading
+ * beside it.
+ */
+export function tabRowProps(surface: number): ReplBoxProps {
+  return {
+    layout: { width: grow(), height: fixed(1), direction: "ltr", gap: TAB_GAP },
+    bg: terminalColour(surface),
+    clip: { horizontal: true },
+  };
+}
+
+/**
+ * One tab: as wide as its own name, on the header's surface.
+ *
+ * Self-sized rather than given a share of the row, so each tab's hit box is the
+ * label a person is aiming at. Two children holding the old full-column width
+ * would overlap, and the second would publish a box reaching out of the column.
+ */
+export function tabProps(surface: number): ReplBoxProps {
+  return { layout: { width: fit(), height: fixed(1) }, bg: terminalColour(surface) };
 }
 
 /**
@@ -410,13 +649,22 @@ export function paneColumnProps(width: number | undefined, surface: number): Rep
   return {
     ...columnProps(width),
     bg: terminalColour(surface),
-    border: { color: terminalColour(REPL_PALETTE.edge), left: 1 },
+    border: { color: terminalColour(REPL_PALETTE.columnDivider), left: 1 },
   };
 }
 
 /** A pane with a surface and no edge of its own, like the one at the margin. */
-export function paneProps(width: number | undefined, surface: number): ReplBoxProps {
-  return { ...columnProps(width), bg: terminalColour(surface) };
+export function paneProps(width: number | undefined, surface: number, topGap = 0): ReplBoxProps {
+  return {
+    ...columnProps(width),
+    layout: {
+      width: columnAxis(width),
+      height: grow(),
+      direction: "ttb",
+      padding: { top: topGap },
+    },
+    bg: terminalColour(surface),
+  };
 }
 
 /**
@@ -427,8 +675,10 @@ export function paneProps(width: number | undefined, surface: number): ReplBoxPr
  * count in the caller would be a second answer to a question the engine has
  * already answered.
  */
-export function paneContentProps(): ReplBoxProps {
-  return { layout: { width: grow(), height: grow(), direction: "ttb" } };
+export function paneContentProps(topGap = 0): ReplBoxProps {
+  return {
+    layout: { width: grow(), height: grow(), direction: "ttb", padding: { top: topGap } },
+  };
 }
 
 /**
@@ -442,8 +692,12 @@ export function paneContentProps(): ReplBoxProps {
  * its column, and a column takes no minimum from the text inside it.
  */
 export function columnProps(width: number | undefined): ReplBoxProps {
-  const axis: SizingAxis = width === undefined ? grow() : fixed(width);
-  return { layout: { width: axis, height: grow(), direction: "ttb" } };
+  return { layout: { width: columnAxis(width), height: grow(), direction: "ttb" } };
+}
+
+/** A column is the width the product gave it, or whatever is left over. */
+function columnAxis(width: number | undefined): SizingAxis {
+  return width === undefined ? grow() : fixed(width);
 }
 
 /**
@@ -454,7 +708,7 @@ export function columnProps(width: number | undefined): ReplBoxProps {
  * that arithmetic is not whole: measured, two `grow()` viewports in a 29-row
  * sidebar came back `11.994140625` and `12`, which puts every row inside the
  * first one at a fractional position. A target there names a row that is not a
- * row, so placement states the size and lets one child grow into the remainder.
+ * row, so the layout states the size and lets one child grow into the remainder.
  *
  * `"grow"` takes whatever the column has left, `"fit"` takes exactly what its
  * own rows need, and a number states a share.

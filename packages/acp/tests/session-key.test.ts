@@ -5,11 +5,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { API } from "@executablemd/runtime";
 import type { Operation } from "effection";
-import {
-  deriveSessionKey,
-  resolveSessionPlacement,
-  sessionCandidates,
-} from "../src/session-key.ts";
+import { deriveSessionKey, resolveSessionDetails, sessionCandidates } from "../src/session-key.ts";
 import { makeRecord, makeStore } from "./helpers.ts";
 
 /** Stub stat so exactly the given paths exist. */
@@ -83,20 +79,20 @@ describe("Tier SK — session identity", () => {
     expect(candidates.map((candidate) => candidate.cwd)).toEqual(["/no/repo/here"]);
   });
 
-  it("SK5: placement reuses the nearest existing record and passes its cwd", function* () {
+  it("SK5: resolution reuses the nearest existing record and passes its cwd", function* () {
     yield* useStatWorld({ "/repo/.git": "dir" });
     const rootKey = deriveSessionKey("codex", "/repo");
     const store = makeStore({ [rootKey]: makeRecord("codex", "/repo") });
-    const placement = yield* resolveSessionPlacement(store, "codex", "/repo/sub");
-    expect(placement.cwd).toBe("/repo");
-    expect(placement.sessionKey).toBe(rootKey);
+    const details = yield* resolveSessionDetails(store, "codex", "/repo/sub");
+    expect(details.cwd).toBe("/repo");
+    expect(details.sessionKey).toBe(rootKey);
   });
 
   it("SK6: without an existing record the exact contextual cwd is used", function* () {
     yield* useStatWorld({ "/repo/.git": "dir" });
-    const placement = yield* resolveSessionPlacement(makeStore(), "codex", "/repo/sub");
-    expect(placement.cwd).toBe("/repo/sub");
-    expect(placement.sessionKey).toBe(deriveSessionKey("codex", "/repo/sub"));
+    const details = yield* resolveSessionDetails(makeStore(), "codex", "/repo/sub");
+    expect(details.cwd).toBe("/repo/sub");
+    expect(details.sessionKey).toBe(deriveSessionKey("codex", "/repo/sub"));
   });
 
   it("SK7: records for a different agent command or cwd are not reused", function* () {
@@ -105,7 +101,7 @@ describe("Tier SK — session identity", () => {
     const store = makeStore({
       [rootKey]: makeRecord("other-command", "/repo"),
     });
-    const placement = yield* resolveSessionPlacement(store, "codex", "/repo/sub");
-    expect(placement.cwd).toBe("/repo/sub");
+    const details = yield* resolveSessionDetails(store, "codex", "/repo/sub");
+    expect(details.cwd).toBe("/repo/sub");
   });
 });

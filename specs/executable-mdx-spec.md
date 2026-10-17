@@ -167,7 +167,7 @@ replay guards, the eval compiler, the diagnostic journal, and the test target
 are not document-addressable, and they stay where they are.
 
 The ordinary file-operation paths a document authors are relative and resolved
-by the provider against contextual `Env.cwd`. Directory placement preserves
+by the provider against contextual `Env.cwd`. Directory resolution preserves
 Dir's existing exception: an absolute `path` is used as written, while a
 relative one is resolved against the enclosing cwd. Nothing the provider
 resolves reaches a printed error or the journal: what crosses back is a reason
@@ -2009,7 +2009,10 @@ run but are absent from the diagnostic trace.
 | `packages/workflow/src/deno/workspace/host.ts` | `withWorkflowWorkspace()` — the run's effect coordinator, logical cwd `/`, and Files provider installed together inside one execution |
 | `src/generated-xmd-preview.ts` | `previewGeneratedXmdRoot()`, `GeneratedXmdRootPreview`, `GeneratedXmdPreviewError` — projecting the literal top-level `<Output>` text a response prefix already says. It takes the whole accumulated prefix and returns `Result<GeneratedXmdRootPreview>` directly rather than an `Operation`, because it performs no suspended work: no file is read, no name resolved, no component invoked, no expression evaluated, no admission granted and no history written. A prefix still arriving is a success stating `incomplete`, and source the language does not allow where it is written is an `Err` — told apart by the scan's own report of the constructs it began and could not finish, through the same walk that decides what a fence, a quoted `>`, an inline code span and a tag-like expression are. Only settled meaning projects: an expression, an interpolation and a nested component wait, and a passive fence is the literal example it looks like |
 | `src/generated-interpolation.ts` | `readsBinding()` — the one rule deciding whether a piece of text would read a binding, shared by admission, which refuses such text, and by the prefix preview, which leaves it out. Text one of them called literal and the other called a read would be two readings of one rule |
-| `src/agent/conversation.ts` | `useAgentConversation()`, `AgentConversation`, `AgentConversationRequest`, `AgentConversationError` — one retained agent conversation a trusted host holds open over the history stream it supplies, under the installations it captured through `executeInstalled()`. A host-declared identity component in a synthetic root core owns, because a provider and its placement coordinator are installed inside `Execution.document` and a durable preparation precedes both; the session is therefore placed under the engine's own claimant-issued identity and the host's conversation id names the history alone. The element serves turns and does not return, so the root records no terminal and reopening resumes a partial continuation. Each turn is one journaled Prompt under its own durable name, run in a task of its own, reaching the same `runPrompt()` the component does rather than a copy. `evaluateGeneratedXmdRoot()` is a third job on the same mailbox, sharing its admission guard and cancellation-join protocol: the element obtains the actual method on its own execution's handle through a private readiness bridge before announcing the conversation ready, and an evaluation sends no provider prompt, changes no configuration, and runs on a durable sequence distinct from the conversation's turns. A failure of the run that a caller caught is raised again by the release that ends the conversation, because a root that records no terminal leaves no completion for it to travel through |
+| `src/agent/publication.ts` | `useAgentPromptPublisher()`, `AgentPromptPublisher`, `AgentPromptPublication`, `AgentPromptObservation`, `AgentPromptHandle`, `AgentPromptAssociation` — where a trusted host retains something beside a canonical Prompt, and is shown that Prompt while it is still talking. `begin()` is called before the provider is asked and its opaque return is carried back on `publish()`, which appends the record inside whatever transaction the host opened; the optional `observe()` is offered the whole source received so far, already cleared for disclosure by the execution the turn runs in, after each delta and once more when the stream returns text the deltas did not say. An observation is a snapshot and not an account: no session, checkpoint, turn number or append, `null` withdraws the body for the rest of that turn, and an empty string is a cleared prefix that says nothing. A publisher that observes must also begin, refused where it is installed; a publisher with no `observe` accumulates no prefix and is scanned for nothing. A host that raises from either call has failed a trusted operation, so the run's durability failure is activated with its own error and no record claims the turn — never an agent failure |
+| `src/agent/conversation.ts` | `useAgentConversation()`, `AgentConversation`, `AgentConversationRequest`, `AgentConversationError` — one retained agent conversation a trusted host holds open over the history stream it supplies, under the installations it captured through `executeInstalled()`. A host-declared identity component in a synthetic root core owns, because a provider and its launch coordinator are installed inside `Execution.document` and a durable preparation precedes both; the session is therefore placed under the engine's own claimant-issued identity and the host's conversation id names the history alone. The element serves turns and does not return, so the root records no terminal and reopening resumes a partial continuation. Each turn is one journaled Prompt under its own durable name, run in a task of its own, reaching the same `runPrompt()` the component does rather than a copy. Every operation of the conversation goes to the one `AgentConversationProvider` its host installed, read once from Context in the element's own scope after installation and before readiness — so a handler cannot forward a request's name past the setup that carries the configuration requirement, nor replace a prompt's session after one was checked, and a provider that installs no object refuses the opening before the conversation is bound rather than falling back to routing. The conversation's agent is resolved through that provider before the turn's session is resolved and is then stated to both of the turn's operations, so the session and the prompt are the same agent's while the request itself still carries no agent. The conversation keeps private evidence of the exact `Session` settling its own request produced, and refuses one it never settled or one substituted afterwards before asking for a prompt stream. `evaluateGeneratedXmdRoot()` is a third job on the same mailbox, sharing its admission guard and cancellation-join protocol: the element obtains the actual method on its own execution's handle through a private readiness bridge before announcing the conversation ready, and an evaluation sends no provider prompt, changes no configuration, and runs on a durable sequence distinct from the conversation's turns. A failure of the run that a caller caught is raised again by the release that ends the conversation, because a root that records no terminal leaves no completion for it to travel through. The first turn's activation commits one `agent_conversation_configuration` record — the provider, the resolved command and the complete active provider configuration — before any native work may begin, and every later activation compares against it and writes nothing; a reopening re-offers that record in its own position so the turns written after it replay in order, and a difference refuses before reattachment without replacing the conversation, its turns, its native identity or its configuration |
+| `src/agent/conversation-provider.ts` | `AgentConversationProvider` — one name for the interface and the Context, exported from `@executablemd/core/api`, carrying the four operations a retained conversation does its work through: `agent()`, `session()` for the genuine opaque request under an explicit agent, `options()` and a cold `prompt()` for the exact Session the conversation supplies. A provider that serves saved conversations installs one in its own provider scope beside whatever `Agent` middleware it provides; the factory signature is unchanged and the object carries no coordinator, permission flag, configuration approval, history mapping or completion receipt. Selection is read once per conversation and is an ordinary local afterwards, so a later selection cannot reach an open chat; the object's lifetime is its provider's, and a method called after that provider's teardown refuses. Undefined is the default and an answer: ordinary `Agent` middleware alone does not serve conversations |
+| `src/agent/provider-configuration.ts` | `ProviderSessionConfiguration`, `AdmitProviderConfiguration`, `parseProviderConfiguration()`, `sameJson()`, `freezeJson()` — what an installed provider says it is constructing a session under, held as values rather than a digest. All four members are required and absence is never a default, so a provider that cannot state one states none; the values are parsed into Core's own copy and frozen, and compared as JSON rather than by identity or member order with the provider's array order kept. It imports no transport type: the MCP connection shapes and permission spellings are the provider's vocabulary, validated by the provider and stored as JSON |
 | `packages/workflow/src/generated-observations.ts` | `evaluateGeneratedFragment()` — the workflow policy adapter over `evaluateGeneratedXmd()`, returning its rendered text directly as `Operation<string>`; `GeneratedObservation` remains the read-table entry type, not an output envelope |
 | `packages/workflow/src/journal.ts` | the `workflow_run` record, canonical-record recognition, and the refusals that name differing fields without their values |
 | `packages/workflow/src/run.ts` | `retainedWorkflowInstallation()` and `getWorkflowRun()` — associating one execution with a run already created, as the `ExecutionInstallation` a trusted host passes to `executeInstalled()`, contributing a mandatory run-identity admission and the `prepare` hook that reopens the run inside the durable root. The association resolves no revision and imports no Git feature, and a run retains the bytes it executes, so nothing afterwards reaches a repository for its Markdown |
@@ -3587,10 +3590,10 @@ above the workflow component bundle, repository files and every registered
 default. A declaration that states neither arm is refused as it always was,
 before any other member of it is read.
 
-**Placement is a fact about the source.** A construct holds whitespace and the
+**Structure is a fact about the source.** A construct holds whitespace and the
 regions it declares; ordinary text, a code block, a foreign element, another
 construct and a region belonging to a different construct are each a structural
-placement error. A region is written directly inside its own construct and is an
+structural error. A region is written directly inside its own construct and is an
 error anywhere else. A self-closing construct has no regions, and is accepted
 when that form is declared. One analysis answers those questions, so
 non-executing validation and canonical expansion cannot accept different
@@ -3600,10 +3603,10 @@ documents.
 construct the engine owns and before any component import, so core holds no
 branch for an installed name. An admitted construct takes the generic path; an
 admitted region written anywhere but inside its own construct refuses through
-the shared placement analysis and reaches no handler.
+the shared structural analysis and reaches no handler.
 
 Before the handler is entered, the occurrence is settled in this order:
-placement; then the authored form of the construct and of every accepted region,
+structure; then the authored form of the construct and of every accepted region,
 each against the forms its own declaration accepts, since a region is declared in
 its own right and does not inherit what its construct accepts; then `as` and
 `slot` — which remain the engine's, so a valid `as` binds nothing and is not a
@@ -3797,7 +3800,7 @@ that does not exist.
 A declared structural construct and each of its regions contribute one entry to
 the **structural** category, sorted by code point beside the constructs the
 engine owns, reporting the declared origin under the same `structural` kind
-and carrying the declared forms, props schema, placement, syntax examples,
+and carrying the declared forms, props schema, structure, syntax examples,
 description and content sentence. The two structural entry shapes are a closed
 union: an engine entry keeps exactly the fields it always had, and neither shape
 can inhabit a component entry. The symbols stay **version 2** — the categories,
@@ -3923,7 +3926,7 @@ author reading a result is owed all of them at once.
 
 **A declared structural construct is checked where it was written.** An
 occurrence is held to the declared forms and props exactly as a registration's
-invocation is, and its placement to the shared analysis: a construct holds
+invocation is, and its structure to the shared analysis: a construct holds
 whitespace and its declared regions, and a region is written directly inside its
 own construct. A foreign element inside a construct is reported at the element
 that was written as well as at the construct that refused it. A region's body is
@@ -6027,7 +6030,7 @@ Expanding a component invocation proceeds as:
   whose `props` binding points at the validated props object, exposing
   `renderChildren()` / `render()` (§4.8) to eval blocks. Expression props
   resolve in the caller's scope. When
-  the component declares `<Output>`, its placement is validated before any body
+  the component declares `<Output>`, its structure is validated before any body
   content executes and only its declared regions render (§6.9).
 - **Capture (`as=`).** With `as="binding"`, the rendered result is written to
   that binding in the caller's environment and nothing is emitted at the call
@@ -7720,9 +7723,9 @@ const releaseChanged = files.filter((p) => releaseConfigFiles.includes(`- ${p}`)
 </Output>
 ````
 
-#### Placement
+#### Structure
 
-Only a **direct top-level** `<Output>` is a valid declaration. Placement is
+Only a **direct top-level** `<Output>` is a valid declaration. Structure is
 checked against the component's (or root's) source structure, including regions
 that never render — content inside `<If condition={false}>`, content passed to a
 component that has no `<Content />`, an `<Output>` nested inside another
@@ -7732,7 +7735,7 @@ occurrences in a single component are reported together as one printed error tha
 advises `<Output>` must be a direct top-level declaration and that conditional
 rendering uses `<If>` inside `<Output>`.
 
-Placement is owned by the declaring component. Child expansion cannot
+Structure is owned by the declaring component. Child expansion cannot
 introduce, remove, or redefine it, and an `<Output>` a caller passes as content
 is diagnosed against the caller's own structure — it never becomes the callee's
 declaration.
@@ -7755,7 +7758,7 @@ Documentation and output regions execute in document order, so an output region
 can use bindings a preceding documentation block computed, and documentation
 after a region still runs. The required sequencing:
 
-- Structural placement is validated before any body content executes; a
+- Structure is validated before any body content executes; a
   structurally invalid component or root runs no eval, exec, `<Let>`, or
   nested components. The aggregate is raised where every undecided error is
   raised, so the region's own mode decides it: printed inside a printing
@@ -7974,7 +7977,7 @@ A value component declares one or more `<Return value={…} />` elements in its
 body's own source flow and executes exactly one of them. Each takes that one
 prop, takes no children, and renders nothing.
 
-**Depth is not placement.** A `<Return>` under `<If>` or a selected `<Case>`,
+**Depth is not structure.** A `<Return>` under `<If>` or a selected `<Case>`,
 inside a `<Loop>` or an
 `<Each>`, or within a `<Let>` body belongs to the body those directives are
 written in, so a value can be selected conditionally. What decides ownership is
@@ -8064,7 +8067,7 @@ carries its normalized issues.
 
 #### Structure is checked before body effects
 
-Placement is validated against the component's own source, before `<Content />`
+Structure is validated against the component's own source, before `<Content />`
 substitution, so projected content can neither introduce nor satisfy a
 declaration. All violations are reported together, and a structurally invalid
 component runs no eval, exec, `<Let>`, or nested component:
@@ -8328,7 +8331,7 @@ the prop and then fails serialization. There is no `indent`, `pretty`, compact,
 replacer, key-order, schema or newline option.
 
 **`as` is optional, and it is the engine's, not this component's.** A document
-that wants the text rather than its placement writes the binding on the
+that wants the text rather than its position writes the binding on the
 invocation:
 
 ```md
@@ -9555,8 +9558,8 @@ by which point a matcher's `value` expression and its own position are gone. A
 repository file named `Answers.md` therefore never stands in for one, and could
 not implement matcher semantics if it did.
 
-The ordinary placement wraps the region whose elicitations it answers. Its one
-other placement is as a direct declaration in an `<Execution host="run">`
+The ordinary position wraps the region whose elicitations it answers. Its one
+other position is as a direct declaration in an `<Execution host="run">`
 declaration prefix (`testing-spec.md`). There it contains only one or more
 `<Answer>` matchers, configures the isolated child rather than the assertion
 body, and may appear once. `delegate` must be absent or `false`: child
@@ -11094,7 +11097,7 @@ Returns the **complete invocation** of the currently running xmd, with `args`
 appended — something directly executable, not a prefix for the caller to
 extend. `command()` with no arguments returns the base invocation.
 
-Argument placement belongs to the adapter, because it differs per host:
+Argument order belongs to the adapter, because it differs per host:
 
 | Entrypoint | `command(args)` | `compile` |
 | --- | --- | --- |
@@ -11548,7 +11551,7 @@ visible warning blocks, gather into a separate error report).
 | C38 | `<Output>` props rejected | Props/expression props on `<Output>` produce an ErrorSegment |
 | C39 | `<Content />` in `<Output>` | Caller content projects into a top-level `<Output>` region |
 | C40 | `as=` captures selected output | A component invoked with `as=` captures only its `<Output>` regions; documentation is neither rendered nor captured |
-| C41 | Structural placement | Nested/misplaced `<Output>` (including inside `<If condition={false}>` or a content-discarding component) produces one aggregate printed error and runs no body side effects |
+| C41 | Structure | Nested/misplaced `<Output>` (including inside `<If condition={false}>` or a content-discarding component) produces one aggregate printed error and runs no body side effects |
 | C42 | Caller-projected `<Output>` inert | Projecting `<Output>` through `<Content />` neither activates nor alters the callee's error mode |
 | C43 | Documentation and region failures | A failure in documentation (direct, inside `<Let>`, inside a nested component, or a transported error) throws; a modifier-handled failure continues; an error inside `<Output>` fails the run, and one under `<PrintErrors>` or in a body with no `<Output>` stays a comment |
 | C44 | **Array element-type mismatch** | `files` is `{ type: array, items: { type: string } }`; passing `["a", 3]` → PropValidationError |
@@ -12320,12 +12323,12 @@ Each row names the derivation it kills.
 | AF22 | A refused launch is an observation | The failure is raised as an error segment whose cause carries `phase` and `failureClass`, so `<AssertThrows as="…">` binds a value an author can assert which refusal it was on, rather than the wording of a message |
 | AF23 | A `<Session>` joins what a launch constructed | The same named `<Session>` after a client-native `<Session.Launch>` attaches to the conversation the native process made, and a `<Prompt>` in it answers from that conversation's history rather than from a new one. The route is unchanged: not republished, not converted, and no second identity allocated. Authored whole in `packages/test-agent/src/NativeSessionLaunch.test.md`; a provider that reported another conversation fails it |
 | AF24 | A Session pins the exact value it was issued | A fresh `<Session>` calls `session()` once and hands the same object — by identity, not by key — to every `<Prompt>` nested inside it. A provider decides whether a session may be acted on by that identity, so a rebuilt look-alike is a value nobody issued |
-| AF25 | A fresh Session performs no provider effect | A self-closing `<Session />` places one and renders nothing: no prompt is started, and nothing about the placement appears in the document where the element stood |
-| AF26-AF31, SP1-SP10 | One authentic configured use per lexical Session | `<Session model effort>` freezes its configuration inside the private issuance of the opaque placement routed through the released one-argument `Agent.session()` call. The final live placement is completed once through the provider's directly delivered coordinator: fresh completion stays inert, established completion returns the canonical verified configuration, and Core issues one opaque use selected unchanged for nested prompts and launches. Session middleware never receives model or effort as a member. An element that authored nothing uses the returned Session directly; an inner `<Session>` does not inherit the outer element's settings |
+| AF25 | A new Session performs no provider effect | A self-closing `<Session />` resolves one and renders nothing: no prompt is started, and nothing about the session appears in the document where the element stood |
+| AF26-AF31, SP1-SP10 | One authentic configured use per lexical Session | `<Session model effort>` freezes its configuration inside the private issuance of the opaque request routed through the released one-argument `Agent.session()` call. The final live request is finished once through the provider's directly delivered coordinator: finishing a new session stays inert, established completion returns the canonical verified configuration, and Core issues one opaque use selected unchanged for nested prompts and launches. Session middleware never receives model or effort as a member. An element that authored nothing uses the returned Session directly; an inner `<Session>` does not inherit the outer element's settings |
 | AF32-AF33, AF35-AF36 | Durable settings are one verified value | A prompt record carries one canonical `configuration` only after `started`, read from the session the provider named as the one the turn ran in; a pre-start configuration refusal retains none, and a prompt that started and then failed retains what it ran under. Records written before the member existed parse as unconfigured, and an empty, malformed or unknown-member configuration refuses the record |
 | AF34 | Only `<Session>` admits them | `model` and `effort` on `<Agent>`, `<Prompt>` or `<Session.Launch>` fail prop validation before anything runs |
 | AF37-AF45 | Middleware routes whole Sessions | An ordinary handler may route the raw Session a use names, remove the Session, substitute another authentic use or send the prompt to a different conversation. The provider follows the final route: an authentic use applies its own configuration; a raw Session, name or absence performs no configuration work; and a copied or foreign configured claim refuses before provider work. Reading and delegating the original use is unchanged. Prompt records retain only the verified configuration of the final route that actually started. Session middleware receives no standalone configuration, and the exact provider Session is configured only through coordination delivered directly to the provider factory |
-| AF46-AF52 | Placement registration is operation-owned | `with({ name })` preserves one placement issuance; another live placement substitutes its own configuration and optional durable identity; a raw string or directly returned raw Session selects the unconfigured route. A programmatic configured string uses one non-durable operation-local issuance. One provider-installation closure owns exact Session registration, duplicate detection, completion and configured-use lookup; it refuses a different apply operation, registration or lookup after teardown, sibling/run state, same-name Context substitution, and values from another loaded Core copy, then drops every registration after provider finalizers. The established apply operation's canonical verified return is sealed into the use; a fresh placement performs no configuration work |
+| AF46-AF52 | Session setup registration is operation-owned | `with({ name })` preserves one request issuance; another live request substitutes its own configuration and optional durable identity; a raw string or directly returned raw Session selects the unconfigured route. A programmatic configured string uses one non-durable operation-local issuance. One provider-installation closure owns exact Session registration, duplicate detection, completion and configured-use lookup; it refuses a different apply operation, registration or lookup after teardown, sibling/run state, same-name Context substitution, and values from another loaded Core copy, then drops every registration after provider finalizers. The established apply operation's canonical verified return is sealed into the use; a new session performs no configuration work |
 
 
 ### Tier CR — Component registration and resolution
@@ -13281,10 +13284,10 @@ Defined in [ACP client](./acp-client-spec.md) §The workflow Agent profile.
 | WAP2 | Denial outranks approval | A native permission request under an authored approve-all scope is rejected, the public permission chain is consulted zero times, and the Prompt fails with the fixed diagnostic even though the adapter reported success |
 | WAP3 | Teardown | A completed, failed, cancelled and interrupted turn each finish their turn and close their handle |
 | WAP4 | `xmd run` unchanged | The ordinary provider keeps the caller cwd, omits `mcpServers` and `sessionOptions`, and honours the authored policy's `allow_once` |
-| WAP5 | Refusal precedes ACPX | A placement the host refuses establishes no session and starts no turn |
+| WAP5 | Refusal precedes ACPX | A session request the host refuses creates no session and starts no turn |
 | WAP6 | Nothing echoed | No tool title, raw input, path or command reaches the failure message or its stack |
-| WAP7 | Sibling Sessions | Two `<Session name="review">` sites in one document place two engine identities the middleware cannot touch while its rename reaches the provider; a placement kept from the first site and routed for the second refuses before the provider places anything |
-| WAP8 | Placement only | A fresh `<Session>` under this profile ensures nothing, opens no handle, writes no provider record and retains nothing; the host is asked to place and is not asked to retain |
+| WAP7 | Sibling Sessions | Two `<Session name="review">` sites in one document place two engine identities the middleware cannot touch while its rename reaches the provider; a request kept from the first site and routed for the second refuses before the provider names anything |
+| WAP8 | The request only | A new `<Session>` under this profile ensures nothing, opens no handle, writes no provider record and retains nothing; the host is asked to place and is not asked to retain |
 | WAP9 | Retention follows acceptance | Nothing is retained until the backend accepts the session's first turn, and the ordered log is ensure, turn start, adapter acceptance, the provider's asserting save, then the host's retention — with the mapping absent at every earlier point |
 
 ### Tier WSL — Retained workflow Agent sessions
@@ -14072,7 +14075,7 @@ ordering and teardown are proved with latches rather than elapsed time.
 | SR1 | The owner's handler | The installation that declared the construct receives the occurrence exactly once, and a second installation's handler receives nothing |
 | SR2 | The request | Name, origin, form and a frozen copy of the authored position are correct; props carry declared defaults and are frozen through, as are the regions array and each region's props; the public keys are exactly the request and region members, so no segment, children array, execution environment, counter or ledger is reachable |
 | SR3 | Everything validates first | A definitely invalid prop on the last region leaves the handler unentered and every region body at zero; a region written in a form only its own declaration refuses is settled in preflight, before any prop evaluates |
-| SR4 | Authored order | Regions arrive in the order they were written rather than declared, whitespace between them is not content, and a region written on its own refuses through the shared placement analysis and reaches no handler |
+| SR4 | Authored order | Regions arrive in the order they were written rather than declared, whitespace between them is not content, and a region written on its own refuses through the shared structural analysis and reaches no handler |
 | SR5 | Demand runs the body | A read expands the region's authored body, including a nested component; a region created, expanded and subscribed to but never read runs nothing at all |
 | SR6 | Region output is not document output | Chunks carry the region's rendered text while the construct renders nothing, and no chunk reaches `DocumentOutput` middleware |
 | SR7 | One demand, one chunk | Subscribing runs nothing; the first read delivers the first chunk while the second element's work has not begun; the next element runs only once a later read asks for it, so a delivered chunk buys no work beyond itself |
@@ -14097,10 +14100,10 @@ invokes a handler: this layer captures one and calls none.
 | ED3 | The pair is declared | Several constructs and interleaved regions pair inside one installation; an orphan region, a region of a region, a pair split across two installations, a construct with no region, declarations with no handler and a handler with no declarations each refuse with nothing yielded |
 | ED4 | One name, one answer | Distinct names coexist across installations and arms; the same name twice in one arm, across the arms, across installations, and against a private closure name each refuse whichever order they arrive in |
 | ED5 | The name is claimed | A declared construct answers ahead of a repository file of the same name, which answers when nothing is declared; the engine's structural table, the canonical protected tier and a reserved registration cannot be claimed |
-| ED6 | Described from the declaration | `inspectComponent()` reports a construct and a region as `structural`, carrying the declared origin with their forms, props, placement, syntax, description and context, and no handler; a malformed relationship refuses for inspection exactly as it does for a run |
-| ED7 | Version 2, one category, one kind | The symbols stay version 2 with their three categories in order, carry the construct and its regions sorted by code point beside the engine's own, and render the installed contract; both structural selections are `structural` and are told apart by `construct` versus `origin`, neither shape inhabits a component entry, and an engine entry carries no forms, props or placement |
-| ED8 | Placement | A construct holding its declared regions is valid and every region body is walked; a region outside its construct, a region under something else, substantive text, a code block, a foreign element, a refused form and a failed literal schema are deterministic diagnostics with nothing executed, and the foreign element is reported where it was written |
-| ED9 | Opacity | A required prop written as an expression is present and makes the occurrence opaque; a definitely missing required prop still fails, opacity hides no placement error, and the engine's own constructs keep the results they always had |
+| ED6 | Described from the declaration | `inspectComponent()` reports a construct and a region as `structural`, carrying the declared origin with their forms, props, structure, syntax, description and context, and no handler; a malformed relationship refuses for inspection exactly as it does for a run |
+| ED7 | Version 2, one category, one kind | The symbols stay version 2 with their three categories in order, carry the construct and its regions sorted by code point beside the engine's own, and render the installed contract; both structural selections are `structural` and are told apart by `construct` versus `origin`, neither shape inhabits a component entry, and an engine entry carries no forms, props or structure |
+| ED8 | Structure | A construct holding its declared regions is valid and every region body is walked; a region outside its construct, a region under something else, substantive text, a code block, a foreign element, a refused form and a failed literal schema are deterministic diagnostics with nothing executed, and the foreign element is reported where it was written |
+| ED9 | Opacity | A required prop written as an expression is present and makes the occurrence opaque; a definitely missing required prop still fails, opacity hides no structural error, and the engine's own constructs keep the results they always had |
 | ED10 | Absence | With nothing declared, the new names are unresolved, the structural category holds only the engine's own constructs, and a repository file under one of those names is an ordinary component rather than syntax |
 
 ### Tier PL — Plugins (§7 Plugins)

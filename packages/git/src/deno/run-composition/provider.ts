@@ -118,7 +118,7 @@ import {
   type PushEvidence,
   type RegisteredCheckout,
 } from "./operations.ts";
-import { repositorySlot, worktreeSlot } from "./placement.ts";
+import { repositorySlot, worktreeSlot } from "./checkout-layout.ts";
 import { lazily } from "./lazy.ts";
 import { realpath } from "node:fs/promises";
 import { ensureDir } from "@effectionx/fs";

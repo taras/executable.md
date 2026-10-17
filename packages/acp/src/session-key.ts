@@ -26,14 +26,13 @@ export interface SessionCandidate {
 /**
  * One candidate, and whether a session already lives there.
  *
- * `pending` means this key names where a session will be, and nothing has
- * constructed one yet. `established` means a durable record already stands
- * behind it — including a record written before deferred materialization
- * existed, which carries no marker and asserted its identity when it was
- * created.
+ * `new` means this key names where a session will be, and nothing has created
+ * one yet. `existing` means a durable record already stands behind it —
+ * including a record written before deferred creation existed, which carries
+ * no marker and asserted its identity when it was created.
  */
-export interface SessionPlacement extends SessionCandidate {
-  state: "pending" | "established";
+export interface SessionDetails extends SessionCandidate {
+  state: "new" | "existing";
 }
 
 function digest(value: string): string {
@@ -89,15 +88,18 @@ export function* sessionCandidates(
  * contextual cwd when none does.
  *
  * A record still marked pending is occupancy rather than a conversation — its
- * first turn was never accepted — so the placement it answers with is pending
- * too, and the next operation constructs rather than continues.
+ * first turn was never accepted — so the details it answers with say new too,
+ * and the next operation creates rather than continues.
+ *
+ * `pending` on the stored marker is ACPX's own spelling, which this reads and
+ * never rewrites; the value this answers with is the translated one.
  */
-export function* resolveSessionPlacement(
+export function* resolveSessionDetails(
   store: AcpSessionStore,
   agentCommand: string,
   cwdPath: string,
   name?: string,
-): Operation<SessionPlacement> {
+): Operation<SessionDetails> {
   const candidates = yield* sessionCandidates(agentCommand, cwdPath, name);
   for (const candidate of candidates) {
     const record = yield* until(store.load(candidate.sessionKey));
@@ -108,9 +110,9 @@ export function* resolveSessionPlacement(
     ) {
       return {
         ...candidate,
-        state: record.sessionMaterialization?.state === "pending" ? "pending" : "established",
+        state: record.sessionMaterialization?.state === "pending" ? "new" : "existing",
       };
     }
   }
-  return { ...candidates[0]!, state: "pending" };
+  return { ...candidates[0]!, state: "new" };
 }

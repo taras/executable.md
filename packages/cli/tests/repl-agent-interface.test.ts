@@ -28,6 +28,7 @@ import {
 } from "effection";
 import type { Operation, Result, Stream, Subscription } from "effection";
 import { DurableContext, InMemoryStream } from "@executablemd/durable-streams";
+import { DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import {
   Agent,
   agentIdentityComponents,
@@ -48,6 +49,7 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
 
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { agentReferenceEvents } from "./fixtures/repl/reference.ts";
+import { ENTRIES_FILE, PAIRED_DIRECTORY } from "../src/repl/sidekick/history.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
@@ -88,7 +90,9 @@ import type { ReplTerminalCapabilities } from "../src/repl/terminal-host.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { ReplClock } from "../src/repl/frame.ts";
 import { runReplProgram } from "../src/repl/program.ts";
+import { entryVocabulary } from "../src/repl-profile.ts";
 import type { ReplExecutionProfile } from "../src/repl-profile.ts";
+import { NO_PLUGINS } from "../src/plugin-host.ts";
 import type { ReplOutcome } from "../src/repl/program.ts";
 import { appendFile, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -100,9 +104,11 @@ import { useReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplRenderer } from "../src/repl/renderer.ts";
 import { useReplTree } from "../src/repl/reconcile.ts";
 import type { ReplTree } from "../src/repl/reconcile.ts";
+import { sidekickAssembly } from "../src/repl/sidekick/assembly.ts";
 
 /** The widest accepted frame, stated here because layout keeps it private. */
 const WIDE = { columns: 160, rows: 36 };
+const MEDIUM = { columns: 120, rows: 30 };
 
 /** The Story's shape: three spawned children, each its own conversation. */
 const THREE_SPAWNS = [
@@ -434,6 +440,14 @@ const PROFILE: ReplExecutionProfile = {
   installations: [{ components: agentIdentityComponents() }],
   generated: ordinaryGeneratedSelection(),
   permissionMode: "approve-reads",
+  // No row here opens a Sidekick conversation, so the selection is the one an
+  // unconfigured command settles.
+  sidekickAgent: DEFAULT_AGENT_NAME,
+  // Declared because a profile carries one, and never installed: no row here
+  // opens a Sidekick conversation.
+  sidekickAssembly: sidekickAssembly(DEFAULT_AGENT_NAME, {}),
+  plugins: NO_PLUGINS.plugins.map((plugin) => plugin.name),
+  vocabulary: entryVocabulary([], NO_PLUGINS),
 };
 
 function installations(): readonly ExecutionInstallation[] {
@@ -581,7 +595,7 @@ interface Frame {
   cell(key: string): string | undefined;
   /** Where one placed row's own cell landed. */
   boundsOf(key: string): ReplBounds | undefined;
-  /** The keys this frame placed in one region, in placement order. */
+  /** The keys this frame placed in one region, in layout order. */
   inRegion(name: ReplRegion): string[];
   /** Where one named region landed. */
   region(name: ReplRegion): ReplBounds | undefined;
@@ -3818,7 +3832,11 @@ describe("U2 — a pending permission announces itself without taking the screen
  */
 function* focusTheDraft(terminal: Terminal, limit = 240): Operation<void> {
   for (let press = 0; press <= limit; press += 1) {
-    if (screenOf(terminal).some((line) => line.includes(">> "))) {
+    // The draft's own row, not any focused field. This screen has two input
+    // destinations now — the draft and `Message Sidekick` (#883 section 5) — and
+    // both wear the same focus marker, so a helper looking for the marker alone
+    // stops at whichever it reaches first and types an entry into a chat box.
+    if (screenOf(terminal).some((line) => line.includes(`>> ${DRAFT_PROMPT}`))) {
       return;
     }
     terminal.feed("\t");
@@ -3848,11 +3866,17 @@ function* focusTheDraft(terminal: Terminal, limit = 240): Operation<void> {
  */
 function* admittedSources(hostRoot: string): Operation<readonly string[]> {
   const directory = join(hostRoot, "xmd", "repl");
-  const files = yield* readdir(directory);
-  // One execution, so one file. More than one would mean this row read a
-  // history it did not write, and picking the first would hide that.
-  expect(files).toHaveLength(1);
-  const events = yield* readRecords(join(directory, files[0] ?? ""));
+  const held = yield* readdir(directory);
+  // One execution, so one entry in the repository. More than one would mean
+  // this row read a history it did not write, and picking the first would hide
+  // that. A published pair keeps its entries inside `v1/<execution>/`, so the
+  // one entry here is that directory.
+  expect(held).toHaveLength(1);
+  const executions = yield* readdir(join(directory, PAIRED_DIRECTORY));
+  expect(executions).toHaveLength(1);
+  const events = yield* readRecords(
+    join(directory, PAIRED_DIRECTORY, executions[0] ?? "", ENTRIES_FILE),
+  );
   const projected = projectRepl(events);
   if (!projected.ok) {
     throw projected.error;
@@ -4025,4 +4049,97 @@ describe("U2 — a draft outlives a permission and is still editable", () => {
       });
     });
   }
+});
+
+/**
+ * Tier BP4 — the sidebar's longest rows survive its two-cell body gutter (#883).
+ *
+ * The Product Owner asked for the Transcript and Sessions to match the
+ * Sidekick's body padding. An inset sidebar at the old widths could not hold a
+ * turn's state: `fitLabel` keeps that part whole because "a state cut in half is
+ * a row saying something untrue", and beneath that guarantee is a last-resort
+ * hard cut which the inset reached — at the medium profile it was already being
+ * reached before any inset. The answer was width, not shorter words: the sidebar
+ * is 36 columns at both profiles, which leaves 32 inside the gutter and 30 past
+ * the focus marker, exactly the room the old full-width wide sidebar had.
+ *
+ * Both profiles, because wide-only evidence is what let the medium case through.
+ */
+describe("Tier BP4 — the widened sidebar holds its longest rows whole", () => {
+  /** The longest state this product writes for a turn, and the widest control. */
+  const LONGEST_STATE = "completed, not recorded yet";
+  const FILTERED = "All conversations (filtered)";
+
+  it("BP4: a turn's whole state and the filtered control are drawn at both sizes", function* () {
+    const { session, stub } = yield* asking({
+      review: { unrecorded: true },
+      build: { unrecorded: true },
+      check: { unrecorded: true },
+    });
+    yield* stub.finished(REVIEWER);
+    yield* stub.finished(BUILDER);
+    yield* stub.finished(CHECKER);
+
+    // One turn left unrecorded, which is the state that does not fit, and one
+    // recorded beside it so the two readings are both on the screen.
+    const order = [...session.agent.slots].sort((left, right) => left.order - right.order);
+    const unrecorded = promptOf(session, order[0]?.key);
+    const recordedPrompt = promptOf(session, order[order.length - 1]?.key);
+    expect(unrecorded).not.toBe(recordedPrompt);
+    stub.record(coroutineFor(recordedPrompt));
+    yield* until(session, `${recordedPrompt} being recorded`, () => recorded(session) === 1);
+
+    for (const size of [WIDE, MEDIUM]) {
+      const where = `${size.columns}x${size.rows}`;
+      const standing = initialState("agents");
+
+      // Whole, not shortened: this is the row the old widths cut, and the one
+      // the width ruling exists to keep.
+      const view = reading(standing, session, size);
+      expect([where, (yield* labelOf(view, unrecorded)).includes(LONGEST_STATE)]).toEqual([
+        where,
+        true,
+      ]);
+      expect([
+        where,
+        (yield* labelOf(view, recordedPrompt)).includes("completed, recorded"),
+      ]).toEqual([where, true]);
+      // And every row of this column ends in a *complete* state, which is the
+      // guarantee itself: the hard-cut branch stops wherever the room ran out,
+      // so a row ending mid-state is exactly the failure this width prevents.
+      // The prompt in front of it may still give way — that is the part marked
+      // elidable, and why the state is the part marked to be kept.
+      const STATES =
+        /(?:queued|streaming|(?:completed|failed|cancelled|finished), (?:not recorded yet|recorded))$/;
+      for (const row of yield* turnRows(view)) {
+        expect([where, row.key, STATES.test(row.label)]).toEqual([where, row.key, true]);
+      }
+
+      // The three turns are still three distinct rows, which is the other thing
+      // a cut takes away: two rows ending mid-key read as the same row.
+      const labels = (yield* turnRows(view)).map((one) => one.label);
+      expect([where, labels.length]).toEqual([where, 3]);
+      expect([where, new Set(labels).size]).toEqual([where, labels.length]);
+
+      // The widest control the sidebar draws, with a filter actually applied
+      // through the real action rather than a route written here.
+      const chosen = (yield* conversationRows(view))[0]?.replace("sessions:conversation:", "");
+      if (chosen === undefined) {
+        throw new Error(`${where} offered no conversation to filter by`);
+      }
+      const filteredState = reduceRepl(
+        standing,
+        { kind: "select-session", session: chosen },
+        session.model,
+        liveReading(session),
+        yield* admissionOf(standing, session, size),
+      ).state;
+      const filtered = reading(filteredState, session, size);
+      const all = (yield* describedBy(filtered)).find((one) => one.key === "sessions:all");
+      if (all === undefined) {
+        throw new Error(`${where} drew no All conversations control`);
+      }
+      expect([where, all.label.includes(FILTERED)]).toEqual([where, true]);
+    }
+  });
 });

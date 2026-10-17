@@ -767,7 +767,7 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
     });
   });
 
-  it("WAL11: the profile materializes the adapter a placement names, and only then", function* () {
+  it("WAL11: the profile materializes the adapter a session request names, and only then", function* () {
     const root = yield* useStorageRoot();
     const source = yield* documentWithNote();
 
@@ -1027,7 +1027,7 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
   it("WAL16: a refusing snapshot refuses its own agent and leaves the others alone", function* () {
     // Two runs, two roots. There is one run id per store, so the second half
     // has to be a fresh run rather than a continuation of the first one's
-    // journal — which would replay a Codex placement into a Gemini document.
+    // journal — which would replay a Codex session into a Gemini document.
     const refusedRoot = yield* useStorageRoot();
     const unaffectedRoot = yield* useStorageRoot();
 

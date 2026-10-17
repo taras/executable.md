@@ -21,7 +21,7 @@ real ACPX runtime and a real `xmd test-agent` worker.
     <AssertStringIncludes actual={secondReply} expected="The review of **packages/core** passed." />
   </Test>
 
-  `<TestAgent>` has a second placement. Written as a declaration inside an
+  `<TestAgent>` has a second position. Written as a declaration inside an
   `<Execution host="run">` it scripts the agent a *child* document reaches, and
   `<Answers>` says what the child's elicitations are answered with. The child
   below is written the way an ordinary document is — it asks an agent to review

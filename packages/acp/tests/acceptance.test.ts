@@ -84,13 +84,15 @@ describe("Tier XA — ACPX provider through the rootProvider seam", () => {
  *
  * Two sibling `<Session name="review">` elements are two sessions. The authored
  * name is descriptive and compositional — a handler may rewrite it, and one
- * here does — while the identity travels inside the placement, reachable only
+ * here does — while the identity travels inside the request, reachable only
  * through the coordinator delivered to this provider.
  */
 describe("Tier WAP — same-named sibling Sessions", () => {
-  it('WAP7: two sibling <Session name="review"> sites place two identities the middleware cannot touch', function* () {
+  it('WAP7: two sibling <Session name="review"> sites name two identities the middleware cannot touch', function* () {
     const harness = createFakeRuntime();
-    const placements: Array<{ session: string | undefined; sessionIdentity?: string }> = [];
+    const requests: Array<{ session: string | undefined; sessionIdentity?: string }> = [];
+    /** The session keys this host was asked to retain, in order. */
+    const recorded: string[] = [];
 
     const dir = path.join(os.tmpdir(), `xmd-acp-session-${randomUUID()}`);
     yield* ensureDir(dir);
@@ -122,18 +124,26 @@ describe("Tier WAP — same-named sibling Sessions", () => {
             agentRegistry: makeRegistry({ gemini: "gemini-cmd" }),
             sessions: {
               // deno-lint-ignore require-yield
-              *place(context) {
-                placements.push({
-                  session: context.session,
-                  ...(context.sessionIdentity === undefined
+              *requestSession(request) {
+                requests.push({
+                  session: request.session,
+                  ...(request.sessionIdentity === undefined
                     ? {}
-                    : { sessionIdentity: context.sessionIdentity }),
+                    : { sessionIdentity: request.sessionIdentity }),
                 });
                 return {
-                  sessionKey: `placed:${context.sessionIdentity ?? "none"}`,
-                  cwd: "/placed",
-                  state: "pending",
+                  sessionKey: `session:${request.sessionIdentity ?? "none"}`,
+                  cwd: "/sessions",
+                  state: "new",
                 };
+              },
+              // A host that decides where sessions live retains what stands
+              // there. This one keeps the keys it was asked to retain, in
+              // order, which is how the test sees that each request became its
+              // own confirmed session rather than one shared by the name.
+              // deno-lint-ignore require-yield
+              *recordSessionIdentity(details) {
+                recorded.push(details.sessionKey);
               },
             },
           }),
@@ -165,23 +175,29 @@ describe("Tier WAP — same-named sibling Sessions", () => {
       yield* execution;
     });
 
-    expect(placements).toHaveLength(2);
+    expect(requests).toHaveLength(2);
     // The middleware's rewrite reached the provider, because the name is the
     // compositional half.
-    expect(placements.map((placement) => placement.session)).toEqual(["rewritten", "rewritten"]);
+    expect(requests.map((request) => request.session)).toEqual(["rewritten", "rewritten"]);
     // The identities did not, and are two: same authored name, two elements,
     // two sessions.
-    const identities = placements.map((placement) => placement.sessionIdentity);
+    const identities = requests.map((request) => request.sessionIdentity);
     expect(identities.every((identity) => typeof identity === "string")).toBe(true);
     expect(new Set(identities).size).toBe(2);
     expect(identities).not.toContain("rewritten");
-    // And each placement is its own session, not one shared by the name.
+    // And each request is its own session, not one shared by the name.
     expect(new Set(harness.ensureCalls.map((call) => call.sessionKey)).size).toBe(2);
+    // The host was asked to retain both, in the order they were confirmed. A
+    // provider that skipped a host with nothing to skip would show up here as
+    // an empty list.
+    expect(recorded).toEqual(requests.map((request) => `session:${request.sessionIdentity}`));
   });
 
-  it("WAP7: a placement kept from the first Session cannot be routed for the second", function* () {
+  it("WAP7: a request kept from the first Session cannot be routed for the second", function* () {
     const harness = createFakeRuntime();
-    const placements: Array<string | undefined> = [];
+    const requests: Array<string | undefined> = [];
+    /** The session keys this host was asked to retain, in order. */
+    const recorded: string[] = [];
     let refusal: string | undefined;
 
     const dir = path.join(os.tmpdir(), `xmd-acp-substitute-${randomUUID()}`);
@@ -214,13 +230,17 @@ describe("Tier WAP — same-named sibling Sessions", () => {
             agentRegistry: makeRegistry({ gemini: "gemini-cmd" }),
             sessions: {
               // deno-lint-ignore require-yield
-              *place(context) {
-                placements.push(context.sessionIdentity);
+              *requestSession(request) {
+                requests.push(request.sessionIdentity);
                 return {
-                  sessionKey: `placed:${context.sessionIdentity ?? "none"}`,
-                  cwd: "/placed",
-                  state: "pending",
+                  sessionKey: `session:${request.sessionIdentity ?? "none"}`,
+                  cwd: "/sessions",
+                  state: "new",
                 };
+              },
+              // deno-lint-ignore require-yield
+              *recordSessionIdentity(details) {
+                recorded.push(details.sessionKey);
               },
             },
           }),
@@ -228,7 +248,7 @@ describe("Tier WAP — same-named sibling Sessions", () => {
         },
       });
 
-      // The attack: keep the first element's real placement and route it for
+      // The attack: keep the first element's real request and route it for
       // the second. Reading it again would answer with the first element's
       // identity, and both sessions would collapse into one.
       let kept: string | AgentSessionRequest | undefined;
@@ -260,9 +280,12 @@ describe("Tier WAP — same-named sibling Sessions", () => {
       }
     });
 
-    // Refused before the provider placed anything for the second element: the
-    // issuance the first one opened closed when it finished placing.
-    expect(refusal).toContain("already placed its session");
-    expect(placements).toHaveLength(1);
+    // Refused before the provider named anything for the second element: the
+    // issuance the first one opened closed when that element finished.
+    expect(refusal).toContain("already resolved its session");
+    expect(requests).toHaveLength(1);
+    // One session was confirmed, so one identity was retained — the refused
+    // element contributed no mapping of its own.
+    expect(recorded).toEqual([`session:${requests[0]}`]);
   });
 });

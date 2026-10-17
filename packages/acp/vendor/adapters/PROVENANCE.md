@@ -38,7 +38,7 @@ conversation.
 
 ### Whether the backend accepted a turn
 
-A fresh `<Session>` places a session; it does not create one. The conversation
+A new `<Session>` names a session; it does not create one. The conversation
 begins when a backend accepts the first turn, and only the adapter is in a
 position to say when that happened (`specs/acp-client-spec.md`). Everything else
 a turn produces — text, a stop reason, a terminal response, a checkpoint token —
@@ -135,7 +135,7 @@ installed — which is what lets a session key be built from it early and never
 change underneath. Materialization itself is lazy: it happens only for a
 selection this build carries a snapshot for, and only just before the first
 operation that could spawn that adapter — the provider's availability probe,
-which is earlier than any `<Session>` placement and earlier than any turn. A
+which is earlier than any `<Session>` request and earlier than any turn. A
 document that opens no `<Session>` installs nothing.
 
 Publication is one rename out of a private staging directory, and a marker

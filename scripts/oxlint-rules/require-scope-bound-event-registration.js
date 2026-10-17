@@ -964,7 +964,7 @@ export const requireScopeBoundEventRegistration = {
         return;
       }
 
-      const verdicts = candidates.map((removal) => placement(removal, node, owner, handler));
+      const verdicts = candidates.map((removal) => position(removal, node, owner, handler));
 
       if (verdicts.includes("accepted")) {
         return;
@@ -1065,7 +1065,7 @@ export const requireScopeBoundEventRegistration = {
      * Where a matching removal sits relative to the registration, and whether
      * that place runs when the owner ends.
      */
-    function placement(removal, registration, owner, handler) {
+    function position(removal, registration, owner, handler) {
       // Only a handler this file declares can remove itself. A handler that
       // arrived as a parameter is somebody else's function, and its
       // declaration is the enclosing signature rather than a body.

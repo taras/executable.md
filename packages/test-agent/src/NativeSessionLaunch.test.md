@@ -43,7 +43,7 @@ the one meeting a session that already exists.
 
 So the launch refuses, and says so.
 
-<Test name="an established session is refused, never converted">
+<Test name="an existing session is refused, never converted">
 <Session name="claimed">
 <Prompt as="occupant">who is in here?</Prompt>
 

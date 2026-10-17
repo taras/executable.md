@@ -102,6 +102,21 @@ export function fieldText(prompt: string, text: string, focused: boolean): strin
   return `${parts.marker}${parts.prompt}${parts.earlier}${parts.value}`;
 }
 
+/**
+ * A field drawn as a block: its marker and its name, with no value on the row.
+ *
+ * For the one field whose value is fitted into rows of its own beneath it. The
+ * value is deliberately absent here rather than shortened: it is drawn in full
+ * below, so putting the last line of it on the name as well would say the same
+ * text twice, and the count of earlier lines would stand in for rows that are
+ * really there.
+ */
+export function fieldLabel(prompt: string, focused: boolean): string {
+  const parts = fieldParts(prompt, "", focused);
+  return `${parts.marker}${parts.prompt}`;
+}
+
+/** Read an optional string field. */
 function optional(input: ReplViewData, name: string): string | undefined {
   const value = fields(input)?.[name];
   return typeof value === "string" ? value : undefined;
@@ -206,6 +221,16 @@ function activation(input: ReplViewData): ReplAction | undefined {
   if (select === "exit") {
     return { kind: "exit" };
   }
+  if (select === "pane") {
+    const pane = named["pane"];
+    return pane === "bindings" || pane === "sidekick" ? { kind: "select-pane", pane } : undefined;
+  }
+  if (select === "send-message") {
+    return { kind: "send-message" };
+  }
+  if (select === "stop-sidekick") {
+    return { kind: "stop-sidekick" };
+  }
   if (select === "form-field") {
     const field = named["field"];
     return typeof field === "string" ? { kind: "select-field", field } : undefined;
@@ -219,6 +244,77 @@ function activation(input: ReplViewData): ReplAction | undefined {
   }
   if (select === "form-submit") {
     return { kind: "answer" };
+  }
+  // The Sidekick's own question, named on every one of its controls. Two
+  // owners ask questions, and an action that said only "the form" would be
+  // answered by whichever one the reducer looked at.
+  if (select === "sidekick-question") {
+    const question = named["question"];
+    return typeof question === "string" ? { kind: "open-sidekick-question", question } : undefined;
+  }
+  if (select === "sidekick-question-close") {
+    return { kind: "close-sidekick-question" };
+  }
+  if (select === "sidekick-form-field") {
+    const question = named["question"];
+    const field = named["field"];
+    return typeof question === "string" && typeof field === "string"
+      ? { kind: "select-sidekick-field", question, field }
+      : undefined;
+  }
+  if (select === "sidekick-form-choice") {
+    const question = named["question"];
+    const field = named["field"];
+    const option = named["option"];
+    return typeof question === "string" && typeof field === "string" && typeof option === "string"
+      ? { kind: "choose-sidekick", question, field, option }
+      : undefined;
+  }
+  if (select === "sidekick-form-submit") {
+    const question = named["question"];
+    return typeof question === "string" ? { kind: "answer-sidekick", question } : undefined;
+  }
+  if (select === "configure") {
+    const conversation = named["conversation"];
+    return {
+      kind: "open-configure",
+      ...(typeof conversation === "string" ? { conversation } : { conversation: undefined }),
+    };
+  }
+  if (select === "configure-refresh") {
+    return { kind: "refresh-configure" };
+  }
+  if (select === "configure-close") {
+    return { kind: "close-configure" };
+  }
+  if (select === "configure-model") {
+    const model = named["model"];
+    return typeof model === "string" ? { kind: "choose-model", model } : undefined;
+  }
+  if (select === "configure-effort") {
+    const effort = named["effort"];
+    return typeof effort === "string" ? { kind: "choose-effort", effort } : undefined;
+  }
+  if (select === "configure-agent") {
+    return { kind: "name-agent" };
+  }
+  if (select === "configure-apply") {
+    return { kind: "apply-configure" };
+  }
+  if (select === "retry-message") {
+    const conversation = named["conversation"];
+    const message = named["message"];
+    return typeof conversation === "string" && typeof message === "number"
+      ? { kind: "retry-message", conversation, message }
+      : undefined;
+  }
+  if (select === "configure-scroll") {
+    const delta = named["delta"];
+    return typeof delta === "number" ? { kind: "scroll-configure", delta } : undefined;
+  }
+  if (select === "sidekick-scroll") {
+    const delta = named["delta"];
+    return typeof delta === "number" ? { kind: "scroll-sidekick-question", delta } : undefined;
   }
   if (select === "scroll") {
     // A direction, not a position: the control knows which way it points, and
@@ -246,6 +342,30 @@ function activation(input: ReplViewData): ReplAction | undefined {
   }
   if (select === "all-sessions") {
     return { kind: "all-sessions" };
+  }
+  // One saved Sidekick turn, by its own chat and canonical ordinal. Both,
+  // because a turn number means nothing outside the conversation that holds
+  // it, and a row that carried only one of them would open a chat at a turn
+  // somebody else's conversation had.
+  if (select === "sidekick-turn") {
+    const conversation = named["conversation"];
+    const turn = named["turn"];
+    if (typeof conversation !== "string" || conversation.length === 0) {
+      return undefined;
+    }
+    if (turn === undefined) {
+      return { kind: "read-sidekick-turn", conversation, turn: undefined };
+    }
+    return typeof turn === "number" && turn > 0
+      ? { kind: "read-sidekick-turn", conversation, turn }
+      : undefined;
+  }
+  if (select === "sidekick-back") {
+    return { kind: "read-current-chat" };
+  }
+  if (select === "scroll-sidekick") {
+    const delta = named["delta"];
+    return typeof delta === "number" ? { kind: "scroll-sidekick", delta } : undefined;
   }
   if (select === "permission") {
     const request = named["request"];
@@ -312,6 +432,24 @@ function submission(input: ReplViewData): ReplAction | undefined {
   if (purpose === "answer") {
     return { kind: "answer" };
   }
+  if (purpose === "configure-agent") {
+    // Enter in the agent field asks for what Configure holds, exactly as Enter
+    // in the draft runs the draft: one destination, one meaning.
+    return { kind: "apply-configure" };
+  }
+  if (purpose === "sidekick-answer") {
+    // The question's key is on the line itself, for the same reason it is on
+    // every other control of this form: Enter here answers the question this
+    // row was drawn for and no later one.
+    const question = optional(input, "question");
+    return question === undefined ? undefined : { kind: "answer-sidekick", question };
+  }
+  if (purpose === "message") {
+    // Enter in the Sidekick's box asks the Sidekick, exactly as Enter in the
+    // draft runs the draft. Two destinations, two meanings, and the field's own
+    // description is what says which one this line is.
+    return { kind: "send-message" };
+  }
   return undefined;
 }
 
@@ -322,13 +460,20 @@ function submission(input: ReplViewData): ReplAction | undefined {
  * earlier ones are said to be there rather than drawn into a footer that is a
  * row tall — what the whole draft is remains exactly readable in the canonical
  * location, which is where a caller reopens it from.
+ *
+ * A **block** field is the exception, and it is one field still: its name and
+ * focus marker are this row, and its value is fitted into rows of its own
+ * beneath it. The node here is the same node — one focus owner, one editing
+ * value, one hold on the keyboard — so the rows below add no Tab stop and
+ * nothing else can answer for them.
  */
 function rendered(input: ReplViewData): string {
-  return fieldText(
-    textOf(input, "prompt"),
-    textOf(input, "text"),
-    fields(input)?.["focused"] === true,
-  );
+  const focused = fields(input)?.["focused"] === true;
+  const prompt = textOf(input, "prompt");
+  if (fields(input)?.["block"] === true) {
+    return fieldLabel(prompt, focused);
+  }
+  return fieldText(prompt, textOf(input, "text"), focused);
 }
 
 /**

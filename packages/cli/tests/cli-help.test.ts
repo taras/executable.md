@@ -233,7 +233,7 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(stdout).not.toContain("document reference");
   });
 
-  it("CH12: program help lists repl, and its own help describes the one entry", function* () {
+  it("CH12: program help lists repl, and its own help describes how entries follow", function* () {
     const listed = yield* runCli(["--help"]).expect();
     expect(listed.stdout).toContain("repl");
     expect(listed.stdout).toContain(
@@ -243,8 +243,15 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     const own = yield* runCli(["repl", "--help"]).expect();
     expect(own.stdout).toContain("Usage: xmd repl [OPTIONS] [location]");
     expect(own.stdout).toContain("a location this REPL printed earlier");
-    expect(own.stdout).toContain("ONE ENTRY");
-    expect(own.stdout).toContain("An execution admits exactly one entry.");
+    // Re-anchored for #883: the help used to say an execution admits exactly one
+    // entry, which the sequential REPL this command mounts contradicts. The
+    // claim this row makes is unchanged — the command's own help describes what
+    // an execution does with the entries it is given — and it is now the
+    // behavior the mounted journeys actually prove.
+    expect(own.stdout).toContain("ENTRIES");
+    expect(own.stdout).toContain("An execution admits one entry at a time");
+    expect(own.stdout).toContain("the bindings the entries before it published");
+    expect(own.stdout).not.toContain("exactly one entry");
     // Describing a command is not running one: help reaches no data directory,
     // no history file and no terminal mode.
     expect(own.stdout).not.toContain("xmd/repl/");
@@ -286,7 +293,8 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(options).toEqual(described(run.stdout));
     // Approve-reads is what an unstated line means, and the help says so.
     expect(repl.stdout).toContain("ask for the rest (default)");
-    // And no sixth: this command adds no data directory and no REPL-only knob.
+    // The five are all of what it shares: this command adds no data directory,
+    // and the one option it adds of its own is covered by C2 below.
     expect(repl.stdout).not.toContain("--data-dir");
   });
 
@@ -329,6 +337,58 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     // An option value is not a location: `--default-agent claude` names one
     // thing, and a scan that counted the value would refuse it as two.
     const withLocation = yield* runCli(["repl", "--default-agent", "claude", "one", "two"]).join();
+    expect(withLocation.code).toBe(1);
+    expect(withLocation.stderr).toContain("at most one location");
+  });
+
+  it("C2: repl states its own Sidekick agent option, and names a value or refuses", function* () {
+    const repl = yield* runCli(["repl", "--help"]).expect();
+    const run = yield* runCli(["run", "--help"]).expect();
+
+    // Its own, and separate: this command has a Sidekick and a run has none, so
+    // the option is on one help and not the other — and it is a second line
+    // rather than a second description of `--default-agent`.
+    expect(repl.stdout).toContain("--sidekick-agent");
+    expect(repl.stdout).toContain("agent name for the Sidekick's own conversations");
+    expect(repl.stdout).toContain("--default-agent");
+    expect(run.stdout).not.toContain("--sidekick-agent");
+
+    // Accepted in both forms a valued option has, and accepted *with* the
+    // options it is independent of: each line parses, the stack settles, and the
+    // command gets as far as wanting a terminal — which a pipe is not.
+    for (const accepted of [
+      ["repl", "--sidekick-agent", "claude"],
+      ["repl", "--sidekick-agent=claude"],
+      ["repl", "--default-agent", "codex", "--sidekick-agent", "claude"],
+    ]) {
+      const ran = yield* runCli(accepted).join();
+      expect([accepted, ran.code]).toEqual([accepted, 1]);
+      expect([accepted, ran.stderr.trim()]).toEqual([
+        accepted,
+        "xmd repl: the REPL runs where a terminal is: it is not available over a pipe.",
+      ]);
+    }
+
+    // Refused before anything is opened: no terminal, and no per-user directory
+    // or history file either — the message is fixed grammar's, which reads
+    // nothing. An empty value is the same refusal as none, in both spellings:
+    // an agent with no name is not an agent.
+    for (const refused of [
+      ["repl", "--sidekick-agent"],
+      ["repl", "--sidekick-agent="],
+      ["repl", "--sidekick-agent", ""],
+    ]) {
+      const ran = yield* runCli(refused).join();
+      expect([refused, ran.code]).toEqual([refused, 1]);
+      expect([refused, ran.stderr]).toEqual([
+        refused,
+        "xmd repl: --sidekick-agent requires a value\n",
+      ]);
+    }
+
+    // And the one-location grammar still holds around it: the value is this
+    // option's, not a second location.
+    const withLocation = yield* runCli(["repl", "--sidekick-agent", "claude", "one", "two"]).join();
     expect(withLocation.code).toBe(1);
     expect(withLocation.stderr).toContain("at most one location");
   });

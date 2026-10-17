@@ -1833,7 +1833,7 @@ function twoPromptsIn(first: string, second: string): string {
   ].join("\n");
 }
 
-function admitted(result: Result<void>): void {
+function admitted(result: Result<unknown>): void {
   if (!result.ok) {
     throw result.error;
   }

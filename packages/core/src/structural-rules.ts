@@ -817,7 +817,7 @@ function misplacedSpawnViolations(children: Segment[]): StructuralViolation[] {
 /**
  * What one spawned child's own body says about control flow leaving it.
  *
- * Lexical, like every other placement rule here: a `<Break>` is legal because a
+ * Lexical, like every other structural rule here: a `<Break>` is legal because a
  * `<Loop>` written inside the same spawn encloses it, and a `<Return>` has no
  * owner to select at all, because `<All>` produces no value and a spawn is not
  * a value body. A definition invoked inside the child is its own source and is

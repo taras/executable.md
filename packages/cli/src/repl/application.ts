@@ -10,6 +10,7 @@
 
 import { Ok, type Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
+import type { AgentOption, AgentOptions, SessionConfiguration } from "@executablemd/core";
 
 import {
   describe as describeNode,
@@ -23,12 +24,18 @@ import {
   actionRowProps,
   bandProps,
   bodyProps,
+  insetBodyProps,
+  headerBandProps,
+  headerRowProps,
+  headerTitleProps,
   box,
   columnProps,
+  COLUMN_TOP_GAP,
   stackProps,
   CONTROL_PROPS,
   drawerLayerProps,
   drawerRect,
+  sidekickDrawerRect,
   footerProps,
   inspectionWidth,
   paneColumnProps,
@@ -42,6 +49,8 @@ import {
   rowProps,
   sharedColumnRows,
   sidebarWidth,
+  tabProps,
+  tabRowProps,
   viewportProps,
 } from "./layout.ts";
 import type {
@@ -71,6 +80,12 @@ import { entryReading, NO_READING } from "./source-reading.ts";
 import type { ReplReading } from "./source-reading.ts";
 import { readingRuns } from "./fitting.ts";
 import type { ReplFittedLine, ReplPreparedReading, ReplPreparedRow } from "./fitting.ts";
+// The one gate, reached from here as well as from the root. A pure decision
+// module: no session, no repository, no resolver and no authority crosses it,
+// so the reduction stays a reduction while still refusing on exactly the terms
+// the root admits on.
+import { cleared, clearedMessage, edited, initialRevisions, submittable } from "./sidekick/gate.ts";
+import type { Instruction, Reservation, Revisions, Submitter } from "./sidekick/gate.ts";
 import type { ReplTerminalSize } from "./terminal.ts";
 import {
   decodeLocation,
@@ -79,7 +94,14 @@ import {
   resolveLocation,
   surfaceForDrawer,
 } from "./route.ts";
-import type { ReplDrawerRef, ReplLiveAvailability, ReplRoute, ReplSelection } from "./route.ts";
+import type {
+  ReplDrawerRef,
+  ReplLiveAvailability,
+  ReplRoute,
+  ReplSelection,
+  ReplSidekickAvailability,
+  ReplSurface,
+} from "./route.ts";
 import type {
   ReplAgentPermission,
   ReplAgentTurn,
@@ -125,8 +147,28 @@ export interface ReplLive {
   /** Whether this process holds the continuations, and so may pause at all. */
   readonly pausable: boolean;
   /**
-   * Whether this entry's task is still running, including teardown after its
-   * recorded root close. Readiness needs both this and `model.settled`.
+   * The submission being prepared for the next entry, where there is one.
+   *
+   * Present from the moment a submission reserves the next slot until its entry
+   * exists or its refusal arrives. It is what makes Pause available during a
+   * preflight that suspends: the person who pressed Run can ask that entry to
+   * stop before it expands anything, without waiting to find out whether it
+   * was admitted.
+   *
+   * Absent — rather than a preparation nothing is preparing — because the
+   * difference between "a submission is in flight" and "none is" is the whole
+   * fact. Preparation is not execution: an entry that does not exist yet is not
+   * running, paused, admitted or settled, and this adds no history-head state.
+   */
+  readonly preparing?: ReplPreparing;
+  /**
+   * Whether an entry's execution is still running in this process.
+   *
+   * The durable side cannot answer this. A root close is recorded the moment the
+   * document settles, while the task that produced it is still unwinding — so a
+   * screen reading only `model.settled` would offer the next entry during a
+   * teardown that has not finished, and announce readiness the session would
+   * refuse. Readiness is a fact about both halves, and this is the live half.
    */
   readonly running: boolean;
   /**
@@ -145,6 +187,296 @@ export interface ReplLive {
    * admission add nothing to it.
    */
   readonly lifecycle: ReplLifecycleReading;
+  /**
+   * What this process's Sidekick says, where this screen has one.
+   *
+   * Optional because a frame can be built without one — a measurement, a
+   * refusal, a proof about the reducer — and an absent Sidekick draws no chat
+   * rather than an empty one.
+   */
+  readonly sidekick?: ReplSidekickReading;
+}
+
+/**
+ * One row of acknowledged chat, as the screen reads it.
+ *
+ * Detached values. A row carries no record, no response handle and no operation,
+ * so what is drawn is what the chat history says and a component cannot reach
+ * past it. `key` is its mounted identity, which is what keeps focus on the row a
+ * reader left it on when the next reply arrives.
+ */
+export interface ReplSidekickChatRow {
+  /**
+   * The saved request this failed attempt could be asked again, or none.
+   *
+   * Present only where the history establishes which request failed — a turn
+   * whose association is unknown, or one that did not fail, offers nothing,
+   * because asking again would be guessing about a turn that really happened.
+   */
+  readonly retry?: { readonly conversation: string; readonly message: number };
+  /**
+   * The row holding the person request this reply answered, or none.
+   *
+   * Present only on a `reply`, and only where the history's own request
+   * boundaries establish which request this turn carried. It exists for the
+   * one case where this row is not drawn: a successful reply that said nothing
+   * to a person contributes no utterance, and a reader sent to that turn is
+   * shown the request it answered rather than a row nothing drew. Derived
+   * presentation, never an identity anything durable holds.
+   */
+  readonly request?: string;
+  readonly key: string;
+  /**
+   * The chat this row belongs to.
+   *
+   * Every chat's rows are composed, and which of them is drawn is the reading
+   * this location selects — because selecting a saved chat has to be able to
+   * show a chat this process is not continuing, and a reading that held only
+   * the current one could not.
+   */
+  readonly conversation: string;
+  /**
+   * The saved turn this row is about, or none where none is established.
+   *
+   * None is unknown rather than unsent, exactly as the history's own reading
+   * has it: a request whose canonical record never landed may well have been
+   * accepted. It is what a selected turn is found by, because a title names
+   * nothing — two turns may read identically.
+   */
+  readonly turn: number | null;
+  /**
+   * Whose turn this was, and what kind of account it is.
+   *
+   * `incomplete` is deliberately its own kind rather than a reply with a flag:
+   * it is source nobody finished writing, performed no control, and saying it
+   * was a reply would present an attempt as an account of one.
+   *
+   * `preview` is what a turn is saying *now*: literal Output from source that
+   * has arrived and has been cleared, with nothing evaluated, nothing performed
+   * and nothing saved. It is not a reply and is never presented as one — and it
+   * carries the same `key` the reply that replaces it will, so a response is
+   * one item on the screen from its first word to its last.
+   *
+   * `saved` is the inert one: a turn the provider finished and whose evaluated
+   * reply nobody recorded. It is the turn, in its own place, saying exactly
+   * that — never a reply rebuilt from its source and never a person's words.
+   */
+  readonly kind: "person" | "reply" | "incomplete" | "preview" | "saved";
+  readonly text: string;
+  /** Whether a reply selected person-facing chat at all. */
+  readonly hasOutput: boolean;
+  /** Why an incomplete attempt stopped, in the terms its record holds. */
+  readonly failure: string | undefined;
+  /**
+   * A live candidate whose generation ended with nothing saved.
+   *
+   * Only on a `preview` row. What the agent said is still true; what is not
+   * true is that any turn, acceptance or recorded failure came of it, so the
+   * row says it did not finish instead of reporting either.
+   */
+  readonly incomplete?: boolean;
+  /**
+   * A saved turn that carried a previous response's results.
+   *
+   * Only on a `saved` row, and what makes it readable as agent work rather
+   * than as something a person said: its request is this host's own account of
+   * what a reply did, so it is labelled rather than quoted.
+   */
+  readonly automatic?: boolean;
+}
+
+/**
+ * What this process's Sidekick says about itself, as the screen reads it.
+ *
+ * Facts, not a capability: the screen draws them and produces ordinary actions,
+ * and the root is the only thing that can act. Absent — rather than an empty
+ * chat — where a frame is built without one, because "this screen has no
+ * Sidekick" and "this Sidekick has said nothing" are different, and an empty
+ * reading would present the first as the second.
+ */
+/**
+ * One Sidekick turn as the Sessions surface shows it, live or saved.
+ *
+ * Beside {@link ReplSessionTurn} rather than folded into it, because the two
+ * have different owners: an entry turn is read at the history position its
+ * record holds, and a Sidekick turn is read by opening the chat that contains
+ * it. One type for live and saved work for the same reason the entry one is —
+ * a person is looking at one turn either way, and `key` survives publication so
+ * the row they had focus on is the same row afterwards.
+ */
+export interface ReplSidekickTurnRow {
+  /** The mounted identity: this process's response, or the saved turn's own. */
+  readonly key: string;
+  /** The chat this turn belongs to, which is what activating it opens. */
+  readonly conversation: string;
+  /** The agent that answered in that chat, from that chat and this turn. */
+  readonly agent: string;
+  /** Its canonical ordinal, or none for work no record holds yet. */
+  readonly turn: number | null;
+  /**
+   * What this turn is called.
+   *
+   * A person's exact saved message, or that it was automatic feedback. A
+   * machine input, a bootstrap, a reference chapter and a control argument are
+   * none of them something anybody said, so none of them appears here.
+   */
+  readonly title: string;
+  /** How far it has got, in the owner's own terms. */
+  readonly state: string;
+  /** Whether it is work in flight rather than a saved account of work. */
+  readonly running: boolean;
+  /** Whether it failed, so the row reads as the failure it is. */
+  readonly failed: boolean;
+  /**
+   * The provider conversation this turn names, or none.
+   *
+   * None has no filter membership at all, which is a different answer from an
+   * empty conversation: such a turn appears under All and nowhere else.
+   */
+  readonly sessionKey: string | undefined;
+  /** What it said to a person, which may be nothing. */
+  readonly text: string;
+  /** Why it did not succeed, when it did not. */
+  readonly failure: string | undefined;
+}
+
+/**
+ * How far one chat's own setup got, for a chat being read rather than continued.
+ *
+ * A conversation is `activated` before it may be prompted. One left `prepared`
+ * was interrupted while it was being set up, and a `failed` one preserved the
+ * association before it and kept the reason. Either is a real saved chat a
+ * location may select and a reader may open — and what such a chat holds is
+ * that status, not an absence of messages, so the pane says it.
+ */
+export interface ReplSidekickSetup {
+  readonly phase: "prepared" | "activated" | "failed";
+  /** Why setup failed, where a reason was recorded. */
+  readonly failure: string | undefined;
+}
+
+export interface ReplSidekickReading {
+  /**
+   * Every chat's acknowledged rows, oldest first, each naming its own chat.
+   *
+   * All of them rather than the current one's, because the reading this screen
+   * draws is the chat the location selects — and that may be a chat this
+   * Sidekick is no longer continuing.
+   */
+  readonly chat: readonly ReplSidekickChatRow[];
+  /** Whether a cycle is running, so a second Send refuses rather than queueing. */
+  readonly busy: boolean;
+  /** The agent the chat being read was held with. */
+  readonly agent: string;
+  /**
+   * Every Sessions row this execution's Sidekick holds, in its history's order.
+   *
+   * Across every chat, because that is what the section shows: Sidekick work
+   * outlives an agent change, and a list that stopped at the current chat would
+   * lose the conversations somebody came to Sessions to find.
+   */
+  readonly turns: readonly ReplSidekickTurnRow[];
+  /**
+   * The chat whose rows are drawn, which is the selected one or the current one.
+   *
+   * None where this Sidekick has held none at all.
+   */
+  readonly reading: string | undefined;
+  /**
+   * Whether that chat is the one this Sidekick is actually continuing.
+   *
+   * What decides whether the pane has its usual controls. A chat that is not
+   * the active association is read-only: it has no composer, no Send, no
+   * Retry, no Configure and no pending question addressing it, because a
+   * reading of acknowledged history is not a conversation anybody may continue.
+   */
+  readonly current: boolean;
+  /**
+   * What a location may name about this Sidekick, for resolving one.
+   *
+   * The same facts the route validates against and the same ones the filter
+   * offers, so a key a control offers is a key a location resolves.
+   */
+  readonly availability: ReplSidekickAvailability;
+  /**
+   * Why this chat cannot be read, when that is the answer.
+   *
+   * A refusal rather than an empty chat: showing somebody no conversation for a
+   * file that holds one is the single answer that cannot be corrected later.
+   */
+  readonly refusal: string | undefined;
+  /**
+   * The question this conversation is waiting on an answer to, or none.
+   *
+   * Facts and a name, never the question itself: `submit` is the root's, and a
+   * component holding it would be a second way to answer, answerable to nobody.
+   */
+  readonly question: ReplSidekickQuestion | undefined;
+  /** The conversation these facts are about, for a control that names it. */
+  readonly conversation: string | undefined;
+  /**
+   * How far the setup of the chat being read got, or none where there is no
+   * such chat to say it of.
+   *
+   * The chat being *read*, not the active association: a reader who opened an
+   * interrupted or failed chat is owed that chat's own status, and the active
+   * one's would describe a different conversation.
+   *
+   * Optional as well as absent, like the location's own Sidekick availability:
+   * a reading assembled without it establishes no chat's setup, which is the
+   * same thing absence means. Nothing reads it as a default.
+   */
+  readonly setup?: ReplSidekickSetup | undefined;
+  /**
+   * What this conversation has been *asked* to run under, or none.
+   *
+   * A preference somebody saved, read back out of the history. It says what
+   * was requested and nothing more: the next turn is where it is applied, and
+   * an agent may still refuse it there.
+   */
+  readonly requested: SessionConfiguration | undefined;
+  /**
+   * What this conversation was last actually running under, or none.
+   *
+   * Core's own saved account of a turn that started. Shown beside the request
+   * rather than instead of it, because they answer different questions: one is
+   * what somebody asked for, the other is what an agent was verified on. Where
+   * there is no saved verification, there is nothing to show.
+   */
+  readonly verified: SessionConfiguration | undefined;
+}
+
+/**
+ * The Sidekick's pending question, as the screen reads it.
+ *
+ * `key` is this process's own name for the exact pending object. It has to be:
+ * a reply may answer one question and ask another with the same words and the
+ * same schema, so text, shape or a count would all name whichever question
+ * happened to be pending by the time a keystroke arrived.
+ */
+export interface ReplSidekickQuestion {
+  readonly key: string;
+  readonly message: string;
+  readonly form: ReplQuestionForm;
+}
+
+/**
+ * One submission on its way to becoming an entry, as the screen reads it.
+ *
+ * Facts, not a capability: the screen says what is being prepared and produces
+ * the ordinary Pause action, and the root resolves that action against whatever
+ * the target actually is. A preparation that handed the screen something to
+ * call would be a second way to stop expansion, answerable to nobody.
+ */
+export interface ReplPreparing {
+  /**
+   * Whether Pause has already been asked for and has not yet stopped anything.
+   *
+   * It stays true across the handoff to the entry: the request is answered when
+   * that entry holds, not when it starts, so a screen that cleared this at
+   * startup would say `preparing` again about work already asked to stop.
+   */
+  readonly requested: boolean;
 }
 
 /**
@@ -319,6 +651,117 @@ export interface ReplFormState {
   readonly offset: number;
 }
 
+/**
+ * What one explicit inspection advertised, and what it was read for.
+ *
+ * Bound to the conversation, the agent and — for effort — the exact model it
+ * was read against. Effort levels belong to a model, so a list read for one
+ * model says nothing about another; and a result that arrives after somebody
+ * has selected something else is a result for a question nobody is asking any
+ * more. Keeping the identity beside the choices is what lets a late one be
+ * ignored rather than drawn.
+ */
+export interface ReplOffered {
+  readonly conversation: string;
+  readonly agent: string;
+  /** The models this agent offers, as it names them. */
+  readonly models: readonly ReplOfferedChoice[];
+  /** The effort levels of one exact model, when they have been read. */
+  readonly effort:
+    | { readonly model: string; readonly levels: readonly ReplOfferedChoice[] }
+    | undefined;
+}
+
+/** One value a provider offers, in the provider's own words. */
+export interface ReplOfferedChoice {
+  /** The exact id a configuration names, which is what is saved. */
+  readonly id: string;
+  /** What the agent calls it for a reader, which is never what is saved. */
+  readonly name: string;
+  readonly description: string | undefined;
+  /** The heading the agent filed it under, for an agent that groups them. */
+  readonly group: string | undefined;
+}
+
+/**
+ * The Configure drawer's own state, while this screen has one.
+ *
+ * Process-local, like the question form beside it: which choices somebody has
+ * made and not yet applied, what the last Apply was told, and what an
+ * inspection advertised are all facts about this process holding a drawer open.
+ * None of it is in the location or in any record, and reopening initializes
+ * from the saved preferences rather than from anything remembered here.
+ *
+ * `conversation` binds the whole of it. A replacement, or any other change of
+ * active conversation, invalidates these choices rather than carrying them
+ * over: they were made about an agent and a conversation, and neither survives
+ * being pointed at another one.
+ */
+export interface ReplConfiguring {
+  readonly conversation: string | undefined;
+  readonly open: boolean;
+  /** The agent name as typed, exactly — never a value chosen from a list. */
+  readonly agent: string;
+  /** The model this would ask for, or none because it asks for no change. */
+  readonly model: string | undefined;
+  /** The effort this would ask for, which belongs to `model`. */
+  readonly effort: string | undefined;
+  /** Whether the agent field is the one text acts on. */
+  readonly naming: boolean;
+  /** Why the last Apply did not happen, for the drawer to say. */
+  readonly refusal: string | undefined;
+  /** What an explicit inspection advertised, where one has answered. */
+  readonly offered: ReplOffered | undefined;
+  /** Whether an explicit inspection is being waited on right now. */
+  readonly reading: boolean;
+  /**
+   * Which selection this is, counted up and never reused.
+   *
+   * An Apply's answer belongs to the selection that asked for it, and *which*
+   * one that was cannot be told from its values: a drawer deliberately
+   * reopened on the saved preference holds the same model and effort as the
+   * Apply that saved it, and a drawer whose agent was edited while a save ran
+   * holds the same model and effort it was applied with. So an Apply carries
+   * this number, and an answer naming an earlier one leaves the drawer alone.
+   */
+  readonly revision: number;
+}
+
+/** A Configure drawer nobody has opened. */
+export const NOT_CONFIGURING: ReplConfiguring = Object.freeze({
+  conversation: undefined,
+  open: false,
+  agent: "",
+  model: undefined,
+  effort: undefined,
+  naming: false,
+  refusal: undefined,
+  offered: undefined,
+  reading: false,
+  revision: 0,
+});
+
+/**
+ * The Sidekick's own question form, and whether its drawer is showing.
+ *
+ * Beside the entry's form rather than sharing it. The two are two questions
+ * with two owners: an entry's form is discarded when its drawer closes, and
+ * this one is not — somebody who closes the Sidekick's form to read the
+ * transcript has not thrown their half-filled answer away. Sharing one slot
+ * would make either rule wrong for the other owner.
+ *
+ * `key` binds the form to the exact question it was filled in for, so a reply
+ * that asks again starts empty rather than inheriting the last one's values.
+ * None of it is durable and none of it is in the route.
+ */
+export interface ReplAsking {
+  /** The question this form belongs to, by the view's own name for it. */
+  readonly key: string;
+  /** Whether its drawer is presented right now. */
+  readonly open: boolean;
+  readonly form: ReplFormState;
+}
+
 /** A form nobody has touched. */
 export const EMPTY_FORM: ReplFormState = Object.freeze({
   values: Object.freeze({}),
@@ -337,6 +780,21 @@ export const EMPTY_FORM: ReplFormState = Object.freeze({
  * what is mounted and only the view knows that.
  */
 export type ReplFocusRestore =
+  /**
+   * The control that opens the Sidekick's question, while it still has one.
+   *
+   * Where somebody was when they opened the form, which is where closing it
+   * puts them back — rather than at the top of a pane they have to walk down
+   * again to reopen the thing they just closed.
+   */
+  | { readonly kind: "sidekick-answer" }
+  /**
+   * The control that opens Configure, once its drawer has gone.
+   *
+   * Where somebody was when they opened it, which is where closing puts them
+   * back rather than at the top of a pane they have to walk down again.
+   */
+  | { readonly kind: "sidekick-configure" }
   /**
    * The invocation whose answer this was, once its record is projected.
    *
@@ -360,7 +818,38 @@ export type ReplFocusRestore =
    * answering it means — and the turn it was waiting on is the thing still on
    * screen to come back to.
    */
-  | { readonly kind: "turn"; readonly turn: string };
+  | { readonly kind: "turn"; readonly turn: string }
+  /**
+   * The Sidekick's own box, for somebody who has just asked to read it.
+   *
+   * Explicit activation only. A reader who selected the Sidekick is going to
+   * type into it, and leaving focus on the draft would send their first
+   * sentence to their document. Cold default visibility states no such thing:
+   * the pane is simply the one showing, and the draft still holds focus.
+   */
+  | { readonly kind: "message" };
+
+/**
+ * The saved turn a selection asked to be shown, until a frame can show it.
+ *
+ * Process-local root state, beside the window offsets and never in the
+ * location: it names a turn, which is a durable fact, but *being brought into
+ * view* is a fact about this screen, and a location carrying one would promise
+ * a scroll position the process reading it has not fitted.
+ *
+ * It is retained rather than resolved on the spot because the frame a selection
+ * is answered in is not the frame the turn is read in. A Sessions reading at a
+ * size with no room for the chat beside it, and a pane showing Bindings, have
+ * measured no chat window at all — so the offset that would put this turn on
+ * screen is not a number that frame knows. The destination's own measurement
+ * places it, and until then the request is kept exactly as it was asked.
+ */
+export interface ReplSidekickReveal {
+  /** The chat the turn belongs to, which is the chat now being read. */
+  readonly conversation: string;
+  /** The turn, by the canonical ordinal its own records carry. */
+  readonly turn: number;
+}
 
 /**
  * How far each windowed reading is scrolled, in rows.
@@ -379,10 +868,38 @@ export type ReplFocusRestore =
 export interface ReplViewports {
   /** Rows the Sessions reading is scrolled by. */
   readonly sessions: number;
+  /**
+   * Rows the Sidekick pane is scrolled by, one entry per chat it has read.
+   *
+   * Keyed by chat because reading an older one is reading somewhere else: a
+   * single offset let scrolling a read-only chat decide where the current chat
+   * returned to, and somebody who came back found their newest reply gone.
+   *
+   * Process-local like the rest, and deliberately not in the location: a copied
+   * location restores the chat somebody selected and promises no scroll offset,
+   * because a row number describes a reading the other process has not fitted.
+   */
+  readonly sidekick: Readonly<Record<string, number>>;
+  /**
+   * Which chats are following their newest rows rather than holding a place.
+   *
+   * A flag and not a row number, because what "the bottom" is changes every
+   * time a message arrives: a stored offset could only ever describe the bottom
+   * the list had when it was stored, which is one message ago. Following is
+   * where a chat starts; scrolling up is how somebody leaves it, and reaching
+   * the end again is how they return.
+   *
+   * Keyed by chat, like the offsets beside it and for the same reason: reading
+   * an older chat is reading somewhere else, and scrolling it must not decide
+   * where the current one comes back to.
+   */
+  readonly sidekickFollowing: Readonly<Record<string, boolean>>;
   /** Rows the Entries catalog is scrolled by. */
   readonly entries: number;
   /** Rows the open permission drawer is scrolled by. */
   readonly permission: number;
+  /** Rows the Configure drawer is scrolled by. */
+  readonly configure: number;
   /**
    * Rows each retained drawer reading is scrolled by, one per reading.
    *
@@ -401,8 +918,11 @@ export interface ReplViewports {
 /** Every window at its first row, which is where a fresh reading starts. */
 export const AT_TOP: ReplViewports = Object.freeze({
   sessions: 0,
+  sidekick: Object.freeze({}),
+  sidekickFollowing: Object.freeze({}),
   entries: 0,
   permission: 0,
+  configure: 0,
   readings: Object.freeze({}),
 });
 
@@ -420,6 +940,23 @@ export interface ReplState {
   readonly draft: string;
   /** The form being filled into the waiting question. */
   readonly form: ReplFormState;
+  /**
+   * The Sidekick's own question form, while it has one to fill in.
+   *
+   * Process-local and absent from the location: which question is open, what
+   * has been typed into it and what was wrong with the last attempt are facts
+   * about this process holding a suspended request, and a printed location that
+   * carried them would describe a screen nobody else can be shown.
+   */
+  readonly asking: ReplAsking | undefined;
+  /**
+   * The Configure drawer, while this screen has one.
+   *
+   * Beside the question form rather than sharing it: they are alternative
+   * contents of the same pane, and one is not a state of the other. Both are
+   * process-local and absent from the location.
+   */
+  readonly configuring: ReplConfiguring;
   /** Why the last action changed nothing, or none. */
   readonly refusal: string | undefined;
   /**
@@ -440,15 +977,135 @@ export interface ReplState {
   readonly restore: ReplFocusRestore | undefined;
   /** How far each windowed reading is scrolled. */
   readonly viewports: ReplViewports;
+  /**
+   * The saved turn a Sessions selection asked to be brought into view, or none.
+   *
+   * Held until something else moves that window — a scroll, a different
+   * selection, or going back to the current chat — because the frame that can
+   * place it is the one that measures the chat it is in.
+   */
+  readonly revealing: ReplSidekickReveal | undefined;
+  /**
+   * What the Sidekick's own message box holds.
+   *
+   * Beside the shared draft rather than in it: they are two texts with two
+   * owners, and the one thing a shared draft must never do is lose what
+   * somebody is typing to something typed elsewhere.
+   */
+  readonly message: string;
+  /**
+   * A monotonic revision for each of them, raised by every edit.
+   *
+   * What makes "the thing I admitted" nameable after the fact. Process-local,
+   * like the viewports: a revision counts edits in this run and means nothing
+   * in another, so a location never carries one.
+   */
+  readonly revisions: Revisions;
+  /**
+   * Whether a person has taken the shared draft over.
+   *
+   * Set by an edit a person made and cleared by the next explicit instruction
+   * to the Sidekick. While it stands, the Sidekick's automatic replacement and
+   * submission are paused — not refused forever, and not silently resumed.
+   */
+  readonly takenOver: boolean;
 }
 
 /** What the root must perform, because a component cannot. */
 export type ReplIntent =
   | { readonly kind: "none" }
-  | { readonly kind: "submit"; readonly source: string }
+  /**
+   * Admit this exact source as the next entry.
+   *
+   * The revision travels with it, because the root reserves the slot against
+   * it and a later admission clears only the revision it admitted. A source
+   * alone would be a text with no way to say which edit it was.
+   */
+  | { readonly kind: "submit"; readonly source: string; readonly revision: number }
+  /**
+   * Ask the Sidekick for this exact text, at these exact revisions.
+   *
+   * All three travel together for the reason the submission's revision does:
+   * the root saves the text and later clears the box it came from, and it has
+   * to clear the edit it sent rather than whatever is there by then. The draft
+   * revision comes too, because the same instruction hands the shared draft
+   * back — and only if the person has not taken it back since.
+   */
+  | {
+      readonly kind: "send-message";
+      readonly text: string;
+      readonly held: Instruction;
+    }
+  /** Stop the Sidekick's own work, and join it. */
+  | { readonly kind: "stop-sidekick" }
   | { readonly kind: "pause" }
   | { readonly kind: "continue" }
   | { readonly kind: "answer"; readonly values: Readonly<Record<string, string>> }
+  /**
+   * Answer the Sidekick's own pending question, by the name this view gave it.
+   *
+   * The key travels so the root can check it still names the exact question it
+   * holds before submitting anything: a reply that answered one question and
+   * asked another would otherwise be handed the values typed for the first.
+   */
+  | {
+      readonly kind: "answer-sidekick";
+      readonly question: string;
+      readonly values: Readonly<Record<string, string>>;
+    }
+  /**
+   * Ask this conversation's agent what it offers, explicitly.
+   *
+   * The conversation travels so a result that arrives after it has been
+   * replaced can be ignored rather than drawn: choices belong to the
+   * conversation and the agent they were read for.
+   */
+  | {
+      readonly kind: "inspect-configuration";
+      readonly conversation: string | undefined;
+      /**
+       * The model whose effort levels this reads, or none for what is current.
+       *
+       * Effort belongs to a model, so a read has to say which model it is
+       * asking about — and the answer is bound to that model when it arrives,
+       * because levels read for one model are not another's.
+       */
+      readonly model: string | undefined;
+    }
+  /**
+   * Save this complete preference for the conversation it was chosen in.
+   *
+   * The whole of what was asked for, never a patch: an omitted member asks for
+   * no change to that setting, and nothing here resets one.
+   */
+  | {
+      readonly kind: "save-configuration";
+      readonly conversation: string | undefined;
+      /** The selection that asked, so its answer cannot be applied to another. */
+      readonly revision: number;
+      readonly model?: string;
+      readonly effort?: string;
+    }
+  /**
+   * Start a new conversation with this agent, by the exact name entered.
+   *
+   * The conversation it was asked *from* and the selection that asked travel
+   * with it, so a late outcome cannot close or overwrite a drawer that has
+   * since been reopened, edited or pointed somewhere else.
+   */
+  | {
+      readonly kind: "replace-agent";
+      readonly agent: string;
+      readonly conversation: string | undefined;
+      /** The selection that asked, so its answer cannot be applied to another. */
+      readonly revision: number;
+    }
+  /** Send the saved failed request this names again, as a new message. */
+  | {
+      readonly kind: "retry-message";
+      readonly conversation: string;
+      readonly message: number;
+    }
   /**
    * Answer one pending permission request with one option it offered.
    *
@@ -470,6 +1127,17 @@ export type ReplIntent =
    * for it: ending is the absence of further work, not an outcome.
    */
   | { readonly kind: "exit" };
+
+/**
+ * The field name the Sidekick's message box emits its text under.
+ *
+ * Named, because a field name is what tells typing where to go: focus belongs
+ * to the mounted tree and the action vocabulary does not, so a control that
+ * emitted bare text would have its characters delivered to whichever
+ * destination the application last recorded. One spelling, used by the row that
+ * draws the box and the reduction that answers it.
+ */
+export const MESSAGE_FIELD = "message";
 
 /** One reduction: the state that stands now, and what the root owes. */
 export interface ReplTransition {
@@ -530,11 +1198,17 @@ export interface ReplView {
  * now the entry and a location carrying both would describe two different things
  * at once.
  */
-export function admitted(state: ReplState): ReplState {
+export function admitted(state: ReplState, held?: Reservation): ReplState {
+  // Only the revision that was admitted is cleared. A person who typed while a
+  // slow preflight was running has a newer one, and that edit survives — which
+  // is the difference between clearing "the draft" and clearing "the draft I
+  // admitted". With no reservation to compare against there is nothing that
+  // could have moved, so the draft goes as it always did.
+  const draft = held === undefined ? "" : cleared(held, state).draft;
   return Object.freeze({
     ...state,
-    draft: "",
-    route: Object.freeze({ ...state.route, draft: undefined }),
+    draft,
+    route: Object.freeze({ ...state.route, draft: draft.length === 0 ? undefined : draft }),
     refusal: undefined,
   });
 }
@@ -666,6 +1340,14 @@ export function initialRoute(execution: string): ReplRoute {
     inspect: false,
     draft: undefined,
     session: undefined,
+    // A fresh execution has selected no reading and no pane of its own: what it
+    // shows is its surface, and a narrow frame therefore opens on Entries
+    // rather than on a Sidekick nobody asked for.
+    view: undefined,
+    right: undefined,
+    // And it has selected no saved chat, so the Sidekick it shows is the chat
+    // it is actually in rather than one named on its behalf.
+    sidekick: undefined,
   });
 }
 
@@ -675,10 +1357,16 @@ export function initialState(execution: string): ReplState {
     route: initialRoute(execution),
     draft: "",
     form: EMPTY_FORM,
+    asking: undefined,
+    configuring: NOT_CONFIGURING,
     refusal: undefined,
     permission: undefined,
     restore: undefined,
     viewports: AT_TOP,
+    revealing: undefined,
+    message: "",
+    revisions: initialRevisions(),
+    takenOver: false,
   });
 }
 
@@ -693,13 +1381,25 @@ export function stateFor(location: string): Result<ReplState> {
       route: decoded.value,
       draft: decoded.value.draft ?? "",
       form: EMPTY_FORM,
+      asking: undefined,
+      configuring: NOT_CONFIGURING,
       refusal: undefined,
       permission: undefined,
       restore: undefined,
       // Never decoded: a window position is this process's, so a location read
       // here opens the reading at its first row rather than at a row the
-      // process that wrote the location happened to be on.
+      // process that wrote the location happened to be on. A location names a
+      // chat and never a turn to reveal in it, for the same reason.
       viewports: AT_TOP,
+      revealing: undefined,
+      // Never decoded either, and for a stronger reason. A revision counts the
+      // edits of one run, so a number from another process names a text this
+      // one has never held; a takeover is a fact about somebody typing here.
+      // Reading a location starts both over, which is what makes the Sidekick
+      // free to act again and the draft it finds the only one there is.
+      message: "",
+      revisions: initialRevisions(),
+      takenOver: false,
     }),
   );
 }
@@ -745,6 +1445,19 @@ export function viewFor(
           // this position's: a reading frozen before them describes a file
           // that had not reached them yet.
           lifecycle: NO_LIFECYCLE,
+          // No preparation either, which is why it is left out rather than
+          // carried over: a submission in flight belongs to the live head, and
+          // the position being inspected is not where it will land. Submitting
+          // from here is refused, so Pause offered here would be a control over
+          // work this reading cannot reach.
+          //
+          // The Sidekick is kept, and that is the one exception. Freezing a
+          // prefix freezes the *entry* history: a chat is a separate file with
+          // no position in this one, so a reading frozen at an entry checkpoint
+          // is not a reading of an earlier chat — and dropping it would make
+          // somebody's current conversation disappear for the length of a
+          // History selection.
+          ...(live.sidekick === undefined ? {} : { sidekick: live.sidekick }),
         };
   return Ok(
     Object.freeze({
@@ -783,6 +1496,7 @@ export function refusedView(
       ancestry: Object.freeze([]),
       scope: undefined,
       session: undefined,
+      sidekick: undefined,
       drawers: Object.freeze([]),
     }),
     live: Object.freeze({
@@ -830,6 +1544,11 @@ function availabilityOf(state: ReplState, live: ReplLive): ReplLiveAvailability 
     permission:
       selected !== undefined && live.agent.requests.some((request) => request.key === selected),
     sessions: Object.freeze(keys),
+    // The Sidekick's own, passed through rather than derived here: the chat is
+    // a separate history, so the facts a location may name about it come from
+    // the reading that was composed for this frame and from nowhere else. A
+    // frame built without a Sidekick passes none, and a selector then refuses.
+    ...(live.sidekick === undefined ? {} : { sidekick: live.sidekick.availability }),
   };
 }
 
@@ -860,6 +1579,12 @@ const EMPTY_MODEL: ReplModel = Object.freeze({
 export function readsGeometry(action: ReplAction): boolean {
   return (
     action.kind === "scroll" ||
+    // The Sidekick form's own window, for the same reason: how far it may
+    // travel is what this frame measured, and an unmeasured frame has admitted
+    // nothing to clamp against.
+    action.kind === "scroll-sidekick-question" ||
+    action.kind === "scroll-sidekick" ||
+    action.kind === "scroll-configure" ||
     action.kind === "scroll-sessions" ||
     action.kind === "scroll-entries" ||
     action.kind === "scroll-reading"
@@ -884,41 +1609,90 @@ export function reduceRepl(
   // the screen is not showing. A caller that states none moves no window — an
   // unmeasured frame has admitted nothing.
   admission: ReplAdmission = NOTHING_ADMITTED,
+  /**
+   * The Sidekick question whose form that frame presented, or none.
+   *
+   * A frame-derived fact like the admission beside it, and for the same reason:
+   * what a key means depends on what was on the screen when it was pressed, and
+   * only the frame knows that. A caller that states none presents no form,
+   * which is the safe answer — typing then reaches the visible input.
+   */
+  presented: ReplPresented | undefined = undefined,
 ): ReplTransition {
   // Whoever pressed this key has moved on from wherever the last drawer put
   // focus, so the claim does not outlive the commit it was made for.
   const state =
     given.restore === undefined ? given : Object.freeze({ ...given, restore: undefined });
   const answering = state.route.drawers.some((drawer) => drawer.kind === "live-elicit");
+  // The Sidekick's form, while its drawer is the one presented. One question
+  // drawer is open at a time, so this is also what says the keystrokes below
+  // belong to this form rather than to the entry's or to either composer.
+  const asking = openAsking(
+    state,
+    live,
+    presented?.kind === "question" ? presented.question : undefined,
+  );
+  // Configure, while its drawer is what is drawn. The frame's own answer rather
+  // than the held flag, exactly as the question form above: a drawer open in
+  // state behind another pane, another tab or a route drawer is state and not
+  // presentation, and it owns no keystroke. It decides both the one text
+  // destination this drawer has — before either composer, because a field in a
+  // drawer holding focus is where the keys a person presses are going — and
+  // whether Escape is addressed to this drawer.
+  const configuring = presented?.kind === "configure" && state.configuring.open;
 
   switch (action.kind) {
     // Typing is always typing the *next* entry. Which entry is selected, and
     // whether one is running, decide nothing here: an admitted entry is
     // immutable, so there is never an entry these keystrokes could be editing.
     case "type": {
+      if (configuring) {
+        return renaming(state, state.configuring.agent + action.text);
+      }
+      // The Sidekick's form first, while its drawer is the one holding focus.
+      // Before the message box deliberately: a form field may be *named*
+      // `message`, and a reduction that matched the name before the owner would
+      // type somebody's answer into the composer.
+      if (asking !== undefined) {
+        return filling(state, asking, live, action.field, (value) => value + action.text);
+      }
       if (answering) {
         return editing(state, live, action.field, (value) => value + action.text);
+      }
+      if (action.field === MESSAGE_FIELD) {
+        return messaging(state, state.message + action.text);
       }
       return drafting(state, state.draft + action.text);
     }
     case "erase": {
+      if (configuring) {
+        return renaming(state, shortened(state.configuring.agent));
+      }
+      if (asking !== undefined) {
+        return filling(state, asking, live, action.field, shortened);
+      }
       if (answering) {
         return editing(state, live, action.field, shortened);
+      }
+      if (action.field === MESSAGE_FIELD) {
+        return messaging(state, shortened(state.message));
       }
       return drafting(state, shortened(state.draft));
     }
     case "submit": {
-      if (state.route.at !== undefined) {
-        // Inspection freezes durable state, not the draft. Submitting from here
-        // would have to choose an inheritance boundary, and the only one that is
-        // not a fork is the live head — which is not what this view is of.
-        return refuse(
-          state,
-          "this view is frozen at an earlier history position. Return to the live head to submit.",
-        );
-      }
-      if (state.draft.length === 0) {
-        return refuse(state, "there is nothing to submit yet.");
+      // The one gate, over the part of its facts this reduction can see.
+      // Inspection freezes durable state, not the draft, and submitting from a
+      // frozen position would have to choose an inheritance boundary that is
+      // not the live head — so the gate refuses it here on exactly the terms it
+      // refuses a reply's request at the root.
+      const drafted = submittable("person", {
+        live: state.route.at === undefined,
+        revisions: state.revisions,
+        takenOver: state.takenOver,
+        draft: state.draft,
+      });
+      if (!drafted.ok) {
+        return refuse(state, drafted.error.message);
       }
       // The draft stays until the entry exists. Clearing it here would lose
       // somebody's document to a preflight refusal, which is the one moment they
@@ -927,7 +1701,40 @@ export function reduceRepl(
       // one has both settled and joined.
       return {
         state: Object.freeze({ ...state, refusal: undefined }),
-        intent: { kind: "submit", source: state.draft },
+        intent: { kind: "submit", source: state.draft, revision: state.revisions.draft },
+      };
+    }
+    case "send-message": {
+      // Nothing to ask for. An empty box is not a message, and a Send that
+      // sent one would start a turn nobody asked a question in.
+      if (state.message.length === 0) {
+        return settled(state);
+      }
+      // Both revisions captured here, in the reduction, because this is the
+      // moment the person asked: the text is saved and the box cleared against
+      // this edit, and what happens to either of them while the append is in
+      // flight belongs to whoever did it.
+      return {
+        state: Object.freeze({ ...state, refusal: undefined }),
+        intent: {
+          kind: "send-message",
+          text: state.message,
+          // This box's own text, so the record that saves it clears this box.
+          held: {
+            message: state.revisions.message,
+            draft: state.revisions.draft,
+            from: "composer",
+          },
+        },
+      };
+    }
+    case "stop-sidekick": {
+      // Unguarded, like `exit`. Stopping something that is not running is
+      // nothing, and a control that refused on a screen where the work had
+      // just finished would be refusing the person's own timing.
+      return {
+        state: Object.freeze({ ...state, refusal: undefined }),
+        intent: { kind: "stop-sidekick" },
       };
     }
     case "exit": {
@@ -941,7 +1748,41 @@ export function reduceRepl(
       };
     }
     case "select-surface": {
-      return navigate(state, model, { ...state.route, surface: action.surface, drawers: [] }, live);
+      // Explicitly asking for a surface is also asking to read it, so an
+      // explicit Sidekick reading goes: the alternative is somebody activating
+      // Entries and staying where they were.
+      return navigate(
+        hidingAsking(state),
+        model,
+        { ...state.route, surface: action.surface, drawers: [], view: undefined },
+        live,
+      );
+    }
+    case "select-pane": {
+      // Selecting the Sidekick selects it as the reading too, because that is
+      // what a person who activated it asked to see — and the saved surface,
+      // the selected entry and the frozen position all stay exactly as they
+      // are, since reading the Sidekick is what somebody comes back from.
+      //
+      // Bindings is a pane and not a reading, so selecting it puts the saved
+      // surface back in front of whoever was reading the Sidekick rather than
+      // leaving them on a reading they just navigated away from.
+      const moved = navigate(
+        hidingAsking(state),
+        model,
+        {
+          ...state.route,
+          right: action.pane,
+          view: action.pane === "sidekick" ? "sidekick" : undefined,
+        },
+        live,
+      );
+      // Somebody who activated the Sidekick is about to type into it. The
+      // claim is made only for that activation, and only when the navigation
+      // actually happened: a refused route leaves focus where it was.
+      return action.pane === "sidekick" && moved.state.route.right === "sidekick"
+        ? settled({ ...moved.state, restore: { kind: "message" } })
+        : moved;
     }
     case "select-scope": {
       return navigate(
@@ -1001,6 +1842,24 @@ export function reduceRepl(
     }
     case "close-drawer": {
       if (state.route.drawers.length === 0) {
+        // Escape over Configure closes Configure, by the one transition its own
+        // Close control produces. Two ways out of a modal that disagreed about
+        // what closing means would be two different closes, and the one a
+        // person reaches by habit was the one that did nothing.
+        if (configuring) {
+          return closedConfigure(state);
+        }
+        // Escape with no route drawer open closes the Sidekick's form, which is
+        // the only other thing that holds focus. The question stays pending and
+        // the values stay typed: hiding a form is not abandoning an answer.
+        if (asking !== undefined) {
+          return settled({
+            ...state,
+            asking: Object.freeze({ ...asking.held, open: false }),
+            restore: Object.freeze({ kind: "sidekick-answer" }),
+            refusal: undefined,
+          });
+        }
         return refuse(state, "no drawer is open.");
       }
       const closing = state.route.drawers[state.route.drawers.length - 1];
@@ -1056,6 +1915,81 @@ export function reduceRepl(
     }
     case "all-sessions": {
       return navigate(atFirstRow(state), model, { ...state.route, session: undefined }, live);
+    }
+    case "read-sidekick-turn": {
+      // The reading moves and nothing else does: the surface, the selected
+      // entry, its scopes, the history position, the filter and both drafts
+      // stay exactly as they stand. Selecting a reading starts no provider,
+      // writes no record and stops no work.
+      const chosen = navigate(
+        hidingAsking(state),
+        model,
+        {
+          ...state.route,
+          view: "sidekick",
+          right: "sidekick",
+          sidekick: action.conversation,
+        },
+        live,
+      );
+      if (chosen.state.refusal !== undefined) {
+        return chosen;
+      }
+      // And the turn asked for, retained until a frame measuring that chat can
+      // place it. The frame answering this action is the one being left: a
+      // Sessions reading at a size with no room for the chat beside it, and a
+      // pane showing Bindings, measured no chat window — so the offset is not
+      // a number this frame knows, and the destination's own measurement is
+      // what puts the turn on screen.
+      //
+      // The window itself is left exactly where it was. Nothing guesses a
+      // position here; the request is what is kept.
+      return settled({
+        ...chosen.state,
+        revealing:
+          action.turn === undefined
+            ? undefined
+            : Object.freeze({ conversation: action.conversation, turn: action.turn }),
+      });
+    }
+    case "read-current-chat": {
+      // Only the selector. The pane stays selected, because this is where
+      // somebody came back *to* rather than away from, and the current chat's
+      // own window opens where this process left it — which is why the turn
+      // that was being revealed in the chat being left goes with it.
+      const back = navigate(state, model, { ...state.route, sidekick: undefined }, live);
+      return { ...back, state: Object.freeze({ ...back.state, revealing: undefined }) };
+    }
+    case "scroll-sidekick": {
+      const window = admission.windows.get(SIDEKICK_WINDOW);
+      // Which chat is being scrolled: the one this frame is reading, which is
+      // the only one its measured window describes. A frame with no Sidekick
+      // has no window either, so the two are absent together.
+      const chat = live.sidekick?.reading;
+      if (window === undefined || chat === undefined) {
+        return settled({ ...state, refusal: undefined });
+      }
+      // From the clamp the frame is showing, which is where a pending reveal
+      // already put it — and the reveal is spent by this press, because the
+      // window is now being moved by the person reading it.
+      const moved = scrolled(window, action.delta);
+      return settled({
+        ...state,
+        viewports: Object.freeze({
+          ...state.viewports,
+          sidekick: Object.freeze({ ...state.viewports.sidekick, [chat]: moved }),
+          // Reaching the end is what resumes following, and leaving it is what
+          // stops it: the press says where somebody wants to be reading, and a
+          // reader standing at the newest row is asking for the newest row.
+          // For this chat alone — the one being read.
+          sidekickFollowing: Object.freeze({
+            ...state.viewports.sidekickFollowing,
+            [chat]: moved >= Math.max(0, window.total - window.capacity),
+          }),
+        }),
+        revealing: undefined,
+        refusal: undefined,
+      });
     }
     case "scroll-sessions": {
       // From the clamp the frame is **showing**, over the window it measured for
@@ -1195,7 +2129,12 @@ export function reduceRepl(
       });
     }
     case "pause": {
-      if (!live.pausable) {
+      // A submission being prepared is as pausable as one already expanding:
+      // what Pause asks for is that the entry stop before it expands anything,
+      // and the whole window this covers is the one where that entry does not
+      // exist yet. Asking twice asks for the same thing, so a request already
+      // standing is not refused — it is the same request.
+      if (!live.pausable && live.preparing === undefined) {
         return refuse(state, "this process holds no live expansion to pause.");
       }
       return { state: Object.freeze({ ...state, refusal: undefined }), intent: { kind: "pause" } };
@@ -1268,6 +2207,320 @@ export function reduceRepl(
         intent: { kind: "answer", values: chosen.values },
       };
     }
+    case "open-sidekick-question": {
+      const pending = live.sidekick?.question;
+      if (pending === undefined || pending.key !== action.question) {
+        // The question this control was drawn for is not the one pending now.
+        // Opening "whatever is pending" would put somebody in front of a
+        // question they never asked to see.
+        return refuse(state, "that Sidekick question is no longer waiting.");
+      }
+      return settled({
+        ...state,
+        asking: Object.freeze({
+          key: pending.key,
+          open: true,
+          form: state.asking?.key === pending.key ? state.asking.form : EMPTY_FORM,
+        }),
+        refusal: undefined,
+      });
+    }
+    case "close-sidekick-question": {
+      if (state.asking === undefined || !state.asking.open) {
+        return refuse(state, "the Sidekick's question form is not open.");
+      }
+      // Hidden, not discarded. The question is still waiting and the values are
+      // still theirs — the entry's close-clears-the-form rule is the entry's,
+      // because its drawer *is* its question and this one is a presentation of
+      // one that goes on existing without it.
+      return settled({
+        ...state,
+        asking: Object.freeze({ ...state.asking, open: false }),
+        restore: Object.freeze({ kind: "sidekick-answer" }),
+        refusal: undefined,
+      });
+    }
+    case "select-sidekick-field": {
+      if (asking === undefined || asking.key !== action.question) {
+        return refuse(state, "that Sidekick question is not open.");
+      }
+      if (!asking.question.form.fields.some((one) => one.name === action.field)) {
+        return refuse(state, "this question has no such field.");
+      }
+      return settled({
+        ...state,
+        asking: Object.freeze({
+          ...asking.held,
+          form: Object.freeze({ ...asking.held.form, field: action.field }),
+        }),
+        refusal: undefined,
+      });
+    }
+    case "choose-sidekick": {
+      if (asking === undefined || asking.key !== action.question) {
+        return refuse(state, "that Sidekick question is not open.");
+      }
+      const field = asking.question.form.fields.find((one) => one.name === action.field);
+      if (field === undefined) {
+        return refuse(state, "this question has no such field.");
+      }
+      if (field.choices === undefined || !field.choices.includes(action.option)) {
+        return refuse(state, "this field does not offer that value.");
+      }
+      // The same meaning activation has in the entry's form: the value goes in
+      // and the whole object is offered, because whether it is an answer is the
+      // schema's to say.
+      const chosen = written(asking.held.form, action.field, action.option);
+      return {
+        state: Object.freeze({
+          ...state,
+          asking: Object.freeze({ ...asking.held, form: chosen }),
+          refusal: undefined,
+        }),
+        intent: { kind: "answer-sidekick", question: asking.key, values: chosen.values },
+      };
+    }
+    case "answer-sidekick": {
+      if (asking === undefined || asking.key !== action.question) {
+        return refuse(state, "that Sidekick question is not open.");
+      }
+      // The whole object, however it was assembled, and the key it belongs to.
+      // Whether it is an answer is the schema's to say and the root asks it; a
+      // reducer that judged here would be a second validator.
+      return {
+        state: Object.freeze({ ...state, refusal: undefined }),
+        intent: {
+          kind: "answer-sidekick",
+          question: asking.key,
+          values: asking.held.form.values,
+        },
+      };
+    }
+    case "open-configure": {
+      const active = live.sidekick?.question;
+      void active;
+      // Bound to the conversation it was asked of. A drawer opened for one
+      // conversation cannot be applied to another, so a reply that finished and
+      // opened a new one while somebody was reaching for this control opens a
+      // drawer about the new one rather than carrying stale choices into it.
+      const held = state.configuring;
+      return {
+        state: Object.freeze({
+          ...state,
+          // The form and Configure are alternative contents of one pane, so
+          // opening this hides that — and hiding it keeps its question, its
+          // partial values and its messages exactly as they were.
+          asking:
+            state.asking === undefined
+              ? undefined
+              : Object.freeze({ ...state.asking, open: false }),
+          configuring: Object.freeze({
+            conversation: action.conversation,
+            open: true,
+            naming: false,
+            refusal: undefined,
+            // Initialized from what was *saved*, never from what this drawer
+            // last held: unapplied selections were discarded when it closed,
+            // and the saved preference is the thing a next turn will use.
+            agent: live.sidekick?.agent ?? "",
+            model: live.sidekick?.requested?.model,
+            effort: live.sidekick?.requested?.effort,
+            // What the agent advertised, kept across a close for the
+            // conversation it was read of. Choices are not selections: a list
+            // this agent gave for this conversation is still true, so
+            // reopening reuses it rather than asking again — and a different
+            // conversation starts with none, because they are not its.
+            offered: held.conversation === action.conversation ? held.offered : undefined,
+            reading: true,
+            // A new selection, even where it opens on exactly the values the
+            // last one applied: opening is a deliberate act, and an Apply
+            // still in flight was asked by the drawer before this one.
+            revision: held.revision + 1,
+          }),
+          refusal: undefined,
+        }),
+        // Explicitly asked for, so it explicitly inspects. Opening a drawer is
+        // the one moment a person has said they want to know what the agent
+        // offers; nothing else here asks.
+        intent: {
+          kind: "inspect-configuration",
+          conversation: action.conversation,
+          // The model this drawer is actually showing, which is the saved
+          // preference rather than whatever the drawer held last: asking about
+          // one model and labelling the answer with another is how an
+          // inspection's defaults get relabelled as somebody's saved choice.
+          model: live.sidekick?.requested?.model,
+        },
+      };
+    }
+    case "refresh-configure": {
+      if (!state.configuring.open) {
+        return refuse(state, "Configure is not open.");
+      }
+      return {
+        state: Object.freeze({
+          ...state,
+          configuring: Object.freeze({ ...state.configuring, reading: true, refusal: undefined }),
+          refusal: undefined,
+        }),
+        intent: {
+          kind: "inspect-configuration",
+          conversation: state.configuring.conversation,
+          // The model selected *now*, so what comes back is this model's own
+          // effort levels rather than whatever the agent happens to be on.
+          model: state.configuring.model,
+        },
+      };
+    }
+    case "close-configure": {
+      if (!state.configuring.open) {
+        return refuse(state, "Configure is not open.");
+      }
+      return closedConfigure(state);
+    }
+    case "choose-model": {
+      if (!state.configuring.open) {
+        return refuse(state, "Configure is not open.");
+      }
+      const offered = state.configuring.offered;
+      if (offered === undefined || !offered.models.some((one) => one.id === action.model)) {
+        // Never a value this agent did not offer: a stray id puts nothing in
+        // the drawer rather than something the next turn will be refused for.
+        return refuse(state, "this agent did not offer that model.");
+      }
+      return settled({
+        ...state,
+        configuring: Object.freeze({
+          ...state.configuring,
+          model: action.model,
+          // Effort belongs to a model. Choosing another model leaves the effort
+          // of the one before it behind rather than carrying a level that
+          // model may not have at all.
+          effort: undefined,
+          refusal: undefined,
+          revision: state.configuring.revision + 1,
+        }),
+        refusal: undefined,
+      });
+    }
+    case "choose-effort": {
+      if (!state.configuring.open) {
+        return refuse(state, "Configure is not open.");
+      }
+      const levels = state.configuring.offered?.effort;
+      if (
+        levels === undefined ||
+        levels.model !== state.configuring.model ||
+        !levels.levels.some((one) => one.id === action.effort)
+      ) {
+        // Only the levels of the model selected now. A list read for another
+        // model is not this model's, and an unread one is not a list.
+        return refuse(state, "that effort does not belong to the model chosen here.");
+      }
+      return settled({
+        ...state,
+        configuring: Object.freeze({
+          ...state.configuring,
+          effort: action.effort,
+          refusal: undefined,
+          revision: state.configuring.revision + 1,
+        }),
+        refusal: undefined,
+      });
+    }
+    case "name-agent": {
+      if (!state.configuring.open) {
+        return refuse(state, "Configure is not open.");
+      }
+      return settled({
+        ...state,
+        configuring: Object.freeze({ ...state.configuring, naming: true, refusal: undefined }),
+        refusal: undefined,
+      });
+    }
+    case "apply-configure": {
+      if (!state.configuring.open) {
+        return refuse(state, "Configure is not open.");
+      }
+      const held = state.configuring;
+      const current = live.sidekick?.agent;
+      if (held.agent !== "" && current !== undefined && held.agent !== current) {
+        // A different agent is a different conversation, explicitly. The old
+        // chat and its association stay; nothing of this drawer's choices goes
+        // with it, because they were made about another agent.
+        return {
+          state: Object.freeze({ ...state, refusal: undefined }),
+          intent: {
+            kind: "replace-agent",
+            agent: held.agent,
+            conversation: held.conversation,
+            revision: held.revision,
+          },
+        };
+      }
+      // The whole of what is asked for, every time, and never a patch: an
+      // omitted setting asks for no change to it.
+      return {
+        state: Object.freeze({ ...state, refusal: undefined }),
+        intent: {
+          kind: "save-configuration",
+          conversation: held.conversation,
+          revision: held.revision,
+          ...(held.model === undefined ? {} : { model: held.model }),
+          ...(held.effort === undefined ? {} : { effort: held.effort }),
+        },
+      };
+    }
+    case "retry-message": {
+      return {
+        state: Object.freeze({ ...state, refusal: undefined }),
+        intent: {
+          kind: "retry-message",
+          conversation: action.conversation,
+          message: action.message,
+        },
+      };
+    }
+    case "scroll-sidekick-question": {
+      if (asking === undefined) {
+        return refuse(state, "the Sidekick's question form is not open.");
+      }
+      const window = admission.windows.get(DRAWER_WINDOW);
+      if (window === undefined) {
+        return refuse(state, "this frame has not measured that form yet.");
+      }
+      return settled({
+        ...state,
+        asking: Object.freeze({
+          ...asking.held,
+          form: Object.freeze({
+            ...asking.held.form,
+            offset: scrolled(window, action.delta),
+          }),
+        }),
+        refusal: undefined,
+      });
+    }
+    case "scroll-configure": {
+      // Presented rather than merely open: a drawer behind a route drawer, or
+      // one a narrower frame drew nothing of, is not what these controls
+      // belong to — and the controls are drawn by the same answer.
+      if (presented?.kind !== "configure") {
+        return refuse(state, "Configure is not the drawer on screen.");
+      }
+      const window = admission.windows.get(DRAWER_WINDOW);
+      if (window === undefined) {
+        return refuse(state, "this frame has not measured that drawer yet.");
+      }
+      return settled({
+        ...state,
+        viewports: Object.freeze({
+          ...state.viewports,
+          configure: scrolled(window, action.delta),
+        }),
+        refusal: undefined,
+      });
+    }
     case "scroll": {
       const open = state.route.drawers[state.route.drawers.length - 1];
       if (open === undefined) {
@@ -1328,6 +2581,355 @@ export function reduceRepl(
       });
     }
   }
+}
+
+/**
+ * The Sidekick form this screen is presenting, with the question it is for.
+ *
+ * Both halves or neither: a form whose key names no pending question is a form
+ * nobody can answer, so there is nothing for a keystroke to edit. This is also
+ * the one place that decides the Sidekick's drawer is the open one, which is
+ * what lets every form action below belong to exactly one owner.
+ */
+function openAsking(
+  state: ReplState,
+  live: ReplLive,
+  /**
+   * The question whose form the frame this action was dispatched against was
+   * actually presenting, as that frame answered it.
+   *
+   * Required, and the whole decision. A form may be held open in state while
+   * the screen is showing something else entirely — a narrower frame routing
+   * its one outlet to Entries, another pane selected, a route drawer in front
+   * of it — and keys sent to a visible input would then be swallowed by a form
+   * nobody can see. What owns typing is what is drawn, so the frame says so.
+   */
+  presented: string | undefined,
+):
+  | {
+      readonly key: string;
+      readonly held: ReplAsking;
+      readonly question: ReplSidekickQuestion;
+    }
+  | undefined {
+  const held = state.asking;
+  const question = live.sidekick?.question;
+  if (
+    held === undefined ||
+    !held.open ||
+    question === undefined ||
+    question.key !== held.key ||
+    presented !== held.key
+  ) {
+    return undefined;
+  }
+  return { key: held.key, held, question };
+}
+
+/**
+ * One field of the Sidekick's own form, edited.
+ *
+ * The entry's {@link editing} with the other owner's state: the field is
+ * resolved against *this* question's declared fields, so a name the form does
+ * not have edits nothing rather than inventing a value the schema never asked
+ * for.
+ */
+function filling(
+  state: ReplState,
+  asking: { readonly held: ReplAsking; readonly question: ReplSidekickQuestion },
+  live: ReplLive,
+  named: string | undefined,
+  change: (value: string) => string,
+): ReplTransition {
+  const fields = asking.question.form.fields;
+  const field =
+    named === undefined
+      ? (fields.find((one) => one.name === asking.held.form.field) ?? fields[0])
+      : fields.find((one) => one.name === named);
+  if (field === undefined) {
+    return refuse(state, "this question has no such field.");
+  }
+  const form = written(
+    asking.held.form,
+    field.name,
+    change(asking.held.form.values[field.name] ?? ""),
+  );
+  return settled({
+    ...state,
+    asking: Object.freeze({
+      ...asking.held,
+      form: Object.freeze({ ...form, field: field.name }),
+    }),
+    refusal: undefined,
+  });
+}
+
+/**
+ * The same state with the Sidekick's form hidden, keeping everything in it.
+ *
+ * Selecting another pane or surface takes the form off the screen, and coming
+ * back must not put it there again: the question is still waiting and the
+ * values are still typed, and reopening it is a deliberate act in both
+ * directions. No background event reopens a modal somebody navigated away from.
+ */
+function hidingAsking(state: ReplState): ReplState {
+  if (state.asking === undefined || !state.asking.open) {
+    return state;
+  }
+  return Object.freeze({ ...state, asking: Object.freeze({ ...state.asking, open: false }) });
+}
+
+/**
+ * The state after one explicit inspection answered.
+ *
+ * Ignored unless it is still the drawer's own question: a result for a
+ * conversation that has since been replaced, or for a drawer that has been
+ * closed, is an answer to something nobody is asking any more — and drawing it
+ * would put another agent's choices in front of somebody.
+ *
+ * The effort levels come with the model they were read against, because effort
+ * belongs to a model: a list read for one says nothing about another.
+ */
+export function offering(
+  state: ReplState,
+  conversation: string | undefined,
+  /** The model these effort levels were read for, as the read asked. */
+  model: string | undefined,
+  read: Result<AgentOptions>,
+  agent: string,
+): ReplState {
+  const held = state.configuring;
+  if (!held.open || held.conversation !== conversation) {
+    return state;
+  }
+  if (!read.ok) {
+    return Object.freeze({
+      ...state,
+      configuring: Object.freeze({ ...held, reading: false, refusal: read.error.message }),
+    });
+  }
+  return Object.freeze({
+    ...state,
+    configuring: Object.freeze({
+      ...held,
+      reading: false,
+      refusal: undefined,
+      offered: Object.freeze({
+        conversation: conversation ?? "",
+        agent,
+        // `null` is an agent that offers no model choice at all, which is a
+        // different answer from offering choices none of which is yours — so it
+        // becomes no selector rather than an empty one.
+        models: Object.freeze((read.value.model?.options ?? []).map(offeredChoice)),
+        // Tagged with the model the read *asked about*, and kept only while
+        // that is still the model selected here. An agent asked about one model
+        // answers with that model's levels, so labelling them with whatever is
+        // selected by the time they arrive offers a choice the selected model
+        // may not have at all.
+        effort:
+          read.value.effort === null || model === undefined || model !== held.model
+            ? undefined
+            : Object.freeze({
+                model,
+                levels: Object.freeze(read.value.effort.options.map(offeredChoice)),
+              }),
+      }),
+    }),
+  });
+}
+
+/** One provider-authored choice, copied out as the drawer reads it. */
+function offeredChoice(choice: AgentOption): ReplOfferedChoice {
+  return Object.freeze({
+    id: choice.id,
+    name: choice.name,
+    // The provider's own words, kept as the provider wrote them or absent. A
+    // label is never what is saved: the id is.
+    description: choice.description ?? undefined,
+    group: choice.group?.name ?? undefined,
+  });
+}
+
+/**
+ * The state after an explicit configuration action could not even start.
+ *
+ * Said in the drawer rather than only beside the chat, because the drawer is
+ * what somebody is looking at when they press one of its controls: a reason
+ * that appeared somewhere else would read as the control doing nothing.
+ */
+export function unavailable(
+  state: ReplState,
+  conversation: string | undefined,
+  reason: string,
+): ReplState {
+  const held = state.configuring;
+  if (!held.open || held.conversation !== conversation) {
+    return state;
+  }
+  return Object.freeze({
+    ...state,
+    configuring: Object.freeze({ ...held, reading: false, refusal: reason }),
+  });
+}
+
+/**
+ * The state after an Apply answered.
+ *
+ * Success closes Configure, because the choices are saved and there is nothing
+ * left in the drawer that is not in the history. A failure keeps every choice
+ * and says why, so it can be corrected rather than retyped.
+ */
+export function applied(
+  state: ReplState,
+  /** The conversation this Apply was asked of, so a late one cannot close a newer drawer. */
+  conversation: string | undefined,
+  /** The selection that asked for it, by its own number rather than its values. */
+  revision: number,
+  answer: Result<void>,
+): ReplState {
+  const held = state.configuring;
+  // Still the drawer this answer is about, and still the selection that asked.
+  // A drawer opened again, pointed at another conversation, or edited since is
+  // a different selection — closing it on an older answer would take a person
+  // out of something they are in the middle of, and comparing values instead
+  // cannot tell a deliberate reopen from the Apply that preceded it.
+  if (!held.open || held.conversation !== conversation || held.revision !== revision) {
+    return state;
+  }
+  if (!answer.ok) {
+    return Object.freeze({
+      ...state,
+      configuring: Object.freeze({ ...held, refusal: answer.error.message }),
+    });
+  }
+  return Object.freeze({
+    ...state,
+    configuring: closed(state.configuring),
+    restore: Object.freeze({ kind: "sidekick-configure" }),
+    refusal: undefined,
+  });
+}
+
+/**
+ * The state after an agent replacement answered.
+ *
+ * The drawer first, by the same rules every other Apply answers by. Then the
+ * reading: a replacement asked for from the chat somebody is explicitly
+ * reading leaves that chat behind, so a success clears the selector and puts
+ * them in the new current chat — which is the conversation their next message
+ * would go to anyway.
+ *
+ * Only where the selector still names the chat that was replaced. A failure
+ * preserves both the reading and the association it was asked of, and a
+ * selector pointing somewhere else is a newer deliberate reading that a
+ * replacement finishing afterwards must not overwrite.
+ */
+export function replacedAgent(
+  state: ReplState,
+  conversation: string | undefined,
+  revision: number,
+  answer: Result<void>,
+): ReplState {
+  const settledState = applied(state, conversation, revision, answer);
+  if (!answer.ok || conversation === undefined || settledState.route.sidekick !== conversation) {
+    return settledState;
+  }
+  return Object.freeze({
+    ...settledState,
+    route: Object.freeze({ ...settledState.route, sidekick: undefined }),
+  });
+}
+
+/**
+ * Configure, closed, by whichever of its two exits somebody reached.
+ *
+ * One transition for both, because closing a drawer is one act: the visible
+ * `[close]` control and Escape are two ways to ask for it, not two meanings of
+ * it. Written once so they cannot drift — a modal whose keyboard exit discarded
+ * something its button kept, or vice versa, would make the way out depend on
+ * how a person found it.
+ *
+ * Closing saves nothing and asks the provider for nothing. What was chosen and
+ * not applied is discarded, so reopening starts from the saved preference again
+ * — which is the only thing a next turn will use. What the agent advertised
+ * stays: a list it gave for this conversation is not a selection somebody made.
+ * An Apply already acknowledged is a saved preference and is not touched; it
+ * stopped being part of this drawer when it landed.
+ *
+ * Focus goes back to the control that opened it, which is the one thing on the
+ * screen that is about this drawer.
+ */
+function closedConfigure(state: ReplState): ReplTransition {
+  return settled({
+    ...state,
+    configuring: closed(state.configuring),
+    restore: Object.freeze({ kind: "sidekick-configure" }),
+    refusal: undefined,
+  });
+}
+
+/**
+ * The state after the agent name in Configure was edited.
+ *
+ * An exact name rather than a choice from a list: which agents exist is the
+ * provider's to answer, and `select()` validates what is typed against the real
+ * one. Nothing else in the drawer moves — a name being typed is not a model or
+ * an effort being chosen.
+ */
+function renaming(state: ReplState, agent: string): ReplTransition {
+  return settled({
+    ...state,
+    configuring: Object.freeze({
+      ...state.configuring,
+      agent,
+      naming: true,
+      refusal: undefined,
+      // The agent is part of what Apply would do, so editing it is a different
+      // selection: a save already in flight was asked by the one before it.
+      revision: state.configuring.revision + 1,
+    }),
+    refusal: undefined,
+  });
+}
+
+/**
+ * The drawer with nothing selected, closed, and its advertisements kept.
+ *
+ * The one shape both ways of leaving Configure produce. Selections go because
+ * they were never saved; what the agent offered stays, because it is a fact
+ * about this agent and this conversation rather than a choice anybody made.
+ */
+function closed(held: ReplConfiguring): ReplConfiguring {
+  return Object.freeze({
+    ...NOT_CONFIGURING,
+    conversation: held.conversation,
+    offered: held.offered,
+    // Kept, so the next drawer counts on from here rather than reusing a
+    // number an Apply in flight is still naming.
+    revision: held.revision,
+  });
+}
+
+/**
+ * What this process names one pending Sidekick question, and the form for it.
+ *
+ * Called once per pass of the loop, before anything is drawn. A question that
+ * ended takes its form and its presentation with it; a *different* question
+ * starts empty, because values typed for one question are not an answer to
+ * another; and the same question keeps both, through close, tab changes,
+ * History selection and resizing.
+ */
+export function askingFor(state: ReplState, question: ReplSidekickQuestion | undefined): ReplState {
+  if (question === undefined) {
+    return state.asking === undefined ? state : Object.freeze({ ...state, asking: undefined });
+  }
+  if (state.asking?.key === question.key) {
+    return state;
+  }
+  return Object.freeze({
+    ...state,
+    asking: Object.freeze({ key: question.key, open: false, form: EMPTY_FORM }),
+  });
 }
 
 /** One field's value replaced, leaving every other field alone. */
@@ -1466,6 +3068,73 @@ export function elicitWithdrawn(state: ReplState): ReplState {
   });
 }
 
+/**
+ * Where the chat window has to be for one pending reveal to be in it, or none.
+ *
+ * As little as it takes, exactly as a restored focus request moves the catalog:
+ * a turn above the window brings it up to that turn, one below brings it down
+ * until that turn is the last row shown, and a turn the window already holds
+ * moves nothing.
+ *
+ * The capacity is the one the frame asking measured, which is the frame the
+ * turn is about to be read in. None where this frame cannot place it: no
+ * measured chat window, no reading, or a chat that holds no such turn.
+ *
+ * The rows are built for the chat the reveal names, through the one builder the
+ * description and the measurement both use, so the row this lands on is the row
+ * the screen draws.
+ */
+function revealedAt(
+  reveal: ReplSidekickReveal,
+  reading: ReplSidekickReading | undefined,
+  capacity: number,
+  /** The rows this frame fitted, so a reveal lands on a row that is drawn. */
+  fitted: readonly ReplFittedLine[] | undefined,
+): number | undefined {
+  if (capacity < 1 || reading === undefined) {
+    return undefined;
+  }
+  // The turn's own result, not the first row carrying its number. A turn is a
+  // request and what came back: the row a reader was sent to see is the
+  // evaluated reply, the failure, or the anchor saying nothing was recorded —
+  // landing on the request would put the answer below the window's last row.
+  const items = reading.chat.filter(
+    (item) => item.conversation === reveal.conversation && item.turn === reveal.turn,
+  );
+  // In the order they answer "what is this turn", and every one of them an item
+  // this reading already holds. The request is last and is the one that is not
+  // this turn's own result: it is what remains visible of a turn whose
+  // successful reply said nothing to anybody, and nothing is composed to serve
+  // as an anchor — a turn this history cannot associate reveals nothing, which
+  // is the honest answer.
+  const candidates = [
+    ...items.filter((item) => item.kind !== "person").map((item) => item.key),
+    ...items.filter((item) => item.kind === "person").map((item) => item.key),
+    ...items.flatMap((item) => (item.request === undefined ? [] : [item.request])),
+  ];
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  // Focus is not a fact about where a row is, so none is stated: the marker
+  // would change what one row's text says and not which row it is.
+  const rows = sidekickReadingRows(
+    Object.freeze({ ...reading, reading: reveal.conversation }),
+    undefined,
+    fitted,
+  );
+  // The first candidate this frame actually draws, at its *first* row, which is
+  // the one its key is on: a message cut into three rows is revealed from its
+  // beginning, not from wherever it ends. Asked of the same rows the screen
+  // paints, so a reveal cannot land on a row that does not exist.
+  const at = candidates
+    .map((key) => rows.findIndex((item) => item.key === `sidekick:${key}`))
+    .find((found) => found >= 0);
+  if (at === undefined) {
+    return undefined;
+  }
+  return Math.min(Math.max(0, at - capacity + 1), at);
+}
+
 /** The same state with the Sessions reading back at its first row. */
 function atFirstRow(state: ReplState): ReplState {
   return Object.freeze({
@@ -1482,14 +3151,466 @@ function refuse(state: ReplState, reason: string): ReplTransition {
   return { state: Object.freeze({ ...state, refusal: reason }), intent: { kind: "none" } };
 }
 
-/** The draft, and the canonical query that carries it. */
-function drafting(state: ReplState, draft: string): ReplTransition {
+/**
+ * The draft, and the canonical query that carries it.
+ *
+ * Every edit raises the draft's revision, because the revision is how an
+ * admission names the text it took. An edit a *person* made also takes the
+ * draft over: from here the Sidekick's automatic replacement and submission are
+ * paused until the next explicit instruction, which is the one thing that stops
+ * a reply overwriting what somebody is in the middle of typing.
+ */
+function drafting(state: ReplState, draft: string, by: Submitter = "person"): ReplTransition {
   return settled({
     ...state,
     draft,
     // The draft is route state, so the location always says what would be
     // submitted. It is the one thing in the URL that is not yet durable.
     route: Object.freeze({ ...state.route, draft: draft.length === 0 ? undefined : draft }),
+    refusal: undefined,
+    revisions: edited(state.revisions, "draft"),
+    takenOver: by === "person" ? true : state.takenOver,
+  });
+}
+
+/**
+ * The Sidekick's reading, its input and the controls that act on it.
+ *
+ * Everything here is described from detached facts and answers with an ordinary
+ * action: the chat and what a response is saying as it arrives, the box, Send
+ * or Stop, the way into a pending question, Configure, and the retry a failed
+ * request offers. Nothing stands in for an operation this screen cannot
+ * perform — a placeholder promising one is worse than its absence, because a
+ * reader cannot tell the difference until they press it.
+ */
+/**
+ * One composed row of the Sidekick's reading: text to read, or a control.
+ *
+ * Composed before any width is known, because what a message *is* does not
+ * depend on how wide the pane turned out to be. A `text` row is one logical
+ * line somebody wrote or this screen wrote about them, and the frame cuts it
+ * into as many rows as it needs; a `control` is activated rather than read and
+ * is never cut, because a label broken over two rows is half a control on each
+ * of them.
+ */
+type ReplChatComposed =
+  | {
+      readonly kind: "text";
+      readonly key: string;
+      readonly text: string;
+      readonly style: ReplRowStyle;
+    }
+  | { readonly kind: "control"; readonly described: Described };
+
+function sidekickComposedRows(
+  reading: ReplSidekickReading | undefined,
+  /** The key of whatever holds focus, for the one row that wears the marker. */
+  focused: string | undefined,
+): readonly ReplChatComposed[] {
+  const items: ReplChatComposed[] = [];
+  /** One row of readable text, which a width still has to cut into rows. */
+  const text = (key: string, label: string, style: ReplRowStyle): ReplChatComposed =>
+    Object.freeze({ kind: "text" as const, key, text: label, style });
+  /** One row that is activated rather than read, which is never cut. */
+  const control = (described: Described): ReplChatComposed =>
+    Object.freeze({ kind: "control" as const, described });
+  if (reading === undefined) {
+    // No Sidekick on this screen at all. Said rather than drawn as an empty
+    // conversation, because the two are different facts.
+    items.push(text("sidekick:absent", "  This screen has no Sidekick.", styleOf("metadata")));
+    return items;
+  }
+  if (reading.refusal !== undefined) {
+    // An unreadable chat history. The reason stands in the pane rather than
+    // being replaced by an empty conversation.
+    items.push(text("sidekick:refusal", `  ${reading.refusal}`, styleOf("failed-outcome")));
+    return items;
+  }
+  // The chat this location selected, which is the current one unless it named
+  // another. Every chat's rows are composed, so reading an older one is a
+  // filter over them rather than a second reading assembled somewhere else.
+  const shownChat = reading.chat.filter((item) => item.conversation === reading.reading);
+  const setup = reading.setup;
+  if (setup !== undefined && setup.phase !== "activated") {
+    // What this chat's own setup came to. First, because it is the fact that
+    // decides what the rows below it can mean: a chat that was never activated
+    // was never prompted, and one whose setup failed kept the reason it did.
+    items.push(
+      text(
+        "sidekick:setup",
+        setup.phase === "failed"
+          ? `  Setup failed: ${setup.failure ?? "no reason was recorded."}`
+          : "  Setup did not finish: this chat was never activated.",
+        setup.phase === "failed" ? styleOf("failed-outcome") : styleOf("metadata"),
+      ),
+    );
+  }
+  if (shownChat.length === 0) {
+    items.push(text("sidekick:empty", "  No messages yet.", styleOf("metadata")));
+  }
+  for (const item of shownChat) {
+    if (item.kind === "person") {
+      items.push(text(`sidekick:${item.key}`, `  you: ${item.text}`, styleOf("source")));
+      continue;
+    }
+    if (item.kind === "preview") {
+      // What the agent is saying, as it says it. Labelled, because this is not
+      // a reply: nothing has been evaluated, no control has run and no turn is
+      // acknowledged — and once one is, this same item becomes that reply.
+      //
+      // `incomplete` is the other ending. A generation that stopped with
+      // nothing saved still said this, so it stays, said as the attempt it is
+      // rather than as an answer or a failure anybody recorded.
+      items.push(
+        text(
+          `sidekick:${item.key}`,
+          item.incomplete === true
+            ? `  ${reading.agent} (unfinished): ${item.text}`
+            : `  ${reading.agent} (preview): ${item.text}`,
+          item.incomplete === true ? styleOf("failed-outcome") : styleOf("waiting"),
+        ),
+      );
+      continue;
+    }
+    if (item.kind === "saved") {
+      // The turn, inert, where its record sits. A saved Prompt says the
+      // provider finished; it says nothing about the program it returned
+      // having been evaluated. So this is what a reader lands on when they
+      // open the chat at this turn, and it claims nothing more than that.
+      items.push(
+        text(
+          `sidekick:${item.key}`,
+          item.automatic === true ? `  Automatic feedback \u00b7 ${item.text}` : `  ${item.text}`,
+          styleOf("metadata"),
+        ),
+      );
+      continue;
+    }
+    if (item.kind === "incomplete") {
+      // The attempt, and the way to ask for the same thing again. Offered only
+      // where this history can establish *which* saved request failed: the row
+      // carries that request's own conversation and message id, because text
+      // names nothing and two requests may read identically.
+      const asked = item.retry;
+      // An attempt, said as one. It performed no control and nobody finished
+      // writing it, so it is not presented as a reply and its retained reason
+      // travels with it.
+      items.push(
+        text(
+          `sidekick:${item.key}`,
+          `  ${reading.agent} (unfinished): ${item.failure ?? "this turn did not complete"}`,
+          styleOf("failed-outcome"),
+        ),
+      );
+      if (item.text !== "") {
+        // What that turn had actually said, as the literal Output its saved
+        // source projects. Said after the reason, because the reason is why
+        // there is no more of it.
+        items.push(text(`sidekick:${item.key}:said`, `  ${item.text}`, styleOf("source")));
+      }
+      if (asked !== undefined && reading.current) {
+        items.push(
+          control(
+            row(
+              `sidekick:retry:${asked.message}`,
+              "[retry]",
+              { select: "retry-message", conversation: asked.conversation, message: asked.message },
+              styleOf("action"),
+              { here: focused },
+            ),
+          ),
+        );
+      }
+      continue;
+    }
+    if (item.failure !== undefined) {
+      // An evaluated reply that failed, said as the failure it is and never as
+      // an answer. The reason is what a reader can act on, so it stands whether
+      // or not the response that failed had selected any Output.
+      items.push(
+        text(
+          `sidekick:${item.key}`,
+          `  ${reading.agent} (failed): ${item.failure}`,
+          styleOf("failed-outcome"),
+        ),
+      );
+      if (item.hasOutput) {
+        // And what it had already rendered, after the reason, because the
+        // reason is why there is no more of it.
+        items.push(text(`sidekick:${item.key}:said`, `  ${item.text}`, styleOf("output")));
+      }
+      continue;
+    }
+    if (!item.hasOutput) {
+      // A reply that succeeded and selected no person-facing chat said nothing
+      // to the person, and contributes nothing to read. The work it did is in
+      // Sessions and in its own records; its body is not chat and is
+      // deliberately not shown as any — a response's source, its chapters and
+      // its feedback envelope are not what it told somebody, and a sentence
+      // about the absence is not something it said either.
+      continue;
+    }
+    items.push(text(`sidekick:${item.key}`, `  ${reading.agent}: ${item.text}`, styleOf("output")));
+  }
+  return items;
+}
+
+/**
+ * One composed row's own lines, as whoever wrote them wrote them.
+ *
+ * Split before anything is measured, because a line break is content and a
+ * width is not: a message holding three lines holds three lines at every size,
+ * and fitting measures each of them against the pane separately. A width-only
+ * cut would leave the breaks inside one row's text, which is exactly how a
+ * message comes to be drawn over the row below it.
+ *
+ * The first line keeps the row's own key, so everything that already names
+ * that row — a description, a reveal, a test — still finds it. The rest are
+ * derived display rows under it, and are not messages, turns or records.
+ */
+function chatLinesOf(
+  key: string,
+  text: string,
+): readonly { readonly key: string; readonly text: string }[] {
+  return text.split("\n").map((own, offset) => ({
+    key: offset === 0 ? key : `${key}::${offset}`,
+    text: own,
+  }));
+}
+
+/**
+ * Every readable line of the Sidekick's reading, by the key that owns it.
+ *
+ * What the frame preparation fits. It comes from the same composition the rows
+ * below are built from, so the list a width is measured against and the list
+ * that is drawn cannot be two different lists.
+ */
+export function sidekickChatLines(
+  reading: ReplSidekickReading | undefined,
+): readonly { readonly key: string; readonly text: string }[] {
+  return sidekickComposedRows(reading, undefined).flatMap((one) =>
+    one.kind === "text" ? chatLinesOf(one.key, one.text) : [],
+  );
+}
+
+/**
+ * The Sidekick's reading, as the rows a frame of this width actually draws.
+ *
+ * One composition, cut by `fitted`. A message is text somebody wrote and a row
+ * is one line of a terminal, and the two are the same thing only while every
+ * message is short enough to fit — so a reading drawn without this cut paints
+ * its second line over the next message's row, and the window counts one row
+ * for something that occupies three.
+ *
+ * Without a fitted list this returns the composition as it stands, which is
+ * what the pass still asking how wide the pane is must get: text fitted to a
+ * width nobody has measured yet would be fitted to nothing. Everything that
+ * reads these rows — the descriptions, the window's own count and a Sessions
+ * reveal — comes through here with the same list, so a drawn row and the row a
+ * scroll clamps against are the same row.
+ *
+ * A cut row is a display row *under* its item: it carries that item's style and
+ * a continuation key the fitting derived, and it is not a new message, turn,
+ * response or record.
+ */
+function sidekickReadingRows(
+  reading: ReplSidekickReading | undefined,
+  /** The key of whatever holds focus, for the one row that wears the marker. */
+  focused: string | undefined,
+  /** The lines this frame fitted, or none before it has fitted any. */
+  fitted?: readonly ReplFittedLine[] | undefined,
+): readonly Described[] {
+  const composed = sidekickComposedRows(reading, focused);
+  const cuts = new Map<string, ReplFittedLine[]>();
+  for (const cut of fitted ?? []) {
+    const held = cuts.get(cut.line);
+    if (held === undefined) {
+      cuts.set(cut.line, [cut]);
+    } else {
+      held.push(cut);
+    }
+  }
+  const rows: Described[] = [];
+  for (const one of composed) {
+    if (one.kind === "control") {
+      rows.push(one.described);
+      continue;
+    }
+    for (const own of chatLinesOf(one.key, one.text)) {
+      const pieces = cuts.get(own.key);
+      if (pieces === undefined) {
+        // No width was asked for, so this line stands as the one line it is.
+        rows.push(line(own.key, own.text, one.style));
+        continue;
+      }
+      for (const piece of pieces) {
+        // Continuations are drawn at the column their line began at, which is
+        // the room the cut already reserved for them: a wrapped message reads
+        // as the one message it is, and a row drawn flush left would be as wide
+        // as the fitting assumed it was narrow.
+        rows.push(line(piece.key, `${" ".repeat(piece.indent)}${piece.text}`, one.style));
+      }
+    }
+  }
+  return rows;
+}
+
+/**
+ * The Sidekick pane's own controls, which stay put while its chat moves.
+ *
+ * Outside the window deliberately: a composer, a Send and the way back to the
+ * current chat are not part of the reading, and a control that scrolled away
+ * from whoever was reaching for it is the one thing this layout exists to
+ * prevent.
+ *
+ * What is here depends on *which* chat is being read, and that is the whole of
+ * read-only. The active association keeps every control it has; every other
+ * saved chat is a reading of acknowledged history, so it has no composer, no
+ * Send, no Retry, no Configure, no pending question and no Stop addressing it —
+ * absent from the description rather than drawn and refused, because a control
+ * a person cannot tell is inert is worse than no control.
+ */
+function sidekickControls(
+  state: ReplState,
+  reading: ReplSidekickReading | undefined,
+  view: ReplView,
+  claim: string | undefined,
+  context: ReplPresentationContext,
+): readonly Described[] {
+  const items: Described[] = [];
+  if (reading === undefined) {
+    return items;
+  }
+  // The way back, wherever a selector is standing. It clears only that
+  // selector: the pane stays selected, and the current message draft comes
+  // back exactly as it was.
+  if (state.route.sidekick !== undefined) {
+    items.push(
+      row(
+        "sidekick:back",
+        "[Back to current chat]",
+        { select: "sidekick-back" },
+        styleOf("action"),
+        { here: view.focused },
+      ),
+    );
+  }
+  if (reading.refusal !== undefined || !reading.current) {
+    // A history nobody can read has nothing to send into, and a chat this
+    // Sidekick is not continuing is not a conversation anybody may continue.
+    return items;
+  }
+  // What this conversation is with, and the way to change it. In the header,
+  // because an agent and its settings are facts about the whole conversation
+  // rather than about any one message in it.
+  items.push(
+    row(
+      "sidekick:configure",
+      `[configure ${reading.agent}]`,
+      {
+        select: "configure",
+        ...(reading.conversation === undefined ? {} : { conversation: reading.conversation }),
+      },
+      styleOf("action"),
+      { here: view.focused, ...(claim === "sidekick:configure" ? { focus: true } : {}) },
+    ),
+  );
+  // A question this conversation is waiting on an answer to, said in the pane
+  // rather than opened over it. Arrival is an announcement: it takes no tab, no
+  // focus and no History position, and opening the form is a separate
+  // deliberate act — which is what this control is.
+  const question = reading.question;
+  if (question !== undefined) {
+    items.push(line("sidekick:asking", `  ${reading.agent} has a question.`, styleOf("waiting")));
+    items.push(
+      row(
+        "sidekick:answer",
+        // Its own words rather than the footer's `[answer]`. An entry may be
+        // asking at the same moment, and two controls reading the same thing
+        // would leave a reader — and a pointer — unable to tell which question
+        // they were reaching for.
+        "[answer sidekick]",
+        { select: "sidekick-question", question: question.key },
+        styleOf("action"),
+        { here: view.focused, ...(claim === "sidekick:answer" ? { focus: true } : {}) },
+      ),
+    );
+  }
+  // Where a message is typed, named so the row says which of the two
+  // destinations it is. It stays editable while the Sidekick is working: a
+  // person composing their next question while a reply comes back is the
+  // ordinary case, and what they type is not sent by the cycle finishing.
+  const claiming = claim === "sidekick:message";
+  items.push(
+    field("sidekick:message", "> Message Sidekick: ", state.message, "message", styleOf("draft"), {
+      field: MESSAGE_FIELD,
+      here: view.focused,
+      block: true,
+      ...(claiming ? { focus: true } : {}),
+    }),
+  );
+  // The value itself, in the rows a width cut it into. One row for an empty
+  // message, because the box a person types into is a place on the screen
+  // whether or not anything is in it yet — and these are read, not reached:
+  // the field above owns the value, the focus and the keyboard.
+  for (const [at, own] of messageValueRows(context).entries()) {
+    items.push(line(`sidekick:message:value:${at}`, own, styleOf("draft")));
+  }
+  if (reading.busy) {
+    // Working, so there is nothing for Send to do — a second cycle cannot queue
+    // behind the first one — and Stop is the control that is offered instead.
+    items.push(line("sidekick:working", `  ${reading.agent} is working...`, styleOf("waiting")));
+    items.push(
+      row("sidekick:stop", "[stop]", { select: "stop-sidekick" }, styleOf("action"), {
+        here: view.focused,
+      }),
+    );
+    return items;
+  }
+  items.push(
+    row("sidekick:send", "[send]", { select: "send-message" }, styleOf("action"), {
+      here: view.focused,
+    }),
+  );
+  return items;
+}
+
+/**
+ * The state after somebody typed into the Sidekick's own message box.
+ *
+ * It touches neither the draft nor the takeover: the two texts have two owners,
+ * and typing a question to the Sidekick is not taking the shared draft over.
+ * The message is process-local and absent from the location, so nothing about
+ * it is published.
+ */
+function messaging(state: ReplState, message: string): ReplTransition {
+  return settled({
+    ...state,
+    message,
+    refusal: undefined,
+    revisions: edited(state.revisions, "message"),
+  });
+}
+
+/** The state after the Sidekick filled the shared draft with exactly this. */
+export function filled(state: ReplState, source: string): ReplState {
+  return Object.freeze(drafting(state, source, "sidekick").state);
+}
+
+/**
+ * The state after an explicit instruction to the Sidekick was saved.
+ *
+ * Applied when the message is actually in the chat history, not at the
+ * keystroke that asked for it — so it names the revisions it was asked for at
+ * and clears only those. A person who typed another message while the append
+ * was in flight keeps it, and one who went back to the shared draft keeps the
+ * draft: clearing the takeover is what unpauses automatic submission, and an
+ * instruction sent before their edit is not what hands it back.
+ */
+export function instructed(state: ReplState, held: Instruction): ReplState {
+  return Object.freeze({
+    ...state,
+    ...clearedMessage(held, state),
     refusal: undefined,
   });
 }
@@ -1651,6 +3772,38 @@ export function focusClaim(view: ReplView): string | undefined {
   if (state.restore.kind === "asked") {
     return live.question === undefined || state.route.at !== undefined ? undefined : "footer:asked";
   }
+  if (state.restore.kind === "message") {
+    // Silent while the Sidekick is not the reading on screen — a claim naming a
+    // row this view does not draw is focus asked for on behalf of nothing.
+    const narrow = profileFor(view.size) === "narrow";
+    const showing = narrow
+      ? state.route.view === "sidekick"
+      : (state.route.right ?? "sidekick") === "sidekick";
+    return showing ? "sidekick:message" : undefined;
+  }
+  if (state.restore.kind === "sidekick-configure") {
+    // Silent unless this pane is what the screen is showing, for the same
+    // reason the opener beside it is: a claim naming a row this view does not
+    // draw is focus asked for on behalf of nothing.
+    return selection.drawers.length > 0 || !showingSidekick(view)
+      ? undefined
+      : "sidekick:configure";
+  }
+  if (state.restore.kind === "sidekick-answer") {
+    // The opener, while there is still a question to open. Silent once the
+    // question has been answered or withdrawn: the control is gone, and a
+    // claim naming it would be focus asked for on behalf of nothing.
+    // And while this pane is what the screen is showing. Silent otherwise: once
+    // the question has been answered or withdrawn the control is gone, and
+    // while a route drawer owns the modal the opener is outside it — a claim on
+    // either is focus asked for on behalf of a row this view does not draw,
+    // which the commit refuses rather than honours.
+    return live.sidekick?.question === undefined ||
+      selection.drawers.length > 0 ||
+      !showingSidekick(view)
+      ? undefined
+      : "sidekick:answer";
+  }
   if (state.restore.kind === "turn") {
     const turn = state.restore.turn;
     return chronology(view.model, live).some((candidate) => candidate.key === turn)
@@ -1772,6 +3925,32 @@ function sameJson(left: Json, right: Json): boolean {
  */
 function selected(on: boolean): string {
   return on ? "* " : "  ";
+}
+
+/**
+ * The word beside Pause for a live entry, or none when Pause has no place.
+ *
+ * Playing expansion says nothing: the control alone is the whole offer, and a
+ * word reporting that expansion is working is a word that is always there.
+ */
+function expansionState(expansion: ExpansionState): string | undefined {
+  return expansion === "playing" ? "" : expansion;
+}
+
+/**
+ * The word beside Pause for a submission still being prepared.
+ *
+ * `preparing` while nobody has asked it to stop, and `pausing` once somebody
+ * has — the same word a live walk that has been asked and has not yet stopped
+ * uses, because it is the same situation: the request stands and nothing is
+ * held yet. What a person reads does not change under them when the entry they
+ * asked to stop finally starts.
+ */
+function preparingState(preparing: ReplPreparing | undefined): string | undefined {
+  if (preparing === undefined) {
+    return undefined;
+  }
+  return preparing.requested ? "pausing" : "preparing";
 }
 
 function line(
@@ -2061,33 +4240,22 @@ function requiredLength(parts: readonly GuidancePart[]): number {
 }
 
 /**
- * The one guidance row, composed for the width it will be drawn at.
+ * What the guidance says, whole, before any width has cut it into rows.
  *
- * Composed rather than written long and left to the renderer, because a row the
- * renderer cuts is a row whose last fact is missing with nothing to say that it
- * is missing. At `72x20` every required part is chosen to fit together; the wider
- * frames say the same things in full.
+ * Every part it has to say, in the one order it says them: the state, then what
+ * focus actually does, then the way out, then movement. Nothing is dropped and
+ * nothing is shortened to fit a row, because the block is as many rows as its
+ * words need — a direction a reader cannot see is a direction they do not have,
+ * and the Transcript sharing its column is not a reason to stop giving it.
  *
- * What never moves is the order: the state, then what focus actually does, then
- * the way out, then movement.
+ * The vocabulary is the profile's: the long phrases where there is a Transcript
+ * column, and the short ones a narrow frame already says. There is no third.
  */
-function guidance(view: ReplView, room: number): string {
-  const width = Math.max(1, room);
-  const readiness = readinessOf(view);
-  // Which vocabulary this row speaks is decided by the room it was measured
-  // for, not by the size of the terminal it is somewhere inside. The medium
-  // profile is wide enough for the long phrases and its transcript column is
-  // not: this row's three required parts come to seventy-one columns in a
-  // sixty-three column pane, and the parts that do not fit are not dropped —
-  // they are required — so the sentence ran onto the row below.
-  //
-  // A narrow frame keeps saying what it says today: it is already compact, and
-  // a profile that has chosen the short phrases does not un-choose them because
-  // its one column happens to be wide.
+export function guidanceSentence(view: ReplView): string {
   const narrow = view.size.columns <= NARROW.columns;
-  const full = guidanceParts(view, readiness, narrow);
-  const parts = requiredLength(full) <= width ? full : guidanceParts(view, readiness, true);
-  return fitted(width, parts);
+  return guidanceParts(view, readinessOf(view), narrow)
+    .map((part) => part.text)
+    .join(GUIDANCE_SEPARATOR);
 }
 
 /**
@@ -2106,7 +4274,7 @@ function guidanceParts(
   compact: boolean,
 ): readonly GuidancePart[] {
   const focused = view.focused;
-  const modal = view.selection.drawers.length > 0;
+  const modal = modalOpen(view);
   const editing = focused === undefined || focused === "footer:input";
   const narrow = view.size.columns <= NARROW.columns;
   const move: GuidancePart = { text: "Tab/Shift+Tab move" };
@@ -2179,26 +4347,40 @@ function field(
   key: string,
   prompt: string,
   text: string,
-  purpose: "draft" | "answer",
+  purpose: "draft" | "answer" | "sidekick-answer" | "configure-agent" | "message",
   style: ReplRowStyle,
   options: {
     readonly focus?: true;
     readonly here?: string | undefined;
     /** The form field this line edits, for a line that edits one. */
     readonly field?: string;
+    /** The Sidekick question this line answers, for a line that answers one. */
+    readonly question?: string;
     /** What the value on this line is, for a line showing something classified. */
     readonly classify?: (value: string) => readonly ReplTokenRun[];
+    /**
+     * Whether this field's value is drawn in rows of its own beneath it.
+     *
+     * The row is then its name and its focus marker alone. One field still:
+     * the value, the focus and the hold on the keyboard are all this node's,
+     * and the rows below it are read rather than reached.
+     */
+    readonly block?: true;
   } = {},
 ): Described {
   const here = options.here === key;
-  const parts = fieldParts(prompt, text, here);
+  const parts = fieldParts(prompt, options.block === true ? "" : text, here);
   const runs = tokenRuns([
     { text: parts.marker, token: here ? "focus-marker" : style.role },
     { text: parts.prompt, token: style.role },
-    { text: parts.earlier, token: style.role },
-    ...(options.classify === undefined
-      ? [{ text: parts.value, token: style.role }]
-      : options.classify(parts.value)),
+    ...(options.block === true
+      ? []
+      : [
+          { text: parts.earlier, token: style.role },
+          ...(options.classify === undefined
+            ? [{ text: parts.value, token: style.role }]
+            : options.classify(parts.value)),
+        ]),
   ]);
   return {
     key,
@@ -2211,7 +4393,9 @@ function field(
         prompt,
         text,
         purpose,
+        ...(options.block === undefined ? {} : { block: options.block }),
         ...(options.field === undefined ? {} : { field: options.field }),
+        ...(options.question === undefined ? {} : { question: options.question }),
         ...(options.here === key ? { focused: true } : {}),
       },
       ...(options.focus === undefined ? {} : { focus: options.focus }),
@@ -2222,7 +4406,7 @@ function field(
 /**
  * Describe the whole screen, for one measured frame.
  *
- * One flat set with keyed children for the drawer, because placement is not
+ * One flat set with keyed children for the drawer, because layout is not
  * nesting: where a row appears is the layout's decision, and the only nesting
  * that matters to the tree is what a modal must contain.
  *
@@ -2254,7 +4438,15 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     // A reason as long as its sentence, over rows that fit: a refusal is the only
     // thing on this screen, and one clipped to a single row is a refusal that has
     // not been given.
-    const [first, ...rest] = chunked(view.refusal, context.widths?.surface ?? 0);
+    // Fitted where this frame has fitted it, and chunked where it has not —
+    // the pass still asking how wide the surface is has no width to fit to.
+    // Each row is padded either way: a renderer writes what changed, so a row
+    // whose text got shorter would keep the tail of what used to be there.
+    const room = context.widths?.surfaceBody ?? 0;
+    const [first, ...rest] =
+      context.refusal === undefined
+        ? chunked(view.refusal, room)
+        : context.refusal.map((own) => (room < 1 ? own : own.padEnd(room, " ")));
     // Where somewhere to go exists, the refusal itself is focusable and takes the
     // claim; otherwise focus starts on the way out. Declared, so the claim is a
     // typed member rather than a literal that has to be asserted into one.
@@ -2313,8 +4505,34 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // nothing and a pointer target behind nothing.
   const narrow = profileFor(view.size) === "narrow";
   const routed = state.route.surface;
+  /**
+   * Which of the two right readings a wide or medium frame is showing.
+   *
+   * Sidekick unless Bindings was asked for. A command whose default right pane
+   * is the inspector would open on the thing a person most often wants beside
+   * their work only by accident — but the default decides a *reading*, not
+   * focus: the draft still holds that, so a person who starts typing is typing
+   * their entry.
+   *
+   * Narrow routes one outlet instead, and the Sidekick is one of the three it
+   * routes: an explicit `view=sidekick` selects it, and nothing else does.
+   */
+  const showSidekick = narrow
+    ? state.route.view === "sidekick"
+    : (state.route.right ?? "sidekick") === "sidekick";
   const showSessions = !narrow || routed === "sessions";
-  const showEntry = !narrow || routed === "entries";
+  /**
+   * Whether the Sidekick's own question form is covering its pane.
+   *
+   * What that pane would have drawn is not described where it would be drawn:
+   * an opaque modal is in front of it, and a control behind one is a Tab stop
+   * and a pointer target with nothing visible on it. The ones a person still
+   * needs are reparented into the form, exactly as `[history]` and `[exit]`
+   * already are — described once, in the active focus root.
+   */
+  const covered = presentedAsking(view) !== undefined;
+
+  const showEntry = (!narrow || routed === "entries") && !(narrow && showSidekick);
 
   const turns = chronology(model, live);
   // Which surface to be on belongs to neither surface. A narrow frame mounts one
@@ -2346,10 +4564,11 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   }
   if (!showSessions) {
     // Nothing: this frame is showing the other surface.
-  } else if (turns.length === 0) {
-    // Present and empty. This REPL keeps one execution per invocation, and a
-    // Sessions surface that vanished when it held nothing would read as a
-    // feature that does not exist.
+  } else if (live.sidekick === undefined && turns.length === 0) {
+    // Present and empty, with one owner. This REPL keeps one execution per
+    // invocation, and a Sessions surface that vanished when it held nothing
+    // would read as a feature that does not exist. With a Sidekick installed
+    // there are two sections instead, and each of them says what it holds.
     items.push(line("sessions:empty", "  (none retained)", styleOf("metadata")));
   } else {
     // One window over the whole reading. Every conversation, turn, fact, audit
@@ -2360,7 +4579,14 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
     // The window is what the frame measured, not what this boundary could work
     // out from the region's height — the rows above and below it are described
     // here, so only the engine knows what is left for the rows inside.
-    const content = sessionRows(state, turns, view.focused, claim, context.widths?.list);
+    const content = sessionRows(
+      state,
+      turns,
+      view.focused,
+      claim,
+      context.widths?.listBody,
+      live.sidekick,
+    );
     // Outside the thing they move, like the drawer's: a control inside the
     // window would scroll away from whoever was reaching for it.
     items.push(
@@ -2368,7 +4594,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         "sessions:earlier",
         `  ${EARLIER}`,
         { select: "scroll-sessions", delta: -1 },
-        styleOf("action"),
+        styleOf("navigate"),
         {
           here: view.focused,
         },
@@ -2380,7 +4606,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         "sessions:later",
         `  ${LATER}`,
         { select: "scroll-sessions", delta: 1 },
-        styleOf("action"),
+        styleOf("navigate"),
         {
           here: view.focused,
         },
@@ -2401,16 +4627,27 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       model,
       view.focused,
       selection.entry?.key,
-      context.widths?.list,
+      context.widths?.listBody,
       claim,
     );
+    if (catalog.length === 0) {
+      // Present and empty, exactly as the Sessions reading says so: an
+      // execution that has submitted nothing still has a catalog, and a column
+      // that drew nothing would read as a feature that does not exist.
+      //
+      // Stated around the window rather than inside it, and in every pass, so
+      // the pass that measures this column and the frame that draws it count
+      // the same rows. A placeholder described only once the window had been
+      // admitted would take a row the measurement had already given away.
+      items.push(line("entry:none", "  1. (not submitted)", styleOf("metadata")));
+    }
     if (context.entriesWindowed) {
       items.push(
         row(
           "entries:earlier",
           `  ${EARLIER}`,
           { select: "scroll-entries", delta: -1 },
-          styleOf("action"),
+          styleOf("navigate"),
           { here: view.focused },
         ),
       );
@@ -2422,7 +4659,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
           "entries:later",
           `  ${LATER}`,
           { select: "scroll-entries", delta: 1 },
-          styleOf("action"),
+          styleOf("navigate"),
           { here: view.focused },
         ),
       );
@@ -2439,7 +4676,85 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // The two surface controls are that frame's own headings.
   if (!narrow) {
     items.push(line("transcript:heading", "Transcript", styleOf("pane-heading")));
-    items.push(line("inspection:heading", "Bindings", styleOf("pane-heading")));
+    // Both tabs, always, and they are the right column's heading: the pane named
+    // itself above them until the two names together said Sidekick twice when the
+    // Sidekick was the reading. One row, each name once, and which of them is
+    // selected carried by the styling the two have always differed by.
+    // Described in the wide and medium frames only — a narrow frame routes one
+    // outlet and reaches the Sidekick through its own surface control.
+    for (const pane of ["bindings", "sidekick"] as const) {
+      const here = pane === "sidekick" ? showSidekick : !showSidekick;
+      items.push(
+        row(
+          `tab:${pane}`,
+          // The name alone: it is the heading of the reading it selects, and a
+          // heading that spelled out its own selection would say in the text
+          // what the row's own styling already says. Which one is selected is
+          // the active style, and keyboard focus stays the separate mark it is.
+          // And whether the Sidekick is waiting on an answer, said on the tab
+          // while its pane is the hidden one: a question nobody can see
+          // announced is a question nobody knows to go and answer.
+          `${pane === "sidekick" ? "Sidekick" : "Bindings"}${
+            pane === "sidekick" && !here && live.sidekick?.question !== undefined
+              ? " (question)"
+              : ""
+          }`,
+          { select: "pane", pane },
+          styleOf(here ? "pane-heading" : "metadata"),
+          { here: view.focused },
+        ),
+      );
+    }
+  }
+  // The Sidekick's own reading, where it is the one selected. Described for a
+  // narrow frame too, because there the Sidekick is an outlet of its own rather
+  // than a tab — and in both cases what is drawn is the acknowledged chat, the
+  // one box its messages are typed into, and the two controls that act on it.
+  if (showSidekick && !covered) {
+    // Nothing of this pane's own body while its form is in front of it: an
+    // opaque modal covers these rows, and a control behind one is a Tab stop
+    // and a pointer target with no cell of its own. What a person still needs
+    // from here — Stop, and the way out of the form — the form itself holds.
+    //
+    // One window over the chat, for the reason the Sessions reading has one: a
+    // chat long enough to outgrow its pane has turns only scrolling can reach,
+    // and a turn somebody selected from Sessions may be any of them. The
+    // controls sit outside the thing they move, and the pane's own controls sit
+    // below both.
+    //
+    // Only where there is a chat to move. A frame built without a Sidekick says
+    // so in one row, and two controls over that row would be Tab stops that
+    // scroll nothing.
+    if (live.sidekick === undefined) {
+      items.push(...sidekickReadingRows(undefined, view.focused));
+    } else {
+      items.push(
+        row(
+          "sidekick:earlier",
+          `  ${EARLIER}`,
+          { select: "scroll-sidekick", delta: -1 },
+          styleOf("navigate"),
+          { here: view.focused },
+        ),
+      );
+      items.push(
+        ...shown(
+          sidekickReadingRows(live.sidekick, view.focused, context.chat),
+          context,
+          SIDEKICK_WINDOW,
+        ),
+      );
+      items.push(
+        row(
+          "sidekick:later",
+          `  ${LATER}`,
+          { select: "scroll-sidekick", delta: 1 },
+          styleOf("navigate"),
+          { here: view.focused },
+        ),
+      );
+      items.push(...sidekickControls(state, live.sidekick, view, claim, context));
+    }
   }
 
   // The transcript of whatever is selected. Selecting an entry *is* selecting a
@@ -2452,7 +4767,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // it lands in, and an unbounded one makes that region wider than its share —
   // which would corrupt the very measurement that is about to answer how wide
   // it is.
-  const surface = context.widths?.surface;
+  const surface = context.widths?.surfaceBody;
   // The entry's own reading: what it produced, then the source that produced
   // it, as the rows the frame fitted to this pane. The controls that move it sit
   // outside the moving content, which is why they are described before the rows
@@ -2474,7 +4789,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         "reading:earlier",
         `  ${EARLIER}`,
         { select: "scroll-reading", delta: -1 },
-        styleOf("action"),
+        styleOf("navigate"),
         { here: view.focused },
       ),
     );
@@ -2486,7 +4801,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
         "reading:later",
         `  ${LATER}`,
         { select: "scroll-reading", delta: 1 },
-        styleOf("action"),
+        styleOf("navigate"),
         { here: view.focused },
       ),
     );
@@ -2498,7 +4813,12 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // Tab stop that draws no cell and a pointer target behind nothing. What is
   // selected and which route is showing are unchanged: this is what the frame
   // offers, not what the reader has chosen.
-  const scope = inspectable && !narrow ? selection.scope : undefined;
+  //
+  // Nor while the Sidekick is the reading selected. One pane shows one of its
+  // two readings: a binding row described beside the chat would be a focus stop
+  // and a pointer target inside a reading nobody asked for, in a column that is
+  // showing something else.
+  const scope = inspectable && !narrow && !showSidekick ? selection.scope : undefined;
   if (scope !== undefined) {
     for (const binding of scope.bindings) {
       items.push(
@@ -2577,7 +4897,7 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // nothing. The screen says Escape leaves instead, which is the one way out a
   // window too small to draw in can offer.
   const drawable = profileFor(view.size) !== "too-small";
-  const modal = view.selection.drawers.length > 0;
+  const modal = modalOpen(view);
   if (!modal) {
     if (offering("footer:history")) {
       items.push(history);
@@ -2591,26 +4911,34 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
       row("footer:live", "[live]", { select: "live" }, styleOf("action"), { here: view.focused }),
     );
   }
-  if (live.pausable) {
+  // One control for both, because a person reaching for Pause is asking for the
+  // same thing whether the entry is expanding or still being prepared — and one
+  // mounted identity across that transition is what keeps focus where they left
+  // it. What the two differ in is what expansion is doing, and that is the state
+  // beside the control rather than part of it.
+  const pausing = live.pausable ? expansionState(live.expansion) : preparingState(live.preparing);
+  if (pausing !== undefined) {
     if (offering("footer:pause")) {
       items.push(
-        // The control is what it does; the state is what expansion is doing. One
-        // label that changed between them would rename a control out from under
-        // whoever was reaching for it.
-        row(
-          "footer:pause",
-          live.expansion === "playing" ? "[pause]" : `[pause] ${live.expansion}`,
-          { select: "pause" },
-          styleOf("action"),
-          { here: view.focused },
-        ),
+        row("footer:pause", "[pause]", { select: "pause" }, styleOf("action"), {
+          here: view.focused,
+        }),
       );
+    }
+    // The state is what expansion is doing, and it is plain text: not part of
+    // the button's label, which would rename a control out from under whoever
+    // was reaching for it, and not a focus stop, because there is nothing to
+    // activate in a word that reports.
+    if (pausing.length > 0 && offering("footer:pause-state")) {
+      items.push(line("footer:pause-state", pausing, styleOf("status")));
     }
     // Continue releases a continuation, so it exists exactly while one is
     // held. Expansion that is *pausing* holds nothing yet — the walks it asked
     // to stop have not all stopped — and a Continue offered there would cancel
-    // the pause somebody just asked for rather than resume anything.
-    if (live.expansion === "paused" && offering("footer:continue")) {
+    // the pause somebody just asked for rather than resume anything. A
+    // preparation holds nothing either: there is no entry yet, so there is no
+    // continuation for Continue to release.
+    if (live.pausable && live.expansion === "paused" && offering("footer:continue")) {
       items.push(
         row("footer:continue", "[continue]", { select: "continue" }, styleOf("action"), {
           here: view.focused,
@@ -2643,7 +4971,15 @@ function described(view: ReplView, context: ReplPresentationContext): DescribedS
   // transcript column is narrower than the longest of them — a row wider than
   // its column is one the column beside it loses space to.
   if (surface !== undefined) {
-    items.push(line("guidance", guidance(view, surface), styleOf("status", { inspected })));
+    // One inert block, in the rows this frame fitted its words into. Without a
+    // fitted list — the pass still asking how wide the surface is — it is the
+    // one row that pass describes, so its own geometry question stays askable.
+    const said = context.guidance ?? [guidanceSentence(view)];
+    for (const [at, own] of said.entries()) {
+      items.push(
+        line(at === 0 ? "guidance" : `guidance:row:${at}`, own, styleOf("status", { inspected })),
+      );
+    }
   }
 
   // Why the last thing asked for changed nothing. Shown rather than swallowed: a
@@ -2837,10 +5173,28 @@ function sessionRows(
    * rows there are.
    */
   width: number | undefined,
+  /**
+   * What this execution's Sidekick says, where the screen has one.
+   *
+   * Absent is no Sidekick installation at all, and the surface then draws
+   * exactly the one entry reading it always did — no section headings, and the
+   * same empty placeholder. Present is the two labelled sections, because an
+   * execution that has a Sidekick has two owners doing agent work and one
+   * interleaved list would have to assert an order these two files do not share.
+   */
+  sidekick: ReplSidekickReading | undefined,
 ): readonly Described[] {
   const items: Described[] = [];
   const filter = state.route.session;
-  const offered = conversations(turns);
+  // Entry keys in their own order, then the Sidekick's in its own, each
+  // earliest-observed first and a duplicate offered once. Which section a key
+  // came from is not a fact about the key, so one list of choices filters both.
+  const offered = [...conversations(turns)];
+  for (const key of sidekick?.availability.sessions ?? []) {
+    if (!offered.includes(key)) {
+      offered.push(key);
+    }
+  }
   if (offered.length > 0) {
     // All is a control rather than the absence of one: clearing a filter is
     // something a person does, and a list that could only be narrowed would
@@ -2869,11 +5223,19 @@ function sessionRows(
       );
     }
   }
+  // Which owner's work this is, said once above each list. Without a Sidekick
+  // there is one owner and the surface says so by having no sections at all;
+  // with one there are two, in a fixed order, each keeping its own history's
+  // order rather than being merged into an order neither file establishes.
+  if (sidekick !== undefined) {
+    items.push(line("sessions:section:entries", "  Entry agents", styleOf("pane-heading")));
+  }
+  const entries: Described[] = [];
   for (const turn of turns) {
     if (filter !== undefined && turn.sessionKey !== filter) {
       continue;
     }
-    items.push(
+    entries.push(
       row(
         `sessions:turn:${turn.key}`,
         // The state comes last and stays: it is why this row is on the screen,
@@ -2903,7 +5265,7 @@ function sessionRows(
     );
     if (turn.agent !== undefined || turn.sessionKey !== undefined) {
       const said = [turn.agent, turn.sessionKey].filter((fact) => fact !== undefined);
-      items.push(
+      entries.push(
         line(
           `sessions:turn:${turn.key}:whose`,
           fitLine([{ text: "    " }, { text: said.join(" · "), elide: true }], width),
@@ -2912,7 +5274,7 @@ function sessionRows(
       );
     }
     if (turn.text.length > 0) {
-      items.push(
+      entries.push(
         line(
           `sessions:turn:${turn.key}:text`,
           fitLine([{ text: "    " }, { text: headline(turn.text), elide: true }], width),
@@ -2921,7 +5283,7 @@ function sessionRows(
       );
     }
     if (turn.stopReason !== undefined) {
-      items.push(
+      entries.push(
         line(
           `sessions:turn:${turn.key}:stop`,
           fitLine([{ text: "    stopped: " }, { text: turn.stopReason, elide: true }], width),
@@ -2930,7 +5292,7 @@ function sessionRows(
       );
     }
     if (turn.failure !== undefined) {
-      items.push(
+      entries.push(
         line(
           `sessions:turn:${turn.key}:failed`,
           fitLine([{ text: "    " }, { text: headline(turn.failure), elide: true }], width),
@@ -2949,7 +5311,7 @@ function sessionRows(
         { text: "    asks: " },
         { text: headline(request.title ?? request.toolCallId), elide: true },
       ];
-      items.push(
+      entries.push(
         state.route.surface === "sessions"
           ? row(
               `sessions:request:${request.key}`,
@@ -2964,7 +5326,7 @@ function sessionRows(
     for (const [at, audit] of turn.audits.entries()) {
       // Read, never answered: a record is what a turn was granted, and offering
       // a control here would invite somebody to answer a question nobody asked.
-      items.push(
+      entries.push(
         line(
           `sessions:audit:${turn.key}:${at}`,
           // The outcome comes last and stays, for the same reason a turn's state
@@ -2983,6 +5345,99 @@ function sessionRows(
       );
     }
   }
+  items.push(...entries);
+  if (sidekick === undefined) {
+    // One owner, one list, and exactly the surface this has always been.
+    return items;
+  }
+  if (entries.length === 0) {
+    // Said rather than left blank: a section that drew nothing would read as a
+    // gap, and a reader cannot tell a gap from a list that failed to appear.
+    items.push(line("sessions:entries:none", "    No entry turns.", styleOf("metadata")));
+  }
+  items.push(line("sessions:section:sidekick", "  Sidekick", styleOf("pane-heading")));
+  if (sidekick.refusal !== undefined) {
+    // A chat history this version cannot read. Its own reason stands here, and
+    // it does not masquerade as a Sidekick that has done no work: showing
+    // somebody an empty section for a file that holds their conversations is
+    // the one answer that cannot be corrected later.
+    items.push(
+      line("sessions:sidekick:refusal", `    ${sidekick.refusal}`, styleOf("failed-outcome")),
+    );
+    return items;
+  }
+  const chat = sidekick.turns.filter((turn) => filter === undefined || turn.sessionKey === filter);
+  if (chat.length === 0) {
+    items.push(line("sessions:sidekick:none", "    No Sidekick turns.", styleOf("metadata")));
+    return items;
+  }
+  for (const turn of chat) {
+    items.push(
+      row(
+        `sessions:${turn.key}`,
+        fitControl(
+          [
+            { text: "    " },
+            { text: headline(turn.title), elide: true },
+            { text: " \u00b7 " },
+            { text: turn.state, keep: true },
+          ],
+          width,
+        ),
+        // Activating it opens the chat that contains it and brings it into
+        // view. Never a History marker: a Sidekick turn is in no entry
+        // position, and navigating to a guessed one would freeze the entry
+        // reading at a place this turn says nothing about.
+        {
+          select: "sidekick-turn",
+          conversation: turn.conversation,
+          // Its own ordinal where a record holds one, and nothing where none
+          // does: work still in flight is opened in its chat without a saved
+          // row to reveal, rather than against a number this screen made up.
+          ...(turn.turn === null ? {} : { turn: turn.turn }),
+        },
+        turn.running
+          ? styleOf("waiting")
+          : turn.failed
+            ? styleOf("failed-outcome")
+            : styleOf("output"),
+        { here: focused },
+      ),
+    );
+    // Whose work this was: this section's own owner, then the chat's agent and
+    // the chat itself, then the provider conversation where one is known. Never
+    // whichever agent happens to be active now — a conversation does not change
+    // agent in place, so its turns say what actually answered in them.
+    const whose = ["Sidekick", turn.agent, turn.conversation];
+    if (turn.sessionKey !== undefined) {
+      whose.push(turn.sessionKey);
+    }
+    items.push(
+      line(
+        `sessions:${turn.key}:whose`,
+        fitLine([{ text: "      " }, { text: whose.join(" \u00b7 "), elide: true }], width),
+        styleOf("metadata"),
+      ),
+    );
+    if (turn.text.length > 0) {
+      items.push(
+        line(
+          `sessions:${turn.key}:text`,
+          fitLine([{ text: "      " }, { text: headline(turn.text), elide: true }], width),
+          styleOf("output"),
+        ),
+      );
+    }
+    if (turn.failure !== undefined) {
+      items.push(
+        line(
+          `sessions:${turn.key}:failed`,
+          fitLine([{ text: "      " }, { text: headline(turn.failure), elide: true }], width),
+          styleOf("failed-outcome"),
+        ),
+      );
+    }
+  }
   return items;
 }
 
@@ -2994,7 +5449,8 @@ function sessionRows(
  * what the reading is, asked twice.
  */
 function sessionContentRows(state: ReplState, model: ReplModel, live: ReplLive): number {
-  return sessionRows(state, chronology(model, live), undefined, undefined, undefined).length;
+  return sessionRows(state, chronology(model, live), undefined, undefined, undefined, live.sidekick)
+    .length;
 }
 
 /**
@@ -3032,9 +5488,6 @@ function entryContent(
    */
   claim?: string | undefined,
 ): readonly Described[] {
-  if (model.entries.length === 0) {
-    return [line("entry:none", "  1. (not submitted)", styleOf("metadata"))];
-  }
   const items: Described[] = [];
   for (const entry of model.entries) {
     items.push(
@@ -3148,6 +5601,156 @@ function outcomeOf(audit: ReplAgentPermission): string {
 }
 
 /**
+ * The message the presented drawer is fitting, or none because none is.
+ *
+ * Asked rather than assumed, because two owners ask questions and only one
+ * form is drawn: fitting the entry's message into the Sidekick's form would
+ * show somebody one question's words above another question's fields.
+ */
+export function previewedMessage(view: ReplView): string | undefined {
+  if (view.selection.drawers.length > 0) {
+    return view.live.question?.message;
+  }
+  return presentedAsking(view)?.question.message;
+}
+
+/**
+ * The Sidekick form this view is presenting, or none.
+ *
+ * Only while the Sidekick is the selected reading, and only while its key still
+ * names the question the owner holds: a form left open behind a tab change is
+ * state rather than presentation, and one whose question ended is neither.
+ */
+function presentedAsking(
+  view: ReplView,
+): { readonly held: ReplAsking; readonly question: ReplSidekickQuestion } | undefined {
+  // A route drawer owns the modal while it is open, and owning it means owning
+  // its content, its width, its window, its close and its focus. The Sidekick's
+  // form is still *held* underneath — its question is waiting and its values are
+  // typed — and none of that makes it the thing on the screen. Answering
+  // otherwise gave History's rows the Sidekick's own controls.
+  if (view.selection.drawers.length > 0) {
+    return undefined;
+  }
+  const held = view.state.asking;
+  const question = view.live.sidekick?.question;
+  if (held === undefined || !held.open || question === undefined || question.key !== held.key) {
+    return undefined;
+  }
+  // The pane has to be the one showing. A narrow frame routes one outlet and a
+  // wide one two tabs, and in both cases this form lives in the Sidekick's own
+  // pane — so when that pane is not what is drawn, neither is this.
+  //
+  // And the chat being read has to be the one asking. A pending question
+  // belongs to the current conversation, so reading an older chat hides the
+  // form rather than drawing it over somebody else's transcript. Hidden, not
+  // discarded: the question stays pending and every value already typed into
+  // it is exactly where it was when the reader comes back.
+  return showingSidekick(view) && currentChat(view) ? { held, question } : undefined;
+}
+
+/**
+ * Whether the chat this view is reading is the one this Sidekick is continuing.
+ *
+ * True where there is no Sidekick at all, because the question is about the
+ * reading rather than about the Sidekick: a frame with none draws none of its
+ * controls either way, and answering `false` here would hide things that are
+ * not about a chat.
+ */
+function currentChat(view: ReplView): boolean {
+  return view.live.sidekick?.current !== false;
+}
+
+/**
+ * Which of the Sidekick's own drawers this committed view is presenting.
+ *
+ * One fact rather than two, because what it decides is one thing: where a
+ * keystroke goes. A form held open in state while the screen shows something
+ * else owns nothing — what owns typing is what is drawn.
+ */
+export type ReplPresented =
+  | { readonly kind: "question"; readonly question: string }
+  | { readonly kind: "configure" };
+
+export function presentedDrawer(view: ReplView): ReplPresented | undefined {
+  const asking = presentedAsking(view);
+  if (asking !== undefined) {
+    return { kind: "question", question: asking.question.key };
+  }
+  return presentedConfiguring(view) === undefined ? undefined : { kind: "configure" };
+}
+
+/**
+ * Whether the Configure drawer is the thing presented in the Sidekick's pane.
+ *
+ * The same three conditions the question form answers: no route drawer on top,
+ * the drawer actually open, and this pane the one being drawn. Configure and
+ * the question form are alternative contents of one pane, so at most one of
+ * them is ever open — opening either hides the other's presentation and keeps
+ * everything in it.
+ */
+function presentedConfiguring(view: ReplView): ReplConfiguring | undefined {
+  if (view.selection.drawers.length > 0) {
+    return undefined;
+  }
+  const held = view.state.configuring;
+  // Configure belongs to the current conversation, so reading an older chat
+  // hides it for the same reason it hides the question form: a drawer that
+  // configured the conversation somebody is *not* reading would apply a
+  // decision to work they are not looking at.
+  return held.open && showingSidekick(view) && currentChat(view) ? held : undefined;
+}
+
+/** Whether this view's Sidekick pane is the one being drawn. */
+function showingSidekick(view: ReplView): boolean {
+  return profileFor(view.size) === "narrow"
+    ? view.state.route.view === "sidekick"
+    : (view.state.route.right ?? "sidekick") === "sidekick";
+}
+
+/**
+ * Whether a modal is holding focus, by either owner.
+ *
+ * One question is presented at a time, and a route drawer takes precedence:
+ * its own explicit close is what a person reaches before they can reach the
+ * Sidekick's opener, so an open permission request is never answered or
+ * dismissed by something underneath it.
+ */
+function modalOpen(view: ReplView): boolean {
+  return (
+    view.selection.drawers.length > 0 ||
+    presentedAsking(view) !== undefined ||
+    presentedConfiguring(view) !== undefined
+  );
+}
+
+/**
+ * The rectangle whichever drawer is presented occupies.
+ *
+ * One calculation for both, read back by measurement, admission, description,
+ * drawing and hit testing: the entry's covers the body, and the Sidekick's
+ * covers the pane that owns its question.
+ *
+ * A route drawer's is the envelope the preparation settled once it had measured
+ * the guidance this layer must stay clear of. Taken from the frame's own context
+ * rather than recomputed here, so there is one answer to where it is: a second
+ * calculation is how a drawer's cells and its targets come to disagree. Before
+ * that block has been fitted there is nothing to clear, and the rectangle the
+ * size states is what those passes measure.
+ *
+ * The Sidekick's pane-local rectangles are untouched by any of it. They are its
+ * pane's own, they begin at the top of it, and the gap is not in that pane.
+ */
+function presentedRect(view: ReplView, context: ReplPresentationContext): ReplBounds | undefined {
+  if (view.selection.drawers.length > 0) {
+    return context.drawer ?? drawerRect(view.size);
+  }
+  return presentedAsking(view) === undefined && presentedConfiguring(view) === undefined
+    ? undefined
+    : sidekickDrawerRect(view.size);
+}
+
+/**
  * The innermost open drawer, as a modal branch holding its own controls.
  *
  * Every reading it can show — a binding's value, a recorded answer, History's
@@ -3175,24 +5778,39 @@ function drawerFor(
   }
   const { title, titleStyle, dismissing, entering, content } = held;
   const width = context.widths?.drawer ?? 0;
+  // Which owner's form this is, for the scroll controls, the editable line the
+  // window claims focus for, and `[close]`. One drawer is presented at a time,
+  // so this is also what says the Sidekick's own is the one on screen.
+  const asking = presentedAsking(view)?.question.key;
+  const configuring = presentedConfiguring(view) !== undefined;
   const rows: Described[] = [];
   rows.push(
     row(
       "drawer:scroll:up",
-      padControl(EARLIER, width),
-      { select: "scroll", delta: -1 },
+      // Configure's window moves through a list of choices rather than through
+      // a recorded order, so it is the one drawer that does not say Earlier.
+      padControl(configuring ? SCROLL_UP : EARLIER, width),
+      asking !== undefined
+        ? { select: "sidekick-scroll", delta: -1 }
+        : configuring
+          ? { select: "configure-scroll", delta: -1 }
+          : { select: "scroll", delta: -1 },
       styleOf("action"),
       { here: view.focused },
     ),
   );
-  for (const placed of windowed(content, context, entering, view.focused)) {
+  for (const placed of windowed(content, context, entering, view.focused, asking)) {
     rows.push(placed);
   }
   rows.push(
     row(
       "drawer:scroll:down",
-      padControl(LATER, width),
-      { select: "scroll", delta: 1 },
+      padControl(configuring ? SCROLL_DOWN : LATER, width),
+      asking !== undefined
+        ? { select: "sidekick-scroll", delta: 1 }
+        : configuring
+          ? { select: "configure-scroll", delta: 1 }
+          : { select: "scroll", delta: 1 },
       styleOf("action"),
       { here: view.focused },
     ),
@@ -3206,6 +5824,22 @@ function drawerFor(
   // Reparented, but still admitted: the action row is where their cells land, so
   // a control that row cannot hold whole is not described here either.
   const offered = (key: string): boolean => context.measuring || context.admission.actions.has(key);
+  // Stop, where the Sidekick's own pane would have offered it. Its own row of
+  // this form rather than the pane's row mounted inside it: a reparented node
+  // keeps its focus stop and loses its cell, and a control somebody cannot see
+  // is not a control. One node either way — while the form is in front of that
+  // pane, the pane describes none of its body.
+  if ((asking !== undefined || configuring) && view.live.sidekick?.busy === true) {
+    rows.push(
+      row(
+        "drawer:sidekick:stop",
+        padControl("[stop]", width),
+        { select: "stop-sidekick" },
+        styleOf("action"),
+        { here: view.focused },
+      ),
+    );
+  }
   if (offered("footer:history")) {
     rows.push(history);
   }
@@ -3216,9 +5850,17 @@ function drawerFor(
     row(
       "drawer:close",
       padControl("[close]", width),
-      dismissing === undefined
-        ? { select: "close" }
-        : { select: "permission-dismiss", request: dismissing },
+      dismissing !== undefined
+        ? { select: "permission-dismiss", request: dismissing }
+        : // Closing one of the Sidekick's own drawers is not what closing the
+          // entry's means. The question form keeps its question and its values;
+          // Configure discards what was chosen and not applied, and saves and
+          // changes nothing.
+          configuring
+          ? { select: "configure-close" }
+          : asking === undefined
+            ? { select: "close" }
+            : { select: "sidekick-question-close" },
       styleOf("action"),
       { here: view.focused },
     ),
@@ -3269,7 +5911,7 @@ interface DrawerContent {
  * the fallback is what a measurement sees and never what a reader does.
  */
 function messageRows(
-  question: ReplQuestion,
+  question: { readonly message: string },
   preview: readonly ReplFittedLine[] | undefined,
 ): readonly { readonly text: string; readonly runs: readonly ReplTokenRun[] }[] {
   if (preview !== undefined) {
@@ -3291,7 +5933,15 @@ function drawerContent(
 ): DrawerContent | undefined {
   const open = view.selection.drawers[view.selection.drawers.length - 1];
   if (open === undefined) {
-    return undefined;
+    // No route drawer, so this is one of the Sidekick's own two drawers if
+    // anything is. Configure first: opening it hides the question form's
+    // presentation, so both are never open at once.
+    const settings = presentedConfiguring(view);
+    if (settings !== undefined) {
+      return configureContent(view, settings, width);
+    }
+    const asking = presentedAsking(view);
+    return asking === undefined ? undefined : askingContent(view, asking, width, preview);
   }
   // Every row of this drawer reaches its own right edge. A modal that wrote only
   // its own text would let what it is in front of show through from where that
@@ -3407,137 +6057,445 @@ function drawerContent(
     if (question === undefined) {
       return undefined;
     }
-    const form = question.form;
-    title = form.title ?? "Answer";
-    titleStyle = styleOf("question-title");
-    // One viewport over the whole ordered content. Everything a person has to
-    // read or reach — the complete message, the form's description, every field
-    // with its annotation, options, editable value, every validation message and
-    // [submit] — is built in order and then windowed. A drawer too short to hold
-    // all of it scrolls, rather than describing rows that have no frame to be
-    // placed in.
-    for (const [offset, part] of messageRows(question, preview).entries()) {
-      content.push({
-        described: drawerLine(
-          `drawer:message:${offset}`,
-          part.text,
-          width,
-          styleOf("source"),
-          part.runs,
-        ),
-      });
-    }
-    if (form.description !== undefined) {
-      content.push({
-        described: drawerLine("drawer:form:about", form.description, width, styleOf("field-hint")),
-      });
-    }
-    // The same rule inside the modal: the first control claims focus when the
-    // drawer opens, and afterwards traversal inside the drawer owns it.
-    entering = view.focused === undefined || !view.focused.startsWith("drawer:");
-    for (const one of form.fields) {
-      const value = view.state.form.values[one.name] ?? "";
-      const marked = requiredNow(form, view.state.form.values, one) ? "*" : " ";
-      const label = one.title ?? one.name;
-      // What the field is called and what is in it, on one row and told apart:
-      // a reader scanning a form reads down the labels, and a label that looked
-      // like its own value would make them read every row to find the one they
-      // have not filled in yet.
-      const named = padded(
-        tokenRuns([
-          { text: `${marked}${label}:`, token: "field-label" },
-          { text: " ", token: "field-label" },
-          { text: value, token: "field-value" },
-        ]),
-        width - FOCUS_MARKER,
-        "field-label",
-      );
-      content.push({
-        described: row(
-          `drawer:field:${one.name}`,
-          runText(named),
-          { select: "form-field", field: one.name },
-          styleOf("field-label"),
-          { here: view.focused, runs: named },
-        ),
-      });
-      if (one.description !== undefined) {
-        content.push({
-          described: drawerLine(
-            `drawer:field:${one.name}:about`,
-            `  ${one.description}`,
-            width,
-            styleOf("field-hint"),
-          ),
-        });
-      }
-      if (one.choices !== undefined) {
-        // What this field accepts, said once. The controls below are how a value
-        // is chosen; this is the line that names the whole set, and it is what a
-        // reader scanning the form reads first.
-        content.push({
-          described: drawerLine(
-            `drawer:form:${one.name}`,
-            `${one.name}: ${one.choices.join(" | ")}`,
-            width,
-            styleOf("field-hint"),
-          ),
-        });
-      }
-      // Every offered value, each its own control. A form that drew only the
-      // first would be offering a choice nobody could make.
-      for (const option of one.choices ?? []) {
-        content.push({
-          described: row(
-            `drawer:choice:${one.name}:${option}`,
-            padControl(`  ${value === option ? "(x)" : "( )"} ${option}`, width),
-            { select: "form-choice", field: one.name, option },
-            styleOf("action", { selected: value === option }),
-            { here: view.focused },
-          ),
-        });
-      }
-      // The one editable line for this field, which is where text and Backspace
-      // land while it has focus. The first field's line claims focus when the
-      // drawer opens — including an enum's, because typing an offered value and
-      // pressing Enter is still a way to answer.
-      content.push({
-        described: field(
-          `drawer:value:${one.name}`,
-          "  = ",
-          value,
-          "answer",
-          styleOf("field-value"),
-          {
-            here: view.focused,
-          },
-        ),
-        field: { name: one.name, value },
-      });
-    }
-    // What the last submission was told, under the form it is about.
-    for (const [offset, message] of view.state.form.messages.entries()) {
-      content.push({
-        described: drawerLine(
-          `drawer:invalid:${offset}`,
-          message.field === undefined ? message.message : `${message.field}: ${message.message}`,
-          width,
-          styleOf("failed-outcome"),
-        ),
-      });
-    }
-    content.push({
-      described: row(
-        "drawer:form:submit",
-        padControl("[submit]", width),
-        { select: "form-submit" },
-        styleOf("action"),
-        { here: view.focused },
-      ),
-    });
+    const built = formContent(question, view.state.form, width, preview, view.focused, undefined);
+    title = built.title;
+    titleStyle = built.titleStyle;
+    entering = built.entering;
+    content.push(...built.content);
   }
 
   return { title, titleStyle, dismissing, entering, content };
+}
+
+/**
+ * One row of a drawer's ordered content, and what it would take to focus it.
+ *
+ * A field's editable line is built unfocused and the request is placed afterwards,
+ * once the window is known: focusing a row that scrolled out would put focus
+ * where nothing is drawn, and which row is first inside the window is not
+ * something the loop that builds them can see.
+ */
+interface DrawerRow {
+  readonly described: Described;
+  readonly field?: { readonly name: string; readonly value: string };
+}
+
+/**
+ * A question's form as ordered drawer rows, for whichever owner asked it.
+ *
+ * One builder for both, because a form is a form: the complete message, the
+ * description, every field with its annotation and options, its editable line,
+ * every validation message and `[submit]` are the same rows in the same order.
+ * What differs is only which question an activation names — the entry's actions
+ * mean "the question this session is asking", and the Sidekick's carry the key
+ * of the exact question they were drawn for.
+ *
+ * The keys stay the drawer's own, because one drawer is presented at a time and
+ * the frame places rows by the slot their key names.
+ */
+function formContent(
+  question: { readonly message: string; readonly form: ReplQuestionForm },
+  held: ReplFormState,
+  width: number,
+  preview: readonly ReplFittedLine[] | undefined,
+  focused: string | undefined,
+  /** The Sidekick's question this form answers, or none for the entry's. */
+  asking: string | undefined,
+): {
+  readonly title: string;
+  readonly titleStyle: ReplRowStyle;
+  readonly entering: boolean;
+  readonly content: readonly DrawerRow[];
+} {
+  const form = question.form;
+  const content: DrawerRow[] = [];
+  for (const [offset, part] of messageRows(question, preview).entries()) {
+    content.push({
+      described: drawerLine(
+        `drawer:message:${offset}`,
+        part.text,
+        width,
+        styleOf("source"),
+        part.runs,
+      ),
+    });
+  }
+  if (form.description !== undefined) {
+    content.push({
+      described: drawerLine("drawer:form:about", form.description, width, styleOf("field-hint")),
+    });
+  }
+  // The same rule inside the modal: the first control claims focus when the
+  // drawer opens, and afterwards traversal inside the drawer owns it.
+  const entering = focused === undefined || !focused.startsWith("drawer:");
+  for (const one of form.fields) {
+    const value = held.values[one.name] ?? "";
+    const marked = requiredNow(form, held.values, one) ? "*" : " ";
+    const label = one.title ?? one.name;
+    // What the field is called and what is in it, on one row and told apart: a
+    // reader scanning a form reads down the labels, and a label that looked like
+    // its own value would make them read every row to find the one they have
+    // not filled in yet.
+    const named = padded(
+      tokenRuns([
+        { text: `${marked}${label}:`, token: "field-label" },
+        { text: " ", token: "field-label" },
+        { text: value, token: "field-value" },
+      ]),
+      width - FOCUS_MARKER,
+      "field-label",
+    );
+    content.push({
+      described: row(
+        `drawer:field:${one.name}`,
+        runText(named),
+        asking === undefined
+          ? { select: "form-field", field: one.name }
+          : { select: "sidekick-form-field", field: one.name, question: asking },
+        styleOf("field-label"),
+        { here: focused, runs: named },
+      ),
+    });
+    if (one.description !== undefined) {
+      content.push({
+        described: drawerLine(
+          `drawer:field:${one.name}:about`,
+          `  ${one.description}`,
+          width,
+          styleOf("field-hint"),
+        ),
+      });
+    }
+    if (one.choices !== undefined) {
+      // What this field accepts, said once. The controls below are how a value
+      // is chosen; this is the line that names the whole set, and it is what a
+      // reader scanning the form reads first.
+      content.push({
+        described: drawerLine(
+          `drawer:form:${one.name}`,
+          `${one.name}: ${one.choices.join(" | ")}`,
+          width,
+          styleOf("field-hint"),
+        ),
+      });
+    }
+    // Every offered value, each its own control. A form that drew only the
+    // first would be offering a choice nobody could make.
+    for (const option of one.choices ?? []) {
+      content.push({
+        described: row(
+          `drawer:choice:${one.name}:${option}`,
+          padControl(`  ${value === option ? "(x)" : "( )"} ${option}`, width),
+          asking === undefined
+            ? { select: "form-choice", field: one.name, option }
+            : { select: "sidekick-form-choice", field: one.name, option, question: asking },
+          styleOf("action", { selected: value === option }),
+          { here: focused },
+        ),
+      });
+    }
+    // The one editable line for this field, which is where text and Backspace
+    // land while it has focus. The first field's line claims focus when the
+    // drawer opens — including an enum's, because typing an offered value and
+    // pressing Enter is still a way to answer.
+    content.push({
+      described: field(
+        `drawer:value:${one.name}`,
+        "  = ",
+        value,
+        asking === undefined ? "answer" : "sidekick-answer",
+        styleOf("field-value"),
+        asking === undefined
+          ? { here: focused }
+          : { here: focused, field: one.name, question: asking },
+      ),
+      field: { name: one.name, value },
+    });
+  }
+  // What the last submission was told, under the form it is about.
+  for (const [offset, message] of held.messages.entries()) {
+    content.push({
+      described: drawerLine(
+        `drawer:invalid:${offset}`,
+        message.field === undefined ? message.message : `${message.field}: ${message.message}`,
+        width,
+        styleOf("failed-outcome"),
+      ),
+    });
+  }
+  content.push({
+    described: row(
+      "drawer:form:submit",
+      padControl("[submit]", width),
+      asking === undefined
+        ? { select: "form-submit" }
+        : { select: "sidekick-form-submit", question: asking },
+      styleOf("action"),
+      { here: focused },
+    ),
+  });
+  return {
+    title: form.title ?? "Answer",
+    titleStyle: styleOf("question-title"),
+    entering,
+    content,
+  };
+}
+
+/** One setting, said as a reader reads it: a model and an effort, or neither. */
+function settingLine(settings: SessionConfiguration | undefined): string {
+  if (settings === undefined) {
+    return "none";
+  }
+  const parts: string[] = [];
+  if (settings.model !== undefined) {
+    parts.push(`model=${settings.model}`);
+  }
+  if (settings.effort !== undefined) {
+    parts.push(`effort=${settings.effort}`);
+  }
+  // Short, because this is drawn in a pane and a sentence the frame clips is
+  // one a reader cannot finish.
+  return parts.length === 0 ? "none" : parts.join(" ");
+}
+
+/**
+ * Configure, as the drawer that is presenting it.
+ *
+ * What it says, in order: which agent this conversation is with and the field
+ * that would change it, what has been *asked for* and what an agent was last
+ * *verified* on, the models it offers, the effort levels of the model selected
+ * here, and the three things a person can do — read again, apply, close.
+ *
+ * Requested and verified are two lines rather than one, because they answer
+ * different questions. A preference says what somebody asked for; Core's saved
+ * account of a turn that started says what an agent was actually running under.
+ * Where there is no saved verification this says so rather than borrowing the
+ * request to stand in for it.
+ */
+function configureContent(view: ReplView, held: ReplConfiguring, width: number): DrawerContent {
+  const content: DrawerRow[] = [];
+  const focused = view.focused;
+  const reading = view.live.sidekick;
+  content.push({
+    described: field(
+      "drawer:configure:agent",
+      "> Agent: ",
+      held.agent,
+      "configure-agent",
+      styleOf("field-value"),
+      { here: focused },
+    ),
+  });
+  // Exactly what was asked for, and exactly what was verified. The second is
+  // not derived from the first: a request an agent has not run under yet is
+  // still only a request.
+  content.push({
+    described: drawerLine(
+      "drawer:configure:requested",
+      `  Requested: ${settingLine(reading?.requested)}`,
+      width,
+      styleOf("field-hint"),
+    ),
+  });
+  content.push({
+    described: drawerLine(
+      "drawer:configure:verified",
+      `  Verified: ${settingLine(reading?.verified)}`,
+      width,
+      styleOf("metadata"),
+    ),
+  });
+  if (held.refusal !== undefined) {
+    content.push({
+      described: drawerLine(
+        "drawer:configure:refusal",
+        `  ${held.refusal}`,
+        width,
+        styleOf("failed-outcome"),
+      ),
+    });
+  }
+  // A different agent is a different conversation, and these choices were read
+  // from the agent this one is with: they cannot be applied to another. So they
+  // are not offered while a replacement is what Apply would do — a model nobody
+  // can ask for is a control that does nothing.
+  const replacing =
+    held.agent !== "" && reading?.agent !== undefined && held.agent !== reading.agent;
+  const offered = replacing ? undefined : held.offered;
+  if (held.reading) {
+    // Said beside what is already in hand rather than instead of it. A refresh
+    // that hid the list would take away the choices a person is looking at,
+    // and already advertised choices stay usable while another read runs.
+    content.push({
+      described: drawerLine(
+        "drawer:configure:asking",
+        "  Reading what this agent offers...",
+        width,
+        styleOf("waiting"),
+      ),
+    });
+  }
+  if (replacing) {
+    // Said, so a reader knows why the choices went rather than wondering.
+    content.push({
+      described: drawerLine(
+        "drawer:configure:replacing",
+        `  ${held.agent} has its own settings.`,
+        width,
+        styleOf("metadata"),
+      ),
+    });
+  } else if (offered === undefined) {
+    // Nothing read, and nothing invented to stand in for it. While the Sidekick
+    // is working an inspection is one of the things its conversation cannot do,
+    // so this says so rather than offering a list from somewhere else.
+    content.push({
+      described: drawerLine(
+        "drawer:configure:unread",
+        "  What this agent offers has not been read yet.",
+        width,
+        styleOf("metadata"),
+      ),
+    });
+  } else if (offered.models.length === 0) {
+    // `null` from the provider: an agent that offers no model choice at all,
+    // which is a different answer from offering choices none of which is yours.
+    content.push({
+      described: drawerLine(
+        "drawer:configure:no-models",
+        "  This agent offers no model choice.",
+        width,
+        styleOf("metadata"),
+      ),
+    });
+  } else {
+    content.push({
+      described: drawerLine("drawer:configure:models", "  Model", width, styleOf("field-label")),
+    });
+    for (const choice of offered.models) {
+      // The provider's own words, and the provider's own id on the action: a
+      // label is what a reader reads, and the id is what is saved.
+      const named = choice.group === undefined ? choice.name : `${choice.group} · ${choice.name}`;
+      content.push({
+        described: row(
+          `drawer:configure:model:${choice.id}`,
+          padControl(`  ${held.model === choice.id ? "(x)" : "( )"} ${named}`, width),
+          { select: "configure-model", model: choice.id },
+          styleOf("action", { selected: held.model === choice.id }),
+          { here: focused },
+        ),
+      });
+      if (choice.description !== undefined) {
+        content.push({
+          described: drawerLine(
+            `drawer:configure:model:${choice.id}:about`,
+            `    ${choice.description}`,
+            width,
+            styleOf("field-hint"),
+          ),
+        });
+      }
+    }
+  }
+  if (offered !== undefined && held.model !== undefined) {
+    const levels = offered.effort;
+    if (levels === undefined || levels.model !== held.model) {
+      // Effort belongs to a model, so levels read for another one are not
+      // these. Said rather than filled in from the list beside it: choosing an
+      // effort this model may not have is a turn refused later for a reason
+      // nobody chose.
+      content.push({
+        described: drawerLine(
+          "drawer:configure:effort-unread",
+          // Short enough for the pane this is drawn in: a sentence the frame
+          // clips is one a reader cannot finish.
+          `  Effort for ${held.model}: not read yet.`,
+          width,
+          styleOf("metadata"),
+        ),
+      });
+    } else {
+      content.push({
+        described: drawerLine(
+          "drawer:configure:efforts",
+          "  Effort",
+          width,
+          styleOf("field-label"),
+        ),
+      });
+      for (const level of levels.levels) {
+        content.push({
+          described: row(
+            `drawer:configure:effort:${level.id}`,
+            padControl(`  ${held.effort === level.id ? "(x)" : "( )"} ${level.name}`, width),
+            { select: "configure-effort", effort: level.id },
+            styleOf("action", { selected: held.effort === level.id }),
+            { here: focused },
+          ),
+        });
+      }
+    }
+  }
+  content.push({
+    described: row(
+      "drawer:configure:refresh",
+      padControl("[refresh]", width),
+      { select: "configure-refresh" },
+      styleOf("action"),
+      { here: focused },
+    ),
+  });
+  content.push({
+    described: row(
+      "drawer:configure:apply",
+      // What Apply would do, said on the control. A different agent is a
+      // different conversation, and somebody pressing this has to know that
+      // before they press it rather than after.
+      padControl(
+        replacing
+          ? reading?.busy === true
+            ? "[stop and start new conversation]"
+            : "[start new conversation]"
+          : "[apply]",
+        width,
+      ),
+      { select: "configure-apply" },
+      styleOf("action"),
+      { here: focused },
+    ),
+  });
+  return {
+    title: "Configure",
+    titleStyle: styleOf("drawer-title"),
+    dismissing: undefined,
+    entering: focused === undefined || !focused.startsWith("drawer:"),
+    content,
+  };
+}
+
+/** The Sidekick's own question, as the drawer that is presenting it. */
+function askingContent(
+  view: ReplView,
+  asking: { readonly held: ReplAsking; readonly question: ReplSidekickQuestion },
+  width: number,
+  preview: readonly ReplFittedLine[] | undefined,
+): DrawerContent {
+  const built = formContent(
+    asking.question,
+    asking.held.form,
+    width,
+    preview,
+    view.focused,
+    asking.question.key,
+  );
+  return {
+    title: built.title,
+    titleStyle: built.titleStyle,
+    dismissing: undefined,
+    entering: built.entering,
+    content: built.content,
+  };
 }
 
 /**
@@ -3565,6 +6523,8 @@ function windowed(
   context: ReplPresentationContext,
   entering: boolean,
   focused: string | undefined,
+  /** The Sidekick question these rows answer, or none for the entry's. */
+  asking: string | undefined,
 ): readonly Described[] {
   if (context.measuring) {
     return [];
@@ -3584,9 +6544,11 @@ function windowed(
       `drawer:value:${named.name}`,
       "  = ",
       named.value,
-      "answer",
+      asking === undefined ? "answer" : "sidekick-answer",
       styleOf("field-value"),
-      { focus: true, here: focused },
+      asking === undefined
+        ? { focus: true, here: focused }
+        : { focus: true, here: focused, field: named.name, question: asking },
     );
   });
 }
@@ -4035,8 +6997,32 @@ export const EARLIER = "[\u2191 earlier]";
 /** The other one. */
 export const LATER = "[\u2193 later]";
 
+/**
+ * What Configure's own window controls are called instead.
+ *
+ * Earlier and Later are words about a *history*: they are right for a
+ * recorded order — Sessions, the entry reading, the catalog, a chat — and
+ * wrong for a list of settings, where moving the window reaches another
+ * choice rather than another moment. Configure's window is the only one of
+ * these that is not a reading of something that happened, so it is the only
+ * one that says this. The actions behind the controls, their order, their
+ * ownership and their scrolling are unchanged.
+ */
+export const SCROLL_UP = "[\u2191 scroll up]";
+/** The other one. */
+export const SCROLL_DOWN = "[\u2193 scroll down]";
+
 /** The Sessions reading's window. */
 export const SESSIONS_WINDOW = "sessions";
+
+/**
+ * The Sidekick chat's own window.
+ *
+ * Its own, because the panes are open at once: a wide frame carries the
+ * Sessions reading in its sidebar and a chat in its inspection pane, and one
+ * offset meaning either would move whichever the reducer guessed.
+ */
+export const SIDEKICK_WINDOW = "sidekick";
 /** The Entries catalog's window. */
 export const ENTRIES_WINDOW = "entries";
 /** The open drawer's content window, whichever reading it is showing. */
@@ -4045,6 +7031,28 @@ export const DRAWER_WINDOW = "drawer";
 export const READING_WINDOW = "reading";
 /** The action row's own structural id, which admission measures against. */
 export const ACTION_ROW = "box:footer:actions";
+/** The right pane's tab row, which is also that column's header. */
+export const TAB_ROW = "box:inspection:tabs";
+
+/**
+ * The Sidekick's inset body, by the id the frame measures it under.
+ *
+ * Named here because two things read it: the box that publishes the inset, and
+ * the pass that asks the engine how wide what is inside it came out.
+ */
+export const SIDEKICK_BODY = "box:inspection:body";
+
+/**
+ * The Transcript's inset body, by the id the frame measures it under.
+ *
+ * Named for the same reason the Sidekick's is: the box that publishes the inset
+ * and the pass that asks how wide what is inside it came out are two readers of
+ * one id.
+ */
+export const TRANSCRIPT_BODY = "box:transcript:body";
+
+/** The sidebar's inset body, which its two groups share the width of. */
+export const SIDEBAR_BODY = "box:sidebar:body";
 
 /**
  * How wide each region that text must fit is, as the engine measured it.
@@ -4056,12 +7064,45 @@ export const ACTION_ROW = "box:footer:actions";
  * calculator is a second answer to a question with one.
  */
 export interface ReplMeasuredWidths {
-  /** The surface carrying content: the transcript column, or the narrow outlet. */
+  /**
+   * The surface carrying content: the transcript column, or the narrow outlet.
+   *
+   * The pane itself, which is what its heading band spans. The rows beneath that
+   * heading are inset from it and use {@link ReplMeasuredWidths.surfaceBody}.
+   */
   readonly surface: number;
   /** The column the Sessions reading and the Entries catalog share. */
   readonly list: number;
   /** The bindings and recorded-answer column. */
   readonly inspection: number;
+  /**
+   * The Transcript's own body, inside its pane's gutter.
+   *
+   * What the guidance, a refusal's explanation, the retained reading and the
+   * controls around it are built to. Narrower than the pane, because a heading
+   * says what a column is across its whole width and what a person reads is
+   * inset from it. Falls back to the pane where a frame draws no inset body,
+   * which is the narrow outlet.
+   */
+  readonly surfaceBody: number;
+  /**
+   * The sidebar's own body, inside the same gutter.
+   *
+   * What the Sessions rows, the Entries catalog and both windows' controls are
+   * built to. The two groups are inset identically, so this is one answer for
+   * the column rather than one per reading.
+   */
+  readonly listBody: number;
+  /**
+   * The Sidekick's own body, inside its pane's gutter.
+   *
+   * Narrower than the pane it is in, which is why it is measured separately:
+   * the header rows span the column while the chat, the composer and the
+   * controls below them are inset from it. One answer for all of those, so a
+   * fitted row, the count a window admits and a pointer target cannot
+   * disagree about how wide the body is.
+   */
+  readonly body: number;
   /** The drawer's own interior. */
   readonly drawer: number;
 }
@@ -4132,6 +7173,47 @@ export interface ReplPresentationContext {
    */
   readonly preview: readonly ReplFittedLine[] | undefined;
   /**
+   * The Sidekick's chat, fitted to the width of the pane it is drawn in.
+   *
+   * Prepared for the same reason the reading and the drawer's preview are: a
+   * chat row is one row, so a message with its own line breaks — or one simply
+   * wider than the pane — is only readable whole if it was cut into rows before
+   * anything counted them. Everything downstream shares this one list, so the
+   * rows drawn, the number the window clamps against and the row a Sessions
+   * reveal lands on are all the same rows.
+   */
+  readonly chat: readonly ReplFittedLine[] | undefined;
+  /**
+   * The rows this frame is drawing of the message's own value, or none.
+   *
+   * Already cut to the pane's measured width and already windowed to what this
+   * screen allows, so the list is exactly the rows to draw and its length is
+   * the height they take. A measuring pass carries as many blank rows as it is
+   * asking the geometry of: their count is the question, and their text would
+   * be text fitted to a width nobody has answered yet.
+   *
+   * The value itself is untouched. These are display rows: soft wrapping puts
+   * no newline into the string Send carries.
+   */
+  readonly message: readonly string[] | undefined;
+  /**
+   * The rows this frame is drawing the contextual guidance in, or none.
+   *
+   * Fitted to the surface it is drawn on, because it is one block of
+   * directions rather than one row: the words are the same at every width and
+   * the number of rows they need is not. A measuring pass carries one blank
+   * row, which is the geometry question it is asking.
+   */
+  readonly guidance: readonly string[] | undefined;
+  /**
+   * The rows this frame is drawing a refusal's own explanation in, or none.
+   *
+   * Word-aware and engine-measured, like every other block of text here. A
+   * reason cut at a code unit breaks a word in half for no reason a reader can
+   * see, and the reason is the whole of what a refusal has to give.
+   */
+  readonly refusal: readonly string[] | undefined;
+  /**
    * The History band this frame measured, or none before it has measured one.
    *
    * Prepared beside the reading: where a mark lands is a proportion of the
@@ -4139,6 +7221,17 @@ export interface ReplPresentationContext {
    * cannot already have placed anything on it.
    */
   readonly rail: ReplPreparedRail | undefined;
+  /**
+   * Where a route drawer goes once the guidance it must clear has been measured.
+   *
+   * One rectangle, settled by the preparation that measured the fitted guidance
+   * block and then read back by everything: the layer's own box, the window its
+   * rows are admitted against, the cells it paints and the targets it publishes.
+   * Absent in the passes that run before the block has been fitted, which fall
+   * back to the rectangle the size alone states — those passes answer widths and
+   * counts, and nothing is admitted into a drawer from them.
+   */
+  readonly drawer: ReplBounds | undefined;
 }
 
 /** One reading's descriptions, paired with where the engine places them. */
@@ -4202,7 +7295,12 @@ export function readingKeyOf(state: ReplState, open: ReplDrawerRef): string | un
  */
 export function drawerOffsetOf(state: ReplState, open: ReplDrawerRef | undefined): number {
   if (open === undefined) {
-    return 0;
+    // No route drawer, so one of the Sidekick's own drawers is being read if
+    // any is. Its own offset, because each window is its own.
+    if (state.configuring.open) {
+      return state.viewports.configure;
+    }
+    return state.asking?.open === true ? state.asking.form.offset : 0;
   }
   if (open.kind === "live-elicit") {
     return state.form.offset;
@@ -4212,6 +7310,33 @@ export function drawerOffsetOf(state: ReplState, open: ReplDrawerRef | undefined
   }
   const reading = readingKeyOf(state, open);
   return reading === undefined ? 0 : (state.viewports.readings[reading] ?? 0);
+}
+
+/**
+ * The most rows the message's own value may take, before a screen reduces it.
+ *
+ * Six, and the label is not one of them: a name that scrolled away with the
+ * text it names would leave somebody typing into an unlabelled box.
+ */
+export const MESSAGE_VALUE_ROWS = 6;
+
+/**
+ * The message's value, as the rows this frame is drawing of it.
+ *
+ * The newest rows rather than the first, because the end is where somebody is
+ * typing: a box that showed the beginning of a long message would scroll the
+ * cursor off itself. What is not drawn is still in the value — this is a
+ * window on it, not a shortening of it.
+ *
+ * One blank row where there is nothing yet, so the box a person types into is
+ * a place on the screen before it holds anything.
+ */
+function messageValueRows(context: ReplPresentationContext): readonly string[] {
+  const held = context.message;
+  if (held === undefined || held.length === 0) {
+    return [""];
+  }
+  return held;
 }
 
 /**
@@ -4240,7 +7365,13 @@ type ReplSlot =
   | "drawer-title"
   | "action"
   | "status"
-  | "draft";
+  | "draft"
+  /** The right pane's two tabs, which stay above whatever it is showing. */
+  | "inspection-above"
+  /** The Sidekick's own input row and its controls, below its chat. */
+  | "inspection-below"
+  /** The chat window's own two controls, which surround it. */
+  | "inspection-window";
 
 function slotOf(key: string): ReplSlot | undefined {
   if (key === "drawer:open") {
@@ -4249,7 +7380,10 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key === "drawer:scroll:up") {
     return "drawer-above";
   }
-  if (key === "drawer:scroll:down" || key === "drawer:close") {
+  if (key === "drawer:scroll:down" || key === "drawer:close" || key === "drawer:sidekick:stop") {
+    // Below the window with the other fixed controls, never inside it: a
+    // control that scrolled away from whoever was reaching for it is the one
+    // thing this drawer's layout exists to prevent.
     return "drawer-below";
   }
   if (key.startsWith("drawer:")) {
@@ -4271,7 +7405,7 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key === "sessions:heading" || key === "entries:heading") {
     return "navigation";
   }
-  if (key === "transcript:heading" || key === "inspection:heading") {
+  if (key === "transcript:heading") {
     return "pane-heading";
   }
   // The empty placeholder and both window controls stay put around the window
@@ -4299,10 +7433,31 @@ function slotOf(key: string): ReplSlot | undefined {
   if (key.startsWith("line:")) {
     return "transcript";
   }
-  if (key.startsWith("binding:") || key.startsWith("elicit:")) {
+  if (key.startsWith("tab:")) {
+    return "inspection-above";
+  }
+  // Both window controls stay put around the chat rather than inside it, so a
+  // measured viewport is the moving part alone.
+  if (key === "sidekick:earlier" || key === "sidekick:later") {
+    return "inspection-window";
+  }
+  if (
+    key === "sidekick:message" ||
+    key.startsWith("sidekick:message:value:") ||
+    key === "sidekick:send" ||
+    key === "sidekick:stop" ||
+    key === "sidekick:back" ||
+    key === "sidekick:working" ||
+    key === "sidekick:configure" ||
+    key === "sidekick:asking" ||
+    key === "sidekick:answer"
+  ) {
+    return "inspection-below";
+  }
+  if (key.startsWith("binding:") || key.startsWith("elicit:") || key.startsWith("sidekick:")) {
     return "inspection";
   }
-  if (key === "guidance") {
+  if (key === "guidance" || key.startsWith("guidance:row:")) {
     return "located";
   }
   // Above the surface, where there is a row's full width for a sentence. On the
@@ -4426,13 +7581,24 @@ function isControl(component: ReplComponent<ReplAction>, input: ReplViewData): b
  * its width to the flow would take it from its own text instead, and a row
  * wider than its column both widens that column and publishes a hit box
  * reaching into the next one.
+ *
+ * `surface` is for the rows that are a pane's header chrome rather than part of
+ * its reading. It paints the measured width and changes no geometry of its own:
+ * the fill is the row's own background rather than a box around it. What the
+ * header does cost is one row for its edge, which belongs to the band these rows
+ * sit in and is measured there.
  */
-function rowBox(candidate: ReplCandidate, region: ReplRegion, width: number | undefined): ReplBox {
+function rowBox(
+  candidate: ReplCandidate,
+  region: ReplRegion,
+  width: number | undefined,
+  surface?: number,
+): ReplBox {
   return box({
     id: `box:${region}:${candidate.key}`,
     key: candidate.key,
     region,
-    props: rowProps(width),
+    props: surface === undefined ? rowProps(width) : headerRowProps(width, surface),
     text: candidate.text,
     control: candidate.control,
     style: candidate.style,
@@ -4506,7 +7672,7 @@ export function presentationFor(
   const viewports: ReplViewportSlot[] = [];
   const regions: { region: ReplRegion; id: string }[] = [];
   /** The border-free inside of each pane that has edges. */
-  const contents: { region: ReplRegion; id: string }[] = [];
+  const contents: { region: ReplRegion; id: string; kind: "pane" | "body" }[] = [];
   /**
    * How wide one region is, as this frame measured it.
    *
@@ -4529,6 +7695,25 @@ export function presentationFor(
     // The sidebar and the narrow outlet both carry the two list readings.
     return context.widths?.list;
   };
+  /**
+   * How wide a row *under* a heading may be, which is the inset body.
+   *
+   * Two answers per column and not one: a heading band says what the column is
+   * across its whole width, and everything a person reads in it is inset two
+   * cells on each side. A row built to the pane would be four cells too wide
+   * and would publish a hit box reaching into the gutter it is meant to leave
+   * blank. The narrow outlet draws no inset body and answers with its own
+   * width, which is what leaves its rows where they have always been.
+   */
+  const bodyWidthOfRegion = (region: ReplRegion): number | undefined => {
+    if (region === "transcript") {
+      return context.widths?.surfaceBody;
+    }
+    if (region === "sidebar") {
+      return context.widths?.listBody;
+    }
+    return widthOfRegion(region);
+  };
   const of = (slot: ReplSlot): readonly ReplCandidate[] =>
     candidates.filter((candidate) => candidate.slot === slot);
 
@@ -4549,31 +7734,200 @@ export function presentationFor(
       (candidate) => !candidate.key.endsWith(":earlier") && !candidate.key.endsWith(":later"),
     );
     const id = `box:${window}:viewport`;
+    const room = bodyWidthOfRegion(region);
     viewports.push(Object.freeze({ id, region, window }));
     return [
-      ...rest.map((candidate) => rowBox(candidate, region, widthOfRegion(region))),
-      ...above.map((candidate) => rowBox(candidate, region, widthOfRegion(region))),
+      ...rest.map((candidate) => rowBox(candidate, region, room)),
+      ...above.map((candidate) => rowBox(candidate, region, room)),
       box({
         id,
         region,
         props: viewportProps(rows),
-        children: of(rowSlot).map((candidate) => rowBox(candidate, region, widthOfRegion(region))),
+        children: of(rowSlot).map((candidate) => rowBox(candidate, region, room)),
       }),
-      ...below.map((candidate) => rowBox(candidate, region, widthOfRegion(region))),
+      ...below.map((candidate) => rowBox(candidate, region, room)),
     ];
   };
 
-  const located = of("located").map((candidate) =>
-    rowBox(candidate, profile === "narrow" ? "content" : "transcript", context.widths?.surface),
-  );
+  /**
+   * The Sidekick's chat, as a window with its controls around it.
+   *
+   * Registered only while the Sidekick is the pane being drawn, because the
+   * slot it windows is the pane's body and the other reading in it — Bindings —
+   * has no offset of its own and must not acquire one. A form covering the
+   * pane describes no body either, so there is nothing to window then.
+   */
+  /**
+   * How wide the Sidekick's own body is, which is its pane less the gutter.
+   *
+   * Every row inside the inset reads this instead of the pane's width: the
+   * fitted text, the window's own count and a published hit box all have to
+   * agree about the room, and the engine measured it once.
+   */
+  const bodyWidth = (): number | undefined => context.widths?.body;
+  const chatColumn = (region: ReplRegion): readonly ReplBox[] => {
+    const controls = of("inspection-window");
+    const rows = of("inspection").map((candidate) => rowBox(candidate, region, bodyWidth()));
+    const id = "box:inspection:viewport";
+    const windowed =
+      showingSidekick(view) &&
+      presentedAsking(view) === undefined &&
+      view.refusal === undefined &&
+      view.live.sidekick !== undefined;
+    if (!windowed) {
+      return [box({ id, region, props: viewportProps(), children: rows })];
+    }
+    viewports.push(Object.freeze({ id, region, window: SIDEKICK_WINDOW }));
+    return [
+      ...controls
+        .filter((candidate) => candidate.key.endsWith(":earlier"))
+        .map((candidate) => rowBox(candidate, region, bodyWidth())),
+      box({ id, region, props: viewportProps(), children: rows }),
+      ...controls
+        .filter((candidate) => candidate.key.endsWith(":later"))
+        .map((candidate) => rowBox(candidate, region, bodyWidth())),
+    ];
+  };
+
+  const located = of("located").map((candidate) => {
+    const region = profile === "narrow" ? "content" : "transcript";
+    return rowBox(candidate, region, bodyWidthOfRegion(region));
+  });
   const heading = (key: string, region: ReplRegion): readonly ReplBox[] => {
     const found = of("navigation").filter((candidate) => candidate.key === key);
     return found.map((candidate) => rowBox(candidate, region, widthOfRegion(region)));
   };
-  /** One pane's own title, where there is a pane to put it in. */
-  const paneTitle = (key: string, region: ReplRegion): readonly ReplBox[] => {
+  /**
+   * One pane's own title, where there is a pane to put it in.
+   *
+   * Inset by the same gutter the body under it has, so the column's name lines
+   * up with what it names. The band around it keeps the whole inner width: it
+   * draws the header surface and the rule that closes it, and only the row
+   * holding the text moves. The row is built to the inset width because that is
+   * the box it is in — a row built to the pane would overflow the gutter it was
+   * just given.
+   */
+  const paneTitle = (key: string, region: ReplRegion, surface: number): readonly ReplBox[] => {
     const found = of("pane-heading").filter((candidate) => candidate.key === key);
-    return found.map((candidate) => rowBox(candidate, region, widthOfRegion(region)));
+    if (found.length === 0) {
+      return [];
+    }
+    return [
+      box({
+        id: `box:${region}:title`,
+        region,
+        props: headerTitleProps(surface),
+        children: found.map((candidate) =>
+          rowBox(candidate, region, bodyWidthOfRegion(region), surface),
+        ),
+      }),
+    ];
+  };
+  /**
+   * The right pane's two tabs, in the one row that is also its heading.
+   *
+   * Side by side rather than stacked, each as wide as its own name, so the
+   * column says what it holds in one row and a pointer aimed at a name lands on
+   * the tab that bears it. They keep the ids and keys they had when they were
+   * rows of their own: the arrangement changed and the controls did not.
+   *
+   * Nothing where there are no tabs to put in it — a narrow frame describes
+   * none, and an empty row would buy that frame a header band it has no heading
+   * for.
+   */
+  const tabRow = (region: ReplRegion, surface: number): readonly ReplBox[] => {
+    const tabs = of("inspection-above");
+    if (tabs.length === 0) {
+      return [];
+    }
+    return [
+      box({
+        id: TAB_ROW,
+        region,
+        props: tabRowProps(surface),
+        children: tabs.map((candidate) =>
+          box({
+            id: `box:${region}:${candidate.key}`,
+            key: candidate.key,
+            region,
+            props: tabProps(surface),
+            text: candidate.text,
+            control: candidate.control,
+            style: candidate.style,
+            runs: candidate.runs,
+          }),
+        ),
+      }),
+    ];
+  };
+  /**
+   * One column's body, in the gutter that insets it from the pane.
+   *
+   * Everything under a column's heading: the Sidekick's chat and composer, the
+   * Transcript's directions and retained reading, the sidebar's two lists and
+   * every window control around them. Published as a content box of its own, so
+   * the pass that asks how wide a row in it may be asks the engine about this
+   * box rather than about the pane the heading spans.
+   *
+   * The gutter outside and the room inside, as two boxes — the same division a
+   * bordered pane already makes. A measured bound is the only honest answer to
+   * how much room the padding left, and reading the padded box's own bounds
+   * would answer with the padding still in it.
+   */
+  const insetBody = (region: ReplRegion, id: string, children: readonly ReplBox[]): ReplBox => {
+    contents.push({ region, id, kind: "body" });
+    return box({
+      id: `${id}:gutter`,
+      region,
+      props: insetBodyProps(),
+      children: [box({ id, region, props: paneContentProps(), children })],
+    });
+  };
+  /**
+   * The Sidekick's body, where the Sidekick is the reading being shown.
+   *
+   * The inset belongs to that reading alone. A binding is a line of source, and
+   * indenting it to match a conversation would narrow the thing it quotes by
+   * four cells without saying so — so Bindings shares the pane and keeps the
+   * body it has always had. That frame publishes no inset body for this column
+   * at all, which is what makes the measured body width fall back to the pane
+   * the rows actually have.
+   */
+  const sidekickBody = (region: ReplRegion, children: readonly ReplBox[]): ReplBox => {
+    if (!showingSidekick(view)) {
+      return box({ id: "box:inspection:reading", region, props: paneContentProps(), children });
+    }
+    return insetBody(region, SIDEKICK_BODY, children);
+  };
+
+  /**
+   * One pane's header rows, in the band whose edge closes them.
+   *
+   * The band is what draws the accepted edge, and it draws nothing when there
+   * are no header rows to close — a narrow frame names no pane, so it has no
+   * header and buys no rule.
+   */
+  const headerBand = (
+    region: ReplRegion,
+    surface: number,
+    rows: readonly ReplBox[],
+  ): readonly ReplBox[] => {
+    if (rows.length === 0) {
+      return [];
+    }
+    return [
+      box({
+        id: `box:${region}:header`,
+        region,
+        // The asked-for space above this column's heading, owned by the band so
+        // it is painted with the header's own surface: the gap is the top of
+        // the band rather than a strip of the reading pushed down. Every row
+        // below it keeps the position it had — the band grew by the row the
+        // column's content gave up.
+        props: headerBandProps(rows.length, surface, COLUMN_TOP_GAP),
+        children: rows,
+      }),
+    ];
   };
   /**
    * One pane with edges, and the border-free box its rows are measured in.
@@ -4588,11 +7942,13 @@ export function presentationFor(
     children: readonly ReplBox[],
   ): ReplBox => {
     const id = `box:${region}:content`;
-    contents.push({ region, id });
+    contents.push({ region, id, kind: "pane" });
     return box({
       id: `box:${region}`,
       region,
       props: paneColumnProps(width, surface),
+      // No gap here: a column with a header band has that band own it, so the
+      // blank row is painted with the header's surface rather than the body's.
       children: [box({ id, region, props: paneContentProps(), children })],
     });
   };
@@ -4613,28 +7969,47 @@ export function presentationFor(
     // The catalog takes its own height while it fits and its share when it does
     // not, exactly as it does in the sidebar; the reading takes what is left.
     const routed =
-      view.state.route.surface === "sessions"
-        ? listColumn("content", "sessions-fixed", "sessions", SESSIONS_WINDOW)
-        : [
-            box({
-              id: "box:content:entries",
-              region: "content",
-              props: stackProps(context.entriesRows === undefined ? sharedColumnRows(size) : "fit"),
-              children: listColumn(
-                "content",
-                "entries-fixed",
-                "entries",
-                ENTRIES_WINDOW,
-                context.entriesRows,
+      view.state.route.view === "sidekick"
+        ? [
+            // One outlet, holding the chat and the row its messages are typed
+            // into. The reading grows and the input keeps its row, the same
+            // division the wide pane makes.
+            sidekickBody("content", [
+              box({
+                id: "box:content:sidekick",
+                region: "content",
+                props: stackProps("grow"),
+                children: chatColumn("content"),
+              }),
+              ...of("inspection-below").map((candidate) =>
+                rowBox(candidate, "content", bodyWidth()),
               ),
-            }),
-            box({
-              id: "box:content:reading",
-              region: "content",
-              props: stackProps("grow"),
-              children: listColumn("content", "reading-fixed", "reading", READING_WINDOW),
-            }),
-          ];
+            ]),
+          ]
+        : view.state.route.surface === "sessions"
+          ? listColumn("content", "sessions-fixed", "sessions", SESSIONS_WINDOW)
+          : [
+              box({
+                id: "box:content:entries",
+                region: "content",
+                props: stackProps(
+                  context.entriesRows === undefined ? sharedColumnRows(size) : "fit",
+                ),
+                children: listColumn(
+                  "content",
+                  "entries-fixed",
+                  "entries",
+                  ENTRIES_WINDOW,
+                  context.entriesRows,
+                ),
+              }),
+              box({
+                id: "box:content:reading",
+                region: "content",
+                props: stackProps("grow"),
+                children: listColumn("content", "reading-fixed", "reading", READING_WINDOW),
+              }),
+            ];
     regions.push({ region: "content", id: "box:content" });
     columns.push(
       box({
@@ -4661,7 +8036,10 @@ export function presentationFor(
       box({
         id: "box:sidebar",
         region: "sidebar",
-        props: paneProps(sidebarWidth(size), REPL_PALETTE.sideSurface),
+        // The asked-for space above this column's first heading. The Entries
+        // group below is the column's second reading rather than the top of
+        // another column, so it takes no second gap.
+        props: paneProps(sidebarWidth(size), REPL_PALETTE.sideSurface, COLUMN_TOP_GAP),
         children: [
           // Two groups, and only one of them grows: the Sessions reading takes
           // whatever the column has left, and the catalog states its own height.
@@ -4676,7 +8054,13 @@ export function presentationFor(
             props: stackProps("grow"),
             children: [
               ...heading("sessions:heading", "sidebar"),
-              ...listColumn("sidebar", "sessions-fixed", "sessions", SESSIONS_WINDOW),
+              // The heading spans the column and the list under it is inset,
+              // which is the division every other column already makes. This is
+              // the box the sidebar's body width is measured from; the Entries
+              // group below is inset identically, so one answer serves both.
+              insetBody("sidebar", SIDEBAR_BODY, [
+                ...listColumn("sidebar", "sessions-fixed", "sessions", SESSIONS_WINDOW),
+              ]),
             ],
           }),
           box({
@@ -4689,37 +8073,73 @@ export function presentationFor(
             props: stackProps(context.entriesRows === undefined ? sharedColumnRows(size) : "fit"),
             children: [
               ...heading("entries:heading", "sidebar"),
-              ...listColumn(
-                "sidebar",
-                "entries-fixed",
-                "entries",
-                ENTRIES_WINDOW,
-                context.entriesRows,
-              ),
+              box({
+                id: "box:sidebar:entries:gutter",
+                region: "sidebar",
+                props: insetBodyProps(),
+                children: [
+                  box({
+                    id: "box:sidebar:entries:body",
+                    region: "sidebar",
+                    props: paneContentProps(),
+                    children: listColumn(
+                      "sidebar",
+                      "entries-fixed",
+                      "entries",
+                      ENTRIES_WINDOW,
+                      context.entriesRows,
+                    ),
+                  }),
+                ],
+              }),
             ],
           }),
         ],
       }),
       edgedColumn("transcript", undefined, REPL_PALETTE.centreSurface, [
-        ...paneTitle("transcript:heading", "transcript"),
-        ...located,
-        ...listColumn("transcript", "reading-fixed", "reading", READING_WINDOW),
+        ...headerBand(
+          "transcript",
+          REPL_PALETTE.transcriptHeaderSurface,
+          paneTitle("transcript:heading", "transcript", REPL_PALETTE.transcriptHeaderSurface),
+        ),
+        // Everything under that heading, inset: the directions, the retained
+        // reading and the two controls that move it. The band above spans the
+        // column, because a column says what it is across its full width.
+        insetBody("transcript", TRANSCRIPT_BODY, [
+          ...located,
+          ...listColumn("transcript", "reading-fixed", "reading", READING_WINDOW),
+        ]),
       ]),
-      edgedColumn("inspection", inspectionWidth(size), REPL_PALETTE.bindingsSurface, [
-        ...paneTitle("inspection:heading", "inspection"),
-        box({
-          id: "box:inspection:viewport",
-          region: "inspection",
-          props: viewportProps(),
-          children: of("inspection").map((candidate) =>
-            rowBox(candidate, "inspection", context.widths?.inspection),
+      edgedColumn("inspection", inspectionWidth(size), REPL_PALETTE.rightSurface, [
+        // The tabs are the header band, closed by the same one edge. They stay
+        // above whatever the pane is showing and the Sidekick's own input stays
+        // below it, so the moving part is the reading alone: the way between the
+        // two readings does not scroll away with one of them, and the box a
+        // person types into does not either.
+        //
+        // This column's header chrome is that one row, so it carries the header
+        // surface across the measured width: the two names say both what is here
+        // and what can be reached, which is why there is no title above them.
+        ...headerBand(
+          "inspection",
+          REPL_PALETTE.inspectionHeaderSurface,
+          tabRow("inspection", REPL_PALETTE.inspectionHeaderSurface),
+        ),
+        sidekickBody("inspection", [
+          ...chatColumn("inspection"),
+          ...of("inspection-below").map((candidate) =>
+            rowBox(candidate, "inspection", bodyWidth()),
           ),
-        }),
+        ]),
       ]),
     );
   }
 
-  const rect = drawerRect(size);
+  // Whichever drawer is presented, through the one calculation both use: the
+  // entry's covers the body and the Sidekick's covers the pane that owns its
+  // question. Measurement, admission, description, drawing and hit testing all
+  // read it from here, so a cell and a target cannot disagree about where it is.
+  const rect = presentedRect(view, context);
   const [title] = of("drawer-title");
   if (rect !== undefined && title !== undefined) {
     const id = `box:${DRAWER_WINDOW}:viewport`;
@@ -4855,17 +8275,22 @@ export function admissionFor(input: {
   readonly reading?: ReplPreparedReading | undefined;
   /** The open question's message, fitted, which its own window admits rows of. */
   readonly preview?: readonly ReplFittedLine[] | undefined;
+  /** The chat, fitted, which its own window admits rows of. */
+  readonly chat?: readonly ReplFittedLine[] | undefined;
   readonly boundsOf: (id: string) => ReplBounds | undefined;
 }): ReplAdmission {
-  const { view, manifest, widths, reading, preview, boundsOf } = input;
+  const { view, manifest, widths, reading, preview, chat, boundsOf } = input;
   const windows = new Map<string, ReplWindow>();
   for (const slot of manifest.viewports) {
     const capacity = capacityOf(boundsOf(slot.id));
+    // The count first, because a window that follows its newest rows needs to
+    // know where they end before it can say where it is.
+    const total = totalOf(view, widths, reading, preview, chat, slot.window);
     windows.set(
       slot.window,
       admitRows({
-        offset: offsetFor(view, slot.window, capacity),
-        total: totalOf(view, widths, reading, preview, slot.window),
+        offset: offsetFor(view, slot.window, capacity, total, chat),
+        total,
         capacity,
       }),
     );
@@ -4884,6 +8309,12 @@ export function admissionFor(input: {
  * Asked by the preparation that decides whether the catalog needs its window
  * controls at all: a catalog shorter than the room it has keeps its natural
  * footprint and takes no row for a control nothing would scroll.
+ *
+ * An execution that has submitted nothing holds no catalog rows. Its
+ * placeholder is a row this column states around the window, like both window
+ * controls, so counting it here would size the window for a row that is not
+ * inside it — and the measuring pass and the frame would then disagree about
+ * the column by exactly one row.
  */
 export function entriesRowCount(model: ReplModel): number {
   return entryContent(model, undefined, undefined, undefined).length;
@@ -4900,8 +8331,39 @@ export function entriesRowCount(model: ReplModel): number {
  * the existing process-local one; nothing new scrolls and nothing is added to the
  * frame.
  */
-function offsetFor(view: ReplView, window: string, capacity: number): number {
+function offsetFor(
+  view: ReplView,
+  window: string,
+  capacity: number,
+  total: number,
+  chat: readonly ReplFittedLine[] | undefined,
+): number {
   const held = offsetOf(view, window);
+  if (window === SIDEKICK_WINDOW) {
+    // The turn a Sessions selection asked to be shown, placed against the chat
+    // window *this* frame measured. The frame that answered the selection may
+    // have had no chat window at all, so this is where the request becomes an
+    // offset; a frame that still cannot place it leaves the window alone.
+    //
+    // It takes precedence over following: somebody who asked to see one turn
+    // asked for that turn and not for whatever arrived since.
+    const reveal = view.state.revealing;
+    if (reveal !== undefined) {
+      const at = revealedAt(reveal, view.live.sidekick, capacity, chat);
+      if (at !== undefined) {
+        return at;
+      }
+      return held;
+    }
+    // The newest end of the list, recomputed from the rows this frame fitted.
+    // A chat that is following is asking for wherever the bottom is *now*,
+    // which is why no number for it is stored: appending rows would leave a
+    // stored one describing the bottom the list had before they arrived.
+    if (view.state.viewports.sidekickFollowing[chatRead(view)] ?? true) {
+      return Math.max(0, total - capacity);
+    }
+    return held;
+  }
   if (window !== ENTRIES_WINDOW || capacity < 1) {
     return held;
   }
@@ -4921,10 +8383,24 @@ function offsetFor(view: ReplView, window: string, capacity: number): number {
   return Math.min(Math.max(held, at - capacity + 1), at);
 }
 
+/**
+ * Which chat this frame is reading, as the key its own position is held under.
+ *
+ * The reading itself rather than the route's selector: the current chat is the
+ * absence of a selector, and an absence is not a key. A frame with no Sidekick
+ * reads no chat and has no window to position either.
+ */
+function chatRead(view: ReplView): string {
+  return view.live.sidekick?.reading ?? "";
+}
+
 /** How far one window is scrolled, as this process is holding it. */
 function offsetOf(view: ReplView, window: string): number {
   if (window === SESSIONS_WINDOW) {
     return view.state.viewports.sessions;
+  }
+  if (window === SIDEKICK_WINDOW) {
+    return view.state.viewports.sidekick[chatRead(view)] ?? 0;
   }
   if (window === READING_WINDOW) {
     return view.state.viewports.readings[entryReadingKeyOf(view.state)] ?? 0;
@@ -4947,10 +8423,18 @@ function totalOf(
   widths: ReplMeasuredWidths,
   reading: ReplPreparedReading | undefined,
   preview: readonly ReplFittedLine[] | undefined,
+  chat: readonly ReplFittedLine[] | undefined,
   window: string,
 ): number {
   if (window === SESSIONS_WINDOW) {
     return sessionContentRows(view.state, view.model, view.live);
+  }
+  if (window === SIDEKICK_WINDOW) {
+    // Counted by the builder that produces those rows, so what a scroll clamps
+    // against cannot disagree with the list it is clamping — fitted rows
+    // included, because a message that occupies three rows is three rows to
+    // scroll past.
+    return sidekickReadingRows(view.live.sidekick, undefined, chat).length;
   }
   if (window === ENTRIES_WINDOW) {
     return entriesRowCount(view.model);

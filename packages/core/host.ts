@@ -346,6 +346,7 @@ export { GeneratedXmdPreviewError, previewGeneratedXmdRoot } from "./src/generat
 export type { GeneratedXmdRootPreview } from "./src/generated-xmd-preview.ts";
 
 /**
+
  * Where a completed Prompt publishes, for a host that retains something beside
  * it.
  *
@@ -363,6 +364,7 @@ export { useAgentPromptPublisher } from "./src/agent/publication.ts";
 export type {
   AgentPromptAssociation,
   AgentPromptHandle,
+  AgentPromptObservation,
   AgentPromptPublication,
   AgentPromptPublisher,
 } from "./src/agent/publication.ts";
@@ -409,7 +411,7 @@ export type { AnswerConfiguration, AnswerMatcher } from "./src/answers.ts";
  * from its own closure.
  */
 export { DeclarationScan } from "./src/declaration-scan.ts";
-export type { AnswersPlacement, DeclarationScanner } from "./src/declaration-scan.ts";
+export type { AnswersState, DeclarationScanner } from "./src/declaration-scan.ts";
 
 /**
  * Where a trusted host states the description its profile shows.

@@ -72,21 +72,21 @@ const RETAINED = agentSessionKey(IDENTITY);
  * What the provider calls the same session.
  *
  * A different namespace that happens to share a prefix, exactly as the real
- * placement key does. Nothing under test may recover one from the other by
+ * provider session key does. Nothing under test may recover one from the other by
  * taking the spelling apart.
  */
-const PLACEMENT = `${RETAINED}:0123456789abcdef`;
+const PROVIDER_KEY = `${RETAINED}:0123456789abcdef`;
 
-/** A session the run never placed, for the Prompt that must retain nothing. */
-const FOREIGN_PLACEMENT = "some-other-provider-key";
+/** A session the run never requested, for the Prompt that must retain nothing. */
+const FOREIGN_PROVIDER_KEY = "some-other-provider-key";
 
 interface Reply {
   /** What the agent answered. */
   readonly text: string;
   /** Which turn it says that was, or none. */
   readonly turnId?: string;
-  /** Which session it answered in. Defaults to the placed one. */
-  readonly placement?: string;
+  /** Which session it answered in. Defaults to the requested one. */
+  readonly providerKey?: string;
   /** Whether the turn succeeded. Defaults to true. */
   readonly failed?: true;
   /** Held here before the turn answers, so a run can be interrupted mid-turn. */
@@ -135,7 +135,7 @@ function scriptedProvider(replies: readonly Reply[]): AgentProviderFactory {
         },
         // deno-lint-ignore require-yield
         *session(): Operation<Session> {
-          return { sessionKey: PLACEMENT, cwd: "/nowhere" };
+          return { sessionKey: PROVIDER_KEY, cwd: "/nowhere" };
         },
         *prompt(): Operation<Stream<AgentPromptEvent, string>> {
           const reply = replies[index];
@@ -147,7 +147,7 @@ function scriptedProvider(replies: readonly Reply[]): AgentProviderFactory {
             yield* reply.hold();
           }
           const session: Session = {
-            sessionKey: reply.placement ?? PLACEMENT,
+            sessionKey: reply.providerKey ?? PROVIDER_KEY,
             cwd: "/nowhere",
           };
           const terminal: AgentPromptEvent = reply.failed
@@ -204,21 +204,21 @@ interface Attempt {
 /**
  * Run one document against this run's journal, with the publisher installed.
  *
- * `placed` is what the placement recorded, supplied the way the real
- * attachment supplies it — a lookup of what this host placed, never a parse of
- * the provider's own key.
+ * `recorded` is what the request recorded, supplied the way the real
+ * attachment supplies it — a lookup of what this host asked for, never a parse
+ * of the provider's own key.
  */
 function runDocument(
   database: WorkflowRunDatabase,
   source: string,
   replies: readonly Reply[],
-  placed: readonly string[] = [PLACEMENT],
+  recorded: readonly string[] = [PROVIDER_KEY],
 ): Operation<Attempt> {
   return scoped(function* () {
     yield* useAgentPromptPublisher(
       createWorkflowPromptPublisher({
         database,
-        retainedSessionKey: (key) => (placed.includes(key) ? RETAINED : undefined),
+        retainedSessionKey: (key) => (recorded.includes(key) ? RETAINED : undefined),
       }),
     );
     const factory = scriptedProvider(replies);
@@ -465,7 +465,7 @@ describe("Tier WPC — retained Prompt checkpoints", () => {
       // the provider's key would satisfy every shape check here and reference
       // a session this run does not retain.
       expect(row?.["session_key"]).toBe(RETAINED);
-      expect(row?.["session_key"]).not.toBe(PLACEMENT);
+      expect(row?.["session_key"]).not.toBe(PROVIDER_KEY);
     });
   });
 
@@ -541,8 +541,8 @@ describe("Tier WPC — retained Prompt checkpoints", () => {
       yield* runDocument(
         database,
         ONE_PROMPT,
-        [{ text: "ok", turnId: "turn-alpha", placement: FOREIGN_PLACEMENT }],
-        [PLACEMENT],
+        [{ text: "ok", turnId: "turn-alpha", providerKey: FOREIGN_PROVIDER_KEY }],
+        [PROVIDER_KEY],
       );
 
       expect(committedPrompts(path)).toHaveLength(1);

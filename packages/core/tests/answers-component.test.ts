@@ -30,7 +30,7 @@ import { collect } from "../src/collect.ts";
 import { installAnswerProvider } from "../src/answers.ts";
 import type { AnswerConfiguration } from "../src/answers.ts";
 import { DeclarationScan } from "../src/declaration-scan.ts";
-import type { AnswersPlacement } from "../src/declaration-scan.ts";
+import type { AnswersState } from "../src/declaration-scan.ts";
 import { Elicitation } from "../src/elicitation-api.ts";
 import type { ElicitationRequest } from "../src/elicitation-api.ts";
 import { execute } from "../src/execute.ts";
@@ -942,7 +942,7 @@ describe("Answers: reservation", () => {
     );
 
     // A reserved name resolves to nothing else wherever it is written, so the
-    // misplacement is still a printed error rather than a component that renders.
+    // a misplaced one is still a printed error rather than a component that renders.
     expect(reported(result)).toContain("<Answer> must be a direct child of <Answers>");
     expect(result.output).not.toContain("REPOSITORY_ANSWER");
   });
@@ -988,7 +988,7 @@ describe("Answers: durability", () => {
 /**
  * `<Answers>` as child configuration (specs/testing-spec.md).
  *
- * The other placement. A direct declaration in an `<Execution host="run">`
+ * The other position. A direct declaration in an `<Execution host="run">`
  * prefix holds matchers alone, produces detached data, and is installed by
  * whoever assembled the child — so what is held here is the two halves core
  * owns: reading one, and answering from what was read.
@@ -1008,14 +1008,14 @@ describe("Answers: child configuration", () => {
   /**
    * Read every `<Answers>` in `source` as a declaration.
    *
-   * The placement is supplied rather than derived: how a harness decides that
+   * The state is supplied rather than derived: how a harness decides that
    * an element is a direct child of the prefix it is scanning is the harness's
    * own business, and what these hold is what core does once it has been told.
    */
   function declare(
     workspace: string,
     source: string,
-    placement: AnswersPlacement = "parse",
+    state: AnswersState = "parse",
   ): Operation<Declared> {
     return scoped(function* () {
       const path = join(workspace, "declared.md");
@@ -1026,7 +1026,7 @@ describe("Answers: child configuration", () => {
       yield* DeclarationScan.set({
         enterList: () => {},
         exitList: () => {},
-        declaresAnswers: () => placement,
+        declaresAnswers: () => state,
         recordAnswers(_site: string, configuration: Result<AnswerConfiguration>): void {
           if (configuration.ok) {
             configurations.push(configuration.value);

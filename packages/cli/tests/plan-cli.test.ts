@@ -449,7 +449,7 @@ describe(
         expect(complaints(stderr)).toBe(RUN_REMOVAL_REFUSAL);
       }
 
-      // Placement decides nothing: before the request, and swallowed by an
+      // Position decides nothing: before the request, and swallowed by an
       // option that takes a value, are the two places a hidden switch survives.
       yield* refusedEarly(["--run", REQUEST], RUN_REMOVAL_REFUSAL);
       yield* refusedEarly([REQUEST, "--include", "--run"], RUN_REMOVAL_REFUSAL);
@@ -1140,7 +1140,7 @@ describe(
 
     it("PO7: a retained option written where the journal path goes refuses before any phase", function* () {
       // `refusedEarly` carries an agent name nothing resolves and an isolated
-      // `HOME`, so reaching the catalog, the provider or a session placement
+      // `HOME`, so reaching the catalog, the provider or a session request
       // would each leave a trace. None of them does — and neither does the
       // filesystem: the switch that was about to become a filename is not one.
       //
@@ -1180,7 +1180,7 @@ describe(
         expect(yield* exists(join(dir, "--verbose"))).toBe(false);
         expect(yield* exists(join(dir, "release.md"))).toBe(false);
         expect((yield* until(readdir(dir))).sort()).toEqual(["home"]);
-        // And no catalog, provider or session placement happened on the way.
+        // And no catalog, provider or session request happened on the way.
         expect(result.stdout).toBe("");
         expect(result.stderr).not.toContain("## Built-in components");
         expect(result.stderr).not.toContain("unavailable");
@@ -1502,7 +1502,7 @@ describe(
         // complete settled text is scanned before `<PlanInformation>` returns,
         // which is the last moment at which nothing has been disclosed.
         //
-        // The discriminator for that placement: relying on the Prompt event's
+        // The discriminator for that position: relying on the Prompt event's
         // later append gate leaves this failing with the canary in prompt two.
         for (const prompt of harness.fake.prompts) {
           expect(prompt).not.toContain(canary());

@@ -106,15 +106,15 @@ function probeRuntime(probe: RuntimeProbe) {
 /** What core does with each phase, minus the journal. */
 function collectingCoordinator(records: LaunchRecord[]): AgentLaunchCoordinator {
   return {
-    // These suites route launches, never a `<Session>` placement. Throwing
-    // rather than answering means a placement that did reach here fails
+    // These suites route launches, never a `<Session>` request. Throwing
+    // rather than answering means a request that did reach here fails
     // loudly instead of being handed an identity nobody derived.
-    sessionPlacement: () => {
-      throw new Error("this stub coordinator routes no session placement");
+    sessionSetup: () => {
+      throw new Error("this stub coordinator routes no session request");
     },
     sessionUse: (routed) =>
       typeof routed === "object" && routed !== null ? { session: routed } : undefined,
-    // As with a placement, these suites name no provider turn. Throwing means a
+    // As with a request, these suites name no provider turn. Throwing means a
     // checkpoint that did reach here fails loudly rather than being recorded by
     // a coordinator nothing is asserting against.
     checkpoint: () => {
@@ -141,13 +141,13 @@ function collectingCoordinator(records: LaunchRecord[]): AgentLaunchCoordinator 
  */
 function performingCoordinator(records: LaunchRecord[]): AgentLaunchCoordinator {
   return {
-    // As above: these suites route launches, never a `<Session>` placement.
-    sessionPlacement: () => {
-      throw new Error("this stub coordinator routes no session placement");
+    // As above: these suites route launches, never a `<Session>` request.
+    sessionSetup: () => {
+      throw new Error("this stub coordinator routes no session request");
     },
     sessionUse: (routed) =>
       typeof routed === "object" && routed !== null ? { session: routed } : undefined,
-    // As with a placement, these suites name no provider turn. Throwing means a
+    // As with a request, these suites name no provider turn. Throwing means a
     // checkpoint that did reach here fails loudly rather than being recorded by
     // a coordinator nothing is asserting against.
     checkpoint: () => {

@@ -5,7 +5,7 @@
  * be empty, Entries, the selected entry's scopes, a transcript, a
  * bindings/history inspection column, an optional drawer and a footer holding
  * the action row, the History band and the draft. Every row is an ordinary
- * described node, so what is under test is placement and rendering rather than a
+ * described node, so what is under test is layout and rendering rather than a
  * screen this fixture invented.
  *
  * ## One walk, two things
@@ -237,7 +237,7 @@ const CLOSE_ROW = row("close-drawer");
 /**
  * Which surface a narrow screen is showing.
  *
- * A route, not a preference: the application decides it, and placement is told
+ * A route, not a preference: the application decides it, and the layout is told
  * rather than asked.
  */
 export type ReplFixtureRoute = "sessions" | "entries";
@@ -273,7 +273,7 @@ export interface ReplFixtureState {
   /**
    * Whether each list offers its two window controls.
    *
-   * Off by default, so a test about placement gets the plainest screen that
+   * Off by default, so a test about layout gets the plainest screen that
    * places anything. The admission tests turn it on, because what a window
    * control costs its own region a row for is the thing they are measuring.
    */

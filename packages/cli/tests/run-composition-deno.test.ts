@@ -147,12 +147,12 @@ describe("ORC7 — a Session launched in a managed Worktree", () => {
   it("hands the launch that worktree's own root and a session key of its own", function* () {
     const ambient = yield* useAmbient();
 
-    /** Every launch this document routed, as the placement it was given. */
+    /** Every launch this document routed, as the session details it was given. */
     const routed: { cwd: string; session: string | undefined }[] = [];
 
     // The public launch surface a provider answers. A real `<Session.Launch>`
     // reaches exactly this, through the same installation `xmd run` makes, and
-    // what it is handed is the placement: the directory the session belongs to.
+    // what it is handed is the details: the directory the session belongs to.
     const capture = function* (): Operation<void> {
       // A registered provider, reached the way `<AgentProvider>` reaches one.
       // Only a registered provider is handed the launch coordinator, so only one
@@ -219,7 +219,7 @@ describe("ORC7 — a Session launched in a managed Worktree", () => {
     };
 
     // One launch inside a managed Worktree, and one in the ambient checkout, in
-    // the same document — so the two placements are decided by where each
+    // the same document — so the two sessions are decided by where each
     // element was written and by nothing else.
     const bound = yield* runOrdinary(
       [
@@ -256,13 +256,13 @@ describe("ORC7 — a Session launched in a managed Worktree", () => {
     expect(routed[1]?.session).toBe("implementer");
 
     // The same agent and the same session name in the two places are two
-    // sessions, because the placement differs.
+    // sessions, because the directory differs.
     const agent = "codex";
     const inWorktree = deriveSessionKey(agent, routed[0]?.cwd ?? "", "implementer");
     const inAmbient = deriveSessionKey(agent, routed[1]?.cwd ?? "", "implementer");
     expect(inWorktree).not.toBe(inAmbient);
 
-    // Supporting evidence for *why* the placement stops at the worktree: `.git`
+    // Supporting evidence for *why* the walk stops at the worktree: `.git`
     // there is a file, and the candidate walk is bounded by it.
     expect(yield* readTextFile(`${worktree}/.git`)).toContain("gitdir:");
     const candidates = yield* sessionCandidates(agent, worktree);

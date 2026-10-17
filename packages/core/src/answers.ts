@@ -37,15 +37,15 @@
  * written does not decide what it can answer; and "an `<Answers>` with no body"
  * is a structural fact rather than a guess from empty rendered text.
  *
- * ## Two placements, one matcher language
+ * ## Two positions, one matcher language
  *
- * The ordinary placement wraps the region whose elicitations it answers. The
+ * The ordinary position wraps the region whose elicitations it answers. The
  * other configures a nested execution: written as a direct declaration in an
  * `<Execution host="run">` prefix, an `<Answers>` holds only matchers, and what
  * it produces is detached data a trusted host installs inside the child
- * (specs/testing-spec.md). Which placement an element has is decided by the
+ * (specs/testing-spec.md). Which position an element has is decided by the
  * harness that recognized it, from where the element was written and from
- * whether the scan reached it directly — so neither placement is selected by
+ * whether the scan reached it directly — so neither position is selected by
  * looking a name up, and neither is reachable through a construct that expands
  * descendants of its own.
  *
@@ -87,7 +87,7 @@ import { JsonParseError, parseJson } from "./json.ts";
 import { matchPrompt, parseTemplate, resolveBinding } from "./template.ts";
 import type { ParsedTemplate } from "./template.ts";
 import type { ComponentElement, ErrorSegment, Json, Segment } from "./types.ts";
-import type { AnswersPlacement, DeclarationScanner } from "./declaration-scan.ts";
+import type { AnswersState, DeclarationScanner } from "./declaration-scan.ts";
 import {
   answerFormViolations,
   answersBodyViolation,
@@ -198,8 +198,8 @@ function isMalformed(value: object): value is Malformed {
 /**
  * Read every `<Answer>` child, and keep whatever else was written.
  *
- * The matchers are parsed here for both placements: a matcher means the same
- * thing wherever it is written, and the two placements differ only in what they
+ * The matchers are parsed here for both positions: a matcher means the same
+ * thing wherever it is written, and the two positions differ only in what they
  * do with the body they did not consume.
  */
 function* partition(
@@ -278,13 +278,13 @@ export function* declareChildAnswers(
   expand: ExpandSegments,
   scanner: DeclarationScanner,
   site: string,
-  placement: AnswersPlacement,
+  state: AnswersState,
 ): Operation<Segment[]> {
-  if (placement === "parsed") {
+  if (state === "parsed") {
     // The assertion pass re-expanding a declaration the scan already read.
     return [];
   }
-  if (placement === "misplaced") {
+  if (state === "misplaced") {
     scanner.recordAnswers(
       site,
       Err(

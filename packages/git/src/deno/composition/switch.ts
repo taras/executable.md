@@ -31,7 +31,7 @@ import type { RepositoryHost } from "./host.ts";
 import { settled, type CompositionOutcome, type MutationContext } from "./effects.ts";
 import { gitRefused } from "./refusals.ts";
 import { gitOperationFingerprint, performGitOperation, type GitCheckout } from "./operations.ts";
-import { placedCheckout } from "./identity.ts";
+import { checkoutPathAgrees } from "./identity.ts";
 
 /** The effect type one branch change is recorded under. */
 export const WORKSPACE_GIT_SWITCH = "workspace_git_switch";
@@ -176,10 +176,10 @@ export function* createGitSwitch(
   // Read for this request rather than merely read: a result that does not
   // describe the checkout, branch, base and transition this invocation asked for
   // is not this invocation's result, whatever else it is. The identity it names
-  // is then held to this provider's own placement, which is the half of it the
+  // is then held to this provider's own paths, which is the half of it the
   // shared protocol has no way to decide.
   const result = parseGitSwitchResult(outcome, admitted);
-  if (result === undefined || !placedCheckout(result.checkout, admitted.repository)) {
+  if (result === undefined || !checkoutPathAgrees(result.checkout, admitted.repository)) {
     throw new GitOperationProtocolError(SWITCH);
   }
   return result;

@@ -23,6 +23,9 @@ import type {
   ReplRoute,
   ReplSelection,
 } from "../src/repl/route.ts";
+import { initialState, NO_AGENT, reduceRepl } from "../src/repl/application.ts";
+import type { ReplLive } from "../src/repl/application.ts";
+import { NO_LIFECYCLE } from "../src/repl/lifecycle.ts";
 import { agentReferenceEvents, referenceEvents } from "./fixtures/repl/reference.ts";
 
 function decoded(location: string): ReplRoute {
@@ -111,6 +114,17 @@ function holdsARecord(value: unknown, seen: Set<object> = new Set()): boolean {
   }
   return false;
 }
+
+/** A process holding nothing live, which is what a reduction over a route needs. */
+const QUIET: ReplLive = Object.freeze({
+  output: "",
+  question: undefined,
+  expansion: "playing",
+  pausable: false,
+  running: false,
+  agent: NO_AGENT,
+  lifecycle: NO_LIFECYCLE,
+});
 
 const EXECUTION = "kf39sla2";
 
@@ -717,5 +731,382 @@ describe("REPL route: resolving a conversation", () => {
     expect(resolved(model, question, holding({ elicit: true })).drawers[0].kind).toBe(
       "live-elicit",
     );
+  });
+});
+
+describe("REPL route: the Sidekick's two choices", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("R1: encodes view and right last, and leaves every older location byte-identical", function* () {
+    // Beside everything that was canonical before them, in the fixed order the
+    // codec appends them in.
+    const carrying = [
+      `xmd://repl/${EXECUTION}/entries?view=sidekick&right=sidekick`,
+      `xmd://repl/${EXECUTION}/entries?right=bindings`,
+      `xmd://repl/${EXECUTION}/sessions?view=sidekick`,
+      `xmd://repl/${EXECUTION}/entries/entry-1?draft=another%20entry&view=sidekick&right=sidekick`,
+      `xmd://repl/${EXECUTION}/entries/entry-1/+binding:plan` +
+        `?at=yield:root:6&inspect&draft=typed&session=stub:planner&view=sidekick&right=sidekick`,
+    ];
+    for (const location of carrying) {
+      expect(encodeLocation(decoded(location))).toBe(location);
+      expect(decoded(encodeLocation(decoded(location)))).toEqual(decoded(location));
+    }
+
+    // And a location written before either member existed still comes back
+    // exactly as it went in, naming neither.
+    const older = [
+      `xmd://repl/${EXECUTION}/entries`,
+      `xmd://repl/${EXECUTION}/sessions/+permission?session=xmd:v1:a`,
+      `xmd://repl/${EXECUTION}/entries/entry-1?at=yield:root:1&inspect&draft=one`,
+    ];
+    for (const location of older) {
+      expect(encodeLocation(decoded(location))).toBe(location);
+      expect([decoded(location).view, decoded(location).right]).toEqual([undefined, undefined]);
+    }
+  });
+
+  it("R1: reads both by name, and refuses an unknown, empty or repeated value", function* () {
+    // Order still does not matter: query members are read by name.
+    const canonical = decoded(
+      `xmd://repl/${EXECUTION}/entries?draft=typed&view=sidekick&right=bindings`,
+    );
+    expect(canonical).toEqual(
+      decoded(`xmd://repl/${EXECUTION}/entries?right=bindings&view=sidekick&draft=typed`),
+    );
+    expect([canonical.view, canonical.right]).toEqual(["sidekick", "bindings"]);
+
+    // Each names one of a closed set, so anything else is refused by the same
+    // grammar that refuses a member nothing defines.
+    for (const location of [
+      `xmd://repl/${EXECUTION}/entries?view=entries`,
+      `xmd://repl/${EXECUTION}/entries?view=`,
+      `xmd://repl/${EXECUTION}/entries?view`,
+      `xmd://repl/${EXECUTION}/entries?view=sidekick&view=sidekick`,
+      `xmd://repl/${EXECUTION}/entries?right=transcript`,
+      `xmd://repl/${EXECUTION}/entries?right=`,
+      `xmd://repl/${EXECUTION}/entries?right`,
+      `xmd://repl/${EXECUTION}/entries?right=bindings&right=sidekick`,
+    ]) {
+      expect([location, refused(location)]).toEqual([location, expect.stringContaining("query")]);
+    }
+  });
+
+  it("R1: both resolve against a model, and neither is a surface or a drawer", function* () {
+    const events = yield* referenceEvents();
+    const model = projected(events);
+
+    // The surface underneath an explicit Sidekick reading is still the one the
+    // path names, and the entry it selected is still selected: a reading is
+    // what somebody comes back from.
+    const reading = resolved(
+      model,
+      `xmd://repl/${EXECUTION}/entries/entry-1?view=sidekick&right=sidekick`,
+    );
+    expect(reading.surface).toBe("entries");
+    expect(reading.entry).toBe(model.entries[0]?.scope);
+    expect([reading.route.view, reading.route.right]).toEqual(["sidekick", "sidekick"]);
+
+    // Neither is a path segment: spelling one there selects a scope, which is
+    // the entry a reader comes back to, so one URL still means one thing.
+    const segmented = decoded(`xmd://repl/${EXECUTION}/entries/sidekick`);
+    expect([segmented.view, segmented.right]).toEqual([undefined, undefined]);
+    expect(segmented.scopes).toEqual(["sidekick"]);
+
+    // And neither is a drawer: the Sidekick's own question and Configure
+    // drawers are this process's, so the grammar has no word for them.
+    expect(refused(`xmd://repl/${EXECUTION}/entries/+sidekick`)).toContain("drawer");
+    expect(refused(`xmd://repl/${EXECUTION}/entries/+configure`)).toContain("drawer");
+  });
+});
+
+describe("REPL route: selecting a reading and a pane", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("R1: a fresh execution has selected neither, so a narrow frame opens on its surface", function* () {
+    const fresh = initialState(EXECUTION);
+    expect([fresh.route.view, fresh.route.right]).toEqual([undefined, undefined]);
+    expect(fresh.route.surface).toBe("entries");
+    expect(encodeLocation(fresh.route)).toBe(`xmd://repl/${EXECUTION}/entries`);
+  });
+
+  it("R1: the Sidekick is selected without losing the entry, the position or the draft", function* () {
+    const events = yield* referenceEvents();
+    // The last retained position, where the nested scope this row selects has
+    // been admitted: an earlier one holds the entry and not yet its children.
+    const marker = projected(events).checkpoints.at(-1)?.marker;
+    if (marker === undefined) {
+      throw new Error("the reference journal retains a position");
+    }
+    const model = projected(events, marker);
+
+    // Everything a person had: a selected entry, a nested scope, a frozen
+    // position they are inspecting, and text they are part way through typing.
+    const standing = Object.freeze({
+      ...initialState(EXECUTION),
+      draft: "part way through",
+      route: Object.freeze({
+        ...initialState(EXECUTION).route,
+        surface: "sessions" as const,
+        scopes: Object.freeze(["entry-1", "Checklist-1"]),
+        at: marker,
+        inspect: true,
+      }),
+    });
+
+    const sidekick = reduceRepl(standing, { kind: "select-pane", pane: "sidekick" }, model, QUIET);
+    expect(sidekick.state.refusal).toBe(undefined);
+    expect(sidekick.intent).toEqual({ kind: "none" });
+    expect([sidekick.state.route.view, sidekick.state.route.right]).toEqual([
+      "sidekick",
+      "sidekick",
+    ]);
+    // The saved surface and everything beneath it, exactly as they were.
+    expect(sidekick.state.route.surface).toBe("sessions");
+    expect(sidekick.state.route.scopes).toEqual(["entry-1", "Checklist-1"]);
+    expect([sidekick.state.route.at, sidekick.state.route.inspect]).toEqual([marker, true]);
+    expect(sidekick.state.draft).toBe("part way through");
+
+    // Bindings is a pane and not a reading, so selecting it puts the saved
+    // surface back in front of whoever was reading the Sidekick.
+    const bindings = reduceRepl(
+      sidekick.state,
+      { kind: "select-pane", pane: "bindings" },
+      model,
+      QUIET,
+    );
+    expect([bindings.state.route.view, bindings.state.route.right]).toEqual([
+      undefined,
+      "bindings",
+    ]);
+    expect(bindings.state.route.surface).toBe("sessions");
+    expect(bindings.state.route.scopes).toEqual(["entry-1", "Checklist-1"]);
+    expect(bindings.state.draft).toBe("part way through");
+  });
+
+  it("R1: selecting Entries or Sessions clears an explicit Sidekick reading", function* () {
+    const events = yield* referenceEvents();
+    const model = projected(events);
+    const reading = reduceRepl(
+      Object.freeze({
+        ...initialState(EXECUTION),
+        draft: "still typing",
+        route: Object.freeze({
+          ...initialState(EXECUTION).route,
+          scopes: Object.freeze(["entry-1"]),
+        }),
+      }),
+      { kind: "select-pane", pane: "sidekick" },
+      model,
+      QUIET,
+    );
+    expect(reading.state.route.view).toBe("sidekick");
+
+    for (const surface of ["entries", "sessions"] as const) {
+      const selected = reduceRepl(reading.state, { kind: "select-surface", surface }, model, QUIET);
+      // Asking for a surface is asking to read it: the alternative is somebody
+      // activating Entries and staying where they were.
+      expect([surface, selected.state.route.view]).toEqual([surface, undefined]);
+      expect([surface, selected.state.route.surface]).toEqual([surface, surface]);
+      // The right-hand pane is a separate choice and is not disturbed, and
+      // neither is the entry or the draft.
+      expect([surface, selected.state.route.right]).toEqual([surface, "sidekick"]);
+      expect([surface, selected.state.route.scopes]).toEqual([surface, ["entry-1"]]);
+      expect([surface, selected.state.draft]).toEqual([surface, "still typing"]);
+    }
+  });
+});
+
+/**
+ * What a Sidekick history says, as a location may name it.
+ *
+ * Built from the parts a case states, because the two questions this member
+ * answers are different: which chats exist, and which provider conversations
+ * the applicable facts establish. A legacy execution passes none of this at
+ * all, which is what `undefined` is for.
+ */
+function chats(
+  known: Partial<{
+    chats: readonly string[];
+    sessions: readonly string[];
+    refusal: string | undefined;
+  }>,
+): ReplLiveAvailability {
+  return holding({
+    sidekick: {
+      chats: Object.freeze(known.chats ?? []),
+      sessions: Object.freeze(known.sessions ?? []),
+      refusal: known.refusal,
+    },
+  });
+}
+
+describe("REPL route: the saved chat a location reads", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("SS2: encodes sidekick last, and leaves every older location byte-identical", function* () {
+    // After every member that was canonical before it, in the one order the
+    // codec appends them in — and percent-encoded, because a conversation
+    // identifier is a name rather than a word of this grammar.
+    const carrying = [
+      `xmd://repl/${EXECUTION}/entries?sidekick=chat-1`,
+      `xmd://repl/${EXECUTION}/sessions?view=sidekick&right=sidekick&sidekick=chat-7`,
+      `xmd://repl/${EXECUTION}/entries/entry-1/+binding:plan` +
+        `?at=yield:root:6&inspect&draft=typed&session=stub:planner` +
+        `&view=sidekick&right=sidekick&sidekick=a%20chat/b`,
+    ];
+    for (const location of carrying) {
+      expect(encodeLocation(decoded(location))).toBe(location);
+      expect(decoded(encodeLocation(decoded(location)))).toEqual(decoded(location));
+    }
+    // Through the codec's own query-value encoder, which is the one `session`
+    // and `draft` already use: everything a value may not hold literally is
+    // escaped, and a separator this grammar has no structure for is not.
+    expect(decoded(`xmd://repl/${EXECUTION}/entries?sidekick=a%20chat%2Fb`).sidekick).toBe(
+      "a chat/b",
+    );
+
+    // And every location written before this member existed comes back exactly
+    // as it went in, naming no chat at all.
+    const older = [
+      `xmd://repl/${EXECUTION}/entries`,
+      `xmd://repl/${EXECUTION}/sessions/+permission?session=xmd:v1:a`,
+      `xmd://repl/${EXECUTION}/entries/entry-1?at=yield:root:1&inspect&draft=one`,
+      `xmd://repl/${EXECUTION}/entries?session=stub:planner&view=sidekick&right=bindings`,
+    ];
+    for (const location of older) {
+      expect(encodeLocation(decoded(location))).toBe(location);
+      expect(decoded(location).sidekick).toBeUndefined();
+    }
+  });
+
+  it("SS2: reads it by name, and refuses an empty, bare, repeated or aliased value", function* () {
+    // Order still does not matter, and the filter beside it is a different
+    // member answering a different question.
+    const canonical = decoded(
+      `xmd://repl/${EXECUTION}/entries?sidekick=chat-2&session=stub:planner`,
+    );
+    expect(canonical).toEqual(
+      decoded(`xmd://repl/${EXECUTION}/entries?session=stub:planner&sidekick=chat-2`),
+    );
+    expect([canonical.sidekick, canonical.session]).toEqual(["chat-2", "stub:planner"]);
+
+    for (const location of [
+      `xmd://repl/${EXECUTION}/entries?sidekick=`,
+      `xmd://repl/${EXECUTION}/entries?sidekick`,
+      `xmd://repl/${EXECUTION}/entries?sidekick=chat-1&sidekick=chat-1`,
+      `xmd://repl/${EXECUTION}/entries?sidekick=chat-1&sidekick=chat-2`,
+      `xmd://repl/${EXECUTION}/entries?sidekick=%ZZ`,
+      // There is no second spelling of this member: one query member means one
+      // name, and `chat=` is a member nothing defines.
+      `xmd://repl/${EXECUTION}/entries?chat=chat-1`,
+    ]) {
+      expect([location, refused(location)]).toEqual([location, expect.stringContaining("query")]);
+    }
+    // And a route this codec cannot spell raises rather than emitting something
+    // decoding would then refuse.
+    expect(() =>
+      encodeLocation({ ...decoded(`xmd://repl/${EXECUTION}/entries`), sidekick: "" }),
+    ).toThrow();
+  });
+
+  it("SS2: resolves an exact saved chat, and refuses everything else", function* () {
+    const events = yield* referenceEvents();
+    const model = projected(events);
+    const location = `xmd://repl/${EXECUTION}/entries/entry-1?view=sidekick&sidekick=chat-2`;
+
+    // An exact association this history holds, including one whose setup was
+    // only prepared or failed and which therefore has no provider conversation
+    // at all: it is a chat this execution really held, and reading it is not a
+    // claim that anything may be sent to it.
+    const held = resolved(model, location, chats({ chats: ["chat-1", "chat-2"] }));
+    expect(held.sidekick).toBe("chat-2");
+    // And it changed nothing else: the surface, the entry and the reading are
+    // exactly what the rest of the location named.
+    expect([held.surface, held.entry]).toEqual(["entries", model.entries[0]?.scope]);
+    expect(held.route.view).toBe("sidekick");
+
+    // An identifier this history does not hold refuses rather than falling back
+    // to the current chat or creating one.
+    expect(unresolved(model, location, chats({ chats: ["chat-1"] }))).toContain("chat-2");
+
+    // A chat history this version cannot read keeps its own refusal: showing
+    // somebody an empty conversation for a file that holds one is the single
+    // answer that cannot be corrected later.
+    expect(
+      unresolved(model, location, chats({ chats: [], refusal: "this pair is incomplete." })),
+    ).toContain("this pair is incomplete.");
+
+    // And an execution still held in the older single file has no saved chat to
+    // select at all. Reading one does not upgrade it.
+    expect(unresolved(model, location, NO_LIVE)).toContain("no Sidekick history");
+
+    // Omission is the current chat, which is what every older location means.
+    expect(
+      resolved(model, `xmd://repl/${EXECUTION}/entries`, chats({ chats: ["chat-1"] })).sidekick,
+    ).toBeUndefined();
+  });
+
+  it("SS3: a Sidekick conversation filters beside a frozen entry prefix", function* () {
+    const events = yield* agentReferenceEvents();
+    const model = projected(events);
+    const first = model.checkpoints[0]?.marker;
+    if (first === undefined) {
+      throw new Error("this reference history retained no checkpoint to freeze at");
+    }
+    const frozen = projected(events, first);
+
+    // A key the Sidekick's own complete reading establishes. It is applicable
+    // beside a checkpoint that precedes the conversation entirely, because
+    // freezing a prefix freezes *entry* facts and a chat has no position in
+    // this history.
+    expect(
+      resolved(
+        frozen,
+        `xmd://repl/${EXECUTION}/sessions?at=${first}&inspect&session=sk:chat`,
+        chats({ chats: ["chat-1"], sessions: ["sk:chat"] }),
+      ).session,
+    ).toBeUndefined();
+
+    // An entry-only key absent from that prefix still refuses: nothing here
+    // widens what the selected prefix retained.
+    const entryKeys = model.sessions.map((one) => one.sessionKey);
+    expect(entryKeys.length).toBeGreaterThan(0);
+    for (const key of entryKeys) {
+      if (frozen.sessions.some((one) => one.sessionKey === key)) {
+        continue;
+      }
+      expect(
+        unresolved(
+          frozen,
+          `xmd://repl/${EXECUTION}/sessions?at=${first}&inspect&session=${key}`,
+          chats({ chats: ["chat-1"], sessions: ["sk:chat"] }),
+        ),
+      ).toContain(key);
+    }
+
+    // A key absent from every applicable fact refuses rather than silently
+    // producing an apparently empty conversation.
+    expect(
+      unresolved(
+        model,
+        `xmd://repl/${EXECUTION}/sessions?session=sk:nothing`,
+        chats({ chats: ["chat-1"], sessions: ["sk:chat"] }),
+      ),
+    ).toContain("sk:nothing");
+
+    // And a key the entry history itself retains is still answered with the
+    // exact group that history holds, beside all of this.
+    const retained = model.sessions[0];
+    if (retained === undefined) {
+      throw new Error("this reference history retained no conversation");
+    }
+    expect(
+      resolved(
+        model,
+        `xmd://repl/${EXECUTION}/sessions?session=${retained.sessionKey}`,
+        chats({ chats: ["chat-1"], sessions: ["sk:chat"] }),
+      ).session,
+    ).toBe(retained);
   });
 });

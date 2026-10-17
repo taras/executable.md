@@ -145,7 +145,7 @@ describe("Tier AA — configuration and option discovery compose", () => {
     expect(answered).toEqual(CHOICES);
   });
 
-  it("AA7: session middleware receives the placement and nothing else", function* () {
+  it("AA7: session middleware receives the request and nothing else", function* () {
     // Model and effort are settings a `<Session>` supplies, not inputs a
     // handler composes. Routing them here would make them a value every
     // handler could edit, and the conversation would run under the last thing
@@ -172,7 +172,7 @@ describe("Tier AA — configuration and option discovery compose", () => {
     expect(routed).toEqual([["review"], []]);
   });
 
-  it("AA8: a wrapper that delegates hands the placement on unchanged", function* () {
+  it("AA8: a wrapper that delegates hands the request on unchanged", function* () {
     const seen: unknown[][] = [];
     yield* scoped(function* (): Operation<void> {
       yield* Agent.around(

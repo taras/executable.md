@@ -29,13 +29,14 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
-import { Component, installAgentComponents } from "@executablemd/core";
-import type { FunctionComponentDefinition, Json } from "@executablemd/core";
+import { Agent, Component, installAgentComponents } from "@executablemd/core";
+import type { FunctionComponentDefinition, Json, Session } from "@executablemd/core";
 import { useAgentConversation } from "@executablemd/core/host";
 import type { AgentConversation, ExecutionInstallation } from "@executablemd/core/host";
 
 import { createAcpxProvider } from "../src/provider.ts";
 import type { AcpxSessionIdentity, AcpxSessionPolicy } from "../src/provider.ts";
+import type { AgentSessionRequest } from "@executablemd/core/api";
 import { createFakeRuntime, makeRegistry, makeStore, useFlatWorld } from "./helpers.ts";
 import type { FakeRuntimeHarness } from "./helpers.ts";
 
@@ -48,7 +49,7 @@ const HOST_DIR = "/runs/sessions/host";
 /** Where this host puts the one session a chat conversation runs in. */
 const SESSION_DIR = "/runs/sessions/cwd/8f2a";
 
-/** The key this host places that session under — a chat, not a directory. */
+/** The key this host puts that session under — a chat, not a directory. */
 const CHAT_SESSION_KEY = "xmd:chat:v1:acpx:scribe-cmd:default";
 
 /** The conversation the fake adapter opens for that key, and asserts. */
@@ -57,9 +58,9 @@ const NATIVE = `agent-session:${CHAT_SESSION_KEY}`;
 /**
  * One host's agent assembly, with its mapping acknowledgement under a switch.
  *
- * `place` answers `pending` every time, which is the truthful answer from a
- * host whose mapping was never acknowledged: it knows where the session lives
- * and has retained nothing about what stands there. `established` is the
+ * `requestSession` answers `new` every time, which is the truthful answer from
+ * a host whose mapping was never acknowledged: it knows where the session lives
+ * and has retained nothing about what stands there. `recordSessionIdentity` is the
  * acknowledgement itself, so refusing it once is exactly the interruption these
  * rows are about — and the provider's own assertion is already written by then.
  *
@@ -79,18 +80,35 @@ interface Host {
   refuseNextRetention(): void;
 }
 
-function host(): Host {
+/** How one case's host differs from the ordinary one. */
+interface HostOptions {
+  /**
+   * Leave the construction inputs unstated, as a host that configures nothing
+   * does.
+   *
+   * A provider that cannot state all four members states none, so a retained
+   * conversation has nothing to be held to and refuses. That is the arm the
+   * routing finding was reproduced against.
+   */
+  readonly states?: false;
+  /** The agents this host's registry knows. Default: `scribe` alone. */
+  readonly agents?: Record<string, string>;
+  /** Whatever else this host installs around the provider's own chain. */
+  readonly around?: () => Operation<void>;
+}
+
+function host(options: HostOptions = {}): Host {
   const harness = createFakeRuntime();
   const store = makeStore();
   const retained: AcpxSessionIdentity[] = [];
   let refusing = false;
   const sessions: AcpxSessionPolicy = {
     // deno-lint-ignore require-yield
-    *place() {
-      return { sessionKey: CHAT_SESSION_KEY, cwd: SESSION_DIR, state: "pending" };
+    *requestSession() {
+      return { sessionKey: CHAT_SESSION_KEY, cwd: SESSION_DIR, state: "new" };
     },
     // deno-lint-ignore require-yield
-    *established(_placement, identity) {
+    *recordSessionIdentity(_details, identity) {
       retained.push(identity);
       if (refusing) {
         refusing = false;
@@ -115,19 +133,26 @@ function host(): Host {
             factory: createAcpxProvider({
               createRuntime: harness.create,
               sessionStore: store,
-              agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
+              agentRegistry: makeRegistry(options.agents ?? { scribe: "scribe-cmd" }),
               // deno-lint-ignore require-yield
               agentCwd: function* () {
                 return HOST_DIR;
               },
-              mcpServers: [],
-              newSessionOptions: { allowedTools: [], systemPrompt: "none" },
+              ...(options.states === false
+                ? {}
+                : {
+                    mcpServers: [],
+                    newSessionOptions: { allowedTools: [], systemPrompt: "none" },
+                  }),
               permissions: "strict",
               sessions,
             }),
             options: { defaultAgent: AGENT, permissionMode: "deny-all" },
           },
         });
+        if (options.around !== undefined) {
+          yield* options.around();
+        }
       },
     },
   };
@@ -198,6 +223,8 @@ function withConversation<T>(
   stream: InMemoryStream,
   installation: ExecutionInstallation,
   body: (conversation: AgentConversation) => Operation<T>,
+  /** The agent this conversation is opened with. Default: the host's own. */
+  agent = AGENT,
   /**
    * The host that declares this conversation's generated selection.
    *
@@ -211,7 +238,7 @@ function withConversation<T>(
     const opened = yield* useAgentConversation({
       history: stream,
       id: "chat-1",
-      agent: AGENT,
+      agent,
       installations: [installation, ...(declared === undefined ? [] : [declared])],
     });
     if (!opened.ok) {
@@ -304,7 +331,7 @@ describe("Tier HC — a host conversation across the provider's own commit windo
    * uses: a turn is sent and journaled, its reply comes back as source, and
    * running that source is a separate explicit call. What this adds to the stub
    * rows is that the real provider is reached by the turn and by nothing else —
-   * no second placement, no second prompt, no configuration applied — so a host
+   * no second setup, no second prompt, no configuration applied — so a host
    * evaluating a reply is not quietly spending another turn.
    */
   it("HC4: a reply is evaluated on the conversation that produced it, reaching no provider", function* () {
@@ -325,6 +352,7 @@ describe("Tier HC — a host conversation across the provider's own commit windo
         });
         settled.rendered = evaluated.ok ? evaluated.value.output : evaluated.error.message;
       },
+      AGENT,
       selecting(invoked),
     );
 
@@ -430,5 +458,317 @@ describe("Tier HC — a host conversation across the provider's own commit windo
 
     expect(reopened.ok).toBe(false);
     expect(!reopened.ok && reopened.error.message).toContain("more than one native conversation");
+  });
+});
+
+describe("Tier HC — what this provider declared it was building under", () => {
+  /** The configuration record this history holds, as one value. */
+  function saved(events: readonly DurableEvent[]): Record<string, unknown> {
+    for (const event of events) {
+      if (event.type !== "yield" || event.description.type !== "agent_conversation_configuration") {
+        continue;
+      }
+      if (event.result.status !== "ok") {
+        throw new Error("the conversation's configuration recorded no outcome");
+      }
+      const held = event.result.value;
+      if (held === null || typeof held !== "object" || Array.isArray(held)) {
+        throw new Error("the conversation's configuration is not a record");
+      }
+      return held;
+    }
+    throw new Error("this history holds no provider configuration");
+  }
+
+  it("SC1: the configuration is the values construction used, and a later edit changes neither", function* () {
+    const harness = createFakeRuntime();
+    const store = makeStore();
+    const stream = new InMemoryStream();
+    // The host's own containers, kept and edited after the turn — which is what
+    // a long-lived assembly actually does with the objects it built.
+    const tools: string[] = [];
+    const servers = [
+      {
+        name: "notes",
+        command: "/usr/local/bin/notes-mcp",
+        args: ["--quiet"],
+        env: [{ name: "NOTES_TOKEN", value: "first" }],
+      },
+    ];
+    const sessions: AcpxSessionPolicy = {
+      // deno-lint-ignore require-yield
+      *requestSession() {
+        return { sessionKey: CHAT_SESSION_KEY, cwd: SESSION_DIR, state: "new" };
+      },
+      // deno-lint-ignore require-yield
+      *recordSessionIdentity() {},
+    };
+    const installation: ExecutionInstallation = {
+      *install(): Operation<void> {
+        yield* useFlatWorld(WORKSPACE);
+        yield* installAgentComponents({
+          defaultAgent: AGENT,
+          permissionMode: "deny-all",
+          rootProvider: {
+            factory: createAcpxProvider({
+              createRuntime: harness.create,
+              sessionStore: store,
+              agentRegistry: makeRegistry({ scribe: "scribe-cmd" }),
+              // deno-lint-ignore require-yield
+              agentCwd: function* () {
+                return HOST_DIR;
+              },
+              mcpServers: servers,
+              newSessionOptions: { allowedTools: tools },
+              permissions: "strict",
+              sessions,
+            }),
+            options: { defaultAgent: AGENT, permissionMode: "deny-all" },
+          },
+        });
+      },
+    };
+
+    const sent = yield* withConversation(stream, installation, function* (chat) {
+      return yield* chat.prompt("first");
+    });
+    if (!sent.ok || !sent.value.ok) {
+      throw new Error(`the first turn did not complete: ${answer(sent)}`);
+    }
+    // The turn really ran, which is what makes the construction inputs below
+    // the ones a native session was actually built from.
+    expect(harness.turns.map((turn) => turn.input.text)).toEqual(["first"]);
+
+    // What the provider actually constructed with.
+    const created = harness.createdOptions[0];
+    const ensured = harness.ensureCalls[0];
+    expect(created?.mcpServers).toEqual(servers);
+    expect(ensured?.sessionOptions?.allowedTools).toEqual([]);
+
+    // What Core admitted: the same values, and all four members stated. The
+    // permission configuration is all three settings, because a mode alone
+    // does not say who is asked or what happens when nobody is.
+    expect(saved(yield* stream.readAll())).toEqual({
+      provider: "acpx",
+      agentCommand: "scribe-cmd",
+      configuration: {
+        providerTools: [],
+        mcpServers: [
+          {
+            name: "notes",
+            command: "/usr/local/bin/notes-mcp",
+            args: ["--quiet"],
+            env: [{ name: "NOTES_TOKEN", value: "first" }],
+          },
+        ],
+        permissions: {
+          permissionMode: "deny-all",
+          routing: "strict",
+          nonInteractivePermissions: "deny",
+        },
+        systemPrompt: null,
+      },
+    });
+
+    // Now the host edits what it still holds — a nested member, not the array
+    // itself, which is the edit a shallow copy would not have stopped.
+    tools.push("Edit");
+    servers[0]!.env[0]!.value = "second";
+    servers[0]!.args.push("--loud");
+
+    // Neither the configuration Core admitted nor the options the provider
+    // constructed with moved: both are the one detached copy, and the record
+    // read back from the journal is still the admitted value.
+    expect(harness.createdOptions[0]?.mcpServers).toEqual([
+      {
+        name: "notes",
+        command: "/usr/local/bin/notes-mcp",
+        args: ["--quiet"],
+        env: [{ name: "NOTES_TOKEN", value: "first" }],
+      },
+    ]);
+    expect(harness.ensureCalls[0]?.sessionOptions?.allowedTools).toEqual([]);
+    const admitted = saved(yield* stream.readAll());
+    const configuration = admitted["configuration"];
+    expect(configuration).toEqual({
+      providerTools: [],
+      mcpServers: [
+        {
+          name: "notes",
+          command: "/usr/local/bin/notes-mcp",
+          args: ["--quiet"],
+          env: [{ name: "NOTES_TOKEN", value: "first" }],
+        },
+      ],
+      permissions: {
+        permissionMode: "deny-all",
+        routing: "strict",
+        nonInteractivePermissions: "deny",
+      },
+      systemPrompt: null,
+    });
+  });
+});
+
+/**
+ * Tier DP — the routing a saved conversation no longer travels.
+ *
+ * Both of these were reproduced against the real provider before the
+ * correction: a supported `Agent.session` handler that forwarded the request's
+ * descriptive name made ACP see a string, so it never obtained the request's
+ * setup, never asked whether the configuration was stated, and answered a turn
+ * with one native ensure and zero configuration records. A prompt handler could
+ * do the same thing one call later by replacing `options.session` after another
+ * session had been checked.
+ *
+ * A conversation now reads its provider once and calls it directly, so there is
+ * no dispatch for either handler to sit on. These rows are the permanent form
+ * of that: the refusal must still be the specific one about configuration — a
+ * refusal because no provider object was installed would prove nothing about
+ * the routing at all.
+ */
+describe("Tier DP — a saved conversation reaches its provider directly", () => {
+  /** How many provider configurations this history holds. */
+  function configurations(events: readonly DurableEvent[]): number {
+    return events.filter(
+      (event) =>
+        event.type === "yield" && event.description.type === "agent_conversation_configuration",
+    ).length;
+  }
+
+  /**
+   * What the reproducing handler forwarded: the descriptive name alone.
+   *
+   * Supported composition — a handler may observe or change a session's name —
+   * and the finding was that for a conversation it also dropped the request,
+   * and with it the only channel the required configuration travels on.
+   */
+  function named(request: string | AgentSessionRequest | undefined): string | undefined {
+    return typeof request === "object" && request !== null ? request.name : request;
+  }
+
+  /** The handler that reproduced the finding: forward the name, drop the request. */
+  function forwardsTheName(seen: string[]): () => Operation<void> {
+    return function* (): Operation<void> {
+      yield* Agent.around(
+        {
+          *session([request], next) {
+            seen.push("session");
+            return yield* next(named(request));
+          },
+        },
+        { at: "max" },
+      );
+    };
+  }
+
+  it("DP1: a provider that stated no configuration is refused, routed or not", function* () {
+    // The control arm: nothing installed around the chain at all.
+    const plain = host({ states: false });
+    const first = new InMemoryStream();
+    const refused = yield* withConversation(first, plain.installation, function* (chat) {
+      return yield* chat.prompt("first");
+    });
+
+    expect(refused.ok).toBe(true);
+    if (!refused.ok) {
+      throw refused.error;
+    }
+    expect(refused.value.ok).toBe(false);
+    expect(!refused.value.ok && refused.value.error.message).toContain(
+      "did not state what it is building this conversation's session under",
+    );
+    expect(!refused.value.ok && refused.value.error.message).toContain(
+      "no active provider configuration was named",
+    );
+    // And it is not the readiness refusal: a conversation that could not find a
+    // provider at all would say so, and would prove nothing about routing.
+    expect(!refused.value.ok && refused.value.error.message).not.toContain(
+      "does not support saved conversations",
+    );
+    expect(plain.harness.ensureCalls).toHaveLength(0);
+    expect(asked(plain)).toEqual([]);
+    expect(configurations(yield* first.readAll())).toBe(0);
+
+    // The arm that used to answer. The handler is installed and supported; it
+    // simply has no dispatch to sit on for a conversation.
+    const seen: string[] = [];
+    const routed = host({ states: false, around: forwardsTheName(seen) });
+    const second = new InMemoryStream();
+    const forwarded = yield* withConversation(second, routed.installation, function* (chat) {
+      return yield* chat.prompt("first");
+    });
+
+    expect(forwarded.ok).toBe(true);
+    if (!forwarded.ok) {
+      throw forwarded.error;
+    }
+    expect(forwarded.value.ok).toBe(false);
+    expect(!forwarded.value.ok && forwarded.value.error.message).toContain(
+      "no active provider configuration was named",
+    );
+    // The same answer as the control, by the same route, and the handler was
+    // never reached: one native ensure, one turn and zero configuration records
+    // is what this used to produce.
+    expect(seen).toEqual([]);
+    expect(routed.harness.ensureCalls).toHaveLength(0);
+    expect(asked(routed)).toEqual([]);
+    expect(configurations(yield* second.readAll())).toBe(0);
+  });
+
+  it("DP2: neither the session nor the agent of a chat is something a handler decides", function* () {
+    const seen: string[] = [];
+    // A session this chat has never been in, and a canary on the prompt: if
+    // either handler were reached, the turn would run somewhere else and the
+    // runtime below would say so.
+    const canary: Session = { sessionKey: "xmd:chat:v1:acpx:elsewhere", cwd: SESSION_DIR };
+    const target = host({
+      agents: { scribe: "scribe-cmd", editor: "editor-cmd" },
+      around: function* (): Operation<void> {
+        yield* Agent.around(
+          {
+            *session([request], next) {
+              seen.push("session");
+              return yield* next(named(request));
+            },
+            *agent([_name], next) {
+              seen.push("agent");
+              return yield* next("scribe");
+            },
+            *prompt([content, promptOptions], next) {
+              seen.push("prompt");
+              return yield* next(content, { ...promptOptions, session: canary });
+            },
+          },
+          { at: "max" },
+        );
+      },
+    });
+    const stream = new InMemoryStream();
+
+    const answered = yield* withConversation(
+      stream,
+      target.installation,
+      function* (chat): Operation<Result<string>> {
+        return yield* chat.prompt("first");
+      },
+      "editor",
+    );
+
+    expect(answer(answered)).toBe("hello world");
+    // None of the three handlers was reached on the chat's path.
+    expect(seen).toEqual([]);
+    // The turn ran in this conversation's own native session, under the agent
+    // the conversation selected rather than the host's default — and the
+    // command the configuration was saved against is that agent's.
+    expect(target.harness.ensureCalls.map((call) => call.sessionKey)).toEqual([CHAT_SESSION_KEY]);
+    expect(asked(target)).toEqual(["first"]);
+    const retained = turns(yield* stream.readAll());
+    expect(retained.map((turn) => turn.name)).toEqual(["turn:1"]);
+    expect(retained[0]!.record.agentSessionId).toBe(NATIVE);
+    expect(retained[0]!.record.agent).toBe("editor");
+    expect(retained[0]!.record.sessionKey).toBe(CHAT_SESSION_KEY);
+    expect(target.retained.map((identity) => identity.agentSessionId)).toEqual([NATIVE]);
+    expect(configurations(yield* stream.readAll())).toBe(1);
   });
 });

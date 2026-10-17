@@ -27,7 +27,7 @@
  *
  * The empty working directory is a deterministic subpath of that sidecar, so
  * ACPX sees the same cwd spelling on a restart and reuses its record rather than
- * placing a second session beside it. It is emptied before use — the same path
+ * creating a second session beside it. It is emptied before use — the same path
  * can hold residue after an unstructured process death — and nothing is ever
  * copied into it or read back out of it.
  *
@@ -52,7 +52,7 @@
  *
  * Materialization is lazy, and happens only for an embedded selection, just
  * before the first operation that could spawn that adapter — the provider's
- * availability probe, which runs earlier than any `<Session>` placement and
+ * availability probe, which runs earlier than any `<Session>` request and
  * earlier than any turn. A document that opens no `<Session>` installs nothing,
  * extracts nothing and spawns nothing; an agent ACPX resolves prepares nothing,
  * because its command is already on this machine. Verifying before that first
@@ -69,8 +69,8 @@
  * Prompt was is a second fact, and it is retained the same way: in the run's own
  * database, in the transaction that appends that Prompt. This module installs
  * the publisher that opens it, because this is the only side that holds both the
- * run and the placement that made the session — the provider names the turn, the
- * placement names the session, and neither is recovered from the spelling of the
+ * run and the request that made the session — the provider names the turn, the
+ * request names the session, and neither is recovered from the spelling of the
  * other.
  */
 
@@ -128,12 +128,12 @@ const PROVIDER = "acpx";
 const ACPX_ASSERTION = "acpx.agentSessionId";
 
 /**
- * What namespaces one session's ACPX placement, beside its identity.
+ * What namespaces one session's ACPX session key, beside its identity.
  *
  * The provider's store is shared, so its key carries the provider and command;
  * this run's session identity does not.
  */
-function placementSuffix(agentCommand: string): string {
+function providerSessionSuffix(agentCommand: string): string {
   return createHash("sha256")
     .update(`${PROVIDER}:${agentCommand}`, "utf8")
     .digest("hex")
@@ -215,14 +215,14 @@ export interface WorkflowAgentProfileOptions {
    * The embedded adapters this profile runs.
    *
    * The default materializes this build's own snapshots beneath `root`. A suite
-   * substitutes one to watch what a placement asked for, or to prove a refusal
+   * substitutes one to watch what a session request asked for, or to prove a refusal
    * without a real install.
    */
   readonly adapters?: EmbeddedAdapters;
 }
 
 /**
- * What the provider currently asserts about the session under `placementKey`.
+ * What the provider currently asserts about the session under `providerSessionKey`.
  *
  * An assertion, not occupancy: ACPX holding a record under a key says something
  * is there, and this says what conversation it is. A record with no
@@ -230,8 +230,8 @@ export interface WorkflowAgentProfileOptions {
  * must refuse rather than adopt.
  */
 function assertionsFor(store: AcpxSessionStore) {
-  return function* (placementKey: string): Operation<ProviderAssertion[]> {
-    const held = yield* retainedSession(store, placementKey);
+  return function* (providerSessionKey: string): Operation<ProviderAssertion[]> {
+    const held = yield* retainedSession(store, providerSessionKey);
     if (held?.agentSessionId === undefined) {
       return [];
     }
@@ -248,7 +248,7 @@ function assertionsFor(store: AcpxSessionStore) {
  * either refuses reattachment rather than selecting or creating a second mapping
  * for the same element.
  *
- * The ACPX placement key is a different thing, and namespaces provider and
+ * The ACPX provider session key is a different thing, and namespaces provider and
  * command into it because ACPX's store is shared with whatever else uses it.
  * That key is arrangement; it is not this run's session identity.
  */
@@ -258,11 +258,14 @@ function sessionPolicy(
   policy: string,
   store: AcpxSessionStore,
   adapters: EmbeddedAdapters,
-): { policy: AcpxSessionPolicy; retainedSessionKey: (placementKey: string) => string | undefined } {
+): {
+  policy: AcpxSessionPolicy;
+  retainedSessionKey: (providerSessionKey: string) => string | undefined;
+} {
   const assertions = assertionsFor(store);
   const emptied = new Set<string>();
-  /** What each placement key was placed for, so the commit names the same thing. */
-  const placed = new Map<string, AgentSessionIdentity>();
+  /** What each provider session key was asked for, so the commit names the same thing. */
+  const requested = new Map<string, AgentSessionIdentity>();
 
   /**
    * What this run retains about which agent a session belongs to.
@@ -296,35 +299,35 @@ function sessionPolicy(
   }
 
   /**
-   * What this run retains the session behind one ACPX placement key under.
+   * What this run retains the session behind one ACPX provider session key under.
    *
-   * A lookup of what the placement recorded, never a parse of the key. The
-   * placement key namespaces the provider and command into the retained key
+   * A lookup of what the request recorded, never a parse of the key. The
+   * provider session key namespaces the provider and command into the retained key
    * because ACPX's store is shared; recovering one from the other by taking the
    * spelling apart would be reading arrangement as identity, and would keep
    * working right up until the two namespaces diverged.
    */
-  function retainedSessionKey(placementKey: string): string | undefined {
-    const identity = placed.get(placementKey);
+  function retainedSessionKey(providerSessionKey: string): string | undefined {
+    const identity = requested.get(providerSessionKey);
     return identity === undefined ? undefined : agentSessionKey(identity);
   }
 
   const acpxPolicy: AcpxSessionPolicy = {
-    *place(context) {
-      if (context.sessionIdentity === undefined) {
+    *requestSession(request) {
+      if (request.sessionIdentity === undefined) {
         throw new WorkflowAgentSessionError(
-          "a workflow Agent session must be placed by a <Session> element, whose identity the " +
-            "engine derives. Nothing else names a session this run can retain.",
+          "a workflow Agent session must be requested by a <Session> element, whose identity " +
+            "the engine derives. Nothing else names a session this run can retain.",
         );
       }
       const identity = identityOf({
-        agentName: context.agentName,
-        agentCommand: context.agentCommand,
-        sessionIdentity: context.sessionIdentity,
+        agentName: request.agentName,
+        agentCommand: request.agentCommand,
+        sessionIdentity: request.sessionIdentity,
       });
       const sessionKey = agentSessionKey(identity);
-      const placementKey = `${sessionKey}:${placementSuffix(identity.agentCommand)}`;
-      placed.set(placementKey, identity);
+      const providerSessionKey = `${sessionKey}:${providerSessionSuffix(identity.agentCommand)}`;
+      requested.set(providerSessionKey, identity);
 
       const read = yield* transactAgentSessions(database, function* (sessions) {
         return sessions.read(sessionKey);
@@ -335,38 +338,38 @@ function sessionPolicy(
       // Decided before ACPX is contacted, and from one canonical assertion
       // rather than from the fact that a key is occupied. A pending ACPX record
       // occupies its key and asserts nothing, so this answers `create` for it —
-      // which is what makes the placement pending rather than established.
+      // which is what makes the session new rather than existing.
       const resolution = resolveAgentSession(
         read.value,
         policy,
-        yield* assertions(placementKey),
+        yield* assertions(providerSessionKey),
         identity,
       );
 
-      const cwd = providerSessionDirectory(paths, placementKey);
+      const cwd = providerSessionDirectory(paths, providerSessionKey);
       if (!emptied.has(cwd)) {
         emptied.add(cwd);
         yield* useEmptyDirectory(cwd);
       }
       return {
-        sessionKey: placementKey,
+        sessionKey: providerSessionKey,
         cwd,
-        state: resolution.kind === "create" ? "pending" : "established",
+        state: resolution.kind === "create" ? "new" : "existing",
       };
     },
 
-    *established(placement, providerIdentity) {
+    *recordSessionIdentity(details, providerIdentity) {
       // The order is the contract: the provider has been created and has
       // asserted, and only now does the mapping commit. An attempt that stops
       // before this leaves nothing retained, and the next attachment reconciles
       // it from the provider's own assertion.
-      const identity = placed.get(placement.sessionKey);
+      const identity = requested.get(details.sessionKey);
       if (identity === undefined) {
         return;
       }
       if (providerIdentity.agentSessionId === undefined) {
         throw new WorkflowAgentSessionError(
-          "the provider established an Agent session without asserting a durable identity, so " +
+          "the provider created an Agent session without asserting a durable identity, so " +
             "this run cannot record which conversation it is having.",
         );
       }

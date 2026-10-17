@@ -29,7 +29,7 @@ import type { Operation } from "effection";
 import { useIssueTrackerServer } from "../../../git/tests/support/issue-tracker-server.ts";
 import type { IssueTrackerServer } from "../../../git/tests/support/issue-tracker-server.ts";
 import { credential } from "../../../git/tests/support/issue-tracker-server.ts";
-import { allocate, showing } from "./pty.ts";
+import { allocate, showing, showingAcross } from "./pty.ts";
 import type { Pty } from "./pty.ts";
 
 /**
@@ -187,8 +187,9 @@ export function replIssuesJourney(repl: ReplCommand): Operation<void> {
     yield* first.type("\r");
 
     // The prefix ran: one issue was filed, and the two facts the document
-    // asked for are on the screen.
-    yield* showing(first, `filed at ${TRACKER}/issues/1`, ACT_MS);
+    // asked for are on the screen. The URL is read across the wrap the
+    // Transcript's own width puts in it — the whole location, not a row of it.
+    yield* showingAcross(first, `filed at ${TRACKER}/issues/1`, ACT_MS);
     yield* showing(first, "titled A journey issue", ACT_MS);
     expect(server.issues.length).toBe(1);
     expect(creates(server)).toBe(1);
@@ -287,7 +288,7 @@ export function replIssuesAdoptionJourney(repl: ReplCommand): Operation<void> {
     yield* showing(second, "[exit]", REACH_MS);
     // The same owner and the same site, so the same key: the adapter finds its
     // own mark on the issue that is already there and adopts it.
-    yield* showing(second, `filed at ${TRACKER}/issues/1`, ACT_MS);
+    yield* showingAcross(second, `filed at ${TRACKER}/issues/1`, ACT_MS);
     expect(server.issues.length).toBe(1);
     expect(server.issues[0]?.body ?? "").toBe(mark);
 
@@ -322,7 +323,8 @@ export function replIssuesUnsupported(repl: ReplCommand): Operation<void> {
     yield* sleep(500);
     yield* pty.type("\r");
 
-    yield* showing(pty, "no Issue provider is installed", ACT_MS);
+    // Wrapped by the Transcript's own width, so read across its rows.
+    yield* showingAcross(pty, "no Issue provider is installed", ACT_MS);
     // Configured and reachable, and never reached: what is absent is the host
     // that would have installed a lifecycle, not the operator's configuration.
     expect(server.requests).toEqual([]);

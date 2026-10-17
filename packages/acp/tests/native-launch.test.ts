@@ -19,11 +19,11 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, Ok, scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { Agent, sameExecutableBuild } from "@executablemd/core";
-import type { ConfigureAgentSession } from "@executablemd/core";
-// The engine's own placement machinery, used the way core uses it: these suites
-// stand in for an installation, so they open and read placements rather than
-// inventing a second shape for one.
-import { readPlacement, sessionPlacement } from "../../core/src/agent/session-request.ts";
+import type { ConfigureAgentSession, ProviderSessionConfiguration } from "@executablemd/core";
+// The engine's own session-request machinery, used the way core uses it: these
+// suites stand in for an installation, so they open and read requests rather
+// than inventing a second shape for one.
+import { consumeSessionRequest, openSessionRequest } from "../../core/src/agent/session-request.ts";
 import type {
   AgentLaunchRequest,
   AgentLaunchCoordinator,
@@ -88,7 +88,7 @@ const SESSION_KEY = deriveSessionKey(AGENT_COMMAND, CWD);
 /**
  * A barrier on the directory an Agent runs in.
  *
- * The provider asks for it twice per operation: once to place the session, and
+ * The provider asks for it twice per operation: once to resolve the session, and
  * once while building the runtime that will ensure it. Parking each call and
  * releasing them by hand is what lets a case hold two operations inside the
  * same lookup suspension at once, deterministically, through a seam the
@@ -197,6 +197,12 @@ interface Trace {
   uses: Map<Session, { session: Session; configuration: SessionConfiguration }>;
   /** Every exact session the provider registered as configurable. */
   registered: Session[];
+  /** What the provider declared it was building under, each time it asked. */
+  activated: {
+    provider: string;
+    agentCommand: string;
+    configuration: ProviderSessionConfiguration | undefined;
+  }[];
   /** How the provider said each of those is configured. */
   configurable: Map<Session, ConfigureAgentSession>;
   /**
@@ -244,7 +250,7 @@ interface ProviderOptions {
    * Testing isolation here would prove neither.
    */
   coordinator?: AgentSessionCoordinator;
-  /** Host-owned session placement and retention, as a workflow host supplies. */
+  /** Host-owned session requests and retention, as a workflow host supplies. */
   sessions?: AcpxSessionPolicy;
   /**
    * The directory an Agent runs in.
@@ -282,22 +288,32 @@ function traceCoordinator(trace: Trace): AgentLaunchCoordinator {
     // The installation's own reader: a suite says a session is configured by
     // issuing a use of it through `configuredUse`, and this is what unwraps
     // one. Anything else is the ordinary session it presents itself as.
-    sessionPlacement: (request) => {
-      const placed = readPlacement(request);
+    sessionSetup: (request) => {
+      const requested = consumeSessionRequest(request);
       return {
-        ...(placed.sessionIdentity === undefined
+        ...(requested.sessionIdentity === undefined
           ? {}
-          : { sessionIdentity: placed.sessionIdentity }),
-        *complete(session, state) {
+          : { sessionIdentity: requested.sessionIdentity }),
+        // This trace's setups carry no retained conversation, so there is
+        // nothing to be held to and activation only records what the provider
+        // declared it was about to build under. It is still required: a
+        // provider that settled a setup without asking is a provider that
+        // reattached without authorization.
+        // deno-lint-ignore require-yield
+        *activate(provider, agentCommand, configuration) {
+          trace.activated.push({ provider, agentCommand, configuration });
+          return Ok(undefined);
+        },
+        *finish(session, state) {
           trace.registered.push(session);
-          if (state.kind === "established") {
+          if (state.kind === "existing") {
             trace.configurable.set(session, state.configure);
           }
-          if (placed.configuration === undefined) {
+          if (requested.configuration === undefined) {
             return session;
           }
           const use: Session = { ...session };
-          trace.uses.set(use, { session, configuration: placed.configuration });
+          trace.uses.set(use, { session, configuration: requested.configuration });
           return use;
         },
       };
@@ -308,10 +324,10 @@ function traceCoordinator(trace: Trace): AgentLaunchCoordinator {
       }
       return trace.uses.get(routed) ?? { session: routed };
     },
-    // These suites route launches, never a `<Session>` placement. Throwing
-    // rather than answering means a placement that did reach here fails
+    // These suites route launches, never a `<Session>` request. Throwing
+    // rather than answering means a request that did reach here fails
     // loudly instead of being handed an identity nobody derived.
-    // As with a placement, these suites name no provider turn. Throwing means a
+    // As with a request, these suites name no provider turn. Throwing means a
     // checkpoint that did reach here fails loudly rather than being recorded by
     // a coordinator nothing is asserting against.
     checkpoint: () => {
@@ -448,6 +464,7 @@ function newTrace(): Trace {
     ownership: makeCoordinator(),
     uses: new Map(),
     registered: [],
+    activated: [],
     configurable: new Map(),
   };
   return trace;
@@ -512,7 +529,7 @@ function launchRequest(
 }
 
 /**
- * Place a session and issue one use of it, the way a `<Session>` element does.
+ * Resolve a session and issue one use of it, the way a `<Session>` element does.
  *
  * What a launch runs under travels on the value that names its conversation,
  * and only the installation that issued that value can say what it is — so a
@@ -520,10 +537,10 @@ function launchRequest(
  * member to set on a request built out of thin air.
  */
 function* configuredUse(trace: Trace, configuration: SessionConfiguration): Operation<Session> {
-  // A placement carrying what the element asks, exactly as core opens one: the
+  // A request carrying what the element asks, exactly as core opens one: the
   // settings are sealed into it before anything routes, and the provider
   // settles it into the use this trace then hands to a launch.
-  const issuance = sessionPlacement(undefined, undefined);
+  const issuance = openSessionRequest(undefined, undefined);
   issuance.configure(configuration);
   try {
     return yield* Agent.operations.session(issuance.request);
@@ -547,9 +564,9 @@ function* attempt(
 /**
  * Run one prompt to completion.
  *
- * A fresh `<Session>` places a session and constructs nothing, so this is what
- * establishes one through ACP — and what every case needing an established
- * session reaches for.
+ * A new `<Session>` names a session and constructs nothing, so this is what
+ * creates one through ACP — and what every case needing an existing session
+ * reaches for.
  */
 function* prompt(text: string, options: { session?: string | Session } = {}): Operation<void> {
   yield* scoped(function* () {
@@ -894,8 +911,8 @@ describe("Tier NL — native session launch", () => {
     yield* scoped(function* () {
       yield* installLaunchStack(harness, trace);
       // What an enclosing `<Session name>` and a `<Prompt>` inside it do before
-      // the `<Session.Launch>` beside them: the placement constructs nothing,
-      // and the prompt establishes the session with no instruction layer at all.
+      // the `<Session.Launch>` beside them: the request constructs nothing,
+      // and the prompt creates the session with no instruction layer at all.
       const session = yield* Agent.operations.session();
       expect(harness.ensureCalls.length).toBe(0);
       yield* prompt("hello", { session });
@@ -1139,7 +1156,7 @@ describe("Tier NO — session ownership", () => {
       const cold = yield* Agent.operations.prompt("later", {});
       expect(trace.ownership.acquisitions).toEqual([]);
 
-      // Placing a session validates where it will live and constructs nothing,
+      // Resolving a session validates where it will live and constructs nothing,
       // so there is nothing yet for a native UI to be in.
       yield* Agent.operations.session();
       expect(trace.ownership.acquisitions).toEqual([]);
@@ -1179,7 +1196,7 @@ describe("Tier NO — session ownership", () => {
       const session = yield* Agent.operations.session();
 
       expect(trace.ownership.acquisitions).toEqual([]);
-      // Placement is inert on every host, advertised or not.
+      // Resolution is inert on every host, advertised or not.
       expect(harness.ensureCalls.length).toBe(0);
 
       yield* prompt("hello", { session });
@@ -1372,7 +1389,7 @@ describe("Tier NO — session ownership", () => {
     // Every ordering claim here rests on a barrier rather than a duration. The
     // fake says when a turn has actually started; the second task says when it
     // is about to subscribe; and the provider's own route hook says when that
-    // subscription's placement is finished — the step immediately before it
+    // subscription's resolution is finished — the step immediately before it
     // enters the session's queue.
     const harness = createFakeRuntime();
     const trace = newTrace();
@@ -1382,19 +1399,19 @@ describe("Tier NO — session ownership", () => {
     harness.script({ manual: true });
     const store = makeStore();
     const subscribing = withResolvers<void>();
-    const placed = withResolvers<void>();
+    const resolvedTwice = withResolvers<void>();
     // The provider's own route hook, supplied the way a host supplies it. It
-    // wraps two things per subscription — the placement, and the
+    // wraps two things per subscription — the resolution, and the
     // registry-dependent work inside the session's queue — and only the
-    // placement *completes* while the first turn is still held, because the
+    // resolution *completes* while the first turn is still held, because the
     // first subscription's second call encloses its whole turn. So the second
-    // completion is the second subscription's placement, and the provider's
+    // completion is the second subscription's resolution, and the provider's
     // next step after it is `turns.slot`.
     //
-    // A suspension before it returns, so nothing here rests on placement being
+    // A suspension before it returns, so nothing here rests on resolution being
     // synchronous: a scheduler that hands control back at a yield has already
     // done so once by the time this signals.
-    let placements = 0;
+    let resolutions = 0;
     yield* scoped(function* () {
       yield* installLaunchStack(harness, trace, {
         store,
@@ -1403,9 +1420,9 @@ describe("Tier NO — session ownership", () => {
           const settled = withResolvers<void>();
           settled.resolve();
           yield* settled.operation;
-          placements += 1;
-          if (placements === 2) {
-            placed.resolve();
+          resolutions += 1;
+          if (resolutions === 2) {
+            resolvedTwice.resolve();
           }
           return value;
         },
@@ -1429,7 +1446,7 @@ describe("Tier NO — session ownership", () => {
           yield* scoped(function* () {
             const stream = yield* Agent.operations.prompt("second", {});
             // Constructing the stream chose nothing and started nothing. The
-            // next step is the subscription, whose placement is what the
+            // next step is the subscription, whose resolution is what the
             // barrier below waits for.
             subscribing.resolve();
             const subscription = yield* stream;
@@ -1444,17 +1461,17 @@ describe("Tier NO — session ownership", () => {
         }
       });
       yield* subscribing.operation;
-      // Its placement is done, so the only thing ahead of it is the session's
+      // Its resolution is done, so the only thing ahead of it is the session's
       // queue — and it reaches that queue before this task runs again.
-      yield* placed.operation;
+      yield* resolvedTwice.operation;
 
       // Waiting on the session's queue, not refused and not running: the
       // coordinator has been asked once, one turn exists, and the second
       // subscription has reached nothing that would establish a session.
-      // The two completions are the two placements, not the first
+      // The two completions are the two resolutions, not the first
       // subscription's construction: that call encloses its whole turn, and the
       // turn is still open.
-      expect(placements).toBe(2);
+      expect(resolutions).toBe(2);
       expect(trace.ownership.acquisitions).toHaveLength(1);
       expect(harness.turns).toHaveLength(1);
       expect(harness.ensureCalls).toHaveLength(1);
@@ -1586,7 +1603,7 @@ describe("Tier NO — session ownership", () => {
 
           if (site === "session") {
             // A fresh <Session> constructs nothing and so releases nothing.
-            // The release this is about is an established session's: the prompt
+            // The release this is about is an existing session's: the prompt
             // establishes it, and the <Session> beside it reattaches.
             yield* prompt("hello");
             harness.closeFailure = new Error("the agent connection would not close");
@@ -1632,7 +1649,7 @@ describe("Tier NO — session ownership", () => {
       // And teardown found that exact handle again, through the same runtime
       // that created it — the availability probe builds one of its own, so what
       // matters is that both closes went through one and the same. A failed
-      // release that had detached the placement, or dropped the entry, would
+      // release that had detached the session, or dropped the entry, would
       // leave nothing here to close.
       expect([site, harness.closeCalls.length]).toEqual([site, site === "session" ? 3 : 2]);
       expect([site, new Set(harness.closeRuntimeIndexes).size]).toEqual([site, 1]);
@@ -1855,7 +1872,7 @@ describe("Tier CN — client-allocated construction", () => {
     expect(harness.ensureCalls).toEqual([]);
   });
 
-  it("CN6: a launch inside a fresh Session constructs the session it placed", function* () {
+  it("CN6: a launch inside a new Session constructs the session it named", function* () {
     // The first consuming operation chooses the route. A <Session> that
     // published one would have taken that choice from the <Session.Launch>
     // nested inside it, which is the composition this whole feature exists for.
@@ -1912,7 +1929,7 @@ describe("Tier CN — client-allocated construction", () => {
 
     const session = yield* Agent.operations.session();
 
-    // Placement publishes nothing and builds nothing, and it asked no agent
+    // Resolution publishes nothing and builds nothing, and it asked no agent
     // whether it was available either: probing spawns a child, which is
     // provider work on a session nothing has settled yet.
     expect(order).toEqual([]);
@@ -3291,7 +3308,7 @@ describe("Tier CA — client-native attachment", () => {
 
   it("CA17: a released session keeps its name and nothing live", function* () {
     // `<Session>` releases its handle as it returns, so what the returned value
-    // still resolves to is placement metadata — not the handle, and not the
+    // still resolves to is session metadata — not the handle, and not the
     // runtime that carries the transient child environment and therefore the
     // canonical executable path. Reusing it re-ensures, and the observation
     // that goes with it is a fresh one: a value that still named a runtime
@@ -3342,16 +3359,16 @@ describe("Tier CA — client-native attachment", () => {
     const space = yield* installAttachment(bound(), {
       sessions: {
         // deno-lint-ignore require-yield
-        *place(context) {
-          const named = typeof context.session === "string" ? context.session : undefined;
+        *requestSession(request) {
+          const named = typeof request.session === "string" ? request.session : undefined;
           return {
             sessionKey: deriveSessionKey(AGENT_COMMAND, CWD, named),
             cwd: CWD,
-            state: "pending",
+            state: "new",
           };
         },
         // deno-lint-ignore require-yield
-        *established() {
+        *recordSessionIdentity() {
           retentions += 1;
           if (retentions === 1) {
             throw new Error("the run could not retain this session");
@@ -3669,7 +3686,7 @@ describe("Tier RT — bound runtime partitions", () => {
       agentCwd: barrier.agentCwd,
     });
 
-    // Each operation asks twice: once to place its session, once while building
+    // Each operation asks twice: once to resolve its session, once while building
     // the runtime that will ensure it. Releasing only the first of each leaves
     // both parked in the second.
     const first = yield* spawn(() => Agent.operations.session("alpha"));
@@ -3855,7 +3872,7 @@ describe("Tier RT — bound runtime partitions", () => {
     expect(seen).toEqual({
       beforeElection: 0,
       afterElection: 1,
-      // Four: the sibling's placement *and* its option resolution, on a hit.
+      // Four: the sibling's session resolution *and* its option resolution, on a hit.
       arrivalsOnAHit: 4,
       afterSiblingReleased: 1,
       afterJoiner: 1,

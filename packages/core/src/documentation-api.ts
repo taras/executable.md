@@ -48,7 +48,7 @@ import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 
 import {
-  CORE_DOCUMENTED_NAMES,
+  coreDocumentedNames,
   packagedAssetReader,
   readCoreDocumentation,
 } from "./component-documentation.ts";
@@ -85,7 +85,7 @@ export const Documentation: Api<DocumentationApi> = createApi<DocumentationApi>(
    * that bootstrapped no other package at all.
    */
   *contributions(read: DocumentationReader): Operation<readonly DocumentationContribution[]> {
-    return [{ source: yield* readCoreDocumentation(read), supplies: CORE_DOCUMENTED_NAMES }];
+    return [{ source: yield* readCoreDocumentation(read), supplies: coreDocumentedNames() }];
   },
 });
 

@@ -459,8 +459,9 @@ the corpus or enabling in-shard concurrency is not an answer to a miss.
     job withholds the required `green` check until CI has proven `main`'s exact
     current head. Repairing it is a pull request a maintainer labels
     `ci-main-red-fix`, which runs `composability` in the gate's place.
-15. State shared across loaded copies uses stable, namespaced names: plain
-    structural values for composition data and a contextual Api for operations.
+15. State shared across loaded copies uses stable, namespaced names. Use owned
+    handles for instance operations, Context for scoped service selection, and
+    contextual Api middleware for intended per-call composition.
     Security enforcement, durable identity, and reconciliation never trust
     replaceable context state.
 16. An event listener an Effection operation installs has that operation's

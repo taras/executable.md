@@ -89,14 +89,26 @@ export function* resolvePlanWriterStack(
   if (flags.agentProvider !== "acpx") {
     return Err(new Error(`Unknown agent provider "${flags.agentProvider}"`));
   }
-  const defaultAgent =
-    flags.defaultAgent ?? (yield* readEnv("DEFAULT_AGENT_NAME")) ?? DEFAULT_AGENT_NAME;
+  const defaultAgent = flags.defaultAgent ?? (yield* contextualAgent());
   return Ok({
     provider: flags.agentProvider,
     defaultAgent,
     adapters: createEmbeddedAdapters(DEFAULT_ADAPTER_ROOT),
     ...(sessions === undefined ? {} : { sessions }),
   });
+}
+
+/**
+ * Which agent this context names when a command line names none.
+ *
+ * The environment first and this build's own default behind it, in one place
+ * because more than one selection falls back to it: the agent a `<Session>`
+ * means by default and the agent a REPL's Sidekick opens its conversations
+ * under are chosen independently, and a fallback spelled once per selection is
+ * how two independent choices come to disagree about what "unstated" means.
+ */
+export function* contextualAgent(): Operation<string> {
+  return (yield* readEnv("DEFAULT_AGENT_NAME")) ?? DEFAULT_AGENT_NAME;
 }
 
 /**

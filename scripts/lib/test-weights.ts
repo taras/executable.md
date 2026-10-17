@@ -117,7 +117,7 @@ export const PROVENANCE_VARIABLES: Record<keyof WeightSource, string> = {
  * Provenance read from the environment, refusing rather than defaulting.
  *
  * A default here would be a measurement that describes a run it did not come
- * from, which is worse than no weights at all: the file would look placeable
+ * from, which is worse than no weights at all: the file would look plausible
  * and be wrong.
  */
 export function weightSourceFrom(read: (variable: string) => string | undefined): WeightSource {

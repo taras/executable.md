@@ -86,7 +86,7 @@ function opened(result: Result<ReplSession>): ReplSession {
   return result.value;
 }
 
-function accepted(result: Result<void>): void {
+function accepted(result: Result<unknown>): void {
   if (!result.ok) {
     throw result.error;
   }

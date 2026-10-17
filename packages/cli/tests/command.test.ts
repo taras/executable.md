@@ -61,7 +61,7 @@ describe("Tier XC — the xmd command", { sanitizeOps: false, sanitizeResources:
   });
 
   it("XC4: this runtime's entrypoint relaunches a worker from another directory", function* () {
-    // Argument placement is proven by the worker actually starting: the
+    // Argument order is proven by the worker actually starting: the
     // relaunch command is what spawns it. Running from a scratch directory
     // also exercises the entry path, which comes from import.meta.url and so
     // stays valid wherever the CLI was started.
