@@ -26,7 +26,7 @@ import { execFile } from "node:child_process";
 import { chmod, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
-import { allocate, showing } from "./pty.ts";
+import { allocate, showing, showingAcross } from "./pty.ts";
 import type { Pty } from "./pty.ts";
 
 /**
@@ -882,7 +882,9 @@ export function replGitJourney(repl: ReplCommand, through: GitJourney): Operatio
     yield* sleep(500);
     yield* third.type("\r");
     const today = yield* moved(working, home, theirs);
-    yield* showing(third, `again is ${today}`, ACT_MS);
+    // The object id is read across the wrap the Transcript's own width puts in
+    // it: forty characters of it, whole, rather than whichever row it starts on.
+    yield* showingAcross(third, `again is ${today}`, ACT_MS);
     // Today's staged work, not the commit the earlier entry retained.
     expect(today).not.toBe(recorded);
     expect(yield* gitSaid(working, ["show", "HEAD:today.md"], home)).toBe("today");

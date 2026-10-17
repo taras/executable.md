@@ -30,7 +30,7 @@
  */
 
 import { createContext } from "effection";
-import type { Operation, Stream } from "effection";
+import type { Context, Operation, Stream } from "effection";
 import type {
   AgentOptions,
   AgentOptionsRequest,
@@ -83,7 +83,8 @@ export interface AgentConversationProvider {
  * `Agent` middleware does not serve conversations, and a conversation opened
  * over it refuses rather than falling back to the routing this exists to avoid.
  */
-export const AgentConversationProvider = createContext<AgentConversationProvider | undefined>(
-  "executablemd.agent.conversation.provider",
-  undefined,
-);
+export const AgentConversationProvider: Context<AgentConversationProvider | undefined> =
+  createContext<AgentConversationProvider | undefined>(
+    "executablemd.agent.conversation.provider",
+    undefined,
+  );

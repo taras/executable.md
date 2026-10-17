@@ -2350,6 +2350,57 @@ function* outputOf(view: ReplView): Operation<string[]> {
     .filter((label) => label.length > 0);
 }
 
+/**
+ * The whole guidance sentence this view draws, across the rows it was cut into.
+ *
+ * Guidance is one sentence and the pane is as wide as it is, so a sentence
+ * longer than the Transcript's own column is *wrapped* — `guidance` and then
+ * `guidance:row:1`, `guidance:row:2` and so on. Nothing is dropped and nothing
+ * is marked: the fitting keeps the space it cut at in the prefix, so joining
+ * the rows with nothing between them reproduces the sentence exactly.
+ *
+ * Read this way rather than off the first row, which is a row and not the
+ * sentence. Every caller here is asking what the screen says, and a reader of
+ * one row would report a complete sentence as a truncated one at every width
+ * narrow enough to wrap it.
+ */
+function* wholeGuidance(view: ReplView): Operation<string> {
+  const rows = (yield* describedBy(view)).filter(
+    (one) => one.key === "guidance" || one.key.startsWith("guidance:row:"),
+  );
+  if (rows.length === 0) {
+    throw new Error("this view described no guidance row");
+  }
+  return rows.map((one) => one.label).join("");
+}
+
+/**
+ * The Output half as one text, across the rows its width cut it into.
+ *
+ * A caption longer than the half it is drawn in is wrapped, and its
+ * continuation carries the offset it was cut at — `reading:caption:output+33`
+ * beside `reading:caption:output`. Each row is padded to the region, so the
+ * rows are trimmed and rejoined with the single space the cut stood at, and the
+ * result is compared on its words rather than on its spacing.
+ *
+ * {@link outputOf} is still the right reader for a question about *which rows*
+ * a prefix shows. This is the one for a question about a sentence, and it fails
+ * on a sentence that lost any of itself — a truncation leaves words missing and
+ * a mark behind.
+ */
+function* outputText(view: ReplView): Operation<string> {
+  return (yield* describedBy(view))
+    .filter(
+      (one) =>
+        one.key === "reading:caption:output" ||
+        one.key.startsWith("reading:caption:output+") ||
+        one.key.startsWith("reading:output:"),
+    )
+    .map((one) => said(one.label))
+    .filter((label) => label.length > 0)
+    .join(" ");
+}
+
 /** The live overlay rows this view draws, in order. */
 function* overlayOf(view: ReplView): Operation<string[]> {
   return (yield* describedBy(view))
@@ -2739,10 +2790,19 @@ describe("REPL entries: what each prefix of a two-entry history shows", () => {
       const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
       return yield* outputOf(reading(state, projected(events, marker), NOTHING_LIVE, WIDE));
     };
+    /** The same half, as the one text its rows join back into. */
+    const outputTextAt = function* (marker: string): Operation<string> {
+      const state = frozenAt(drafting(initialState(EXECUTION), "still typing"), marker);
+      return yield* outputText(reading(state, projected(events, marker), NOTHING_LIVE, WIDE));
+    };
     expect(yield* linesAt(before)).toContain("ALPHA-ONE");
     expect(yield* linesAt(before)).not.toContain("BRAVO-TWO");
     expect(yield* outputAt(admission)).not.toContain("BRAVO-TWO");
-    expect(yield* outputAt(admission)).toContain("No entry output recorded at this checkpoint.");
+    // The caption is one sentence, wrapped where the Output half's own width
+    // cuts it, so it is recovered from its rows rather than looked for on one.
+    expect(yield* outputTextAt(admission)).toContain(
+      "No entry output recorded at this checkpoint.",
+    );
     expect(yield* outputAt(terminal)).toContain("BRAVO-TWO");
 
     // The draft is current route state throughout: it is not a thing a prefix
@@ -2950,13 +3010,7 @@ describe("REPL entries: what the screen says the execution is doing", () => {
     live: ReplLive,
     size: ReplTerminalSize,
   ): Operation<string> {
-    const row = (yield* describedBy(reading(state, model, live, size))).find(
-      (one) => one.key === "guidance",
-    );
-    if (row === undefined) {
-      throw new Error("this view described no guidance row");
-    }
-    return row.label;
+    return yield* wholeGuidance(reading(state, model, live, size));
   }
 
   it("UI10: ready, running, waiting, settling, unfinished and complete each read differently", function* () {
@@ -3157,13 +3211,7 @@ describe("REPL entries: a retained close while the task is still coming down", (
 
   /** The contextual guidance this view describes. */
   function* guidanceOf(state: ReplState, model: ReplModel, live: ReplLive): Operation<string> {
-    const row = (yield* describedBy(reading(state, model, live, WIDE))).find(
-      (one) => one.key === "guidance",
-    );
-    if (row === undefined) {
-      throw new Error("this view described no guidance row");
-    }
-    return row.label;
+    return yield* wholeGuidance(reading(state, model, live, WIDE));
   }
 
   it("UI11: settling refuses the next entry, and releasing teardown reads ready with no input", function* () {
@@ -3384,10 +3432,14 @@ describe("REPL entries: what a failed entry says it failed with", () => {
           // the ellipsis stood for — no character of the recorded reason is
           // thrown away — is the stronger one, and is asserted here by
           // recovering the whole reason from the rows it was cut into.
+          // Joined as the rows stand, trailing space included: the fitting cuts
+          // at a space and keeps it in the prefix, so trimming each row would
+          // delete the one character that was between two words.
           const reason = cells
             .filter((cell) => cell.key.startsWith("reading:output:reason:"))
-            .map((cell) => cell.text.replace(/^[\u2502]\s*/, "").trimEnd())
-            .join("");
+            .map((cell) => cell.text.replace(/^[\u2502]\s*/, ""))
+            .join("")
+            .trimEnd();
           expect([size.columns, reason.startsWith("failed: ")]).toEqual([size.columns, true]);
           expect([size.columns, reason.includes("…")]).toEqual([size.columns, false]);
         }

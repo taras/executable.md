@@ -67,7 +67,11 @@ import {
 } from "../src/retained-repository/placement-records.ts";
 import type { ReplPlacementRecord } from "../src/retained-repository/placement-records.ts";
 import { REPL_REPOSITORY_LOCAL } from "../src/retained-repository/records.ts";
-import { metadataOf, repositorySlot, worktreeSlot } from "../src/deno/run-composition/checkout-layout.ts";
+import {
+  metadataOf,
+  repositorySlot,
+  worktreeSlot,
+} from "../src/deno/run-composition/checkout-layout.ts";
 import { writeMetadata } from "../src/deno/run-composition/checkouts.ts";
 import { METADATA_VERSION } from "../src/deno/run-composition/metadata.ts";
 import type { ManagedRepositoryMetadata } from "../src/deno/run-composition/metadata.ts";
