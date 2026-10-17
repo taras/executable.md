@@ -38,7 +38,11 @@
 
 import { Err, Ok, useScope } from "effection";
 import type { Operation, Result } from "effection";
-import { createDurableOperation, DurableContext } from "@executablemd/durable-streams";
+import {
+  createDurableOperation,
+  DurableContext,
+  StaleInputError,
+} from "@executablemd/durable-streams";
 import type {
   DurableEvent,
   EffectDescription,
@@ -128,7 +132,8 @@ export function createRootBindingPublications(root: EvalEnv): RootBindingPublica
       // retains nothing and binds exactly as it would have. There is no history
       // for a position in, so there is no sequence to keep either.
       const scope = yield* useScope();
-      if (scope.get(DurableContext) === undefined) {
+      const durable = scope.get(DurableContext);
+      if (durable === undefined) {
         return;
       }
       const sequence = published;
@@ -137,10 +142,25 @@ export function createRootBindingPublications(root: EvalEnv): RootBindingPublica
       // snapshot is what the journal keeps, and reading it later would read
       // whatever the entry had done to the value in between.
       const outcome = snapshot(value);
-      yield* retain(publicationName(sequence, binding), position, {
-        binding,
-        publication: outcome,
-      });
+      const name = publicationName(sequence, binding);
+      const stored = yield* retain(name, position, { binding, publication: outcome });
+      // Read back and parsed, which is the only way a replay can be told from a
+      // live run here: `createDurableOperation` answers with the value the
+      // journal already held, so this is where a retained publication this
+      // version cannot read is discovered. Live it parses the record just
+      // written, and the check costs nothing.
+      //
+      // Before the caller binds and before any later authored work: a history
+      // whose publication cannot be read is not one this run may continue, so
+      // it must not reach the binding, the suffix no record describes, or a
+      // completion appended on top of it.
+      const held = parseRootBindingRecord(stored, name);
+      if (!held.ok) {
+        throw new StaleInputError(UNREADABLE_PUBLICATION, {
+          coroutineId: durable.coroutineId,
+          description: { type: ROOT_BINDING_PUBLICATION, name },
+        });
+      }
     },
   };
 }
@@ -278,7 +298,7 @@ export const UNREADABLE_PUBLICATION =
  * write.
  */
 export function parseRootBindingPublication(event: DurableEvent): Result<RootBindingPublication> {
-  let record: Json;
+  let carried: unknown;
   let name: unknown;
   try {
     if (event.type !== "yield" || event.description.type !== ROOT_BINDING_PUBLICATION) {
@@ -288,7 +308,38 @@ export function parseRootBindingPublication(event: DurableEvent): Result<RootBin
       return Err(new Error(UNREADABLE_PUBLICATION));
     }
     name = event.description.name;
-    record = parseJson(event.result.value);
+    carried = event.result.value;
+  } catch {
+    return Err(new Error(UNREADABLE_PUBLICATION));
+  }
+  if (typeof name !== "string") {
+    return Err(new Error(UNREADABLE_PUBLICATION));
+  }
+  return parseRootBindingRecord(carried, name);
+}
+
+/**
+ * One retained publication record, parsed against the effect name it was
+ * recorded under.
+ *
+ * The one contract both readers are held to: the projection reads a journal
+ * somebody else wrote, and the publisher reads what its own durable operation
+ * handed back — which on a continuation is the retained record rather than the
+ * one just built. Two readings of this shape would be two contracts, and the
+ * day they disagreed is the day a history one of them refused continued
+ * through the other.
+ *
+ * The name is part of it. Replay matches a position by description, so a record
+ * naming a different binding from the effect it came back for is a record this
+ * version did not write there.
+ */
+export function parseRootBindingRecord(
+  carried: unknown,
+  name: string,
+): Result<RootBindingPublication> {
+  let record: Json;
+  try {
+    record = parseJson(carried);
   } catch {
     return Err(new Error(UNREADABLE_PUBLICATION));
   }
@@ -306,7 +357,7 @@ export function parseRootBindingPublication(event: DurableEvent): Result<RootBin
   if (!validated.ok || validated.value !== binding) {
     return Err(new Error(UNREADABLE_PUBLICATION));
   }
-  if (typeof name !== "string" || !namesBinding(name, binding)) {
+  if (!namesBinding(name, binding)) {
     return Err(new Error(UNREADABLE_PUBLICATION));
   }
   const outcome = readOutcome(record["publication"]);

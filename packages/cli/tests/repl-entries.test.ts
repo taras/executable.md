@@ -88,6 +88,7 @@ import { useReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplRenderer } from "../src/repl/renderer.ts";
 import { committedContext } from "./fixtures/repl/presentation.ts";
 import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
+import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import {
   LEGACY_COMPLETED,
   LEGACY_UNFINISHED,
@@ -3997,6 +3998,10 @@ function* capturing(
       source,
       includes: [REFERENCE_DIRECTORY],
       installations: [captureComponents(counted)],
+      // What a fragment in these entries may write. Stated because P3's named
+      // boundaries include a generated one; the entries that admit no fragment
+      // are unaffected by it.
+      generated: ordinaryGeneratedSelection(),
     }),
   );
   return { execution, session };
@@ -4022,6 +4027,31 @@ function publications(events: readonly DurableEvent[]): RootBindingPublication[]
     held.push(parsed.value);
   }
   return held;
+}
+
+/** Every retained effect type this history holds, in append order. */
+function recordedTypes(events: readonly DurableEvent[]): string[] {
+  return events.flatMap((event) => (event.type === "yield" ? [event.description.type] : []));
+}
+
+/**
+ * The marker of the first retained publication, as the first entry spells it.
+ *
+ * Derived through the same independent spelling the marker control uses rather
+ * than read off a checkpoint: an eval export and a publication both produce a
+ * binding checkpoint, so picking the first of those would stand at whichever
+ * came first. Valid for the first entry, whose markers the projection does not
+ * namespace.
+ */
+function firstPublicationMarker(events: readonly DurableEvent[]): string {
+  const at = events.findIndex(
+    (event) => event.type === "yield" && event.description.type === ROOT_BINDING_PUBLICATION,
+  );
+  const marker = at === -1 ? undefined : localMarkers(events)[at];
+  if (marker === undefined) {
+    throw new Error("this history retained no publication to stand at");
+  }
+  return marker;
 }
 
 /** The names one entry's projected scope holds, in the order they appeared. */
@@ -4131,15 +4161,15 @@ const ORDERS_EVAL_FIRST = [
 /** One entry that captures an object and then mutates the live binding. */
 const MUTATES_AFTER_CAPTURE = [
   "```js eval",
-  "const original = { keep: 1 };",
+  'const original = { outer: { keep: 1 }, label: "first" };',
   "```",
   "",
   '<Let as="alias" value={original} />',
   "",
   "```js eval",
   "const same = alias === original;",
-  "alias.keep = 2;",
-  "const after = alias.keep;",
+  "alias.outer.keep = 2;",
+  "const after = alias.outer.keep;",
   "```",
   "",
   "Same: {same}, After: {after}",
@@ -4149,12 +4179,12 @@ const MUTATES_AFTER_CAPTURE = [
 /** One entry that republishes the value it inherited, deliberately. */
 const REPUBLISHES = [
   "```js eval",
-  "alias.keep = 3;",
+  "alias.outer.keep = 3;",
   "```",
   "",
   '<Let as="alias" value={alias} />',
   "",
-  "Three: {alias.keep}",
+  "Three: {alias.outer.keep}",
   "",
 ].join("\n");
 
@@ -4180,17 +4210,33 @@ describe("REPL entries: which publication wins, and which prefix keeps its own (
   it("P2: a mutation republishes nothing, and a deliberate republication does", function* () {
     const { execution, session } = yield* capturing(MUTATES_AFTER_CAPTURE);
     expect((yield* session.join()).ok).toBe(true);
-    // The live binding is the operand, so the entry sees its own mutation.
+    // The live binding is the operand, so the entry sees its own mutation — and
+    // what it mutates is a member one level down, so what the assertions below
+    // pin is the depth the retained value is detached to rather than a scalar
+    // that any copy would separate.
     expect(session.model.entries[0]?.terminal?.output).toContain("Same: true, After: 2");
-    // The retained snapshot was taken at the capture and is detached from it.
-    expect(value(session.model.entries[0]?.bindings ?? [], "alias")).toEqual({ keep: 1 });
+    // The retained snapshot was taken at the capture and is detached all the way
+    // down: the member the entry went on to change is still 1 here.
+    expect(value(session.model.entries[0]?.bindings ?? [], "alias")).toEqual({
+      outer: { keep: 1 },
+      label: "first",
+    });
 
-    expect((yield* following(session, "Two: {alias.keep}\n")).ok).toBe(true);
+    expect((yield* following(session, "Two: {alias.outer.keep}\n")).ok).toBe(true);
     expect(session.model.entries[1]?.terminal?.output).toContain("Two: 1");
 
     expect((yield* following(session, REPUBLISHES)).ok).toBe(true);
     expect(session.model.entries[2]?.terminal?.output).toContain("Three: 3");
-    expect(inherited(yield* execution.stream.readAll())["alias"]).toEqual({ keep: 3 });
+    const events = yield* execution.stream.readAll();
+    expect(inherited(events)["alias"]).toEqual({ outer: { keep: 3 }, label: "first" });
+
+    // And the position that retained the first publication keeps its own deep
+    // value, after two later entries moved that member twice.
+    const first = firstPublicationMarker(events);
+    expect(value(projected(events, first).entries[0]?.bindings ?? [], "alias")).toEqual({
+      outer: { keep: 1 },
+      label: "first",
+    });
   });
 });
 
@@ -4202,7 +4248,17 @@ const SCOPES = [
   "",
   '<Shape title="Scoped" steps={1} as="shaped" />',
   "",
-  '<Each in={[1, 2]} let="n" as="joined">{n}</Each>',
+  // An ordinary component capture inside each environment the accepted scope
+  // rule names, so what these rows measure is the publication helper running in
+  // that environment rather than only the construct's own structural capture.
+  '<Each in={[1, 2]} let="n" as="joined"><Syntax as="inEach" />{n}</Each>',
+  "",
+  "<All>",
+  '<Spawn><Syntax as="inSpawn" /></Spawn>',
+  '<Spawn><Syntax as="alsoSpawn" /></Spawn>',
+  "</All>",
+  "",
+  `<Evaluate text={${JSON.stringify('<Syntax as="inFragment" />\n')}} allow={["read"]} />`,
   "",
   "Scoped.",
   "",
@@ -4216,6 +4272,10 @@ const READS_SCOPES = [
   "  typeof shapeLocal,",
   "  typeof n,",
   "  typeof joined,",
+  "  typeof inEach,",
+  "  typeof inSpawn,",
+  "  typeof alsoSpawn,",
+  "  typeof inFragment,",
   "  typeof props,",
   '].join("/");',
   "```",
@@ -4235,22 +4295,30 @@ describe("REPL entries: whose root a capture belongs to (#939)", () => {
     // written at the root, so it publishes like any other root capture.
     const first = session.model.entries[0];
     expect(value(first?.bindings ?? [], "chosen")).toBe("under if");
-    // The component's own `<Let>`, the iteration's `let`, and the structural
-    // capture `<Each as>` makes are each somebody else's — and none of them
-    // becomes a root value because the file it was written in is the root's.
-    expect(names(first?.bindings ?? [])).not.toContain("shapeLocal");
-    expect(names(first?.bindings ?? [])).not.toContain("n");
-    expect(names(first?.bindings ?? [])).not.toContain("joined");
-    expect(publications(yield* execution.stream.readAll()).map((one) => one.binding)).toEqual([
-      "chosen",
-      "shaped",
-    ]);
+
+    const events = yield* execution.stream.readAll();
+    // Each local capture really ran, which is what makes their absence below an
+    // absence of publication rather than an absence of work: one `<Syntax>` read
+    // per iteration, one per spawned branch, and one inside the fragment.
+    expect(recordedTypes(events).filter((type) => type === "syntax_symbols").length).toBe(5);
+    expect(recordedTypes(events)).toContain("generated_xmd");
+
+    // The component's own `<Let>`, the iteration's `let`, the structural capture
+    // `<Each as>` makes, and the ordinary captures written inside the iteration,
+    // the spawned branches and the admitted fragment are each somebody else's —
+    // and none of them becomes a root value because the file it was written in
+    // is the root's.
+    const locals = ["shapeLocal", "n", "joined", "inEach", "inSpawn", "alsoSpawn", "inFragment"];
+    for (const local of locals) {
+      expect(names(first?.bindings ?? [])).not.toContain(local);
+    }
+    expect(publications(events).map((one) => one.binding)).toEqual(["chosen", "shaped"]);
 
     expect((yield* following(session, READS_SCOPES)).ok).toBe(true);
     // `props` is the entry's own namespace, which every entry validates for
     // itself: inherited or not, it is an object here because this root has one.
     expect(session.model.entries[1]?.terminal?.output).toContain(
-      "Read: under if/undefined/undefined/undefined/object",
+      "Read: under if/undefined/undefined/undefined/undefined/undefined/undefined/undefined/object",
     );
   });
 });
@@ -4672,6 +4740,10 @@ describe("REPL entries: a history written before captures were retained (#939)",
       true,
     );
 
+    // The completed entry alone, which is the history this row inspects.
+    const completed = events.slice(0, 5);
+    expect(completed.filter((event) => event.type === "close").length).toBe(1);
+
     const cold = projected(events);
     expect(cold.entries.map((entry) => entry.settled)).toEqual([true, false]);
     // Only the eval export it really recorded. The four captures that entry
@@ -4682,22 +4754,23 @@ describe("REPL entries: a history written before captures were retained (#939)",
     expect(LEGACY_COMPLETED).toContain('as="legacySummary"');
     expect(publications(events)).toEqual([]);
 
-    // Reading it adds nothing: a settled entry is projected, never resumed.
-    const holder = replExecution(events);
+    // Reading it adds nothing: a settled entry is projected, never resumed. The
+    // execution inspected is the one the equality below reads, so an append to
+    // it would be caught rather than hidden behind an untouched copy.
+    const holder = replExecution(completed);
     yield* scoped(function* () {
       const performed = yield* countPerformed();
       const reading = opened(
-        yield* openReplSession({
-          execution: replExecution(events.slice(0, 5)),
-          includes: [REFERENCE_DIRECTORY],
-        }),
+        yield* openReplSession({ execution: holder, includes: [REFERENCE_DIRECTORY] }),
       );
       expect(reading.live).toBe(false);
+      expect(names(reading.model.entries[0]?.bindings ?? [])).toEqual(["legacyEval"]);
       yield* reading.join();
       expect(performed.compiles).toBe(0);
       expect(performed.reads).toEqual([]);
+      expect(yield* holder.stream.readAll()).toEqual(completed);
     });
-    expect(yield* holder.stream.readAll()).toEqual(events);
+    expect(yield* holder.stream.readAll()).toEqual(completed);
   });
 
   it("G2: an unfinished legacy entry continues in its own mode through its close", function* () {
