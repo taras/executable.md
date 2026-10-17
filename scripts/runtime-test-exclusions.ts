@@ -755,6 +755,12 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/181",
   },
   {
+    path: "packages/git/tests/retained-repository-pull-request.test.ts",
+    reason:
+      "the subject is a REPL entry's native pull-request upsert: it clones a managed checkout, publishes to a real bare remote with real `git` children, holds that checkout's managed slot under a kernel-released exclusive advisory lock taken through the Deno runtime, and reconciles against a modeled Git host. The saved request, the coordinated Push/pull-request admission and the owner-specified worker are provider-neutral and are proven on every runtime by packages/git/tests/retained-repository-pull-request-records.test.ts and packages/git/tests/git-host-owned.test.ts; that a runtime without the provider refuses <PullRequest> before any native or service operation is proven by packages/cli/tests/repl-pull-request-pty.test.ts, which runs everywhere",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "packages/cli/tests/repl-push.test.ts",
     reason:
       "drives the production per-entry capability, which only Deno and the compiled binary select: its module graph reaches @executablemd/git/deno and so Workflow's storage adapter and node:sqlite, and its rows publish to a real bare remote with real `git` children. That a runtime selecting no entry capability reports no Git provider for <Git.Push /> is proven by packages/cli/tests/repl-push-pty.test.ts, which runs everywhere",
