@@ -139,7 +139,7 @@ function symbolsWith(props: PropsSchema): SyntaxSymbols {
   };
 }
 
-/** The thirteen names #643 settled, exactly as a document writes them. */
+/** The repository vocabulary, exactly as a document writes it. */
 const COMPOSITION_NAMES = [
   "Repository",
   "Worktree",
@@ -147,6 +147,10 @@ const COMPOSITION_NAMES = [
   "Git.Add",
   "Git.Commit",
   "Git.Push",
+  "Git.Files",
+  "Git.Changes",
+  "Git.Diff",
+  "Git.File",
   "PullRequest",
   "PullRequest.Reviews",
   "PullRequest.Comments",

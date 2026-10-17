@@ -1434,6 +1434,66 @@ completed Git operation takes neither. A no-op Add, a same-branch Switch and a
 Commit that will refuse take them too: whether `git` will change anything is not
 predicted.
 
+### Reading the repository an entry is standing in
+
+Inside the same checkout, type this:
+
+```xmd
+<Git.Files prefix="src/" limit={5} as="files" />
+<Git.Changes compare="unstaged" as="changes" />
+<Git.Diff compare="unstaged" limit={4096} as="diff" />
+<Git.File commit="HEAD~1" path="src/expand.ts" as="before" />
+<Json value={files.paths} />
+```
+
+Four reads and nothing changed. `<Git.Files>` lists the tracked paths the index
+holds, relative to the repository root, excluding untracked files and the
+contents of any checkout nested beside them. `<Git.Changes>` reports each
+changed path with Git's own letter for what happened to it, for the index
+against the working tree, HEAD against the index, or two commits you name
+directly. `<Git.Diff>` answers the same comparison as patch text. `<Git.File>`
+answers the text one commit holds at one path — the commit's bytes, not the
+working copy, so it still answers after you have edited the file.
+
+A page is bounded: 100 records, or 4096 characters of text, unless you ask for
+more. Ask for more and you get more; nothing caps it beyond what a number can
+represent. When something remains, `next` holds the complete arguments of the
+read that continues it, so a later entry follows it by passing the value back:
+
+```xmd
+<Git.Files prefix={files.next.prefix} limit={files.next.limit} cursor={files.next.cursor} as="more" />
+```
+
+Follow one after the answer has changed and the read refuses rather than
+stitching two repositories together: *The Git observation changed. Restart
+`<Git.Files>` without cursor.* A change elsewhere that does not alter this
+answer needs no restart, and raising `limit` between pages is safe — a limit is
+how much of an answer to return, not which answer it is. `<Git.File>` carries
+its resolved commit in `next`, so moving the branch under it changes nothing
+about the file you are reading.
+
+Leave an entry at a question after these reads, change every file behind it, and
+come back. The saved pages answer again: the same paths, the same statuses, the
+same patch window, the same commit — and not a single `git` command. The entry
+after it inherits those bound values and can render members of them without
+reading anything. Reads after the question run for the first time, against the
+repository as it is now. Delete the checkout outright and the saved pages still
+answer; reading one consults nothing.
+
+A refusal you asked for is retained as a refusal, exactly as a transition's is.
+A revision that names no commit, a path the commit does not hold, a directory or
+a nested checkout's recorded commit where a file was asked for, and a file that
+is not text each say which it was and what to write instead. None of them quotes
+anything Git printed.
+
+These reads change nothing, so they take no hold on the repository you are
+changing: another entry committing in the same checkout does not wait for a
+read, and a read does not wait for it. The first new read inside a restored
+managed placement takes that placement's ownership and nothing else; a completed
+read takes neither. Hooks, signing, filesystem monitors, external diff programs,
+text conversion, content filters and repository credential helpers stay
+disabled, and no read reaches a remote — a missing object refuses instead.
+
 ### The branch an entry published
 
 Inside a lexical `<Repository>` — or a `<Worktree>` of one, including a
@@ -2169,11 +2229,23 @@ resolved against the frame that published its coordinates.
   neither a retained local result nor a retained publication authorizes one.
   What an entry retains is `<Repository>` and `<Worktree>` selection, the file
   and directory work inside those checkouts and the one it was started in,
-  `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` in them, the branch
-  `<Git.Push />` published, and the issues it filed and read. A runtime that
-  installs no repository provider — Node and Bun — refuses the Git components,
-  publication included, before any native operation or remote contact, while
-  ordinary `<File>` and `<Dir>` work keeps working there.
+  `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` in them, the page each of
+  `<Git.Files>`, `<Git.Changes>`, `<Git.Diff>` and `<Git.File>` answered with,
+  the branch `<Git.Push />` published, and the issues it filed and read. A
+  runtime that installs no repository provider — Node and Bun — refuses the Git
+  components, the four reads and publication included, before any native
+  operation or remote contact, while ordinary `<File>` and `<Dir>` work keeps
+  working there.
+- A read confers nothing. Nothing a page holds authorizes a mutation, a
+  publication, a pull request or an Agent, and the opaque `cursor` a `next`
+  carries is continuation data rather than permission: a follow-up read
+  authenticates and routes on its own terms and then checks that the cursor
+  describes the checkout it reached.
+- A read is not a snapshot. One observation may run several Git commands against
+  one private index copy and one pair of resolved commit ids, and that is as much
+  as it promises: nothing locks the repository, watches it or compares every
+  write that happened while it ran. What continuation checks is whether the
+  *answer* changed, not whether the filesystem did.
 - `<Issue>` is an ordinary shadowable default here, as it is under every other
   host. A repository component of that name keeps its ordinary precedence over
   it, and what such a component does not get is the identity an entry's own

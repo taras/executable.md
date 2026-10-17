@@ -18,9 +18,10 @@
  *
  * Each name says what its operations do. `Repository` selects a checkout,
  * `Git` performs the four authored durable transitions behind `<Git.*>`, and
- * `GitQuery` asks read-only questions of the checkout the contextual working
- * directory is in. The last two are never the same seam: replacing `GitQuery`
- * answers questions and moves no branch.
+ * `GitQuery` asks read-only questions — four of the checkout the contextual
+ * working directory is in, and four of the checkout a Repository selected. The
+ * last two are never the same seam: replacing `GitQuery` answers questions and
+ * moves no branch.
  *
  * ```ts
  * import { GitQuery, Repository } from "@executablemd/git/api";
@@ -48,16 +49,50 @@
  * question from what the question is.
  */
 
-// The read-only Git questions, and the four operations pre-bound for callers
+// The read-only Git questions, and the eight operations pre-bound for callers
 // who want the operation rather than the seam.
 export {
   gitObjectFormat,
   GitQuery,
   gitRoot,
+  readGitChanges,
+  readGitDiff,
+  readGitFile,
+  readGitFiles,
   readGitObject,
   resolveGitRevision,
 } from "./src/git.ts";
 export type { GitObjectFormat, GitQueryApi } from "./src/git.ts";
+
+// What the four selected-checkout reads ask for and answer with, and the
+// continuation that carries one page to the next.
+export type {
+  GitChange,
+  GitChangesInvocation,
+  GitChangesNext,
+  GitChangesRequest,
+  GitChangesResult,
+  GitChangeStatus,
+  GitCompareMode,
+  GitComparison,
+  GitComparisonRequest,
+  GitDiffInvocation,
+  GitDiffNext,
+  GitDiffRequest,
+  GitDiffResult,
+  GitFileInvocation,
+  GitFileNext,
+  GitFileRequest,
+  GitFileResult,
+  GitFilesInvocation,
+  GitFilesNext,
+  GitFilesRequest,
+  GitFilesResult,
+  GitObservationInvocation,
+  GitObservationKind,
+  GitObservationRequest,
+  GitObservationValue,
+} from "./src/composition/observation-api.ts";
 
 // Repository selection: what a `<Repository>` or `<Worktree>` selects, and the
 // credential-free selection it hands back.
