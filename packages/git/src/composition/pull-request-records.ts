@@ -588,11 +588,43 @@ export function parsePullRequestResult(
   value: unknown,
   expected: PullRequestExpectation,
 ): PullRequestResult | undefined {
+  const result = parseClosedPullRequestResult(value, expected.repository.objectFormat);
+  if (result === undefined) {
+    return undefined;
+  }
+  if (
+    !sameRepositoryIdentity(result.repository, expected.repository) ||
+    result.headSha !== expected.headSha ||
+    (expected.number !== null && result.number !== expected.number)
+  ) {
+    return undefined;
+  }
+  return result;
+}
+
+/**
+ * The closed result shape this value carries, without holding it to a request.
+ *
+ * The members alone: every one the contract declares, no others, each the kind
+ * of value it is declared as. What this deliberately does not ask is whether
+ * the pull request it describes is the one some request asked for — that needs
+ * a resolved head, and there are callers with no head to compare against.
+ *
+ * A retained upsert is not one of them. It always has its resolved inputs and
+ * goes through `parsePullRequestResult` above, which adds exactly those
+ * questions. This narrower reading is for an answer that was never delegated:
+ * a handler that answered the document itself has produced something that must
+ * still be this component's closed contract, and discovering a head to check it
+ * against would be performing the work the handler declined to do.
+ */
+export function parseClosedPullRequestResult(
+  value: unknown,
+  format: GitObjectFormat,
+): PullRequestResult | undefined {
   const record = members(value, RESULT_MEMBERS);
   if (record === undefined) {
     return undefined;
   }
-  const format = expected.repository.objectFormat;
   const repository = parseRepositoryIdentity(record.repository);
   const providerId = text(record.providerId);
   const number = pullRequestNumber(record.number);
@@ -607,13 +639,6 @@ export function parsePullRequestResult(
     headSha === undefined ||
     baseSha === undefined ||
     record.state !== OPEN
-  ) {
-    return undefined;
-  }
-  if (
-    !sameRepositoryIdentity(repository, expected.repository) ||
-    headSha !== expected.headSha ||
-    (expected.number !== null && number !== expected.number)
   ) {
     return undefined;
   }

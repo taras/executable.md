@@ -1502,6 +1502,7 @@ describe("how a REPL entry gets its issues", () => {
     expect([...(built.components ?? [])].map((component) => component.name).sort()).toEqual([
       "Git.Push",
       "Issue",
+      "PullRequest",
     ]);
   });
 

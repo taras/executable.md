@@ -439,6 +439,7 @@ describe("how a REPL entry gets its publication capability", () => {
     expect([...(built.components ?? [])].map((component) => component.name).sort()).toEqual([
       "Git.Push",
       "Issue",
+      "PullRequest",
     ]);
     expect((built.admissions ?? []).length).toBe(2);
     expect(yield* nothingUnder(fixture.managed)).toBe(true);
