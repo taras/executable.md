@@ -589,8 +589,19 @@ function* admitOutcome(
   const queued = pending.get(event.coroutineId) ?? [];
   const request = queued.pop();
   if (request === undefined) {
-    const spent = answered.get(event.coroutineId) ?? [];
-    throw spent.length > 0
+    // Which of the two this is, is a question about *this* outcome rather than
+    // about how much of the coroutine is already paired. With two protocols
+    // settling through one durable type, a completed pair earlier in the same
+    // coroutine is ordinary, and calling an orphan a duplicate because one
+    // exists would describe a history that is not this one.
+    let answeredTwice = false;
+    for (const candidate of answered.get(event.coroutineId) ?? []) {
+      if (event.description.name === (yield* outcomeNameOf(candidate))) {
+        answeredTwice = true;
+        break;
+      }
+    }
+    throw answeredTwice
       ? refusal(
           "duplicate-outcome",
           "a saved request in this entry's history is answered by more than one Git-host " +

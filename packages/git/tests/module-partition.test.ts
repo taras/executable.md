@@ -102,6 +102,7 @@ const PROVIDER_NEUTRAL: readonly string[] = [
   "src/retained-repository/observation-records.ts",
   "src/retained-repository/placement-records.ts",
   "src/retained-repository/publication-evidence.ts",
+  "src/retained-repository/pull-request-read-admission.ts",
   "src/retained-repository/pull-request-records.ts",
   "src/retained-repository/push-admission.ts",
   "src/retained-repository/push-records.ts",

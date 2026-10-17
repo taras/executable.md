@@ -59,10 +59,14 @@
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { createDurableOperation } from "@executablemd/durable-streams";
-import type { Json } from "@executablemd/durable-streams";
+import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { documented, formDispatcher } from "@executablemd/core";
 import type { ComponentInvocation, FunctionComponent } from "@executablemd/core";
-import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/host";
+import type {
+  IdentityClaimant,
+  IdentityComponent,
+  JournalAdmission,
+} from "@executablemd/core/host";
 import type { Around } from "@effectionx/context-api";
 import { COMPOSITION_ORIGIN } from "../../composition/definitions.ts";
 import {
@@ -90,6 +94,11 @@ import {
   pullRequestReadEnvelopeJson,
   readRequest,
 } from "../../composition/pull-request-read-records.ts";
+import {
+  admitReplPullRequestReadRequest,
+  admitReplPullRequestReadResult,
+  replPullRequestReadNameRefusal,
+} from "../../retained-repository/pull-request-read-admission.ts";
 import type {
   PullRequestReadKind,
   PullRequestReadRequest,
@@ -98,6 +107,7 @@ import type {
 import type { FirstPartyDocumentation, ReturnsSchema } from "@executablemd/core";
 import {
   describePullRequestRead,
+  PULL_REQUEST_READ,
   pullRequestReadElement,
   retainedPullRequestRead,
 } from "../composition/pull-request-operations.ts";
@@ -315,4 +325,34 @@ function* retain(
     return pullRequestReadEnvelopeJson(answered);
   });
   return retainedPullRequestRead(stored, request.kind, element);
+}
+
+/**
+ * What this entry requires of the evidence reads its history holds.
+ *
+ * The record, the owner and the retained collection are the neutral
+ * admission's questions; what is asked here is the one it cannot ask, because
+ * the read's name is a synchronous native digest that belongs to this half of
+ * the package.
+ */
+export function replPullRequestReadAdmission(owner: string): JournalAdmission {
+  return function* (retained: readonly DurableEvent[]): Operation<void> {
+    for (const event of retained) {
+      if (event.type !== "yield" || event.description.type !== PULL_REQUEST_READ) {
+        continue;
+      }
+      const request = admitReplPullRequestReadRequest(owner, event.description["input"]);
+      const described = yield* describePullRequestRead(request);
+      if (event.description.name !== described.name) {
+        throw replPullRequestReadNameRefusal();
+      }
+      if (event.result.status !== "ok") {
+        // A refused read retains no result of its own: its outcome is the
+        // durable operation's failed result, and there is nothing in it to hold
+        // to a collection. Its description was still held to this entry above.
+        continue;
+      }
+      admitReplPullRequestReadResult(request, event.result.value);
+    }
+  };
 }

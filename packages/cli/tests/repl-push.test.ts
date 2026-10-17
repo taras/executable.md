@@ -444,7 +444,9 @@ describe("how a REPL entry gets its publication capability", () => {
       "PullRequest.Comments",
       "PullRequest.Reviews",
     ]);
-    expect((built.admissions ?? []).length).toBe(2);
+    // Three: the issues history, the entry's publication and pull-request
+    // history, and its evidence reads.
+    expect((built.admissions ?? []).length).toBe(3);
     expect(yield* nothingUnder(fixture.managed)).toBe(true);
   });
 });

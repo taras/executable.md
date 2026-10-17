@@ -230,6 +230,53 @@ export function pullRequestReadRequestJson(request: PullRequestReadRequest): Jso
   };
 }
 
+const READ_REQUEST_MEMBERS = ["operation", "url", "provider", "kind", "runId", "expansionId"];
+
+/**
+ * The normalized read request this retained description carries, or
+ * `undefined`.
+ *
+ * Closed and exact, because this is what a continuation decides ownership from:
+ * the owner is in `runId`, and a description carrying one more member than the
+ * contract declares is not a description this host wrote. The question itself —
+ * operation, URL, discriminator and collection — is what the name is derived
+ * from, so reading it back is how a saved read is held to the name it is
+ * journaled under.
+ */
+export function parsePullRequestReadRequest(
+  value: Json | undefined,
+): PullRequestReadRequest | undefined {
+  if (!isJsonObject(value) || !exactMembers(value, READ_REQUEST_MEMBERS)) {
+    return undefined;
+  }
+  const kind = PULL_REQUEST_READ_KINDS.find((known) => known === value.kind);
+  const url = value.url;
+  const provider = value.provider;
+  const runId = value.runId;
+  const expansionId = value.expansionId;
+  if (
+    value.operation !== "read" ||
+    kind === undefined ||
+    typeof url !== "string" ||
+    url === "" ||
+    !(provider === null || (typeof provider === "string" && provider !== "")) ||
+    typeof runId !== "string" ||
+    runId === "" ||
+    typeof expansionId !== "string" ||
+    expansionId === ""
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    operation: "read" as const,
+    url,
+    provider,
+    kind,
+    runId,
+    expansionId,
+  });
+}
+
 /**
  * Exactly these members, and no others.
  *
