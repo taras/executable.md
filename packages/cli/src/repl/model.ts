@@ -42,11 +42,18 @@
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 import { validateBindingName } from "@executablemd/core";
-import { AGENT_PROMPT, parsePromptRecord, readElicitationSchema } from "@executablemd/core/host";
+import {
+  AGENT_PROMPT,
+  parsePromptRecord,
+  parseRootBindingPublication,
+  readElicitationSchema,
+  recordedRootBindingPublicationMode,
+  ROOT_BINDING_PUBLICATION,
+} from "@executablemd/core/host";
 import type { PromptRecord } from "@executablemd/core/host";
 import type { Close, DurableEvent, Json, Yield } from "@executablemd/durable-streams";
 
-import { entryKey, entryMarker, partitionEntrySegments } from "./entries.ts";
+import { entryKey, entryMarker, partitionEntrySegments, ROOT_COROUTINE } from "./entries.ts";
 import type { EntrySegment } from "./entries.ts";
 
 /** The first entry's key, and the root scope key every existing location names. */
@@ -61,6 +68,19 @@ export const ENTRY_SCOPE = entryKey(1);
 const ROOT_PROPS_BINDING = "props";
 
 const SOURCE_POSITION_FIELD = "executablemd.source-position";
+
+/**
+ * What the projection says when a retained publication cannot belong to the
+ * entry that holds it.
+ *
+ * Refused rather than skipped: a record in an entry whose admission retains no
+ * mode, or on a coroutine that is not that entry's root, is a history this
+ * version did not write — and projecting around it would publish a value into a
+ * root scope on the strength of where the record happened to land.
+ */
+const UNOWNED_PUBLICATION =
+  "a retained root capture does not belong to the entry that holds it, so nothing can say " +
+  "whose root value it is.";
 
 /** What the REPL could not read, and what it was reading when it stopped. */
 export class ReplProjectionError extends Error {
@@ -724,6 +744,16 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
       ),
     );
   }
+  // Read here, off the admission that began the range, and validated
+  // independently of whatever a running session believes: a cold command
+  // projecting these bytes has to reach the same answer. An absent mode is the
+  // readable legacy entry — one written before root captures were retained —
+  // and a spelling this version does not know is a refusal rather than an
+  // absence to project around.
+  const retention = recordedRootBindingPublicationMode(segment.admission.description);
+  if (!retention.ok) {
+    return Err(new ReplProjectionError(retention.error.message));
+  }
   const entry: ScopeDraft = {
     key: segment.key,
     kind: "entry",
@@ -839,6 +869,53 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
         path: scope.path,
       });
       checkpoints.push({ marker, kind: "scope", label: `<${description.name} /> admitted` });
+      continue;
+    }
+
+    if (description.type === ROOT_BINDING_PUBLICATION) {
+      if (event.result.status !== "ok") {
+        transcript.push({
+          kind: "effect",
+          marker,
+          type: ROOT_BINDING_PUBLICATION,
+          status: event.result.status,
+        });
+        continue;
+      }
+      // A publication belongs to the entry's own root, so there is no owner to
+      // look up: a source position on one of these records says where the
+      // capture was written and decides nothing about whose it is. A record on
+      // another coroutine, or in an entry whose admission retains no mode, is
+      // one this REPL did not write.
+      if (retention.value === undefined || event.coroutineId !== ROOT_COROUTINE) {
+        return Err(new ReplProjectionError(UNOWNED_PUBLICATION));
+      }
+      const published = parseRootBindingPublication(event);
+      if (!published.ok) {
+        return Err(new ReplProjectionError(published.error.message));
+      }
+      const outcome = published.value.publication;
+      // An entry-local capture has no durable value to place in the map, and
+      // nothing to manufacture one from. It records that the capture happened
+      // and removes nothing, so the name keeps whichever value was last
+      // published under it.
+      if (outcome.kind === "entry-local") {
+        transcript.push({
+          kind: "effect",
+          marker,
+          type: ROOT_BINDING_PUBLICATION,
+          status: event.result.status,
+        });
+        continue;
+      }
+      bind(entry, published.value.binding, detach(outcome.value));
+      transcript.push({
+        kind: "binding",
+        marker,
+        scope: entry.key,
+        names: Object.freeze([published.value.binding]),
+      });
+      checkpoints.push({ marker, kind: "binding", label: published.value.binding });
       continue;
     }
 

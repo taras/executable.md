@@ -23,8 +23,12 @@ import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { collect, Execution, inlineSource, useTempFileCompiler } from "@executablemd/core";
 import { RootMetadata } from "@executablemd/core/api";
-import { executeInstalled } from "@executablemd/core/host";
-import type { ExecutionInstallation } from "@executablemd/core/host";
+import {
+  executeInstalled,
+  parseRootBindingPublication,
+  ROOT_BINDING_PUBLICATION,
+} from "@executablemd/core/host";
+import type { ExecutionInstallation, RootBindingPublication } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
@@ -83,6 +87,12 @@ import type { ReplCommitted } from "../src/repl/program.ts";
 import { useReplRenderer } from "../src/repl/renderer.ts";
 import type { ReplRenderer } from "../src/repl/renderer.ts";
 import { committedContext } from "./fixtures/repl/presentation.ts";
+import { REFERENCE_DIRECTORY } from "./fixtures/repl/reference.ts";
+import {
+  LEGACY_COMPLETED,
+  LEGACY_UNFINISHED,
+  legacyHistory,
+} from "./fixtures/repl/legacy-root-bindings.ts";
 import type { ReplTerminalSize } from "../src/repl/terminal.ts";
 import { fields, readDescription } from "../src/repl/description.ts";
 import type { ReplDescription } from "../src/repl/description.ts";
@@ -3919,5 +3929,903 @@ describe("Tier R4 — a submission answers for its own entry", () => {
       open();
     }
     expect(started(yield* holder.stream.readAll())).toBe(2);
+  });
+});
+
+/**
+ * Where this suite's own probe components report they come from.
+ *
+ * Declared on an installation rather than registered inside `install()`: an
+ * entry is validated against what its installations declare before anything
+ * runs, so a name only a scope registration knows about does not resolve at all.
+ */
+const CAPTURE_ORIGIN = "@executablemd/cli/tests/repl-entries";
+
+/** How many times each probe component really ran. */
+interface Probes {
+  reading: number;
+  handle: number;
+}
+
+function probes(): Probes {
+  return { reading: 0, handle: 0 };
+}
+
+/**
+ * Two host components the capture rows need and core has none of: one whose
+ * unvalidated return is a JSON object, and one whose return is a live function.
+ */
+function captureComponents(counted: Probes): ExecutionInstallation {
+  return {
+    components: [
+      {
+        name: "Reading",
+        origin: CAPTURE_ORIGIN,
+        props: { type: "object", properties: {}, additionalProperties: false },
+        factory: () =>
+          // deno-lint-ignore require-yield
+          function* Reading(): Operation<Json> {
+            counted.reading += 1;
+            return { pressure: 1013, station: "north" };
+          },
+      },
+      {
+        name: "Handle",
+        origin: CAPTURE_ORIGIN,
+        props: { type: "object", properties: {}, additionalProperties: false },
+        factory: () =>
+          // deno-lint-ignore require-yield
+          function* Handle(): Operation<unknown> {
+            counted.handle += 1;
+            return () => "still live";
+          },
+      },
+    ],
+  };
+}
+
+/** One session over an execution, with this suite's capture vocabulary. */
+function* capturing(
+  source: string,
+  counted: Probes = probes(),
+  events: readonly DurableEvent[] = [],
+): Operation<{ execution: ReplExecution; session: ReplSession }> {
+  const execution = replExecution(events);
+  const session = opened(
+    yield* submitReplEntry({
+      execution,
+      source,
+      includes: [REFERENCE_DIRECTORY],
+      installations: [captureComponents(counted)],
+    }),
+  );
+  return { execution, session };
+}
+
+/** Submit the next entry and wait for it, reporting what it settled to. */
+function* following(session: ReplSession, source: string): Operation<Result<unknown>> {
+  accepted(yield* session.submit(source));
+  return yield* session.join();
+}
+
+/** Every retained root capture this history holds, parsed. */
+function publications(events: readonly DurableEvent[]): RootBindingPublication[] {
+  const held: RootBindingPublication[] = [];
+  for (const event of events) {
+    if (event.type !== "yield" || event.description.type !== ROOT_BINDING_PUBLICATION) {
+      continue;
+    }
+    const parsed = parseRootBindingPublication(event);
+    if (!parsed.ok) {
+      throw parsed.error;
+    }
+    held.push(parsed.value);
+  }
+  return held;
+}
+
+/** The names one entry's projected scope holds, in the order they appeared. */
+function names(bindings: readonly { name: string; value: Json }[]): string[] {
+  return bindings.map((binding) => binding.name);
+}
+
+/** One entry holding every root capture form the language offers. */
+const CAPTURES = [
+  '<Let as="direct" value={{ answer: 42 }} />',
+  "",
+  '<Let as="paired">beta</Let>',
+  "",
+  '<Json value={{ answer: 42 }} as="jsonText" />',
+  "",
+  '<Checklist title="Plan" steps={2} as="markdownText" />',
+  "",
+  '<Shape title="Plan" steps={2} as="markdownValue" />',
+  "",
+  '<Reading as="functionJson" />',
+  "",
+  "Captured.",
+  "",
+].join("\n");
+
+/** One entry that reads every one of them back. */
+const READS_CAPTURES = [
+  "```js eval",
+  "const seen = [",
+  "  direct.answer,",
+  "  paired,",
+  "  JSON.parse(jsonText).answer,",
+  '  markdownText.includes("Plan"),',
+  "  markdownValue.steps,",
+  "  functionJson.pressure,",
+  '].join("/");',
+  "```",
+  "",
+  "Read: {seen}",
+  "",
+].join("\n");
+
+describe("REPL entries: the root values a capture retains (#939)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P1: every capture form reaches the next entry with its own type", function* () {
+    const counted = probes();
+    const { execution, session } = yield* capturing(CAPTURES, counted);
+    expect((yield* session.join()).ok).toBe(true);
+
+    const first = session.model.entries[0];
+    expect(value(first?.bindings ?? [], "direct")).toEqual({ answer: 42 });
+    expect(value(first?.bindings ?? [], "paired")).toBe("beta");
+    expect(JSON.parse(String(value(first?.bindings ?? [], "jsonText")))).toEqual({ answer: 42 });
+    expect(String(value(first?.bindings ?? [], "markdownText"))).toContain("Plan");
+    expect(value(first?.bindings ?? [], "markdownValue")).toEqual({ title: "Plan", steps: 2 });
+    expect(value(first?.bindings ?? [], "functionJson")).toEqual({
+      pressure: 1013,
+      station: "north",
+    });
+
+    // Read back by the entry after it, each as the kind of value it was: an
+    // object stays an object, `<Json>`'s capture is the text it returned, and
+    // a Markdown component's text capture is what it rendered.
+    expect((yield* following(session, READS_CAPTURES)).ok).toBe(true);
+    expect(session.model.entries[1]?.terminal?.output).toContain("Read: 42/beta/42/true/2/1013");
+
+    // One publication per capture, and the component really ran once: these
+    // are values the run produced rather than a reconstruction of them.
+    const events = yield* execution.stream.readAll();
+    expect(publications(events).map((one) => one.binding)).toEqual([
+      "direct",
+      "paired",
+      "jsonText",
+      "markdownText",
+      "markdownValue",
+      "functionJson",
+    ]);
+    expect(counted.reading).toBe(1);
+  });
+});
+
+/** One entry that publishes a value and then replaces it through eval. */
+const ORDERS_CAPTURE_FIRST = [
+  '<Let as="ordered" value="alpha" />',
+  "",
+  "```js eval",
+  'const ordered = "beta";',
+  "```",
+  "",
+  "One: {ordered}",
+  "",
+].join("\n");
+
+/** One entry that publishes through eval and then replaces it with a capture. */
+const ORDERS_EVAL_FIRST = [
+  "```js eval",
+  'const ordered = "gamma";',
+  "```",
+  "",
+  '<Let as="ordered" value="delta" />',
+  "",
+  "Two: {ordered}",
+  "",
+].join("\n");
+
+/** One entry that captures an object and then mutates the live binding. */
+const MUTATES_AFTER_CAPTURE = [
+  "```js eval",
+  "const original = { keep: 1 };",
+  "```",
+  "",
+  '<Let as="alias" value={original} />',
+  "",
+  "```js eval",
+  "const same = alias === original;",
+  "alias.keep = 2;",
+  "const after = alias.keep;",
+  "```",
+  "",
+  "Same: {same}, After: {after}",
+  "",
+].join("\n");
+
+/** One entry that republishes the value it inherited, deliberately. */
+const REPUBLISHES = [
+  "```js eval",
+  "alias.keep = 3;",
+  "```",
+  "",
+  '<Let as="alias" value={alias} />',
+  "",
+  "Three: {alias.keep}",
+  "",
+].join("\n");
+
+describe("REPL entries: which publication wins, and which prefix keeps its own (#939)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P2: capture and eval replace each other in journal order, both directions", function* () {
+    const { execution, session } = yield* capturing(ORDERS_CAPTURE_FIRST);
+    expect((yield* session.join()).ok).toBe(true);
+    expect(session.model.entries[0]?.terminal?.output).toContain("One: beta");
+    expect((yield* following(session, ORDERS_EVAL_FIRST)).ok).toBe(true);
+    expect(session.model.entries[1]?.terminal?.output).toContain("Two: delta");
+
+    const events = yield* execution.stream.readAll();
+    // The last durably published value, whichever kind published it.
+    expect(inherited(events)).toEqual({ ordered: "delta" });
+    // And the prefix that stands at the first publication keeps "alpha": a
+    // later overwrite never moves a value an earlier position retained.
+    const at = projected(events, "yield:root:1");
+    expect(value(at.entries[0]?.bindings ?? [], "ordered")).toBe("alpha");
+  });
+
+  it("P2: a mutation republishes nothing, and a deliberate republication does", function* () {
+    const { execution, session } = yield* capturing(MUTATES_AFTER_CAPTURE);
+    expect((yield* session.join()).ok).toBe(true);
+    // The live binding is the operand, so the entry sees its own mutation.
+    expect(session.model.entries[0]?.terminal?.output).toContain("Same: true, After: 2");
+    // The retained snapshot was taken at the capture and is detached from it.
+    expect(value(session.model.entries[0]?.bindings ?? [], "alias")).toEqual({ keep: 1 });
+
+    expect((yield* following(session, "Two: {alias.keep}\n")).ok).toBe(true);
+    expect(session.model.entries[1]?.terminal?.output).toContain("Two: 1");
+
+    expect((yield* following(session, REPUBLISHES)).ok).toBe(true);
+    expect(session.model.entries[2]?.terminal?.output).toContain("Three: 3");
+    expect(inherited(yield* execution.stream.readAll())["alias"]).toEqual({ keep: 3 });
+  });
+});
+
+/** One entry whose only root capture is written inside a selected `<If>`. */
+const SCOPES = [
+  "<If condition={true}>",
+  '<Let as="chosen" value="under if" />',
+  "</If>",
+  "",
+  '<Shape title="Scoped" steps={1} as="shaped" />',
+  "",
+  '<Each in={[1, 2]} let="n" as="joined">{n}</Each>',
+  "",
+  "Scoped.",
+  "",
+].join("\n");
+
+/** One entry that reports which of those names reached it, and what props is. */
+const READS_SCOPES = [
+  "```js eval",
+  "const seen = [",
+  "  chosen,",
+  "  typeof shapeLocal,",
+  "  typeof n,",
+  "  typeof joined,",
+  "  typeof props,",
+  '].join("/");',
+  "```",
+  "",
+  "Read: {seen}",
+  "",
+].join("\n");
+
+describe("REPL entries: whose root a capture belongs to (#939)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P3: a transparent region publishes, and every other scope keeps its own", function* () {
+    const { execution, session } = yield* capturing(SCOPES);
+    expect((yield* session.join()).ok).toBe(true);
+
+    // `<If>` is not a scope: a capture written inside a selected branch is
+    // written at the root, so it publishes like any other root capture.
+    const first = session.model.entries[0];
+    expect(value(first?.bindings ?? [], "chosen")).toBe("under if");
+    // The component's own `<Let>`, the iteration's `let`, and the structural
+    // capture `<Each as>` makes are each somebody else's — and none of them
+    // becomes a root value because the file it was written in is the root's.
+    expect(names(first?.bindings ?? [])).not.toContain("shapeLocal");
+    expect(names(first?.bindings ?? [])).not.toContain("n");
+    expect(names(first?.bindings ?? [])).not.toContain("joined");
+    expect(publications(yield* execution.stream.readAll()).map((one) => one.binding)).toEqual([
+      "chosen",
+      "shaped",
+    ]);
+
+    expect((yield* following(session, READS_SCOPES)).ok).toBe(true);
+    // `props` is the entry's own namespace, which every entry validates for
+    // itself: inherited or not, it is an object here because this root has one.
+    expect(session.model.entries[1]?.terminal?.output).toContain(
+      "Read: under if/undefined/undefined/undefined/object",
+    );
+  });
+});
+
+/** One entry that publishes, then stops authored work with its own message. */
+const PUBLISHES_THEN_FAILS = [
+  '<Let as="kept" value="one" />',
+  "",
+  '<Fail message="stopped on purpose" />',
+  "",
+  '<Let as="never" value="two" />',
+  "",
+].join("\n");
+
+/** One entry that publishes and then waits at a question nobody answers. */
+const PUBLISHES_THEN_ASKS = [
+  '<Let as="held" value="acknowledged" />',
+  "",
+  "```js eval",
+  "const schema = {",
+  '  type: "object",',
+  '  properties: { decision: { type: "string", enum: ["go"] } },',
+  '  required: ["decision"],',
+  "  additionalProperties: false,",
+  "};",
+  "```",
+  "",
+  '<Elicit schema={schema} as="answer">Go?</Elicit>',
+  "",
+  "One: {answer.decision}",
+  "",
+].join("\n");
+
+/**
+ * One execution whose stream holds the `nth` publication append open.
+ *
+ * The gate is on the physical append rather than on anything the document can
+ * see, which is the one position that stands between "this run decided to
+ * publish" and "the journal holds it".
+ */
+function gatedPublication(nth: number, reached: Gate, release: Gate): ReplExecution {
+  const backing = new InMemoryStream();
+  let seen = 0;
+  return {
+    id: "entries",
+    stream: {
+      onAppend: null,
+      readAll: () => backing.readAll(),
+      *append(event: DurableEvent): Operation<void> {
+        if (event.type === "yield" && event.description.type === ROOT_BINDING_PUBLICATION) {
+          seen += 1;
+          if (seen === nth) {
+            reached.open();
+            yield* release.opened;
+          }
+        }
+        yield* backing.append(event);
+        this.onAppend?.(event);
+      },
+    },
+  };
+}
+
+describe("REPL entries: what a failure and an interruption leave published (#939)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P4: a failed entry hands on what it acknowledged, and nothing after it", function* () {
+    const { execution, session } = yield* capturing(PUBLISHES_THEN_FAILS);
+    expect((yield* session.join()).ok).toBe(false);
+    expect(session.model.entries[0]?.terminal?.status).toBe("err");
+
+    const events = yield* execution.stream.readAll();
+    expect(publications(events).map((one) => one.binding)).toEqual(["kept"]);
+    expect(inherited(events)).toEqual({ kept: "one" });
+
+    // A failure is an outcome, so a successor may follow it and inherits
+    // exactly what the failing entry had already retained.
+    expect((yield* following(session, "Two: {kept}\n")).ok).toBe(true);
+    expect(session.model.entries[1]?.terminal?.output).toContain("Two: one");
+  });
+
+  it("P4: halting before the backing append retains the first value and no second", function* () {
+    const reached = gate();
+    const release = gate();
+    const execution = gatedPublication(2, reached, release);
+    try {
+      yield* scoped(function* () {
+        const session = opened(
+          yield* submitReplEntry({
+            execution,
+            source: [
+              '<Let as="first" value="one" />',
+              "",
+              '<Let as="second" value="two" />',
+              "",
+            ].join("\n"),
+          }),
+        );
+        yield* awaiting("the second publication reaching its append", reached.opened);
+        // Leaving here halts the entry inside that append, which is the one
+        // place a publication has been decided and not yet retained.
+        expect(session.live).toBe(true);
+      });
+    } finally {
+      release.open();
+    }
+
+    const events = yield* execution.stream.readAll();
+    expect(publications(events).map((one) => one.binding)).toEqual(["first"]);
+    // Halted, so the entry never settled and nothing may follow it — the value
+    // it did retain is still readable at the position that retained it.
+    expect(events.some((event) => event.type === "close")).toBe(false);
+    expect(projected(events).entries[0]?.bindings.map((one) => one.name)).toEqual(["first"]);
+    const blocked = refusedSession(
+      yield* submitReplEntry({ execution: replExecution(events), source: PLAIN }),
+    );
+    expect(blocked.name).toBe("ReplLifecycleError");
+  });
+
+  it("P4: halting after an acknowledged capture keeps it and settles nothing", function* () {
+    const execution = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution, source: PUBLISHES_THEN_ASKS }));
+      yield* asking(session);
+    });
+    const events = yield* execution.stream.readAll();
+    expect(publications(events).map((one) => one.binding)).toEqual(["held"]);
+    expect(events.some((event) => event.type === "close")).toBe(false);
+    expect(partitioned(events).map((segment) => segment.settled)).toEqual([false]);
+  });
+
+  it("P5: a recorded cancelled close keeps its publications and permits a successor", function* () {
+    const { execution, session } = yield* capturing(
+      ['<Let as="kept" value="one" />', "", "One.", ""].join("\n"),
+    );
+    expect((yield* session.join()).ok).toBe(true);
+    const events = yield* execution.stream.readAll();
+    const [only] = partitioned(events);
+    // The close is doctored and only the close: the entry before it really ran
+    // and really published. Cancelling a live entry appends no close at all, so
+    // this is the one way to stand where a cancelled entry has settled.
+    const holder = replExecution(withClose(events, only, cancelled("root")));
+
+    yield* scoped(function* () {
+      const reopened = opened(yield* openReplSession({ execution: holder }));
+      expect(reopened.model.entries[0]?.terminal?.status).toBe("cancelled");
+      expect(value(reopened.model.entries[0]?.bindings ?? [], "kept")).toBe("one");
+      accepted(yield* reopened.submit("Two: {kept}\n"));
+      yield* reopened.join();
+      expect(reopened.model.entries[1]?.terminal?.output).toContain("Two: one");
+    });
+  });
+});
+
+/**
+ * One execution whose stream refuses the `nth` publication append.
+ *
+ * The storage failure is on the physical append, where a durability failure
+ * really happens: nothing the document wrote caused it, so nothing the document
+ * does may absorb it.
+ */
+function refusingPublication(nth: number, reason: string): ReplExecution {
+  const backing = new InMemoryStream();
+  let seen = 0;
+  return {
+    id: "entries",
+    stream: {
+      onAppend: null,
+      readAll: () => backing.readAll(),
+      *append(event: DurableEvent): Operation<void> {
+        if (event.type === "yield" && event.description.type === ROOT_BINDING_PUBLICATION) {
+          seen += 1;
+          if (seen === nth) {
+            throw new Error(reason);
+          }
+        }
+        yield* backing.append(event);
+        this.onAppend?.(event);
+      },
+    },
+  };
+}
+
+describe("REPL entries: a publication the journal refuses (#939)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P6: a rejected append publishes no binding and keeps its own cause", function* () {
+    const execution = refusingPublication(2, "the file could not be written");
+    const outcome = yield* scoped(function* () {
+      const session = opened(
+        yield* submitReplEntry({
+          execution,
+          source: [
+            '<Let as="first" value="one" />',
+            "",
+            '<Let as="second" value="two" />',
+            "",
+            "After: {second}",
+            "",
+          ].join("\n"),
+        }),
+      );
+      return yield* session.join();
+    });
+
+    expect(outcome.ok).toBe(false);
+    // The durability failure is not something the document did, so it reaches
+    // the caller as itself rather than as the entry's own printed error — and
+    // the storage failure that caused it is still the cause it arrived with.
+    expect(outcome.ok ? "" : outcome.error.message).toContain("Failed to persist");
+    expect(outcome.ok ? [] : causes(outcome.error)).toContain("the file could not be written");
+
+    const events = yield* execution.stream.readAll();
+    // Only the publication that was acknowledged, and no later record of any
+    // kind: no second value, no sentinel, and no compensating close.
+    expect(publications(events).map((one) => one.binding)).toEqual(["first"]);
+    expect(events.some((event) => event.type === "close")).toBe(false);
+    expect(projected(events).entries[0]?.bindings.map((one) => one.name)).toEqual(["first"]);
+  });
+});
+
+/** Every message in one failure's cause chain, outermost first. */
+function causes(error: Error): string[] {
+  const held: string[] = [];
+  let walked: unknown = error;
+  while (walked instanceof Error) {
+    held.push(walked.message);
+    walked = walked.cause;
+  }
+  return held;
+}
+
+/** One publication record, written by hand, for the reader's own refusals. */
+function fabricated(name: string, record: Json): DurableEvent {
+  return {
+    type: "yield",
+    coroutineId: "root",
+    description: { type: ROOT_BINDING_PUBLICATION, name },
+    result: { status: "ok", value: record },
+  };
+}
+
+/** The same history with one event inserted before its close. */
+function inserting(events: readonly DurableEvent[], event: DurableEvent): DurableEvent[] {
+  const at = events.findIndex((one) => one.type === "close");
+  return [...events.slice(0, at), event, ...events.slice(at)];
+}
+
+/** The same history with the publication mode taken off its first admission. */
+function unmarked(events: readonly DurableEvent[]): DurableEvent[] {
+  return events.map((event, index) => {
+    if (index !== 0 || event.type !== "yield") {
+      return event;
+    }
+    const { [PUBLICATIONS_FIELD]: _mode, ...rest } = event.description;
+    return { ...event, description: { ...rest } };
+  });
+}
+
+/** Where a root admission retains the publication mode. */
+const PUBLICATIONS_FIELD = "executablemd.root-binding-publications";
+
+describe("REPL entries: the retained publications it will not read (#939)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P9: a malformed payload refuses the projection whole", function* () {
+    const { execution, session } = yield* capturing(
+      ['<Let as="kept" value="one" />', "", "One.", ""].join("\n"),
+    );
+    expect((yield* session.join()).ok).toBe(true);
+    const events = yield* execution.stream.readAll();
+
+    // Each of these is "not a record this version wrote" rather than one to
+    // read the rest of: a version nobody wrote, a name that does not agree with
+    // the binding inside it, and an outcome carrying a member it should not.
+    const malformed: Json[] = [
+      { version: 2, binding: "kept", publication: { kind: "json", value: "other" } },
+      { version: 1, binding: "kept", publication: { kind: "entry-local", value: "other" } },
+    ];
+    for (const record of malformed) {
+      expect(refusal(inserting(events, fabricated("root-binding:v1:9:kept", record)))).toContain(
+        "cannot be read by this version",
+      );
+    }
+    expect(
+      refusal(
+        inserting(
+          events,
+          fabricated("root-binding:v1:9:other", {
+            version: 1,
+            binding: "kept",
+            publication: { kind: "json", value: "other" },
+          }),
+        ),
+      ),
+    ).toContain("cannot be read by this version");
+  });
+
+  it("P9: a publication in an entry that retains no mode refuses before any value", function* () {
+    const { execution, session } = yield* capturing(
+      ['<Let as="kept" value="one" />', "", "One.", ""].join("\n"),
+    );
+    expect((yield* session.join()).ok).toBe(true);
+    const events = yield* execution.stream.readAll();
+
+    // Cold projection decides this for itself, off the admission the entry
+    // began with: the record is well formed, and the entry it sits in says
+    // nothing about retaining captures, so nothing can say whose value it is.
+    expect(refusal(unmarked(events))).toContain("does not belong to the entry that holds it");
+    // And so does a record claiming to be a root capture from somewhere other
+    // than the entry's own root.
+    const elsewhere: DurableEvent = {
+      type: "yield",
+      coroutineId: "someone-else",
+      description: { type: ROOT_BINDING_PUBLICATION, name: "root-binding:v1:9:kept" },
+      result: {
+        status: "ok",
+        value: { version: 1, binding: "kept", publication: { kind: "json", value: "one" } },
+      },
+    };
+    expect(refusal(inserting(events, elsewhere))).toContain(
+      "does not belong to the entry that holds it",
+    );
+  });
+
+  it("P9: continuing an entry under another retention refuses before its work", function* () {
+    // A history whose unfinished entry retains captures, reopened by a session
+    // that would publish — which is the agreement — and then the same history
+    // with the mode taken off, which is not.
+    const execution = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution, source: PUBLISHES_THEN_ASKS }));
+      yield* asking(session);
+    });
+    const events = yield* execution.stream.readAll();
+    expect(publications(events).length).toBe(1);
+
+    yield* scoped(function* () {
+      const reopened = opened(yield* openReplSession({ execution: replExecution(events) }));
+      yield* asking(reopened);
+      expect(reopened.live).toBe(true);
+    });
+
+    // The same records with the mode removed hold a publication the entry's own
+    // admission does not account for, and the reading refuses before anything
+    // this session could run.
+    const refused = refusedSession(
+      yield* openReplSession({ execution: replExecution(unmarked(events)) }),
+    );
+    expect(refused.message).toContain("does not belong to the entry that holds it");
+  });
+});
+
+/** One entry that captures a live function and binds it again by reference. */
+const CAPTURES_LIVE = [
+  '<Handle as="saved" />',
+  "",
+  '<Let as="localOnly" value={saved} />',
+  "",
+  "```js eval",
+  "const used = `${saved()}/${localOnly === saved}`;",
+  "```",
+  "",
+  "Used: {used}",
+  "",
+].join("\n");
+
+describe("REPL entries: the values that stay in the entry that made them (#939)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("G1: a live capture is usable here, publishes nothing, and removes nothing", function* () {
+    const counted = probes();
+    const { execution, session } = yield* capturing(
+      ['<Let as="saved" value="alpha" />', "", "One.", ""].join("\n"),
+      counted,
+    );
+    expect((yield* session.join()).ok).toBe(true);
+
+    // The second entry binds a function under the name an earlier entry
+    // durably published, and binds it again under a fresh one. Both are used
+    // by reference, in this entry, as the exact values the producer made.
+    expect((yield* following(session, CAPTURES_LIVE)).ok).toBe(true);
+    expect(session.model.entries[1]?.terminal?.output).toContain("Used: still live/true");
+    expect(counted.handle).toBe(1);
+
+    // One outcome per successful root capture, and each of them value-free:
+    // the record says the capture happened and nothing else.
+    const events = yield* execution.stream.readAll();
+    const held = publications(events);
+    expect(held.map((one) => [one.binding, one.publication.kind])).toEqual([
+      ["saved", "json"],
+      ["saved", "entry-local"],
+      ["localOnly", "entry-local"],
+    ]);
+    for (const one of held.slice(1)) {
+      expect(Object.hasOwn(one.publication, "value")).toBe(false);
+    }
+
+    // So the name keeps the last value anything durably published under it,
+    // and a name only ever bound to a live value is absent from inheritance.
+    expect((yield* following(session, "Three: {saved}\n")).ok).toBe(true);
+    expect(session.model.entries[2]?.terminal?.output).toContain("Three: alpha");
+    const cold = projected(yield* execution.stream.readAll());
+    expect(entryInitialBindings(cold)["saved"]).toBe("alpha");
+    expect(Object.hasOwn(entryInitialBindings(cold), "localOnly")).toBe(false);
+  });
+});
+
+describe("REPL entries: a history written before captures were retained (#939)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("G2: a completed legacy entry exposes only what it recorded", function* () {
+    const events = yield* legacyHistory();
+    // Produced by really running `LEGACY_COMPLETED` and `LEGACY_UNFINISHED`
+    // through `submitReplEntry` at the base this change was written against, so
+    // its records are the ones that revision wrote rather than ones shaped here.
+    expect(events.length).toBe(9);
+    expect(events.every((event) => event.type !== "yield" || !hasMode(event.description))).toBe(
+      true,
+    );
+
+    const cold = projected(events);
+    expect(cold.entries.map((entry) => entry.settled)).toEqual([true, false]);
+    // Only the eval export it really recorded. The four captures that entry
+    // made — two `<Let>`s, a `<Json>` and a Markdown component — are absent,
+    // and nothing re-ran the source to recover them.
+    expect(names(cold.entries[0]?.bindings ?? [])).toEqual(["legacyEval"]);
+    expect(LEGACY_COMPLETED).toContain('<Let as="legacySaved"');
+    expect(LEGACY_COMPLETED).toContain('as="legacySummary"');
+    expect(publications(events)).toEqual([]);
+
+    // Reading it adds nothing: a settled entry is projected, never resumed.
+    const holder = replExecution(events);
+    yield* scoped(function* () {
+      const performed = yield* countPerformed();
+      const reading = opened(
+        yield* openReplSession({
+          execution: replExecution(events.slice(0, 5)),
+          includes: [REFERENCE_DIRECTORY],
+        }),
+      );
+      expect(reading.live).toBe(false);
+      yield* reading.join();
+      expect(performed.compiles).toBe(0);
+      expect(performed.reads).toEqual([]);
+    });
+    expect(yield* holder.stream.readAll()).toEqual(events);
+  });
+
+  it("G2: an unfinished legacy entry continues in its own mode through its close", function* () {
+    const events = yield* legacyHistory();
+    const holder = replExecution(events);
+
+    yield* scoped(function* () {
+      const performed = yield* countPerformed();
+      const session = opened(
+        yield* openReplSession({ execution: holder, includes: [REFERENCE_DIRECTORY] }),
+      );
+      const question = yield* asking(session);
+      expect(session.live).toBe(true);
+      // The prefix was restored rather than performed: its eval block compiled
+      // not at all, and the Markdown component it captured was not read again.
+      expect(performed.compiles).toBe(0);
+      expect(performed.reads.filter((path) => path.includes("Checklist"))).toEqual([]);
+
+      question.submit({ decision: "go" });
+      expect((yield* session.join()).ok).toBe(true);
+      expect(session.model.entries[1]?.terminal?.output).toContain("Answered before/go with after");
+      // Exactly the suffix ran: one eval block, and still no second read of the
+      // component the prefix had already recorded.
+      expect(performed.compiles).toBe(1);
+      expect(performed.reads.filter((path) => path.includes("Checklist"))).toEqual([]);
+    });
+
+    const after = yield* holder.stream.readAll();
+    // The retained prefix is byte for byte what it was, and the whole of the old
+    // entry — including the captures in its unrecorded suffix — published
+    // nothing, so `legacySuffix` is not something the entry after it inherits.
+    expect(after.slice(0, events.length)).toEqual(events);
+    expect(publications(after)).toEqual([]);
+    expect(LEGACY_UNFINISHED).toContain('<Let as="legacySuffix"');
+    expect(Object.hasOwn(inherited(after), "legacySuffix")).toBe(false);
+    expect(inherited(after)["legacySuffixEval"]).toBe("before/go");
+  });
+
+  it("G2: the entry admitted after it is marked, and its capture is inherited", function* () {
+    const events = yield* legacyHistory();
+    const holder = replExecution(events);
+
+    yield* scoped(function* () {
+      const session = opened(
+        yield* openReplSession({ execution: holder, includes: [REFERENCE_DIRECTORY] }),
+      );
+      const question = yield* asking(session);
+      question.submit({ decision: "go" });
+      yield* session.join();
+
+      // A newly admitted entry opts into the repair, so a mixed history — a
+      // legacy entry followed by a marked one — is a history this reads.
+      accepted(yield* session.submit('<Let as="fresh" value="newmode" />\n\nThird {fresh}.\n'));
+      expect((yield* session.join()).ok).toBe(true);
+      expect(session.model.entries[2]?.terminal?.output).toContain("Third newmode");
+
+      // And an entry that captures nothing is marked just the same: the mode is
+      // a fact about the entry, not about whether it happened to hold a `<Let>`.
+      accepted(yield* session.submit(PLAIN));
+      expect((yield* session.join()).ok).toBe(true);
+    });
+
+    const after = yield* holder.stream.readAll();
+    const segments = partitioned(after);
+    expect(segments.map((segment) => hasMode(segment.admission.description))).toEqual([
+      false,
+      false,
+      true,
+      true,
+    ]);
+    expect(publications(after).map((one) => one.binding)).toEqual(["fresh"]);
+    expect(inherited(after)["fresh"]).toBe("newmode");
+  });
+});
+
+/** Whether a recorded description retains a root-binding publication mode. */
+function hasMode(description: Readonly<Record<string, Json>>): boolean {
+  return description[PUBLICATIONS_FIELD] !== undefined;
+}
+
+describe("REPL entries: what the Bindings reading shows at each position (#939)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P8: the pane draws the retained captures of the position it is standing at", function* () {
+    const { execution, session } = yield* capturing(
+      ['<Let as="token" value="alpha" />', "", "One: {token}", ""].join("\n"),
+    );
+    expect((yield* session.join()).ok).toBe(true);
+    expect(
+      (yield* following(
+        session,
+        ['<Let as="token" value="beta" />', "", "Two: {token}", ""].join("\n"),
+      )).ok,
+    ).toBe(true);
+
+    const events = yield* execution.stream.readAll();
+    const head = projected(events);
+    const second = head.entries[1]?.scope.marker;
+    const terminal = head.entries[1]?.checkpoints[head.entries[1].checkpoints.length - 1]?.marker;
+    if (second === undefined || terminal === undefined) {
+      throw new Error("the second entry has an admission and a terminal position");
+    }
+
+    /** The binding rows the reading draws at one position, as a reader reads them. */
+    const bindingsAt = function* (marker: string, scope: string): Operation<string[]> {
+      // Bindings explicitly: a scope's own rows belong to that reading, and
+      // the command's right pane defaults to the Sidekick — so this asks for
+      // the pane the way a person does rather than relying on a default.
+      const selected = Object.freeze({
+        ...selecting(initialState(EXECUTION), scope),
+        route: Object.freeze({
+          ...selecting(initialState(EXECUTION), scope).route,
+          right: "bindings" as const,
+        }),
+      });
+      const state = frozenAt(selected, marker);
+      const view = reading(state, projected(events, marker), NOTHING_LIVE, WIDE);
+      return (yield* describedBy(view))
+        .filter((one) => one.key.startsWith("binding:"))
+        .map((one) => one.label.trim());
+    };
+
+    // Standing at the second entry's admission, the reading shows the first
+    // entry's own capture — the value that position retained.
+    expect(yield* bindingsAt(second, "entry-1")).toEqual(['token = "alpha"']);
+    // At the second entry's outcome, its own scope shows its own capture, and
+    // the first entry's row has not moved.
+    expect(yield* bindingsAt(terminal, "entry-2")).toEqual(['token = "beta"']);
+    expect(yield* bindingsAt(terminal, "entry-1")).toEqual(['token = "alpha"']);
   });
 });

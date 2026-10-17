@@ -144,6 +144,8 @@ import {
 import type { Workflow } from "@executablemd/durable-streams";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
 import { isJsonObject, parseJson } from "./json.ts";
+import { bindRootCapture } from "./root-binding-publications.ts";
+import type { RootBindingPublications } from "./root-binding-publications.ts";
 import { healSegment } from "./heal.ts";
 import { scanSegments } from "./scanner.ts";
 import { declareChildAnswers, expandAnswers, strayAnswerError } from "./answers.ts";
@@ -289,6 +291,7 @@ function expandChildrenScoped(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
@@ -313,6 +316,7 @@ function expandChildrenScoped(
       checkedFailures,
       environment,
       imports,
+      publications,
       returnBody,
     );
   });
@@ -382,6 +386,7 @@ interface ProjectionState {
    */
   narrowedSyntax: SyntaxReference | undefined;
   imports: ComponentImportTerminal | undefined;
+  publications: RootBindingPublications | undefined;
 }
 
 interface ProjectionFrame {
@@ -530,6 +535,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             state.checkedFailures,
             state.environment,
             state.imports,
+            state.publications,
             options.returnFrame,
           );
           outcome.resolve({ segments: rendered });
@@ -643,6 +649,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
               state.checkedFailures,
               state.environment,
               state.imports,
+              state.publications,
               request.kind === "markdown" ? undefined : state.callerReturn,
             );
             outcome.resolve({ segments: [...errors, ...rendered] });
@@ -849,7 +856,10 @@ export function expandSegments(
     checkedFailures,
     environment,
     // No execution terminal: an expansion driven directly resolves its imports
-    // through the ordinary public Component Api, exactly as it always has.
+    // through the ordinary public Component Api, exactly as it always has. And
+    // no root publisher: an expansion with no execution has no root environment
+    // of an execution's to publish for.
+    undefined,
     undefined,
     undefined,
   );
@@ -931,6 +941,7 @@ function* expandListSegments(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
@@ -955,6 +966,7 @@ function* expandListSegments(
         checkedFailures,
         environment,
         imports,
+        publications,
         returnBody,
       );
     });
@@ -1077,6 +1089,7 @@ function* expandListSegments(
               checkedFailures,
               environment,
               imports,
+              publications,
               returnBody,
             )),
           );
@@ -1098,6 +1111,7 @@ function* expandListSegments(
               checkedFailures,
               environment,
               imports,
+              publications,
               returnBody,
             )),
           );
@@ -1120,6 +1134,7 @@ function* expandListSegments(
             checkedFailures,
             environment,
             imports,
+            publications,
             returnBody,
           );
           break;
@@ -1154,6 +1169,7 @@ function* expandListSegments(
             checkedFailures,
             environment,
             imports,
+            publications,
             returnBody,
           );
           break;
@@ -1173,6 +1189,7 @@ function* expandListSegments(
             checkedFailures,
             environment,
             imports,
+            publications,
             returnBody,
           );
           break;
@@ -1195,6 +1212,7 @@ function* expandListSegments(
               checkedFailures,
               environment,
               imports,
+              publications,
               returnBody,
             );
           // Which state this is, answered by identity rather than by name:
@@ -1242,6 +1260,7 @@ function* expandListSegments(
             checkedFailures,
             environment,
             imports,
+            publications,
             returnBody,
           );
           break;
@@ -1280,6 +1299,7 @@ function* expandListSegments(
             checkedFailures,
             environment,
             imports,
+            publications,
           );
           break;
         }
@@ -1333,6 +1353,7 @@ function* expandListSegments(
             checkedFailures,
             environment,
             imports,
+            publications,
             returnBody,
           );
           break;
@@ -1356,6 +1377,7 @@ function* expandListSegments(
           checkedFailures,
           environment,
           imports,
+          publications,
           returnBody,
         );
         // A printed error the callee produced is data, and stays data here: it
@@ -1501,6 +1523,7 @@ function* expandListSegments(
                 checkedFailures,
                 environment,
                 imports,
+                publications,
                 returnBody,
               ),
             );
@@ -1564,6 +1587,7 @@ function* checkedCommandFailure(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<ErrorSegment> {
   // Written down before it is raised or projected, and before the error mode is
@@ -1670,6 +1694,7 @@ function* expandLet(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<ErrorSegment[]> {
   // Every one of these is decided from what the author wrote, so the whole
@@ -1685,7 +1710,7 @@ function* expandLet(
   const hasValue = "value" in segment.props || "value" in segment.expressions;
 
   if (hasValue) {
-    return yield* letValue(segment, bindingName);
+    return yield* letValue(segment, bindingName, publications);
   }
 
   // The region's foreground commands write their stdout into this binding
@@ -1703,6 +1728,7 @@ function* expandLet(
       checkedFailures,
       environment,
       imports,
+      publications,
       returnBody,
     ),
   );
@@ -1738,7 +1764,7 @@ function* expandLet(
   if (!bindingEnv) {
     return [yield* raise(letError("<Let> requires an evaluation environment."))];
   }
-  bindingEnv.values[bindingName] = captured;
+  yield* bindRootCapture(publications, bindingEnv, bindingName, captured, segment.position);
   return [];
 }
 
@@ -1754,6 +1780,7 @@ function* expandLet(
 function* letValue(
   segment: Extract<Segment, { type: "component" }>,
   bindingName: string,
+  publications: RootBindingPublications | undefined,
 ): Operation<ErrorSegment[]> {
   let value: unknown;
   if ("value" in segment.props) {
@@ -1783,7 +1810,7 @@ function* letValue(
   if (!bindingEnv) {
     return [yield* raise(letError("<Let> requires an evaluation environment."))];
   }
-  bindingEnv.values[bindingName] = value;
+  yield* bindRootCapture(publications, bindingEnv, bindingName, value, segment.position);
   return [];
 }
 
@@ -1815,6 +1842,7 @@ function* expandEach(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return yield* structural(segment, path, () => work());
@@ -1878,6 +1906,7 @@ function* expandEach(
         checkedFailures,
         environment,
         imports,
+        publications,
         returnBody,
       );
       // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
@@ -2006,6 +2035,7 @@ function* expandIf(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
@@ -2082,6 +2112,7 @@ function* expandIf(
         checkedFailures,
         environment,
         imports,
+        publications,
         returnBody,
       );
     };
@@ -2162,6 +2193,7 @@ function* expandSwitch(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
@@ -2236,6 +2268,7 @@ function* expandSwitch(
         checkedFailures,
         environment,
         imports,
+        publications,
         returnBody,
       ),
     );
@@ -2314,6 +2347,7 @@ function* expandLoop(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
@@ -2375,6 +2409,7 @@ function* expandLoop(
             checkedFailures,
             environment,
             imports,
+            publications,
             returnBody,
           );
           if (frame.broken) {
@@ -2499,6 +2534,7 @@ function spawnChild(
   inherited: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
 ): Operation<Emission[]> {
   return scoped(function* () {
     yield* provideEnv(spawnEnvironment(incoming));
@@ -2531,6 +2567,7 @@ function spawnChild(
         ledger,
         environment,
         imports,
+        publications,
         undefined,
       ),
     );
@@ -2577,6 +2614,7 @@ function* expandAll(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
 
@@ -2607,6 +2645,7 @@ function* expandAll(
           checkedFailures,
           environment,
           imports,
+          publications,
         ),
     );
 
@@ -2710,6 +2749,7 @@ function* expandPrintErrors(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const refusal = printErrorsViolations(segment)[0];
@@ -2737,6 +2777,7 @@ function* expandPrintErrors(
       recoveringLedger(),
       environment,
       imports,
+      publications,
       returnBody,
     );
   });
@@ -2776,6 +2817,7 @@ function* expandComponent(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // Surrounded before resolution, props validation or any body: what an
@@ -2953,6 +2995,7 @@ function* expandComponent(
         checkedFailures,
         environment,
         imports,
+        publications,
         returnBody,
         selected,
         dispatcher,
@@ -3113,6 +3156,7 @@ function* expandComponent(
         checkedFailures,
         environment,
         imports,
+        publications,
       });
       // Published on the eval scope, which every task the invocation owns
       // descends from — including its persist-eval blocks and its content.
@@ -3188,6 +3232,7 @@ function* expandComponent(
             checkedFailures,
             bodyEnvironment,
             imports,
+            publications,
             returnBody,
           );
         }, observed.settled);
@@ -3213,7 +3258,7 @@ function* expandComponent(
           }),
         ];
       }
-      parentEnv.values[asBinding] = value;
+      yield* bindRootCapture(publications, parentEnv, asBinding, value, position);
       return [];
     }
 
@@ -3237,6 +3282,7 @@ function* expandComponent(
         checkedFailures,
         bodyEnvironment,
         imports,
+        publications,
         returnBody,
       );
     }, observed.settled);
@@ -3283,7 +3329,13 @@ function* expandComponent(
           }),
         ];
       }
-      parentEnv.values[asBinding] = renderSegments(expanded);
+      yield* bindRootCapture(
+        publications,
+        parentEnv,
+        asBinding,
+        renderSegments(expanded),
+        position,
+      );
       return [];
     }
 
@@ -3413,6 +3465,7 @@ function* expandFunctionComponent(
   inherited: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
   returnBody: ReturnBody | undefined,
   /**
    * The identity domain canonical resolution selected for this invocation.
@@ -3626,6 +3679,7 @@ function* expandFunctionComponent(
           checkedFailures,
           environment,
           imports,
+          publications,
         };
         // Only the ordinary handle is published. The richer projection a
         // protected body may reach stays a closure at the dispatch below, so
@@ -3828,10 +3882,11 @@ function* expandFunctionComponent(
         // By reference by default: the binding is the value the component
         // returned. `returns` is the opt-in that says this one is a validated
         // JSON record, and it is checked before binding.
-        parentEnv.values[asBinding] =
+        const captured =
           returns === undefined
             ? output
             : yield* validateReturnValue(name, parseJson(output), returns);
+        yield* bindRootCapture(publications, parentEnv, asBinding, captured, position);
         return [];
       }
       // Without `as` there is nowhere to bind, so only text can be observed:
@@ -4483,6 +4538,7 @@ export function* expandBody(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
@@ -4499,6 +4555,7 @@ export function* expandBody(
       checkedFailures,
       environment,
       imports,
+      publications,
       returnBody,
     );
   }
@@ -4522,6 +4579,7 @@ export function* expandBody(
         checkedFailures,
         environment,
         imports,
+        publications,
         returnBody,
       );
     } else if (chunk.output) {
@@ -4539,6 +4597,7 @@ export function* expandBody(
           checkedFailures,
           environment,
           imports,
+          publications,
           returnBody,
         );
       });
@@ -4558,6 +4617,7 @@ export function* expandBody(
           checkedFailures,
           environment,
           imports,
+          publications,
           returnBody,
         );
       });
@@ -4587,6 +4647,7 @@ function runDocumentation(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
@@ -4603,6 +4664,7 @@ function runDocumentation(
       checkedFailures,
       environment,
       imports,
+      publications,
       returnBody,
     );
   });
@@ -4656,6 +4718,7 @@ function* expandValueBody(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
@@ -4683,6 +4746,7 @@ function* expandValueBody(
       checkedFailures,
       environment,
       imports,
+      publications,
       ownBody,
     );
   }
@@ -4725,6 +4789,7 @@ function* expandInstalledStructural(
   checkedFailures: CheckedFailures | undefined,
   environment: ExecutionEnvironment,
   imports: ComponentImportTerminal | undefined,
+  publications: RootBindingPublications | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const name = segment.name;
@@ -4827,6 +4892,7 @@ function* expandInstalledStructural(
     checkedFailures,
     environment,
     imports,
+    publications,
     returnBody,
     children: segment.children,
   });
@@ -4880,6 +4946,7 @@ interface RegionContext {
   readonly checkedFailures: CheckedFailures | undefined;
   readonly environment: ExecutionEnvironment;
   readonly imports: ComponentImportTerminal | undefined;
+  readonly publications: RootBindingPublications | undefined;
   readonly returnBody: ReturnBody | undefined;
   readonly children: Segment[];
 }
@@ -5045,6 +5112,7 @@ function* produceRegion(
         context.checkedFailures,
         context.environment,
         context.imports,
+        context.publications,
         context.returnBody,
       );
     } catch (error) {

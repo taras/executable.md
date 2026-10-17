@@ -17,7 +17,8 @@ import { expandSegments } from "../src/expand.ts";
 import { Component } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
-import { execute } from "../src/execute.ts";
+import { execute, executeInstalled } from "../src/execute.ts";
+import { parseRootBindingPublication } from "../src/root-binding-publications.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { asText } from "./helpers.ts";
@@ -406,5 +407,125 @@ describe("Tier LET — a whole document", () => {
 
     expect(output).toContain("an ordinary component ran.");
     expect(output).not.toContain("A REPOSITORY FILE RAN");
+  });
+});
+
+/**
+ * One document binding one of each kind of value at its root, through both of
+ * `<Let>`'s sources.
+ *
+ * The values are the representatives of the strict JSON boundary — nested data,
+ * `null`, a value that is not a plain object, a cycle, a sparse hole, a
+ * non-finite number, `undefined` and a function — because that boundary is one
+ * walk shared by every producer. Which of them persists is settled once, here,
+ * rather than re-asserted for each component that can bind one.
+ *
+ * Each value is built in the expression that binds it rather than exported by a
+ * block first, and the cycle is read in prose rather than in the block: an
+ * eval block serializes the values it carries, and what a cycle does to that
+ * is eval's own contract rather than anything this says.
+ */
+const EVERY_KIND = [
+  '<Let as="nested" value={{ list: [1, { deep: true }], nothing: null }} />',
+  '<Let as="nothing" value={null} />',
+  '<Let as="notPlain" value={new Map([["kept", 1]])} />',
+  '<Let as="cycle" value={(() => { const held = { name: "self" }; held.self = held; return held; })()} />',
+  '<Let as="sparse" value={(() => { const held = [1]; held[2] = 3; return held; })()} />',
+  '<Let as="infinite" value={Number.POSITIVE_INFINITY} />',
+  '<Let as="absent" value={undefined} />',
+  '<Let as="work" value={() => 1} />',
+  '<Let as="rendered">plain text</Let>',
+  "",
+  "Cycle {cycle.name}",
+  "",
+  "```ts eval",
+  "return [",
+  "  nested.list[1].deep,",
+  "  nothing,",
+  '  notPlain.get("kept"),',
+  "  sparse.length,",
+  "  infinite,",
+  "  typeof absent,",
+  "  work(),",
+  "  rendered,",
+  '].join("/");',
+  "```",
+].join("\n");
+
+describe("Tier LET — root captures an execution retains, and one that retains none", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("P9: ordinary execute() keeps the exact LET11 inventory", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({ "README.md": EVERY_KIND });
+
+    // Every one of those values binds by reference and is usable here, and the
+    // run records the import, the two evals and its close — a `<Let>` adds no
+    // journal entry of its own to an execution that retains no root captures.
+    const output = asText(yield* collect(yield* execute({ path: "README.md", stream })));
+    expect(output).toContain("Cycle self");
+    expect(output).toContain("true//1/3/Infinity/undefined/1/plain text");
+    expect(stream.snapshot().map(kindOf)).toEqual(["import_component", "eval", "close"]);
+  });
+
+  it("P9: the same document under retention publishes only the JSON values", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({ "README.md": EVERY_KIND });
+
+    const execution = yield* executeInstalled({ path: "README.md", stream }, [], {
+      rootBindingPublications: "json-v1",
+    });
+    const output = asText(yield* collect(execution));
+
+    // Nothing about the entry changes: the live bindings are the exact values
+    // the expressions produced, including the ones no journal can hold.
+    expect(output).toContain("Cycle self");
+    expect(output).toContain("true//1/3/Infinity/undefined/1/plain text");
+
+    // One outcome per successful capture, in authored order — and the kind each
+    // one is follows the strict JSON walk rather than the producer that bound it.
+    const published = stream
+      .snapshot()
+      .filter((event) => event.type === "yield" && event.description.type === "root_binding")
+      .map((event) => {
+        const parsed = parseRootBindingPublication(event);
+        if (!parsed.ok) {
+          throw parsed.error;
+        }
+        return [parsed.value.binding, parsed.value.publication.kind];
+      });
+    expect(published).toEqual([
+      ["nested", "json"],
+      ["nothing", "json"],
+      ["notPlain", "entry-local"],
+      ["cycle", "entry-local"],
+      ["sparse", "entry-local"],
+      ["infinite", "entry-local"],
+      ["absent", "entry-local"],
+      ["work", "entry-local"],
+      ["rendered", "json"],
+    ]);
+  });
+
+  it("P9: a retention this version does not know refuses before anything installs", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({ "README.md": '<Let as="bound" value={1} />\n' });
+
+    let raised: Error | undefined;
+    try {
+      // Read rather than written: a host's initialization is data it holds, and
+      // a version this build does not know is exactly what arrives that way.
+      yield* executeInstalled(
+        { path: "README.md", stream },
+        [],
+        JSON.parse('{"rootBindingPublications":"json-v2"}'),
+      );
+    } catch (error) {
+      raised = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(raised?.message).toContain("json-v1");
+    // Nothing ran: no installation, no document, and no record at all.
+    expect(stream.snapshot()).toEqual([]);
   });
 });

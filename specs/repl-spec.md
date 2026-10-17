@@ -226,6 +226,51 @@ order, and the values are the entry's own to change — they behave like values
 authored earlier in the same environment, and a later export replaces one
 through the ordinary rules.
 
+A root `<Let>` and an ordinary component capture publish, and so does an `eval`
+block's export. Writing
+
+```xmd
+<Let as="saved" value="alpha" />
+```
+
+is enough for the next entry to read `{saved}`, and the same is true of
+`<Json value={{ answer: 42 }} as="saved" />`, of a Markdown component captured
+with `as`, and of a `<Git.Commit as="commit" />` whose object id a later entry
+consumes without committing again. The capture and the export are one sequence:
+whichever of them published last under a name is the value that crosses.
+
+What crosses is the value as it stood when the capture happened, copied. The
+binding inside the entry is still the exact object the expression or the
+component produced, so the entry goes on using it the way it always has — but
+mutating it afterwards changes nothing the file holds, and the entry after it
+reads what was published rather than what the object became. Publish it again
+to publish the change.
+
+### Values that stay in the entry that made them
+
+What crosses between entries is ordinary JSON data: text, numbers, `true`,
+`false`, `null`, lists and plain objects of those. A function, a live handle, a
+class instance, a cycle, a non-finite number and `undefined` are **entry-local**.
+They bind exactly as they always have and stay usable for the rest of that
+entry, and they are not converted into data, not kept alive past the entry, and
+not published.
+
+A capture like that publishes no replacement, so the name keeps whichever value
+was last published under it:
+
+```xmd
+<Let as="saved" value="alpha" />
+```
+
+```xmd
+<Handle as="saved" />
+```
+
+The second entry uses that handle. The third entry — and a cold reading of the
+file — still reads `saved` as `"alpha"`, because nothing published over it. A
+name only ever bound to a value like that is absent from inheritance
+altogether: there is no removal, nothing is deleted, and nothing warns.
+
 What survives is what was retained. An entry that failed, and one whose
 cancellation the file records, each settle their entry: they hand on everything
 they published before that, hand on nothing they never durably published, and
@@ -236,6 +281,24 @@ An entry interrupted before its root closed is a different thing. The file holds
 no close for it, so it is unfinished, and an unfinished entry permits no
 successor — reopen that execution and it resumes where its records stop, and
 another entry can be submitted once it has settled.
+
+### A history written before captures were retained
+
+A file whose entries were written before root captures were published is read
+as it is. A completed entry there exposes the values it actually recorded, and
+a capture it never recorded stays absent: nothing re-runs its source, repeats
+an effect it already performed, or writes a value into it after the fact.
+
+An entry such a file shows as unfinished continues the way it began. Its
+remaining body — including the captures in it — publishes nothing, right
+through its own close, because its records say that is the entry it is. Once it
+has settled, the next entry you submit retains its captures like any other. A
+file holding both kinds of entry is an ordinary file.
+
+What is refused is a history whose records say something this version cannot
+read: an entry stating a retention it does not know, or a retained capture it
+cannot parse. That is a refusal with nothing appended and no execution started,
+and it is a different answer from an entry that simply says nothing.
 
 This comes from the file and from nothing else, so a later entry begins from the
 same values whether the earlier ones ran a moment ago in this process or were

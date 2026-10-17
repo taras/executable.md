@@ -35,6 +35,18 @@ import { DocumentProtocolError, issueDocument } from "./document-request.ts";
 import { claimBoundExec } from "./bound-exec.ts";
 import type { DocumentSettlement, IssuedDocument } from "./document-request.ts";
 import type { DocumentRequest, DurablePreparation } from "./document-request.ts";
+import {
+  createRootBindingPublications,
+  readRootBindingPublicationMode,
+  recordedRootBindingPublicationMode,
+  MISMATCHED_MODE,
+  rootBindingPublicationsDescription,
+  UNREADABLE_MODE,
+} from "./root-binding-publications.ts";
+import type {
+  RootBindingPublicationMode,
+  RootBindingPublications,
+} from "./root-binding-publications.ts";
 import type { CompletionFailure, ExecutionRequest } from "./execution-request.ts";
 import { createContext } from "effection";
 import type { Context } from "effection";
@@ -902,6 +914,15 @@ function* durableImportComponent(
   root: RootDocumentSource | undefined,
   position: Readonly<SourcePosition> | undefined,
   inputs: ImportInputs,
+  /**
+   * The retention this execution publishes root captures under, retained on the
+   * root admission and on no other import.
+   *
+   * On the description rather than in the result: the result is the closed root
+   * selection, and a reader that had to understand a new shape there would stop
+   * reading every root admission written before this existed.
+   */
+  publications: RootBindingPublicationMode | undefined,
 ): Workflow<ComponentDefinition | FunctionComponentDefinition> {
   // Taken before the durable operation and outside it, because the offer is
   // canonical core's own and a replay has to reach this the same way the live
@@ -910,7 +931,11 @@ function* durableImportComponent(
   const recorded = yield createDurableOperation<DurableSelection>(
     // The root import is the run's own entry rather than an authored element,
     // so it carries no source however it was reached.
-    { type: "import_component", name, ...(root ? {} : sourceDescription(position)) },
+    {
+      type: "import_component",
+      name,
+      ...(root ? rootBindingPublicationsDescription(publications) : sourceDescription(position)),
+    },
     () => selectImport(name, root, inputs, claimed),
   );
 
@@ -1233,6 +1258,8 @@ function guardedJournal(
   root: RootDocumentSource,
   coroutineId: CoroutineId,
   admissions: readonly JournalAdmission[],
+  /** The retention this invocation publishes root captures under. */
+  publications: RootBindingPublicationMode | undefined,
 ): DurableStream {
   const admitting: DurableStream = {
     *readAll(): Operation<DurableEvent[]> {
@@ -1259,7 +1286,7 @@ function guardedJournal(
       for (const admission of admissions) {
         yield* admission(retained);
       }
-      admitRootHistory(retained, root, coroutineId);
+      admitRootHistory(retained, root, coroutineId, publications);
       // The same objects the admissions were held to. `readAll` is declared
       // mutable by the protocol, so this is a fresh array over the identical
       // sealed events rather than a second reading of the backend.
@@ -1281,6 +1308,7 @@ function admitRootHistory(
   retained: readonly DurableEvent[],
   root: RootDocumentSource,
   coroutineId: CoroutineId,
+  publications: RootBindingPublicationMode | undefined,
 ): void {
   const imports: Yield[] = [];
   let terminal = false;
@@ -1341,6 +1369,39 @@ function admitRootHistory(
 
   for (const event of imports) {
     admitRootSelection(event, root);
+    admitRootBindingPublications(event, publications);
+  }
+}
+
+/**
+ * Hold a resumed run to the root-binding retention its journal recorded.
+ *
+ * The durable engine compares a description's type and name and nothing else,
+ * so merely writing the mode onto the root admission proves nothing: a run that
+ * began retaining captures could continue a history that recorded none, insert
+ * a publication between two retained positions, and diverge against work the
+ * entry had already done. This is where that is refused — inside the read every
+ * later phase depends on, ahead of terminal reuse, public replay policy and any
+ * authored work.
+ *
+ * An absent field is a readable legacy entry and agrees with an invocation that
+ * publishes nothing, which is what lets an unfinished old entry be continued in
+ * its own mode through its own Close. Anything else the record states, and any
+ * disagreement in either direction, is refused rather than guessed at.
+ */
+function admitRootBindingPublications(
+  event: Yield,
+  publications: RootBindingPublicationMode | undefined,
+): void {
+  const recorded = recordedRootBindingPublicationMode(event.description);
+  if (!recorded.ok) {
+    throw new Error(UNREADABLE_MODE);
+  }
+  if (recorded.value !== publications) {
+    throw new StaleInputError(MISMATCHED_MODE, {
+      coroutineId: event.coroutineId,
+      description: event.description,
+    });
   }
 }
 
@@ -2041,6 +2102,8 @@ function* runValueRoot(
   environment: ExecutionEnvironment,
   /** This execution's own import resolution, for the expansions below. */
   importTerminal: ComponentImportTerminal,
+  /** This execution's own root publisher, for the captures the body may bind. */
+  publications: RootBindingPublications | undefined,
 ): Operation<DocumentResult> {
   // Created outside the scope the body runs in, so the value it selected is
   // still readable after that scope — and its teardown — has finished.
@@ -2071,6 +2134,7 @@ function* runValueRoot(
         checkedFailures,
         environment,
         importTerminal,
+        publications,
         ownBody,
       );
       const exactRecord = environment.sourceSegments;
@@ -2120,6 +2184,14 @@ function* documentWorkflow(
    * can name reaches it.
    */
   roots: GeneratedRootOwner,
+  /**
+   * Whether this execution retains the root values its captures bind.
+   *
+   * The mode rather than the publisher, because the publisher is built here,
+   * beside the root environment it is the publisher *of*. Handing one in would
+   * be handing in an environment this root had not created yet.
+   */
+  publicationMode: RootBindingPublicationMode | undefined,
 ): Workflow<DocumentResult> {
   // This run's memory of a checked command failure it never authorized. Passed
   // by value into core's own expansion and reachable from nowhere else, so no
@@ -2180,6 +2252,15 @@ function* documentWorkflow(
     });
   }
   liveEnvironment(rootEnv);
+
+  // Built here and nowhere else, and holding this exact environment in its
+  // closure: what may publish is a capture whose actual assignment target is
+  // this object, which is an identity rather than a guess about a file name or
+  // a coroutine. It is handed to expansion by hand, beside the import terminal
+  // and the root owner, so nothing a document, a component or a middleware
+  // package can name reaches it — and it expires with this execution.
+  const publications =
+    publicationMode === undefined ? undefined : createRootBindingPublications(rootEnv);
 
   // Per-root-segment emission loop (spec §9).
   // Mutable counter preserves deterministic blockIds across
@@ -2260,6 +2341,7 @@ function* documentWorkflow(
         checkedFailures,
         environment,
         importTerminal,
+        publications,
       );
     }
 
@@ -2284,6 +2366,7 @@ function* documentWorkflow(
         checkedFailures,
         environment,
         importTerminal,
+        publications,
         undefined,
       );
       // An empty buffered root emits no output event.
@@ -2313,6 +2396,7 @@ function* documentWorkflow(
         checkedFailures,
         environment,
         importTerminal,
+        publications,
         undefined,
       );
 
@@ -2710,6 +2794,15 @@ function* executeDocument(
    * *against*, and these are values the document's own namespace starts with.
    */
   initialBindings: Readonly<JsonObject> = NO_INITIAL_BINDINGS,
+  /**
+   * The retention this execution publishes root captures under, carried by value
+   * from the invocation that validated it.
+   *
+   * Beside the initial bindings and for the same reason: it is an input this
+   * execution was started with rather than anything a document, a component or
+   * a middleware package describes.
+   */
+  publicationMode: RootBindingPublicationMode | undefined = undefined,
 ): Operation<CanonicalInvocation> {
   const {
     stream,
@@ -2860,6 +2953,7 @@ function* executeDocument(
             catalog,
             guarded: identity.protected,
           },
+          name === "__root__" ? publicationMode : undefined,
         );
         // Canonical selection, recorded into the frame of the import that asked
         // for it. This is the only thing that puts an invocation in one of this
@@ -3079,7 +3173,14 @@ function* executeDocument(
       const returned = yield* durableRun(
         function* (): Operation<DocumentResult> {
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
-            documentWorkflow(claimed, environment, resolveComponentImport, initialBindings, roots),
+            documentWorkflow(
+              claimed,
+              environment,
+              resolveComponentImport,
+              initialBindings,
+              roots,
+              publicationMode,
+            ),
           );
           try {
             return yield* beforeAnyImport(issued);
@@ -3164,7 +3265,7 @@ function* executeDocument(
           }
         },
         {
-          stream: guardedJournal(journal, root, ROOT_COROUTINE, admissions),
+          stream: guardedJournal(journal, root, ROOT_COROUTINE, admissions, publicationMode),
         },
       );
       // Taken rather than read, so the handoff belongs to the run that made it.
@@ -3463,6 +3564,11 @@ function* runInvocation(
   // afterwards; nothing is frozen, so the values stay as ordinary to work with
   // as any other binding.
   const initialBindings = initialRootBindings(initialization);
+  // Read here too, and for the same reason: a mode this execution cannot run
+  // under refuses before an installation has run and before there is a handle
+  // to report it on. Read once — a member that answered differently the second
+  // time would let a host be inspected for one retention and run under another.
+  const publicationMode = readRootBindingPublicationMode(initialization?.rootBindingPublications);
   const ready = withResolvers<CanonicalInvocation>();
   const settled = withResolvers<Result<Json>>();
   const state: { finished: boolean; document: Result<Json> | undefined } = {
@@ -3509,7 +3615,13 @@ function* runInvocation(
     let published = false;
     try {
       yield* scoped(function* () {
-        const invoked = yield* invoke(options, installations, readAsset, initialBindings);
+        const invoked = yield* invoke(
+          options,
+          installations,
+          readAsset,
+          initialBindings,
+          publicationMode,
+        );
         published = true;
         evaluation = invoked.evaluation;
         ready.resolve(invoked);
@@ -3814,6 +3926,11 @@ function* invoke(
    * not have before this function was reached.
    */
   initialBindings: Readonly<JsonObject> = NO_INITIAL_BINDINGS,
+  /**
+   * The retention this execution publishes root captures under, already
+   * validated by the invocation that captured it.
+   */
+  publicationMode: RootBindingPublicationMode | undefined = undefined,
 ): Operation<CanonicalInvocation> {
   const admissions = Object.freeze(
     installations.flatMap((installation) => [...(installation.admissions ?? [])]),
@@ -4020,6 +4137,7 @@ function* invoke(
     issued.completions(),
     preparations,
     initialBindings,
+    publicationMode,
   );
 }
 
@@ -4103,6 +4221,21 @@ export interface ExecutionInitialization {
    * installed over the namespace or quietly dropped.
    */
   readonly initialBindings?: Readonly<Record<string, Json>>;
+  /**
+   * Whether this execution retains the root values its captures bind.
+   *
+   * Absent is every ordinary execution: `<Let>` and a component capture bind
+   * into the environment they were written in and record nothing, which is what
+   * a document that runs once needs. Stating `"json-v1"` asks for the retention
+   * a REPL entry needs — each successful root capture published as one ordinary
+   * durable record, so the entry after it can start from what this one bound.
+   *
+   * The version is in the value because the agreement is one: an execution
+   * continuing a retained history is held to the mode that history records, and
+   * a spelling this version does not know is refused rather than taken as a
+   * history written before the field existed.
+   */
+  readonly rootBindingPublications?: RootBindingPublicationMode;
 }
 
 /**

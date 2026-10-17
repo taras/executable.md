@@ -31,6 +31,24 @@ Sidekick responses, and the root bindings a REPL entry inherits.
 - An entry inherits the JSON state earlier entries published, so a value an
   entry needs from an earlier one is reached by name inside the entry, not
   carried through your response.
+- Inside an entry, a root `<Let as="name" value={...} />` and a root component
+  capture are published for the entries after it, alongside an `eval` block's
+  exports. For each name the value that crosses is whichever of them published
+  last.
+- What crosses is ordinary JSON: text, numbers, `true`, `false`, `null`, lists
+  and plain objects of those. A function, a live handle, a class instance, a
+  cycle, a non-finite number and `undefined` stay in the entry that made them.
+  They are usable for the rest of that entry and are not published.
+- A capture like that publishes no replacement, so the name keeps the last
+  value anything did publish under it. After an entry publishes `saved =
+  "alpha"`, a later entry binding a function as `saved` uses that function and
+  leaves `saved` as `"alpha"` for the entry after it. A name only ever bound to
+  such a value is absent from `<REPL.Bindings />` entirely.
+- The published value is a copy taken when the capture happened. Mutating the
+  object afterwards changes the entry's own binding and nothing a later entry
+  reads; publish it again to publish the change.
+- A history written before captures were published is read as it is: a value it
+  never recorded stays absent, and nothing re-runs the entry to recover it.
 
 ## Example
 
@@ -47,6 +65,11 @@ Receiving a binding named `names` in feedback does not make `{names}` available
 in your next response. Feedback is information to reason about, not an automatic
 variable. The name can be referenced inside an entry that inherits that
 binding, or restated in your response with an explicit `Let`.
+
+A second one: a name missing from `<REPL.Bindings />` is a name nothing
+published, not a name something removed. There is no way to delete a published
+value — write an entry that publishes the value you want under that name
+instead of expecting an absence to clear it.
 
 ## Read next
 

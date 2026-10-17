@@ -1384,6 +1384,133 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     }
   }
 
+  /** One entry that captures a root value with `<Let>` and renders it. */
+  function captures(name: string, held: string, label: string): string {
+    return [`<Let as="${name}" value="${held}" />`, "", `${label}: {${name}}`, ""].join("\n");
+  }
+
+  /** One entry that captures and then stops, so it is still running when read. */
+  const CAPTURES_THEN_WAITS = ['<Let as="live" value="running" />', "", RUNS_ON].join("\n");
+
+  /**
+   * Evaluate one reply whose controls reach the REPL's real reads.
+   *
+   * The same held-execution shape the stub rows use, with the ceiling built
+   * over `sidekickRequests` instead of a stand-in: what the control answers is
+   * then the acknowledged head's own projection rather than a fixture.
+   */
+  function replyReading(
+    source: string,
+    session: ReplSession,
+    asked: Asked,
+  ): Operation<Result<GeneratedXmdRootResult>> {
+    return scoped(function* () {
+      const journal = journalOf(asked);
+      const ceiling = sidekickResponseCeiling(
+        sidekickRequests(reading(session), noSubmission),
+        journal,
+      );
+      const gate = withResolvers<void>();
+      const entered = withResolvers<void>();
+      const execution = yield* executeInstalled(
+        {
+          ...retainedSource("repl/sidekick.md", "<SidekickHost />\n"),
+          stream: new InMemoryStream(),
+        },
+        [
+          sidekickCeilingInstallation(ceiling),
+          {
+            components: [
+              {
+                name: "SidekickHost",
+                origin: "test://sidekick-host",
+                props: { type: "object", properties: {}, additionalProperties: false },
+                description: "Hold this execution open while its caller evaluates one reply.",
+                factory: () =>
+                  function* (): Operation<string> {
+                    entered.resolve();
+                    yield* gate.operation;
+                    return "";
+                  },
+              },
+            ],
+          },
+        ],
+      );
+      const watched = yield* spawn(() => execution);
+      yield* entered.operation;
+      const answer = yield* execution.evaluateGeneratedXmdRoot({
+        id: "turn-1",
+        source,
+        allow: [...ceiling.allow],
+      });
+      gate.resolve();
+      const ran = yield* watched;
+      if (!ran.ok) {
+        throw ran.error;
+      }
+      return answer;
+    });
+  }
+
+  it("P8: a reply reads the captures the acknowledged head published, not the prefix", function* () {
+    const stream = new InMemoryStream();
+    // Two settled entries, each capturing the same name with a different value
+    // through `<Let>` rather than through an eval block, so what the reply reads
+    // is the retained capture and not an export that happens to agree with it.
+    const marker = yield* scoped(function* (): Operation<string> {
+      const session = yield* opened("captures", stream);
+      yield* ran(session, captures("token", "alpha", "One"));
+      yield* ran(session, captures("token", "beta", "Two"));
+      const first = session.navigation.checkpoints[0]?.marker;
+      if (first === undefined) {
+        throw new Error("this history retained no position to stand at");
+      }
+      return first;
+    });
+
+    const session = yield* opened("captures", stream, marker);
+    // Both sides measured: the selected prefix is Entry 1's admission, before
+    // anything was captured, so a read answering from the screen says `{}`.
+    expect(session.model.selection).toBe(marker);
+    expect(entryInitialBindings(session.model)).toEqual({});
+
+    const direct = yield* sidekickRequests(reading(session), noSubmission).bindings();
+    if (!direct.ok) {
+      throw direct.error;
+    }
+    expect(direct.value).toEqual({ token: "beta" });
+
+    // And through the admitted control itself, in a real reply, recorded as the
+    // one occurrence it is.
+    const asked = fresh();
+    const answer = yield* replyReading("<Output>\n<REPL.Bindings />\n</Output>\n", session, asked);
+    expect(rendered(answer)).toContain("beta");
+    expect(rendered(answer)).not.toContain("alpha");
+    // Recorded as the one occurrence it is. `asked.requests` stays empty here on
+    // purpose: nothing stands in for the REPL in this row, so the only thing
+    // counting is the owner's own journal.
+    expect(asked.requests).toEqual([]);
+    expect(asked.began).toEqual([{ component: "REPL.Bindings", arguments: {} }]);
+    expect(asked.settled.map((one) => one.ok)).toEqual([true]);
+  });
+
+  it("P8: a capture a running entry has published is in that reading", function* () {
+    const session = yield* opened("running-capture", new InMemoryStream());
+    const submitted = yield* session.submit(CAPTURES_THEN_WAITS);
+    if (!submitted.ok) {
+      throw submitted.error;
+    }
+    // The entry is still open — suspended in the block after the capture — and
+    // the capture's own publication has reached the file.
+    yield* reprojected(session, (model) => Object.hasOwn(entryInitialBindings(model), "live"));
+    expect(session.live).toBe(true);
+
+    const asked = fresh();
+    const answer = yield* replyReading("<Output>\n<REPL.Bindings />\n</Output>\n", session, asked);
+    expect(rendered(answer)).toContain("running");
+  });
+
   it("R3: the latest acknowledged root, read from an earlier selected position", function* () {
     const stream = new InMemoryStream();
     // Two settled entries, each publishing the same name with a different

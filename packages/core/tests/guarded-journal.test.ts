@@ -25,7 +25,8 @@ import {
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
-import { execute } from "../src/execute.ts";
+import { execute, executeInstalled } from "../src/execute.ts";
+import type { Json } from "../src/types.ts";
 import { inlineSource } from "../src/root-source.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -360,5 +361,71 @@ describe("the default scanner over a persistence backend", () => {
     const close = persisted[0]!;
     expect(close.type === "close" && close.result.status).toBe("err");
     expect(persisted.map(serializeDurableEvent).join("")).not.toContain(CANARY);
+  });
+});
+
+/**
+ * A root whose own source names no token: the value arrives from the host
+ * component it captures, and the capture is what the publication would retain.
+ *
+ * Scanning this document finds nothing, which is the point — what the gate has
+ * to stop is a value the journal would hold, not a string a source happens to
+ * contain.
+ */
+const CAPTURES_A_CREDENTIAL = `# Capturing
+
+<Credential as="token" />
+
+Captured.
+`;
+
+/** The host component whose unvalidated return is the canary. */
+const CREDENTIAL_COMPONENT = {
+  name: "Credential",
+  origin: "@executablemd/core/tests/guarded-journal",
+  props: { type: "object", properties: {}, additionalProperties: false },
+  factory: () =>
+    // deno-lint-ignore require-yield
+    function* Credential(): Operation<Json> {
+      return CANARY;
+    },
+};
+
+describe("a retained root capture crossing the secret gate", () => {
+  it("P6: rejects the publication, publishes no binding, and keeps the token off disk", function* () {
+    const dir = yield* useTempDirectory("xmd-root-capture-scanner-");
+    const journalPath = path.join(dir, "journal.jsonl");
+    const backend = fileStream(journalPath);
+
+    const execution = yield* executeInstalled(
+      { ...inlineSource(CAPTURES_A_CREDENTIAL), stream: backend },
+      [{ components: [CREDENTIAL_COMPONENT] }],
+      // The retention a REPL entry runs under, so the capture really publishes
+      // and the record really crosses the policy.
+      { rootBindingPublications: "json-v1" },
+    );
+    const result = yield* execution;
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error.name).toBe("SecretDetectedError");
+    const error = result.ok === false ? result.error : new Error("unreachable");
+    expect(error.message).not.toContain(CANARY);
+
+    // The publication never reached the backend, so no binding was published —
+    // and the run's own close is the only thing after it. No sentinel of any
+    // kind stands in for the value, and the failure is not laundered into an
+    // ordinary capture error.
+    const persisted = yield* backend.readAll();
+    expect(persisted.map(label)).toEqual([
+      "yield(import_component)",
+      "yield(import_component)",
+      "close(root)",
+    ]);
+    const close = persisted[persisted.length - 1]!;
+    expect(close.type === "close" && close.result.status).toBe("err");
+
+    const bytes = yield* readTextFile(journalPath);
+    expect(bytes).toBe(persisted.map(serializeDurableEvent).join(""));
+    expect(bytes).not.toContain(CANARY);
   });
 });

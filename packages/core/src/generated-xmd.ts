@@ -2412,6 +2412,9 @@ function expand(
         undefined,
         environment,
         undefined,
+        // A fragment writes an environment of its own, so it has no root
+        // capture to publish and no root publisher to be given one.
+        undefined,
         undefined,
       );
       return renderSegments(owner ?? []);
@@ -2430,6 +2433,9 @@ function expand(
       // No execution terminal: this fragment's imports are answered by the
       // narrowed provider installed above, and it inherits nothing of the
       // document execution that admitted it.
+      undefined,
+      // And no root publisher: a fragment's locals are its own, and a name it
+      // binds is not something a later entry inherits.
       undefined,
       // A generated fragment is the engine's own text, so it owns no value body
       // and a <Return> written into it satisfies no declaration.

@@ -6155,6 +6155,54 @@ ordinarily mutable inside the execution that receives them. The REPL derives
 that record only from values durably retained before the new entry's admission,
 so replay derives the identical record from the identical bytes.
 
+#### Execution owns which captures it retains
+
+An `eval` block's exports are journaled because evaluating one is a durable
+effect. A root `<Let>` and an ordinary component capture are not, which is
+right for a document that runs once and wrong for one entry of several over one
+journal — so retention is a second trusted-host input beside the initial
+bindings, stated once per execution as `rootBindingPublications: "json-v1"`,
+and read nowhere else. Ordinary execution states nothing and behaves exactly as
+it did.
+
+The publisher is **execution-owned**, not described: Core builds it beside the
+canonical root binding environment, holds that exact environment in its
+closure, and hands it to expansion as an argument beside the import terminal
+and the generated-root owner. What may publish is therefore a capture whose
+actual assignment target is that object — an identity rather than a judgment
+about a file name, a coroutine or a source position. A component body, an
+`<Each>` iteration, a `<Spawn>` and a generated fragment each write a different
+environment and none of them acquires root ownership from where it was written.
+It is not a member of `ExecutionEnvironment`, which describes what a document
+is expanded *against*; it reaches no Context, Api or registry, and it expires
+with the execution.
+
+The retained profile is part of the history's identity. The mode travels on the
+root import's own description under a namespaced field, and root-history
+admission compares the recorded mode against the invoking one before a recorded
+terminal is reused, before public replay policy and before authored work — so
+an execution cannot publish into the middle of a sequence its own records do
+not account for. An absent field is a readable history written before this
+existed: it agrees with an execution that publishes nothing, which is what lets
+an unfinished entry from such a file be continued in its own mode through its
+own close, with its completed effects restored rather than repeated. Any other
+value, and any disagreement, is refused. Cold projection applies that same rule
+independently, off the admission each segment begins with, so a cold command
+and a live session cannot disagree about whose a retained capture is.
+
+One record per successful root capture, whichever outcome it carries, so the
+retained effect sequence is a fact about the document rather than about what
+happened to be serializable. The value crossing is a detached snapshot taken
+through the one strict JSON parser the initial bindings are copied through; the
+binding itself stays the exact value the producer made, so same-entry
+reference identity, resource lifetime and later mutation are unchanged and none
+of them reaches the record. A value outside that domain takes a value-free
+outcome, which publishes nothing, removes nothing and keeps the last value
+anything did publish under that name. The publication goes through the ordinary
+durable path, so the secret gate and the append fence apply to it as they do to
+every other effect: a rejected publication binds nothing, writes no sentinel
+and keeps its own fatal classification.
+
 The session owns at most one entry task. Starting another needs two separate
 facts — the preceding entry has a retained terminal close, *and* its task has
 completely torn down and joined — because observing a terminal outcome is not

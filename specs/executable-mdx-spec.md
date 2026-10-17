@@ -1943,6 +1943,48 @@ Non-serializable bindings (functions, class instances, live objects) are
 omitted. They remain in `env.values` as live references during the current
 run but are absent from the diagnostic trace.
 
+#### Root binding publications
+
+An execution a trusted host initializes with `rootBindingPublications:
+"json-v1"` additionally journals each successful **root** capture — a `<Let>`
+or an ordinary component capture whose assignment target is that execution's
+own root binding environment. Ordinary execution states nothing and journals
+nothing of the kind, which is the behavior LET11 describes.
+
+The mode is retained on the root import's description, under the stable
+namespaced `"executablemd.root-binding-publications"` field, and is compared
+against the invoking execution's own during root-history admission — before a
+recorded terminal is reused, before public replay policy and before authored
+work. An absent field is a history written before this existed and agrees with
+an execution that publishes nothing; any other value, and any disagreement, is
+refused.
+
+Each publication is one ordinary durable operation under the deterministic name
+`root-binding:v1:{sequence}:{binding}`, where the sequence counts this
+execution's successful root captures. Its result is closed on three members:
+
+```json
+{ "version": 1, "binding": "saved",
+  "publication": { "kind": "json", "value": { "answer": 42 } } }
+
+{ "version": 1, "binding": "saved", "publication": { "kind": "entry-local" } }
+```
+
+The `json` outcome holds a detached snapshot taken through the strict JSON
+parser at the capture, before the publication suspends; the binding itself is
+then the exact value the producer made, so same-entry reference identity and
+later mutation are unchanged and neither reaches the record. A value outside
+that JSON domain — a function, a live handle, a class instance, a cycle, a
+non-finite number, a sparse hole, `undefined` — takes the `entry-local`
+outcome, which carries no value, names no type and removes nothing.
+
+One outcome per successful root capture, whichever kind it is, so the retained
+effect sequence does not depend on what happened to be serializable: a partial
+continuation replays the positions it recorded and parses the retained outcome
+rather than refreshing it from today's operand. A capture that refused,
+failed, or whose publication the journal rejected publishes nothing and binds
+nothing.
+
 ### 4.6 File locations
 
 | File | Contents |
@@ -6398,9 +6440,17 @@ document:
 - Component invocation capture: `<Comp as="binding" />`
 - Inline binding directive: `<Let as="binding">...</Let>`
 
-Neither produces output at its site. Component `as` always writes a string.
-`<Let>` writes a string when it binds rendered content, and the exact value
-it was given when it binds a `value`.
+Neither produces output at its site. A Markdown component's `as` writes the
+text its body rendered; a function component's writes the value the
+implementation returned, validated against its `returns` where it declares one
+and taken by reference where it does not. `<Let>` writes a string when it binds
+rendered content, and the exact value it was given when it binds a `value`.
+
+Where the capture's target is the execution's own root and a trusted host
+initialized that execution with `rootBindingPublications`, the value is also
+published as one ordinary durable record before it is bound, so a later
+execution over the same journal can start from it (§4.5,
+`specs/repl-spec.md`). Nothing about the binding changes.
 
 ##### Component `as`
 
@@ -6507,6 +6557,14 @@ again as `alias`, `alias === source` holds within that execution — neither is
 the earlier process's object.
 
 Overwrites are allowed for every mechanism here: last writer wins.
+
+A `<Let>` adds no journal entry of its own. An execution a trusted host
+initialized with `rootBindingPublications` is the exception, and only for a
+`<Let>` written at that execution's root: the binding is published as one
+ordinary durable record before it is bound, so a later execution over the same
+journal can start from it (§4.5, `specs/repl-spec.md`). The value bound is
+unchanged — by reference, un-normalized, and not replaced by its snapshot — and
+a value outside the strict JSON domain publishes no value at all.
 
 ##### `select` prop — CSS selector extraction
 
@@ -11390,6 +11448,7 @@ fragment's own scanned positions.
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 | Read over HTTP | `fetch` | `fetch:{expansion id}` | Normalized request in `description.input`; status, detached headers and text body in the result (§6.18) |
 | Admit generated XMD | `generated_xmd` | `generated:{fragment id}` | The canonical class selection, retained roots, selected root, every selected entry as a name, identity and admitted forms, and the exact request policy in `description.input`; the admitted source, that same policy, and the identity and form of each element the fragment named in the result (workflow-workspace-spec §8.4) |
+| Publish a root capture | `root_binding` | `root-binding:v1:{sequence}:{binding}` | Only for an execution a trusted host initialized with `rootBindingPublications`; the validated binding name and the closed `json`/`entry-local` outcome in the result (§4.5) |
 | Read the symbols | `syntax_symbols` | `syntax_symbols:{expansion id}` | One per authored `<Syntax />` occurrence. The payload is closed on exactly one member: `{ symbols: string }`, the rendered Markdown the component returned, or `{ refused: non-empty string }`, a named selection canonical core refused. Both are durable values, interpreted only after publication succeeds, so a retained refusal is classified identically live and on replay while a publication failure prevents interpretation and stays terminal. A continuation restores from the record without consulting the filesystem, registry, bundle, host or lexical reference again; existing `{ symbols }` histories remain readable, a missing, additional, mistyped, empty or simultaneous member is stale input and refuses before output or binding, and a cancelled read completes teardown and commits nothing (§5.3.1) |
 
 ### 10.2 Example journal for a multi-component document
@@ -11602,7 +11661,8 @@ visible warning blocks, gather into a separate error report).
 | LET8 | Direct expression failure | The error carries the element's source position and the ordinary expression-prop wrapper, and no binding is made |
 | LET9 | Last writer wins | A rendered `<Let>` and a direct `<Let>` overwrite each other in either order |
 | LET10 | Reaches the environment | A direct binding is read by later prose interpolation, by a component's expression prop, and by a later eval block |
-| LET11 | Partial replay | A `<Let value={source}>` between a replayed producer eval and a live consumer eval rebinds by reference; the journal holds the root import, the two eval effects and Close, and no record of its own |
+| LET11 | Partial replay | A `<Let value={source}>` between a replayed producer eval and a live consumer eval rebinds by reference; the journal holds the root import, the two eval effects and Close, and no record of its own. The record is an execution the host initialized with `rootBindingPublications` only (§4.5) |
+| LET13 | Root capture publication | Under `rootBindingPublications: "json-v1"`, each successful root `<Let>` publishes one outcome in authored order — JSON values as detached snapshots, everything else as the value-free entry-local outcome — while every binding stays the exact value the expression produced |
 | LET12 | `Let` is reserved, `Capture` is not | `Let` cannot be registered or bundled, while a repository component named `Capture` resolves and renders |
 
 ### Tier EU — a prop that evaluates to `undefined` (§6.5)

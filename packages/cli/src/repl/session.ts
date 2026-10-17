@@ -75,12 +75,13 @@ import type { Operation, Result, Stream, Task } from "effection";
 import { INLINE_SOURCE_PATH, inlineSource, validateDocument } from "@executablemd/core";
 import type { DocumentValidationDiagnostic, Json, PermissionMode } from "@executablemd/core";
 import type { GeneratedSelection } from "@executablemd/core/api";
-import { executeInstalled } from "@executablemd/core/host";
+import { executeInstalled, recordedRootBindingPublicationMode } from "@executablemd/core/host";
 import { useGeneratedFallback } from "../evaluation-profile.ts";
 import type {
   ExecutionDeclaration,
   ExecutionInstallation,
   IdentityComponent,
+  RootBindingPublicationMode,
 } from "@executablemd/core/host";
 import {
   ContinuePastCloseDivergenceError,
@@ -128,6 +129,15 @@ export class ReplPreflightError extends Error {
 }
 
 /** A history this process cannot continue, refused before anything is shown. */
+/**
+ * The retention every newly admitted entry runs under.
+ *
+ * One mode and one spelling, stated here because this is the host that keeps a
+ * journal across executions: an entry is one of several over one file, so what
+ * it captures at its root is what the entry after it may start from.
+ */
+const ROOT_BINDING_PUBLICATIONS: RootBindingPublicationMode = "json-v1";
+
 export class ReplReconstructionError extends Error {
   constructor(message: string) {
     super(message);
@@ -625,10 +635,25 @@ function* start(
 
   /** The one unfinished final entry this session resumes, and its range. */
   const finalSegment = segments[segments.length - 1];
-  const resumed =
+  const continuing =
     submitted === undefined && last !== undefined && !last.settled && finalSegment !== undefined
       ? { entry: last, segment: finalSegment }
       : undefined;
+  // The retention that entry recorded for itself, read off its own admission.
+  // An entry admitted before root captures were retained says nothing here, and
+  // continues saying nothing for the whole of its remaining body — which is
+  // what keeps its replay aligned and leaves its completed effects alone. A
+  // retention this version cannot read refuses the reconstruction rather than
+  // continuing the entry under a guess.
+  const recorded =
+    continuing === undefined
+      ? Ok(undefined)
+      : recordedRootBindingPublicationMode(continuing.segment.admission.description);
+  if (!recorded.ok) {
+    return Err(new ReplReconstructionError(recorded.error.message));
+  }
+  const resumed =
+    continuing === undefined ? undefined : { ...continuing, publications: recorded.value };
 
   if (submitted !== undefined) {
     const validated = yield* preflight(submitted, includes, installations);
@@ -1095,6 +1120,7 @@ function* start(
         // this process remembers of the entry that just ran, and not from the
         // prefix somebody happens to be inspecting.
         entryInitialBindings(after.value),
+        ROOT_BINDING_PUBLICATIONS,
         pausing,
       );
       return yield* scoped(function* (): Operation<Result<ReplSubmission>> {
@@ -1135,6 +1161,17 @@ function* start(
       source: string,
       view: EntrySegmentStream,
       initialBindings: Readonly<Record<string, Json>>,
+      /**
+       * Whether this entry retains the root values its captures bind.
+       *
+       * A newly admitted entry retains them, because the entry after it reads
+       * what the file says this one published. An entry being continued runs
+       * under the retention its own admission recorded for its whole remaining
+       * body, including the suffix no record describes: that admission is
+       * already written, and publishing into the middle of a sequence it does
+       * not mention would diverge against work the entry had already done.
+       */
+      publications: RootBindingPublicationMode | undefined,
       /**
        * Whether the submission that asked for this entry wants it held.
        *
@@ -1279,7 +1316,7 @@ function* start(
         // scheduled to notice the admission instead would be ordered by the
         // scheduler rather than by the record, and the continuation it was
         // racing has no reason to lose.
-        const outcome = yield* runEntry(key, source, view, initialBindings);
+        const outcome = yield* runEntry(key, source, view, initialBindings, publications);
         settle(outcome);
         // A settled entry is past whatever its segment retained, whichever way
         // it settled — including a failure that appended nothing at all, which
@@ -1308,6 +1345,7 @@ function* start(
       source: string,
       view: EntrySegmentStream,
       initialBindings: Readonly<Record<string, Json>>,
+      publications: RootBindingPublicationMode | undefined,
     ): Operation<Result<unknown>> {
       try {
         // This entry's Agent attachment, acquired here and nowhere else. It is a
@@ -1359,7 +1397,10 @@ function* start(
           // observer and the permission policy are this session's, not the
           // process's, and the attachment carries the entry whose turns they are.
           [...installations, lifecycle.installation, installation, ...owned],
-          { initialBindings },
+          {
+            initialBindings,
+            ...(publications === undefined ? {} : { rootBindingPublications: publications }),
+          },
         );
         // Consumed as it arrives, inside this session's scope. Collecting until
         // the stream closed would leave the overlay empty for the whole of the
@@ -1488,6 +1529,7 @@ function* start(
         resumed.entry.source,
         new EntrySegmentStream(stream, { retained: resumed.segment.events, final: true }),
         entryInitialBindings(head, resumed.entry),
+        resumed.publications,
       );
     } else if (submitted !== undefined) {
       begin(
@@ -1495,6 +1537,7 @@ function* start(
         submitted,
         new EntrySegmentStream(stream),
         entryInitialBindings(head),
+        ROOT_BINDING_PUBLICATIONS,
       );
     } else {
       // Nothing to run. Every entry this history holds has settled, so the
