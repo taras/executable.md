@@ -122,7 +122,7 @@ import type { SlotKind } from "../run-composition/leases.ts";
 import type { SelectionRegistry } from "../selections.ts";
 import { holdManagedPlacement } from "./leases.ts";
 import { retainedRecordAhead } from "./local.ts";
-import { placementSubject } from "./selections.ts";
+import { nativeGitTurn, placementSubject } from "./selections.ts";
 import type { ReplPlacementRegistration } from "./selections.ts";
 
 /**
@@ -420,7 +420,7 @@ function* live(
 ): Operation<unknown> {
   const target = yield* routing();
   return yield* entry.serialize(
-    `git ${target.registration.placement.commonDirectory}`,
+    nativeGitTurn(target.registration.placement.commonDirectory),
     function* () {
       yield* own(entry, target);
       return yield* once();

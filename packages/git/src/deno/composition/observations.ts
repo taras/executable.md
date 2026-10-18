@@ -832,8 +832,8 @@ function* observeFile(
   if (listed.code !== 0) {
     return unreadable(view, `the tree of commit ${commit}`);
   }
-  const entry = treeEntry(listed.stdout);
-  if (entry === undefined) {
+  const entry = treeEntry(listed.stdout, request.path);
+  if (entry.kind === "absent") {
     return refuse(
       view,
       "absent-path",
@@ -841,11 +841,12 @@ function* observeFile(
         "path that commit holds, or list them with <Git.Files>.",
     );
   }
-  if (entry.type !== "blob") {
+  if (entry.kind === "directory" || entry.type !== "blob") {
+    const what = entry.kind === "directory" ? "tree" : entry.type;
     return refuse(
       view,
       "nontext-blob",
-      `read commit ${commit}, where ${JSON.stringify(request.path)} is a ${entry.type} rather ` +
+      `read commit ${commit}, where ${JSON.stringify(request.path)} is a ${what} rather ` +
         "than a file. A directory and a nested checkout's recorded commit are not text to read.",
     );
   }
@@ -891,28 +892,47 @@ function* observeFile(
   });
 }
 
+/** What the commit holds at the exact path a read asked for. */
+type TreeEntry =
+  /** The entry at that path, with the object and type Git reported for it. */
+  | { readonly kind: "entry"; readonly type: string; readonly object: string }
+  /** A directory: the path names no entry, and entries beneath it exist. */
+  | { readonly kind: "directory" }
+  | { readonly kind: "absent" };
+
 /**
- * The entry one `ls-tree` record describes, or `undefined` for no record.
+ * The entry this commit holds at exactly the path that was asked for.
  *
- * `<mode> <type> <object>` then a tab and the path. The path is not read back:
- * what the entry is asked for is the type and the object, and the path this
- * read answers with is the admitted spelling the caller wrote.
+ * Each record is `<mode> <type> <object>`, a tab, then the path. The path is
+ * what decides the answer, because the argument Git received is a *pathspec*
+ * rather than a lookup: `dir` matches the directory entry itself and `dir/`
+ * matches the things inside it. Taking the first record would answer a read of
+ * `dir/` with the blob at `dir/inside.txt` — a file the caller never named,
+ * under a path the result would claim was a directory.
+ *
+ * So a path that matched records but is not one of them is a directory, which
+ * is refused as the tree it is; a path that matched nothing is absent.
  */
-function treeEntry(
-  output: string,
-): { readonly type: string; readonly object: string } | undefined {
-  const record = output.split("\u0000")[0] ?? "";
-  const tab = record.indexOf("\t");
-  if (tab < 0) {
-    return undefined;
+function treeEntry(output: string, path: string): TreeEntry {
+  let matched = false;
+  for (const record of output.split("\u0000")) {
+    const tab = record.indexOf("\t");
+    if (tab < 0) {
+      continue;
+    }
+    matched = true;
+    if (record.slice(tab + 1) !== path) {
+      continue;
+    }
+    const fields = record.slice(0, tab).split(" ");
+    const type = fields[1];
+    const object = fields[2];
+    if (type === undefined || object === undefined) {
+      continue;
+    }
+    return { kind: "entry", type, object };
   }
-  const fields = record.slice(0, tab).split(" ");
-  const type = fields[1];
-  const object = fields[2];
-  if (type === undefined || object === undefined) {
-    return undefined;
-  }
-  return { type, object };
+  return matched ? { kind: "directory" } : { kind: "absent" };
 }
 
 /**

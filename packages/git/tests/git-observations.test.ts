@@ -1171,6 +1171,22 @@ describe("GO7 — a file is read as one commit holds it", () => {
         cwd: fixture.root,
         reason: "nontext-blob",
       },
+      // Both spellings of the same directory. The argument Git receives is a
+      // pathspec rather than a lookup, so `dir/` matches the *contents* of the
+      // directory — and a read that took the first record would answer this
+      // with the blob at `dir/inside.txt` under a path claiming to be `dir/`.
+      {
+        source: `<Git.File commit="${fixture.f1}" path="dir/" as="x" />`,
+        cwd: fixture.root,
+        reason: "nontext-blob",
+      },
+      // A file is not a directory either way round: a trailing slash on one
+      // matches nothing at all, which is an absent path rather than that file.
+      {
+        source: `<Git.File commit="${fixture.f1}" path="empty.txt/" as="x" />`,
+        cwd: fixture.root,
+        reason: "absent-path",
+      },
       {
         source: `<Git.File commit="${main.c2}" path="nested" as="x" />`,
         cwd: main.root,
@@ -1194,6 +1210,27 @@ describe("GO7 — a file is read as one commit holds it", () => {
       );
       expect(`${entry.source}: ${reasonOf(raised_)}`).toBe(`${entry.source}: ${entry.reason}`);
     }
+  });
+
+  it("still reads a directory's own child by its exact path", function* () {
+    const root = yield* useManagedRoot();
+    const fixture = yield* useFileFixture();
+    const seen: Json[] = [];
+
+    yield* runOrdinaryDocument(
+      [
+        `<Git.File commit="${fixture.f1}" path="dir/inside.txt" as="inside" />`,
+        "",
+        "<Captured value={inside} />",
+        "",
+      ].join("\n"),
+      { root, cwd: fixture.root, components: [capturingProbe(seen)] },
+    );
+
+    // The control for the two directory refusals above: what they refuse is the
+    // spelling of a directory, not reading anything beneath one.
+    expect(object(seen[0]).path).toBe("dir/inside.txt");
+    expect(object(seen[0]).text).toBe("inside\n");
   });
 
   it("answers a symbolic link's own stored text rather than what it points at", function* () {

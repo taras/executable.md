@@ -57,7 +57,7 @@ import type {
   ReplObservationRequest,
 } from "../src/retained-repository/observation-records.ts";
 import { admitReplRepositoryHistory } from "../src/retained-repository/admission.ts";
-import { Elicitation } from "@executablemd/core";
+import { Elicitation, registerComponents } from "@executablemd/core";
 import { useObservationFixture, writeFixtureFile } from "./support/observations.ts";
 import type { EntryCounters } from "./support/repl-observations.ts";
 import {
@@ -226,7 +226,54 @@ function* waitingScript(path: string, marker: string): Operation<void> {
   yield* until(chmod(path, 0o755));
 }
 
-/** The native reads one entry performed, which is what a read's `git` is. */
+/** The one observation payload this history holds, as an object. */
+function soundPayload(events: readonly DurableEvent[]): Json {
+  for (const event of events) {
+    if (
+      event.type === "yield" &&
+      event.description.type === REPL_REPOSITORY_OBSERVATION &&
+      event.result.status === "ok"
+    ) {
+      return event.result.value ?? null;
+    }
+  }
+  throw new Error("this history holds no observation record");
+}
+
+/** The route member of one observation payload. */
+function soundCheckout(payload: Json): Json {
+  const checkout = objectOf(payload).checkout;
+  if (checkout === undefined) {
+    throw new Error("this observation payload holds no checkout");
+  }
+  return checkout;
+}
+
+/**
+ * This history with its one observation replaced, and everything else intact.
+ *
+ * The placements, the ambient routing and the terminal stay exactly as the
+ * entry wrote them, which is what makes a refusal below about the record that
+ * changed rather than about a history missing its context.
+ */
+function replacingObservation(
+  events: readonly DurableEvent[],
+  name: string,
+  payload: Json,
+): readonly DurableEvent[] {
+  return events.map((event) => {
+    if (event.type !== "yield" || event.description.type !== REPL_REPOSITORY_OBSERVATION) {
+      return event;
+    }
+    return {
+      ...event,
+      description: { ...event.description, name },
+      result: { status: "ok" as const, value: payload },
+    };
+  });
+}
+
+/** The native reads one entry performed, which is what a read's `git` is. *//** The native reads one entry performed, which is what a read's `git` is. */
 const READ_SUBCOMMANDS: readonly string[] = ["ls-files", "diff", "cat-file", "ls-tree"];
 
 function reads(counted: EntryCounters): string[] {
@@ -425,23 +472,28 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
     ).toBe("<Git.Files> could not read its tracked files.");
   });
 
+  // Over a real production history rather than a hand-built record, because the
+  // route check below is a relationship *between* records: an observation names
+  // the checkout it read, and what authorizes that is a placement the same
+  // history made. A lone observation has no history to be routed by.
   it("refuses a version, a fingerprint, a name, a page and a route it cannot read", function* () {
     const fixture = yield* useObservationFixture();
-    const common = commonDirectoryOf({ root: fixture.root, home: fixture.home, run: fixture.run });
-    const request = requestOf(fixture, common);
-    const checkout = checkoutOf(fixture, common);
-    const fingerprint = yield* replObservationFingerprint(request);
-    const sound = replObservationRecordJson({
-      fingerprint,
-      request,
-      checkout,
-      outcome: Ok({ paths: ["a.ts"], next: null }),
-    });
-    const name = replObservationRecordName({ operation: "files", fingerprint });
+    const place = yield* useEntryPlace(fixture);
+    const live = yield* runEntry(
+      place,
+      '<Git.Files as="files" />\n',
+      new InMemoryStream(),
+      entryCounters(),
+    );
+    expect(live.refusal).toBe(undefined);
+    const recorded = observations(live.events);
+    expect(recorded).toHaveLength(1);
+    const name = recorded[0]?.name ?? "";
+    const sound = soundPayload(live.events);
 
-    // The control: the sound record is admitted, so every refusal below is
-    // about the one thing it changed.
-    yield* admitReplRepositoryHistory([recordEvent(name, sound)]);
+    // The control: this history is admitted as it stands, so every refusal
+    // below is about the one thing it changed.
+    yield* admitReplRepositoryHistory(live.events);
 
     const broken: [string, string, Json][] = [
       ["a stated version this host does not implement", name, { ...objectOf(sound), version: 2 }],
@@ -456,7 +508,10 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
         name,
         {
           ...objectOf(sound),
-          outcome: { ok: true, value: { paths: Array.from({ length: 101 }, (_, i) => `p${i}`), next: null } },
+          outcome: {
+            ok: true,
+            value: { paths: Array.from({ length: 101 }, (_, i) => `p${i}`), next: null },
+          },
         },
       ],
       [
@@ -469,12 +524,50 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
         name,
         { ...objectOf(sound), checkout: { root: fixture.root } },
       ],
+      // Fully shaped, and wrong. Every required member is present, the request,
+      // the fingerprint and the journaled name are untouched, and only the root
+      // names a checkout no placement in this history selected.
+      [
+        "a complete checkout no placement in this history selected",
+        name,
+        {
+          ...objectOf(sound),
+          checkout: { ...objectOf(soundCheckout(sound)), root: "/unregistered/other-checkout" },
+        },
+      ],
+      [
+        "a complete checkout under another repository's name",
+        name,
+        {
+          ...objectOf(sound),
+          checkout: { ...objectOf(soundCheckout(sound)), repositoryName: "elsewhere" },
+        },
+      ],
+      [
+        "a complete checkout claiming to be a worktree",
+        name,
+        {
+          ...objectOf(sound),
+          checkout: { ...objectOf(soundCheckout(sound)), worktreeName: "side" },
+        },
+      ],
+      [
+        "a complete checkout under another Git directory",
+        name,
+        {
+          ...objectOf(sound),
+          checkout: {
+            ...objectOf(soundCheckout(sound)),
+            commonDirectory: "/unregistered/other-checkout/.git",
+          },
+        },
+      ],
     ];
 
     for (const [named, recordName, payload] of broken) {
       let refusal: unknown;
       try {
-        yield* admitReplRepositoryHistory([recordEvent(recordName, payload)]);
+        yield* admitReplRepositoryHistory(replacingObservation(live.events, recordName, payload));
       } catch (error) {
         refusal = error;
       }
@@ -482,6 +575,79 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
         `${named}: refused`,
       );
     }
+  });
+
+  it("refuses a well-shaped wrong route before reusing a completed or unfinished page", function* () {
+    const fixture = yield* useObservationFixture();
+    const place = yield* useEntryPlace(fixture);
+    const source = ['<Git.Files as="files" />', "", "<Json value={files} />", ""].join("\n");
+
+    // A settled entry, and the same entry left at a question: the route has to
+    // be refused before either is reused, and a completed terminal is reused
+    // without the body that checks the live registry ever being entered.
+    const settled = yield* runEntry(place, source, new InMemoryStream(), entryCounters());
+    expect(settled.refusal).toBe(undefined);
+    const unfinished = yield* leftEntry(
+      place,
+      [source, '<Elicit schema={{ type: "object" }} as="answer">Carry on?</Elicit>', ""].join("\n"),
+      entryCounters(),
+    );
+
+    for (const [named, history] of [
+      ["a completed history", settled.events],
+      ["an unfinished history", unfinished],
+    ] as const) {
+      const elsewhere = replacingObservation(
+        history,
+        observations(history)[0]?.name ?? "",
+        {
+          ...objectOf(soundPayload(history)),
+          checkout: {
+            ...objectOf(soundCheckout(soundPayload(history))),
+            root: "/unregistered/other-checkout",
+          },
+        },
+      );
+      const counted = entryCounters();
+      const replayed = yield* runEntry(place, source, new InMemoryStream([...elsewhere]), counted);
+      // Refused through the production trusted admission, so no page is bound
+      // and the original output is not reproduced.
+      expect(`${named}: ${replayed.refusal === undefined ? "reused" : "refused"}`).toBe(
+        `${named}: refused`,
+      );
+      expect(`${named}: ${replayed.refusal ?? ""}`).toContain(
+        "names a checkout no placement in this history selected",
+      );
+      expect(replayed.output).not.toContain("src/a.ts");
+      // And decided from the history alone: nothing opened a checkout, resolved
+      // a path or ran `git` to find out.
+      expect(`${named}: ${entrySubcommands(counted).join(",")}`).toBe(`${named}: `);
+      expect(counted.directories).toBe(0);
+    }
+  });
+
+  it("admits a completed page whose checkout has been deleted since", function* () {
+    const fixture = yield* useObservationFixture();
+    const place = yield* useEntryPlace(fixture);
+    const source = ['<Git.Files as="files" />', "", "<Json value={files} />", ""].join("\n");
+    const live = yield* runEntry(place, source, new InMemoryStream(), entryCounters());
+    expect(live.refusal).toBe(undefined);
+
+    // The control the route check must not break: a cold reuse whose checkout
+    // is gone. The route is authorized by the history's own placement, and
+    // nothing consults a filesystem to decide it.
+    yield* rm(fixture.root, { recursive: true, force: true });
+    yield* repoint(place, place.root);
+    const counted = entryCounters();
+    const again = yield* runEntry(
+      place,
+      source,
+      new InMemoryStream([...live.events]),
+      counted,
+    );
+    expect(again.refusal).toBe(undefined);
+    expect(again.output).toBe(live.output);
+    expect(entrySubcommands(counted)).toEqual([]);
   });
 
   it("refuses a failed envelope under this type, and leaves older histories alone", function* () {
@@ -815,6 +981,98 @@ describe("ROB5 — cancellation, persistence and ownership", () => {
     expect(reported).not.toContain("sentinel");
     expect(observations(events)).toEqual([]);
     expect(yield* exists(join(fixture.root, "sentinel.md"))).toBe(false);
+  });
+
+  // The two halves of the same ownership rule, in one entry and then across
+  // two. Inside one entry a read owns the native turn and a mutation waits;
+  // between entries a mutation lease is a different mechanism and a read does
+  // not wait for it.
+  it("keeps the same entry's mutation out of a held read, then lets it through", function* () {
+    const fixture = yield* useObservationFixture();
+    const place = yield* useEntryPlace(fixture);
+    const counted = entryCounters();
+    yield* writeFixtureFile(fixture.root, "src/a.ts", "export const a = 123;\n");
+
+    const readHeld = withResolvers<void>();
+    const releaseRead = withResolvers<void>();
+    const mutationEntered = withResolvers<void>();
+    let holding = false;
+    let enteredWhileHeld = false;
+
+    const settled = yield* scoped(function* () {
+      const task = yield* spawn(() =>
+        runEntry(
+          place,
+          [
+            "<All>",
+            '<Spawn><Git.Diff compare="unstaged" as="patch" /></Spawn>',
+            '<Spawn><WaitsForTheRead /><Git.Add paths="src/a.ts" /></Spawn>',
+            "</All>",
+            "",
+          ].join("\n"),
+          new InMemoryStream(),
+          counted,
+          {
+            *between(): Operation<void> {
+              // The second branch starts its mutation only once the read is
+              // genuinely held, so the race the regression needs is arranged
+              // rather than hoped for.
+              yield* registerComponents([
+                {
+                  name: "WaitsForTheRead",
+                  origin: "test://waits-for-the-read",
+                  props: { type: "object", properties: {}, additionalProperties: false },
+                  *fn(): Operation<string> {
+                    yield* readHeld.operation;
+                    return "";
+                  },
+                },
+              ]);
+            },
+            *barrier(invocation): Operation<void> {
+              if (invocation.args.includes("add")) {
+                if (holding) {
+                  enteredWhileHeld = true;
+                }
+                mutationEntered.resolve();
+                return;
+              }
+              if (invocation.args.includes("diff") && !holding) {
+                holding = true;
+                readHeld.resolve();
+                // Long enough that a mutation on a queue of its own would have
+                // reached the host by now, and short enough to end the case.
+                yield* race([
+                  mutationEntered.operation,
+                  (function* (): Operation<void> {
+                    yield* sleep(2000);
+                  })(),
+                ]);
+                holding = false;
+                releaseRead.resolve();
+              }
+            },
+          },
+        ),
+      );
+      yield* releaseRead.operation;
+      // The read has finished its own turn; the mutation may now proceed.
+      yield* race([
+        mutationEntered.operation,
+        (function* (): Operation<void> {
+          yield* sleep(30_000);
+          throw new Error("the mutation never reached native Git");
+        })(),
+      ]);
+      return yield* task;
+    });
+
+    // Nothing of this entry's own Git entered while its read held the turn,
+    // and the mutation did run once the read released it.
+    expect(enteredWhileHeld).toBe(false);
+    expect(settled.refusal).toBe(undefined);
+    expect(reads(counted)).toContain("diff");
+    expect(entrySubcommands(counted)).toContain("add");
   });
 
   it("answers while another holder has the checkout's mutation lease", function* () {
