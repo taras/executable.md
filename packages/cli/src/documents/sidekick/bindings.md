@@ -32,23 +32,25 @@ Sidekick responses, and the root bindings a REPL entry inherits.
   entry needs from an earlier one is reached by name inside the entry, not
   carried through your response.
 - Inside an entry, a root `<Let as="name" value={...} />` and a root component
-  capture are published for the entries after it, alongside an `eval` block's
-  exports. For each name the value that crosses is whichever of them published
-  last.
+  capture reach the entries after it, alongside an `eval` block's exports. What
+  an entry hands on is the state its root is in when it finishes, so the order
+  the names were written in does not matter — only what they were at the end.
 - What crosses is ordinary JSON: text, numbers, `true`, `false`, `null`, lists
   and plain objects of those. A function, a live handle, a class instance, a
   cycle, a non-finite number and `undefined` stay in the entry that made them.
-  They are usable for the rest of that entry and are not published.
-- A capture like that publishes no replacement, so the name keeps the last
-  value anything did publish under it. After an entry publishes `saved =
-  "alpha"`, a later entry binding a function as `saved` uses that function and
-  leaves `saved` as `"alpha"` for the entry after it. A name only ever bound to
-  such a value is absent from `<REPL.Bindings />` entirely.
-- The published value is a copy taken when the capture happened. Mutating the
-  object afterwards changes the entry's own binding and nothing a later entry
-  reads; publish it again to publish the change.
-- A history written before captures were published is read as it is: a value it
-  never recorded stays absent, and nothing re-runs the entry to recover it.
+  They are usable for the rest of that entry and do not cross.
+- A name bound only to a value like that is absent rather than cleared, so the
+  name keeps whichever value an entry last handed on. After an entry hands on
+  `saved = "alpha"`, a later entry binding a function as `saved` uses that
+  function and leaves `saved` as `"alpha"` for the entry after it. A name only
+  ever bound to such a value is absent from `<REPL.Bindings />` entirely.
+- Because it is the state at the end, a change an entry makes to a value before
+  it finishes is part of what it hands on — including to a value it inherited
+  and never named again. A change made after an entry finished reaches nothing.
+- An entry that failed still hands on the state it had. One whose cancellation
+  the file records hands on nothing, and so does one still running.
+- A history written before this was retained is read as it is: a value it never
+  recorded stays absent, and nothing re-runs the entry to recover it.
 
 ## Example
 
@@ -66,10 +68,10 @@ in your next response. Feedback is information to reason about, not an automatic
 variable. The name can be referenced inside an entry that inherits that
 binding, or restated in your response with an explicit `Let`.
 
-A second one: a name missing from `<REPL.Bindings />` is a name nothing
-published, not a name something removed. There is no way to delete a published
-value — write an entry that publishes the value you want under that name
-instead of expecting an absence to clear it.
+A second one: a name missing from `<REPL.Bindings />` is a name nothing handed
+on, not a name something removed. There is no way to delete a retained value —
+write an entry that ends with the value you want under that name instead of
+expecting an absence to clear it.
 
 ## Read next
 

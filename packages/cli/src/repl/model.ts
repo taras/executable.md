@@ -42,18 +42,11 @@
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 import { validateBindingName } from "@executablemd/core";
-import {
-  AGENT_PROMPT,
-  parsePromptRecord,
-  parseRootBindingPublication,
-  readElicitationSchema,
-  recordedRootBindingPublicationMode,
-  ROOT_BINDING_PUBLICATION,
-} from "@executablemd/core/host";
+import { AGENT_PROMPT, parsePromptRecord, readElicitationSchema } from "@executablemd/core/host";
 import type { PromptRecord } from "@executablemd/core/host";
 import type { Close, DurableEvent, Json, Yield } from "@executablemd/durable-streams";
 
-import { entryKey, entryMarker, partitionEntrySegments, ROOT_COROUTINE } from "./entries.ts";
+import { entryKey, entryMarker, partitionEntrySegments } from "./entries.ts";
 import type { EntrySegment } from "./entries.ts";
 
 /** The first entry's key, and the root scope key every existing location names. */
@@ -68,19 +61,6 @@ export const ENTRY_SCOPE = entryKey(1);
 const ROOT_PROPS_BINDING = "props";
 
 const SOURCE_POSITION_FIELD = "executablemd.source-position";
-
-/**
- * What the projection says when a retained publication cannot belong to the
- * entry that holds it.
- *
- * Refused rather than skipped: a record in an entry whose admission retains no
- * mode, or on a coroutine that is not that entry's root, is a history this
- * version did not write — and projecting around it would publish a value into a
- * root scope on the strength of where the record happened to land.
- */
-const UNOWNED_PUBLICATION =
-  "a retained root capture does not belong to the entry that holds it, so nothing can say " +
-  "whose root value it is.";
 
 /** What the REPL could not read, and what it was reading when it stopped. */
 export class ReplProjectionError extends Error {
@@ -257,6 +237,14 @@ export interface ReplTerminal {
   readonly status: "ok" | "err" | "cancelled";
   readonly output: string;
   readonly message: string | undefined;
+  /**
+   * The root data this entry's own result computed, when its record carries any.
+   *
+   * Part of the ordinary document result rather than a record of its own, so a
+   * protocol error close, a cancelled close and an older result have none —
+   * which says this outcome supplied no byproduct, not that its root was empty.
+   */
+  readonly bindings?: readonly ReplBinding[];
 }
 
 /** One semantic transcript row. Never a record dump. */
@@ -744,16 +732,6 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
       ),
     );
   }
-  // Read here, off the admission that began the range, and validated
-  // independently of whatever a running session believes: a cold command
-  // projecting these bytes has to reach the same answer. An absent mode is the
-  // readable legacy entry — one written before root captures were retained —
-  // and a spelling this version does not know is a refusal rather than an
-  // absence to project around.
-  const retention = recordedRootBindingPublicationMode(segment.admission.description);
-  if (!retention.ok) {
-    return Err(new ReplProjectionError(retention.error.message));
-  }
   const entry: ScopeDraft = {
     key: segment.key,
     kind: "entry",
@@ -798,6 +776,22 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
         );
       }
       terminal = settled;
+      // After the eval facts this segment already recorded, and through the
+      // same publishing path: the ordinary result is the last thing this entry
+      // said, so a name it carries wins over an earlier value for that name.
+      for (const binding of settled.bindings ?? []) {
+        bind(entry, binding.name, binding.value);
+      }
+      if ((settled.bindings ?? []).length > 0) {
+        const names = settled.bindings?.map((binding) => binding.name) ?? [];
+        transcript.push({
+          kind: "binding",
+          marker,
+          scope: entry.key,
+          names: Object.freeze(names),
+        });
+        checkpoints.push({ marker, kind: "binding", label: names.join(", ") });
+      }
       transcript.push({
         kind: "terminal",
         marker,
@@ -869,53 +863,6 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
         path: scope.path,
       });
       checkpoints.push({ marker, kind: "scope", label: `<${description.name} /> admitted` });
-      continue;
-    }
-
-    if (description.type === ROOT_BINDING_PUBLICATION) {
-      if (event.result.status !== "ok") {
-        transcript.push({
-          kind: "effect",
-          marker,
-          type: ROOT_BINDING_PUBLICATION,
-          status: event.result.status,
-        });
-        continue;
-      }
-      // A publication belongs to the entry's own root, so there is no owner to
-      // look up: a source position on one of these records says where the
-      // capture was written and decides nothing about whose it is. A record on
-      // another coroutine, or in an entry whose admission retains no mode, is
-      // one this REPL did not write.
-      if (retention.value === undefined || event.coroutineId !== ROOT_COROUTINE) {
-        return Err(new ReplProjectionError(UNOWNED_PUBLICATION));
-      }
-      const published = parseRootBindingPublication(event);
-      if (!published.ok) {
-        return Err(new ReplProjectionError(published.error.message));
-      }
-      const outcome = published.value.publication;
-      // An entry-local capture has no durable value to place in the map, and
-      // nothing to manufacture one from. It records that the capture happened
-      // and removes nothing, so the name keeps whichever value was last
-      // published under it.
-      if (outcome.kind === "entry-local") {
-        transcript.push({
-          kind: "effect",
-          marker,
-          type: ROOT_BINDING_PUBLICATION,
-          status: event.result.status,
-        });
-        continue;
-      }
-      bind(entry, published.value.binding, detach(outcome.value));
-      transcript.push({
-        kind: "binding",
-        marker,
-        scope: entry.key,
-        names: Object.freeze([published.value.binding]),
-      });
-      checkpoints.push({ marker, kind: "binding", label: published.value.binding });
       continue;
     }
 
@@ -1648,6 +1595,19 @@ function readAdmission(event: Yield): Omit<ReplGenerated, "marker"> | undefined 
 
 /** What the root coroutine's close records, read as the document outcome. */
 function readTerminal(event: Close): ReplTerminal | undefined {
+  return readSettlement(event);
+}
+
+/**
+ * The retained outcome of one entry, with the root data its result carries.
+ *
+ * Computed bindings are part of the ordinary document result, so they are read
+ * here, where that result is already interpreted, rather than by a reader of
+ * their own. A result that carries none — an older record, a protocol error
+ * close, a cancelled close — simply has none to report, which is a different
+ * thing from reporting an empty environment.
+ */
+function readSettlement(event: Close): ReplTerminal | undefined {
   if (event.result.status === "cancelled") {
     return { status: "cancelled", output: "", message: undefined };
   }
@@ -1665,8 +1625,16 @@ function readTerminal(event: Close): ReplTerminal | undefined {
   if (typeof output !== "string") {
     return undefined;
   }
+  // Read whole or not at all: a member this version cannot read refuses the
+  // outcome rather than being dropped, because dropping it would hand a later
+  // entry a smaller environment than the record describes.
+  const bindings = readResultBindings(record["bindings"]);
+  if (bindings === MALFORMED) {
+    return undefined;
+  }
+  const carried = bindings === undefined ? {} : { bindings };
   if (status === "ok") {
-    return { status, output, message: undefined };
+    return { status, output, message: undefined, ...carried };
   }
   if (status !== "err") {
     return undefined;
@@ -1675,8 +1643,41 @@ function readTerminal(event: Close): ReplTerminal | undefined {
   if (!isJsonObject(failure) || typeof failure["message"] !== "string") {
     return undefined;
   }
-  return { status, output, message: failure["message"] };
+  return { status, output, message: failure["message"], ...carried };
 }
+
+/**
+ * The computed root data one retained result carries, read as this projection
+ * will use it.
+ *
+ * Every name is checked against the parser an authored binding is checked
+ * against, and `props` is refused outright: each entry's props namespace is the
+ * one its own root validated, so a record carrying that name is not a value a
+ * later entry inherits.
+ */
+function readResultBindings(carried: Json | undefined): ReplBindingMap | undefined | typeof MALFORMED {
+  if (carried === undefined) {
+    return undefined;
+  }
+  if (!isJsonObject(carried)) {
+    return MALFORMED;
+  }
+  const held: [string, Json][] = [];
+  for (const [name, value] of Object.entries(carried)) {
+    if (name === ROOT_PROPS_BINDING) {
+      return MALFORMED;
+    }
+    const binding = validateBindingName(name);
+    if (!binding.ok || binding.value !== name) {
+      return MALFORMED;
+    }
+    held.push([name, detach(value)]);
+  }
+  return Object.freeze(held.map(([name, value]) => freeze({ name, value })));
+}
+
+/** One entry's computed root data, as the model holds it. */
+type ReplBindingMap = readonly ReplBinding[];
 
 function isJsonObject(value: Json | undefined): value is { [key: string]: Json } {
   return value !== null && typeof value === "object" && !Array.isArray(value);

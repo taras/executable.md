@@ -1389,8 +1389,55 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     return [`<Let as="${name}" value="${held}" />`, "", `${label}: {${name}}`, ""].join("\n");
   }
 
-  /** One entry that captures and then stops, so it is still running when read. */
-  const CAPTURES_THEN_WAITS = ['<Let as="live" value="running" />', "", RUNS_ON].join("\n");
+  /**
+   * One entry that captures and is then held at a question after it.
+   *
+   * The question is the barrier and the hold at once: it is reached only after
+   * the capture, and an entry waiting to be answered has settled nothing. What
+   * the row then measures is that the captured name is in no record at all and
+   * is still readable — which is the whole point of an explicit live read, and
+   * the state no projection of the file can answer.
+   */
+  const CAPTURES_THEN_ASKS = [
+    '<Let as="live" value="running" />',
+    "",
+    "```js eval",
+    "const schema = {",
+    '  type: "object",',
+    '  properties: { decision: { type: "string" } },',
+    '  required: ["decision"],',
+    "  additionalProperties: false,",
+    "};",
+    "```",
+    "",
+    '<Elicit schema={schema} as="answer">Go on?</Elicit>',
+    "",
+    "Answered: {answer.decision}",
+    "",
+  ].join("\n");
+
+  /**
+   * Wait until the running entry is held at its question.
+   *
+   * The elicitation's own announcement is the readiness signal: a question is
+   * announced when the walk reaches it, so this waits for exactly the state
+   * being asserted and nothing is slept on.
+   */
+  function* held(session: ReplSession): Operation<void> {
+    if (session.overlay.question !== undefined) {
+      return;
+    }
+    const changes = yield* session.elicitation.changes;
+    while (true) {
+      const next = yield* changes.next();
+      if (next.done === true) {
+        throw new Error("the session stopped announcing before the question arrived");
+      }
+      if (next.value !== undefined) {
+        return;
+      }
+    }
+  }
 
   /**
    * Evaluate one reply whose controls reach the REPL's real reads.
@@ -1495,16 +1542,19 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     expect(asked.settled.map((one) => one.ok)).toEqual([true]);
   });
 
-  it("P8: a capture a running entry has published is in that reading", function* () {
+  it("P8: a capture of the entry held at a question is in the live reading", function* () {
     const session = yield* opened("running-capture", new InMemoryStream());
-    const submitted = yield* session.submit(CAPTURES_THEN_WAITS);
+    const submitted = yield* session.submit(CAPTURES_THEN_ASKS);
     if (!submitted.ok) {
       throw submitted.error;
     }
-    // The entry is still open — suspended in the block after the capture — and
-    // the capture's own publication has reached the file.
-    yield* reprojected(session, (model) => Object.hasOwn(entryInitialBindings(model), "live"));
+    // The entry is open and held at the question written after the capture, so
+    // the capture has run and the entry has settled nothing.
+    yield* held(session);
     expect(session.live).toBe(true);
+    // And the capture is in no record: it is not durable on its own, and this
+    // entry has not settled, so nothing the file holds mentions the name.
+    expect(Object.hasOwn(entryInitialBindings(session.model), "live")).toBe(false);
 
     const asked = fresh();
     const answer = yield* replyReading("<Output>\n<REPL.Bindings />\n</Output>\n", session, asked);

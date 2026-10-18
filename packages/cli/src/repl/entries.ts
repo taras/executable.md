@@ -37,14 +37,7 @@ import type { DurableEvent, DurableStream, Yield } from "@executablemd/durable-s
 export const ROOT_IMPORT = "__root__";
 
 /** The coroutine an entry's root document runs on. */
-/**
- * The coroutine an entry's own root document runs on.
- *
- * Exported because the projection beside this reads it too: a retained root
- * capture belongs to the entry's root, and a record that names some other
- * coroutine is not something either half of this reader may own.
- */
-export const ROOT_COROUTINE = "root";
+const ROOT_COROUTINE = "root";
 
 /** What the REPL could not read or write about an entry boundary. */
 export class ReplSegmentError extends Error {

@@ -19,12 +19,12 @@ import { Component } from "../src/component-api.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import { execute, executeInstalled } from "../src/execute.ts";
+import type { HostExecution } from "../src/execute.ts";
 import { inlineSource } from "../src/root-source.ts";
-import { parseRootBindingPublication } from "../src/root-binding-publications.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { asText } from "./helpers.ts";
-import type { ComponentDefinition, EvalEnv, Segment } from "../src/types.ts";
+import type { ComponentDefinition, EvalEnv, JsonObject, Segment } from "../src/types.ts";
 import type { ExecutionInstallation } from "../src/execute.ts";
 
 function markdownComponent(name: string, body: string): ComponentDefinition {
@@ -455,337 +455,217 @@ const EVERY_KIND = [
   "```",
 ].join("\n");
 
-describe("Tier LET — root captures an execution retains, and one that retains none", () => {
-  beforeAll(() => useTempFileCompiler());
-
-  it("P9: ordinary execute() keeps the exact LET11 inventory", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({ "README.md": EVERY_KIND });
-
-    // Every one of those values binds by reference and is usable here, and the
-    // run records the import, the two evals and its close — a `<Let>` adds no
-    // journal entry of its own to an execution that retains no root captures.
-    const output = asText(yield* collect(yield* execute({ path: "README.md", stream })));
-    expect(output).toContain("Cycle self");
-    expect(output).toContain("true//1/3/Infinity/undefined/1/plain text");
-    expect(stream.snapshot().map(kindOf)).toEqual(["import_component", "eval", "close"]);
-  });
-
-  it("P9: the same document under retention publishes only the JSON values", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({ "README.md": EVERY_KIND });
-
-    const execution = yield* executeInstalled({ path: "README.md", stream }, [], {
-      rootBindingPublications: "json-v1",
-    });
-    const output = asText(yield* collect(execution));
-
-    // Nothing about the entry changes: the live bindings are the exact values
-    // the expressions produced, including the ones no journal can hold.
-    expect(output).toContain("Cycle self");
-    expect(output).toContain("true//1/3/Infinity/undefined/1/plain text");
-
-    // One outcome per successful capture, in authored order — and the kind each
-    // one is follows the strict JSON walk rather than the producer that bound it.
-    const published = stream
-      .snapshot()
-      .filter((event) => event.type === "yield" && event.description.type === "root_binding")
-      .map((event) => {
-        const parsed = parseRootBindingPublication(event);
-        if (!parsed.ok) {
-          throw parsed.error;
-        }
-        return [parsed.value.binding, parsed.value.publication.kind];
-      });
-    expect(published).toEqual([
-      ["nested", "json"],
-      ["nothing", "json"],
-      ["notPlain", "entry-local"],
-      ["cycle", "entry-local"],
-      ["sparse", "entry-local"],
-      ["infinite", "entry-local"],
-      ["absent", "entry-local"],
-      ["work", "entry-local"],
-      ["rendered", "json"],
-    ]);
-  });
-
-  it("P9: a retention this version does not know refuses before anything installs", function* () {
-    const stream = new InMemoryStream();
-    yield* useStubFs({ "README.md": '<Let as="bound" value={1} />\n' });
-
-    let raised: Error | undefined;
-    try {
-      // Read rather than written: a host's initialization is data it holds, and
-      // a version this build does not know is exactly what arrives that way.
-      yield* executeInstalled(
-        { path: "README.md", stream },
-        [],
-        JSON.parse('{"rootBindingPublications":"json-v2"}'),
-      );
-    } catch (error) {
-      raised = error instanceof Error ? error : new Error(String(error));
-    }
-
-    expect(raised?.message).toContain("json-v1");
-    // Nothing ran: no installation, no document, and no record at all.
-    expect(stream.snapshot()).toEqual([]);
-  });
-});
-
 /**
- * Where this suite's own probe component reports it comes from.
+ * Where the owned-handle rows' probe component reports it comes from.
  *
- * Declared on an installation, so the counted suffix resolves the same way on
- * the live run and on the continuation.
+ * Declared on an installation, so the same producer resolves on a live run and
+ * on a continuation.
  */
-const SUFFIX_ORIGIN = "@executablemd/core/tests/let";
+const COMPUTED_ORIGIN = "@executablemd/core/tests/let-computed";
 
-/** How many times the counted suffix component really ran. */
-interface Suffix {
+/** How many times the probe producer really ran. */
+interface Produced {
   calls: number;
 }
 
-/** One host component the continuation rows count the suffix with. */
-function suffixComponent(counted: Suffix): ExecutionInstallation {
+/** One host component whose unvalidated return is a JSON object. */
+function readingComponent(counted: Produced): ExecutionInstallation {
   return {
     components: [
       {
-        name: "After",
-        origin: SUFFIX_ORIGIN,
+        name: "Reading",
+        origin: COMPUTED_ORIGIN,
         props: { type: "object", properties: {}, additionalProperties: false },
         factory: () =>
           // deno-lint-ignore require-yield
-          function* After(): Operation<Json> {
+          function* Reading(): Operation<Json> {
             counted.calls += 1;
-            return "suffix";
+            return { answer: 42 };
           },
       },
     ],
   };
 }
 
-/** One root capture, then work no record describes until the run reaches it. */
-const CAPTURE_THEN_SUFFIX = ['<Let as="saved" value="alpha" />', "", "<After />", ""].join("\n");
+/** One entry that captures at its root through both sources. */
+const COMPUTES_ROOT = [
+  '<Let as="direct" value={{ answer: 42 }} />',
+  "",
+  '<Let as="paired">beta</Let>',
+  "",
+  '<Reading as="functionJson" />',
+  "",
+  "Rendered body.",
+  "",
+].join("\n");
 
-/** The retained events through the first root publication, and nothing after. */
-function throughPublication(records: readonly DurableEvent[]): DurableEvent[] {
-  const at = records.findIndex(
-    (event) => event.type === "yield" && event.description.type === "root_binding",
-  );
-  if (at === -1) {
-    throw new Error("this history retained no root publication to continue from");
+/** The same captures, then an ordinary authored failure. */
+const COMPUTES_THEN_FAILS = [
+  '<Let as="direct" value={{ answer: 42 }} />',
+  "",
+  '<Reading as="functionJson" />',
+  "",
+  '<Fail message="stopped on purpose" />',
+  "",
+].join("\n");
+
+/** One value root: its typed return is not its binding data. */
+const VALUE_ROOT = [
+  "---",
+  "returns:",
+  "  verdict: { type: string }",
+  "---",
+  "",
+  '<Let as="noted" value={{ answer: 42 }} />',
+  "",
+  "```ts eval",
+  'const answer = { verdict: "settled" };',
+  "```",
+  "",
+  "<Return value={answer} />",
+  "",
+].join("\n");
+
+/** The eligible root data this execution reports, or a failure naming why not. */
+function* readBindings(execution: HostExecution): Operation<JsonObject> {
+  const answer = yield* execution.bindings();
+  if (!answer.ok) {
+    throw answer.error;
   }
-  return records.slice(0, at + 1);
+  return answer.value;
 }
-
-/** The same prefix with its publication's retained record replaced. */
-function withRecord(prefix: readonly DurableEvent[], value: Json): DurableEvent[] {
-  return prefix.map((event) =>
-    event.type === "yield" && event.description.type === "root_binding"
-      ? { ...event, result: { status: "ok", value } }
-      : event,
-  );
-}
-
-/** The same events with each root admission's retained publication mode removed. */
-function unmarked(records: readonly DurableEvent[]): DurableEvent[] {
-  return records.map((event) => {
-    if (event.type !== "yield" || event.description.type !== "import_component") {
-      return event;
-    }
-    const { [PUBLICATIONS_FIELD]: _mode, ...rest } = event.description;
-    return { ...event, description: { ...rest } };
-  });
-}
-
-/** Where a root admission retains the publication mode. */
-const PUBLICATIONS_FIELD = "executablemd.root-binding-publications";
-
-/** What one continuation settled to, and what it did on the way. */
-interface Continued {
-  readonly outcome: Result<Json>;
-  readonly appended: string[];
-  readonly calls: number;
-}
-
-/**
- * Continue `prefix` with the identical source and retention, and report what
- * the run settled to, what it appended and whether the suffix ran.
- */
-function* continuing(
-  prefix: readonly DurableEvent[],
-  initialization: unknown,
-): Operation<Continued> {
-  const counted: Suffix = { calls: 0 };
-  const stream = new InMemoryStream([...prefix]);
-  let outcome: Result<Json>;
-  try {
-    outcome = yield* yield* executeInstalled(
-      { ...inlineSource(CAPTURE_THEN_SUFFIX), stream },
-      [suffixComponent(counted)],
-      // Read rather than written, so a row can state a retention this build
-      // does know and one it does not through the same boundary.
-      initialization === undefined ? undefined : JSON.parse(JSON.stringify(initialization)),
-    );
-  } catch (error) {
-    outcome = Err(error instanceof Error ? error : new Error(String(error)));
-  }
-  return {
-    outcome,
-    appended: stream
-      .snapshot()
-      .slice(prefix.length)
-      .map((event) => (event.type === "yield" ? event.description.type : event.type)),
-    calls: counted.calls,
-  };
-}
-
-describe("Tier LET — the retained publications a continuation will not read", () => {
+describe("Tier LET — the ordinary inventory, and which values are eligible", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("P9: a retained publication this version cannot read refuses the continuation", function* () {
-    const counted: Suffix = { calls: 0 };
-    const original = new InMemoryStream();
-    const live = yield* yield* executeInstalled(
-      { ...inlineSource(CAPTURE_THEN_SUFFIX), stream: original },
-      [suffixComponent(counted)],
-      { rootBindingPublications: "json-v1" },
+  it("C9: ordinary execution records the exact LET11 inventory and no binding effect", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({ "README.md": EVERY_KIND });
+
+    // Every one of those values binds by reference and is usable here, and the
+    // run records the import, the eval and its close. Handing computed data
+    // back is not a durable effect, so a `<Let>` still adds no journal entry.
+    const output = asText(yield* collect(yield* execute({ path: "README.md", stream })));
+    expect(output).toContain("Cycle self");
+    expect(output).toContain("true//1/3/Infinity/undefined/1/plain text");
+    expect(stream.snapshot().map(kindOf)).toEqual(["import_component", "eval", "close"]);
+  });
+
+  it("C7: the eligible data is the JSON subset of the same document's root", function* () {
+    const stream = new InMemoryStream();
+    yield* useStubFs({ "README.md": EVERY_KIND });
+
+    const execution = yield* executeInstalled({ path: "README.md", stream }, []);
+    const settled = yield* execution;
+    expect(settled.ok).toBe(true);
+
+    // The live bindings are unchanged — the document read every one of them
+    // above — and what crosses is decided by one strict JSON walk rather than
+    // by which construct produced the value.
+    const held = yield* readBindings(execution);
+    expect(held["nested"]).toEqual({ list: [1, { deep: true }], nothing: null });
+    expect(held["nothing"]).toBe(null);
+    expect(held["rendered"]).toBe("plain text");
+    // Omitted whole, never coerced: a value that is not plain JSON, a cycle, a
+    // sparse hole, a non-finite number, `undefined` and a function.
+    for (const omitted of ["notPlain", "cycle", "sparse", "infinite", "absent", "work"]) {
+      expect(Object.hasOwn(held, omitted)).toBe(false);
+    }
+    // `props` is each execution's own namespace and never crosses.
+    expect(Object.hasOwn(held, "props")).toBe(false);
+  });
+});
+describe("Tier LET — the computed root data an execution hands back", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("C1: the owner reports every actual root capture, and output and value stay separate", function* () {
+    const counted: Produced = { calls: 0 };
+    const stream = new InMemoryStream();
+    const execution = yield* executeInstalled(
+      { ...inlineSource(COMPUTES_ROOT), stream },
+      [readingComponent(counted)],
     );
-    expect(live.ok).toBe(true);
+    const rendered = String(yield* collect(execution));
+    const settled = yield* execution;
+    expect(settled.ok).toBe(true);
     expect(counted.calls).toBe(1);
 
-    const prefix = throughPublication(original.snapshot());
-    expect(prefix.length).toBe(2);
-
-    // The control: the same prefix, its retained record untouched, continues
-    // and performs exactly the suffix no record describes. Without this the
-    // refusal below would be a refusal of nothing.
-    const sound = yield* continuing(prefix, { rootBindingPublications: "json-v1" });
-    expect(sound.outcome.ok).toBe(true);
-    expect(sound.calls).toBe(1);
-    expect(sound.appended).toEqual(["import_component", "close"]);
-
-    // The P9 malformed-version representative, on the core continuation path:
-    // a version nobody wrote, under an admission whose mode agrees.
-    const malformed = yield* continuing(
-      withRecord(prefix, {
-        version: 2,
-        binding: "saved",
-        publication: { kind: "json", value: "alpha" },
-      }),
-      { rootBindingPublications: "json-v1" },
-    );
-
-    // Refused before the binding and before any later work: the suffix never
-    // ran, and nothing — no publication, no component, no completion — was
-    // appended to a history this version cannot read.
-    expect(malformed.outcome.ok).toBe(false);
-    expect(malformed.outcome.ok ? "" : malformed.outcome.error.message).toContain(
-      "cannot be read by this version",
-    );
-    expect(malformed.calls).toBe(0);
-    expect(malformed.appended).toEqual([]);
-
-    // The same unreadable record, with the run's own recorded completion still
-    // behind it. Reusing a terminal reaches no expansion, so the publisher is
-    // never entered — which makes this the boundary the refusal has to be at
-    // rather than a second case of the one above.
-    const whole = original.snapshot();
-    expect(whole.some((event) => event.type === "close")).toBe(true);
-    const settled = yield* continuing(
-      withRecord(whole, {
-        version: 2,
-        binding: "saved",
-        publication: { kind: "json", value: "alpha" },
-      }),
-      { rootBindingPublications: "json-v1" },
-    );
-
-    expect(settled.outcome.ok).toBe(false);
-    expect(settled.outcome.ok ? "" : settled.outcome.error.message).toContain(
-      "cannot be read by this version",
-    );
-    expect(settled.calls).toBe(0);
-    expect(settled.appended).toEqual([]);
-
-    // And the control that keeps that refusal meaningful: the identical history
-    // with its record untouched reuses its recorded completion, runs nothing
-    // again and appends nothing.
-    const reused = yield* continuing(whole, { rootBindingPublications: "json-v1" });
-    expect(reused.outcome.ok).toBe(true);
-    expect(reused.calls).toBe(0);
-    expect(reused.appended).toEqual([]);
-  });
-
-  it("P9: a retained record whose binding is not the one it replayed under refuses", function* () {
-    const counted: Suffix = { calls: 0 };
-    const original = new InMemoryStream();
-    yield* yield* executeInstalled(
-      { ...inlineSource(CAPTURE_THEN_SUFFIX), stream: original },
-      [suffixComponent(counted)],
-      { rootBindingPublications: "json-v1" },
-    );
-    const prefix = throughPublication(original.snapshot());
-
-    // Well formed in itself, and not this effect's: the name the journal
-    // matched by says `saved`, and the record inside it says another name.
-    const disagreeing = yield* continuing(
-      withRecord(prefix, {
-        version: 1,
-        binding: "elsewhere",
-        publication: { kind: "json", value: "alpha" },
-      }),
-      { rootBindingPublications: "json-v1" },
-    );
-
-    expect(disagreeing.outcome.ok).toBe(false);
-    expect(disagreeing.calls).toBe(0);
-    expect(disagreeing.appended).toEqual([]);
-  });
-
-  it("P9: a retained retention this run does not share refuses at owned admission", function* () {
-    const counted: Suffix = { calls: 0 };
-    const original = new InMemoryStream();
-    const live = yield* yield* executeInstalled(
-      { ...inlineSource(CAPTURE_THEN_SUFFIX), stream: original },
-      [suffixComponent(counted)],
-      { rootBindingPublications: "json-v1" },
-    );
-    expect(live.ok).toBe(true);
-    // The whole history, terminal and all: the boundary this guards is the one
-    // where a recorded completion would otherwise be reused.
-    const whole = original.snapshot();
-    expect(whole.some((event) => event.type === "close")).toBe(true);
-
-    // A marked history, invoked by a run that retains nothing. Core's own
-    // admission decides this, inside the read every later phase depends on, so
-    // nothing is reused and nothing runs.
-    const ordinary = yield* continuing(whole, undefined);
-    expect(ordinary.outcome.ok).toBe(false);
-    expect(ordinary.outcome.ok ? "" : ordinary.outcome.error.message).toContain(
-      "retains its root bindings differently",
-    );
-    expect(ordinary.calls).toBe(0);
-    expect(ordinary.appended).toEqual([]);
-
-    // And the other direction: an unmarked history invoked by a run that does
-    // retain. The disagreement is refused whichever side states the mode.
-    const reversed = yield* continuing(unmarked(whole), {
-      rootBindingPublications: "json-v1",
+    // Every actual root binding, whichever construct wrote it — not a
+    // whitelist of capture producers.
+    expect(yield* readBindings(execution)).toEqual({
+      direct: { answer: 42 },
+      paired: "beta",
+      functionJson: { answer: 42 },
     });
-    expect(reversed.outcome.ok).toBe(false);
-    expect(reversed.outcome.ok ? "" : reversed.outcome.error.message).toContain(
-      "retains its root bindings differently",
-    );
-    expect(reversed.calls).toBe(0);
-    expect(reversed.appended).toEqual([]);
 
-    // The control: that same whole history, invoked under the retention it
-    // records, reuses its recorded completion and runs nothing again.
-    const agreeing = yield* continuing(whole, { rootBindingPublications: "json-v1" });
-    expect(agreeing.outcome.ok).toBe(true);
-    expect(agreeing.calls).toBe(0);
-    expect(agreeing.appended).toEqual([]);
+    // Three separate channels: the rendered body, the public return value and
+    // the computed data. None of them is wrapped around another.
+    expect(rendered).toContain("Rendered body.");
+    expect(settled.ok ? settled.value : undefined).toBe(rendered);
+    expect(Object.hasOwn(yield* readBindings(execution), "props")).toBe(false);
+
+    // The journal holds the ordinary inventory and no per-binding effect.
+    expect(stream.snapshot().map(kindOf)).toEqual([
+      "import_component",
+      "import_component",
+      "close",
+    ]);
+  });
+
+  it("C1: a value root's typed return is distinct from its computed data", function* () {
+    const stream = new InMemoryStream();
+    const execution = yield* executeInstalled({ ...inlineSource(VALUE_ROOT), stream }, []);
+    const settled = yield* execution;
+    expect(settled.ok).toBe(true);
+    expect(settled.ok ? settled.value : undefined).toEqual({ verdict: "settled" });
+    const held = yield* readBindings(execution);
+    expect(held["noted"]).toEqual({ answer: 42 });
+    expect(held["verdict"]).toBe(undefined);
+  });
+
+  it("C2: an ordinary failure keeps its computed data, and a cold reader finds both", function* () {
+    const counted: Produced = { calls: 0 };
+    const stream = new InMemoryStream();
+    const execution = yield* executeInstalled(
+      { ...inlineSource(COMPUTES_THEN_FAILS), stream },
+      [readingComponent(counted)],
+    );
+    const settled = yield* execution;
+
+    // The public outcome is the failure it was, and the live error survives.
+    expect(settled.ok).toBe(false);
+    expect(settled.ok ? "" : settled.error.message).toContain("stopped on purpose");
+    // And the data computed before the failure is still the execution's own.
+    expect(yield* readBindings(execution)).toEqual({
+      direct: { answer: 42 },
+      functionJson: { answer: 42 },
+    });
+    expect(counted.calls).toBe(1);
+
+    const records = stream.snapshot();
+    // Three imports — the root, the producer and `<Fail>` itself — and one
+    // ordinary close. Handing the byproduct back adds no effect of its own.
+    expect(records.map(kindOf)).toEqual([
+      "import_component",
+      "import_component",
+      "import_component",
+      "close",
+    ]);
+
+    // Cold: a fresh owner over the same retained bytes reads the recorded
+    // result's data, runs no producer and appends nothing.
+    const cold: Produced = { calls: 0 };
+    const reread = new InMemoryStream(records);
+    const reopened = yield* executeInstalled(
+      { ...inlineSource(COMPUTES_THEN_FAILS), stream: reread },
+      [readingComponent(cold)],
+    );
+    const again = yield* reopened;
+    expect(again.ok).toBe(false);
+    expect(yield* readBindings(reopened)).toEqual({
+      direct: { answer: 42 },
+      functionJson: { answer: 42 },
+    });
+    expect(cold.calls).toBe(0);
+    expect(reread.snapshot().length).toBe(records.length);
   });
 });

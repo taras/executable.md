@@ -31,8 +31,8 @@
  * interpreted.
  */
 
-import { createContext } from "effection";
-import type { Context, Operation } from "effection";
+import { createContext, Err, Ok } from "effection";
+import type { Context, Operation, Result } from "effection";
 import {
   guardDurableStream,
   preserveJournalProvenance,
@@ -43,6 +43,7 @@ import { SecretDetectedError } from "./findings.ts";
 import type { SecretFinding } from "./findings.ts";
 import { createSecretScanner } from "./scanner.ts";
 import type { SecretScanner } from "./scanner.ts";
+import type { JsonObject } from "../types.ts";
 
 /**
  * What secret detection an execution is running under.
@@ -262,16 +263,70 @@ export function* clearsLiveOutput(content: string): Operation<boolean> {
 export function* useSecretDetection(
   requested: boolean | undefined,
   stream: DurableStream,
-): Operation<DurableStream> {
+): Operation<SecretDetection> {
   if (requested === false) {
     yield* CurrentDetection.set(new DisabledDetection());
-    return stream;
+    return { journal: stream, disclose: discloseFreely };
   }
 
   const create = (yield* CurrentScannerFactory.get()) ?? createSecretScanner;
   const scanner = create();
   yield* CurrentDetection.set(new EnabledDetection(scanner));
-  return guardWithSecretDetection(stream, scanner);
+  return {
+    journal: guardWithSecretDetection(stream, scanner),
+    disclose: discloseThrough(scanner),
+  };
+}
+
+/**
+ * What this execution's normalized policy establishes: the journal to run
+ * through, and the disclosure its own scanner answers for.
+ *
+ * Both come from one decision. The disclosure closes over the exact scanner
+ * the gate closes over, so a reader asking the execution later cannot install a
+ * same-name Context and be answered by that instead — which is the whole reason
+ * it travels beside the stream rather than being looked up when it is used.
+ */
+export interface SecretDetection {
+  readonly journal: DurableStream;
+  readonly disclose: SecretDisclosure;
+}
+
+/**
+ * How this execution answers a request to disclose data it computed.
+ *
+ * A refusal carries neither the data nor the matched text: what a caller
+ * learns is that the policy rejected it.
+ */
+export type SecretDisclosure = (data: JsonObject) => Operation<Result<JsonObject>>;
+
+/** Detection turned off discloses what it was given. */
+// deno-lint-ignore require-yield
+function* discloseFreely(data: JsonObject): Operation<Result<JsonObject>> {
+  return Ok(data);
+}
+
+/**
+ * Disclosure through one scanner.
+ *
+ * The serialized form is what a reader would carry away, so that is what is
+ * scanned — a value is not safe because its own name looks harmless. A scanner
+ * that fails to answer is a refusal rather than a pass, for the reason the
+ * output gate treats it as one.
+ */
+function discloseThrough(scanner: SecretScanner): SecretDisclosure {
+  return function* (data: JsonObject): Operation<Result<JsonObject>> {
+    let findings: readonly SecretFinding[];
+    try {
+      findings = yield* scanner.scan(JSON.stringify(data));
+    } catch (error) {
+      return Err(error instanceof Error ? error : new Error(String(error)));
+    }
+    if (findings.length > 0) {
+      return Err(new SecretDetectedError(findings));
+    }
+    return Ok(data);
+  };
 }
 
 /**

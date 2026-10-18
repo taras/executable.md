@@ -6155,53 +6155,57 @@ ordinarily mutable inside the execution that receives them. The REPL derives
 that record only from values durably retained before the new entry's admission,
 so replay derives the identical record from the identical bytes.
 
-#### Execution owns which captures it retains
+#### Execution computes the root data its result hands back
 
 An `eval` block's exports are journaled because evaluating one is a durable
-effect. A root `<Let>` and an ordinary component capture are not, which is
-right for a document that runs once and wrong for one entry of several over one
-journal — so retention is a second trusted-host input beside the initial
-bindings, stated once per execution as `rootBindingPublications: "json-v1"`,
-and read nowhere else. Ordinary execution states nothing and behaves exactly as
-it did.
+effect. A root `<Let>` and an ordinary component capture are not, and nothing
+here makes them one. A binding is a **byproduct of running the document**: the
+thing a later execution over the same journal needs is not a record per
+capture but the root as it stood when the document finished — which is already
+a fact the canonical result is the place for. So the execution computes that
+data at its own result boundary and carries it on the ordinary
+`DocumentResult`, under an optional member. The journal gains no operation, no
+name, no sequence and no mode; ordinary execution behaves exactly as it did,
+and LET11's inventory is unchanged.
 
-The publisher is **execution-owned**, not described: Core builds it beside the
-canonical root binding environment, holds that exact environment in its
-closure, and hands it to expansion as an argument beside the import terminal
-and the generated-root owner. What may publish is therefore a capture whose
-actual assignment target is that object — an identity rather than a judgment
-about a file name, a coroutine or a source position. A component body, an
-`<Each>` iteration, a `<Spawn>` and a generated fragment each write a different
-environment and none of them acquires root ownership from where it was written.
-It is not a member of `ExecutionEnvironment`, which describes what a document
-is expanded *against*; it reaches no Context, Api or registry, and it expires
-with the execution.
+Two consequences follow from putting it there rather than beside it. A cold
+reader answers from the record it already parses, so `parseDocumentResult`
+stays the single interpretation point for live and replayed results alike. And
+an ordinary authored failure carries its data too, because a failure is an
+outcome with a result — which is why that normalization happens inside the
+canonical boundary, with durability and fatal Files failures still escaping
+ahead of it.
 
-The retained profile is part of the history's identity. The mode travels on the
-root import's own description under a namespaced field, and root-history
-admission compares the recorded mode against the invoking one before a recorded
-terminal is reused, before public replay policy and before authored work — so
-an execution cannot publish into the middle of a sequence its own records do
-not account for. An absent field is a readable history written before this
-existed: it agrees with an execution that publishes nothing, which is what lets
-an unfinished entry from such a file be continued in its own mode through its
-own close, with its completed effects restored rather than repeated. Any other
-value, and any disagreement, is refused. Cold projection applies that same rule
-independently, off the admission each segment begins with, so a cold command
-and a live session cannot disagree about whose a retained capture is.
+The owner is **execution-owned**, not described: Core creates one private owner
+per canonical invocation, adopts the disclosure policy where the secret
+detection that gates the journal is established, and is handed the actual root
+binding environment by identity where expansion creates it. What it reads is
+therefore that exact object — an identity, rather than a judgment about a file
+name, a coroutine or a source position. A component body, an `<Each>` iteration
+and a `<Spawn>` each write an environment of their own, so their local names
+are not the root's; a root `<Each as>` aggregate is written at the root and so
+is root data. The owner is not a member of `ExecutionEnvironment`, which
+describes what a document is expanded *against*; it reaches no Context, Api or
+registry, and it expires with the execution.
 
-One record per successful root capture, whichever outcome it carries, so the
-retained effect sequence is a fact about the document rather than about what
-happened to be serializable. The value crossing is a detached snapshot taken
-through the one strict JSON parser the initial bindings are copied through; the
-binding itself stays the exact value the producer made, so same-entry
-reference identity, resource lifetime and later mutation are unchanged and none
-of them reaches the record. A value outside that domain takes a value-free
-outcome, which publishes nothing, removes nothing and keeps the last value
-anything did publish under that name. The publication goes through the ordinary
-durable path, so the secret gate and the append fence apply to it as they do to
-every other effect: a rejected publication binds nothing, writes no sentinel
-and keeps its own fatal classification.
+Eligibility is a property of the data, not of its provenance. Every own member
+of that root whose name is a valid binding name and whose value is whole in the
+strict JSON domain is in, except `props`, which each execution validates for
+itself. Anything else is omitted — and omission carries no value, names no
+type and removes nothing. There is deliberately no assignment, capture or
+version ledger: "own root data" means membership of that environment, which is
+why a name an entry inherited and then mutated is part of what its result
+carries without being named again, and why a transient value overwritten
+before the result is not recoverable as history.
+
+Reading is owned the same way. `HostExecution.bindings()` is a host-only read
+that authorizes nothing, and it answers through the disclosure policy the owner
+adopted — the exact scanner the journal gate closed over, not a replaceable
+Context — so a counterfeit same-name policy installed afterwards cannot weaken
+it and a secret refuses the read whole rather than appearing in it. The REPL
+session layers that live read over the retained head and rechecks the running
+entry's identity after the read suspends, so one entry's live values are never
+credited to another.
 
 The session owns at most one entry task. Starting another needs two separate
 facts — the preceding entry has a retained terminal close, *and* its task has
