@@ -1048,8 +1048,9 @@ function* drive(
         return Ok(established);
       },
       root: sidekickRoot,
-      submit(at, journal): Operation<Result<SubmitReceipt>> {
+      submit(at, journal, presenting): Operation<Result<SubmitReceipt>> {
         return submitForSidekick(at, {
+          presenting,
           session: {
             // The whole acknowledged history, read at the moment the
             // reservation asks for it. `current.model` is the projection of

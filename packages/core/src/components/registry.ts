@@ -37,6 +37,7 @@ import Glob, {
   returns as globReturns,
 } from "./Glob.ts";
 import Json, { props as jsonProps } from "./Json.ts";
+import Yaml, { props as yamlProps } from "./Yaml.ts";
 import Parse, { props as parseProps, returns as parseReturns } from "./Parse.ts";
 import SafeParse, { props as safeParseProps, returns as safeParseReturns } from "./SafeParse.ts";
 import Test, { props as testProps } from "./Test.ts";
@@ -250,6 +251,19 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
         "Render a value as JSON text. `<Json value={config} />` writes the JSON where you " +
         "put it.",
       as: "Optional. Captures the JSON text instead of emitting it.",
+      context: null,
+    },
+    { captures: ["value"], forms: ["self-closing"] },
+  ),
+  core(
+    "Yaml",
+    Yaml,
+    parseJsonObject(yamlProps),
+    {
+      description:
+        "Render a value as YAML text. `<Yaml value={config} />` writes the YAML where you " +
+        "put it. Nothing else turns a value into YAML.",
+      as: "Optional. Captures the YAML text instead of emitting it.",
       context: null,
     },
     { captures: ["value"], forms: ["self-closing"] },

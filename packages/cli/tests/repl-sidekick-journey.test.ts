@@ -18,7 +18,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Ok, spawn, suspend, useScope, withResolvers } from "effection";
+import { Ok, scoped, spawn, suspend, useScope, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 
 import { previewGeneratedXmdRoot } from "@executablemd/core/host";
@@ -32,12 +32,18 @@ import type { SidekickOwner, SidekickTurn } from "../src/repl/sidekick/owner.ts"
 import type { PairedChatStorage } from "../src/repl/sidekick/repository.ts";
 import type { SidekickRecord } from "../src/repl/sidekick/history.ts";
 import type { SubmitReceipt } from "../src/repl/sidekick/controls.ts";
-import { AGENT, records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
+import {
+  AGENT,
+  records,
+  useHarness,
+  useTemporary,
+} from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import {
   appendGate,
   awaiting,
   awaited,
+  click,
   draftText,
   focusDraft,
   focusMessage,
@@ -45,11 +51,13 @@ import {
   messageText,
   MOUNTED_AGENT,
   mountedReading,
+  operationGate,
   screenOf,
   sendMessage,
   settled,
   shows,
   typing,
+  useMountedHost,
   useMountedRepl,
 } from "./fixtures/repl/issue-883/mounted-program.ts";
 import type { MountedRepl } from "./fixtures/repl/issue-883/mounted-program.ts";
@@ -1650,6 +1658,307 @@ describe("Tier R5 — a mounted message prepares and submits a real entry", () =
     expect(second.model.entries.map((entry) => entry.key)).toEqual(["entry-1", "entry-2"]);
     expect(second.model.entries[1]?.terminal?.output).toContain("| a | b |");
     expect(repl.fake.prompts[4] ?? "").toContain("Entry entry-2 completed.");
+  });
+});
+
+/**
+ * Tier R9 — the moment a selected result becomes feedback (E7).
+ *
+ * A queried control does three things in order: it records the intent, it does
+ * its own work, and *then* a separate record acknowledges what was selected out
+ * of the result. The third one is a real append through the host boundary, and
+ * everything these rows are about happens in the interval it occupies.
+ *
+ * So the interval is held open — at the host's own append, inside the operation
+ * that performs it — and what is asserted is what a next turn is sent while the
+ * acknowledgement is still in flight, and what is sent once it lands. Both
+ * gates are the test's own: nothing in the product has a flag for this, and a
+ * gate on the caller rather than on the append would be a gate on the test.
+ */
+describe("Tier R9 — a selected result is feedback only once it is acknowledged", () => {
+  /** The record a presentation is, as it reaches the file. */
+  const PRESENTATION = '"kind":"control-presentation"';
+
+  /** One entry, so there is a published fact for a reply to select out of. */
+  function* publishing(repl: MountedRepl): Operation<void> {
+    repl.fake.script({ reply: entrySource("greeting", "Hello from the reply.", "{greeting}") });
+    repl.fake.script({ reply: "<Output>Thanks for the receipt.</Output>\n" });
+    yield* sendMessage(repl, "greet");
+    yield* awaiting(repl.terminal, "the reply answering about its own entry", (one) =>
+      shows(one, "Thanks for the receipt."),
+    );
+  }
+
+  it("R9a: nothing is sent while the acknowledgement is in flight, and one lands", function* () {
+    const gate = appendGate();
+    const repl = yield* useMountedRepl({ gate });
+    yield* publishing(repl);
+    const before = repl.fake.prompts.length;
+
+    // A reply that selects one published name out of what the read returned.
+    repl.fake.script({
+      reply: `<Output>\n<REPL.Bindings yq='from_json | .greeting' />\n</Output>\n`,
+    });
+    repl.fake.script({ reply: "<Output>Got the one value.</Output>\n" });
+
+    const acknowledging = gate.holdNext((_path, record) => record.includes(PRESENTATION));
+    yield* sendMessage(repl, "what did it publish?");
+    yield* acknowledging.started();
+    expect(acknowledging.inFlight).toBe(true);
+
+    // The original outcome is already written and the selection has already
+    // happened — this append is the acknowledgement of it. What has gone out is
+    // the person's own message and nothing after it: a build that had sent the
+    // whole observation as a raw fallback, or sent the selected value without
+    // writing it down, would already be a turn ahead here.
+    yield* settled(20);
+    expect(repl.fake.prompts.length).toBe(before + 1);
+
+    acknowledging.release();
+    yield* awaiting(repl.terminal, "the reply answering about the selected value", (one) =>
+      shows(one, "Got the one value."),
+    );
+
+    // Exactly one presentation, for exactly that occurrence — released once,
+    // not once per wait — and the turn it enabled carries the selected value
+    // alone rather than the binding map the control actually returned.
+    const read = yield* mountedReading(repl);
+    const presentations = read.chat.filter((record) => record.kind === "control-presentation");
+    expect(presentations.length).toBe(1);
+    const only = presentations[0];
+    expect(only?.kind === "control-presentation" && only.outcome.status).toBe("ok");
+    expect(only?.kind === "control-presentation" && only.selected).toBe("Hello from the reply.");
+    expect(JSON.parse(repl.fake.prompts.at(-1) ?? "")).toBe("Hello from the reply.");
+    // The observation stands beside it, unchanged: the outcome is still what
+    // the control did, and the selection is a separate record about it.
+    const outcomes = read.chat.filter(
+      (record) => record.kind === "control-outcome" && record.observed !== undefined,
+    );
+    expect(
+      outcomes.some(
+        (record) =>
+          record.kind === "control-outcome" &&
+          JSON.stringify(record.observed) === JSON.stringify({ greeting: "Hello from the reply." }),
+      ),
+    ).toBe(true);
+  });
+
+  it("R9b: Stop before the acknowledgement sends nothing, and writes nothing", function* () {
+    const dataRoot = yield* useTemporary("xmd-repl-r9b-");
+    const operations = operationGate();
+    const host = yield* useMountedHost({ dataRoot, operations });
+    const repl = yield* useMountedRepl({ host });
+    yield* publishing(repl);
+    const before = repl.fake.prompts.length;
+
+    repl.fake.script({
+      reply: `<Output>\n<REPL.Bindings yq='from_json | .greeting' />\n</Output>\n`,
+    });
+    // Scripted but never reached: a follow-up turn appearing here is the
+    // failure this row is named for.
+    repl.fake.script({ reply: "<Output>Should never be asked.</Output>\n" });
+
+    // Held at the operation the append *is*, rather than at a promise the host
+    // was already handed: a native append cannot be taken back, so only this
+    // boundary can say whether Stop took the record back or merely stopped
+    // waiting for it.
+    const acknowledging = operations.holdNext((_path, record) => record.includes(PRESENTATION));
+    yield* sendMessage(repl, "what did it publish?");
+    yield* acknowledging.started();
+    expect(acknowledging.holding).toBe(true);
+
+    yield* click(repl.terminal, "[stop]");
+    yield* awaiting(repl.terminal, "the Sidekick going idle", (one) => shows(one, "[send]"));
+    // Teardown joined the held operation rather than leaving a write scheduled
+    // behind it, and the operation came down without appending.
+    yield* awaited("the acknowledgement coming down", () => acknowledging.abandoned);
+    expect(acknowledging.holding).toBe(false);
+
+    // Nothing physical: the presentation was never written, which is the fact a
+    // promise gate could not establish.
+    expect(operations.appended.some((one) => one.record.includes(PRESENTATION))).toBe(false);
+    const read = yield* mountedReading(repl);
+    expect(read.chat.filter((record) => record.kind === "control-presentation")).toEqual([]);
+    // And no follow-up turn after the message's own: not the selected value,
+    // and not the whole observation as a raw fallback.
+    expect(repl.fake.prompts.length).toBe(before + 1);
+    expect(
+      repl.fake.prompts.slice(before).some((one) => one.includes("Hello from the reply.")),
+    ).toBe(false);
+  });
+
+  it("R9c: a refused acknowledgement is nobody's successful feedback", function* () {
+    const gate = appendGate();
+    const repl = yield* useMountedRepl({ gate });
+    yield* publishing(repl);
+    const before = repl.fake.prompts.length;
+
+    repl.fake.script({
+      reply: `<Output>\n<REPL.Bindings yq='from_json | .greeting' />\n</Output>\n`,
+    });
+    // Scripted for whatever this conversation does next, so the row reads what
+    // actually happened rather than stalling on an unscripted turn.
+    repl.fake.script({ reply: "<Output>Carrying on.</Output>\n" });
+
+    // The storage refuses this one write. Nothing in the product has a flag for
+    // that: the refusal is the gate's, at the boundary the host's own append is
+    // defined in.
+    const acknowledging = gate.holdNext((_path, record) => record.includes(PRESENTATION));
+    yield* sendMessage(repl, "what did it publish?");
+    yield* acknowledging.started();
+    acknowledging.refuse("the storage refused this record");
+
+    yield* awaiting(repl.terminal, "the Sidekick going idle again", (one) => shows(one, "[send]"));
+    yield* settled(40);
+
+    // No presentation was retained, and so no successful selected feedback
+    // exists for anybody to be sent: the record is what makes a selection
+    // feedback, and this one was refused.
+    const read = yield* mountedReading(repl);
+    expect(read.chat.filter((record) => record.kind === "control-presentation")).toEqual([]);
+    expect(
+      repl.fake.prompts.slice(before + 1).some((one) => one.includes("Hello from the reply.")),
+    ).toBe(false);
+    // The original outcome stands, because it happened: the refusal is of the
+    // acknowledgement and not a retraction of the work.
+    expect(
+      read.chat.some(
+        (record) =>
+          record.kind === "control-outcome" &&
+          JSON.stringify(record.observed) === JSON.stringify({ greeting: "Hello from the reply." }),
+      ),
+    ).toBe(true);
+    // And the intent is still marked, which is what makes this history an
+    // incomplete selection rather than an unqueried control: whoever reads it
+    // next can tell that a selection was owed and never acknowledged.
+    expect(
+      read.chat.filter(
+        (record) => record.kind === "control" && record.presentation === "selected-v1",
+      ).length,
+    ).toBe(1);
+  });
+
+  it("R9d: two occurrences of one control select different data, and settle once each", function* () {
+    const gate = appendGate();
+    const repl = yield* useMountedRepl({ gate });
+    yield* publishing(repl);
+    const before = repl.fake.prompts.length;
+
+    // One response, two occurrences of the same control, two expressions. The
+    // failure this discriminates is a receiver correlated by component name or
+    // by completion order: either would hand both occurrences one answer.
+    repl.fake.script({
+      reply: [
+        "<Output>",
+        `<REPL.Bindings yq='from_json | .greeting' as="whole" />`,
+        `<REPL.Bindings yq='from_json | .greeting | length' as="size" />`,
+        "{whole}/{size}",
+        "</Output>",
+        "",
+      ].join("\n"),
+    });
+    repl.fake.script({ reply: "<Output>Both came back.</Output>\n" });
+
+    // The second occurrence's acknowledgement is held, so the two are observed
+    // at different moments rather than as a finished pair.
+    const second = gate.holdNext(
+      (_path, record) => record.includes(PRESENTATION) && record.includes('"order":1'),
+    );
+    yield* sendMessage(repl, "two readings");
+    yield* second.started();
+
+    // The first one is already acknowledged while the second is still in
+    // flight, and no turn has gone out for either.
+    yield* settled(20);
+    expect(repl.fake.prompts.length).toBe(before + 1);
+
+    second.release();
+    yield* awaiting(repl.terminal, "the reply answering about both", (one) =>
+      shows(one, "Both came back."),
+    );
+
+    // Two presentations, in admission order, each holding its own value and
+    // each written once.
+    const read = yield* mountedReading(repl);
+    const presentations = read.chat.flatMap((record) =>
+      record.kind === "control-presentation"
+        ? [{ order: record.order, selected: record.selected }]
+        : [],
+    );
+    expect(presentations).toEqual([
+      { order: 0, selected: "Hello from the reply." },
+      { order: 1, selected: "Hello from the reply.".length },
+    ]);
+    // And the turn they enabled carries both — two sections, in the order the
+    // response admitted them, each holding its own selected value and neither
+    // holding the binding map the control actually returned.
+    const feedback = repl.fake.prompts.at(-1) ?? "";
+    expect(feedback.match(/## REPL\.Bindings/g)?.length).toBe(2);
+    expect(feedback.indexOf('"Hello from the reply."')).toBeLessThan(feedback.indexOf("21"));
+    expect(feedback).not.toContain('"greeting"');
+  });
+
+  it("R9e: a cold reopen reads the saved selection, and reruns nothing", function* () {
+    const dataRoot = yield* useTemporary("xmd-repl-r9e-");
+    let execution = "";
+    let entries = 0;
+    let saved: readonly SidekickRecord[] = [];
+
+    yield* scoped(function* (): Operation<void> {
+      const host = yield* useMountedHost({ dataRoot });
+      const repl = yield* useMountedRepl({ host });
+      yield* publishing(repl);
+      repl.fake.script({
+        reply: `<Output>\n<REPL.Bindings yq='from_json | .greeting' />\n</Output>\n`,
+      });
+      repl.fake.script({ reply: "<Output>Got the one value.</Output>\n" });
+      yield* sendMessage(repl, "what did it publish?");
+      yield* awaiting(repl.terminal, "the selected value coming back", (one) =>
+        shows(one, "Got the one value."),
+      );
+
+      const read = yield* mountedReading(repl);
+      execution = read.execution;
+      entries = read.model.entries.length;
+      saved = read.chat;
+      // This process really did acknowledge one selection, which is what the
+      // cold half is then held to.
+      expect(saved.filter((record) => record.kind === "control-presentation").length).toBe(1);
+    });
+
+    // Cold, over those files, with its own provider: nothing of the process
+    // above is still alive.
+    const cold = yield* useMountedHost({ dataRoot });
+    const reopened = yield* useMountedRepl({
+      host: cold,
+      location: `xmd://repl/${execution}/entries`,
+    });
+
+    // Inspected before anything is said to it. The history is exactly what was
+    // saved, the entry that ran is not run again, and this process has asked
+    // the provider nothing: reopening is a read.
+    const inspected = yield* mountedReading(reopened);
+    expect(inspected.chat).toEqual(saved);
+    expect(inspected.model.entries.length).toBe(entries);
+    expect(reopened.fake.prompts).toEqual([]);
+
+    // An explicit continuation, and it is the only thing that asks the
+    // provider anything. Its first turn carries the saved conversation.
+    reopened.fake.script({ reply: "<Output>Carried it over.</Output>\n" });
+    yield* sendMessage(reopened, "and now?");
+    yield* awaiting(reopened.terminal, "the continuation answering", (one) =>
+      shows(one, "Carried it over."),
+    );
+
+    const after = yield* mountedReading(reopened);
+    // One turn, no control: the continuation repeated no completed control and
+    // ran no entry, and the one acknowledged selection is still the one that
+    // was saved — unchanged, and not written a second time.
+    expect(reopened.fake.prompts.length).toBe(1);
+    expect(after.model.entries.length).toBe(entries);
+    const presentations = after.chat.filter((record) => record.kind === "control-presentation");
+    expect(presentations.length).toBe(1);
+    expect(presentations).toEqual(saved.filter((record) => record.kind === "control-presentation"));
   });
 });
 

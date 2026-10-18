@@ -148,6 +148,7 @@ export type SidekickRecord =
   | ResponseRecord
   | ControlRecord
   | ControlOutcomeRecord
+  | ControlPresentationRecord
   | FeedbackRecord;
 
 /** Ownership: which execution this history belongs to, and what it came from. */
@@ -280,6 +281,18 @@ export interface ControlRecord {
   readonly order: number;
   readonly component: string;
   readonly arguments: unknown;
+  /**
+   * How this occurrence's result will be presented, when the reply queried it.
+   *
+   * Written here, before the original work, by the receiver the response owns —
+   * never inferred afterwards from a record, and never supplied in an argument
+   * a reply wrote. An occurrence marked this way is one whose feedback comes
+   * from an acknowledged `control-presentation` and from nowhere else, so an
+   * interrupted selection reads as incomplete rather than falling back to the
+   * observation the producer happened to retain. An unmarked record keeps the
+   * historical meaning it already had.
+   */
+  readonly presentation?: "selected-v1";
   /** Submit alone binds the slot it reserved, so a crash can be reconciled. */
   readonly submit?: {
     /**
@@ -309,6 +322,45 @@ export interface ControlOutcomeRecord {
   readonly outcome: RetainedOutcome;
   /** The retained observation, for a read whose answer is its own fact. */
   readonly observed?: unknown;
+}
+
+/**
+ * What one queried occurrence's result was selected down to.
+ *
+ * A record of its own rather than a member of the outcome, because the two say
+ * different things and are acknowledged at different moments. The outcome is
+ * the producer's own: what the control did, exactly as it always was. This is
+ * what the reply is told, and it exists only once the original work succeeded,
+ * the selection was accepted as JSON and whatever capture or publication the
+ * occurrence owed has happened — so a presentation in the file is proof the
+ * whole route completed, and its absence beside a marked intent is proof the
+ * route was interrupted.
+ *
+ * It names the exact occurrence — this conversation, this response, this
+ * control order — because a selected value belongs to one invocation. Two
+ * same-named controls in one response select different things, and a record
+ * correlated by component name or by completion order would hand one of them
+ * the other's answer.
+ *
+ * `read` is the original observation's own identity, range and continuation,
+ * kept beside the selected value rather than inside it: selecting a field out
+ * of a window neither reads another page nor changes the extent the producer
+ * actually observed, and a reply has to be able to tell those apart.
+ */
+export interface ControlPresentationRecord {
+  readonly kind: "control-presentation";
+  readonly conversation: string;
+  readonly response: string;
+  /** The intent this presents, by the order that intent was written under. */
+  readonly order: number;
+  /** The one shape this record has; any other value is a shape this build lacks. */
+  readonly version: 1;
+  /** Whether the selection was accepted, in the repository's own encoding. */
+  readonly outcome: RetainedOutcome;
+  /** The selected JSON value, present exactly when the outcome succeeded. */
+  readonly selected?: unknown;
+  /** The read context the original observation carried, when it carried one. */
+  readonly read?: unknown;
 }
 
 /**
@@ -399,6 +451,8 @@ export function parseSidekickRecord(line: string): SidekickRecord | undefined {
       return control(value);
     case "control-outcome":
       return controlOutcome(value);
+    case "control-presentation":
+      return controlPresentation(value);
     case "feedback":
       return feedback(value);
     default:
@@ -668,9 +722,14 @@ function control(value: Record<string, unknown>): ControlRecord | undefined {
     !exactly(
       value,
       ["kind", "conversation", "response", "order", "component", "arguments"],
-      ["submit"],
+      ["submit", "presentation"],
     )
   ) {
+    return undefined;
+  }
+  // One spelling, or none. A marker this build does not have is a record this
+  // grammar does not have, rather than an occurrence read as unqueried.
+  if (Object.hasOwn(value, "presentation") && value.presentation !== "selected-v1") {
     return undefined;
   }
   const held = str(value.conversation);
@@ -716,6 +775,59 @@ function control(value: Record<string, unknown>): ControlRecord | undefined {
     component,
     arguments: value.arguments,
     ...(submit === undefined ? {} : { submit }),
+    ...(Object.hasOwn(value, "presentation") ? { presentation: "selected-v1" as const } : {}),
+  };
+}
+
+/**
+ * One selected presentation, read as the closed shape it is.
+ *
+ * A successful one carries its value and no reason; a failed one carries its
+ * reason and no value. Both arms together, or either member on the wrong arm,
+ * is a record this grammar does not have — so a history cannot hold a
+ * presentation that both answered and did not.
+ */
+function controlPresentation(
+  value: Record<string, unknown>,
+): ControlPresentationRecord | undefined {
+  if (
+    !exactly(
+      value,
+      ["kind", "conversation", "response", "order", "version", "outcome"],
+      ["selected", "read"],
+    )
+  ) {
+    return undefined;
+  }
+  const held = str(value.conversation);
+  const named = str(value.response);
+  const order = whole(value.order);
+  const outcome = outcomeOf(value.outcome);
+  if (
+    held === undefined ||
+    named === undefined ||
+    order === undefined ||
+    outcome === undefined ||
+    value.version !== 1
+  ) {
+    return undefined;
+  }
+  const succeeded = outcome.status === "ok";
+  if (succeeded !== Object.hasOwn(value, "selected")) {
+    return undefined;
+  }
+  if (!succeeded && Object.hasOwn(value, "read")) {
+    return undefined;
+  }
+  return {
+    kind: "control-presentation",
+    conversation: held,
+    response: named,
+    order,
+    version: 1,
+    outcome,
+    ...(Object.hasOwn(value, "selected") ? { selected: value.selected } : {}),
+    ...(Object.hasOwn(value, "read") ? { read: value.read } : {}),
   };
 }
 

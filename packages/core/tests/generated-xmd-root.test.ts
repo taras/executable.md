@@ -933,6 +933,8 @@ describe("Tier GRM — a record's marker is what authorizes the evaluation", () 
       componentRouting: identity.componentRouting,
       reference: undefined,
       live: () => true,
+      // No host destinations: this root's results are its own to render.
+      destinations: undefined,
     });
   }
 
@@ -1155,6 +1157,30 @@ describe("Tier GR — the trusted composition table reaches a root too", () => {
     // Quoted because `<Json>` binds the JSON value, which is what the same
     // source renders to in an ordinary document.
     expect(rendered(attempt).output).toContain('Hello, "Ada"!');
+  });
+
+  it("GR17: a root renders a local binding as YAML", function* () {
+    // The whole composition table, not one entry of it: the host's read table
+    // names neither renderer, and a root reaches both for the same reason.
+    const attempt = yield* evaluateRoot(
+      request(
+        '<Json value={{ names: ["Ada", "Grace"] }} as="held" />\n\n' +
+          "<Output>\n<Yaml value={held} />\n</Output>\n",
+      ),
+    );
+
+    const output = rendered(attempt).output;
+    // `<Json as>` binds the text it rendered, so what `<Yaml>` was handed is a
+    // JSON string — and a string spanning lines is a YAML block scalar. The
+    // indented body is that exact JSON text, unchanged: the renderer described
+    // the value it was given rather than reinterpreting it as data.
+    expect(output.trimStart().startsWith("|-")).toBe(true);
+    const body = output
+      .slice(output.indexOf("|-") + 2)
+      .split("\n")
+      .map((line) => line.replace(/^ {2}/, ""))
+      .join("\n");
+    expect(JSON.parse(body.trim())).toEqual({ names: ["Ada", "Grace"] });
   });
 });
 

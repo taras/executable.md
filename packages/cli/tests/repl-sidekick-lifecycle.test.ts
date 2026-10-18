@@ -169,6 +169,8 @@ describe("Tier R6 — Stop ends the asking and nothing else", () => {
       },
       // deno-lint-ignore require-yield
       *settled(): Operation<void> {},
+      // deno-lint-ignore require-yield
+      *presented(): Operation<void> {},
     };
     const session: AdmittingSession = {
       entries: () => Ok([]),
@@ -183,6 +185,8 @@ describe("Tier R6 — Stop ends the asking and nothing else", () => {
       submitForSidekick(
         { conversation: "c", response: "response:1" },
         {
+          // No receiver: this case is about the reservation, not a selection.
+          presenting: undefined,
           session,
           facts: () => ({
             live: true,

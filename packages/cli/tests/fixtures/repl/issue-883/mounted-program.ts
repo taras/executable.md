@@ -795,6 +795,15 @@ export interface HeldAppend {
   readonly released: boolean;
   /** Let it finish. */
   release(): void;
+  /**
+   * Refuse it instead, as the storage underneath would refuse a write.
+   *
+   * The hold is the Promise the host's own append is defined in, so rejecting
+   * it is a refusal of the write itself: nothing is appended and the task that
+   * asked for it fails where it asked. A product flag would be the wrong seam
+   * for this — there is none, and there should not be one.
+   */
+  refuse(reason: string): void;
 }
 
 /**
@@ -842,11 +851,13 @@ export function appendGate(): AppendGate {
     },
     holdNext(accepts: (path: string, record: string) => boolean): HeldAppend {
       let letGo = (): void => {};
+      let refused: (error: Error) => void = () => {};
       let announce = (): void => {};
       let inFlight = false;
       let released = false;
-      const waiting = new Promise<void>((resolve) => {
+      const waiting = new Promise<void>((resolve, reject) => {
         letGo = resolve;
+        refused = reject;
       });
       const arrival = new Promise<void>((resolve) => {
         announce = resolve;
@@ -872,6 +883,10 @@ export function appendGate(): AppendGate {
         release(): void {
           released = true;
           letGo();
+        },
+        refuse(reason: string): void {
+          released = true;
+          refused(new Error(reason));
         },
       };
     },

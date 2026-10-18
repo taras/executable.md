@@ -20,7 +20,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import type { Json } from "@executablemd/durable-streams";
+import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
 
@@ -464,3 +464,227 @@ describe("Tier FE33 — occurrences do not share generated history", () => {
     expect(admitted).toHaveLength(2);
   });
 });
+
+/**
+ * Tier FE31 — Yaml is composition beside Json, and an old grant stays old.
+ *
+ * Adding a pure component widens what *new* source may write and must widen no
+ * grant anybody already holds. Core's always-on table is a fact about the
+ * build rather than about the policy a host stated, so a record written before
+ * a pure component existed holds no row for it — and that record is what its
+ * own continuation is held to.
+ */
+describe("Tier FE31 — Yaml is composition, and a retained grant is historical", () => {
+  it("FE31: exact core Yaml renders under a read-only selection", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* run(
+      evaluating(`<Yaml value={{ kept: [1, "two", true] }} />\n`, ["read"]),
+      [reading(files)],
+    );
+
+    expect(String(output)).toContain("kept:");
+    expect(String(output)).toContain("- two");
+    // Composition performs nothing: no capability was reached to render it.
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE31: the admission retains Yaml's own identity", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const stream = new InMemoryStream();
+    yield* run(evaluating(`<Yaml value={{ a: 1 }} />\n`, ["read"]), [reading(files)], stream);
+
+    const rows = admittedRows(stream);
+    // Its own URL, not Json's: an admission that reused one would say a
+    // fragment had been granted the other component.
+    expect(rows.find((row) => row.name === "Yaml")?.identity).toBe(
+      "https://executable.md/components/yaml",
+    );
+    expect(rows.find((row) => row.name === "Json")?.identity).toBe(
+      "https://executable.md/components/json",
+    );
+    expect(rows.filter((row) => row.effect === "composition").map((row) => row.name)).toEqual([
+      "Json",
+      "Yaml",
+    ]);
+  });
+
+  it("FE31: a Json-only admission reopens without gaining Yaml", function* () {
+    const files = recordedFiles({ "notes.md": NOTE });
+    const fragment = `<Json value={{ a: 1 }} />\n`;
+    const live = new InMemoryStream();
+    yield* run(evaluating(fragment, ["read"]), [reading(files)], live);
+
+    // The same history with Yaml's composition row removed, which is exactly
+    // what a record written before Yaml existed holds.
+    const retained = new InMemoryStream(withoutYaml(live.snapshot()));
+    const again = yield* run(
+      evaluating(fragment, ["read"]),
+      [recordedFiles({ "notes.md": NOTE })].map((held) => reading(held)),
+      retained,
+    );
+
+    // Readable, and continued: the continuation is compared against the rows
+    // its own admission recorded rather than against today's table, so it is
+    // neither refused for a row it never named nor widened to include one.
+    expect(JSON.parse(String(again).trim())).toEqual({ a: 1 });
+  });
+
+  it("FE31: reopening a Json-only admission adds no Yaml row to it", function* () {
+    const fragment = `<Json value={{ a: 1 }} />\n`;
+    const live = new InMemoryStream();
+    yield* run(
+      evaluating(fragment, ["read"]),
+      [reading(recordedFiles({ "notes.md": NOTE }))],
+      live,
+    );
+
+    const historical = withoutYaml(live.snapshot());
+    const retained = new InMemoryStream(historical);
+    yield* run(
+      evaluating(fragment, ["read"]),
+      [reading(recordedFiles({ "notes.md": NOTE }))],
+      retained,
+    );
+
+    // The grant this continuation ran under is the one its own record holds:
+    // still Json alone, and still one admission. A route that reconciled
+    // against today's table would have had to either refuse this history or
+    // write Yaml into it.
+    expect(admittedRows(retained).filter((row) => row.effect === "composition")).toEqual([
+      { name: "Json", identity: "https://executable.md/components/json", effect: "composition" },
+    ]);
+    const admissions = retained
+      .snapshot()
+      .filter((event) => event.type === "yield" && event.description.type === "generated_xmd");
+    expect(admissions.length).toBe(1);
+  });
+
+  it("FE31: a repository cannot offer its own Yaml for the admitted name", function* () {
+    // The replacement row. What a fragment is admitted to write is core's own
+    // pure definition, and `Yaml` is a name a repository may not take over:
+    // the conflict is detected at capture, so the host's offering never
+    // becomes the definition an admission then records.
+    const files = recordedFiles();
+    const message = yield* refusal(
+      run(evaluating(`<Yaml value={1} />\n`), [
+        {
+          *install(): Operation<void> {
+            yield* useSelection({ Yaml: ["self-closing"] });
+            yield* useRecordedFiles(files);
+          },
+        },
+      ]),
+    );
+
+    expect(message).toContain("Yaml");
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE31: an answered replacement never renders, and never runs", function* () {
+    // The same refusal where the replacement is a provider's answer rather
+    // than a selection row — a definition that would have rendered something
+    // else entirely. Its body is the evidence: a route that preferred the
+    // answer would have run it before anybody could read the output.
+    const ran: string[] = [];
+    const replacement: FunctionComponentDefinition = {
+      kind: "function",
+      name: "Yaml",
+      props: { type: "object", properties: {}, additionalProperties: true },
+      forms: ["self-closing"],
+      // A repository declares "read" or "write" and nothing else: composition is
+      // core's own classification, so the strongest claim a replacement can
+      // make for this name is an effect — which is the claim refused here.
+      generated: {
+        "self-closing": { identity: "https://executable.md/components/yaml", effect: "read" },
+      },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<unknown> {
+        ran.push("replacement");
+        return "replaced:\n";
+      },
+    };
+
+    const message = yield* refusal(
+      run(evaluating(`<Yaml value={{ a: 1 }} />\n`, ["read"]), [
+        {
+          *install(): Operation<void> {
+            yield* useSelection({ Yaml: ["self-closing"] });
+          },
+          componentAnswers: [answerProvider("Yaml", replacement)],
+        },
+      ]),
+    );
+
+    // Refused as the conflict it is — one admitted name cannot stand for two
+    // definitions — and refused before the answer could render anything.
+    expect(message).toContain("two definitions");
+    expect(ran).toEqual([]);
+  });
+});
+
+/** The admitted rows one retained admission holds. */
+function admittedRows(
+  stream: InMemoryStream,
+): { name: string; identity: string; effect: string }[] {
+  for (const event of stream.snapshot()) {
+    if (event.type !== "yield" || event.description.type !== "generated_xmd") {
+      continue;
+    }
+    const result = event.result;
+    if (result.status !== "ok") {
+      continue;
+    }
+    const value = result.value;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      continue;
+    }
+    const policy = (value as { policy?: unknown }).policy;
+    if (typeof policy !== "object" || policy === null || Array.isArray(policy)) {
+      continue;
+    }
+    const allowed = (policy as { allowed?: unknown }).allowed;
+    if (!Array.isArray(allowed)) {
+      continue;
+    }
+    return allowed.map((row) => ({
+      name: String((row as { name?: unknown }).name),
+      identity: String((row as { identity?: unknown }).identity),
+      effect: String((row as { effect?: unknown }).effect),
+    }));
+  }
+  throw new Error("this history retained no generated admission");
+}
+
+/**
+ * The same events with Yaml's composition row removed from the admission.
+ *
+ * Read back out of JSON rather than edited in place, so what the continuation
+ * is given is ordinary journal data of exactly the shape an older build wrote.
+ */
+function withoutYaml(events: readonly DurableEvent[]): DurableEvent[] {
+  return events.map((event) => {
+    if (event.type !== "yield" || event.description.type !== "generated_xmd") {
+      return event;
+    }
+    if (event.result.status !== "ok") {
+      return event;
+    }
+    const held: Json = JSON.parse(JSON.stringify(event.result.value ?? null));
+    if (held === null || typeof held !== "object" || Array.isArray(held)) {
+      return event;
+    }
+    const policy = held.policy;
+    if (policy === null || typeof policy !== "object" || Array.isArray(policy)) {
+      return event;
+    }
+    const allowed = policy.allowed;
+    if (!Array.isArray(allowed)) {
+      return event;
+    }
+    const kept = allowed.filter(
+      (row) => row === null || typeof row !== "object" || Array.isArray(row) || row.name !== "Yaml",
+    );
+    const value: Json = { ...held, policy: { ...policy, allowed: kept } };
+    return { ...event, result: { status: "ok", value } };
+  });
+}

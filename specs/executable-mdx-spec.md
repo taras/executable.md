@@ -8362,7 +8362,7 @@ wrapping form the directory is the invocation's own resource, so §4.4's teardow
 stops everything the content created — including daemons started inside it —
 before the directory is removed. No filesystem operation is fire-and-forget.
 
-### 6.12 JSON in both directions: `<Json>`, `<Parse>` and `<SafeParse>`
+### 6.12 JSON in both directions: `<Json>`, `<Yaml>`, `<Parse>` and `<SafeParse>`
 
 A document moves between structured values and JSON text at boundaries it
 writes down. `<Let>` introduces a value (§6.5), `<Json>` renders one as text,
@@ -8546,6 +8546,38 @@ Neither component repairs content. A document may inspect a `<SafeParse>`
 failure, render its errors into a corrective prompt, and finish with `<Parse>`
 after a bounded retry. That loop is ordinary Markdown, so it is visible and
 testable like anything else.
+
+#### Rendering a value as YAML: `<Yaml>`
+
+`<Yaml>` is `<Json>`'s sibling. The same operand, the same place, a different
+text:
+
+```md
+<File path="package.json" yq="from_json | .scripts" as="scripts" />
+
+<Yaml value={scripts} />
+```
+
+Everything about the invocation is `<Json>`'s: self-closing and contentless,
+one required `value` whose presence is syntactic, `as` as ordinary text
+capture, the operand by reference, and the same atomic refusals decided before
+the operand runs. There is no `indent`, flow-style, separator or anchor option.
+
+**Nothing else turns a value into YAML.** A binding a `yq` expression selected
+(§6.21) is data; a capture is data; an interpolation is a string. YAML is what
+this element renders, where it is written.
+
+The text is one complete YAML document: two-space indentation, no document
+separators, and one terminating newline — the engine's own, neither doubled nor
+stripped. Scalars are quoted where their type depends on it, so what the text
+parses back to is the value that went in: the string `"false"` stays a string,
+`"1.20"` stays a string, and a multiline string stays a block scalar that
+survives a round trip.
+
+One value, one serialization. `<Json>` and `<Yaml>` describe an operand through
+the same single native JSON serialization, so neither can report something the
+other does not — and a value that has no JSON text, or whose serialization
+threw, fails here in the same two distinguishable ways it fails there.
 
 ### 6.13 Reading and writing text: `<File>`
 
@@ -10132,6 +10164,80 @@ Its skipped body is absence, not a retained decision. Replay of a completed root
 is unchanged, and a live or partial expansion reads the value that applies to
 that execution.
 
+
+### 6.21 Selecting out of a result: `yq`
+
+A document often wants part of what a component produced rather than all of it.
+`yq` selects that part before the result becomes a capture:
+
+```md
+<File path="package.json" yq="from_json | .scripts" as="scripts" />
+
+<Yaml value={scripts} />
+```
+
+`File` runs once. Its returned string is explicitly decoded, and `scripts`
+holds the selected JSON data. An invocation that writes no `yq` keeps its
+existing behavior exactly.
+
+**`yq` is the engine's, and it is separate from `as`.** It is an ordinary
+invocation attribute on any ordinary component, consumed before the component's
+own props are validated — so a producer with a closed props schema accepts an
+invocation that selected out of its result without ever seeing that it did, and
+a component never declares `yq`. Structural constructs do not acquire it: they
+keep their own closed prop rules, and `yq` written on one is the unknown prop it
+always was.
+
+It accepts a string literal or an expression that resolves to a string. A
+non-string refuses before the producer runs, so no effect is performed. An empty
+string reaches the engine and receives its ordinary answer: there is no second
+expression grammar here.
+
+**The expression runs on the value the component actually returned.** A
+component that returns text is queried as a JSON string, which is why an
+expression that wants the data inside it says so with `from_json` or
+`from_yaml`. Nothing is decoded on the way in, and a string containing JSON
+stays a string under `.`.
+
+**Selection happens after acceptance and before binding.** The order is fixed:
+
+```text
+form, authored props and destination checks
+  -> the producer runs once, keeping its own effects and outcome
+  -> the producer's own return validation and complete joined teardown
+  -> yq selection
+  -> selected JSON acceptance
+  -> the selected capture, and any root publication
+```
+
+So no expression repairs a return the producer's own schema rejected, a printed
+error, a refused producer or a failed cleanup — and a selection failure binds
+nothing rather than binding a fallback. A selected value is validated as JSON,
+not against the producer's `returns`.
+
+**One value, or a refusal.** `null`, `false`, `[]` and a multiline string are
+values and succeed. An expression that matches nothing, and one that matches
+more than once, refuse with the same sentence:
+
+> This yq expression must return one JSON value. Collect matches into an array
+> with `[ ... ]`.
+
+An invalid expression fails visibly, keeping the engine's own reason. Nothing
+reads a partial answer as a result.
+
+**A queried invocation renders its selection, not its producer's text.** With
+`as`, the selected value is bound. Without `as`, a selected string renders where
+the element is written and anything else renders nothing — the rule an
+uncaptured result already follows. What a queried Markdown body would have
+rendered is buffered until the selection is made, so raw text never reaches the
+document ahead of the value meant to replace it.
+
+**The engine reads nothing ambient.** Every evaluation supplies an empty
+environment, an empty file map and a fixed instant, so `env(NAME)`, `load(path)`
+and `now` cannot reach this host's environment, filesystem or clock.
+
+`as` is unchanged. A component that declares `returns` still requires `as`, and
+`yq` does not supply one.
 
 ## 7. Entry point
 

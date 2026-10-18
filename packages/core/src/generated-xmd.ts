@@ -168,7 +168,8 @@ import {
 } from "./structural-rules.ts";
 import type { StructuralViolation } from "./structural-rules.ts";
 import { installFormSyntax, invocationForm } from "./invocation-identity.ts";
-import type { FormSyntax, ComponentRouting } from "./invocation-identity.ts";
+import type { FormSyntax, ComponentRouting, InvocationForm } from "./invocation-identity.ts";
+import type { ResultDestinationRoute } from "./component-result-destinations.ts";
 import type { ComponentInvocation } from "./invocation-identity.ts";
 import type { SyntaxReference } from "./syntax-reference.ts";
 import { useNarrowedSyntax } from "./syntax-api.ts";
@@ -419,6 +420,16 @@ export interface GeneratedObservation {
 export const JSON_COMPOSITION_IDENTITY = "https://executable.md/components/json";
 
 /**
+ * Core's `<Yaml />`, on the same terms.
+ *
+ * Rendering a value the fragment already holds performs nothing, so Yaml is
+ * trusted composition rather than an effect and carries no read or write form
+ * for an owner to offer. Its own identity, because an admission that reused
+ * Json's would say a fragment had been granted the other component.
+ */
+export const YAML_COMPOSITION_IDENTITY = "https://executable.md/components/yaml";
+
+/**
  * Core's own `<Fetch>`, as the evaluator admits it.
  *
  * Core's default definition, taken from the registry every execution and every
@@ -495,15 +506,60 @@ export function pinnedJson(): CompositionEntry {
 }
 
 /**
+ * Core's `<Yaml />`, admitted as trusted composition beside `<Json />`.
+ *
+ * The exact core definition, so a same-name replacement anywhere reaches
+ * nothing here, and self-closing alone, because `<Yaml>` refuses content of its
+ * own and the refusal belongs in preflight rather than inside the component.
+ */
+export function pinnedYaml(): CompositionEntry {
+  const definition = CORE_REGISTRY.get("Yaml")?.default?.definition;
+  if (definition === undefined || definition.kind !== "function") {
+    throw new GeneratedXmdError("core supplies no Yaml component to admit.");
+  }
+  return { name: "Yaml", identity: YAML_COMPOSITION_IDENTITY, definition };
+}
+
+/**
  * The always-on trusted composition table.
  *
  * Core's own, and not a ceiling a host states: a host cannot remove Json from a
  * fragment's vocabulary by omitting it, and cannot add an effect to the table
  * by naming one. A trusted host that wants another pure component states its
  * exact definition, which is a different act from this one.
+ *
+ * Adding Yaml here widens what new source may write and widens no retained
+ * grant: a continuation is compared against the composition set its own
+ * admission recorded, so a history admitted when Json was the whole table
+ * reopens under that table and gains nothing.
  */
 export function coreComposition(): readonly CompositionEntry[] {
-  return [pinnedJson()];
+  return [pinnedJson(), pinnedYaml()];
+}
+
+/**
+ * One pure component every generated evaluation may write, as a describer reads it.
+ *
+ * Name and spelling only. A host describing the vocabulary a response may write
+ * needs to say that the always-on table exists and what is in it, and it must
+ * not have to restate the list — a hand-kept copy is a description that starts
+ * out true and drifts. Nothing callable and no identity crosses: this is what
+ * is admitted, not permission to invoke it.
+ */
+export interface CompositionVocabulary {
+  readonly name: string;
+  /** The one spelling the composition table admits, which is self-closing. */
+  readonly form: InvocationForm;
+}
+
+/** The always-on composition table, as a describer reads it. */
+export function coreCompositionVocabulary(): readonly CompositionVocabulary[] {
+  return Object.freeze(
+    coreComposition().map((entry): CompositionVocabulary => {
+      const described: CompositionVocabulary = { name: entry.name, form: "self-closing" };
+      return Object.freeze(described);
+    }),
+  );
 }
 
 /**
@@ -725,6 +781,14 @@ export interface GeneratedRootBinding {
   readonly reference: SyntaxReference | undefined;
   /** Whether the captured implementations still belong to a live execution. */
   readonly live: () => boolean;
+  /**
+   * Where a result this execution's host owns a destination for may go.
+   *
+   * The execution's own route, which is why it arrives here rather than on the
+   * request: a root is evaluated by the execution that captured the selection
+   * it runs under, and a destination belongs to the same capture.
+   */
+  readonly destinations: ResultDestinationRoute | undefined;
 }
 
 /**
@@ -740,6 +804,7 @@ interface ResolvedRoot {
   readonly componentRouting: ComponentRouting;
   readonly reference: SyntaxReference | undefined;
   readonly live: () => boolean;
+  readonly destinations: ResultDestinationRoute | undefined;
 }
 
 /**
@@ -945,7 +1010,13 @@ class GeneratedComponentResolution implements ComponentResolution {
     return true;
   }
 
-  constructor(named: readonly Planned[], componentRouting?: ComponentRouting) {
+  readonly #destinations: ResultDestinationRoute | undefined;
+
+  constructor(
+    named: readonly Planned[],
+    componentRouting?: ComponentRouting,
+    destinations?: ResultDestinationRoute,
+  ) {
     const planned = new Map<string, Map<AuthoredForm, Planned>>();
     for (const invocation of named) {
       const byForm = planned.get(invocation.name) ?? new Map<AuthoredForm, Planned>();
@@ -954,6 +1025,7 @@ class GeneratedComponentResolution implements ComponentResolution {
     }
     this.#planned = planned;
     this.#componentRouting = componentRouting;
+    this.#destinations = destinations;
   }
 
   /** The answer canonical execution produces for this name. */
@@ -993,6 +1065,10 @@ class GeneratedComponentResolution implements ComponentResolution {
         return yield* implementation(props, invocation);
       },
     };
+    // Said where the answer is produced: the expansion site holds this wrapper
+    // and cannot see the implementation underneath it, so this is the only
+    // place that can tell a destination route the two are one component.
+    this.#destinations?.alias(admitted.fn, implementation);
     this.#invocations.set(admitted.fn, byForm);
     // The wrapper above is the answer to the import; the dispatcher underneath
     // it is the form dispatcher. Remembered by name so `verify` can record it
@@ -1085,6 +1161,8 @@ function selection(allow: readonly GeneratedEffectClass[] | undefined): Generate
 function selectedEntries(
   request: GeneratedFragmentRequest,
   allow: readonly GeneratedEffectClass[],
+  /** The composition table to admit, which a continuation reads off its own record. */
+  composition: readonly CompositionEntry[] = coreComposition(),
 ): Entry[] {
   const entries: Entry[] = [];
   // One kept reading per definition object, so a name admitted for two
@@ -1093,13 +1171,13 @@ function selectedEntries(
   // Before either effect table and under every selection: composition is not a
   // class `allow` chooses between, so its entries are in the policy the same
   // way whatever the caller asked for, and in one canonical position.
-  for (const composition of coreComposition()) {
+  for (const pure of composition) {
     entries.push({
-      name: composition.name,
+      name: pure.name,
       // Core's own, and the one admitted identity not read off an owner's
       // generated metadata: a pure component offers no effect to declare.
-      identities: new Map([["self-closing", composition.identity]]),
-      definition: composition.definition,
+      identities: new Map([["self-closing", pure.identity]]),
+      definition: pure.definition,
       forms: ["self-closing"],
       kind: "capability",
       effect: "composition",
@@ -1566,6 +1644,33 @@ function readNamed(value: Json): RetainedInvocation[] | undefined {
     named.push({ name, identity, form });
   }
   return named;
+}
+
+/**
+ * The composition table a retained admission was made under, or `undefined`
+ * when it is the one this build already offers.
+ *
+ * Core's always-on table is a fact about the build rather than about the grant
+ * a host stated, so a record written before a pure component existed holds no
+ * row for it. Holding such a record to today's table would refuse a
+ * continuation for a row its own fragment never named, and adding the row to it
+ * would widen a grant nobody reviewed. So a continuation reopens under exactly
+ * the composition rows its own admission retained — read through the same
+ * reader every other term is read with — while new source is admitted under the
+ * current table.
+ *
+ * A retained row this build no longer supplies is left out, which makes the
+ * comparison below fail: a grant naming a component that is gone is stale
+ * rather than reconstructible.
+ */
+
+function retainedComposition(retained: Policy): readonly CompositionEntry[] | undefined {
+  const identities = new Set(
+    retained.allowed.filter((row) => row.effect === "composition").map((row) => row.identity),
+  );
+  const current = coreComposition();
+  const historical = current.filter((entry) => identities.has(entry.identity));
+  return historical.length === current.length ? undefined : historical;
 }
 
 /**
@@ -2323,6 +2428,14 @@ function expand(
    * its own owner outside the expansion.
    */
   owner: Segment[] | undefined,
+  /**
+   * Where a result this execution's host owns a destination for may go.
+   *
+   * A root's is its execution's own route, narrowed to nothing a fragment
+   * receives: `<Evaluate>` in a document asked for a rendering, not for
+   * somebody's operation to be answered.
+   */
+  destinations: ResultDestinationRoute | undefined,
 ): Operation<string> {
   return scoped(function* () {
     // A root selects what it renders, so a failure inside it renders as the
@@ -2358,7 +2471,7 @@ function expand(
     // trusted-document evaluator. Set on this scope, so it ends with the
     // fragment and reaches nothing the document expands afterwards.
     yield* GeneratedDataExpressions.set(true);
-    const resolution = new GeneratedComponentResolution(named, componentRouting);
+    const resolution = new GeneratedComponentResolution(named, componentRouting, destinations);
     yield* Component.around(
       {
         // deno-lint-ignore require-yield
@@ -2415,6 +2528,10 @@ function expand(
         // A fragment writes an environment of its own, so it has no root
         // capture to publish and no root publisher to be given one.
         undefined,
+        // Where a result the host owns a destination for goes. A root's is its
+        // execution's own; a fragment is given none, because `<Evaluate>` in a
+        // document asked for a rendering rather than for somebody's operation.
+        destinations,
         undefined,
       );
       return renderSegments(owner ?? []);
@@ -2437,6 +2554,7 @@ function expand(
       // And no root publisher: a fragment's locals are its own, and a name it
       // binds is not something a later entry inherits.
       undefined,
+      destinations,
       // A generated fragment is the engine's own text, so it owns no value body
       // and a <Return> written into it satisfies no declaration.
       undefined,
@@ -2498,37 +2616,13 @@ function* evaluateGenerated(
   resolved?: ResolvedRoot,
 ): Operation<string> {
   const allow = selection(request.allow);
-  const entries = selectedEntries(request, allow);
-  const table = admitted(entries);
-  const policy = currentPolicy(allow, entries);
-  // A fragment's pair arrives already narrowed, from the protected site
-  // canonical `<Evaluate>` holds. A root's is derived here.
-  let narrowed = componentRouting;
-  let reference = syntax;
-  if (resolved !== undefined) {
-    if (!resolved.live()) {
-      throw new GeneratedXmdError(REVOKED_IMPLEMENTATIONS);
-    }
-    // Seeded with the exact implementations this root admitted. Closed rather
-    // than revoked, and registered before anything expands: cleanups
-    // registered later unwind first, so the route outlives every body inside
-    // it and a wrapper kept past this root answers for nothing while the
-    // execution stays open for the next one.
-    const route = resolved.componentRouting.narrow(entries.map((entry) => entry.definition.fn));
-    yield* ensure(() => {
-      route.close();
-    });
-    narrowed = route;
-    // Narrowing is the reference's own operation, exactly as a fragment's is,
-    // and for the same reason: what this source may *write* is its admitted
-    // table, while what it may *read about* is the vocabulary its execution
-    // captured — every bootstrapped package's chapter included, each entry
-    // reported with its availability here.
-    // The captured entries this root was selected from, which is the shape
-    // `admittedSymbols` already describes an evaluation's vocabulary with — the
-    // same call the authored site makes, so one description mechanism answers
-    // for both kinds.
-    reference = resolved.reference?.available(admittedSymbols(resolved.describing));
+  let entries = selectedEntries(request, allow);
+  let table = admitted(entries);
+  let policy = currentPolicy(allow, entries);
+  // Asked before anything is recorded: an execution whose implementations are
+  // gone admits nothing rather than appending an admission it cannot perform.
+  if (resolved !== undefined && !resolved.live()) {
+    throw new GeneratedXmdError(REVOKED_IMPLEMENTATIONS);
   }
 
   const stored = yield* persistAdmission(
@@ -2555,6 +2649,19 @@ function* evaluateGenerated(
       CONSTRUCT[decided.construct],
     );
   }
+  // Core's always-on composition table is a build fact rather than a grant a
+  // host stated, so a retained admission reopens under the rows it recorded
+  // rather than under today's. What that changes is both halves at once: the
+  // comparison below is against the historical set, and the table this
+  // continuation may *name* is that set too — so a record written before a pure
+  // component existed is neither refused for a row it never named nor quietly
+  // widened to include one.
+  const historical = retainedComposition(decided.policy);
+  if (historical !== undefined) {
+    entries = selectedEntries(request, allow, historical);
+    table = admitted(entries);
+    policy = currentPolicy(allow, entries);
+  }
   // Before a single component is invoked or a single effect is performed: a
   // retained admission is a grant whose selected spellings, identities,
   // effects and classes must be stated exactly again. A run that moved any of
@@ -2568,6 +2675,35 @@ function* evaluateGenerated(
   // quietly expanding the retained copy in its place.
   if (decided.source !== request.source) {
     throw new GeneratedXmdError(STALE_TEXT);
+  }
+
+  // A fragment's pair arrives already narrowed, from the protected site
+  // canonical `<Evaluate>` holds. A root's is derived here, from the entries
+  // reconciliation settled — so what this source may invoke is exactly what it
+  // may name rather than whatever today's table happens to hold.
+  let narrowed = componentRouting;
+  let reference = syntax;
+  if (resolved !== undefined) {
+    // Seeded with the exact implementations this root admitted. Closed rather
+    // than revoked, and registered before anything expands: cleanups
+    // registered later unwind first, so the route outlives every body inside
+    // it and a wrapper kept past this root answers for nothing while the
+    // execution stays open for the next one.
+    const route = resolved.componentRouting.narrow(entries.map((entry) => entry.definition.fn));
+    yield* ensure(() => {
+      route.close();
+    });
+    narrowed = route;
+    // Narrowing is the reference's own operation, exactly as a fragment's is,
+    // and for the same reason: what this source may *write* is its admitted
+    // table, while what it may *read about* is the vocabulary its execution
+    // captured — every bootstrapped package's chapter included, each entry
+    // reported with its availability here.
+    // The captured entries this root was selected from, which is the shape
+    // `admittedSymbols` already describes an evaluation's vocabulary with — the
+    // same call the authored site makes, so one description mechanism answers
+    // for both kinds.
+    reference = resolved.reference?.available(admittedSymbols(resolved.describing));
   }
 
   // The retained source is what expands, so a continuation runs exactly the
@@ -2588,6 +2724,7 @@ function* evaluateGenerated(
     narrowed,
     reference,
     rendering?.owner,
+    resolved?.destinations,
   );
 }
 
@@ -2710,6 +2847,7 @@ function* evaluateRoot(
           componentRouting: binding.componentRouting,
           reference: binding.reference,
           live: binding.live,
+          destinations: binding.destinations,
         },
       );
     });

@@ -66,6 +66,51 @@ export function capturedBinding(value: Json | undefined): string | undefined {
 }
 
 /**
+ * The props the engine consumes rather than hands to a component.
+ *
+ * `slot` places projected content, `as` names a binding, and `yq` selects out
+ * of what the invocation produced. None of them is a component's to declare or
+ * to receive: each is stripped before the component's own closed props schema
+ * is checked, so a producer with `additionalProperties: false` accepts an
+ * invocation that wrote one without ever seeing it.
+ */
+export const ENGINE_OWNED_PROPS = ["slot", "as", "yq"] as const;
+
+/**
+ * What a `yq` that is not an expression says.
+ *
+ * Unlike `as`, which names a binding and is therefore held to a string literal,
+ * `yq` is a value the document may compute: an expression that produces the
+ * expression. So the rule is about the value rather than about the syntax, and
+ * it is asked of whatever value its caller has — expansion asks it of the
+ * resolved prop and validation asks it of the literal the author wrote, which
+ * is why a dynamic one is not statically checkable rather than invalid.
+ *
+ * The empty string is a string. What an empty expression means belongs to the
+ * engine's own dialect, and inventing a second answer here would be a second
+ * grammar.
+ */
+export function queryExpressionViolation(
+  name: string,
+  value: Json | undefined,
+): StructuralViolation | undefined {
+  return value === undefined || typeof value === "string"
+    ? undefined
+    : {
+        code: "props-invalid",
+        source: name,
+        message:
+          `Prop "yq" on <${name} /> must be a string holding a yq expression, got ` +
+          `${value === null ? "null" : Array.isArray(value) ? "array" : typeof value}.`,
+      };
+}
+
+/** The expression a well-formed `yq` names, or `undefined` when it names none. */
+export function queriedExpression(value: Json | undefined): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
  * A component that declares `returns` renders nothing, so an invocation that
  * captures nothing would discard the only thing it produces.
  */

@@ -719,6 +719,64 @@ inputs name it. A package that ships its *first* document adds one entry to
 `PACKAGED_DOCUMENTS` in `scripts/lib/compile.ts`, which
 `scripts/tests/packaged-document.test.ts` enforces.
 
+### The engine `yq` queries values with
+
+`yq` selection and `<Yaml>` are one WebAssembly engine, `yq.rs`, pinned at
+`0.1.0` and reached through one of its two published entries. Its root and
+`./inline` compile an embedded module and instantiate a singleton while that
+module is evaluated, which would start a WebAssembly compilation in every
+process that loads `@executablemd/core`. Core imports `yq.rs/loader`, which
+instantiates nothing by itself and compiles exactly the bytes it is handed.
+
+Those bytes are **committed source**, not an asset a build copies:
+
+```text
+pinned npm package --explicit generation--> packages/core/src/yq-wasm.ts
+core value-query --> yq.rs/loader + imported yq-wasm.ts
+  source runtime: prepared npm loader + source module
+  deno compile: loader and byte module in its imported module graph
+  dnt/npm: emitted byte module + exact external yq.rs dependency
+```
+
+`packages/core/src/yq-wasm.ts` holds the base64 of the published
+`dist/yq.wasm` — 468387 bytes, SHA-256
+`97252eddd0dd7c2d80c25f8b73aec0874af954ca77ea33d8eb892c0a845eac46` — and
+nothing else: it decodes nothing, compiles nothing and instantiates nothing.
+One execution's own lazy initialization decodes it and hands the bytes to the
+loader, so a document that writes neither `yq` nor `<Yaml>` pays for neither.
+
+Being in the static import graph is what makes every distribution agree. A
+compiled binary and an installed npm package each carry core's module graph and
+nothing beside it, so bytes reached through a path, a `fetch` or a host
+filesystem API would be present in a source checkout and absent in both — and
+the failure would reach only the published artifact.
+
+**Generation is deliberate.** `scripts/generate-yq-wasm.ts` resolves the pinned
+package's own `./yq.wasm` export through package resolution, refuses a different
+version or different bytes, and writes the byte module, the provenance record
+and the vendor notices. `--check` reproduces what generation would emit and
+compares, writing nothing. No build, test or check regenerates those bytes:
+`deno task build`, `deno task build:web` and the release compile run under cache
+and node-modules modes that cannot install, and none of them writes tracked
+state.
+
+**Attribution travels with the bytes.** `packages/core/src/yq-wasm.provenance.json`
+records the package, version, asset, byte count, hash, license and the digests of
+the notices, and `packages/core/src/yq-vendor-notices/` carries the vendor's own
+`LICENSE` and complete `THIRD_PARTY_NOTICES.md`. Both are shipped and neither is
+read: `scripts/build-npm.ts` copies them beside the emitted core module, and the
+compile embeds the notice directory through `PACKAGED_NOTICES` (§10). A binary
+that carried no asset at all would still run `yq`.
+
+**The dependency is external to the emitted package.** dnt maps
+`yq.rs/loader` to the published package, so an installed
+`@executablemd/core` resolves the loader as a dependency and reads the byte
+module it emitted. `scripts/tests/yq-distribution.test.ts` executes the source
+graph under Deno, Node and Bun, a real compiled binary from an unrelated
+temporary directory with no checkout assets reachable, and the packed npm CLI
+installed into isolated scratch — and inspects the emitted core manifest for the
+pin, the loader subpath and the emitted byte module.
+
 ## 10. Canonical compile inputs
 
 `deno compile` embeds what `--include` names and nothing else, and reports no
@@ -750,6 +808,11 @@ maintained:
 - `PACKAGED_DOCUMENTATION` — each package's `components.md`, named individually
   because the directories they sit in are package source, and embedding those
   whole would carry the TypeScript into the binary a second time.
+- `PACKAGED_NOTICES` — the vendor attribution that travels with bytes the binary
+  carries from somebody else (§9). One directory,
+  `packages/core/src/yq-vendor-notices`, because the vendor's notice set is
+  theirs to change. It is attribution and not a runtime input: nothing reads it,
+  and the engine's own bytes are in core's static import graph.
 
 `compileArguments()` builds the complete argv from them and refuses an unknown
 `--target` before anything is spawned. `scripts/compile.ts` is the command a

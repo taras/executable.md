@@ -1775,6 +1775,47 @@ entry may be asking at the same moment, neither answer can be taken for the
 other, and Stop withdraws the Sidekick's question — with no answer and no
 outcome — while the entry's stays waiting and answerable.
 
+### A reply selects out of what a control returned
+
+A reply may write `yq` on any control it is admitted to, and what comes back is
+the selected value rather than the whole observation:
+
+```md
+<REPL.Bindings yq="from_json | .selected" as="picked" />
+```
+
+`REPL.Bindings` returns JSON *text*, so an expression that wants the data in it
+decodes it explicitly. The control still performs its own work once and records
+its own outcome; the selection happens after that outcome and before the
+capture, and a reply that captures a selected value is still told it — capturing
+a designated result does not switch its feedback off.
+
+What the history gains is a mark and a record. A queried occurrence's intent
+says it will present a selected result, written before the work; the selected
+value is a separate record naming that exact conversation, response and control
+order, appended only after the original outcome succeeded, the selection was
+accepted and whatever capture the occurrence owed has happened. Nothing is
+correlated by control name, by completion order or by whichever occurrence came
+last, so two same-named controls in one response select different things and
+each is told its own.
+
+Three readings follow from those records, and they are the ones a reply has to
+act on differently. A marked occurrence with its selected record is told that
+value. One whose original work refused keeps the refusal, whatever a constant
+expression would have produced. And one that was marked and never presented is
+reported as an **interrupted selection** — the work may well have happened, and
+what a reply is never handed instead is the whole observation it did not ask
+for.
+
+A queried read keeps its own identity, range and continuation beside the
+selected value rather than inside it. Selecting a field out of a window of an
+entry's output neither reads another page nor changes how much the producer
+actually observed, and both facts reach the next turn.
+
+An existing history is unchanged by any of this. A record written before a reply
+could select carries no mark, keeps the feedback rules it always had, and is
+never rewritten or migrated.
+
 The agent, the model and the thinking effort are configured in the Sidekick's
 own pane. Configure says which agent this conversation is with, what has been
 *asked for* and what the agent was last *verified* on — two separate lines,

@@ -104,7 +104,7 @@ import {
 } from "./profile.ts";
 import { sidekickRequests } from "./requests.ts";
 import type { RootReading } from "./requests.ts";
-import type { ControlJournal, SubmitReceipt } from "./controls.ts";
+import type { ControlJournal, SidekickOccurrence, SubmitReceipt } from "./controls.ts";
 import { useSidekickQuestions } from "./questions.ts";
 import type { ReplElicitations } from "../elicitation.ts";
 import {
@@ -360,7 +360,11 @@ export interface SidekickOwnerInput {
    * Handed in rather than performed here: a submission binds a reservation the
    * root owns the slot for, and this owner owns a conversation.
    */
-  submit(at: ResponseAt, journal: ControlJournal): Operation<Result<SubmitReceipt>>;
+  submit(
+    at: ResponseAt,
+    journal: ControlJournal,
+    presenting: SidekickOccurrence | undefined,
+  ): Operation<Result<SubmitReceipt>>;
   /** The chat revision this message clears, read when the message is sent. */
   revision(): number;
   /**
@@ -534,7 +538,7 @@ export interface SidekickOwner {
 interface ServingResponse {
   readonly journal: ControlJournal;
   /** Admit the draft for this response, recording a refusal that wrote nothing. */
-  submit(): Operation<Result<SubmitReceipt>>;
+  submit(presenting: SidekickOccurrence | undefined): Operation<Result<SubmitReceipt>>;
 }
 
 /** What a captured control refuses with when no response is running. */
@@ -590,15 +594,18 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
      * cannot reach the other one's root.
      */
     const ceiling = sidekickResponseCeiling(
-      sidekickRequests(root, function* (): Operation<Result<SubmitReceipt>> {
-        return yield* servingNow().submit();
+      sidekickRequests(root, function* (presenting): Operation<Result<SubmitReceipt>> {
+        return yield* servingNow().submit(presenting);
       }),
       {
-        *began(occurrence, reserved): Operation<number> {
-          return yield* servingNow().journal.began(occurrence, reserved);
+        *began(occurrence, reserved, presentation): Operation<number> {
+          return yield* servingNow().journal.began(occurrence, reserved, presentation);
         },
         *settled(order, outcome, observed): Operation<void> {
           yield* servingNow().journal.settled(order, outcome, observed);
+        },
+        *presented(order, selected, read): Operation<void> {
+          yield* servingNow().journal.presented(order, selected, read);
         },
       },
     );
@@ -1488,12 +1495,15 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
       const refused: { order: number; component: string; reason: string }[] = [];
       let pairs = 0;
       const journal: ControlJournal = {
-        *began(occurrence, reserved): Operation<number> {
+        *began(occurrence, reserved, presentation): Operation<number> {
           pairs += 1;
-          return yield* written.began(occurrence, reserved);
+          return yield* written.began(occurrence, reserved, presentation);
         },
         *settled(order, outcome, observed): Operation<void> {
           yield* written.settled(order, outcome, observed);
+        },
+        *presented(order, selected, read): Operation<void> {
+          yield* written.presented(order, selected, read);
         },
       };
       /**
@@ -1505,9 +1515,9 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
        */
       const responding: ServingResponse = {
         journal,
-        *submit(): Operation<Result<SubmitReceipt>> {
+        *submit(presenting): Operation<Result<SubmitReceipt>> {
           const taken = pairs;
-          const answer = yield* input.submit(at, journal);
+          const answer = yield* input.submit(at, journal, presenting);
           if (!answer.ok && pairs === taken) {
             refused.push({
               order: taken,

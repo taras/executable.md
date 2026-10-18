@@ -238,8 +238,9 @@ export function* useHarness(
       return Ok(execution.chat as PairedChatStorage);
     },
     root,
-    submit(at, journal: ControlJournal): Operation<Result<SubmitReceipt>> {
+    submit(at, journal: ControlJournal, presenting): Operation<Result<SubmitReceipt>> {
       return submitForSidekick(at, {
+        presenting,
         session: {
           // The acknowledged history, read the way the root reads it.
           entries: () => {

@@ -374,6 +374,90 @@ therefore agree on the ID of every element they both retain, and may share IDs
 without sharing effects — run identity and workflow-definition identity are
 what tell those runs apart.
 
+### What an accepted result becomes
+
+An invocation's result travels a fixed route, and the order is the whole of the
+contract:
+
+```text
+form, authored props and genuine destination checks
+  -> the producer runs once, keeping its own effects and outcomes
+  -> its own return validation and complete joined teardown
+  -> returned-value middleware, including `yq` selection
+  -> selected JSON acceptance
+  -> the selected capture, and any acknowledged root publication
+  -> the acknowledged selected presentation for that exact occurrence
+```
+
+`Component.result` is the one seam between acceptance and binding, published
+under the stable name `executablemd.core.component-result`. A handler receives
+the accepted result and the query the invocation wrote, and answers with the
+value to bind — which is all it can do. By the time it is asked, acceptance has
+happened and publication has not, so nothing it returns repairs a return the
+producer's own schema rejected, a printed error, a refused producer or a failed
+cleanup. Permission, durable identity, which occurrence a result belongs to and
+whether an append was acknowledged are each settled by the execution that owns
+them; a middleware answer is data.
+
+The terminal is the engine's own. With no query it answers with the same
+reference it was given, so an ordinary invocation binds exactly what it always
+did. With one it asks the execution's `yq` engine, which validates the result as
+JSON, evaluates the expression and validates the one answer as JSON. Both
+canonical paths — a Markdown body and a function component, with or without
+`returns` — cross it, because a consumer composing around results composes
+around all of them rather than only the queried ones.
+
+**The engine belongs to the execution and starts when it is wanted.** One lazy
+owner per document execution, selected before expansion under the stable name
+`executablemd.core.value-query`, shared by that execution's generated roots and
+distinct from a concurrent execution's. A document that writes neither `yq` nor
+`<Yaml>` decodes and compiles nothing. `until()` does not cancel the vendor's
+compilation, so what halting stops is the continuation: a halted first consumer
+binds nothing, publishes nothing and appends nothing, and the owner is revoked
+with its execution. Every evaluation supplies an empty environment, an empty
+file map and a fixed instant, so no expression reads this host's environment,
+filesystem or clock.
+
+### Where an owned result may go
+
+A host that evaluates generated source on somebody's behalf has a use for a
+result a document does not: the Sidekick's reply asked the root to do something,
+and the answer has to come back to it. That is a **destination**, and it is not
+public result middleware's to answer.
+
+The host states its destinations on the `ExecutionInstallation` it already hands
+over, and canonical execution copies them before any installation, middleware or
+document code runs — the terms admissions and declared components already
+travel on. Nothing afterwards adds, replaces or reads the collection: it is
+reachable through no context, no contextual Api, no stable name and no
+definition metadata.
+
+What an entry names is authenticated rather than spelled. For a component the
+host published, the entry carries the exact object it published through its own
+`componentAnswers` request, compared by identity against core's own record of
+that publication; the row it then routes to is the sealed implementation
+canonical capture produced. A look-alike, a copy taken afterwards, a same-named
+registration and a definition another execution built are each absent from the
+route. For a **selected** protected name — canonical `<Elicit>`, which the host
+selects and core's own tier answers — there is no published object to hand over,
+so the entry names the selection and core resolves the implementation from its
+own capture, refusing a name some provider published.
+
+A receiver belongs to one occurrence. Canonical invocation opens one before
+required-as is decided, binds it to the exact `ComponentInvocation` the engine
+minted, and revokes it when that invocation settles. Two same-named controls in
+one response are two invocations and therefore two receivers; a receiver kept
+from a finished occurrence answers for nothing. Nothing correlates by component
+name, by completion order or by whichever occurrence came last. A genuine
+execution-owned destination is also the one thing that can satisfy an
+already-authorized uncaptured return — a tag name, a returns schema, a `yq`
+expression, a public option and a Context value each supply none.
+
+A generated import is answered with a fresh wrapper per import, because the
+admitted form is decided per invocation, so the expansion site cannot see the
+implementation underneath it. Canonical resolution says which one it is, at the
+moment it produces the answer, by exact object on both sides.
+
 ### Definition-owned return state
 
 A value body — a value root, or a Markdown component that declares `returns` —
@@ -4066,6 +4150,21 @@ is the binding contract the children actually run under. `<Loop>`,
 exact spelling in the retained source, never join the retained named-component
 list, and change no record version.
 
+Core's always-on composition table holds its own pure components: `<Json />`
+and `<Yaml />`, each under its own `https://executable.md/components/` identity
+and its self-closing spelling alone. `allow` does not select between them —
+rendering a value a fragment already holds performs nothing — so a host can
+neither remove one by omitting it nor give one an effect by naming it.
+
+That table is a fact about the build rather than about the policy a host
+stated, which is what decides how a retained admission reads. A record written
+before a pure component existed holds no row for it, and that record is what its
+own continuation is held to: the comparison is against the historical rows, and
+so is the table that continuation may *name*. So an older admission is neither
+refused for a row its fragment never named nor quietly widened to include one,
+while new source is admitted under the current table. A retained composition row
+this build no longer supplies is stale and refuses.
+
 A trusted host may add another pure component only by placing
 its exact definition and stable identity in the composition table captured
 before execution. It is not inferred to be pure from its name, documentation or
@@ -7728,6 +7827,38 @@ question the question an authored document asks, and what keeps a repository,
 registered or middleware component of the same name from receiving a reply's
 permission. Its form and its class are its declaration's: paired, and a write.
 
+**A reply may select out of what a control returned, and what comes back is
+that selection.** `yq` on a control is the engine's ordinary attribute, so the
+route is the ordinary one: the control performs its own work once, records its
+own outcome, and the selection happens after that outcome and before the
+capture.
+
+What the *history* gains is a mark and a record. A queried occurrence's intent
+carries `presentation: "selected-v1"`, written before the original work by the
+occurrence's own receiver — never inferred afterwards from a record and never
+supplied in an argument a reply wrote. The selected value is then a separate
+closed `control-presentation` record, through the same serialized writer, naming
+that exact conversation, response and control order, and appended only after the
+original outcome succeeded, the selection was accepted as JSON, and whatever
+capture or publication the occurrence owed has happened. Its acknowledged append
+is the sole acceptance of a selected presentation.
+
+So the two states a reader has to tell apart are told apart by the records
+themselves. A marked intent with an acknowledged presentation is a selection;
+a marked intent with none is an **interrupted** selection, reported as that and
+never answered with the observation the producer retained — which is the one
+substitution this pair exists to prevent. A refused control keeps refused
+feedback whatever a constant expression would have produced, cancellation writes
+no successful presentation, and an unmarked record keeps exactly the historical
+meaning it had. History refuses an orphan, a duplicate, a wrong occurrence, a
+presentation for an operation that did not succeed, and a malformed selected
+value.
+
+A read's own identity, range and continuation stay beside the selected value
+rather than inside it: selecting a field out of a window neither reads another
+page nor changes the extent the producer observed, and a reply has to be able to
+tell those apart.
+
 **What the reply asked for comes back to it, and that is what the next turn is
 for.** After the response finishes and its scope joins, the designated results
 go to the same conversation as one turn, in admission order read back out of the
@@ -8433,7 +8564,10 @@ Status is measured against main.
 | `<Let as="name">` | Binds rendered content or an exact by-reference value in the existing environment; source choice precedes execution. [Binding](specs/executable-mdx-spec.md#65-prop-validation). | built on the #527 stack |
 | `<CodeBlock value={…} />` | Renders a supplied string inside a safe fence, preserving its exact value through return and capture. [Forms and validation](specs/executable-mdx-spec.md#619-showing-text-as-a-code-block-codeblock). | built on the #658 stack |
 | `<Verbose>…</Verbose>` | Renders content only under a true lexical verbosity value; CLI diagnostics remain host presentation. [Verbosity](specs/executable-mdx-spec.md#620-verbose-only-content-verbose). | built on this stack |
-| `<Json value={…} />` | Renders a captured value through native two-space JSON serialization without changing its operand. [Validation, failures and exact capture](specs/executable-mdx-spec.md#612-json-in-both-directions-json-parse-and-safeparse). | built on the #452 stack, with ordinary text capture enabled by #666 |
+| `<Json value={…} />` | Renders a captured value through native two-space JSON serialization without changing its operand. [Validation, failures and exact capture](specs/executable-mdx-spec.md#612-json-in-both-directions-json-yaml-parse-and-safeparse). | built on the #452 stack, with ordinary text capture enabled by #666 |
+| `<Yaml value={…} />` | Renders a captured value as one complete YAML document — two-space indentation, no separators, one terminating newline — through the same single native JSON serialization `<Json>` describes the operand with, then the execution's own engine under the identity expression. Nothing else turns a value into YAML, and scalars stay quoted where their type depends on it so the text parses back to the value that went in. [Forms, failures and exact capture](specs/executable-mdx-spec.md#612-json-in-both-directions-json-yaml-parse-and-safeparse). | built on this stack |
+| `yq` | Selects one JSON value out of what an ordinary component returned, before that result becomes a capture. One shared engine-owned invocation attribute, separate from `as` and consumed before the producer's own props are validated; it runs after the producer's own return validation and joined teardown, so no expression repairs a rejected return, a refused producer or a failed cleanup. One value or a refusal — `null`, `false`, `[]` and a multiline string are values, while no match and several matches both refuse with the array guidance. [Authored contract](specs/executable-mdx-spec.md#621-selecting-out-of-a-result-yq) and [the seam](#what-an-accepted-result-becomes). | built on this stack |
+| owned result destinations | Where a trusted host's own component results go, for the components it published or the protected name it selected. Stated on the `ExecutionInstallation`, copied before any installation runs, authenticated by exact object against this execution's own publication record, and opened per canonical occurrence. [Invariant](#where-an-owned-result-may-go). | built on this stack |
 | root failure settlement | a text root installs the fail-capable `output` mode for its whole body, so an uncaught, undecided failure is the document execution's own outcome, whether or not the root declares `<Output>` [Invariant](#3-error-mode-is-lexical). | built on the #453 stack |
 | `<Output>` region `output` mode | an undecided error fails the document execution [Invariant](#3-error-mode-is-lexical). | built on main |
 | `<Output>` rendering selection | chooses which regions of a body render, and buffers a root that declares one; it decides nothing about failure [Interface and evidence](specs/executable-mdx-spec.md#69-component-declared-output-output). | built on main |

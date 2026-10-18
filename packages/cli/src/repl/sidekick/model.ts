@@ -40,6 +40,7 @@ import { parseDurableEvent } from "@executablemd/durable-streams";
 
 import type {
   ConversationRecord,
+  ControlPresentationRecord,
   ControlRecord,
   ResponseRecord,
   RetainedPrefix,
@@ -316,6 +317,21 @@ export interface SidekickOperation {
    */
   readonly status: "ok" | "failed" | "unfinished";
   readonly failure: string | undefined;
+  /**
+   * How this occurrence's result is presented, when its own intent marked one.
+   *
+   * Absent for every occurrence that was never queried, which is what keeps an
+   * unmarked history reading exactly as it did. `selected` means an
+   * acknowledged presentation holds the value; `refused` means the selection
+   * was recorded as having failed; `incomplete` means the intent was marked and
+   * no presentation was ever acknowledged — an interrupted selection, which is
+   * reported as itself and never substituted with the producer's observation.
+   */
+  readonly presentation?: "selected" | "refused" | "incomplete";
+  /** The selected JSON value an acknowledged presentation holds. */
+  readonly selected?: unknown;
+  /** The read context that presentation kept beside the selected value. */
+  readonly read?: unknown;
 }
 
 /** A Submit whose reservation the entry journal still has to be asked about. */
@@ -929,6 +945,8 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
   const intents = new Map<string, { record: ControlRecord; index: number }>();
   const operations: SidekickOperation[] = [];
   const settled = new Set<string>();
+  /** Each acknowledged selected presentation, by the occurrence it names. */
+  const presented = new Map<string, ControlPresentationRecord>();
   let preferences: SidekickPreferences | undefined;
   const delivered = new Map<string, number>();
   const unestablished: { conversation: string; turn: number | null }[] = [];
@@ -1178,6 +1196,62 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
         });
         break;
       }
+      case "control-presentation": {
+        const key = slot(record.conversation, record.response, record.order);
+        const intent = intents.get(key);
+        // Every way this record can fail to belong to an occurrence of this
+        // history is the same refusal: a presentation is an answer about one
+        // exact invocation, and a reading that attached it to the nearest
+        // plausible one would show a reply another control's value.
+        if (intent === undefined) {
+          return Err(
+            new SidekickProjectionError(
+              `this chat history records a selected result for an operation it does not ` +
+                `record (record ${position}).`,
+            ),
+          );
+        }
+        if (intent.record.presentation !== "selected-v1") {
+          return Err(
+            new SidekickProjectionError(
+              `this chat history records a selected result for an operation that did not ask ` +
+                `for one (record ${position}).`,
+            ),
+          );
+        }
+        if (!settled.has(key)) {
+          return Err(
+            new SidekickProjectionError(
+              `this chat history records a selected result before the operation's own outcome ` +
+                `(record ${position}).`,
+            ),
+          );
+        }
+        if (presented.has(key)) {
+          return Err(
+            new SidekickProjectionError(
+              `this chat history records two selected results for one operation ` +
+                `(record ${position}).`,
+            ),
+          );
+        }
+        const owning = operations.find(
+          (held) =>
+            held.conversation === record.conversation &&
+            held.response === record.response &&
+            held.order === record.order,
+        );
+        if (owning?.status !== "ok") {
+          return Err(
+            new SidekickProjectionError(
+              `this chat history records a selected result for an operation that did not ` +
+                `succeed (record ${position}).`,
+            ),
+          );
+        }
+        presented.set(key, record);
+        break;
+      }
       case "feedback":
         if (record.turn === null) {
           // Feedback text retained before its turn: composed for that response
@@ -1243,6 +1317,37 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
     delivered.set(feedback.conversation, owner);
   }
 
+  // What each marked occurrence's result is presented as, decided from the
+  // records rather than from what a producer observed. A marked intent with no
+  // acknowledged presentation is `incomplete`, which is the state that must not
+  // be answered with the raw observation; an unmarked one gains no member at
+  // all, so an older history projects exactly as it did.
+  const settledOperations: SidekickOperation[] = operations.map((held) => {
+    const intent = intents.get(slot(held.conversation, held.response, held.order));
+    if (intent?.record.presentation !== "selected-v1") {
+      return held;
+    }
+    const presentation = presented.get(slot(held.conversation, held.response, held.order));
+    if (presentation === undefined) {
+      return { ...held, presentation: "incomplete" as const };
+    }
+    if (presentation.outcome.status !== "ok") {
+      return {
+        ...held,
+        presentation: "refused" as const,
+        failure: presentation.outcome.error.message,
+      };
+    }
+    return {
+      ...held,
+      presentation: "selected" as const,
+      selected: presentation.selected,
+      ...(Object.hasOwn(presentation, "read") ? { read: presentation.read } : {}),
+    };
+  });
+  operations.length = 0;
+  operations.push(...settledOperations);
+
   // Intents with no outcome, in the order they were written. These are the
   // operations an explicit continuation has to account for, and the reason the
   // family is two records.
@@ -1258,6 +1363,9 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
       component: held.record.component,
       status: "unfinished",
       failure: undefined,
+      ...(held.record.presentation === "selected-v1"
+        ? { presentation: "incomplete" as const }
+        : {}),
     });
   }
   unfinished.sort((left, right) => left.order - right.order);

@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "package": "yq.rs",
+  "version": "0.1.0",
+  "asset": "dist/yq.wasm",
+  "bytes": 468387,
+  "sha256": "97252eddd0dd7c2d80c25f8b73aec0874af954ca77ea33d8eb892c0a845eac46",
+  "license": "MIT AND Apache-2.0",
+  "homepage": "https://github.com/taras/yq.rs#readme",
+  "runtimeExport": "yq.rs/loader",
+  "generator": "scripts/generate-yq-wasm.ts",
+  "encoded": "packages/core/src/yq-wasm.ts",
+  "notices": [
+    {
+      "path": "yq-vendor-notices/LICENSE",
+      "sha256": "647c2da0124ded4c754c2dd65d5928d26b961f3f2fc96a953801e01ad4c88404"
+    },
+    {
+      "path": "yq-vendor-notices/THIRD_PARTY_NOTICES.md",
+      "sha256": "1f2ef73819837f4a7553557f625ab4895c435038a95d404efb47b5fc7cfc4401"
+    }
+  ]
+}

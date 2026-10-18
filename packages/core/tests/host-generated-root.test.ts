@@ -1438,7 +1438,7 @@ describe("Tier E8 — the captured selection holds canonical Syntax once", () =>
     // this root may write.
     const rows = retainedRows(yield* stream.readAll());
     expect(rows.filter((row) => row.name === "Syntax")).toHaveLength(1);
-    expect(rows.map((row) => row.name)).toEqual(["Json", "Probe", "Syntax"]);
+    expect(rows.map((row) => row.name)).toEqual(["Json", "Yaml", "Probe", "Syntax"]);
     // And once in the descriptive vocabulary, which is the other reading of the
     // same selection: a second entry would render a second section.
     expect(occurrences(answered.output ?? "", "### `<Syntax>`")).toBe(1);
@@ -1466,7 +1466,7 @@ describe("Tier E8 — the captured selection holds canonical Syntax once", () =>
     expect(invoked).toEqual(["probed"]);
     const rows = retainedRows(yield* stream.readAll());
     expect(rows.filter((row) => row.name === "Syntax")).toHaveLength(1);
-    expect(rows.map((row) => row.name)).toEqual(["Json", "Probe", "Syntax"]);
+    expect(rows.map((row) => row.name)).toEqual(["Json", "Yaml", "Probe", "Syntax"]);
     expect(occurrences(answered.output ?? "", "### `<Syntax>`")).toBe(1);
   });
 });

@@ -36,7 +36,8 @@ export type StructuralViolationCode =
   | "structural-usage-invalid"
   | "binding-invalid"
   | "capture-invalid"
-  | "return-usage-invalid";
+  | "return-usage-invalid"
+  | "props-invalid";
 
 /** One thing a construct's source got wrong. */
 export interface StructuralViolation {

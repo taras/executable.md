@@ -278,6 +278,37 @@ export type {
  */
 export { installInvocationAgentProvider } from "./src/agent/launch-install.ts";
 export { GeneratedXmdError } from "./src/generated-xmd.ts";
+/**
+ * Where this host's own results may go, for the components it published.
+ *
+ * Here rather than on `./api` because it is an internal host installation
+ * contract: a host states its destinations on the `ExecutionInstallation` it
+ * already hands over, canonical execution copies them before any installation
+ * runs, and the lookup a host's own component body reaches its occurrence
+ * through arrives as the argument of one call. None of it is component props,
+ * definition metadata, a Context slot or a contextual Api, so nothing a
+ * document, a component or a middleware package can name acquires one.
+ */
+export { ResultDestinationError } from "./src/component-result-destinations.ts";
+export type {
+  ResultDestination,
+  ResultDestinationEntry,
+  ResultDestinationInstallation,
+  ResultOccurrence,
+  ResultOccurrenceLookup,
+} from "./src/component-result-destinations.ts";
+/**
+ * The pure components every generated evaluation may write, for a host that
+ * describes the vocabulary a response is admitted under.
+ *
+ * Core's own always-on table, which `allow` does not select between: a host
+ * cannot remove a pure component from a fragment's vocabulary by omitting it
+ * and cannot add an effect to the table by naming one. This is the describing
+ * half of that fact, so a host telling an agent what it may write derives the
+ * list rather than keeping a copy of it.
+ */
+export { coreCompositionVocabulary } from "./src/generated-xmd.ts";
+export type { CompositionVocabulary } from "./src/generated-xmd.ts";
 
 /**
  * Evaluating generated source as a **root** rather than as a fragment — see

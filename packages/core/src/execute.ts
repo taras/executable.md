@@ -33,6 +33,13 @@ import { createReplayStream } from "./replay-stream.ts";
 import { ExecutionProtocolError, issueExecution } from "./execution-request.ts";
 import { DocumentProtocolError, issueDocument } from "./document-request.ts";
 import { claimBoundExec } from "./bound-exec.ts";
+import { createValueQuery, ValueQueryContext } from "./value-query.ts";
+import { createResultDestinationRoute } from "./component-result-destinations.ts";
+import type {
+  ResultDestinationInstallation,
+  ResultDestinationRoute,
+} from "./component-result-destinations.ts";
+import type { ValueQueryOwner } from "./value-query.ts";
 import type { DocumentSettlement, IssuedDocument } from "./document-request.ts";
 import type { DocumentRequest, DurablePreparation } from "./document-request.ts";
 import {
@@ -2151,6 +2158,8 @@ function* runValueRoot(
   importTerminal: ComponentImportTerminal,
   /** This execution's own root publisher, for the captures the body may bind. */
   publications: RootBindingPublications | undefined,
+  /** This execution's own destinations, for the results they may receive. */
+  destinations: ResultDestinationRoute | undefined,
 ): Operation<DocumentResult> {
   // Created outside the scope the body runs in, so the value it selected is
   // still readable after that scope — and its teardown — has finished.
@@ -2182,6 +2191,7 @@ function* runValueRoot(
         environment,
         importTerminal,
         publications,
+        destinations,
         ownBody,
       );
       const exactRecord = environment.sourceSegments;
@@ -2239,6 +2249,14 @@ function* documentWorkflow(
    * be handing in an environment this root had not created yet.
    */
   publicationMode: RootBindingPublicationMode | undefined,
+  /**
+   * Where a result this host owns a destination for may go.
+   *
+   * The execution's own route, handed over beside the root owner and for the
+   * same reason: it is not something the environment describes, and nothing a
+   * document, a component or middleware can name reaches it.
+   */
+  destinations: ResultDestinationRoute,
 ): Workflow<DocumentResult> {
   // This run's memory of a checked command failure it never authorized. Passed
   // by value into core's own expansion and reachable from nowhere else, so no
@@ -2338,6 +2356,19 @@ function* documentWorkflow(
   const rootPath = "";
 
   const scopedExpansion: Operation<DocumentResult> = scoped(function* () {
+    // This execution's own `yq` engine, selected before anything can ask for
+    // one. Lazy, so a document that writes neither `yq` nor `<Yaml>` decodes
+    // and compiles nothing; installed above `roots.activate()` so the generated
+    // roots this execution evaluates reach the same owner its own elements do,
+    // while a concurrent execution reaches a different one. The release is
+    // registered before the owner exists, so an engine that arrives after this
+    // scope ended answers nobody.
+    let queries: ValueQueryOwner | undefined;
+    yield* ensure(() => {
+      queries?.close();
+    });
+    queries = createValueQuery();
+    yield* ValueQueryContext.set(queries);
     // Before any authored work, and in this scope rather than outside
     // `durableRun`: this is the scope `Execution.document` has already
     // installed the document's runtime services in — its Agent provider, its
@@ -2389,6 +2420,7 @@ function* documentWorkflow(
         environment,
         importTerminal,
         publications,
+        destinations,
       );
     }
 
@@ -2414,6 +2446,7 @@ function* documentWorkflow(
         environment,
         importTerminal,
         publications,
+        destinations,
         undefined,
       );
       // An empty buffered root emits no output event.
@@ -2444,6 +2477,7 @@ function* documentWorkflow(
         environment,
         importTerminal,
         publications,
+        destinations,
         undefined,
       );
 
@@ -2610,6 +2644,15 @@ export interface HostExecution extends DocumentExecution {
  */
 interface ComponentAssembly {
   readonly startingRegistry: ComponentRegistry;
+  /**
+   * Where a result this host owns a destination for may go.
+   *
+   * Part of the assembly because it is the same capture: an entry names the
+   * exact definition this execution's `componentAnswers` path published, so the
+   * route and the implementations a generated root may invoke are settled
+   * together rather than reconciled afterwards.
+   */
+  readonly destinations: ResultDestinationRoute;
   readonly bundle: WorkflowComponentCatalog | undefined;
   readonly catalog: ExecutionDeclarationCatalog;
   readonly installedComponents: InstalledComponents | undefined;
@@ -2666,6 +2709,8 @@ function* assembleComponents(
   documentation: readonly DocumentationContribution[],
   canonicalImports: CanonicalImports,
   lifetime: EvaluationLifetime,
+  /** The destinations this host stated, copied before any installation ran. */
+  resultDestinations: ResultDestinationInstallation | undefined,
 ): Operation<ComponentAssembly> {
   // The paths *this capture* resolves against, copied: the selection below is
   // resolved against the environment the host assembled, and a later edit to
@@ -2803,6 +2848,40 @@ function* assembleComponents(
           identity.componentRouting.project,
         );
 
+  // Built here, from the two things that settle it: the host's own entries, and
+  // what this execution's capture actually published. An entry is authenticated
+  // by the exact object the provider published — never by the name it was
+  // published under — and the row it then routes to is the sealed
+  // implementation canonical capture produced, so a definition the capture
+  // never saw reaches no destination.
+  const captured = [
+    ...(evaluationProfile?.composition ?? []),
+    ...(evaluationProfile?.read ?? []),
+    ...(evaluationProfile?.write ?? []),
+  ];
+  const destinations = createResultDestinationRoute(resultDestinations, (entry) => {
+    if ("definition" in entry) {
+      // Authenticated by the exact object the provider published — never by the
+      // name it was published under. The row it then routes to is the sealed
+      // implementation canonical capture produced, so a definition the capture
+      // never saw reaches no destination.
+      const name = canonicalImports.publishedName(entry.definition);
+      return name === undefined
+        ? undefined
+        : captured.find((held) => held.name === name)?.definition.fn;
+    }
+    // A name this host selected and did not publish: core's own tier answered
+    // it, so core is what resolves which implementation that is. The origin on
+    // the captured row is where that answer came from, and only core's own
+    // qualifies — a name a provider published has a destination belonging to
+    // whoever published it rather than to whoever selected it.
+    const held = captured.find((row) => row.name === entry.selected);
+    return held?.origin === CORE_ORIGIN ? held.definition.fn : undefined;
+  });
+  yield* ensure(() => {
+    destinations.revoke();
+  });
+
   return {
     startingRegistry,
     bundle,
@@ -2813,6 +2892,7 @@ function* assembleComponents(
     imports,
     describe,
     evaluationProfile,
+    destinations,
   };
 }
 
@@ -3206,6 +3286,7 @@ function* executeDocument(
               componentRouting: identity.componentRouting,
               reference: derivedSyntax,
               live: profile.live,
+              destinations: assembly.destinations,
             });
       roots.supply({ journal, evaluator: bound });
 
@@ -3227,6 +3308,7 @@ function* executeDocument(
               initialBindings,
               roots,
               publicationMode,
+              assembly.destinations,
             ),
           );
           try {
@@ -3475,6 +3557,16 @@ export interface ExecutionInstallation {
    * installation's origin.
    */
   readonly componentAnswers?: readonly ComponentAnswerInstallation[];
+  /**
+   * Where this host's own results may go, for the components it published.
+   *
+   * Read once and copied before any installation runs, like the admissions
+   * beside it, so what may receive a result is fixed before installed code,
+   * middleware or document code exists. Each entry names the exact definition
+   * this host published through its own `componentAnswers` request; an entry
+   * naming anything else routes nothing.
+   */
+  readonly resultDestinations?: ResultDestinationInstallation;
   install?(): Operation<void>;
 }
 
@@ -4084,6 +4176,26 @@ function* invoke(
     ),
   );
 
+  // Read once, here, with the admissions and the declarations: a destination a
+  // host added from inside its own `install()` would be one nothing captured,
+  // and a member that answered differently on a second reading would let a host
+  // be tested for one destination and install another. One installation states
+  // them; two stating destinations is a composition nothing here resolves, so
+  // the first is the one that is read.
+  const statedDestinations = installations.flatMap((installation) =>
+    installation.resultDestinations === undefined ? [] : [installation.resultDestinations],
+  );
+  const resultDestinations = Object.freeze(
+    statedDestinations.length === 0
+      ? undefined
+      : {
+          destinations: Object.freeze([...(statedDestinations[0]?.destinations ?? [])]),
+          ...(statedDestinations[0]?.installed === undefined
+            ? {}
+            : { installed: statedDestinations[0].installed.bind(statedDestinations[0]) }),
+        },
+  );
+
   // The lifetime every captured generated implementation is held to, opened
   // and armed before a single `install()` runs — so what a capture retains is
   // revoked however the execution ends, including when it is halted partway
@@ -4172,6 +4284,7 @@ function* invoke(
     documentation,
     canonicalImports,
     lifetime,
+    resultDestinations,
   );
 
   // Whatever a handler returns is not an execution, so it is not read.

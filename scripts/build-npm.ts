@@ -62,15 +62,33 @@ import { tmpdir } from "node:os";
 import { z } from "npm:zod@^4";
 
 /**
- * The documents a package ships, as package-relative paths.
+ * The non-TypeScript assets a package ships, as package-relative paths.
  *
- * `src/documents/` and nothing else. Packages keep test documents and scenario
- * fixtures under `src/` as well, so publishing every Markdown found there would
- * ship a package full of fixtures; being in this one directory is what declares
- * a document part of the product.
+ * Two kinds, and they are shipped for different reasons. A **document** is part
+ * of the product: `src/documents/` and the `components.md` beside each
+ * registration boundary, and nothing else — packages keep test documents and
+ * scenario fixtures under `src/` as well, so publishing every Markdown found
+ * there would ship a package full of fixtures.
+ *
+ * An **attribution** accompanies bytes the package carries from somebody else.
+ * Core's generated `yq` module is the published WebAssembly of `yq.rs`, and the
+ * vendor's own license and third-party notices travel beside it because that is
+ * what distributing those bytes requires. They are not runtime inputs: nothing
+ * reads them, and the engine's bytes are in the module graph.
  */
-function* packagedDocuments(pkgDir: URL): Operation<string[]> {
+function* packagedAssets(pkgDir: URL): Operation<string[]> {
   const shipped: string[] = [];
+  // Named individually, because attribution is a decision rather than a layout:
+  // a sweep would ship whatever happened to be in the directory.
+  for (const relative of [
+    "src/yq-wasm.provenance.json",
+    "src/yq-vendor-notices/LICENSE",
+    "src/yq-vendor-notices/THIRD_PARTY_NOTICES.md",
+  ]) {
+    if (yield* exists(new URL(relative, pkgDir))) {
+      shipped.push(relative);
+    }
+  }
   // Component documentation lives beside the registration boundary it
   // documents rather than in `src/documents/`, because that is where the
   // components are and moving it would separate the two things that have to
@@ -430,7 +448,7 @@ function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Oper
   // TypeScript imports would be absent from the published package while the
   // source checkout kept working — the command would find nothing at runtime,
   // on Node and Bun only.
-  for (const asset of yield* packagedDocuments(pkgDir)) {
+  for (const asset of yield* packagedAssets(pkgDir)) {
     const target = new URL(`esm/${asset}`, outDir);
     yield* ensureDir(fromFileUrl(new URL(".", target)));
     yield* copyFile(new URL(asset, pkgDir), target);

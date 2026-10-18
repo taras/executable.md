@@ -705,6 +705,8 @@ function* phases(): Operation<unknown> {
       yield* submitForSidekick(
         { conversation: CHAT, response: RESPONSE },
         {
+          // No receiver: this case is about the reservation, not a selection.
+          presenting: undefined,
           session: {
             // The acknowledged history, read the way the root reads it.
             entries: () => {

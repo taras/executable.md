@@ -65,6 +65,9 @@ import {
   asBindingViolation,
   asExpressionViolation,
   capturedBinding,
+  ENGINE_OWNED_PROPS,
+  queriedExpression,
+  queryExpressionViolation,
   returnCaptureViolation,
 } from "./invocation-rules.ts";
 import { interpolate } from "./interpolate.ts";
@@ -145,7 +148,9 @@ import type { Workflow } from "@executablemd/durable-streams";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
 import { isJsonObject, parseJson } from "./json.ts";
 import { bindRootCapture } from "./root-binding-publications.ts";
+import { componentResult } from "./component-result.ts";
 import type { RootBindingPublications } from "./root-binding-publications.ts";
+import type { ResultDestinationRoute } from "./component-result-destinations.ts";
 import { healSegment } from "./heal.ts";
 import { scanSegments } from "./scanner.ts";
 import { declareChildAnswers, expandAnswers, strayAnswerError } from "./answers.ts";
@@ -292,6 +297,7 @@ function expandChildrenScoped(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
@@ -317,6 +323,7 @@ function expandChildrenScoped(
       environment,
       imports,
       publications,
+      destinations,
       returnBody,
     );
   });
@@ -387,6 +394,7 @@ interface ProjectionState {
   narrowedSyntax: SyntaxReference | undefined;
   imports: ComponentImportTerminal | undefined;
   publications: RootBindingPublications | undefined;
+  destinations: ResultDestinationRoute | undefined;
 }
 
 interface ProjectionFrame {
@@ -536,6 +544,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             state.environment,
             state.imports,
             state.publications,
+            state.destinations,
             options.returnFrame,
           );
           outcome.resolve({ segments: rendered });
@@ -650,6 +659,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
               state.environment,
               state.imports,
               state.publications,
+              state.destinations,
               request.kind === "markdown" ? undefined : state.callerReturn,
             );
             outcome.resolve({ segments: [...errors, ...rendered] });
@@ -856,9 +866,11 @@ export function expandSegments(
     checkedFailures,
     environment,
     // No execution terminal: an expansion driven directly resolves its imports
-    // through the ordinary public Component Api, exactly as it always has. And
-    // no root publisher: an expansion with no execution has no root environment
-    // of an execution's to publish for.
+    // through the ordinary public Component Api, exactly as it always has. No
+    // root publisher: an expansion with no execution has no root environment of
+    // an execution's to publish for. And no destinations: a result has nowhere
+    // to go that an execution did not state.
+    undefined,
     undefined,
     undefined,
     undefined,
@@ -942,6 +954,7 @@ function* expandListSegments(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
@@ -967,6 +980,7 @@ function* expandListSegments(
         environment,
         imports,
         publications,
+        destinations,
         returnBody,
       );
     });
@@ -1090,6 +1104,7 @@ function* expandListSegments(
               environment,
               imports,
               publications,
+              destinations,
               returnBody,
             )),
           );
@@ -1112,6 +1127,7 @@ function* expandListSegments(
               environment,
               imports,
               publications,
+              destinations,
               returnBody,
             )),
           );
@@ -1135,6 +1151,7 @@ function* expandListSegments(
             environment,
             imports,
             publications,
+            destinations,
             returnBody,
           );
           break;
@@ -1170,6 +1187,7 @@ function* expandListSegments(
             environment,
             imports,
             publications,
+            destinations,
             returnBody,
           );
           break;
@@ -1190,6 +1208,7 @@ function* expandListSegments(
             environment,
             imports,
             publications,
+            destinations,
             returnBody,
           );
           break;
@@ -1213,6 +1232,7 @@ function* expandListSegments(
               environment,
               imports,
               publications,
+              destinations,
               returnBody,
             );
           // Which state this is, answered by identity rather than by name:
@@ -1261,6 +1281,7 @@ function* expandListSegments(
             environment,
             imports,
             publications,
+            destinations,
             returnBody,
           );
           break;
@@ -1300,6 +1321,7 @@ function* expandListSegments(
             environment,
             imports,
             publications,
+            destinations,
           );
           break;
         }
@@ -1354,6 +1376,7 @@ function* expandListSegments(
             environment,
             imports,
             publications,
+            destinations,
             returnBody,
           );
           break;
@@ -1378,6 +1401,7 @@ function* expandListSegments(
           environment,
           imports,
           publications,
+          destinations,
           returnBody,
         );
         // A printed error the callee produced is data, and stays data here: it
@@ -1524,6 +1548,7 @@ function* expandListSegments(
                 environment,
                 imports,
                 publications,
+                destinations,
                 returnBody,
               ),
             );
@@ -1588,6 +1613,7 @@ function* checkedCommandFailure(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<ErrorSegment> {
   // Written down before it is raised or projected, and before the error mode is
@@ -1695,6 +1721,7 @@ function* expandLet(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<ErrorSegment[]> {
   // Every one of these is decided from what the author wrote, so the whole
@@ -1729,6 +1756,7 @@ function* expandLet(
       environment,
       imports,
       publications,
+      destinations,
       returnBody,
     ),
   );
@@ -1843,6 +1871,7 @@ function* expandEach(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return yield* structural(segment, path, () => work());
@@ -1907,6 +1936,7 @@ function* expandEach(
         environment,
         imports,
         publications,
+        destinations,
         returnBody,
       );
       // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
@@ -2036,6 +2066,7 @@ function* expandIf(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
@@ -2113,6 +2144,7 @@ function* expandIf(
         environment,
         imports,
         publications,
+        destinations,
         returnBody,
       );
     };
@@ -2194,6 +2226,7 @@ function* expandSwitch(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
@@ -2269,6 +2302,7 @@ function* expandSwitch(
         environment,
         imports,
         publications,
+        destinations,
         returnBody,
       ),
     );
@@ -2348,6 +2382,7 @@ function* expandLoop(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
@@ -2410,6 +2445,7 @@ function* expandLoop(
             environment,
             imports,
             publications,
+            destinations,
             returnBody,
           );
           if (frame.broken) {
@@ -2535,6 +2571,7 @@ function spawnChild(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
 ): Operation<Emission[]> {
   return scoped(function* () {
     yield* provideEnv(spawnEnvironment(incoming));
@@ -2568,6 +2605,7 @@ function spawnChild(
         environment,
         imports,
         publications,
+        destinations,
         undefined,
       ),
     );
@@ -2615,6 +2653,7 @@ function* expandAll(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
 ): Operation<void> {
   return yield* structural(segment, path, () => work());
 
@@ -2646,6 +2685,7 @@ function* expandAll(
           environment,
           imports,
           publications,
+          destinations,
         ),
     );
 
@@ -2750,6 +2790,7 @@ function* expandPrintErrors(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const refusal = printErrorsViolations(segment)[0];
@@ -2778,6 +2819,7 @@ function* expandPrintErrors(
       environment,
       imports,
       publications,
+      destinations,
       returnBody,
     );
   });
@@ -2818,6 +2860,7 @@ function* expandComponent(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   // Surrounded before resolution, props validation or any body: what an
@@ -2996,6 +3039,7 @@ function* expandComponent(
         environment,
         imports,
         publications,
+        destinations,
         returnBody,
         selected,
         dispatcher,
@@ -3042,6 +3086,7 @@ function* expandComponent(
     // expansion engine for slot assignment, not forwarded to the child.
     let validatedProps: Record<string, Json>;
     let asBinding: string | undefined;
+    let query: string | undefined;
     try {
       const refused = asBindingViolation(name, resolvedProps.as);
       if (refused !== undefined) {
@@ -3049,7 +3094,17 @@ function* expandComponent(
       }
       asBinding = capturedBinding(resolvedProps.as);
 
-      const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
+      // Consumed before the producer's own closed schema is checked, and before
+      // its body runs: a component with `additionalProperties: false` accepts an
+      // invocation that selected out of its result without ever seeing that it
+      // did, and a `yq` that is not a string refuses with no effect performed.
+      const unusable = queryExpressionViolation(name, resolvedProps.yq);
+      if (unusable !== undefined) {
+        throw new Error(unusable.message);
+      }
+      query = queriedExpression(resolvedProps.yq);
+
+      const { slot: _slot, as: _as, yq: _yq, ...propsForValidation } = resolvedProps;
       validatedProps = yield* validateProps(name, propsForValidation, definition.props);
     } catch (error) {
       return [yield* raise(schemaValidationErrorSegment(error, name))];
@@ -3157,6 +3212,7 @@ function* expandComponent(
         environment,
         imports,
         publications,
+        destinations,
       });
       // Published on the eval scope, which every task the invocation owns
       // descends from — including its persist-eval blocks and its content.
@@ -3233,6 +3289,7 @@ function* expandComponent(
             bodyEnvironment,
             imports,
             publications,
+            destinations,
             returnBody,
           );
         }, observed.settled);
@@ -3258,11 +3315,27 @@ function* expandComponent(
           }),
         ];
       }
-      yield* bindRootCapture(publications, parentEnv, asBinding, value, position);
+      // The returned value is accepted and the invocation has joined, so this is
+      // where a query may transform it. No expression repairs the schema above
+      // or the cleanup that just finished, and a refusal here binds nothing.
+      let selected: unknown;
+      try {
+        selected = yield* componentResult({ component: name, value, query });
+      } catch (error) {
+        const fatal = fatalCause(error);
+        if (fatal !== undefined) {
+          throw fatal;
+        }
+        return [yield* raise(schemaValidationErrorSegment(error, name))];
+      }
+      yield* bindRootCapture(publications, parentEnv, asBinding, selected, position);
       return [];
     }
 
-    const bodyOwner = asBinding === undefined ? owner : undefined;
+    // A queried rendering is buffered like a captured one. Emitting the raw text
+    // into the caller's region and then querying a copy would show the reader
+    // the text the selection was meant to replace.
+    const bodyOwner = asBinding === undefined && query === undefined ? owner : undefined;
     // Where this body's own segments start, so what it renders can be told apart
     // from what the caller had already produced into the same array.
     const renderedFrom = bodyOwner?.length ?? 0;
@@ -3283,6 +3356,7 @@ function* expandComponent(
         bodyEnvironment,
         imports,
         publications,
+        destinations,
         returnBody,
       );
     }, observed.settled);
@@ -3298,14 +3372,21 @@ function* expandComponent(
     // binds instead. Recording it here — against the segments this body produced,
     // after it produced them — is what carries the fact to the emission loop,
     // which is outside every scope the invocation owned.
-    if (authorizedCanonically && environment?.installedComponents?.declaresExact(name) === true) {
+    //
+    // A selection replaces the rendering with a value of its own, so a queried
+    // invocation contributes no source segments to mark.
+    if (
+      query === undefined &&
+      authorizedCanonically &&
+      environment?.installedComponents?.declaresExact(name) === true
+    ) {
       markExactSource(
         environment?.sourceSegments,
         bodyOwner === undefined ? expanded : bodyOwner.slice(renderedFrom),
       );
     }
 
-    if (asBinding) {
+    if (asBinding !== undefined || query !== undefined) {
       // A capture never swallows an error. The body reported these where they
       // were created (§6.9) — including the ones a string projection rendered
       // away — so they are handed back as they are and the binding stays unset.
@@ -3319,6 +3400,27 @@ function* expandComponent(
         return errors;
       }
 
+      let selected: unknown;
+      try {
+        selected = yield* componentResult({
+          component: name,
+          value: renderSegments(expanded),
+          query,
+        });
+      } catch (error) {
+        const fatal = fatalCause(error);
+        if (fatal !== undefined) {
+          throw fatal;
+        }
+        return [yield* raise(schemaValidationErrorSegment(error, name))];
+      }
+      if (asBinding === undefined) {
+        // Queried and uncaptured: the selected value is what this element
+        // renders. A string renders as itself and anything else renders
+        // nothing, which is the rule an uncaptured result already follows.
+        return typeof selected === "string" ? [{ type: "text", content: selected }] : [];
+      }
+
       const parentEnv = yield* env;
       if (!parentEnv) {
         return [
@@ -3329,13 +3431,7 @@ function* expandComponent(
           }),
         ];
       }
-      yield* bindRootCapture(
-        publications,
-        parentEnv,
-        asBinding,
-        renderSegments(expanded),
-        position,
-      );
+      yield* bindRootCapture(publications, parentEnv, asBinding, selected, position);
       return [];
     }
 
@@ -3466,6 +3562,7 @@ function* expandFunctionComponent(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
   returnBody: ReturnBody | undefined,
   /**
    * The identity domain canonical resolution selected for this invocation.
@@ -3503,7 +3600,14 @@ function* expandFunctionComponent(
   // Captures are the engine's to hand over unresolved, like `slot` and `as` are
   // the engine's to consume: they never meet the JSON gate below, and never
   // appear in `validatedProps`.
-  const captured = new Set(definition.captures ?? []);
+  // The engine's own props never become a component's captures. `as`, `slot`
+  // and `yq` are consumed here, so a declaration naming one of them would
+  // otherwise intercept the prop the engine is about to act on.
+  const captured = new Set(
+    (definition.captures ?? []).filter(
+      (declared) => !(ENGINE_OWNED_PROPS as readonly string[]).includes(declared),
+    ),
+  );
   const literalCaptures: Record<string, Json> = {};
   const expressionCaptures: Record<string, string> = {};
   const openProps: Record<string, Json> = {};
@@ -3553,8 +3657,16 @@ function* expandFunctionComponent(
     return [yield* raise({ type: "error", message: asRefused.message, source: name })];
   }
   const asBinding = capturedBinding(resolvedProps.as);
+  // Consumed before the producer's own closed schema is checked and before its
+  // body runs, so a `yq` that is not a string refuses with no effect performed
+  // and a closed props schema never sees the prop at all.
+  const unusableQuery = queryExpressionViolation(name, resolvedProps.yq);
+  if (unusableQuery !== undefined) {
+    return [yield* raise({ type: "error", message: unusableQuery.message, source: name })];
+  }
+  const query = queriedExpression(resolvedProps.yq);
   const owner = asBinding === undefined ? callerOwner : undefined;
-  const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
+  const { slot: _slot, as: _as, yq: _yq, ...propsForValidation } = resolvedProps;
 
   let validatedProps: Record<string, Json>;
   try {
@@ -3564,8 +3676,20 @@ function* expandFunctionComponent(
   }
 
   const returns = definition.returns;
-  const missingCapture = returnCaptureViolation(name, returns !== undefined, asBinding);
+  // Opened before required-as is decided, because a genuine execution-owned
+  // destination is the one thing that can satisfy an already-authorized
+  // uncaptured return: the host that published this exact definition said where
+  // its result goes, so the result is not being discarded. A tag name, a
+  // returns schema, a `yq` expression, a public option and a Context value each
+  // say nothing here — only the route this execution built from what the host
+  // stated before any document code ran.
+  const designated = destinations?.open(definition.fn, { component: name, query });
+  const missingCapture =
+    designated === undefined
+      ? returnCaptureViolation(name, returns !== undefined, asBinding)
+      : undefined;
   if (missingCapture !== undefined) {
+    designated?.close();
     return [yield* raise({ type: "error", message: missingCapture.message, source: name })];
   }
 
@@ -3650,6 +3774,11 @@ function* expandFunctionComponent(
               )
             : undefined) ??
           issueInvocation(expansion.id, name, selected, frame, !selfClosing, dispatcher);
+        // Tied to the exact object the engine minted for this occurrence, which
+        // is what the host's own body presents when it asks which occurrence it
+        // is in. Two same-named controls in one response are two invocations
+        // and therefore two receivers.
+        designated?.bind(issued.invocation);
         const dispatchBody = (body: Operation<unknown>) =>
           environment?.invokeGeneratedComponent === undefined
             ? body
@@ -3680,6 +3809,7 @@ function* expandFunctionComponent(
           environment,
           imports,
           publications,
+          destinations,
         };
         // Only the ordinary handle is published. The richer projection a
         // protected body may reach stays a closure at the dispatch below, so
@@ -3886,13 +4016,28 @@ function* expandFunctionComponent(
           returns === undefined
             ? output
             : yield* validateReturnValue(name, parseJson(output), returns);
-        yield* bindRootCapture(publications, parentEnv, asBinding, captured, position);
+        // The invocation has joined and its own contract has accepted what it
+        // produced, so this is where a query may transform it.
+        const selected = yield* componentResult({ component: name, value: captured, query });
+        yield* bindRootCapture(publications, parentEnv, asBinding, selected, position);
+        // After the capture and whatever publication it owed, which is the
+        // order a reader of the history depends on: a destination holding a
+        // value the capture never retained would describe work this run did not
+        // finish. Capturing a designated result does not switch its destination
+        // off — a reply may both use the value where it asked and be told it.
+        if (designated !== undefined) {
+          yield* designated.occurrence.deliver(selected);
+        }
         return [];
       }
       // Without `as` there is nowhere to bind, so only text can be observed:
       // a string renders, and anything else renders nothing rather than being
       // stringified into the document.
-      return typeof output === "string" ? [{ type: "text", content: output }] : [];
+      const rendered = yield* componentResult({ component: name, value: output, query });
+      if (designated !== undefined) {
+        yield* designated.occurrence.deliver(rendered);
+      }
+      return typeof rendered === "string" ? [{ type: "text", content: rendered }] : [];
     } catch (error) {
       // Everything below runs after `withInvocation()` has dismantled the
       // invocation, so what is handled here accounts for the body and its
@@ -4039,7 +4184,16 @@ function* expandFunctionComponent(
     }
     return produced;
   }
-  return yield* accepted();
+  try {
+    return yield* accepted();
+  } finally {
+    // Revoked however the occurrence settled — completed, failed or cancelled.
+    // A receiver kept from a finished invocation answers for nothing, which is
+    // what keeps a late or retained reference from filing under an occurrence
+    // that is over. Synchronous, so it is in place before anything else can be
+    // asked about this invocation.
+    designated?.close();
+  }
 }
 
 /**
@@ -4539,6 +4693,7 @@ export function* expandBody(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
@@ -4556,6 +4711,7 @@ export function* expandBody(
       environment,
       imports,
       publications,
+      destinations,
       returnBody,
     );
   }
@@ -4580,6 +4736,7 @@ export function* expandBody(
         environment,
         imports,
         publications,
+        destinations,
         returnBody,
       );
     } else if (chunk.output) {
@@ -4598,6 +4755,7 @@ export function* expandBody(
           environment,
           imports,
           publications,
+          destinations,
           returnBody,
         );
       });
@@ -4618,6 +4776,7 @@ export function* expandBody(
           environment,
           imports,
           publications,
+          destinations,
           returnBody,
         );
       });
@@ -4648,6 +4807,7 @@ function runDocumentation(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
@@ -4665,6 +4825,7 @@ function runDocumentation(
       environment,
       imports,
       publications,
+      destinations,
       returnBody,
     );
   });
@@ -4719,6 +4880,7 @@ function* expandValueBody(
   environment: ExecutionEnvironment | undefined,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
@@ -4747,6 +4909,7 @@ function* expandValueBody(
       environment,
       imports,
       publications,
+      destinations,
       ownBody,
     );
   }
@@ -4790,6 +4953,7 @@ function* expandInstalledStructural(
   environment: ExecutionEnvironment,
   imports: ComponentImportTerminal | undefined,
   publications: RootBindingPublications | undefined,
+  destinations: ResultDestinationRoute | undefined,
   returnBody: ReturnBody | undefined,
 ): Operation<void> {
   const name = segment.name;
@@ -4893,6 +5057,7 @@ function* expandInstalledStructural(
     environment,
     imports,
     publications,
+    destinations,
     returnBody,
     children: segment.children,
   });
@@ -4947,6 +5112,7 @@ interface RegionContext {
   readonly environment: ExecutionEnvironment;
   readonly imports: ComponentImportTerminal | undefined;
   readonly publications: RootBindingPublications | undefined;
+  readonly destinations: ResultDestinationRoute | undefined;
   readonly returnBody: ReturnBody | undefined;
   readonly children: Segment[];
 }
@@ -5113,6 +5279,7 @@ function* produceRegion(
         context.environment,
         context.imports,
         context.publications,
+        context.destinations,
         context.returnBody,
       );
     } catch (error) {

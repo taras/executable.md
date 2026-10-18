@@ -4902,3 +4902,124 @@ describe("REPL entries: what the Bindings reading shows at each position (#939)"
     expect(yield* bindingsAt(terminal, "entry-1")).toEqual(['token = "alpha"']);
   });
 });
+
+/**
+ * Tier EP6 — a selected capture crosses to the next entry.
+ *
+ * `yq` selects before a capture is published, so what the next entry inherits
+ * is the selected value and not the result it was selected out of. Driven
+ * through two real entries over one physical journal, each with its own segment
+ * view, and the second is handed exactly the record the public projection
+ * derives from the first — the same record a cold command derives from the same
+ * bytes.
+ */
+describe("REPL entries: a selected capture is what the next entry inherits", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** A producer whose return is text holding more than the entry wants. */
+  const RECORDS: ExecutionInstallation = {
+    components: [
+      {
+        name: "Records",
+        origin: "repl-entries-test",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        description: "Return the text one entry selects out of.",
+        factory: () =>
+          // deno-lint-ignore require-yield
+          function* (): Operation<string> {
+            return JSON.stringify({
+              records: [
+                { name: "a", status: "ok" },
+                { name: "b", status: "failed" },
+              ],
+            });
+          },
+      },
+    ],
+  };
+
+  /** One entry at the end of `physical`, retaining its root captures. */
+  function* selecting(
+    physical: DurableStream,
+    source: string,
+    initialBindings: Readonly<Record<string, Json>> = {},
+  ): Operation<Result<Json>> {
+    const view = new EntrySegmentStream(physical);
+    try {
+      return yield* yield* executeInstalled({ ...inlineSource(source), stream: view }, [RECORDS], {
+        initialBindings,
+        rootBindingPublications: "json-v1",
+      });
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error : new Error(String(error)) };
+    }
+  }
+
+  const SELECTS = [
+    `<Records yq='from_json | [.records[] | select(.status == "failed") | {"name": .name}]' as="failed" />`,
+    "",
+    "One: {failed.length}",
+    "",
+  ].join("\n");
+
+  // Read through a block rather than an interpolation: text interpolation
+  // resolves a binding name and not an expression over it.
+  const READS = [
+    "```js eval",
+    "const picked = failed[0].name;",
+    "```",
+    "",
+    "Two: {picked}",
+    "",
+  ].join("\n");
+
+  it("EP6: the next entry starts from the selected value, not the producer's text", function* () {
+    const physical = new InMemoryStream();
+    const first = yield* selecting(physical, SELECTS);
+    expect(first.ok).toBe(true);
+    expect(String(first.ok && first.value)).toContain("One: 1");
+
+    // Exactly what the projection says the next entry starts with.
+    const carried = inherited(yield* physical.readAll());
+    expect(carried).toEqual({ failed: [{ name: "b" }] });
+    // The text the producer returned did not cross, so the next entry cannot
+    // read a field the selection removed.
+    expect(JSON.stringify(carried)).not.toContain("status");
+
+    const second = yield* selecting(physical, READS, carried);
+    expect(second.ok).toBe(true);
+    expect(String(second.ok && second.value)).toContain("Two: b");
+  });
+
+  it("EP6: the first entry's own binding is unchanged by the second entry's edit", function* () {
+    const physical = new InMemoryStream();
+    yield* selecting(physical, SELECTS);
+    const carried = inherited(yield* physical.readAll());
+
+    const second = yield* selecting(
+      physical,
+      [
+        "```js eval",
+        'failed.push({ name: "later" });',
+        "const seen = failed.length;",
+        "```",
+        "",
+        "Two: {seen}",
+        "",
+      ].join("\n"),
+      carried,
+    );
+    expect(second.ok).toBe(true);
+    expect(String(second.ok && second.value)).toContain("Two: 2");
+
+    const model = projected(yield* physical.readAll());
+    const [one, two] = model.entries;
+    // The edit happened — the second entry read two — and it published nothing:
+    // a mutation is not a publication, so the retained value stays the one
+    // value the first entry selected, in both entries' readings and in what a
+    // third entry would start from.
+    expect(value(one.bindings, "failed")).toEqual([{ name: "b" }]);
+    expect(value(two.bindings, "failed")).toEqual([{ name: "b" }]);
+    expect(inherited(yield* physical.readAll()).failed).toEqual([{ name: "b" }]);
+  });
+});

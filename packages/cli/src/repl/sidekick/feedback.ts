@@ -37,7 +37,7 @@ import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 
 import { DESIGNATED, DRAFT_FILLED, renderRead, renderReceipt } from "./controls.ts";
-import type { ControlOutcomeRecord, ControlRecord } from "./history.ts";
+import type { ControlOutcomeRecord, ControlPresentationRecord, ControlRecord } from "./history.ts";
 import type { OutputRead } from "./output.ts";
 import { describeGuideIndex, readSidekickBootstrap, sidekickGuideIndex } from "./guide.ts";
 import { fingerprint } from "./history.ts";
@@ -206,7 +206,7 @@ export interface DesignatedResult {
    * Decided from the retained facts rather than from the text, because the text
    * is what this decision chooses the wording of.
    */
-  readonly kind: "answered" | "refused";
+  readonly kind: "answered" | "refused" | "incomplete";
   /** The answer itself, or the reason — the text, with nothing wrapped round it. */
   readonly text: string;
   /**
@@ -218,6 +218,15 @@ export interface DesignatedResult {
    * fence whatever happened to look like JSON.
    */
   readonly json: boolean;
+  /**
+   * The read context a selected presentation kept beside its value.
+   *
+   * Present only for a queried read whose original observation carried one.
+   * Stated beside the selected payload rather than merged into it: selecting a
+   * field out of a window neither reads another page nor changes the extent the
+   * producer observed.
+   */
+  readonly read?: string;
 }
 
 /**
@@ -246,6 +255,17 @@ export function designatedResults(
   }[] = [],
 ): readonly DesignatedResult[] {
   const intents = new Map<number, ControlRecord>();
+  /** The acknowledged selected presentation each occurrence has, if any. */
+  const presentations = new Map<number, ControlPresentationRecord>();
+  for (const record of records) {
+    if (
+      record.kind === "control-presentation" &&
+      record.conversation === at.conversation &&
+      record.response === at.response
+    ) {
+      presentations.set(record.order, record);
+    }
+  }
   const results: DesignatedResult[] = refused
     // Through the same set, so a control that is not designated does not get
     // its refusals delivered either. One set decides what comes back.
@@ -274,7 +294,12 @@ export function designatedResults(
     if (intent === undefined || !DESIGNATED.has(intent.component)) {
       continue;
     }
-    results.push({ order: record.order, ...answered(intent, record) });
+    results.push({
+      order: record.order,
+      ...(intent.presentation === "selected-v1"
+        ? presented(intent, record, presentations.get(record.order))
+        : answered(intent, record)),
+    });
   }
   // Stable, so a refusal and the pair that followed it keep the order they
   // happened in: the refusal was pushed first and holds the order that pair
@@ -311,12 +336,7 @@ export function recoveredWork(
     items.push({
       order: result.order,
       component: result.component,
-      body:
-        result.kind === "answered"
-          ? result.json
-            ? fenced(result.text)
-            : result.text
-          : `${refusal(result.component)}: ${result.text}`,
+      body: labelled(result),
     });
   }
   for (const waiting of unanswered(records, at)) {
@@ -388,6 +408,64 @@ function asking(intent: ControlRecord): string {
     "This began and nobody recorded what became of it, so what it did is not known. " +
     "Do not assume it succeeded or failed."
   );
+}
+
+/**
+ * What one *queried* operation answered, which is only ever its acknowledged
+ * selected presentation.
+ *
+ * A marked occurrence has one source of feedback and no fallback. An
+ * acknowledged presentation is the selected value, as the JSON it is, with the
+ * read context the original observation carried stated beside it rather than
+ * inside it. A recorded selection failure is a failure of the selection and
+ * says so. And a marked intent with no presentation at all is an **interrupted
+ * selection**: the original work may well have happened, and what must not
+ * happen is answering with the observation the producer retained — the reply
+ * asked for a selection, and sending it the whole thing instead is the one
+ * substitution this protocol exists to prevent.
+ */
+function presented(
+  intent: ControlRecord,
+  record: ControlOutcomeRecord,
+  presentation: ControlPresentationRecord | undefined,
+): Omit<DesignatedResult, "order"> {
+  const component = intent.component;
+  if (record.outcome.status !== "ok") {
+    // The original outcome stands. A refused control keeps refused feedback,
+    // whatever a selection would have produced from a constant.
+    return { component, kind: "refused", text: record.outcome.error.message, json: false };
+  }
+  if (presentation === undefined) {
+    return {
+      component,
+      kind: "incomplete",
+      text:
+        "This operation completed and its selected result was never recorded, so what it " +
+        "selected is not known. Nothing of it will be repeated.",
+      json: false,
+    };
+  }
+  if (presentation.outcome.status !== "ok") {
+    return {
+      component,
+      kind: "refused",
+      text: `its yq expression did not select one value: ${presentation.outcome.error.message}`,
+      json: false,
+    };
+  }
+  const selected = JSON.stringify(presentation.selected ?? null, null, 2);
+  if (presentation.read === undefined) {
+    return { component, kind: "answered", text: selected, json: true };
+  }
+  return {
+    component,
+    kind: "answered",
+    // The range outside the payload, so a reply can tell what it selected from
+    // how much the producer actually observed.
+    text: selected,
+    json: true,
+    read: JSON.stringify(presentation.read, null, 2),
+  };
 }
 
 /**
@@ -524,20 +602,11 @@ export function sealedFeedback(
       // One answer to one question, with nothing round it — not even a fence
       // around a JSON value, because the whole message is that value and a
       // reply can parse it as it stands.
-      parts.push(only.kind === "answered" ? only.text : `${refusal(only.component)}: ${only.text}`);
+      parts.push(sole(only));
     }
   } else {
     for (const result of results) {
-      const body =
-        result.kind === "answered"
-          ? result.json
-            ? // Fenced, because this one is sitting among other things now and a
-              // reply has to know where the value ends. Longer than any run inside
-              // it, since a published string may hold a fence of its own.
-              fenced(result.text)
-            : result.text
-          : `${refusal(result.component)}: ${result.text}`;
-      parts.push(`## ${result.component}\n\n${body}`);
+      parts.push(`## ${result.component}\n\n${labelled(result)}`);
     }
   }
   if (failure !== undefined) {
@@ -547,6 +616,45 @@ export function sealedFeedback(
     );
   }
   return parts.join("\n\n");
+}
+
+/**
+ * One result alone, with nothing round it.
+ *
+ * The reply asked one question and this is the answer, so a JSON value is not
+ * even fenced: the whole message is that value and a reply can parse it as it
+ * stands. A read context is the one thing that still needs saying, because it
+ * is a second fact about the same read.
+ */
+function sole(result: DesignatedResult): string {
+  if (result.kind === "refused") {
+    return `${refusal(result.component)}: ${result.text}`;
+  }
+  if (result.kind === "incomplete") {
+    return result.text;
+  }
+  return result.read === undefined
+    ? result.text
+    : [result.text, `What that was selected from:`, fenced(result.read)].join("\n\n");
+}
+
+/** One result among others, under its own heading. */
+function labelled(result: DesignatedResult): string {
+  if (result.kind === "refused") {
+    return `${refusal(result.component)}: ${result.text}`;
+  }
+  if (result.kind === "incomplete") {
+    return result.text;
+  }
+  const body = result.json
+    ? // Fenced, because this one is sitting among other things now and a reply
+      // has to know where the value ends. Longer than any run inside it, since
+      // a published string may hold a fence of its own.
+      fenced(result.text)
+    : result.text;
+  return result.read === undefined
+    ? body
+    : [body, "What that was selected from:", fenced(result.read)].join("\n\n");
 }
 
 /**

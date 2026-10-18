@@ -63,6 +63,7 @@
 
 import { Component, SYNTAX_COMPONENT } from "@executablemd/core";
 import type { GeneratedSelection, InvocationForm } from "@executablemd/core";
+import { coreCompositionVocabulary } from "@executablemd/core/host";
 import type {
   ComponentAnswerInstallation,
   ComponentAnswerRegistrar,
@@ -71,8 +72,18 @@ import type {
 import type { FunctionComponentDefinition } from "@executablemd/core";
 import type { Operation } from "effection";
 
-import { DESIGNATED, sidekickMutations, sidekickObservations } from "./controls.ts";
-import type { ControlJournal, SidekickControl, SidekickRequests } from "./controls.ts";
+import {
+  DESIGNATED,
+  sidekickDestinations,
+  sidekickMutations,
+  sidekickObservations,
+} from "./controls.ts";
+import type {
+  ControlJournal,
+  SidekickControl,
+  SidekickDestinations,
+  SidekickRequests,
+} from "./controls.ts";
 
 /**
  * The ceiling one response is admitted under, as its execution captures it.
@@ -88,6 +99,15 @@ export interface ResponseCeiling {
   readonly controls: readonly SidekickControl[];
   /** Both classes, always: a reply may read and may write the draft. */
   readonly allow: readonly ["read", "write"];
+  /**
+   * Where a selected result of one of those controls goes.
+   *
+   * Beside the controls rather than behind them, because the two are one
+   * capture: an entry names the exact definition this conversation published,
+   * and the occurrence a control body is in is the occurrence its destination
+   * receives.
+   */
+  readonly destinations: SidekickDestinations;
 }
 
 /**
@@ -102,12 +122,14 @@ export function sidekickResponseCeiling(
   requests: SidekickRequests,
   journal: ControlJournal,
 ): ResponseCeiling {
+  const destinations = sidekickDestinations(journal);
   return {
     controls: Object.freeze([
-      ...sidekickObservations(requests, journal),
-      ...sidekickMutations(requests, journal),
+      ...sidekickObservations(requests, journal, destinations),
+      ...sidekickMutations(requests, journal, destinations),
     ]),
     allow: ["read", "write"] as const,
+    destinations,
   };
 }
 
@@ -190,6 +212,26 @@ export function sidekickCeilingInstallation(ceiling: ResponseCeiling): Execution
   };
   return {
     componentAnswers: [answers],
+    // The destinations this conversation owns, one per control it publishes.
+    // Stated on the same installation the answers are, so what canonical
+    // execution copies before any document code runs is the whole of it: the
+    // definition each entry names is the exact object the request above
+    // published, and an entry naming anything else routes nothing.
+    resultDestinations: {
+      destinations: Object.freeze([
+        ...[...owned.values()].map((definition) => ceiling.destinations.entry(definition)),
+        // A control this conversation selects rather than answers for —
+        // canonical `<Elicit>`. There is no definition here to hand over, so
+        // the entry names the selection and core resolves which implementation
+        // its own tier answered with.
+        ...ceiling.controls
+          .filter((control) => control.selected === true)
+          .map((control) => ceiling.destinations.selected(control.name)),
+      ]),
+      installed: (lookup) => {
+        ceiling.destinations.installed(lookup);
+      },
+    },
     *install(): Operation<void> {
       yield* Component.around({ generated: () => selection });
     },
@@ -202,8 +244,15 @@ const CONTROL_ORIGIN = "@executablemd/cli:repl/sidekick";
 /** One admitted control, as the compact surface describes it. */
 export interface SurfaceEntry {
   readonly name: string;
-  /** `read` observes and returns; `write` changes something a person sees. */
-  readonly effect: "read" | "write";
+  /**
+   * What writing this does.
+   *
+   * `read` observes and returns; `write` changes something a person sees;
+   * `render` turns a value the reply already holds into text and reaches
+   * nothing — core's always-on composition table, which `allow` does not select
+   * between and which therefore grants no permission at all.
+   */
+  readonly effect: "read" | "write" | "render";
   /**
    * Which spelling is admitted.
    *
@@ -240,6 +289,21 @@ export function responseSurface(ceiling: ResponseCeiling): readonly SurfaceEntry
       designated: false,
     },
   ];
+  // Core's always-on composition table, derived from core rather than listed
+  // here. A reply may write these whatever `allow` selected, so a surface that
+  // omitted one would describe a vocabulary narrower than the one the response
+  // is admitted under — and a hand-kept copy would stop being true the next
+  // time core admits a pure component. Their returns are the reply's own to
+  // render: nothing is performed, so there is nothing to answer back.
+  for (const pure of coreCompositionVocabulary()) {
+    entries.push({
+      name: pure.name,
+      effect: "render",
+      form: pure.form,
+      props: ["value"],
+      designated: false,
+    });
+  }
   for (const control of ceiling.controls) {
     entries.push({
       name: control.name,
@@ -306,5 +370,21 @@ export function describeSurface(entries: readonly SurfaceEntry[]): string {
     const ordinary = entry.designated ? "" : " (its return is yours to render, not feedback)";
     lines.push(`- ${spelling} — ${entry.effect}.${props}${ordinary}`);
   }
+  // Stated once, after the list, because it is one rule about every control
+  // rather than a prop any of them declares: `yq` and `as` are the engine's,
+  // they are consumed before a control's own props are checked, and a control's
+  // schema therefore never mentions either. Describing them per line would read
+  // as six separate contracts for one rule.
+  lines.push(
+    "",
+    "Two props are the engine's own and may be written on any control above, " +
+      "beside that control's own props:",
+    '- yq="<expression>" — select one JSON value out of what the control returned, ' +
+      "with yq. The selected value is what is captured and what comes back as feedback. " +
+      "A control that returns text is queried as a JSON string, so decode it explicitly " +
+      "with from_json or from_yaml. An expression that matches nothing, or matches more " +
+      "than once, refuses — collect matches into an array with [ ... ].",
+    '- as="<name>" — bind the result instead of rendering it.',
+  );
   return lines.join("\n");
 }

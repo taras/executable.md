@@ -38,7 +38,12 @@ import { entryInitialBindings } from "../model.ts";
 import type { ReplModel } from "../model.ts";
 import type { ReplHostFact } from "../host.ts";
 import type { ReplPrinting, ReplSession } from "../session.ts";
-import type { GuideChapter, SidekickRequests, SubmitReceipt } from "./controls.ts";
+import type {
+  GuideChapter,
+  SidekickOccurrence,
+  SidekickRequests,
+  SubmitReceipt,
+} from "./controls.ts";
 import { replEnvironment } from "./environment.ts";
 import { readGuideChapter } from "./guide.ts";
 import { readEntryOutput } from "./output.ts";
@@ -160,7 +165,9 @@ export function rootReads(
  * submission binds a reservation into the chat history that asked for it, so it
  * needs the response that asked — and a response is the owner's, not the loop's.
  */
-export type SubmitForReply = () => Operation<Result<SubmitReceipt>>;
+export type SubmitForReply = (
+  presenting: SidekickOccurrence | undefined,
+) => Operation<Result<SubmitReceipt>>;
 
 /**
  * Build the requests one response is answered by.
@@ -208,8 +215,8 @@ export function sidekickRequests(root: RootReading, submit: SubmitForReply): Sid
     fillDraft(source: string): Operation<Result<void>> {
       return root.fill(source);
     },
-    submit(): Operation<Result<SubmitReceipt>> {
-      return submit();
+    submit(presenting): Operation<Result<SubmitReceipt>> {
+      return submit(presenting);
     },
     // deno-lint-ignore require-yield
     *entryOutput(request: OutputReadRequest): Operation<Result<OutputRead>> {

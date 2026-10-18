@@ -660,6 +660,27 @@ export class CanonicalImports {
    * its forms is offered under is on the copy, because it is the definition's
    * own.
    */
+  /**
+   * The name a provider published this exact object for, if it published it.
+   *
+   * Exact-object authentication and nothing else: an object this owner never
+   * recorded answers `undefined`, however many members it shares with one that
+   * was published. The name it comes back with is what *this* owner recorded at
+   * publication, so a caller holding a published definition can find the row
+   * canonical execution produced for it rather than matching a spelling.
+   *
+   * It grants nothing. Knowing which name an object was published for is not
+   * permission to invoke it, to publish another, or to reach the copy behind
+   * it — that copy stays with `identify`, which requires the resolution window
+   * the publication happened in.
+   */
+  publishedName(answer: unknown): string | undefined {
+    if (!this.#active || typeof answer !== "object" || answer === null) {
+      return undefined;
+    }
+    return this.#answers.get(answer)?.name;
+  }
+
   identify(resolution: ResolutionWindow, answer: unknown): IdentifiedAnswer | undefined {
     if (!this.#active || typeof answer !== "object" || answer === null) {
       return undefined;

@@ -85,11 +85,27 @@ export const PACKAGED_DOCUMENTATION = [
   "packages/git/src/composition/components.md",
 ];
 
+/**
+ * The vendor attribution that travels with bytes the binary carries.
+ *
+ * Core's generated `yq` module is the published WebAssembly of `yq.rs`, and
+ * distributing those bytes carries the vendor's own license and third-party
+ * notices with them. A directory rather than two files, because the vendor's
+ * notice set is theirs to change; `scripts/tests/yq-distribution.test.ts` holds
+ * this entry to the directory that exists.
+ *
+ * It is attribution and not a runtime input. Nothing reads it: the engine's
+ * bytes are in core's static import graph, which is why a binary that carries
+ * no asset at all still runs `yq`.
+ */
+export const PACKAGED_NOTICES = ["packages/core/src/yq-vendor-notices"];
+
 /** Everything a compile embeds, in the order the argv names it. */
 export const EMBEDDED_ASSETS = [
   ...EMBEDDED_PACKAGES,
   ...PACKAGED_DOCUMENTS,
   ...PACKAGED_DOCUMENTATION,
+  ...PACKAGED_NOTICES,
 ];
 
 export interface CompileRequest {

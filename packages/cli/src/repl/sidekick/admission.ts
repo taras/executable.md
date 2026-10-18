@@ -58,7 +58,7 @@ import { bindRetainedPrefix, failedOutcome, measureRetainedPrefix } from "./hist
 import type { SidekickRecord, SidekickWriter } from "./history.ts";
 import { projectSidekick } from "./model.ts";
 import type { SidekickSubmitIntent } from "./model.ts";
-import type { ControlJournal, SubmitReceipt } from "./controls.ts";
+import type { ControlJournal, SidekickOccurrence, SubmitReceipt } from "./controls.ts";
 import type { ReplSubmission, StartingCheck } from "../session.ts";
 
 /**
@@ -216,9 +216,18 @@ export function* submitForSidekick(
     readonly writer: EntryJournal;
     /** Tell the loop something happened, so it applies the report. */
     readonly woke: () => void;
+    /**
+     * This occurrence's own receiver, when the reply queried the receipt.
+     *
+     * Submit's intent binds the reservation this takes, so this is the one
+     * place that can mark it — and it marks exactly one intent. The position it
+     * took is filed with the receiver only after the entry reached its own
+     * outcome, which is what the destination then presents against.
+     */
+    readonly presenting: SidekickOccurrence | undefined;
   },
 ): Operation<Result<SubmitReceipt>> {
-  const { session, facts, held, journal, writer, woke } = options;
+  const { session, facts, held, journal, writer, woke, presenting } = options;
   // The session's own terms first, before anything is written and before
   // anything is waited for. A session that is ending, is running an entry, or
   // follows an entry that never settled refuses — and it has to refuse *here*,
@@ -297,6 +306,7 @@ export function* submitForSidekick(
       revision: reservation.revision,
       retained,
     },
+    presenting?.query === undefined ? undefined : "selected-v1",
   );
 
   const submitted = yield* session.submit(reservation.source, () =>
@@ -338,6 +348,11 @@ export function* submitForSidekick(
     read: { entry: submission.entry },
   };
   yield* journal.settled(order, outcome.ok ? Ok(undefined) : Err(outcome.error), receipt.status);
+  // Filed after the entry's own outcome, against the one intent this
+  // submission wrote. A submission whose entry ran and failed still produced
+  // that entry's receipt, so its selection is of an answer rather than of a
+  // refusal.
+  presenting?.file(order);
   return Ok(receipt);
 }
 
@@ -367,7 +382,7 @@ export function controlJournal(
 ): ControlJournal {
   let next = from;
   return {
-    *began(occurrence, reserved): Operation<number> {
+    *began(occurrence, reserved, presentation): Operation<number> {
       const order = next;
       next += 1;
       yield* writer.append({
@@ -378,6 +393,7 @@ export function controlJournal(
         component: occurrence.component,
         arguments: occurrence.arguments,
         ...(reserved === undefined ? {} : { submit: reserved }),
+        ...(presentation === undefined ? {} : { presentation }),
       });
       return order;
     },
@@ -389,6 +405,18 @@ export function controlJournal(
         order,
         outcome: outcome.ok ? { status: "ok" } : failedOutcome(outcome.error),
         ...(observed === undefined ? {} : { observed }),
+      });
+    },
+    *presented(order, selected, read): Operation<void> {
+      yield* writer.append({
+        kind: "control-presentation",
+        conversation: at.conversation,
+        response: at.response,
+        order,
+        version: 1,
+        outcome: selected.ok ? { status: "ok" } : failedOutcome(selected.error),
+        ...(selected.ok ? { selected: selected.value } : {}),
+        ...(selected.ok && read !== undefined ? { read } : {}),
       });
     },
   };

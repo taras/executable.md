@@ -54,6 +54,7 @@ import {
   asBindingViolation,
   asExpressionViolation,
   capturedBinding,
+  ENGINE_OWNED_PROPS,
   returnCaptureViolation,
 } from "./invocation-rules.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
@@ -1084,8 +1085,8 @@ class ValidationState {
       );
     }
 
-    // `slot` and `as` are the engine's, and a declared capture is handed over
-    // unresolved — none of the three meets the schema, during execution or here.
+    // `slot`, `as` and `yq` are the engine's, and a declared capture is handed
+    // over unresolved — none of them meets the schema, during execution or here.
     const statics = schemaVisible(segment.props, contract.captures);
     const dynamics = schemaVisible(segment.expressions, contract.captures);
 
@@ -1398,17 +1399,23 @@ function positionOf(segment: ComponentElement): { position?: Readonly<SourcePosi
 }
 
 /**
- * The props a schema may see: everything but the engine's own two and whatever
- * the selected definition declared a capture.
+ * The props a schema may see: everything but the props the engine owns and the
+ * ones the selected definition declared a capture.
+ *
+ * The engine's own list is imported rather than spelled here. Expansion
+ * consumes those props before it validates, so a copy of the list that fell
+ * behind would make this reader refuse an invocation the engine runs — which
+ * is exactly what a static check must never do.
  */
 function schemaVisible<T>(
   written: Record<string, T>,
   captures: readonly string[],
 ): Record<string, T> {
   const captured = new Set(captures);
+  const owned = new Set<string>(ENGINE_OWNED_PROPS);
   const visible: Record<string, T> = {};
   for (const [key, value] of Object.entries(written)) {
-    if (key === "slot" || key === "as" || captured.has(key)) {
+    if (owned.has(key) || captured.has(key)) {
       continue;
     }
     visible[key] = value;

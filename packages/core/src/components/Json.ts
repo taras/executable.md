@@ -31,26 +31,23 @@
  *
  * ## One call, and two ways it can fail
  *
- * `JSON.stringify` runs once. It is never called again to describe a failure,
- * because the value can carry a getter or a `toJSON` hook the document does not
- * own, and asking twice would run somebody else's code twice.
+ * The serialization is `json-serialization.ts`'s, which `<Yaml>` describes the
+ * same value through: one call, never repeated to explain a failure, because
+ * the value can carry a getter or a `toJSON` hook the document does not own.
  *
- * Its two failures are different facts and stay separate. Returning something
- * that is not a string means the value has no JSON text at all — root
- * `undefined`, a function, a symbol — while a thrown exception means
+ * Its two failures are different facts and stay separate here. Returning
+ * something that is not a string means the value has no JSON text at all —
+ * root `undefined`, a function, a symbol — while a thrown exception means
  * serialization started and could not finish: a `bigint`, a cycle, or a hook
  * that threw. The thrown value is preserved as `cause` exactly as it arrived,
  * and neither the error nor the rejected value is interpolated into the
  * message.
- *
- * Native `JSON.stringify` decides everything else — property enumeration,
- * nested `undefined`/function/symbol omission, non-finite numbers, `toJSON`,
- * supported built-ins. This restates none of it and normalizes none of it.
  */
 
 import type { Operation } from "effection";
 import { capture, hasCapture, hasContent } from "../component-api.ts";
 import { printErrors } from "../component-failures.ts";
+import { serializeJson } from "./json-serialization.ts";
 
 export const props = {
   type: "object",
@@ -81,14 +78,12 @@ export default printErrors(function* Json(): Operation<string> {
 
   const value = yield* capture("value");
 
-  let text: unknown;
-  try {
-    text = JSON.stringify(value, null, 2);
-  } catch (error) {
-    throw new JsonRenderError(THREW, { cause: error });
+  const serialized = serializeJson(value);
+  if (serialized.kind === "threw") {
+    throw new JsonRenderError(THREW, { cause: serialized.cause });
   }
-  if (typeof text !== "string") {
+  if (serialized.kind === "no-text") {
     throw new JsonRenderError(NO_TEXT);
   }
-  return text;
+  return serialized.text;
 });

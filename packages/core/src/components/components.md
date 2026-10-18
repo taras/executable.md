@@ -317,6 +317,23 @@ Writes the JSON where the element is written, or binds it with `as`. The
 counterpart of `<Parse>`: this turns a value into text, that turns text into a
 value.
 
+## Yaml
+
+Renders a value as YAML text.
+
+```mdx
+<Yaml value={config} />
+```
+
+Writes the YAML where the element is written, or binds it with `as`. Json's
+sibling: the same value, the same place, a different text. Nothing else turns a
+value into YAML — a binding a `yq` expression selected stays data until this
+element renders it.
+
+Scalars are quoted where their type depends on it, so the YAML parses back to
+the value that went in: the string `"false"` stays a string and a multiline
+string stays whole.
+
 ## Parse
 
 Parses JSON text against a schema, and errors on invalid content.

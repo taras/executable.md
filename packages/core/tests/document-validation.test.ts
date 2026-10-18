@@ -1399,6 +1399,34 @@ describe("Tier DV: one decision, both callers", () => {
   });
 });
 
+describe("Tier DV: the engine's own props are not schema props", () => {
+  it("DV14: `yq` passes a closed schema, exactly as `as` and `slot` do", function* () {
+    // The failure this is named for was found by running the product: a static
+    // reader that stripped two of the engine's props and not the third refused
+    // an invocation expansion runs, and the refusal reached the REPL's own
+    // preflight — so a document that `xmd run` executes could not be submitted
+    // as an entry.
+    const { result } = yield* validateText(
+      `<File path="notes.md" yq='from_json | .name' as="picked" />\n`,
+      { tree: { "notes.md": "{}" } },
+    );
+
+    expect(codes(result)).toEqual([]);
+    expect(outcomes(result)).toEqual(["valid"]);
+  });
+
+  it("DV14: an unknown prop beside `yq` is still refused", function* () {
+    // The negative control: stripping the engine's own props is not stripping
+    // everything, so a closed schema still closes.
+    const { result } = yield* validateText(`<File path="notes.md" yq='.' nonsense={1} />\n`, {
+      tree: { "notes.md": "{}" },
+    });
+
+    expect(codes(result)).toContain("props-invalid");
+    expect(result.diagnostics.map((one) => one.message).join("\n")).toContain("nonsense");
+  });
+});
+
 describe("Tier DV: the no-execution boundary", () => {
   const HOSTILE = [
     "---",

@@ -1164,6 +1164,49 @@ describe("Tier SY: complete component contracts", () => {
     expect(entry.context).toBe(undefined);
   });
 
+  it("SY24b3: reports <Yaml>'s whole contract, on Json's own terms", function* () {
+    const catalog = yield* catalogFor({}, []);
+    const entry = find(builtIn(catalog), "Yaml");
+
+    // The same row Json has, field for field, because it is the same contract:
+    // one capture, closed empty props, text out, optional `as`. A renderer that
+    // had grown a prop of its own — an indent, a document separator — would
+    // fail here rather than in whatever read the YAML afterwards.
+    expect(entry).toEqual({
+      kind: "component",
+      name: "Yaml",
+      origin: { kind: "registered", origin: "@executablemd/core", reserved: false },
+      sourceKind: "registered",
+      inspectability: "complete",
+      forms: ["self-closing"],
+      props: { type: "object", properties: {}, additionalProperties: false },
+      captures: ["value"],
+      returnMode: "text",
+      returns: { type: "string" },
+      description:
+        "Render a value as YAML text. `<Yaml value={config} />` writes the YAML where you " +
+        "put it. Nothing else turns a value into YAML.",
+      as: "Optional. Captures the YAML text instead of emitting it.",
+    });
+    // Contentless, like Json: there is no body to document.
+    expect(entry.context).toBe(undefined);
+  });
+
+  it("SY24b3: neither renderer advertises the engine's own props", function* () {
+    const catalog = yield* catalogFor({}, []);
+
+    // `yq` and `as` are consumed before a component's own props are checked, so
+    // no component schema in the catalog may claim either. Checked across the
+    // whole built-in category rather than on the two renderers, because the
+    // rule is about every component and not about these.
+    for (const entry of builtIn(catalog)) {
+      const properties = (entry as { props?: { properties?: Record<string, unknown> } }).props
+        ?.properties;
+      expect(Object.keys(properties ?? {})).not.toContain("yq");
+      expect(Object.keys(properties ?? {})).not.toContain("as");
+    }
+  });
+
   it("SY24c: describes <Fail> completely enough to copy the invocation", function* () {
     const catalog = yield* catalogFor({}, []);
 

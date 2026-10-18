@@ -42,12 +42,14 @@ import {
   ENTRIES_FILE,
   PAIRED_DIRECTORY,
   parseEntryRecords,
+  parseSidekickRecord,
   readSidekickRecords,
   SIDEKICK_FILE,
   serializeSidekickRecord,
 } from "../src/repl/sidekick/history.ts";
 import type { ControlRecord, SidekickRecord } from "../src/repl/sidekick/history.ts";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";
+import { designatedResults, recoveredWork, sealedFeedback } from "../src/repl/sidekick/feedback.ts";
 import { sidekickChatRows } from "../src/repl/program.ts";
 import type { ReplSidekickChatRow } from "../src/repl/application.ts";
 import type { SidekickReading } from "../src/repl/sidekick/model.ts";
@@ -1418,6 +1420,8 @@ describe("Tier R2 — a reservation binds what the writer has acknowledged", () 
       const asked = yield* submitForSidekick(
         { conversation: CHAT, response: RESPONSE },
         {
+          // No receiver: this case is about the reservation, not a selection.
+          presenting: undefined,
           session: {
             // The acknowledged history, read the way the root reads it.
             entries: () => {
@@ -1472,6 +1476,8 @@ describe("Tier R2 — a reservation binds what the writer has acknowledged", () 
       const accepted = yield* submitForSidekick(
         { conversation: CHAT, response: RESPONSE },
         {
+          // No receiver: this case is about the reservation, not a selection.
+          presenting: undefined,
           session: {
             // The acknowledged history, read the way the root reads it.
             entries: () => {
@@ -2330,5 +2336,325 @@ describe("Tier IN5 — a chat saved by the build before this one", () => {
       (one) => one.kind === "control" && one.component === "REPL.EntryInput",
     );
     expect(fills).toHaveLength(1);
+  });
+});
+
+/**
+ * Tier R7 — what a cold reopening says about a selected result.
+ *
+ * Three shapes of history, and they must read as three different things. One
+ * holds an acknowledged selection; one holds a marked intent whose selection
+ * was never acknowledged; one predates selection entirely. A reading that
+ * rounded any of them to the nearest other would either lose a historical
+ * answer or hand a reply the observation it deliberately did not ask for.
+ *
+ * Projected from records alone, through `projectSidekick`, which is what a cold
+ * open actually does: no conversation is opened, no provider is contacted and
+ * no control is run.
+ */
+describe("Tier R7 — a cold reopening reads a selected result from its records", () => {
+  const RESPONSE = "r1";
+
+  /** One control's intent, marked or not. */
+  function intent(order: number, component: string, marked: boolean): SidekickRecord {
+    return {
+      kind: "control",
+      conversation: CHAT,
+      response: RESPONSE,
+      order,
+      component,
+      arguments: {},
+      ...(marked ? { presentation: "selected-v1" as const } : {}),
+    };
+  }
+
+  function outcome(order: number, observed?: unknown, failure?: string): SidekickRecord {
+    return {
+      kind: "control-outcome",
+      conversation: CHAT,
+      response: RESPONSE,
+      order,
+      outcome:
+        failure === undefined
+          ? { status: "ok" }
+          : { status: "err", error: { name: "Error", message: failure } },
+      ...(observed === undefined ? {} : { observed }),
+    };
+  }
+
+  function presentation(
+    order: number,
+    selected: unknown,
+    options: { read?: unknown; failure?: string; conversation?: string; response?: string } = {},
+  ): SidekickRecord {
+    return {
+      kind: "control-presentation",
+      conversation: options.conversation ?? CHAT,
+      response: options.response ?? RESPONSE,
+      order,
+      version: 1,
+      outcome:
+        options.failure === undefined
+          ? { status: "ok" }
+          : { status: "err", error: { name: "Error", message: options.failure } },
+      ...(options.failure === undefined ? { selected } : {}),
+      ...(options.read === undefined || options.failure !== undefined
+        ? {}
+        : { read: options.read }),
+    };
+  }
+
+  /** A history with one turn, one reply and whatever control records follow. */
+  function history(...controls: SidekickRecord[]): SidekickRecord[] {
+    return [...opened(), turn(1, "said"), reply(1, "answered"), ...controls];
+  }
+
+  it("R7a: an acknowledged selection is reconstructed exactly", function* () {
+    const reading = project(
+      history(
+        intent(0, "REPL.Bindings", true),
+        outcome(0, { names: ["Ada", "Grace"] }),
+        presentation(0, ["Ada", "Grace"]),
+      ),
+    );
+
+    const held = reading.operations.find((operation) => operation.order === 0);
+    expect(held?.status).toBe("ok");
+    expect(held?.presentation).toBe("selected");
+    // The selected value, out of the record, unchanged.
+    expect(held?.selected).toEqual(["Ada", "Grace"]);
+  });
+
+  it("R7a: a queried read keeps its range beside the value", function* () {
+    const reading = project(
+      history(
+        intent(0, "REPL.EntryOutput", true),
+        outcome(0, { entry: "entry-1", status: "completed", offset: 0, length: 12, text: "x" }),
+        presentation(0, [], {
+          read: { entry: "entry-1", status: "completed", offset: 0, length: 12 },
+        }),
+      ),
+    );
+
+    const held = reading.operations.find((operation) => operation.order === 0);
+    expect(held?.selected).toEqual([]);
+    // Outside the payload: an empty selection still says how much the producer
+    // observed, which is what a reply needs to decide whether to read on.
+    expect(held?.read).toEqual({
+      entry: "entry-1",
+      status: "completed",
+      offset: 0,
+      length: 12,
+    });
+  });
+
+  it("R7b: a marked intent with no presentation is incomplete, and exposes nothing", function* () {
+    const reading = project(
+      history(intent(0, "REPL.Bindings", true), outcome(0, { names: ["Ada", "Grace"] })),
+    );
+
+    const held = reading.operations.find((operation) => operation.order === 0);
+    // The original outcome stands as evidence, and the selection is reported as
+    // the interrupted thing it is. What must not appear is the observation: a
+    // reply that asked for a field is never handed the whole map instead.
+    expect(held?.status).toBe("ok");
+    expect(held?.presentation).toBe("incomplete");
+    expect(held?.selected).toBeUndefined();
+  });
+
+  it("R7b: an unfinished marked intent is incomplete too", function* () {
+    const reading = project(history(intent(0, "REPL.Bindings", true)));
+
+    const waiting = reading.unfinished.find((operation) => operation.order === 0);
+    expect(waiting?.status).toBe("unfinished");
+    expect(waiting?.presentation).toBe("incomplete");
+  });
+
+  it("R7b: a recorded selection failure reads as refused, not as a value", function* () {
+    const reading = project(
+      history(
+        intent(0, "REPL.Bindings", true),
+        outcome(0, { names: [] }),
+        presentation(0, undefined, { failure: "this yq expression must return one JSON value." }),
+      ),
+    );
+
+    const held = reading.operations.find((operation) => operation.order === 0);
+    expect(held?.presentation).toBe("refused");
+    expect(held?.selected).toBeUndefined();
+    expect(held?.failure).toContain("one JSON value");
+  });
+
+  it("R7c: a history written before selection keeps its own meaning", function* () {
+    const reading = project(
+      history(intent(0, "REPL.Bindings", false), outcome(0, { names: ["Ada"] })),
+    );
+
+    const held = reading.operations.find((operation) => operation.order === 0);
+    // No member at all, which is what keeps an older file projecting exactly as
+    // it did: the observation is still the answer for an unqueried control.
+    expect(held?.status).toBe("ok");
+    expect(held?.presentation).toBeUndefined();
+    expect(held?.selected).toBeUndefined();
+  });
+
+  it("R7d: a presentation for an operation this history does not record refuses", function* () {
+    expect(refusalOf(history(presentation(0, ["Ada"])))).toContain("does not record");
+  });
+
+  it("R7d: a presentation for an unmarked operation refuses", function* () {
+    expect(
+      refusalOf(
+        history(intent(0, "REPL.Bindings", false), outcome(0, {}), presentation(0, ["Ada"])),
+      ),
+    ).toContain("did not ask for one");
+  });
+
+  it("R7d: a presentation before its own outcome refuses", function* () {
+    expect(
+      refusalOf(history(intent(0, "REPL.Bindings", true), presentation(0, ["Ada"]))),
+    ).toContain("before the operation's own outcome");
+  });
+
+  it("R7d: two presentations for one operation refuse", function* () {
+    expect(
+      refusalOf(
+        history(
+          intent(0, "REPL.Bindings", true),
+          outcome(0, {}),
+          presentation(0, ["Ada"]),
+          presentation(0, ["Grace"]),
+        ),
+      ),
+    ).toContain("two selected results");
+  });
+
+  it("R7d: a presentation for an operation that failed refuses", function* () {
+    expect(
+      refusalOf(
+        history(
+          intent(0, "REPL.Bindings", true),
+          outcome(0, undefined, "the REPL cannot do that"),
+          presentation(0, ["Ada"]),
+        ),
+      ),
+    ).toContain("did not succeed");
+  });
+
+  it("R7d: a presentation naming another occurrence refuses", function* () {
+    // The right order, in a response this history never recorded: an
+    // association by order alone would have accepted it.
+    expect(
+      refusalOf(
+        history(
+          intent(0, "REPL.Bindings", true),
+          outcome(0, {}),
+          presentation(0, ["Ada"], { response: "r2" }),
+        ),
+      ),
+    ).toContain("does not record");
+  });
+
+  it("R7e: what a cold continuation is sent for each of the three shapes", function* () {
+    const at = { conversation: CHAT, response: RESPONSE };
+    const acknowledged = history(
+      intent(0, "REPL.Bindings", true),
+      outcome(0, { names: ["Ada", "Grace"] }),
+      presentation(0, ["Ada", "Grace"]),
+    );
+    const interrupted = history(
+      intent(0, "REPL.Bindings", true),
+      outcome(0, { names: ["Ada", "Grace"] }),
+    );
+    const historical = history(
+      intent(0, "REPL.Bindings", false),
+      outcome(0, { names: ["Ada", "Grace"] }),
+    );
+
+    // (a) The selected value, as the JSON it is, and nothing of the map.
+    const selected = sealedFeedback(designatedResults(acknowledged, at));
+    expect(JSON.parse(String(selected))).toEqual(["Ada", "Grace"]);
+
+    // (b) Told truthfully, and the observation is not in it. This is the
+    // substitution the pair exists to prevent: the names are in the retained
+    // outcome and must not reach the reply that asked for a selection.
+    const incomplete = String(sealedFeedback(designatedResults(interrupted, at)));
+    expect(incomplete).toContain("never recorded");
+    expect(incomplete).not.toContain("Ada");
+
+    // (c) An unmarked occurrence keeps the feedback it always had: its own
+    // observation, serialized as the value it is.
+    const unmarked = sealedFeedback(designatedResults(historical, at));
+    expect(JSON.parse(String(unmarked))).toEqual({ names: ["Ada", "Grace"] });
+  });
+
+  it("R7e: an interrupted response's account carries the same three readings", function* () {
+    const at = { conversation: CHAT, response: RESPONSE };
+    const account = String(
+      recoveredWork(
+        history(
+          intent(0, "REPL.Bindings", true),
+          outcome(0, { names: ["Ada"] }),
+          presentation(0, ["Ada"]),
+          intent(1, "REPL.Environment", true),
+          outcome(1, "cwd: /work"),
+        ),
+        at,
+      ),
+    );
+
+    // The acknowledged one is its selected value; the marked one with no
+    // presentation says so. Both under their own headings, in order.
+    expect(account).toContain("## REPL.Bindings");
+    expect(account).toContain('"Ada"');
+    expect(account).toContain("## REPL.Environment");
+    expect(account).toContain("never recorded");
+    // And the second one's own observation is not substituted for its missing
+    // selection.
+    expect(account).not.toContain("cwd: /work");
+  });
+
+  it("R7d: a malformed selected value is unreadable history", function* () {
+    // Both arms at once — a presentation that answered and did not. Read
+    // through the repository's own parser rather than the typed builder above,
+    // because that is where a record arrives from.
+    const malformed = parseSidekickRecord(
+      JSON.stringify({
+        kind: "control-presentation",
+        conversation: CHAT,
+        response: RESPONSE,
+        order: 0,
+        version: 1,
+        outcome: { status: "ok" },
+      }),
+    );
+    expect(malformed).toBeUndefined();
+
+    const wrongVersion = parseSidekickRecord(
+      JSON.stringify({
+        kind: "control-presentation",
+        conversation: CHAT,
+        response: RESPONSE,
+        order: 0,
+        version: 2,
+        outcome: { status: "ok" },
+        selected: null,
+      }),
+    );
+    expect(wrongVersion).toBeUndefined();
+
+    // And the one this build does have reads back as itself.
+    const readable = parseSidekickRecord(
+      JSON.stringify({
+        kind: "control-presentation",
+        conversation: CHAT,
+        response: RESPONSE,
+        order: 0,
+        version: 1,
+        outcome: { status: "ok" },
+        selected: ["Ada"],
+      }),
+    );
+    expect(readable?.kind).toBe("control-presentation");
   });
 });

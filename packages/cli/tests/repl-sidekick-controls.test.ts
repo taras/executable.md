@@ -41,7 +41,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { Component, Execution, retainedSource, useTempFileCompiler } from "@executablemd/core";
 import type { FunctionComponentDefinition } from "@executablemd/core";
-import { executeInstalled } from "@executablemd/core/host";
+import { coreCompositionVocabulary, executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation, GeneratedXmdRootResult } from "@executablemd/core/host";
 
 import { cwd, platform } from "@executablemd/runtime";
@@ -131,6 +131,15 @@ interface Asked {
   readonly began: ControlOccurrence[];
   /** Every outcome recorded, by the order it settled. */
   readonly settled: { order: number; ok: boolean; observed?: Json }[];
+  /** Every intent marked as presenting a selected result, by its order. */
+  readonly marked: { order: number; presentation: string }[];
+  /** Every selected presentation recorded, by the order it belongs to. */
+  readonly presented: {
+    order: number;
+    selected: Json | undefined;
+    failure: string | undefined;
+    read?: Json;
+  }[];
   /** Whatever the draft now holds. */
   draft: string | undefined;
 }
@@ -143,7 +152,7 @@ interface StubOptions {
 }
 
 function fresh(): Asked {
-  return { requests: [], began: [], settled: [], draft: undefined };
+  return { requests: [], began: [], settled: [], marked: [], presented: [], draft: undefined };
 }
 
 /**
@@ -190,9 +199,16 @@ function requests(
       asked.draft = source;
       return Ok(undefined);
     },
-    *submit(): Operation<Result<SubmitReceipt>> {
+    *submit(presenting): Operation<Result<SubmitReceipt>> {
       asked.requests.push("submit");
-      const order = yield* journal.began({ component: "REPL.Submit", arguments: {} });
+      // Marked here for the reason the root marks it: Submit's intent binds the
+      // reservation the root took, so the root is what writes that pair — and
+      // what marks it, from the receiver handed over with the request.
+      const order = yield* journal.began(
+        { component: "REPL.Submit", arguments: {} },
+        undefined,
+        presenting?.query === undefined ? undefined : "selected-v1",
+      );
       if (options.refuse === "submit") {
         const refusal = new Error("the REPL cannot submit right now");
         yield* journal.settled(order, Err(refusal));
@@ -205,6 +221,7 @@ function requests(
         read: { entry: "entry-1", limit: 4096 },
       };
       yield* journal.settled(order, Ok(undefined), receipt.status);
+      presenting?.file(order);
       return Ok(receipt);
     },
     entryOutput: (request: OutputReadRequest) =>
@@ -240,9 +257,21 @@ function ceilingFor(asked: Asked, options: StubOptions = {}): ResponseCeiling {
 function journalOf(asked: Asked): ControlJournal {
   return {
     // deno-lint-ignore require-yield
-    *began(occurrence): Operation<number> {
+    *began(occurrence, _reserved, presentation): Operation<number> {
       asked.began.push(occurrence);
+      if (presentation !== undefined) {
+        asked.marked.push({ order: asked.began.length - 1, presentation });
+      }
       return asked.began.length - 1;
+    },
+    // deno-lint-ignore require-yield
+    *presented(order, selected, read): Operation<void> {
+      asked.presented.push({
+        order,
+        selected: selected.ok ? selected.value : undefined,
+        failure: selected.ok ? undefined : selected.error.message,
+        ...(read === undefined ? {} : { read }),
+      });
     },
     // deno-lint-ignore require-yield
     *settled(order, outcome, observed): Operation<void> {
@@ -269,8 +298,23 @@ function reply(
   asked: Asked,
   options: StubOptions = {},
 ): Operation<Result<GeneratedXmdRootResult>> {
+  const ceiling = ceilingFor(asked, options);
+  return replyThrough(sidekickCeilingInstallation(ceiling), ceiling, source);
+}
+
+/**
+ * Evaluate one reply through an installation a case assembled itself.
+ *
+ * The same held host execution as {@link reply}, with the ceiling installation
+ * supplied rather than derived — which is what lets a case state destinations
+ * that name something other than what this conversation published.
+ */
+function replyThrough(
+  installation: ExecutionInstallation,
+  ceiling: ResponseCeiling,
+  source: string,
+): Operation<Result<GeneratedXmdRootResult>> {
   return scoped(function* () {
-    const ceiling = ceilingFor(asked, options);
     const gate = withResolvers<void>();
     const entered = withResolvers<void>();
     const execution = yield* executeInstalled(
@@ -279,7 +323,7 @@ function reply(
         stream: new InMemoryStream(),
       },
       [
-        sidekickCeilingInstallation(ceiling),
+        installation,
         {
           components: [
             {
@@ -492,6 +536,12 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         // Core's own too, admitted by this ceiling rather than installed
         // beside it: the canonical question, under its own name.
         "Elicit",
+        // Core's always-on composition table, which `allow` does not select
+        // between: a reply may render a value it already holds whatever it was
+        // admitted for. Taken from core rather than listed, because a copy here
+        // would be a second statement of what is admitted — which is the one
+        // thing this case exists to rule out.
+        ...coreCompositionVocabulary().map((pure) => pure.name),
         ...GUIDE_CHAPTERS.map((chapter) => `Guide.${chapter}`),
         "REPL.Bindings",
         "REPL.EntryInput",
@@ -500,6 +550,20 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.Submit",
         "REPL.Syntax",
       ].sort(),
+    );
+
+    // Rendering is its own class, so a reader of the surface can tell a control
+    // that reaches something from one that turns a value into text: `allow`
+    // selects between read and write and never between these.
+    expect(
+      surface
+        .filter((entry) => entry.effect === "render")
+        .map((entry) => entry.name)
+        .sort(),
+    ).toEqual(
+      coreCompositionVocabulary()
+        .map((pure) => pure.name)
+        .toSorted(),
     );
 
     // The two classes, and the forms each name is admitted for. The question is
@@ -1038,7 +1102,7 @@ describe("Tier R3 — a reservation is found by all three of its facts", () => {
 describe("Tier R3 — the guide index describes what is admitted", () => {
   /** The names this ceiling registers, which is what may be advertised. */
   function admittedNames(): ReadonlySet<string> {
-    const asked: Asked = { requests: [], began: [], settled: [], draft: undefined };
+    const asked: Asked = fresh();
     const ceiling = ceilingFor(asked);
     return new Set(ceiling.controls.filter((one) => one.effect === "read").map((one) => one.name));
   }
@@ -1186,7 +1250,7 @@ describe("Tier R3 — a shipped example prepares a draft and runs", () => {
    * point of the row.
    */
   function* prepared(chapter: GuideChapter): Operation<{ draft: string; fills: number }> {
-    const asked: Asked = { requests: [], began: [], settled: [], draft: undefined };
+    const asked: Asked = fresh();
     const answer = yield* reply(yield* displayed(chapter), asked);
     if (!answer.ok) {
       throw new Error(`Guide.${chapter}'s example was refused: ${answer.error.message}`);
@@ -1959,5 +2023,348 @@ describe("Tier R3 — what a capture seals, and what cannot reach across it", ()
 
     expect(rendered(answer)).toContain("Ada");
     expect(asked.requests).toEqual(["bindings"]);
+  });
+});
+
+/**
+ * Tier R6 — selecting out of what a control returned.
+ *
+ * A reply may write `yq` on any control it is admitted to, and what comes back
+ * is the selected value rather than the whole observation. What these cases
+ * discriminate is the *route*: the intent is marked before the original work,
+ * the selected value is a separate acknowledged record for that exact
+ * occurrence, and nothing about either is read from a component name, a
+ * completion order or the observation the producer happened to retain.
+ *
+ * Driven through the real `evaluateGeneratedXmdRoot` and the real ceiling
+ * installation, because the receiver only exists where canonical invocation
+ * opens one: a direct call to a control would prove nothing about which
+ * occurrence a value belongs to.
+ */
+describe("Tier R6 — a reply selects out of a control's own result", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("R6a: a queried capture marks its intent and presents the selected value", function* () {
+    const asked = fresh();
+    const answer = yield* reply(
+      `<Output>\n<REPL.Bindings yq='from_json | .names' as="names" />{names}\n</Output>\n`,
+      asked,
+    );
+
+    expect(answer.ok).toBe(true);
+    // Marked before the work, from the occurrence's own receiver — not from the
+    // record that came afterwards and not from an argument the reply wrote.
+    expect(asked.marked).toEqual([{ order: 0, presentation: "selected-v1" }]);
+    // One presentation, holding the selected data rather than the binding map.
+    expect(asked.presented).toEqual([{ order: 0, selected: ["Ada", "Grace"], failure: undefined }]);
+    // The original observation stands beside it, unchanged: the outcome is
+    // still what the control actually did.
+    expect(asked.settled[0]?.observed).toEqual({ names: ["Ada", "Grace"] });
+    // And the capture is the selected value, which is what the reply rendered.
+    expect(answer.ok && answer.value.output).toContain("Ada");
+  });
+
+  it("R6b: a queried occurrence without `as` presents the same selected value", function* () {
+    const asked = fresh();
+    const answer = yield* reply(
+      `<Output>\n<REPL.Bindings yq='from_json | .names' />\n</Output>\n`,
+      asked,
+    );
+
+    expect(answer.ok).toBe(true);
+    expect(asked.marked).toEqual([{ order: 0, presentation: "selected-v1" }]);
+    expect(asked.presented).toEqual([{ order: 0, selected: ["Ada", "Grace"], failure: undefined }]);
+  });
+
+  it("R6c: an unqueried occurrence is unmarked and presents nothing", function* () {
+    const asked = fresh();
+    const answer = yield* reply(`<Output>\n<REPL.Bindings />\n</Output>\n`, asked);
+
+    expect(answer.ok).toBe(true);
+    // Exactly as it was before any of this existed, which is what keeps an
+    // older history and an unqueried reply reading the same.
+    expect(asked.marked).toEqual([]);
+    expect(asked.presented).toEqual([]);
+  });
+
+  it("R6d: two same-named occurrences select different values in admission order", function* () {
+    const asked = fresh();
+    const answer = yield* reply(
+      [
+        "<Output>",
+        `<REPL.Bindings yq='from_json | .names[0]' as="first" />`,
+        `<REPL.Bindings yq='from_json | .names[1]' as="second" />`,
+        "{first}/{second}",
+        "</Output>",
+        "",
+      ].join("\n"),
+      asked,
+    );
+
+    expect(answer.ok).toBe(true);
+    // Two occurrences, two receivers, two presentations — in admission order,
+    // and each holding its own value. One receiver reused, or a correlation by
+    // component name, would have given both the same answer.
+    expect(asked.marked).toEqual([
+      { order: 0, presentation: "selected-v1" },
+      { order: 1, presentation: "selected-v1" },
+    ]);
+    expect(asked.presented).toEqual([
+      { order: 0, selected: "Ada", failure: undefined },
+      { order: 1, selected: "Grace", failure: undefined },
+    ]);
+    expect(answer.ok && answer.value.output).toContain("Ada/Grace");
+  });
+
+  it("R6e: a refused control with a query that would succeed stays refused", function* () {
+    const asked = fresh();
+    // The expression is a constant, so a route that queried anything at all
+    // would produce a value — and must not, because the control refused.
+    const answer = yield* reply(
+      `<Output>\n<REPL.Bindings yq='"anything"' as="x" />\n</Output>\n`,
+      asked,
+      { refuse: "bindings" },
+    );
+
+    expect(answer.ok).toBe(true);
+    expect(asked.marked).toEqual([{ order: 0, presentation: "selected-v1" }]);
+    // Marked and never presented: the original outcome is the refusal, and a
+    // presentation here would promote it into an answer.
+    expect(asked.presented).toEqual([]);
+    expect(asked.settled[0]?.ok).toBe(false);
+  });
+
+  it("R6f: a query that selects nothing refuses and presents nothing", function* () {
+    const asked = fresh();
+    const answer = yield* reply(
+      `<Output>\n<REPL.Bindings yq='from_json | .names[]' as="x" />\n</Output>\n`,
+      asked,
+    );
+
+    // The original control succeeded; the selection did not produce one value,
+    // so the invocation refuses and nothing is captured or presented.
+    expect(asked.settled[0]?.ok).toBe(true);
+    expect(asked.presented).toEqual([]);
+    expect(answer.ok === false || answer.value.output.includes("one JSON value")).toBe(true);
+  });
+
+  it("R6g: a queried read keeps its range beside the selected value", function* () {
+    const asked = fresh();
+    // The expression maps the window this read returned to the empty
+    // selection, which is the case that matters: an empty selected payload
+    // still has to carry the extent the producer actually observed.
+    const answer = yield* reply(
+      `<Output>\n<REPL.EntryOutput entry="entry-1" yq='[]' as="picked" />\n</Output>\n`,
+      asked,
+    );
+
+    expect(answer.ok).toBe(true);
+    const held = asked.presented[0];
+    expect(held?.selected).toEqual([]);
+    // The read's own identity and extent, outside the payload: selecting a
+    // field neither read another page nor changed what the producer observed.
+    expect(held?.read).toEqual({
+      entry: "entry-1",
+      status: "completed",
+      offset: 0,
+      length: 12,
+    });
+  });
+
+  it("R6g: one bounded window of a longer entry keeps its continuation", function* () {
+    // A nonzero bounded window of an entry longer than it, so there genuinely
+    // is a next page to ask for — which is the only arrangement in which "no
+    // later page was requested" says anything.
+    const asked = fresh();
+    const answer = yield* reply(
+      `<Output>\n` +
+        `<REPL.EntryOutput entry="entry-1" offset={40} limit={12} yq='[]' as="picked" />\n` +
+        `</Output>\n`,
+      asked,
+      {
+        read: {
+          entry: "entry-1",
+          status: "completed",
+          length: 400,
+          offset: 40,
+          limit: 12,
+          text: "a window of ",
+          previous: undefined,
+          next: { entry: "entry-1", offset: 52, limit: 12 },
+        },
+      },
+    );
+
+    expect(answer.ok).toBe(true);
+    const held = asked.presented[0];
+    // The empty selected payload, and beside it the window's own identity,
+    // range and continuation — the text deliberately absent, because the
+    // selection replaced it.
+    expect(held?.selected).toEqual([]);
+    expect(held?.read).toEqual({
+      entry: "entry-1",
+      status: "completed",
+      offset: 40,
+      length: 400,
+      next: { entry: "entry-1", offset: 52, limit: 12 },
+    });
+    expect(JSON.stringify(held?.read)).not.toContain("a window of");
+    // Exactly one read, and no second one: selecting out of a window is not a
+    // reason to go and fetch the page the continuation names.
+    expect(asked.requests).toEqual(["entryOutput"]);
+  });
+
+  it("R6h: a second response's receiver is its own", function* () {
+    const first = fresh();
+    const second = fresh();
+    yield* reply(`<Output>\n<REPL.Bindings yq='from_json | .names[0]' />\n</Output>\n`, first);
+    yield* reply(`<Output>\n<REPL.Bindings yq='from_json | .names[1]' />\n</Output>\n`, second);
+
+    // Each response filed its own occurrence. Nothing crossed: the receiver is
+    // opened per invocation and closed when that invocation settles, so a
+    // second response cannot reach the first one's.
+    expect(first.presented).toEqual([{ order: 0, selected: "Ada", failure: undefined }]);
+    expect(second.presented).toEqual([{ order: 0, selected: "Grace", failure: undefined }]);
+  });
+
+  it("R6j: a copied definition is routed nowhere", function* () {
+    const asked = fresh();
+    const ceiling = ceilingFor(asked);
+    const installation = sidekickCeilingInstallation(ceiling);
+    // Every member the published definitions have, in objects nothing
+    // published. A route that compared shape, or matched the name these copies
+    // carry, would hand a reply the destination belonging to the real ones.
+    const copied: ExecutionInstallation = {
+      ...installation,
+      resultDestinations: {
+        destinations: (installation.resultDestinations?.destinations ?? []).map((entry) =>
+          "definition" in entry ? { ...entry, definition: { ...entry.definition } } : entry,
+        ),
+        ...(installation.resultDestinations?.installed === undefined
+          ? {}
+          : { installed: installation.resultDestinations.installed }),
+      },
+    };
+    const answer = yield* replyThrough(
+      copied,
+      ceiling,
+      `<Output>\n<REPL.Bindings yq='from_json | .names' as="n" />{n}\n</Output>\n`,
+    );
+
+    // The control still ran and still selected — `yq` is the engine's and owes
+    // nothing to a destination — and nothing was marked or presented, because
+    // no destination was authenticated for it.
+    expect(answer.ok).toBe(true);
+    expect(answer.ok && answer.value.output).toContain("Ada");
+    expect(asked.marked).toEqual([]);
+    expect(asked.presented).toEqual([]);
+  });
+
+  it("R6i: a queried Submit marks the one intent its root wrote", function* () {
+    const asked = fresh();
+    // The identity expression, because what this row is about is the *one*
+    // intent and the *one* presentation rather than the shape of the receipt: a
+    // Submit's intent binds the reservation its root took, so a route that
+    // wrote its own would leave two attempts in the history.
+    const answer = yield* reply(`<Output>\n<REPL.Submit yq='.' />\n</Output>\n`, asked);
+
+    expect(answer.ok).toBe(true);
+    expect(asked.began.filter((held) => held.component === "REPL.Submit").length).toBe(1);
+    expect(asked.marked).toEqual([{ order: 0, presentation: "selected-v1" }]);
+    expect(asked.presented.length).toBe(1);
+    expect(asked.presented[0]?.order).toBe(0);
+    expect(String(asked.presented[0]?.selected)).toContain("entry-1");
+  });
+});
+
+/**
+ * Tier R8 — rendering a selected value in a real reply, and saying so once.
+ *
+ * `<Yaml>` is composition: it reaches nothing, answers nobody back, and is
+ * available to a reply whatever `allow` selected. These cases drive it through
+ * the same real root evaluation the rows above use, so what is checked is the
+ * vocabulary this conversation actually admits rather than a list kept beside
+ * it — and the compact surface a first turn reads is checked against that same
+ * vocabulary for the same reason.
+ */
+describe("Tier R8 — a reply renders what it selected", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("R8a: a reply selects with yq and renders the result as YAML", function* () {
+    const asked = fresh();
+    const answer = yield* reply(
+      [
+        "<Output>",
+        `<REPL.Bindings yq='from_json | .names' as="names" />`,
+        "<Yaml value={names} />",
+        "</Output>",
+        "",
+      ].join("\n"),
+      asked,
+    );
+
+    expect(answer.ok).toBe(true);
+    const output = String(answer.ok && answer.value.output);
+    // The selected value, rendered as a YAML sequence by the same engine that
+    // selected it. A reply that had been handed the whole binding map would
+    // have rendered a mapping with a `names` key instead.
+    expect(output).toContain("- Ada");
+    expect(output).toContain("- Grace");
+    expect(output).not.toContain("names:");
+    // And the selection is still one acknowledged presentation for that one
+    // occurrence: rendering it changed nothing about what came back.
+    expect(asked.marked).toEqual([{ order: 0, presentation: "selected-v1" }]);
+    expect(asked.presented).toEqual([{ order: 0, selected: ["Ada", "Grace"], failure: undefined }]);
+  });
+
+  it("R8a: rendering reaches nothing and answers nobody back", function* () {
+    const asked = fresh();
+    const answer = yield* reply(
+      `<Output>\n<Yaml value={{ kept: [1, "two"] }} />\n</Output>\n`,
+      asked,
+    );
+
+    expect(answer.ok).toBe(true);
+    expect(String(answer.ok && answer.value.output)).toContain("- two");
+    // No control ran, so nothing was requested, marked or presented: writing
+    // `<Yaml>` is not asking the root for anything.
+    expect(asked.requests).toEqual([]);
+    expect(asked.marked).toEqual([]);
+    expect(asked.presented).toEqual([]);
+  });
+
+  it("R8b: the compact surface advertises Yaml as rendering, with Json", function* () {
+    const asked = fresh();
+    const surface = responseSurface(ceilingFor(asked));
+    const rendering = surface.filter((entry) => entry.effect === "render");
+
+    // Derived from core's own composition table, which is why both appear and
+    // why neither is designated — their returns are the reply's to render.
+    expect(rendering.map((entry) => entry.name)).toEqual(["Json", "Yaml"]);
+    expect(rendering.every((entry) => entry.designated)).toBe(false);
+    expect(rendering.every((entry) => entry.form === "self-closing")).toBe(true);
+
+    const described = describeSurface(surface);
+    expect(described).toContain("<Yaml />");
+    expect(described).toContain("<Json />");
+  });
+
+  it("R8b: the shared yq and as are stated once, for every control", function* () {
+    const asked = fresh();
+    const described = describeSurface(responseSurface(ceilingFor(asked)));
+
+    // One rule about every control rather than a prop any of them declares, so
+    // it is said after the list and said once. A description that repeated it
+    // per line would read as one contract per control.
+    expect(described.match(/yq="<expression>"/g)?.length).toBe(1);
+    expect(described.match(/as="<name>"/g)?.length).toBe(1);
+    expect(described).toContain("from_json");
+    expect(described).toContain("[ ... ]");
+    // And no control's own prop list claims either of them: the engine consumes
+    // both before a control's schema is checked.
+    for (const entry of responseSurface(ceilingFor(asked))) {
+      expect(entry.props).not.toContain("yq");
+      expect(entry.props).not.toContain("as");
+    }
   });
 });

@@ -47,10 +47,16 @@
  * installs is where its pair is written. See `questions.ts`.
  */
 
-import { Ok } from "effection";
+import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 import { content } from "@executablemd/core";
-import type { InvocationForm } from "@executablemd/core";
+import type { ComponentInvocation, InvocationForm } from "@executablemd/core";
+import type {
+  ResultDestination,
+  ResultDestinationEntry,
+  ResultOccurrence,
+  ResultOccurrenceLookup,
+} from "@executablemd/core/host";
 import type {
   FunctionComponentDefinition,
   GeneratedEffect,
@@ -125,8 +131,16 @@ export interface SidekickRequests {
   environment(): Operation<Result<string>>;
   /** Fill the shared draft with exactly this source. Moves no focus. */
   fillDraft(source: string): Operation<Result<void>>;
-  /** Admit the draft and wait for the exact admitted entry to finish. */
-  submit(): Operation<Result<SubmitReceipt>>;
+  /**
+   * Admit the draft and wait for the exact admitted entry to finish.
+   *
+   * `presenting` is this occurrence's own receiver, when it queried. Submit's
+   * intent binds the reservation the root took, so the root writes that pair —
+   * which is why the mode arrives here rather than being written by the wrapper
+   * out in this module. The root marks that one intent and files the position
+   * it took; nothing adds a second intent or a second reservation.
+   */
+  submit(presenting: SidekickOccurrence | undefined): Operation<Result<SubmitReceipt>>;
   /** Read one window of one entry's observed output. */
   entryOutput(request: OutputReadRequest): Operation<Result<OutputRead>>;
 }
@@ -173,9 +187,31 @@ export interface ControlJournal {
    * from — has to be on disk before the slot is acted on. Every other control
    * answers a question about state that is already there, so there is nothing
    * for it to bind.
+   *
+   * `presentation` is the mode this occurrence's result will be presented in,
+   * and it is written here — before the original work — because the whole point
+   * of marking is that a reader of an interrupted conversation can tell a
+   * selection that never completed from an ordinary outcome. It comes from the
+   * occurrence's own receiver rather than from an argument a reply wrote, and
+   * an occurrence that queried nothing is unmarked exactly as it always was.
    */
-  began(occurrence: ControlOccurrence, reserved?: ReservedSlot): Operation<number>;
+  began(
+    occurrence: ControlOccurrence,
+    reserved?: ReservedSlot,
+    presentation?: "selected-v1",
+  ): Operation<number>;
   settled(order: number, outcome: Result<unknown>, observed?: Json): Operation<void>;
+  /**
+   * Record what this occurrence's result was selected down to.
+   *
+   * A record of its own, appended after the original outcome and after whatever
+   * capture or publication the occurrence owed — so its presence is proof the
+   * whole route completed and its absence beside a marked intent is proof the
+   * route was interrupted. `read` is the original observation's own identity,
+   * range and continuation, kept beside the selected value rather than inside
+   * it.
+   */
+  presented(order: number, selected: Result<Json>, read?: Json): Operation<void>;
 }
 
 /** The entry slot a Submit intent binds, so a dead process can be reconciled. */
@@ -278,6 +314,14 @@ export interface SidekickControl {
    * row rather than quietly leaving a reply under-told.
    */
   readonly props?: readonly string[];
+  /**
+   * Whether this conversation selects the name rather than answering for it.
+   *
+   * True for a protected component: canonical resolution answers it from core's
+   * own tier, so there is no definition here to publish and its destination is
+   * named by the selection instead.
+   */
+  readonly selected?: boolean;
 }
 
 /**
@@ -332,26 +376,150 @@ function offering(key: string, form: InvocationForm, effect: GeneratedEffect): G
 }
 
 /**
+ * What one queried occurrence of an owned control shares with its destination.
+ *
+ * Two halves of one piece of bookkeeping that meet at different moments. The
+ * control's own body knows which journal position it took and what read context
+ * its observation carried, while it is running; the destination is what is left
+ * to receive the selected value afterwards. Neither knows the other's half, so
+ * they share this — filed by the body, read by the destination, and reached by
+ * the exact occurrence object the engine minted rather than by a name, a count
+ * or whichever occurrence came last.
+ */
+interface Filed {
+  order: number | undefined;
+  read: Json | undefined;
+}
+
+/** The occurrence one control body is in, as that body sees it. */
+export interface SidekickOccurrence {
+  /** The expression this occurrence selects with, when it selects. */
+  readonly query: string | undefined;
+  /** Record the journal position this occurrence took, and its read context. */
+  file(order: number, read?: Json): void;
+}
+
+/**
+ * This conversation's own destinations, and the occurrences behind them.
+ *
+ * One of these per conversation, beside the controls it owns. What it holds is
+ * per-occurrence and weak: a receiver's lifetime is its occurrence's, and
+ * nothing here keeps one alive or reachable after the invocation that opened it
+ * has settled.
+ */
+export interface SidekickDestinations {
+  /** The entry one owned definition is routed through. */
+  entry(definition: FunctionComponentDefinition): ResultDestinationEntry;
+  /** The entry one selected protected name is routed through. */
+  selected(name: string): ResultDestinationEntry;
+  /** Take the lookup canonical execution hands this host at installation. */
+  installed(lookup: ResultOccurrenceLookup): void;
+  /** The occurrence this invocation is in, when it is an owned queried one. */
+  of(invocation: ComponentInvocation): SidekickOccurrence | undefined;
+}
+
+/**
+ * Build this conversation's destinations over its own control journal.
+ *
+ * The journal is the response-routing one the ceiling already writes through,
+ * so a selected presentation is filed by the same serialized writer, under the
+ * same response, as the intent and the outcome it belongs to.
+ */
+export function sidekickDestinations(journal: ControlJournal): SidekickDestinations {
+  const filed = new WeakMap<ResultOccurrence, Filed>();
+  let lookup: ResultOccurrenceLookup | undefined;
+  return {
+    entry(definition: FunctionComponentDefinition): ResultDestinationEntry {
+      return { definition, open: (query) => opened(query) };
+    },
+    selected(name: string): ResultDestinationEntry {
+      return { selected: name, open: (query) => opened(query) };
+    },
+    installed(taken: ResultOccurrenceLookup): void {
+      lookup = taken;
+    },
+    of(invocation: ComponentInvocation): SidekickOccurrence | undefined {
+      const occurrence = lookup?.(invocation);
+      if (occurrence === undefined) {
+        return undefined;
+      }
+      const held = filed.get(occurrence);
+      if (held === undefined) {
+        return undefined;
+      }
+      return {
+        query: occurrence.query,
+        file(order: number, read?: Json): void {
+          held.order = order;
+          held.read = read;
+        },
+      };
+    },
+  };
+
+  /** One occurrence's destination, which is the same for every control. */
+  function opened(query: string | undefined): ResultDestination {
+    const held: Filed = { order: undefined, read: undefined };
+    return {
+      *accept(selected: unknown): Operation<void> {
+        const order = held.order;
+        if (order === undefined || query === undefined) {
+          // An occurrence whose body filed nothing recorded no intent to
+          // present, so there is nothing for a presentation to belong to — a
+          // refused original outcome and an unqueried occurrence both land
+          // here, and both keep the feedback they already had.
+          return;
+        }
+        yield* journal.presented(order, Ok(parseSelected(selected)), held.read);
+      },
+      serves(occurrence: ResultOccurrence): void {
+        filed.set(occurrence, held);
+      },
+    };
+  }
+}
+
+/**
+ * The selected value, as the record retains it.
+ *
+ * Parsed rather than asserted: what reaches a destination is whatever the
+ * engine's own JSON acceptance produced, and the record is JSON, so a value
+ * outside that domain is a failure of this presentation rather than something
+ * written down as if it were data.
+ */
+function parseSelected(selected: unknown): Json {
+  return JSON.parse(JSON.stringify(selected ?? null));
+}
+
+/**
  * Run one control's work, recording the intent before and the outcome after.
  *
  * The outcome crosses as a `Result` and the *rendered* value is what the
  * element becomes. A refusal renders its reason, so a reply reads why its
  * operation did not happen in the place it asked for it.
+ *
+ * A queried occurrence is marked here, before the work, from its own receiver —
+ * and the position it took is filed where its destination will find it. An
+ * occurrence that queried nothing is unmarked and files nothing, so its
+ * feedback stays exactly the ordinary observation it always was.
  */
 function* performed<T>(
   journal: ControlJournal,
+  mine: SidekickOccurrence | undefined,
   occurrence: ControlOccurrence,
   work: () => Operation<Result<T>>,
   render: (value: T) => string,
   observed?: (value: T) => Json,
+  context?: (value: T) => Json | undefined,
 ): Operation<string> {
-  const order = yield* journal.began(occurrence);
+  const selecting = mine?.query !== undefined;
+  const order = yield* journal.began(occurrence, undefined, selecting ? "selected-v1" : undefined);
   let answer: Result<T>;
   try {
     answer = yield* work();
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
-    yield* journal.settled(order, { ok: false, error: failure } as Result<T>);
+    yield* journal.settled(order, Err(failure));
     throw failure;
   }
   yield* journal.settled(
@@ -359,6 +527,12 @@ function* performed<T>(
     answer,
     answer.ok && observed !== undefined ? observed(answer.value) : undefined,
   );
+  if (selecting && answer.ok) {
+    // Filed only for a successful original outcome: a refused control keeps
+    // refused feedback, and a presentation for it would promote a refusal into
+    // an answer.
+    mine?.file(order, context === undefined ? undefined : context(answer.value));
+  }
   return answer.ok ? render(answer.value) : answer.error.message;
 }
 
@@ -399,15 +573,17 @@ function* delegated<T>(
 export function sidekickObservations(
   requests: SidekickRequests,
   journal: ControlJournal,
+  destinations: SidekickDestinations,
 ): SidekickControl[] {
   const observations: SidekickControl[] = [
     reading("REPL.Bindings", "Bindings", {
       kind: "function",
       name: "REPL.Bindings",
       props: NO_PROPS,
-      *fn(): Operation<string> {
+      *fn(_props: Json, invocation: ComponentInvocation): Operation<string> {
         return yield* performed(
           journal,
+          destinations.of(invocation),
           { component: "REPL.Bindings", arguments: {} },
           () => requests.bindings(),
           // The detached map, as JSON a reply reads rather than as prose about
@@ -426,10 +602,14 @@ export function sidekickObservations(
       // comma-separated string would have been a third spelling nothing else
       // in the language uses.
       props: SYNTAX_NAMES_PROPS,
-      *fn(props: { names?: readonly string[] }): Operation<string> {
+      *fn(
+        props: { names?: readonly string[] },
+        invocation: ComponentInvocation,
+      ): Operation<string> {
         const names = props.names;
         return yield* performed(
           journal,
+          destinations.of(invocation),
           {
             component: "REPL.Syntax",
             arguments: names === undefined ? {} : { names: [...names] },
@@ -444,9 +624,10 @@ export function sidekickObservations(
       kind: "function",
       name: "REPL.Environment",
       props: NO_PROPS,
-      *fn(): Operation<string> {
+      *fn(_props: Json, invocation: ComponentInvocation): Operation<string> {
         return yield* performed(
           journal,
+          destinations.of(invocation),
           { component: "REPL.Environment", arguments: {} },
           () => requests.environment(),
           (value) => value,
@@ -470,13 +651,19 @@ export function sidekickObservations(
         },
         additionalProperties: false,
       },
-      *fn(props: OutputReadRequest): Operation<string> {
+      *fn(props: OutputReadRequest, invocation: ComponentInvocation): Operation<string> {
         return yield* performed(
           journal,
-          { component: "REPL.EntryOutput", arguments: { ...props } as Json },
+          destinations.of(invocation),
+          { component: "REPL.EntryOutput", arguments: { ...props } },
           () => requests.entryOutput(props),
           renderRead,
-          (value) => ({ ...value }) as unknown as Json,
+          (value) => readObservation(value),
+          // The read's own identity, range and continuation, kept beside a
+          // selected value rather than inside it: selecting a field out of a
+          // window neither reads another page nor changes the extent the
+          // producer actually observed.
+          (value) => readContext(value),
         );
       },
     }),
@@ -488,9 +675,10 @@ export function sidekickObservations(
         kind: "function",
         name,
         props: NO_PROPS,
-        *fn(): Operation<string> {
+        *fn(_props: Json, invocation: ComponentInvocation): Operation<string> {
           return yield* performed(
             journal,
+            destinations.of(invocation),
             { component: name, arguments: {} },
             () => requests.guide(chapter),
             // Literal Markdown, returned as it is written. Nothing in a guide
@@ -524,19 +712,21 @@ export function sidekickObservations(
 export function sidekickMutations(
   requests: SidekickRequests,
   journal: ControlJournal,
+  destinations: SidekickDestinations,
 ): SidekickControl[] {
   return [
     writing("REPL.EntryInput", "EntryInput", "paired", {
       kind: "function",
       name: "REPL.EntryInput",
       props: NO_PROPS,
-      *fn(): Operation<string> {
+      *fn(_props: Json, invocation: ComponentInvocation): Operation<string> {
         // The rendered content, once. It is entry source — not response
         // syntax — so it is handed over as the literal string it is and
         // never re-expanded.
         const source = String(yield* content());
         return yield* performed(
           journal,
+          destinations.of(invocation),
           { component: "REPL.EntryInput", arguments: { source } },
           () => requests.fillDraft(source),
           // The acknowledgement, not the program. A reply that was handed its
@@ -549,11 +739,12 @@ export function sidekickMutations(
       kind: "function",
       name: "REPL.Submit",
       props: NO_PROPS,
-      *fn(): Operation<string> {
+      *fn(_props: Json, invocation: ComponentInvocation): Operation<string> {
         // Unjournaled here on purpose; see {@link delegated}. The root writes
         // this control's pair, because the intent binds the slot the root
-        // took and nothing out here knows what that is yet.
-        return yield* delegated(() => requests.submit(), renderReceipt);
+        // took and nothing out here knows what that is yet — and for the same
+        // reason the root is what marks it, from the receiver handed over here.
+        return yield* delegated(() => requests.submit(destinations.of(invocation)), renderReceipt);
       },
     }),
     // Core's own `<Elicit>`, admitted paired — and with **no definition of its
@@ -572,7 +763,7 @@ export function sidekickMutations(
     //
     // Its answer still becomes feedback. The pair is written by the provider
     // the owner installs rather than by `performed()` here; see `questions.ts`.
-    { name: ELICIT_CONTROL, form: "paired", effect: "write", props: ["schema"] },
+    { name: ELICIT_CONTROL, form: "paired", effect: "write", props: ["schema"], selected: true },
   ];
 }
 
@@ -626,6 +817,36 @@ export function renderRead(held: OutputRead): string {
     );
   }
   return lines.join("\n");
+}
+
+/** One read's complete observation, as the outcome retains it. */
+function readObservation(held: OutputRead): Json {
+  return {
+    entry: held.entry,
+    status: held.status,
+    offset: held.offset,
+    length: held.length,
+    text: held.text,
+    ...(held.next === undefined ? {} : { next: { ...held.next } }),
+  };
+}
+
+/**
+ * One read's identity, range and continuation, without its text.
+ *
+ * What a reply needs beside a selected value: which entry it read, how much of
+ * it the producer actually observed, and whether there is more. The text is
+ * deliberately absent — a selection replaced it, and carrying both would make
+ * the window and the selection two accounts of one read.
+ */
+function readContext(held: OutputRead): Json {
+  return {
+    entry: held.entry,
+    status: held.status,
+    offset: held.offset,
+    length: held.length,
+    ...(held.next === undefined ? {} : { next: { ...held.next } }),
+  };
 }
 
 /** The longest run of one character, so a fence can be longer than it. */
