@@ -144,6 +144,23 @@ export type {
 export type { Expansion } from "./src/expansion.ts";
 
 /**
+ * The seam one invocation's accepted result crosses, and the request a
+ * handler composing around it is handed.
+ *
+ * Here for the same reason `Component` is: a consumer that wants to see what a
+ * component produced — and to transform it before anything binds, publishes or
+ * presents it — needs the descriptor and the shape, and nothing of the engine
+ * behind them. Every accepted result crosses it, queried or not.
+ *
+ * It carries no authority over where a result goes. Which occurrence owns a
+ * destination is the trusted host installation's, stated through
+ * `packages/core/host.ts` before any document code runs, and a handler here
+ * cannot read, add or redirect one.
+ */
+export { ComponentResult } from "./src/component-result.ts";
+export type { ComponentResultApi, ComponentResultRequest } from "./src/component-result.ts";
+
+/**
  * The execution a host composes around, and the requests its layers are handed.
  *
  * Three seams. `init` is the one a command host installs on: it establishes

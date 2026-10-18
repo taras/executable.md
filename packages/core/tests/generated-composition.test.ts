@@ -223,6 +223,39 @@ describe("Tier FE31 — a fragment binds locally and renders what it chose", () 
     });
   }
 
+  it("FE31: a known-invalid query refuses before the read written ahead of it", function* () {
+    // The authored rule reaches generated source too: `yq={42}` is not an
+    // expression whatever the producer would have done with it, and the read
+    // written first is what says the refusal preceded every effect.
+    const files = recordedFiles({ "notes.md": NOTE });
+    const message = yield* refusal(
+      run(evaluating(`<File path="notes.md" as="note" />\n\n<Json value={note} yq={42} />\n`), [
+        reading(files),
+      ]),
+    );
+
+    expect(message).toContain("yq");
+    expect(files.performed).toEqual([]);
+  });
+
+  it("FE31: a string query on the same fragment runs it", function* () {
+    // The control: the rule refuses what is known to be wrong, and an
+    // ordinary query on the same shape still reaches the producer.
+    const files = recordedFiles({ "notes.md": NOTE });
+    const output = yield* run(
+      evaluating(
+        `<File path="notes.md" as="note" />\n\n` +
+          `<Json value={{ note }} yq='from_json | .note' />\n`,
+      ),
+      [reading(files)],
+    );
+
+    expect(files.performed).toEqual(["read notes.md"]);
+    // The selected string itself, which is what an uncaptured queried
+    // invocation renders.
+    expect(String(output).trim()).toBe(NOTE.trim());
+  });
+
   it("FE31: a directly scanned finite number is the positive control for the non-finite rows", function* () {
     // `-1` is a JSON number rather than an operator, and the scanner resolves it
     // to an inert `-1` before an expression exists. Without this row, the

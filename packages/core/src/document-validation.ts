@@ -55,6 +55,7 @@ import {
   asExpressionViolation,
   capturedBinding,
   ENGINE_OWNED_PROPS,
+  queryExpressionViolation,
   returnCaptureViolation,
 } from "./invocation-rules.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
@@ -930,6 +931,16 @@ class ValidationState {
     if (asRefused !== undefined) {
       captureViolations.push(asRefused);
     }
+    // `yq` is engine-owned on the same terms, and the rule is expansion's own:
+    // a value that is written here and is not a string is not an expression,
+    // whatever a producer would have done with it. A query written as an
+    // expression resolves at runtime and is deliberately not judged — this
+    // phase holds the literal the author wrote, and an unresolved one is not
+    // statically checkable rather than statically valid.
+    const queryRefused = queryExpressionViolation(segment.name, segment.props.yq);
+    if (queryRefused !== undefined) {
+      captureViolations.push(queryRefused);
+    }
     for (const violation of captureViolations) {
       draft.tokens.push(
         this.#draft(context.entry.ordinal, violation.code, {
@@ -1013,7 +1024,7 @@ class ValidationState {
       // no props schema, no captures, no return mode. Only the engine-owned
       // checks above applied, and what is left is unknown rather than accepted.
       if (draft.tokens.length === 0) {
-        if (hasDynamicProp(segment, [])) {
+        if (hasDynamicProp(segment, []) || hasDynamicQuery(segment)) {
           draft.reasons.push("dynamic-props");
         }
         draft.reasons.push("origin-only-contract");
@@ -1112,6 +1123,15 @@ class ValidationState {
       // Ajv is not asked a question about an object it has not been given.
       // Partially solving a schema across the values that are there and the
       // ones that are not would answer with conclusions nothing established.
+      draft.reasons.push("dynamic-props");
+      return;
+    }
+
+    if (hasDynamicQuery(segment)) {
+      // The schema is satisfied and the query is not known. Reported as
+      // unresolved rather than valid: `yq` is stripped before the schema is
+      // consulted, and a site certified because the one thing that was not
+      // checked had been removed is a site nothing checked.
       draft.reasons.push("dynamic-props");
       return;
     }
@@ -1426,6 +1446,19 @@ function schemaVisible<T>(
 /** Whether any schema-visible prop is written as an expression. */
 function hasDynamicProp(segment: ComponentElement, captures: readonly string[]): boolean {
   return Object.keys(schemaVisible(segment.expressions, captures)).length > 0;
+}
+
+/**
+ * Whether this invocation's query is written as an expression.
+ *
+ * Asked separately from the schema question, because the two answers are
+ * about different things. `yq` never meets a producer's schema, so it is
+ * absent from the props a schema is checked against — but what it evaluates
+ * to still decides whether the invocation is well formed, and this phase does
+ * not have it. Saying nothing would report such a site as checked.
+ */
+function hasDynamicQuery(segment: ComponentElement): boolean {
+  return Object.hasOwn(segment.expressions, "yq");
 }
 
 /**

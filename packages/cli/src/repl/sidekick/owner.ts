@@ -638,7 +638,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
      * installed above it. An entry's questions keep reaching the session's
      * provider, in the session's scope, and nothing routes between them.
      */
-    const asking = yield* useSidekickQuestions();
+    const asking = yield* useSidekickQuestions(ceiling.destinations);
     /**
      * The storage this owner writes to, once something explicit established it.
      *

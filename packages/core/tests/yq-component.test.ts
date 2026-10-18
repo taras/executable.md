@@ -40,6 +40,7 @@ import { fatalCause } from "../src/errors.ts";
 import { createYq } from "yq.rs/loader";
 import type { Yq } from "yq.rs/loader";
 import { createValueQuery, ONE_VALUE } from "../src/value-query.ts";
+import { ComponentResult } from "../api.ts";
 import type { EngineFactory } from "../src/value-query.ts";
 import { Component } from "../src/component-api.ts";
 import type { ComponentRegistration } from "../src/components/registration.ts";
@@ -85,6 +86,8 @@ interface Supplied {
   readonly registered?: readonly ComponentRegistration[];
   /** Markdown definitions, answered through the ordinary import chain. */
   readonly markdown?: readonly ComponentDefinition[];
+  /** A log the result seam writes to, for a case about completion order. */
+  readonly watching?: string[];
 }
 
 /** Run `source` as a document in `root`, with `supplied` resolvable. */
@@ -105,6 +108,17 @@ function runDocument(root: string, source: string, supplied: Supplied = {}): Ope
       },
     });
     yield* useHostFiles();
+    if (supplied.watching !== undefined) {
+      const order = supplied.watching;
+      yield* ComponentResult.around({
+        *result([request], next) {
+          if (request.query !== undefined) {
+            order.push("result middleware");
+          }
+          return yield* next(request);
+        },
+      });
+    }
     if (supplied.registered !== undefined && supplied.registered.length > 0) {
       yield* registerComponents([...supplied.registered]);
     }
@@ -283,9 +297,14 @@ describe("Tier YQ — one engine per execution, built when it is wanted", () => 
     const gate = openGate();
     const asked = openGate();
     const reached: string[] = [];
+    // The factory's own promise, kept: `gate.opened` only *starts* the real
+    // engine, and a case that waited on the gate would be asserting before the
+    // vendor had produced anything at all.
+    let engine: Promise<Yq> | undefined;
     const held: EngineFactory = (bytes: Uint8Array) => {
       asked.open();
-      return gate.opened.then(() => realEngine(bytes));
+      engine = gate.opened.then(() => realEngine(bytes));
+      return engine;
     };
     const owner = createValueQuery(held);
 
@@ -302,10 +321,17 @@ describe("Tier YQ — one engine per execution, built when it is wanted", () => 
     // this is about — not before the consumer started.
     yield* until(asked.opened);
     yield* waiting.halt();
-    // Resolved after the halt, which is the case `until` cannot cancel.
+    // Released after the halt, and then *settled*: this waits for the engine
+    // the vendor actually built, which is the moment a resumed continuation
+    // would have had something to publish.
     gate.open();
-    yield* until(gate.opened);
+    expect(engine).not.toBe(undefined);
+    const settled = yield* until(engine ?? Promise.reject(new Error("no engine was started")));
+    expect(settled).not.toBe(undefined);
 
+    // The halted task came down — `halt()` returns once its teardown has run,
+    // and the marker is that teardown — and its downstream continuation never
+    // ran, with the engine now genuinely settled behind it.
     expect(reached).toEqual(["torn down"]);
     owner.close();
   });
@@ -437,6 +463,40 @@ describe("Tier YQ — what one answer may be", () => {
     expect(refusal).toBe(ONE_VALUE);
     owner.close();
   });
+
+  it("YQ2: an evaluator that throws with partial output keeps its cause", function* () {
+    // The other branch, and the one a vendor actually takes when it fails
+    // partway: it raises rather than returning. What a document must not get
+    // is the text it had produced before it gave up — and what a reader must
+    // keep is why it gave up.
+    const broke = new Error("the vendor abandoned this evaluation");
+    const owner = createValueQuery(() =>
+      Promise.resolve({
+        evaluate: () => "",
+        evaluateSequenceWithStatus: () => ({ output: "", matched: false }),
+        evaluateWithStatus: () => {
+          // Partial output exists, and it leaves with the failure rather than
+          // being returned beside it.
+          throw Object.assign(broke, { output: "[1" });
+        },
+      }),
+    );
+    let raised: unknown;
+    try {
+      yield* owner.select(".", [1]);
+    } catch (error) {
+      raised = error;
+    }
+
+    // Reported as the evaluation it was, and the vendor's own failure is
+    // reachable underneath rather than replaced by a summary of it.
+    expect(raised instanceof Error && raised.name).toBe("ValueQueryError");
+    expect(raised instanceof Error && raised.message).toContain("could not be evaluated");
+    expect(raised instanceof Error && raised.cause).toBe(broke);
+    // And nothing partial came back: the refusal is the whole answer.
+    expect(raised instanceof Error && raised.message).not.toContain("[1");
+    owner.close();
+  });
 });
 
 describe("Tier YQ — two real producers select before they bind", () => {
@@ -548,6 +608,26 @@ describe("Tier YQ — acceptance, teardown, then selection", () => {
     // An object under its own `returns`, then a scalar after the query. The
     // selection happens after acceptance, so the schema never saw the scalar.
     expect(text(run).trim()).toBe("widget");
+  });
+
+  it("YQ4: a queried Markdown body finishes before the result is selected", function* () {
+    // The completion order a reader of the history depends on, with the query
+    // in place: everything the component's own body still had to do — a later
+    // element and the cleanup that element owns — happens before the result
+    // middleware is asked and before anything is captured.
+    const root = yield* useWorkspace({});
+    const order: string[] = [];
+    const run = yield* runDocument(root, `<Finishing yq='.name' as="picked" />\n\n{picked}\n`, {
+      markdown: [finishingComponent()],
+      registered: [sentinel(order)],
+      watching: order,
+    });
+
+    expect(run.outcome.ok).toBe(true);
+    expect(text(run).trim()).toBe("widget");
+    // The sentinel ran after `<Return>`, its own cleanup unwound, and only
+    // then was the result composed and bound.
+    expect(order).toEqual(["sentinel body", "sentinel teardown", "result middleware"]);
   });
 
   it("YQ4: no expression repairs a return its own schema rejected", function* () {
@@ -715,6 +795,46 @@ function recordComponent(): ComponentDefinition {
       additionalProperties: false,
     },
     bodySegments: scanSegments('<Return value={{ name: "widget" }} />\n'),
+  };
+}
+
+/**
+ * A Markdown value body that keeps working after it has returned.
+ *
+ * The sentinel is a registered component rather than a code block: a
+ * component body is where the ordering question lives, and putting executable
+ * JavaScript in the Markdown would be answering a different one.
+ */
+function finishingComponent(): ComponentDefinition {
+  return {
+    kind: "markdown",
+    name: "Finishing",
+    path: "components/Finishing.md",
+    meta: {},
+    props: { type: "object", properties: {}, additionalProperties: false },
+    returns: {
+      type: "object",
+      properties: { name: { type: "string" } },
+      required: ["name"],
+      additionalProperties: false,
+    },
+    bodySegments: scanSegments('<Return value={{ name: "widget" }} />\n\n<Sentinel />\n'),
+  };
+}
+
+/** A component that records when it ran and when its own cleanup unwound. */
+function sentinel(order: string[]): ComponentRegistration {
+  return {
+    name: "Sentinel",
+    origin: "yq-component-test",
+    props: { type: "object", properties: {}, additionalProperties: false },
+    *fn(): Operation<unknown> {
+      yield* ensure(() => {
+        order.push("sentinel teardown");
+      });
+      order.push("sentinel body");
+      return "";
+    },
   };
 }
 

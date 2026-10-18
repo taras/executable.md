@@ -1415,6 +1415,46 @@ describe("Tier DV: the engine's own props are not schema props", () => {
     expect(outcomes(result)).toEqual(["valid"]);
   });
 
+  it("DV14: a known non-string `yq` is diagnosed before anything runs", function* () {
+    // The authored literal is what this phase holds, and a number is not an
+    // expression whatever a producer would have done with it. Diagnosed here
+    // so the refusal costs nothing — the same rule expansion applies, applied
+    // before any effect.
+    const { result } = yield* validateText(`<File path="notes.md" yq={42} as="picked" />\n`, {
+      tree: { "notes.md": "{}" },
+    });
+
+    expect(codes(result)).toContain("props-invalid");
+    const said = result.diagnostics.map((one) => one.message).join("\n");
+    expect(said).toContain('Prop "yq" on <File />');
+    expect(said).toContain("number");
+  });
+
+  it("DV14: an unresolved dynamic `yq` is not checkable rather than valid", function* () {
+    // A query the document computes has no literal here. The outcome says the
+    // invocation could not be statically checked; it does not certify the
+    // expression, and it does not refuse it either.
+    const { result } = yield* validateText(
+      `<Glob include={["*.md"]} as="all" />\n\n<File path="notes.md" yq={all[0]} as="picked" />\n`,
+      { tree: { "notes.md": "{}" } },
+    );
+
+    expect(codes(result)).not.toContain("props-invalid");
+    expect(outcomes(result)).toContain("not-statically-checkable");
+  });
+
+  it("DV14: a string `yq` is accepted", function* () {
+    // The control: the rule refuses what is known to be wrong, and the
+    // ordinary authored form still passes.
+    const { result } = yield* validateText(
+      `<File path="notes.md" yq='from_json | .name' as="picked" />\n`,
+      { tree: { "notes.md": "{}" } },
+    );
+
+    expect(codes(result)).toEqual([]);
+    expect(outcomes(result)).toEqual(["valid"]);
+  });
+
   it("DV14: an unknown prop beside `yq` is still refused", function* () {
     // The negative control: stripping the engine's own props is not stripping
     // everything, so a closed schema still closes.

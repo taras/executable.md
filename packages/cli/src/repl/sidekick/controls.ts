@@ -416,6 +416,21 @@ export interface SidekickDestinations {
   installed(lookup: ResultOccurrenceLookup): void;
   /** The occurrence this invocation is in, when it is an owned queried one. */
   of(invocation: ComponentInvocation): SidekickOccurrence | undefined;
+  /**
+   * The occurrence a selected protected control is about to run in, taken once.
+   *
+   * Canonical `<Elicit>` is the only control this conversation does not answer
+   * for, so its body is core's and the lookup above is unreachable from inside
+   * it: the one thing that runs there on this host's behalf is the question
+   * provider. Core opens this destination for that exact occurrence and then
+   * runs that invocation, so what the provider takes here is the occurrence
+   * whose body is asking — not the last one to finish, and not a name match.
+   *
+   * Taken rather than read, because one occurrence asks one question. A
+   * provider that asked twice would find nothing the second time and file
+   * nothing, which is what an occurrence with no destination has always done.
+   */
+  takeSelected(): SidekickOccurrence | undefined;
 }
 
 /**
@@ -428,12 +443,38 @@ export interface SidekickDestinations {
 export function sidekickDestinations(journal: ControlJournal): SidekickDestinations {
   const filed = new WeakMap<ResultOccurrence, Filed>();
   let lookup: ResultOccurrenceLookup | undefined;
+  /** The selected control core has opened a destination for and not yet run. */
+  let awaiting: ResultOccurrence | undefined;
   return {
     entry(definition: FunctionComponentDefinition): ResultDestinationEntry {
       return { definition, open: (query) => opened(query) };
     },
     selected(name: string): ResultDestinationEntry {
-      return { selected: name, open: (query) => opened(query) };
+      return {
+        selected: name,
+        open: (query) =>
+          opened(query, (occurrence) => {
+            awaiting = occurrence;
+          }),
+      };
+    },
+    takeSelected(): SidekickOccurrence | undefined {
+      const occurrence = awaiting;
+      awaiting = undefined;
+      if (occurrence === undefined) {
+        return undefined;
+      }
+      const held = filed.get(occurrence);
+      if (held === undefined) {
+        return undefined;
+      }
+      return {
+        query: occurrence.query,
+        file(order: number, read?: Json): void {
+          held.order = order;
+          held.read = read;
+        },
+      };
     },
     installed(taken: ResultOccurrenceLookup): void {
       lookup = taken;
@@ -458,7 +499,10 @@ export function sidekickDestinations(journal: ControlJournal): SidekickDestinati
   };
 
   /** One occurrence's destination, which is the same for every control. */
-  function opened(query: string | undefined): ResultDestination {
+  function opened(
+    query: string | undefined,
+    announce?: (occurrence: ResultOccurrence) => void,
+  ): ResultDestination {
     const held: Filed = { order: undefined, read: undefined };
     return {
       *accept(selected: unknown): Operation<void> {
@@ -474,6 +518,7 @@ export function sidekickDestinations(journal: ControlJournal): SidekickDestinati
       },
       serves(occurrence: ResultOccurrence): void {
         filed.set(occurrence, held);
+        announce?.(occurrence);
       },
     };
   }

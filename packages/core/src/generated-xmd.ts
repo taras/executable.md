@@ -136,7 +136,7 @@ import { extendPath } from "./expansion.ts";
 import { isJsonObject, parseJson } from "./json.ts";
 import { markGeneratedRequestRefusal } from "./generated-request-refusal.ts";
 import { GeneratedDataExpressions, validateDataExpression } from "./generated-expressions.ts";
-import { capturedBinding } from "./invocation-rules.ts";
+import { capturedBinding, queryExpressionViolation } from "./invocation-rules.ts";
 import { renderSegments } from "./render.ts";
 import { scanSegments } from "./scanner.ts";
 import { sourceDescription } from "./source-position.ts";
@@ -194,6 +194,7 @@ type Construct =
   | "expression"
   | "interpolation"
   | "binding"
+  | "query"
   | "component"
   | "content"
   | "form"
@@ -214,6 +215,7 @@ const CONSTRUCT: Record<Construct, string> = {
     "bindings.",
   interpolation: "a generated fragment reads a binding through interpolation, which it may not.",
   binding: "a generated fragment binds a result with an `as` that is not a binding name.",
+  query: "a generated fragment writes a `yq` that is not a string holding an expression.",
   component: "a generated fragment names a component this host did not admit.",
   content:
     "a generated fragment gives content to a component this host admitted only in its " +
@@ -1817,6 +1819,13 @@ function* walk(
           } catch {
             throw new Refusal("expression");
           }
+        }
+        // Engine-owned and decided on the same terms as every other authored
+        // rule: a query that is written here and is not a string is not an
+        // expression, whatever the producer would have done with it. Refused
+        // in preflight, so a known-invalid query costs no effect at all.
+        if (queryExpressionViolation(segment.name, segment.props.yq) !== undefined) {
+          throw new Refusal("query");
         }
         // How the element was written, read from the scan rather than from
         // anything the run could answer differently later. This is what

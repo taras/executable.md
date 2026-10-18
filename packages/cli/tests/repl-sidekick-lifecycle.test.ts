@@ -681,6 +681,90 @@ describe("Tier R6 — a reply asks, and the Sidekick owns the answer", () => {
     expect(outcomes[0]?.["observed"]).toEqual({ decision: "approve" });
   });
 
+  it("R6: a queried question presents what it selected, and retains the whole answer", function* () {
+    // The shape the defect was found with: a person answers two fields and
+    // the reply asked for one of them. What goes back must be the one it
+    // asked for; what the history keeps must be both.
+    const TWO = {
+      type: "object",
+      properties: { public: { type: "string" }, private: { type: "string" } },
+      required: ["public", "private"],
+      additionalProperties: false,
+    } as const;
+    const held = yield* useHarness();
+    held.fake.script({
+      reply:
+        `<Elicit schema={${JSON.stringify(TWO)}} yq='.public' as="picked">Say something.` +
+        `</Elicit>\n<Output>\n{picked}\n</Output>\n`,
+    });
+    held.fake.script({ reply: "<Output>Noted.</Output>\n" });
+
+    const sent = yield* sending(held, "ask me something");
+    const question = yield* asked(held.owner.questions);
+    expect(question.submit({ public: "yes", private: "unselected" }).kind).toBe("answered");
+
+    const answered = yield* sent;
+    if (!answered.ok) {
+      throw answered.error;
+    }
+    // The capture is the selected value, which is what the reply rendered.
+    expect(replied(held, 1).text.trim()).toBe("yes");
+    expect(answered.value.output).toContain("Noted.");
+
+    const written = yield* records(held.execution);
+    const intents = pairs(written, "control").filter((one) => one["component"] === "Elicit");
+    // One intent, marked before the asking — not a second one, and not an
+    // unmarked one that a later reader would take for an old unqueried
+    // question.
+    expect(intents).toHaveLength(1);
+    expect(intents[0]?.["presentation"]).toBe("selected-v1");
+    // The original answer stands whole as this operation's own evidence.
+    const outcomes = pairs(written, "control-outcome").filter(
+      (one) => one["order"] === intents[0]?.["order"],
+    );
+    expect(outcomes[0]?.["observed"]).toEqual({ public: "yes", private: "unselected" });
+    // One acknowledged presentation, holding the selected value alone.
+    const presentations = written.filter((one) => one.kind === "control-presentation");
+    expect(presentations).toHaveLength(1);
+    expect(presentations[0]?.kind === "control-presentation" && presentations[0].selected).toBe(
+      "yes",
+    );
+    // And what the next turn was sent is that selection — not the answer the
+    // person gave, which still holds the field the reply never asked for.
+    expect(JSON.parse(held.fake.prompts[1] ?? "")).toBe("yes");
+  });
+
+  it("R6: a queried question nobody could be asked keeps its marker and sends nothing raw", function* () {
+    // The interrupted arm, reached the way the surface actually refuses one:
+    // a schema the bounded form language cannot draw. The question was
+    // queried, so its intent carries the marker; nobody answered, so there is
+    // no selected value — and no raw answer goes out in its place.
+    const held = yield* useHarness();
+    held.fake.script({
+      reply:
+        `<Elicit schema={{"type":"object","properties":{"count":{"type":"number"}},` +
+        `"required":["count"],"additionalProperties":false}} yq='.count' as="picked">` +
+        `How many?</Elicit>\n<Output>\n{picked}\n</Output>\n`,
+    });
+    held.fake.script({ reply: "<Output>Understood.</Output>\n" });
+
+    const answer = yield* held.owner.message("ask me something");
+    if (!answer.ok) {
+      throw answer.error;
+    }
+
+    expect(held.owner.questions.asked).toBe(0);
+    const written = yield* records(held.execution);
+    const intents = pairs(written, "control").filter((one) => one["component"] === "Elicit");
+    expect(intents).toHaveLength(1);
+    // Marked, so a reader can tell a selection was owed and never acknowledged.
+    expect(intents[0]?.["presentation"]).toBe("selected-v1");
+    // And nothing was presented: a question nobody answered selected nothing.
+    expect(written.filter((one) => one.kind === "control-presentation")).toEqual([]);
+    // What the next turn was told is the refusal, not an answer.
+    expect(held.fake.prompts[1] ?? "").toContain("Elicit");
+  });
+
   it("R6: an invalid answer answers nobody and leaves the same question pending", function* () {
     const held = yield* useHarness();
     held.fake.script({

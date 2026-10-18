@@ -67,7 +67,7 @@ import type { Json } from "@executablemd/durable-streams";
 import { useReplElicitation } from "../elicitation.ts";
 import type { ReplElicitations } from "../elicitation.ts";
 import { ELICIT_CONTROL } from "./controls.ts";
-import type { ControlJournal } from "./controls.ts";
+import type { ControlJournal, SidekickDestinations } from "./controls.ts";
 
 /** The Sidekick's questions, and the seam that files each one. */
 export interface SidekickAsking {
@@ -96,7 +96,18 @@ export interface SidekickAsking {
  * the form — and a provider an outer scope installed is still shadowed by this
  * one, because a nearer `min` precedes an inherited one.
  */
-export function* useSidekickQuestions(): Operation<SidekickAsking> {
+export function* useSidekickQuestions(
+  /**
+   * This conversation's destinations, so a queried question presents what it
+   * selected.
+   *
+   * Canonical `<Elicit>` is core's own body, so the occurrence lookup a control
+   * uses is unreachable from inside it. The destination core opened for that
+   * exact occurrence is what reaches here instead, and it reaches here before
+   * the asking — which is what lets the intent carry its marker.
+   */
+  destinations?: SidekickDestinations,
+): Operation<SidekickAsking> {
   /** The response being evaluated right now, and therefore asking. */
   let current: ControlJournal | undefined;
 
@@ -113,23 +124,35 @@ export function* useSidekickQuestions(): Operation<SidekickAsking> {
             "evaluating none — so there is no response for an answer to belong to.",
         );
       }
+      // Taken before anybody is asked, and taken once: this is the occurrence
+      // core opened a destination for and is now running.
+      const mine = destinations?.takeSelected();
+      const selecting = mine?.query !== undefined;
       // Before the asking. A question waiting when a process stops has an
       // intent and no outcome, which is exactly what an interrupted operation
-      // looks like everywhere else in this history.
-      const order = yield* journal.began({
-        component: ELICIT_CONTROL,
-        // The rendered request and nothing else. The schema is the reply's own
-        // and the answer is retained by the outcome below; what a person or a
-        // later process needs from the intent is which question was open.
-        arguments: { message: request.message },
-      });
+      // looks like everywhere else in this history — and a queried one carries
+      // its marker from here, so an interrupted selection is readable as a
+      // selection that was owed rather than as a question nobody queried.
+      const order = yield* journal.began(
+        {
+          component: ELICIT_CONTROL,
+          // The rendered request and nothing else. The schema is the reply's own
+          // and the answer is retained by the outcome below; what a person or a
+          // later process needs from the intent is which question was open.
+          arguments: { message: request.message },
+        },
+        undefined,
+        selecting ? "selected-v1" : undefined,
+      );
       let answer: unknown;
       try {
         answer = yield* next(request);
       } catch (error) {
         // A schema this surface cannot draw, or a failure above. The reply is
         // told, because it wrote the schema and the refusal says what the form
-        // language accepts.
+        // language accepts. Nothing is filed: a question that was never
+        // answered has no selected value, and the marked intent standing
+        // without a presentation is what says so.
         const failure = error instanceof Error ? error : new Error(String(error));
         yield* journal.settled(order, { ok: false, error: failure });
         throw failure;
@@ -137,7 +160,16 @@ export function* useSidekickQuestions(): Operation<SidekickAsking> {
       // Deliberately not in a `finally`. A halted question resolved nothing, so
       // writing an outcome for it would manufacture one — an interruption is
       // the absence of a completed operation rather than a receipt saying so.
+      //
+      // The original answer is retained whole here, whatever the expression
+      // later selects out of it: the outcome is what the person actually said.
       yield* journal.settled(order, Ok(answer), answer as Json);
+      // Filed only after a successful original outcome, exactly as a control's
+      // own route files: the destination then presents the selected value, and
+      // what goes back as feedback is that presentation rather than the answer.
+      if (selecting) {
+        mine?.file(order);
+      }
       return answer;
     },
   });

@@ -618,6 +618,41 @@ describe("Tier NS-D — slot prop reservation", () => {
     expect(String(raised)).toContain("reserved prop name");
   });
 
+  it("NS-D1: yq in props frontmatter → error, on slot's own terms", function* () {
+    // `yq` is the engine's for the same reason `slot` and `as` are: expansion
+    // consumes it before a schema is consulted, so a component declaring it
+    // would be declaring a prop it can never be handed.
+    const { props } = parseFrontmatter({
+      props: {
+        type: "object",
+        properties: { yq: { type: "string" } },
+        additionalProperties: false,
+      },
+    });
+    let raised: unknown;
+    try {
+      yield* compilePropsSchema(props);
+    } catch (error) {
+      raised = error;
+    }
+    expect(String(raised)).toContain("reserved prop name");
+    expect(String(raised)).toContain("yq");
+  });
+
+  it("NS-D1: an ordinary prop name beside it still compiles", function* () {
+    // The control for the row above: reservation refuses three names, not
+    // every name a component declares.
+    const { props } = parseFrontmatter({
+      props: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        additionalProperties: false,
+      },
+    });
+    const compiled = yield* compilePropsSchema(props);
+    expect(compiled).not.toBe(undefined);
+  });
+
   it("NS-D2: slot not in child's validatedProps", function* () {
     // Widget declares "title" prop only — slot should be stripped before validation
     const layout = makeComponent("Layout", '<Content slot="main" />');

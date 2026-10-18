@@ -5,7 +5,7 @@ import type { Context, Operation } from "effection";
 import { JsonParseError, parseJson } from "./json.ts";
 import type { Json, PropsSchema, ReturnsSchema } from "./types.ts";
 
-const RESERVED_PROP_NAMES = ["slot", "as"];
+const RESERVED_PROP_NAMES = ["slot", "as", "yq"];
 
 // `validateFormats: false` keeps `format` an annotation (no assertion, no extra
 // dependency). `useDefaults` mutates the validated value to fill defaults.

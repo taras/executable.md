@@ -389,8 +389,9 @@ form, authored props and genuine destination checks
   -> the acknowledged selected presentation for that exact occurrence
 ```
 
-`Component.result` is the one seam between acceptance and binding, published
-under the stable name `executablemd.core.component-result`. A handler receives
+`ComponentResult.result` is the one seam between acceptance and binding,
+published under the stable name `executablemd.core.component-result` and
+exported for consumers from `packages/core/api.ts`. A handler receives
 the accepted result and the query the invocation wrote, and answers with the
 value to bind — which is all it can do. By the time it is asked, acceptance has
 happened and publication has not, so nothing it returns repairs a return the

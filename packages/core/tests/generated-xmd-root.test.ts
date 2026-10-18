@@ -41,6 +41,7 @@ import { Component, content } from "../src/component-api.ts";
 import { Elicitation } from "../src/elicitation-api.ts";
 import type { ElicitationRequest } from "../src/elicitation-api.ts";
 import { pinnedJson } from "../src/generated-xmd.ts";
+import { ComponentResult } from "../api.ts";
 import { useSelection } from "./support/generated-selection.ts";
 import { answerProvider } from "./support/answer-provider.ts";
 import { SYNTAX_COMPONENT, SYNTAX_PROTECTED } from "../src/components/Syntax.ts";
@@ -1181,6 +1182,163 @@ describe("Tier GR — the trusted composition table reaches a root too", () => {
       .map((line) => line.replace(/^ {2}/, ""))
       .join("\n");
     expect(JSON.parse(body.trim())).toEqual({ names: ["Ada", "Grace"] });
+  });
+});
+
+/**
+ * Tier GR — what an owned destination may be handed (R2, R4).
+ *
+ * A host that owns a destination relaxes one decision: an invocation that
+ * captures nothing is still allowed, because the result has somewhere to go.
+ * It does not relax the producer's own contract, and these rows are that
+ * difference. The invalid one is written the way the defect was found — a
+ * constant expression, which turns anything into a valid-looking answer — so a
+ * route that queried before it validated delivers `42` here.
+ */
+describe("Tier GR — an owned destination, and the contract it does not relax", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** The host's own definition, and what its body returns. */
+  function owned(body: () => unknown): FunctionComponentDefinition {
+    return {
+      kind: "function",
+      name: "Owned",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      forms: ["self-closing"],
+      returns: {
+        type: "object",
+        properties: { valid: { type: "boolean" } },
+        required: ["valid"],
+        additionalProperties: false,
+      },
+      generated: {
+        "self-closing": { identity: "https://executable.md/components/owned", effect: "read" },
+      },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<unknown> {
+        return body();
+      },
+    };
+  }
+
+  /**
+   * One root request whose host owns `Owned`'s result.
+   *
+   * The destination names the exact published definition, which is what
+   * canonical capture authenticates it against.
+   */
+  function owning(
+    source: string,
+    definition: FunctionComponentDefinition,
+    delivered: unknown[],
+    extra?: ExecutionInstallation,
+    order?: string[],
+  ): Candidate {
+    const candidate = request(source, {
+      observations: [{ name: "Owned", definition }],
+      allow: ["read"],
+    });
+    return {
+      ...candidate,
+      installation: {
+        ...candidate.installation,
+        resultDestinations: {
+          destinations: [
+            {
+              definition,
+              open: () => ({
+                *accept(selected: unknown): Operation<void> {
+                  order?.push("delivered");
+                  delivered.push(selected);
+                },
+              }),
+            },
+          ],
+        },
+        *install(): Operation<void> {
+          const base = candidate.installation.install;
+          if (base !== undefined) {
+            yield* base();
+          }
+          const added = extra?.install;
+          if (added !== undefined) {
+            yield* added();
+          }
+        },
+      },
+    };
+  }
+
+  it("GR18: an uncaptured owned return its own schema rejects is never delivered", function* () {
+    const delivered: unknown[] = [];
+    const definition = owned(() => ({ invalid: true }));
+    const attempt = yield* evaluateRoot(
+      owning(`<Output>\n<Owned yq='42' />\n</Output>\n`, definition, delivered),
+    );
+
+    // The producer's own contract decided this, before any expression was
+    // asked: a constant query cannot rescue a return its schema rejected, so
+    // the root fails and the destination is handed nothing at all.
+    const answer = attempt.answer;
+    expect(answer?.ok).toBe(false);
+    expect(answer !== undefined && !answer.ok && answer.error.message).toContain("Owned");
+    expect(delivered).toEqual([]);
+  });
+
+  it("GR18: an uncaptured owned return its schema accepts is delivered, selected", function* () {
+    const delivered: unknown[] = [];
+    const definition = owned(() => ({ valid: true }));
+    const attempt = yield* evaluateRoot(
+      owning(`<Output>\n<Owned yq='.valid' />\n</Output>\n`, definition, delivered),
+    );
+
+    // The positive control: same destination, same uncaptured form, a real
+    // expression — an accepted return reaches the destination as what that
+    // expression selected. Nothing is rendered, because an uncaptured result
+    // that is not a string never was.
+    expect(rendered(attempt).output.trim()).toBe("");
+    expect(delivered).toEqual([true]);
+  });
+
+  it("GR18: a consumer's own middleware sees the accepted result before delivery", function* () {
+    // R4's consumer boundary, reached through the published entrypoint rather
+    // than core's private module: `ComponentResult` is what a host installs on,
+    // and what it is handed is the value the producer's contract accepted.
+    // One log for both, so what is read is the order rather than two counts.
+    const order: string[] = [];
+    const seen: { value: unknown; query: string | undefined }[] = [];
+    const delivered: unknown[] = [];
+    const definition = owned(() => ({ valid: true }));
+    const attempt = yield* evaluateRoot(
+      owning(
+        `<Output>\n<Owned yq='.valid' />\n</Output>\n`,
+        definition,
+        delivered,
+        {
+          *install(): Operation<void> {
+            yield* ComponentResult.around({
+              *result([requested], next) {
+                if (requested.component === "Owned") {
+                  order.push("middleware");
+                  seen.push({ value: requested.value, query: requested.query });
+                }
+                return yield* next(requested);
+              },
+            });
+          },
+        },
+        order,
+      ),
+    );
+
+    expect(rendered(attempt).output.trim()).toBe("");
+    // The accepted original and the query the invocation wrote — the value the
+    // producer's contract accepted, not the selected one.
+    expect(seen).toEqual([{ value: { valid: true }, query: ".valid" }]);
+    expect(delivered).toEqual([true]);
+    // And it was observed before anything was delivered, which is the whole
+    // point of the seam sitting between acceptance and everything after it.
+    expect(order).toEqual(["middleware", "delivered"]);
   });
 });
 

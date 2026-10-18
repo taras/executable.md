@@ -1241,7 +1241,15 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
             held.response === record.response &&
             held.order === record.order,
         );
-        if (owning?.status !== "ok") {
+        // An admitted entry that failed still produced its own receipt, and
+        // that receipt is what this presentation selected from. The intent's
+        // reservation is what says the entry was admitted: a submission
+        // refused before admission writes no reservation, so it still cannot
+        // acquire a presentation here. The original operation stays failed
+        // either way — this decides whether the selected answer is readable,
+        // not what the operation did.
+        const admitted = intent.record.submit !== undefined;
+        if (owning?.status !== "ok" && !admitted) {
           return Err(
             new SidekickProjectionError(
               `this chat history records a selected result for an operation that did not ` +

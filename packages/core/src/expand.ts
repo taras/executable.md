@@ -4033,7 +4033,19 @@ function* expandFunctionComponent(
       // Without `as` there is nowhere to bind, so only text can be observed:
       // a string renders, and anything else renders nothing rather than being
       // stringified into the document.
-      const rendered = yield* componentResult({ component: name, value: output, query });
+      //
+      // A declared `returns` is still checked here, and this is the one place
+      // an uncaptured invocation can have one: required-as refuses every other
+      // route to it, and a destination relaxes *that* decision rather than the
+      // producer's own contract. Checked before the query for the same reason
+      // the captured path checks it there — an expression that narrowed an
+      // invalid return to a valid-looking one would deliver a value this
+      // component never agreed to produce.
+      const accepted =
+        returns === undefined
+          ? output
+          : yield* validateReturnValue(name, parseJson(output), returns);
+      const rendered = yield* componentResult({ component: name, value: accepted, query });
       if (designated !== undefined) {
         yield* designated.occurrence.deliver(rendered);
       }

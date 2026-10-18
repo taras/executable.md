@@ -23,6 +23,7 @@ import type { Operation, Result } from "effection";
 
 import { previewGeneratedXmdRoot } from "@executablemd/core/host";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";
+import { designatedResults } from "../src/repl/sidekick/feedback.ts";
 import type { SidekickReading } from "../src/repl/sidekick/model.ts";
 import { sidekickChatLines } from "../src/repl/application.ts";
 import { sidekickChatRows, sidekickTurnRows } from "../src/repl/program.ts";
@@ -821,6 +822,94 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     // what failed, and a reply told otherwise would try to submit again.
     expect(delivered).not.toContain("REPL.Submit refused");
     expect(answered.value.output).toContain("I will correct it.");
+  });
+
+  it("R5: a queried Submit whose entry failed still answers, and reads back cold", function* () {
+    // The same real failing entry as the row above, with the query the defect
+    // was found through. The submission happened and produced its entry's
+    // receipt; the entry is what failed. Both facts have to survive into a
+    // history that can be read again.
+    const held = yield* useHarness();
+    held.fake.script({
+      reply: [
+        '<Let as="code" select="code">',
+        "````xmd",
+        "```js eval",
+        'throw new Error("entry failed on purpose");',
+        "```",
+        "````",
+        "</Let>",
+        "<REPL.EntryInput>{code}</REPL.EntryInput>",
+        `<REPL.Submit yq='.' />`,
+        "",
+      ].join("\n"),
+    });
+    held.fake.script({ reply: "<Output>I will correct it.</Output>\n" });
+
+    const answered = yield* held.owner.message("run this");
+    if (!answered.ok) {
+      throw answered.error;
+    }
+
+    const [entry] = held.session.model.entries;
+    expect(entry?.key).toBe("entry-1");
+    // The original failure stands: this is still a failed entry.
+    expect(entry?.terminal?.status).toBe("err");
+
+    const written = yield* records(held.execution);
+    const intents = written.filter(
+      (one) => one.kind === "control" && one.component === "REPL.Submit",
+    );
+    // One reservation, one intent, and it is marked.
+    expect(intents).toHaveLength(1);
+    const intent = intents[0];
+    expect(intent?.kind === "control" && intent.submit?.entry).toBe("entry-1");
+    expect(intent?.kind === "control" && intent.presentation).toBe("selected-v1");
+    // The original outcome is the failure, with the entry's own status beside it.
+    const outcomes = written.filter(
+      (one) =>
+        one.kind === "control-outcome" && intent?.kind === "control" && one.order === intent.order,
+    );
+    expect(outcomes[0]?.kind === "control-outcome" && outcomes[0].outcome.status).toBe("err");
+    // And one acknowledged selected receipt, which is what the reply asked for.
+    const presentations = written.filter((one) => one.kind === "control-presentation");
+    expect(presentations).toHaveLength(1);
+    // The receipt the submission really produced — this entry, and why it
+    // failed — selected and acknowledged as this occurrence's answer.
+    const selected =
+      presentations[0]?.kind === "control-presentation" ? String(presentations[0].selected) : "";
+    expect(selected).toContain("entry-1");
+    expect(selected).toContain("entry failed on purpose");
+
+    // Read cold, from those records alone: the projection does not refuse this
+    // history, which is the failure this row exists for.
+    const projected = projectSidekick(written);
+    expect(projected.ok).toBe(true);
+
+    // And nothing was repeated: one entry ran, once.
+    expect(held.session.model.entries).toHaveLength(1);
+    expect(answered.value.output).toContain("I will correct it.");
+  });
+
+  it("R5: a submission refused before admission still keeps refused feedback", function* () {
+    // The control the correction must not relax. Nothing was admitted, so
+    // there is no reservation, no receipt and no presentation — whatever the
+    // reply asked to select.
+    const held = yield* useHarness();
+    held.fake.script({ reply: `<REPL.Submit yq='.' />\n` });
+    held.fake.script({ reply: "<Output>Understood.</Output>\n" });
+
+    const answered = yield* held.owner.message("submit nothing");
+    if (!answered.ok) {
+      throw answered.error;
+    }
+
+    const written = yield* records(held.execution);
+    // No entry ran, and no selected receipt was acknowledged.
+    expect(held.session.model.entries).toHaveLength(0);
+    expect(written.filter((one) => one.kind === "control-presentation")).toEqual([]);
+    // The reply was told it was refused, which is what it has to act on.
+    expect(held.fake.prompts[1] ?? "").toContain("refused");
   });
 
   it("R5: a JSON value among other results is fenced long enough to hold it", function* () {
@@ -1896,6 +1985,78 @@ describe("Tier R9 — a selected result is feedback only once it is acknowledged
     expect(feedback.match(/## REPL\.Bindings/g)?.length).toBe(2);
     expect(feedback.indexOf('"Hello from the reply."')).toBeLessThan(feedback.indexOf("21"));
     expect(feedback).not.toContain('"greeting"');
+  });
+
+  it("R9e: a cold reopen of a marked incomplete selection says so, and sends nothing", function* () {
+    // The arm a projection of constructed records cannot supply: a real
+    // process marks an intent, really completes the work, and the
+    // acknowledgement is refused at the storage boundary — then the history it
+    // left is opened cold and inspected before anything is said to it.
+    const dataRoot = yield* useTemporary("xmd-repl-r9e-incomplete-");
+    const gate = appendGate();
+    let execution = "";
+    let entries = 0;
+    let saved: readonly SidekickRecord[] = [];
+
+    yield* scoped(function* (): Operation<void> {
+      const host = yield* useMountedHost({ dataRoot, gate });
+      const repl = yield* useMountedRepl({ host });
+      yield* publishing(repl);
+      repl.fake.script({
+        reply: `<Output>\n<REPL.Bindings yq='from_json | .greeting' />\n</Output>\n`,
+      });
+      repl.fake.script({ reply: "<Output>Carrying on.</Output>\n" });
+
+      const acknowledging = gate.holdNext((_path, record) => record.includes(PRESENTATION));
+      yield* sendMessage(repl, "what did it publish?");
+      yield* acknowledging.started();
+      acknowledging.refuse("the storage refused this record");
+      yield* awaiting(repl.terminal, "the Sidekick going idle", (one) => shows(one, "[send]"));
+      yield* settled(40);
+
+      const read = yield* mountedReading(repl);
+      execution = read.execution;
+      entries = read.model.entries.length;
+      saved = read.chat;
+      // This is the history the cold half is held to: the intent is marked,
+      // the original outcome succeeded, and no presentation was retained.
+      expect(
+        saved.filter((one) => one.kind === "control" && one.presentation === "selected-v1").length,
+      ).toBe(1);
+      expect(saved.filter((one) => one.kind === "control-presentation")).toEqual([]);
+    });
+
+    // Cold, over those files, with its own provider.
+    const cold = yield* useMountedHost({ dataRoot });
+    const reopened = yield* useMountedRepl({
+      host: cold,
+      location: `xmd://repl/${execution}/entries`,
+    });
+
+    // Inspected before anything is said to it.
+    const inspected = yield* mountedReading(reopened);
+    expect(inspected.chat).toEqual(saved);
+    expect(inspected.model.entries.length).toBe(entries);
+    expect(reopened.fake.prompts).toEqual([]);
+
+    // What this history offers a next turn is the honest reading: the
+    // operation completed, what it selected is not known, and nothing of it
+    // will be repeated. The observation it really made is not offered in its
+    // place — that is the raw fallback this exists to refuse.
+    const marked = saved.find(
+      (one) => one.kind === "control" && one.presentation === "selected-v1",
+    );
+    expect(marked?.kind).toBe("control");
+    const designated =
+      marked?.kind === "control"
+        ? designatedResults(saved, {
+            conversation: marked.conversation,
+            response: marked.response,
+          })
+        : [];
+    expect(designated.map((one) => one.kind)).toEqual(["incomplete"]);
+    expect(designated[0]?.text).toContain("selected result was never recorded");
+    expect(JSON.stringify(designated)).not.toContain("Hello from the reply.");
   });
 
   it("R9e: a cold reopen reads the saved selection, and reruns nothing", function* () {

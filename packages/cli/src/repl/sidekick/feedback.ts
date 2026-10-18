@@ -430,7 +430,14 @@ function presented(
   presentation: ControlPresentationRecord | undefined,
 ): Omit<DesignatedResult, "order"> {
   const component = intent.component;
-  if (record.outcome.status !== "ok") {
+  // An admitted entry that failed is the one exception, and the reservation on
+  // its own intent is what establishes it: that submission really did produce
+  // its entry's receipt, and the selection is of that answer. The failure is
+  // still the operation's own and still reaches the reply through the outcome
+  // it belongs to. A submission refused before admission reserved nothing, so
+  // it keeps refused feedback as it always has.
+  const admitted = intent.submit !== undefined;
+  if (record.outcome.status !== "ok" && !(admitted && presentation !== undefined)) {
     // The original outcome stands. A refused control keeps refused feedback,
     // whatever a selection would have produced from a constant.
     return { component, kind: "refused", text: record.outcome.error.message, json: false };
