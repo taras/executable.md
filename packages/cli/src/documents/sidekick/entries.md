@@ -55,6 +55,39 @@ response. `select="code"` extracts the first matching fenced block without its
 fence, and trims trailing whitespace — pass a direct string value when exact
 string boundaries matter.
 
+## Reading the repository in an entry
+
+An entry can ask the checkout it is standing in four questions. Read their exact
+forms with `<REPL.Syntax names={["Git.Files", "Git.Changes", "Git.Diff", "Git.File"]} />`
+before writing one; each requires `as`, renders nothing, and binds JSON.
+
+````xmd
+<Let as="code" select="code">
+```xmd
+<Git.Files prefix="packages/core/" limit={5} as="files" />
+<Json value={files.paths} />
+```
+</Let>
+<REPL.EntryInput>{code}</REPL.EntryInput>
+<REPL.Submit />
+<REPL.EntryOutput />
+````
+
+A page is bounded — 100 records, or 4096 characters of text — and `next` holds
+the complete arguments of the read that continues it, or `null` when there is no
+more. Follow it in a later entry by passing the captured value back, which is an
+ordinary binding the entry before it published:
+
+```xmd
+<Git.Files prefix={files.next.prefix} limit={files.next.limit} cursor={files.next.cursor} as="more" />
+```
+
+If the answer changed in between, that read refuses and says to restart without
+the cursor — ask for a fresh read at the beginning rather than treating the
+refusal as an error to work around. Nothing these reads return lets an entry
+change the repository; a change still takes `<Git.Add>`, `<Git.Switch>` or
+`<Git.Commit>`.
+
 ## Common mistake
 
 Writing the entry source directly into your response, or inside a fence marked

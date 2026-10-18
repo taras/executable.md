@@ -2,7 +2,9 @@
  * Whether one entry's retained history may be continued at all.
  *
  * Two questions, and only two. **Integrity**: every record of this feature's
- * own types parses and is named by the request it carries. **Nothing else**: no
+ * own types — the file work, the ambient routing, the placements, the local Git
+ * transitions and the local Git observations — parses and is named by the
+ * request it carries. **Nothing else**: no
  * checkout is inspected, no saved path is compared with the live one, and no
  * result is handed out — replaying a completed operation is the durable engine's
  * own positional matching, and this runs before any of it.
@@ -45,12 +47,21 @@ import {
   replPlacementRecordName,
   REPL_REPOSITORY_PLACEMENT,
 } from "./placement-records.ts";
+import type { ReplPlacement } from "./placement-records.ts";
 import {
   parseReplGitRecord,
   replGitFingerprint,
   replGitRecordName,
   REPL_REPOSITORY_GIT,
 } from "./git-records.ts";
+import {
+  parseReplObservationRecord,
+  replObservationFingerprint,
+  replObservationRecordName,
+  routedByPlacement,
+  selectedByPlacement,
+  REPL_REPOSITORY_OBSERVATION,
+} from "./observation-records.ts";
 
 /** The durable types this reader owns, and the only ones it reads. */
 const OWNED: ReadonlySet<string> = new Set([
@@ -58,6 +69,7 @@ const OWNED: ReadonlySet<string> = new Set([
   REPL_REPOSITORY_SELECTION,
   REPL_REPOSITORY_PLACEMENT,
   REPL_REPOSITORY_GIT,
+  REPL_REPOSITORY_OBSERVATION,
 ]);
 
 /** Why a history cannot be continued. */
@@ -67,7 +79,9 @@ export type ReplRepositoryRefusal =
   /** A record stating a version this host does not implement. */
   | "unknown-version"
   /** A record whose name is not the name of the request it carries. */
-  | "request-fingerprint";
+  | "request-fingerprint"
+  /** An observation naming a route no preceding placement in it selected. */
+  | "unrouted-observation";
 
 /**
  * A history this host cannot continue from.
@@ -95,6 +109,10 @@ export class ReplRepositoryHistoryError extends StaleInputError {
  * feature's type that does not parse is, and refuses.
  */
 export function* admitReplRepositoryHistory(retained: readonly DurableEvent[]): Operation<void> {
+  // The placements this history has selected *so far*. An observation names the
+  // checkout it read, and nothing outside this snapshot may authorize one: the
+  // route has to be a placement a preceding record in the same history made.
+  const placements: ReplPlacement[] = [];
   for (const event of retained) {
     if (event.type !== "yield") {
       continue;
@@ -109,8 +127,8 @@ export function* admitReplRepositoryHistory(retained: readonly DurableEvent[]): 
       // this host ever wrote — and what it says about work already done is
       // unknown. The three older types keep their existing policy, where a
       // non-ok envelope is the engine's own failure rather than theirs.
-      if (type === REPL_REPOSITORY_GIT) {
-        throw malformed(REPL_REPOSITORY_GIT);
+      if (type === REPL_REPOSITORY_GIT || type === REPL_REPOSITORY_OBSERVATION) {
+        throw malformed(type);
       }
       continue;
     }
@@ -128,11 +146,18 @@ export function* admitReplRepositoryHistory(retained: readonly DurableEvent[]): 
       continue;
     }
     if (type === REPL_REPOSITORY_PLACEMENT) {
-      yield* admitPlacement(payload, event.description.name);
+      const placement = yield* admitPlacement(payload, event.description.name);
+      if (placement !== undefined) {
+        placements.push(placement);
+      }
       continue;
     }
     if (type === REPL_REPOSITORY_GIT) {
       yield* admitGit(payload, event.description.name);
+      continue;
+    }
+    if (type === REPL_REPOSITORY_OBSERVATION) {
+      yield* admitObservation(payload, event.description.name, placements);
       continue;
     }
     yield* admitLocal(payload, event.description.name);
@@ -162,6 +187,58 @@ function* admitGit(payload: unknown, name: string): Operation<void> {
   }
   if (name !== replGitRecordName({ operation: record.operation, fingerprint })) {
     throw misnamed(REPL_REPOSITORY_GIT);
+  }
+}
+
+/**
+ * Hold one recorded observation to the request it carries, and to the route
+ * this history actually selected.
+ *
+ * The two questions the other records answer, over a record whose success side
+ * is one page: a saved page that does not describe the request beside it —
+ * another query, another comparison, a continuation on another commit, more
+ * records than the limit asked for — does not parse, so it is refused here
+ * rather than binding a listing on replay.
+ *
+ * And one more, which the other record types do not need. An observation names
+ * the checkout it was read from, and a parseable record can name any checkout
+ * at all: every required member can be present, the request, name and
+ * fingerprint untouched, and the root somewhere this entry never selected.
+ * Nothing downstream would catch it — a completed terminal is reused before the
+ * body that checks the live registry is ever entered — so a route no preceding
+ * placement authorizes is refused here, before completed or unfinished reuse.
+ *
+ * It is decided from this history alone. No checkout is opened, no path is
+ * canonicalized and no `git` runs: a continuation whose checkout has since been
+ * deleted still answers, which is the whole point of retaining the page.
+ */
+function* admitObservation(
+  payload: unknown,
+  name: string,
+  placements: readonly ReplPlacement[],
+): Operation<void> {
+  const record = parseReplObservationRecord(payload);
+  if (record === undefined) {
+    throw malformed(REPL_REPOSITORY_OBSERVATION);
+  }
+  const fingerprint = yield* replObservationFingerprint(record.request);
+  if (record.fingerprint !== fingerprint) {
+    throw changed(REPL_REPOSITORY_OBSERVATION);
+  }
+  if (name !== replObservationRecordName({ operation: record.operation, fingerprint })) {
+    throw misnamed(REPL_REPOSITORY_OBSERVATION);
+  }
+  if (!selectedByPlacement(placements, record.request)) {
+    throw unrouted(
+      "names a selection no placement in this history made, so this history does not say " +
+        "which checkout the read was routed to",
+    );
+  }
+  if (!routedByPlacement(placements, record.request.repository, record.checkout)) {
+    throw unrouted(
+      "names a checkout no placement in this history selected, so this history does not say " +
+        "where the read ran",
+    );
   }
 }
 
@@ -195,7 +272,7 @@ function* admitLocal(payload: unknown, name: string): Operation<void> {
  * It opens nothing. Whether the checkout a placement names is still there is
  * not this reader's question and is not a question a continuation asks.
  */
-function* admitPlacement(payload: unknown, name: string): Operation<void> {
+function* admitPlacement(payload: unknown, name: string): Operation<ReplPlacement | undefined> {
   const record = parseReplPlacementRecord(payload);
   if (record === undefined) {
     throw malformed(REPL_REPOSITORY_PLACEMENT);
@@ -207,6 +284,8 @@ function* admitPlacement(payload: unknown, name: string): Operation<void> {
   if (name !== replPlacementRecordName({ kind: record.kind, fingerprint })) {
     throw misnamed(REPL_REPOSITORY_PLACEMENT);
   }
+  // A refused selection placed nothing, so it authorizes no route.
+  return record.outcome.ok ? record.outcome.value : undefined;
 }
 
 function* admitSelection(payload: unknown, name: string): Operation<void> {
@@ -235,6 +314,10 @@ function changed(type: string): ReplRepositoryHistoryError {
       "so the request was changed after the work was saved and this history cannot say which of " +
       "the two the saved work belongs to.",
   );
+}
+
+function unrouted(sentence: string): ReplRepositoryHistoryError {
+  return refusal("unrouted-observation", `a retained ${REPL_REPOSITORY_OBSERVATION} ${sentence}.`);
 }
 
 function misnamed(type: string): ReplRepositoryHistoryError {

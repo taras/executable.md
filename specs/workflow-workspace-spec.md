@@ -179,6 +179,19 @@ no transaction, no frontier and no logical filesystem — what it has is a
 historical record of each completed operation, which is neither of the other
 two.
 
+`<Git.Files>`, `<Git.Changes>`, `<Git.Diff>` and `<Git.File>` are available to
+a REPL entry and are retained on the same terms, with one difference that
+follows from what they are: a read changes nothing, so it takes the selected
+placement's ownership of a managed checkout where it has one and no hold on the
+repository at all. An entry committing in a checkout and an entry reading it do
+not wait for each other. Within one entry they do: every operation of that entry
+that runs `git` against one shared Git directory — the four reads, the three
+transitions and the publication's own observation — takes the same turn, and a
+read keeps it until its children have joined and its page is acknowledged. A completed read is answered from its record with no
+`git` invocation, and the page it answered with describes the repository as it
+was then — a saved `next` used in a *new* read is the one place a changed answer
+is noticed, and it refuses there rather than combining two observations.
+
 `<Git.Push />` is available to a REPL entry, and what it retains is
 `specs/repl-spec.md`'s subject rather than this document's. The reconciliation
 is the same one §7.4 and the Git-host effect contract describe — observe, adopt,
@@ -1221,7 +1234,8 @@ contextual way `<File>` writes one.
 
 ## 7. Git operations
 
-The four Git components are likewise one language behind several providers.
+The four Git transitions and the four Git reads are likewise one language behind
+several providers.
 Which checkout one acts on is decided the same way everywhere: by the Repository
 in scope and by the contextual working directory, neither of which admits
 anything.
@@ -1879,6 +1893,93 @@ status that does not say which commit it describes, and a pull request that does
 not name its own number and repository are all refused. A well-formed answer to
 another question is still the wrong answer.
 
+
+### 7.8 Local repository reads
+
+Four read-only components answer questions about the checkout a Repository
+selected:
+
+```md
+<Git.Files prefix="packages/core/" limit={100} as="files" />
+<Git.Changes compare="staged" as="changes" />
+<Git.Diff compare="staged" paths={["packages/core/"]} offset={0} limit={4096} as="diff" />
+<Git.File commit="HEAD~1" path="packages/core/src/expand.ts" offset={0} limit={4096} as="source" />
+```
+
+Each is self-closing, binds JSON through a required ordinary `as`, and renders
+nothing. Which checkout answers is decided exactly as it is for the four
+transitions — the Repository in scope and the contextual working directory,
+neither of which admits anything — so a `<Dir>` inside a selected `<Worktree>`
+reads that worktree, and a read written outside every Repository has nothing to
+read.
+
+`<Git.Files>` lists the tracked paths the selected checkout's index holds,
+sorted, deduplicated and relative to its repository root. An untracked file is
+not in it, the contents of a nested or sibling checkout are not in it, and a
+tracked gitlink is one path rather than a traversal. The optional `prefix` is
+literal string-prefix matching: it may stop inside a final segment, and `*`, `?`
+and `[` match those characters.
+
+`<Git.Changes>` and `<Git.Diff>` take the same three comparisons. `unstaged` is
+the index against the working tree, excluding untracked files; `staged` is the
+HEAD tree against the index, and the empty tree on an unborn branch; `commits`
+compares the trees of the required `base` and `head` commits directly, never
+their merge base. Each change is a path, Git's own letter for what happened to
+it — `A`, `M`, `D`, `R`, `T`, `U` — and the path a rename came from, or `null`.
+`<Git.Diff>` answers the same comparison as unified patch text, with Git's
+binary marker, mode metadata and gitlink pointer changes intact: it is a text
+window rather than a structured hunk graph. The optional `paths` filter names
+literal repository-relative files and directory prefixes, matches a rename on
+either of its paths, and selects nothing at all when it is empty — which is
+different from omitting it.
+
+`<Git.File>` resolves `commit` once and reads the blob that commit's tree holds
+at `path`. The result names the full resolved commit id, so it answers the same
+bytes after the working copy has changed and after the branch has moved. A
+symbolic link is its own stored link text and is never followed.
+
+A page is bounded by the caller's own limit: 100 records or 4096 code points by
+default, and whatever larger positive safe integer a caller asks for otherwise.
+No arbitrary maximum is imposed; the default bounds what a document binds and a
+journal retains rather than what Git had to read. `offset`, `limit`, `length`
+and a next offset count Unicode code points, so no window splits a character,
+and nothing is trimmed. When records or characters remain, `next` holds the
+complete arguments of the read that continues it, and `null` says the
+observation is complete.
+
+Continuation identifies one complete filtered observation and grants nothing.
+The opaque `cursor` a list or text `next` carries is data: a follow-up read
+authenticates its Repository and routes to a checkout on its own terms, then
+checks that the cursor describes that checkout, that same query and that same
+answer. An answer that has changed refuses with restart guidance rather than
+combining two observations; a change that does not alter this answer needs no
+restart; and raising `limit` between pages is safe. `<Git.File>` needs no cursor,
+because its input is already immutable.
+
+Availability is the installed provider's. The shipped Deno and compiled
+`xmd run` and `xmd repl` providers answer; a host that installs no
+selected-repository provider refuses, and nothing falls back to the caller's own
+filesystem. A logical workflow filesystem is not a native checkout: there is no
+provider for one, so the reads refuse there as they do under Node and Bun. The
+vocabulary itself is never hidden or banned by profile.
+
+A read changes nothing in the repository it reads, and nothing it returns
+authorizes anything else: no mutation, no publication, no pull request, no
+Agent, no Push evidence and no broader command capability. The existing
+`Permissions` surfaces mediate what they already mediate and do not reach these
+reads by implication.
+
+What a read may not do, it may not be made to do by the repository's own
+configuration. A read runs against isolated Git administration and a contained,
+read-only view of the authenticated object database, so the selected checkout's
+`.git/config` supplies no external diff program, no text conversion, no content
+filter, no file-system monitor, no hook, no credential helper and no transport.
+Index-based reads use a private copy of the checkout's own index — discovered
+through Git's path query, because a linked worktree has one of its own, and
+copied with its own modification time, because that time is what Git's
+racily-clean rule compares against. Nothing refreshes, expands or repairs the
+source index, and lazy fetching is disabled even while a revision is resolved:
+a missing object refuses rather than reaching a remote.
 
 ## 8. Agents inspect; XMD mutates
 

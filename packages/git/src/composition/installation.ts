@@ -1,9 +1,10 @@
 /**
- * The twelve repository-composition components, as one array of ordinary
+ * The sixteen repository-composition components, as one array of ordinary
  * declarations.
  *
- * Repository, Worktree, the four Git operations, PullRequest and its three
- * evidence reads, IssueTracker and Issue are ordinary registered defaults — not
+ * Repository, Worktree, the four Git operations, the four Git reads,
+ * PullRequest and its three evidence reads, IssueTracker and Issue are
+ * ordinary registered defaults — not
  * reserved and not structural — so a repository-local component may shadow one
  * for its own scope. `<Dir>` is not among them: canonical core reserves that
  * name (`core/src/components/fixed-filesystem.ts`), and a document reaches it
@@ -67,6 +68,17 @@ import {
   reviewsReturns,
 } from "./components/PullRequestReads.ts";
 import IssueTracker, { props as issueTrackerProps } from "./components/IssueTracker.ts";
+import { changesForm, diffForm, fileForm, filesForm } from "./components/GitReads.ts";
+import {
+  changesProps,
+  changesReturns,
+  diffProps,
+  diffReturns,
+  fileProps,
+  fileReturns,
+  filesProps,
+  filesReturns,
+} from "./observation-api.ts";
 
 /**
  * This boundary's long-form documentation, and the components it must cover.
@@ -151,6 +163,54 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: gitPushProps,
     fn: GitPush,
     ...documented(gitPushDocumentation),
+  },
+  {
+    name: "Git.Files",
+    origin: COMPOSITION_ORIGIN,
+    props: filesProps,
+    returns: filesReturns,
+    fn: formDispatcher(filesForm),
+    ...documented({
+      description: `List tracked files. \`<Git.Files prefix="packages/core/" as="files" />\` lists the selected repository's tracked paths, bounded and continuable.`,
+      as: "Required. The tracked paths, and the arguments of the next page or null.",
+      context: null,
+    }),
+  },
+  {
+    name: "Git.Changes",
+    origin: COMPOSITION_ORIGIN,
+    props: changesProps,
+    returns: changesReturns,
+    fn: formDispatcher(changesForm),
+    ...documented({
+      description: `Compare what changed. \`<Git.Changes compare="staged" as="changes" />\` reports each changed path and its status for unstaged, staged or two commits.`,
+      as: "Required. The comparison, each change's path, status and previous path, and the next page or null.",
+      context: null,
+    }),
+  },
+  {
+    name: "Git.Diff",
+    origin: COMPOSITION_ORIGIN,
+    props: diffProps,
+    returns: diffReturns,
+    fn: formDispatcher(diffForm),
+    ...documented({
+      description: `Read a comparison's patch. \`<Git.Diff compare="staged" paths={["packages/core/"]} as="diff" />\` reads a window of the unified diff text.`,
+      as: "Required. The comparison, the patch window, its offset, the whole length, and the next page or null.",
+      context: null,
+    }),
+  },
+  {
+    name: "Git.File",
+    origin: COMPOSITION_ORIGIN,
+    props: fileProps,
+    returns: fileReturns,
+    fn: formDispatcher(fileForm),
+    ...documented({
+      description: `Read a committed file. \`<Git.File commit="HEAD~1" path="packages/core/src/expand.ts" as="source" />\` reads the text that commit holds, not the working copy.`,
+      as: "Required. The resolved commit, the path, the text window, its offset, the whole length, and the next page or null.",
+      context: null,
+    }),
   },
   {
     name: "PullRequest",

@@ -75,6 +75,8 @@ export interface GitCommand {
    * invocation, and every command that invocation runs attaches the same one.
    */
   readonly attachment?: GitAttachment;
+  /** Variables this command needs beyond the session's fixed environment. */
+  readonly variables?: Readonly<Record<string, string>>;
 }
 
 export interface GitSession {

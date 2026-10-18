@@ -3053,8 +3053,9 @@ completes its teardown and commits no record.
 
 #### The run profile's repository declarations
 
-Twelve names — `Repository`, `Worktree`, `Git.Switch`, `Git.Add`, `Git.Commit`,
-`Git.Push`, `PullRequest`, `PullRequest.Reviews`, `PullRequest.Comments`,
+Sixteen names — `Repository`, `Worktree`, `Git.Switch`, `Git.Add`,
+`Git.Commit`, `Git.Push`, `Git.Files`, `Git.Changes`, `Git.Diff`, `Git.File`,
+`PullRequest`, `PullRequest.Reviews`, `PullRequest.Comments`,
 `PullRequest.Checks`, `IssueTracker` and `Issue` — are ordinary
 [registered defaults](#registration-and-resolution-order). A repository-local
 Markdown or TypeScript component of any of those names is chosen ahead of them,
@@ -10259,7 +10260,7 @@ calling a selector, cloning, adding a worktree, reading a sidecar, opening a
 credential or taking a lock, and only genuinely new work meets the current
 filesystem.
 
-It answers three local Git operations on the same terms — `<Git.Add>`,
+It answers three local Git transitions on the same terms — `<Git.Add>`,
 `<Git.Switch>` and `<Git.Commit>` — by calling the *ordinary* performers and
 recording what they produced. A completed one is answered from its record with
 no `git` invocation of any kind, and the object id a completed `<Git.Commit>`
@@ -10273,6 +10274,27 @@ identity, so a copied or edited selection can misname a target and never reach
 one. A live operation takes the selected placement's managed slot and then the
 hold on the repository it changes, keeps both until the entry is torn down, and
 takes neither to answer a completed one.
+
+It answers the four local reads on the same terms — `<Git.Files>`,
+`<Git.Changes>`, `<Git.Diff>` and `<Git.File>` — through the same contextual
+read Api an ordinary run answers, at the same implementation slot, and records
+the page each produced. A completed read is answered from its record with no
+`git` invocation of any kind, and the page names the repository as it was then.
+What the record carries is the authenticated Repository identity, the checkout
+the selection named and its common Git directory, the received working directory
+as it arrived, the normalized query, the checkout the route reached, and the
+exact page including its complete `next` — never the ephemeral selection
+identifier, and never anything a Git command printed. Trusted admission holds
+that route to the entry's own history before either a completed or an unfinished
+page is reused: the selection and the checkout have to be ones a preceding
+placement in that same history made, decided from parsed historical facts
+alone. A record naming a checkout nothing placed ends the attempt, rather than
+answering from a route this entry never took. A read takes the selected
+placement's managed slot and no mutation lease, because it changes nothing: an
+entry mutating a checkout and an entry reading it do not wait for each other.
+A continuation check belongs to a live read rather than to replay — a saved
+`next` used in a new read refuses when the answer has changed, and reopening the
+saved page itself asks the repository nothing.
 
 It answers one publication beside them. `<Git.Push />` publishes the branch the
 selected checkout is on to that Repository's origin through the shared Git-host

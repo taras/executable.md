@@ -29,7 +29,12 @@ import { useCompositionComponents } from "../../src/composition/installation.ts"
 import { RepositoryContext } from "../../src/composition/context.ts";
 import type { RepositorySelection } from "../../src/composition/selection.ts";
 import { denoRepositoryHost } from "../../src/deno/composition/host.ts";
-import type { GitInvocation, GitOutcome, RepositoryHost } from "../../src/deno/composition/host.ts";
+import type {
+  GitBytes,
+  GitInvocation,
+  GitOutcome,
+  RepositoryHost,
+} from "../../src/deno/composition/host.ts";
 import { UNAUTHENTICATED } from "../../src/deno/composition/authentication.ts";
 import type {
   GitAuthentication,
@@ -145,6 +150,13 @@ export function countingOrdinaryHost(
       *git(invocation: GitInvocation): Operation<GitOutcome> {
         counters.commands.push([...invocation.args]);
         return yield* inner.git(invocation);
+      },
+      *gitBytes(invocation: GitInvocation): Operation<GitBytes> {
+        counters.commands.push([...invocation.args]);
+        if (inner.gitBytes === undefined) {
+          throw new Error("the counted host wraps one that lends no byte capture");
+        }
+        return yield* inner.gitBytes(invocation);
       },
       useDirectory: inner.useDirectory,
       *useAuthentication(locator: string): Operation<GitAuthenticationSession> {
