@@ -40,6 +40,7 @@
  * *its own* occurrence is the only thing it can do with that lookup.
  */
 
+import { createContext } from "effection";
 import type { Operation } from "effection";
 
 import type { ComponentInvocation } from "./invocation-identity.ts";
@@ -135,21 +136,25 @@ export type ResultOccurrenceLookup = (
 ) => ResultOccurrence | undefined;
 
 /**
- * How a host asks which occurrence's body is running right now.
+ * How a host asks which occurrence's body it is running inside of.
  *
  * For the one case where the lookup above is unreachable: a protected
  * component's body is core's own, so a host that selected the name has no
  * invocation to ask with — the only thing of its running there is whatever
- * middleware that body crosses. This answers from the invocation canonical
- * dispatch is executing, which nests the way the bodies do: an occurrence
- * running inside another's content is the answer while it runs, and the
- * enclosing one is the answer again afterwards.
+ * middleware that body crosses. An operation rather than a plain call because
+ * the answer is a fact about the caller: it is read from the scope the asking
+ * is happening in, which is the invocation's own.
  *
- * It is not "the last one opened". An occurrence that opened and then failed
- * before its body ran is never the answer, and nothing here is keyed by name,
- * by completion order or by a value a document could replace.
+ * So it is the occurrence of *this* body, not of whichever body entered last.
+ * Two admitted concurrent branches each ask from their own scope and each
+ * receive their own, however their suspensions interleave; a body nested in
+ * another's content answers with its own while it runs and leaves the
+ * enclosing one's standing for when that body resumes. An occurrence that
+ * opened and then failed before its body ran is never the answer, and nothing
+ * here is keyed by name, by completion order or by a value a document could
+ * replace.
  */
-export type RunningOccurrenceReader = () => ResultOccurrence | undefined;
+export type RunningOccurrenceReader = () => Operation<ResultOccurrence | undefined>;
 
 /** This execution's own destinations, as canonical expansion consults them. */
 export interface ResultDestinationRoute {
@@ -189,15 +194,21 @@ export interface ResultDestinationRoute {
    * Run `body` as the occurrence this invocation opened a destination for.
    *
    * Canonical dispatch wraps a protected component's body with this, so the
-   * answer to "which occurrence is running" is scope-bound: it is established
-   * before the body and restored when the body leaves, however it leaves. A
-   * nested body therefore shadows its enclosing one only while it runs, and an
-   * invocation that never reaches its body is never the answer.
+   * answer to "which occurrence am I in" is scope-bound: it is established on
+   * the invocation's own scope before the body and restored when the body
+   * leaves, however it leaves. What reads it reads from where it is running,
+   * so two bodies suspended at once each keep their own answer — the fact is
+   * the caller's position rather than this execution's latest event. A nested
+   * body shadows its enclosing one only within itself, and an invocation that
+   * never reaches its body is never the answer.
    */
   entered(invocation: ComponentInvocation, body: Operation<unknown>): Operation<unknown>;
   /** End the route with its execution. */
   revoke(): void;
 }
+
+/** One per route, so two executions nested in one scope never share a key. */
+let routes = 0;
 
 /**
  * Build this execution's route from what the host stated.
@@ -222,10 +233,16 @@ export function createResultDestinationRoute(
   // Keyed by the exact invocation object the engine minted, held weakly: a
   // receiver's lifetime is its occurrence's, and nothing here keeps one alive.
   const open = new WeakMap<ComponentInvocation, ResultOccurrence>();
-  // The invocations whose bodies are running, innermost last. A stack rather
-  // than a cell because bodies nest: one protected component's content may
-  // hold another, and each has to be the answer while it is the one running.
-  const entering: ComponentInvocation[] = [];
+  // The invocation whose body is executing, told to that body's own scope and
+  // read from wherever the asking is — which is the whole of why an
+  // overlapping body cannot take another's receiver: two concurrent branches
+  // are two scopes, and each is told its own. This route's own, so a nested
+  // execution's dispatch neither shadows it nor is mistaken for it, and what
+  // it holds is resolved through the receivers below rather than trusted: an
+  // invocation this route opened nothing for reaches nothing here.
+  const dispatching = createContext<ComponentInvocation>(
+    `core/component-result-destinations:${++routes}`,
+  );
   let live = true;
 
   // Canonical resolution's own answers, each standing for the implementation it
@@ -297,33 +314,31 @@ export function createResultDestinationRoute(
       };
     },
     *entered(invocation: ComponentInvocation, body: Operation<unknown>): Operation<unknown> {
-      entering.push(invocation);
-      try {
+      // Said on the scope this body runs in, and taken off it again when the
+      // body leaves. Nothing is pushed anywhere this execution shares: a
+      // sibling suspended in its own branch holds its own answer on its own
+      // scope, so neither branch's turn to run can hand the other's
+      // occurrence to whatever asks from inside it.
+      return yield* dispatching.with(invocation, function* () {
         return yield* body;
-      } finally {
-        // Removed by identity rather than by popping blindly: a body that
-        // unwound out of order would otherwise leave somebody else's
-        // invocation standing as the one running.
-        const at = entering.lastIndexOf(invocation);
-        if (at !== -1) {
-          entering.splice(at, 1);
-        }
-      }
+      });
     },
     revoke(): void {
       live = false;
       owned.clear();
-      entering.length = 0;
     },
   };
 
   installation?.installed?.(
     (invocation: ComponentInvocation) => (live ? open.get(invocation) : undefined),
-    () => {
+    function* (): Operation<ResultOccurrence | undefined> {
       if (!live) {
         return undefined;
       }
-      const invocation = entering.at(-1);
+      // Resolved through this route's own record of what it opened, so an
+      // invocation nothing here opened a destination for — including one
+      // another execution's dispatch is running — reaches no receiver.
+      const invocation = yield* dispatching.get();
       return invocation === undefined ? undefined : open.get(invocation);
     },
   );

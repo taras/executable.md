@@ -27,6 +27,7 @@ import { ensure, Ok, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation, Result, Task } from "effection";
 
 import { Execution } from "@executablemd/core";
+import type { Json } from "@executablemd/core";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 
 import { submitForSidekick } from "../src/repl/sidekick/admission.ts";
@@ -808,6 +809,134 @@ describe("Tier R6 — a reply asks, and the Sidekick owns the answer", () => {
     expect(delivered).toContain("outer yes");
     expect(delivered).not.toContain("inner unselected");
     expect(delivered).not.toContain("outer unselected");
+  });
+
+  it("R6: overlapping queried questions each keep their own receiver", function* () {
+    // The shape the defect was found with, and the one nesting cannot reach:
+    // two admitted concurrent branches, each asking its own question, with
+    // the first one's turn to ask arriving while the second's is already
+    // waiting. Neither occurrence encloses the other, so "whichever body was
+    // entered last" names the wrong one — and the occurrence that asked
+    // second here is the one that must still present what it selected.
+    const TWO = {
+      type: "object",
+      properties: { public: { type: "string" }, private: { type: "string" } },
+      required: ["public", "private"],
+      additionalProperties: false,
+    } as const;
+    const schema = JSON.stringify(TWO);
+    // The reply's own ordinary read, held until the case releases it. The
+    // first question's content waits on it, which is what lets the second
+    // branch ask first and stay waiting while the first one asks.
+    const reading = withResolvers<void>();
+    const held = yield* useHarness(undefined, {
+      *bindings(): Operation<Result<Readonly<Record<string, Json>>>> {
+        yield* reading.operation;
+        return Ok({});
+      },
+    });
+    held.fake.script({
+      reply:
+        "<Output>\n<All>\n" +
+        `<Spawn><Elicit schema={${schema}} yq='.public' as="first">First.` +
+        `<REPL.Bindings as="delay" /></Elicit><Json value={first} /></Spawn>\n` +
+        `<Spawn><Elicit schema={${schema}} yq='.public' as="second">Second.` +
+        `</Elicit><Json value={second} /></Spawn>\n` +
+        "</All>\n</Output>\n",
+    });
+    held.fake.script({ reply: "<Output>Both came back.</Output>\n" });
+
+    const sent = yield* sending(held, "ask me from two branches");
+    // The second branch asks while the first is still inside its own
+    // content's read. That is the overlap: the first question's occurrence
+    // has been entered and has not asked yet.
+    const second = yield* asked(held.owner.questions);
+    expect(second.message).toContain("Second.");
+
+    // Subscribed before the read is released, so the question the first
+    // branch asks next cannot be published between the release and the wait.
+    const changes = yield* held.owner.questions.changes;
+    reading.resolve();
+    let first = held.owner.questions.pending;
+    while (first === undefined || first === second) {
+      const next = yield* changes.next();
+      if (next.done === true) {
+        throw new Error("that owner stopped publishing questions before it asked one");
+      }
+      first = next.value;
+    }
+    expect(first.message).toContain("First.");
+
+    // Answered in the order they were asked *in*, not the order they were
+    // asked: the second branch is still waiting while the first is answered.
+    expect(first.submit({ public: "first yes", private: "first unselected" }).kind).toBe(
+      "answered",
+    );
+    expect(second.submit({ public: "second yes", private: "second unselected" }).kind).toBe(
+      "answered",
+    );
+
+    const answered = yield* sent;
+    if (!answered.ok) {
+      throw answered.error;
+    }
+    // Both captures are the selected field, which is what each branch
+    // rendered.
+    const text = replied(held, 1).text;
+    expect(text).toContain("first yes");
+    expect(text).toContain("second yes");
+
+    const written = yield* records(held.execution);
+    const intents = pairs(written, "control").filter((one) => one["component"] === "Elicit");
+    // Two intents, in asking order, and both marked before their work.
+    expect(intents).toHaveLength(2);
+    expect(intents.map((one) => one["arguments"])).toEqual([
+      { message: "Second." },
+      { message: "First." },
+    ]);
+    expect(intents.map((one) => one["presentation"])).toEqual(["selected-v1", "selected-v1"]);
+    // Each original answer stands whole as its own occurrence's evidence.
+    const outcomes = intents.map((intent) =>
+      pairs(written, "control-outcome").find((one) => one["order"] === intent["order"]),
+    );
+    expect(outcomes.map((one) => one?.["observed"])).toEqual([
+      { public: "second yes", private: "second unselected" },
+      { public: "first yes", private: "first unselected" },
+    ]);
+    // The read the first question waited on is an ordinary successful
+    // observation of this conversation's own, between the two questions. It
+    // owes no presentation, and having run between them takes nothing from
+    // the question that asked after it.
+    const read = pairs(written, "control").filter((one) => one["component"] === "REPL.Bindings");
+    expect(read).toHaveLength(1);
+    expect(read[0]?.["presentation"]).toBe(undefined);
+    expect(
+      pairs(written, "control-outcome").find((one) => one["order"] === read[0]?.["order"])?.[
+        "observed"
+      ],
+    ).toEqual({});
+    // Two acknowledged presentations, one for each of those two question
+    // orders, each holding its own selected value. Looked up by the order
+    // they belong to rather than read in sequence: these are written when
+    // each branch's own occurrence finishes, and the branch answered first
+    // finishes first — which is the overlap, not a defect in it.
+    const presentations = written.filter((one) => one.kind === "control-presentation");
+    expect(presentations).toHaveLength(2);
+    const selected = (order: unknown): unknown => {
+      const found = presentations.find((one) => one.order === order);
+      return found?.kind === "control-presentation" ? found.selected : undefined;
+    };
+    expect(selected(intents[0]?.["order"])).toBe("second yes");
+    expect(selected(intents[1]?.["order"])).toBe("first yes");
+    // And what the next turn was sent is the two selected values: neither
+    // question is reported as having selected something nobody recorded, and
+    // neither unselected field leaks as raw feedback.
+    const delivered = held.fake.prompts[1] ?? "";
+    expect(delivered).toContain("first yes");
+    expect(delivered).toContain("second yes");
+    expect(delivered).not.toContain("first unselected");
+    expect(delivered).not.toContain("second unselected");
+    expect(delivered).not.toContain("never recorded");
   });
 
   it("R6: a queried question nobody could be asked keeps its marker and sends nothing raw", function* () {

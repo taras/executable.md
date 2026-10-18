@@ -103,9 +103,10 @@ export function* useSidekickQuestions(
    *
    * Canonical `<Elicit>` is core's own body, so the occurrence lookup a control
    * uses is unreachable from inside it. Core names the occurrence it is
-   * dispatching for the duration of that body instead, and this reads it
-   * before the asking — which is what lets the intent carry its marker, and
-   * what keeps nested questions from taking each other's receiver.
+   * dispatching on that body's own scope instead, and this asks for it from
+   * where the asking happens — which is what lets the intent carry its
+   * marker, and what keeps two questions that are open at once from taking
+   * each other's receiver.
    */
   destinations?: SidekickDestinations,
 ): Operation<SidekickAsking> {
@@ -125,11 +126,14 @@ export function* useSidekickQuestions(
             "evaluating none — so there is no response for an answer to belong to.",
         );
       }
-      // Read before anybody is asked: this is the occurrence whose body core
-      // is dispatching, which is the one asking. A question asked inside
-      // another question's content therefore reaches its own receiver, and
-      // the enclosing question still reaches its own when its body resumes.
-      const mine = destinations?.running();
+      // Asked for from inside the body that is asking, before anybody is
+      // asked: the occurrence is read from this call's own scope, so it is
+      // this question's. A question asked inside another question's content
+      // therefore reaches its own receiver, the enclosing question still
+      // reaches its own when its body resumes, and a question asked from one
+      // admitted branch reaches its own while another branch's question is
+      // still waiting to be answered.
+      const mine = destinations === undefined ? undefined : yield* destinations.running();
       const selecting = mine?.query !== undefined;
       // Before the asking. A question waiting when a process stops has an
       // intent and no outcome, which is exactly what an interrupted operation

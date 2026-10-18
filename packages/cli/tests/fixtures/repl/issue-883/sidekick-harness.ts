@@ -117,6 +117,15 @@ export function* useHarness(
      * only way to observe what Stop waits for.
      */
     readonly fill?: (source: string) => Operation<Result<void>>;
+    /**
+     * The root data read, replaced whole, so a case can hold one read open.
+     *
+     * Replaced at the same seam `fill` is, and for the same reason: the read a
+     * reply writes is ordinary, and what a case needs is to decide when it
+     * answers. A reply whose question waits on this read is a reply with a
+     * question still to ask while another of its own is already waiting.
+     */
+    readonly bindings?: RootReading["bindings"];
   } = {},
 ): Operation<Harness> {
   // An entry's eval block compiles through a module this host has to supply, so
@@ -209,6 +218,7 @@ export function* useHarness(
 
   const root: RootReading = {
     ...rootReads(session, profile),
+    ...(extra.bindings === undefined ? {} : { bindings: extra.bindings }),
     // deno-lint-ignore require-yield
     *fill(source: string): Operation<Result<void>> {
       if (extra.fill !== undefined) {

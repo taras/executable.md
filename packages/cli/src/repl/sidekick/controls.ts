@@ -418,20 +418,21 @@ export interface SidekickDestinations {
   /** The occurrence this invocation is in, when it is an owned queried one. */
   of(invocation: ComponentInvocation): SidekickOccurrence | undefined;
   /**
-   * The occurrence whose body is running right now, when it is a selected one.
+   * The occurrence whose body this call is inside of, when it is a selected one.
    *
    * Canonical `<Elicit>` is the only control this conversation does not answer
    * for, so its body is core's and the lookup above is unreachable from inside
    * it: the one thing that runs there on this host's behalf is the question
-   * provider. Core names the occurrence it is dispatching for the duration of
-   * that body, and this reads that — so a question asked inside another
-   * question's content reaches its own receiver, and the enclosing one still
-   * reaches its own afterwards.
+   * provider. Core names the occurrence it is dispatching on that body's own
+   * scope, and this asks from where the provider is running — so a question
+   * asked inside another question's content reaches its own receiver, and a
+   * question asked from one admitted branch reaches its own while another
+   * branch's question is still waiting.
    *
    * Read rather than taken. Nothing is consumed, because the answer is not a
-   * cell somebody else can empty: it is whichever body is executing.
+   * cell somebody else can empty: it is where the asking is.
    */
-  running(): SidekickOccurrence | undefined;
+  running(): Operation<SidekickOccurrence | undefined>;
 }
 
 /**
@@ -444,7 +445,7 @@ export interface SidekickDestinations {
 export function sidekickDestinations(journal: ControlJournal): SidekickDestinations {
   const filed = new WeakMap<ResultOccurrence, Filed>();
   let lookup: ResultOccurrenceLookup | undefined;
-  /** Which occurrence core is dispatching right now, as core answers it. */
+  /** Which occurrence core is dispatching a caller's body for, as core answers it. */
   let dispatching: RunningOccurrenceReader | undefined;
   return {
     entry(definition: FunctionComponentDefinition): ResultDestinationEntry {
@@ -453,8 +454,8 @@ export function sidekickDestinations(journal: ControlJournal): SidekickDestinati
     selected(name: string): ResultDestinationEntry {
       return { selected: name, open: (query) => opened(query) };
     },
-    running(): SidekickOccurrence | undefined {
-      return held(dispatching?.());
+    *running(): Operation<SidekickOccurrence | undefined> {
+      return held(dispatching === undefined ? undefined : yield* dispatching());
     },
     installed(taken: ResultOccurrenceLookup, runs: RunningOccurrenceReader): void {
       lookup = taken;
