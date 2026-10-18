@@ -36,6 +36,13 @@ import {
   type GitPushInputs,
 } from "../src/composition/git-push-records.ts";
 import { locatorFingerprint } from "../src/deno/composition/locator.ts";
+import { pullRequestReadName } from "../src/deno/composition/pull-request-operations.ts";
+import {
+  createReplPublicationMemory,
+  type RankedReplPublication,
+  type ReplPublicationMemory,
+} from "../src/retained-repository/publication-evidence.ts";
+import { PullRequestAdmissionError } from "../src/composition/errors.ts";
 import type { RepositoryIdentity } from "../src/composition/selection.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect-type.ts";
 import {
@@ -866,6 +873,100 @@ describe("Tier RPR — admitting a history that published and then opened", () =
     };
     expect(yield* refusalOf([...prefix, unrelated])).toBeUndefined();
   });
+
+  it("RPR24: one read-name vector keeps the length-prefixed fingerprint, odd text and all", function* () {
+    // The other naming algorithm this feature touches, and deliberately not
+    // the canonical-JSON digest above: an evidence read is named the way every
+    // other Git operation in this package is named, so a journal a fork reads
+    // keeps answering.
+    //
+    // The vector is the first 16 hex digits of SHA-256 over the UTF-16
+    // big-endian code units of `4:read38:<url>-6:checks` — a null discriminator
+    // is "-" rather than a length, and the 38 counts code units, so the "ö"
+    // counts once.
+    const named = pullRequestReadName(
+      readRequest("https://github.com/octo/pröject/pull/7", "checks", undefined, OWNER, SITE),
+    );
+    expect(named.configuration).toBe("6e1959358a175d22");
+    expect(named.name).toBe(`${SITE}:6e1959358a175d22`);
+
+    // The discriminator is part of the question, so naming one changes it.
+    expect(
+      pullRequestReadName(
+        readRequest("https://github.com/octo/pröject/pull/7", "checks", "github", OWNER, SITE),
+      ).configuration,
+    ).not.toBe(named.configuration);
+
+    // The owner is deliberately not: a fork is a different run asking the same
+    // question at the same position, and a name carrying the run would make
+    // every inherited read unforkable.
+    expect(
+      pullRequestReadName(
+        readRequest(
+          "https://github.com/octo/pröject/pull/7",
+          "checks",
+          undefined,
+          OTHER_OWNER,
+          SITE,
+        ),
+      ),
+    ).toEqual(named);
+  });
+
+  it("RPR25: a pull request resolved in another authenticated checkout is refused", function* () {
+    // Both requests name a placement this entry holds, which is the most this
+    // feature's placement question can establish. What it cannot establish is
+    // that the publication was of *this* checkout's branch: a worktree of the
+    // same repository has its own `review/notes` holding its own commit.
+    const push = yield* pushRequestEvent();
+    const otherRoot = `${CHECKOUT}-other`;
+    const selection = {
+      kind: "worktree" as const,
+      name: "other",
+      branch: BRANCH,
+      owner: IDENTITY,
+      commonDirectory: COMMON,
+      ownerCheckout: CHECKOUT,
+      base: null,
+    };
+    const fingerprint = yield* replPlacementFingerprint(selection);
+    const elsewhere: DurableEvent = {
+      type: "yield",
+      coroutineId: "root",
+      description: {
+        type: REPL_REPOSITORY_PLACEMENT,
+        name: replPlacementRecordName({ kind: "worktree", fingerprint }),
+      },
+      result: {
+        status: "ok",
+        value: replPlacementRecordJson({
+          fingerprint,
+          request: selection,
+          outcome: Ok({ ...PLACEMENT, kind: "worktree", checkoutRoot: otherRoot }),
+        }),
+      },
+    };
+
+    const refusal = yield* refusalOf([
+      yield* placementEvent(),
+      elsewhere,
+      push.event,
+      yield* pushOutcomeEvent(push.record),
+      yield* requestEvent(request({ resolved: { checkoutRoot: otherRoot } })),
+    ]);
+    expect(refusal?.reason).toBe("unauthorized-pull-request");
+
+    // Resolved in the checkout that published it, the same history admits.
+    expect(
+      yield* refusalOf([
+        yield* placementEvent(),
+        elsewhere,
+        push.event,
+        yield* pushOutcomeEvent(push.record),
+        yield* requestEvent(request()),
+      ]),
+    ).toBeUndefined();
+  });
 });
 
 describe("Tier RPR — whose retained evidence read is whose", () => {
@@ -972,5 +1073,87 @@ describe("Tier RPR — whose retained evidence read is whose", () => {
       refusal = error instanceof ReplPullRequestReadHistoryError ? error : undefined;
     }
     expect(refusal?.reason).toBe("malformed-result");
+  });
+});
+
+/**
+ * What a pull request may rest on, as the entry remembers it live.
+ *
+ * The admission above establishes the ordered facts; this is the memory that
+ * decides which of them authorizes a pull request *now*. The two questions it
+ * answers that nothing else can are reached-ness — a fact standing after the
+ * position execution is at is not usable — and durable order, because replay
+ * may revisit two concurrent children in either order.
+ */
+describe("Tier RPR — which publication a pull request may rest on", () => {
+  /** One acknowledged publication, with whatever a case wants different. */
+  function publication(overrides: Partial<RankedReplPublication> = {}): RankedReplPublication {
+    return {
+      site: PUSH_SITE,
+      rank: 0,
+      repository: IDENTITY,
+      origin: ORIGIN,
+      checkoutRoot: CHECKOUT,
+      commonDirectory: COMMON,
+      branch: BRANCH,
+      destinationRef: destinationRefFor(BRANCH),
+      sourceCommit: HEAD,
+      ...overrides,
+    };
+  }
+
+  /** What admitting this pull request refused, or `undefined`. */
+  function refusedBy(
+    memory: ReplPublicationMemory,
+    inputs: PullRequestInputs = INPUTS,
+  ): string | undefined {
+    try {
+      memory.admit(inputs, ORIGIN, { checkoutRoot: CHECKOUT, commonDirectory: COMMON });
+      return undefined;
+    } catch (error) {
+      return error instanceof PullRequestAdmissionError ? error.reason : "unexpected";
+    }
+  }
+
+  it("RPR26: a fact the snapshot holds authorizes nothing until execution reaches it", function* () {
+    const memory = createReplPublicationMemory();
+    memory.admitted([publication()]);
+    // The publication is in this entry's history and this execution has not
+    // arrived at it. A previous session getting further than this one is not
+    // authority for work this one is doing now.
+    expect(refusedBy(memory)).toBe("missing-push-evidence");
+
+    memory.reach(publication());
+    expect(refusedBy(memory)).toBeUndefined();
+  });
+
+  it("RPR27: restoring two publications in reverse keeps the order they were acknowledged in", function* () {
+    const first = publication({ site: "expansion-a", rank: 0 });
+    const second = publication({ site: "expansion-b", rank: 1, sourceCommit: MOVED_HEAD });
+    const memory = createReplPublicationMemory();
+    memory.admitted([first, second]);
+
+    // Replay reaches the later publication first. The branch still holds what
+    // was published to it last, so this head is superseded however this
+    // execution happened to arrive.
+    memory.reach(second);
+    memory.reach(first);
+    expect(refusedBy(memory)).toBe("conflicting-push-evidence");
+    expect(refusedBy(memory, { ...INPUTS, headSha: MOVED_HEAD })).toBeUndefined();
+  });
+
+  it("RPR28: a publication from another of this entry's checkouts authorizes nothing", function* () {
+    const memory = createReplPublicationMemory();
+    const elsewhere = publication({ checkoutRoot: `${CHECKOUT}-other` });
+    memory.admitted([elsewhere]);
+    memory.reach(elsewhere);
+    // Same repository, same origin, same branch, same commit — and a different
+    // checkout, which is a different branch of that name.
+    expect(refusedBy(memory)).toBe("missing-push-evidence");
+
+    // A live publication from this checkout ranks after everything the
+    // snapshot held, and is the one that authorizes.
+    memory.reach(publication({ site: "expansion-live" }));
+    expect(refusedBy(memory)).toBeUndefined();
   });
 });

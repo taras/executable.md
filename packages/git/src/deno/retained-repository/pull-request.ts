@@ -479,16 +479,19 @@ function* resolve(
     baseBranch: received.pullRequest.base,
   });
 
-  // This entry's own account of publishing that head, and nothing else. A
-  // refusal here happens with the Git host never having been asked anything.
-  entry.publications.admit(inputs, origin);
-
-  return Object.freeze({
+  const resolved = Object.freeze({
     checkoutRoot: routed.checkout.root,
     commonDirectory: placement.commonDirectory,
     origin,
     inputs,
   });
+
+  // This entry's own account of publishing that head, from this checkout, and
+  // nothing else. A refusal here happens with the Git host never having been
+  // asked anything.
+  entry.publications.admit(inputs, origin, resolved);
+
+  return resolved;
 }
 
 /**

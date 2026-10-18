@@ -1584,7 +1584,20 @@ continue, even though the reviews were saved an hour ago, and the saved record
 stays in history rather than being erased by that refusal. An allowed completed
 read opens no authentication session and sends nothing.
 
+The publication it rests on is one this entry made from the checkout it is
+opening from. A `<Git.Push />` this entry made from another of its worktrees
+published that worktree's `review/notes`, which holds its own commit, so a pull
+request opened here refuses rather than resting on it — and the refusal happens
+before a credential is read or anything is contacted.
+
+A read interrupted before it was acknowledged simply runs again: nothing is
+written down for it, which is safe in a way repeating a publication is not. A
+read whose answer arrived but whose own session could not be closed records
+nothing either, because what it did is in a state its outcome cannot be read
+from.
+
 What `<PullRequest>` binds is evidence of what the upsert settled on, not
+
 freshness: the repository, the provider's own identity for the pull request, its
 number, its URL, its open state and the head and base commits. Reviews,
 comments, checks and later edits are the separate reads above, which is why a

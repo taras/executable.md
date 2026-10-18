@@ -34,7 +34,8 @@ import {
   withResolvers,
 } from "effection";
 import type { Operation, WithResolvers } from "effection";
-import { rm, writeTextFile } from "@effectionx/fs";
+import { exists, rm, writeTextFile } from "@effectionx/fs";
+
 import { mkdir, mkdtemp, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -57,9 +58,14 @@ import type {
 // From the subpath that publishes them rather than from the source modules:
 // these are public, and reaching one by relative path would bypass the export
 // map the partition test holds every consumer to.
-import { PullRequestAPI } from "@executablemd/git/api";
-import type { PullRequestResult } from "@executablemd/git/api";
+import { Git, PullRequestAPI } from "@executablemd/git/api";
+import type {
+  GitPushOutcome,
+  PullRequestReadResult,
+  PullRequestResult,
+} from "@executablemd/git/api";
 import { PullRequestOperations } from "../src/composition/pull-request-operations.ts";
+import type { PullRequestUpsertInvocation } from "../src/composition/pull-request-operations.ts";
 import { replRepositoryInstallation } from "../src/deno/retained-repository/provider.ts";
 import { admitReplRepositoryHistory } from "../src/retained-repository/admission.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect-type.ts";
@@ -67,8 +73,15 @@ import { parseGitHostReconciliationRecord } from "../src/git-host/records.ts";
 import {
   parseReplPullRequestRequestRecord,
   REPL_REPOSITORY_PULL_REQUEST_REQUEST,
+  replPullRequestRequestJson,
 } from "../src/retained-repository/pull-request-records.ts";
 import { REPL_REPOSITORY_LOCAL } from "../src/retained-repository/records.ts";
+import {
+  parseReplPlacementRecord,
+  REPL_REPOSITORY_PLACEMENT,
+} from "../src/retained-repository/placement-records.ts";
+import { parsePullRequestReadRequest } from "../src/composition/pull-request-read-records.ts";
+import { PULL_REQUEST_READ } from "../src/deno/composition/pull-request-operations.ts";
 import { gitOutput } from "./support/git-remotes.ts";
 import { useGitHubServer } from "./support/github.ts";
 import {
@@ -167,6 +180,10 @@ interface Run {
 
 interface RunOptions {
   readonly answer?: unknown;
+  /** Resolved when the entry reaches a question, which then never answers. */
+  readonly atQuestion?: WithResolvers<void>;
+  /** The host this row installs, when it watches or refuses native work. */
+  readonly host?: RepositoryHost;
   readonly owner?: string;
   readonly cwd?: string;
   /** What this deployment authorizes reading, when a row narrows it. */
@@ -228,11 +245,23 @@ function run(
         { at: "min" },
       );
     }
+    if (options.atQuestion !== undefined) {
+      const reached = options.atQuestion;
+      yield* Elicitation.around(
+        {
+          *elicit(): Operation<unknown> {
+            reached.resolve();
+            return yield* suspend();
+          },
+        },
+        { at: "min" },
+      );
+    }
     if (options.between !== undefined) {
       yield* options.between();
     }
     const installation = yield* replRepositoryInstallation(options.owner ?? OWNER, {
-      host: rewriting(fixture.origin),
+      host: options.host ?? rewriting(fixture.origin),
       root: fixture.managed,
       pullRequests: {
         // The modeled host, injected: an access that outranks any configured
@@ -328,6 +357,196 @@ function store(fixture: Fixture): GitHubStore {
   return forge;
 }
 
+/** A publication answer a handler can build, and that proves nothing. */
+const SYNTHETIC_PUSH: GitPushOutcome = Object.freeze({
+  decision: "performed" as const,
+  result: Object.freeze({
+    repository: Object.freeze({
+      name: "project",
+      locatorFingerprint: "0".repeat(64),
+      requestedBase: null,
+      creationCommit: "0".repeat(40),
+      primaryBranch: "main",
+      objectFormat: "sha1" as const,
+    }),
+    remote: "origin",
+    branch: "review/synthetic",
+    destinationRef: "refs/heads/review/synthetic",
+    refspec: `${"0".repeat(40)}:refs/heads/review/synthetic`,
+    sourceCommit: "0".repeat(40),
+    observedRemoteCommit: "0".repeat(40),
+  }),
+});
+
+/** The question half every left-at-a-question row writes. */
+
+const QUESTION = [
+  `  <Elicit schema={{ type: "object", properties: { choice: { enum: ["continue"] } },`,
+  `    required: ["choice"], additionalProperties: false }} as="answer">`,
+  `The pull request is open. Continue?`,
+  `  </Elicit>`,
+].join("\n");
+
+/** Every retained evidence read this history holds. */
+function reads(events: readonly DurableEvent[]): DurableEvent[] {
+  return events.filter(
+    (event) => event.type === "yield" && event.description.type === PULL_REQUEST_READ,
+  );
+}
+
+/** The normalized question one retained read recorded. */
+function question(event: DurableEvent) {
+  return event.type === "yield"
+    ? parsePullRequestReadRequest(event.description["input"])
+    : undefined;
+}
+
+/**
+ * The modeled host, plus the one evidence route a read in a body needs.
+ *
+ * The fake GitHub answers pull-request routes; a reviews collection is not one
+ * of them, so this answers that path from the pull request the store holds and
+ * leaves every other request exactly as it was.
+ */
+function readable(store: GitHubStore): { readonly access: GitHubAccess } {
+  const inner = fakeGitHubAccess(store);
+  return {
+    access: {
+      endpoint: inner.endpoint,
+      token: () => inner.token(),
+      *send(request: GitHubHttpRequest): Operation<GitHubHttpResponse> {
+        const url = new URL(request.url);
+        const reviews = /^\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)\/reviews$/.exec(url.pathname);
+        if (reviews === null) {
+          return yield* inner.send(request);
+        }
+        const number = Number(reviews[1]);
+        const found = store.pullRequests.find((pullRequest) => pullRequest.number === number);
+        if (found === undefined) {
+          return { status: 404, body: JSON.stringify({ message: "Not Found" }) };
+        }
+        return {
+          status: 200,
+          body: JSON.stringify([
+            {
+              id: 11,
+              user: { login: "reviewer" },
+              state: "APPROVED",
+              body: "looks right",
+              submitted_at: "2026-08-24T00:00:00Z",
+              commit_id: found.headSha,
+              html_url: `${LOCATOR}/pull/${number}#r11`,
+              pull_request_url: `${inner.endpoint}/repos/${store.owner}/${store.repository}/pulls/${number}`,
+            },
+          ]),
+        };
+      },
+    },
+  };
+}
+
+/** A host that answers exactly as the production one does, and counts. */
+function watching(fixture: Fixture): { readonly host: RepositoryHost; readonly ran: string[] } {
+  const ran: string[] = [];
+  const inner = rewriting(fixture.origin);
+  return {
+    ran,
+    host: {
+      *git(invocation: GitInvocation): Operation<GitOutcome> {
+        ran.push(invocation.args[0] ?? "");
+        return yield* inner.git(invocation);
+      },
+      useDirectory: inner.useDirectory,
+    },
+  };
+}
+
+/** A transport that fails the row if a credential or a service is reached. */
+function unreachableAccess(): GitHubAccess {
+  return {
+    endpoint: "https://api.github.test",
+    // deno-lint-ignore require-yield
+    *token(): Operation<string | undefined> {
+      throw new Error("a credential was read for a completed upsert");
+    },
+    // deno-lint-ignore require-yield
+    *send(): Operation<GitHubHttpResponse> {
+      throw new Error("the service was contacted for a completed upsert");
+    },
+  };
+}
+
+/** The same predicate, true only on its nth match. */
+function nth(
+  at: (event: DurableEvent) => boolean,
+  which: number,
+): (event: DurableEvent) => boolean {
+  let seen = 0;
+  return (event) => {
+    if (!at(event)) {
+      return false;
+    }
+    seen += 1;
+    return seen === which;
+  };
+}
+
+/** Every managed checkout this history's placement records name. */
+function* placements(events: readonly DurableEvent[]): Operation<string[]> {
+  const found: string[] = [];
+  for (const event of events) {
+    if (event.type !== "yield" || event.description.type !== REPL_REPOSITORY_PLACEMENT) {
+      continue;
+    }
+    if (event.result.status !== "ok") {
+      continue;
+    }
+    const record = parseReplPlacementRecord(event.result.value);
+    if (record !== undefined && record.outcome.ok) {
+      found.push(record.outcome.value.checkoutRoot);
+    }
+  }
+  return found;
+}
+
+/** The directory this branch is checked out in, as Git itself lists them. */
+function* worktreeOn(fixture: Fixture, checkout: string, branch: string): Operation<string> {
+  const git = gitSession(denoRepositoryHost(), fixture.root);
+  const outcome = yield* git.run(["worktree", "list", "--porcelain"], checkout);
+  let directory: string | undefined;
+  for (const line of outcome.stdout.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      directory = line.slice("worktree ".length).trim();
+    }
+    if (line.trim() === `branch refs/heads/${branch}` && directory !== undefined) {
+      return directory;
+    }
+  }
+  throw new Error(`no worktree of ${checkout} is on ${branch}`);
+}
+
+/** Commit one more file in a checkout, as a person at a shell would. */
+function* commitThere(checkout: string, name: string): Operation<string> {
+  const git = gitSession(denoRepositoryHost(), checkout);
+  yield* writeTextFile(join(checkout, name), `${name}\n`);
+  yield* git.run(["add", name], checkout);
+  yield* git.run(
+    ["-c", "user.name=Shell", "-c", "user.email=shell@example.test", "commit", "-m", name],
+    checkout,
+  );
+  const outcome = yield* git.run(["rev-parse", "HEAD"], checkout);
+  return outcome.stdout.trim();
+}
+
+/** The saved request record one retained event holds. */
+function savedRequest(event: DurableEvent | undefined) {
+  if (event?.type !== "yield" || event.result.status !== "ok") {
+    return undefined;
+  }
+  const value = event.result.value;
+  return value === undefined ? undefined : parseReplPullRequestRequestRecord(value);
+}
+
 describe("one entry's pull request", () => {
   it("V2a: opens a pull request for the head it published, once", function* () {
     const fixture = yield* useFixture();
@@ -384,6 +603,113 @@ describe("one entry's pull request", () => {
     // No second create, and no mutation of any kind.
     expect(creations(forge)).toBe(1);
     expect(patches(forge)).toBe(0);
+  });
+
+  it("V2c: a head this entry has not published yet refuses, until it publishes it", function* () {
+    const fixture = yield* useFixture();
+    // Published at A, then committed again: the checkout is on B and this
+    // entry's only publication is of A.
+    const moved = (branch: string, ...extra: string[]): string =>
+      document(
+        `  <Worktree name="${branch}" branch="review/${branch}" as="worktree" />`,
+        "  <Dir path={worktree}>",
+
+        '    <File path="notes.md">Ready for review.</File>',
+        '    <Git.Add paths="notes.md" />',
+        '    <Git.Commit message="Prepare notes" as="first" />',
+        "    <Git.Push />",
+        '    <File path="more.md">And more.</File>',
+        '    <Git.Add paths="more.md" />',
+        '    <Git.Commit message="And more" as="second" />',
+        ...extra,
+        '    <PullRequest title="Prepare notes" as="pullRequest">Ready for review.</PullRequest>',
+        "  </Dir>",
+      );
+
+    const stale = store(fixture);
+    const refused = yield* run(fixture, moved("stale"), new InMemoryStream(), stale);
+
+    expect(refused.refusal).toBeDefined();
+    // The branch is published; this commit is not. Refused before a request
+    // exists and before anything was contacted.
+    expect(refused.refusal).toContain("different commit");
+    expect(mutations(stale)).toEqual([]);
+
+    // The same document with the entry publishing B explicitly. Now the last
+    // publication to that branch is the head the pull request names.
+    const fresh = store(fixture);
+    const opened = yield* run(
+      fixture,
+      moved("fresh", "    <Git.Push />"),
+      new InMemoryStream(),
+      fresh,
+    );
+
+    expect(opened.refusal).toBeUndefined();
+    expect(creations(fresh)).toBe(1);
+  });
+
+  it("V2d: a synthetic publication answer authorizes nothing", function* () {
+    const fixture = yield* useFixture();
+    const forge = store(fixture);
+    const stream = new InMemoryStream();
+    // A handler that answers `Git.push` itself. The branch is never published,
+    // nothing is retained for it, and a pull request resting on it is resting
+    // on a value a handler made up.
+    const synthetic = yield* run(fixture, openingOn("review/synthetic"), stream, forge, {
+      *between(): Operation<void> {
+        yield* Git.around({
+          // deno-lint-ignore require-yield
+          *push(): Operation<GitPushOutcome> {
+            return SYNTHETIC_PUSH;
+          },
+        });
+      },
+    });
+
+    expect(synthetic.refusal).toBeDefined();
+    expect(synthetic.refusal).toContain("no acknowledged");
+    expect(requests(synthetic.events).length).toBe(0);
+    expect(mutations(forge)).toEqual([]);
+  });
+
+  it("V7k: a read authored in the pull request's body keeps its own handoff", function* () {
+    const fixture = yield* useFixture();
+    const forge = store(fixture);
+    const reviewed = readable(forge);
+    const stream = new InMemoryStream();
+    // The second element updates what the first opened, and its body reads
+    // that pull request's reviews. The read runs inside an upsert's own
+    // invocation and is still its own retained read, under its own identity.
+    const nested = document(
+      `  <Worktree name="review" branch="${BRANCH}" as="worktree" />`,
+      "  <Dir path={worktree}>",
+      '    <File path="notes.md">Ready for review.</File>',
+      '    <Git.Add paths="notes.md" />',
+      '    <Git.Commit message="Prepare notes" as="commit" />',
+      "    <Git.Push />",
+      '    <PullRequest title="Prepare notes" as="pullRequest">Ready for review.</PullRequest>',
+      '    <PullRequest number={1} title="Prepare notes" as="updated">',
+      `      <PullRequest.Reviews url="${LOCATOR}/pull/1" as="reviews" />`,
+      "      Ready for review.",
+      "    </PullRequest>",
+      "    <Json value={reviews} />",
+      "  </Dir>",
+    );
+    const ran = yield* run(fixture, nested, stream, forge, { access: reviewed.access });
+
+    expect(ran.refusal).toBeUndefined();
+    expect(ran.output).toContain("reviewer");
+    const retained = reads(ran.events);
+    expect(retained.length).toBe(1);
+    const asked = question(retained[0]!);
+    expect(asked?.url).toBe(`${LOCATOR}/pull/1`);
+    expect(asked?.runId).toBe(OWNER);
+    // Two upserts asked for, and the read is neither of their invocations: a
+    // nested read's handoff is its own.
+    const sites = new Set(requests(ran.events).map((event) => savedRequest(event)?.site));
+    expect(sites.size).toBe(2);
+    expect(sites.has(asked?.expansionId)).toBe(false);
   });
 });
 
@@ -502,6 +828,29 @@ function replaying(prefix: readonly DurableEvent[]): InMemoryStream {
   );
 }
 
+/** The same history, with every saved request's recorded origin replaced. */
+function* retargeted(events: readonly DurableEvent[], origin: string): Operation<DurableEvent[]> {
+  const rewritten: DurableEvent[] = [];
+  for (const event of events) {
+    const record = isRequest(event) ? savedRequest(event) : undefined;
+    if (record === undefined) {
+      rewritten.push(event);
+      continue;
+    }
+    rewritten.push({
+      ...event,
+      result: {
+        status: "ok",
+        value: replPullRequestRequestJson({
+          ...record,
+          resolved: { ...record.resolved, origin },
+        }),
+      },
+    });
+  }
+  return rewritten;
+}
+
 /** A closed result a handler can build and offer as a completion. */
 const SYNTHETIC = Object.freeze({
   repository: Object.freeze({
@@ -536,13 +885,30 @@ describe("one entry's pull request, interrupted", () => {
     expect(upserts(prefix).length).toBe(0);
     expect(mutations(forge)).toEqual([]);
 
+    // What that record holds is the whole question, complete enough to ask the
+    // service without reading anything again.
+    const published = savedRequest(requests(prefix)[0]);
+    expect(published?.resolved.inputs.title).toBe("Prepare notes");
+    expect(published?.resolved.inputs.body).toBe("Ready for review.");
+    expect(published?.resolved.inputs.draft).toBe(false);
+    expect(published?.resolved.inputs.number).toBe(null);
+    expect(published?.resolved.inputs.headBranch).toBe(BRANCH);
+    expect(published?.resolved.inputs.baseBranch).toBe("main");
+    expect(published?.resolved.inputs.headSha).toMatch(/^[0-9a-f]{40}$/);
+
     // Now the checkout it published from is gone. A pending request needs none
     // of it: the head, the base and the body are in the record.
     yield* rm(join(fixture.managed), { recursive: true, force: true });
 
-    const resumed = yield* run(fixture, opening(), replaying(prefix), forge);
+    const watched = watching(fixture);
+    const resumed = yield* run(fixture, opening(), replaying(prefix), forge, {
+      host: watched.host,
+    });
     expect(resumed.refusal).toBeUndefined();
     expect(creations(forge)).toBe(1);
+    // And it read no checkout to do it: reconciling a saved request is a
+    // service call over parsed facts.
+    expect(watched.ran).toEqual([]);
   });
 
   it("V3b: a remote completion whose outcome was never acknowledged is adopted", function* () {
@@ -578,7 +944,7 @@ describe("one entry's pull request, interrupted", () => {
     const inner = new InMemoryStream();
     const attempt = yield* run(
       fixture,
-      opening("    <Json value={1} />"),
+      opening('    <File path="after.md">continued</File>'),
       refusing(inner, isRequest),
       forge,
     );
@@ -587,15 +953,30 @@ describe("one entry's pull request, interrupted", () => {
     const events = yield* inner.readAll();
     expect(requests(events).length).toBe(0);
     expect(upserts(events).length).toBe(0);
-    // Nothing was asked of the Git host, and the sentinel after it never ran.
+    // Nothing was asked of the Git host.
     expect(mutations(forge)).toEqual([]);
+    // The write after it never ran: a first persistence failure fences what
+    // follows rather than letting the run continue past a position the journal
+    // does not hold.
+    const checkout = (yield* placements(events))[0];
+    expect(checkout).toBeDefined();
+    const worktree = yield* worktreeOn(fixture, checkout ?? "", BRANCH);
+    expect(yield* exists(join(worktree, "after.md"))).toBe(false);
+    // And nothing compensated for it: no coroutine was closed, so a
+    // continuation replays this position rather than stepping over it.
+    expect(events.filter((event) => event.type === "close")).toEqual([]);
   });
 
   it("V8b: a refused outcome append binds nothing and leaves the completion to adopt", function* () {
     const fixture = yield* useFixture();
     const forge = store(fixture);
     const inner = new InMemoryStream();
-    const attempt = yield* run(fixture, opening(), refusing(inner, isUpsert), forge);
+    const attempt = yield* run(
+      fixture,
+      opening('    <File path="after.md">continued</File>'),
+      refusing(inner, isUpsert),
+      forge,
+    );
 
     expect(attempt.refusal).toBeDefined();
     const events = yield* inner.readAll();
@@ -603,11 +984,161 @@ describe("one entry's pull request, interrupted", () => {
     // happened: that is the window reconciliation exists to close.
     expect(requests(events).length).toBe(1);
     expect(upserts(events).length).toBe(0);
+    // The write after it never ran, and nothing was closed to compensate.
+    const checkout = (yield* placements(events))[0];
+    expect(checkout).toBeDefined();
+    expect(
+      yield* exists(join(yield* worktreeOn(fixture, checkout ?? "", BRANCH), "after.md")),
+    ).toBe(false);
+    expect(events.filter((event) => event.type === "close")).toEqual([]);
 
-    // A later attempt over that history adopts the completion.
-    const resumed = yield* run(fixture, opening(), replaying(events), forge);
+    // A later attempt over that history adopts the completion, and reaches the
+    // write that was fenced.
+    const resumed = yield* run(
+      fixture,
+      opening('    <File path="after.md">continued</File>'),
+      replaying(events),
+      forge,
+    );
     expect(resumed.refusal).toBeUndefined();
     expect(creations(forge)).toBe(1);
+    expect(
+      yield* exists(join(yield* worktreeOn(fixture, checkout ?? "", BRANCH), "after.md")),
+    ).toBe(true);
+  });
+
+  it("V3c: a numbered update whose outcome was never acknowledged is adopted", function* () {
+    const fixture = yield* useFixture();
+    const forge = store(fixture);
+    const inner = new InMemoryStream();
+    const reached = withResolvers<void>();
+    // One document that opens a pull request and then brings that number to a
+    // new title. The cut holds the *second* reconciliation's append, so the
+    // update happened at the host and this history does not say so.
+    const source = document(
+      `  <Worktree name="review" branch="${BRANCH}" as="worktree" />`,
+      "  <Dir path={worktree}>",
+      '    <File path="notes.md">Ready for review.</File>',
+      '    <Git.Add paths="notes.md" />',
+      '    <Git.Commit message="Prepare notes" as="commit" />',
+      "    <Git.Push />",
+      '    <PullRequest title="Prepare notes" as="pullRequest">Ready for review.</PullRequest>',
+      '    <PullRequest number={1} title="Retitled" as="updated">Ready for review.</PullRequest>',
+      "    <Json value={updated.number} />",
+      "  </Dir>",
+    );
+
+    const prefix = yield* cutAt(
+      fixture,
+      source,
+      holdingAppend(inner, nth(isUpsert, 2), reached),
+      forge,
+      reached,
+    );
+    expect(requests(prefix).length).toBe(2);
+    expect(upserts(prefix).length).toBe(1);
+    expect(patches(forge)).toBe(1);
+
+    // Resuming observes the pull request already says what the update asked
+    // for, records that, and patches nothing a second time.
+    const resumed = yield* run(fixture, source, replaying(prefix), forge);
+    expect(resumed.refusal).toBeUndefined();
+    expect(patches(forge)).toBe(1);
+    expect(creations(forge)).toBe(1);
+    expect(upserts(resumed.events).length).toBe(2);
+  });
+
+  it("V3d: a cut before the request is acknowledged resolves today's commit", function* () {
+    const fixture = yield* useFixture();
+    const forge = store(fixture);
+    const inner = new InMemoryStream();
+    const reached = withResolvers<void>();
+
+    // Cut with the request append in flight: the publication of A is history
+    // and the pull request asked for nothing yet.
+    const prefix = yield* cutAt(
+      fixture,
+      opening(),
+      holdingAppend(inner, isRequest, reached),
+      forge,
+      reached,
+    );
+    expect(requests(prefix).length).toBe(0);
+    expect(mutations(forge)).toEqual([]);
+
+    // Somebody advances the branch while the entry is away. Nothing was
+    // recorded for the pull request, so the continuation resolves it now — at
+    // B, which this entry never published.
+    const checkout = (yield* placements(prefix))[0];
+    expect(checkout).toBeDefined();
+    const worktree = yield* worktreeOn(fixture, checkout ?? "", BRANCH);
+    yield* commitThere(worktree, "later.md");
+
+    const resumed = yield* run(fixture, opening(), replaying(prefix), forge);
+    expect(resumed.refusal).toBeDefined();
+    expect(resumed.refusal).toContain("different commit");
+    // No request was invented for the commit it published an hour ago, and
+    // nothing was contacted.
+    expect(requests(resumed.events).length).toBe(0);
+    expect(mutations(forge)).toEqual([]);
+  });
+
+  it("V4b: an unfinished prefix restores the upsert with nothing native or remote", function* () {
+    const fixture = yield* useFixture();
+    const forge = store(fixture);
+    const inner = new InMemoryStream();
+    const reached = withResolvers<void>();
+
+    // A genuine unfinished history: the pull request is open and acknowledged,
+    // and the entry is standing at a question it has not answered.
+    const source = opening(QUESTION);
+    const prefix = yield* cutAt(fixture, source, inner, forge, reached, { atQuestion: reached });
+    expect(requests(prefix).length).toBe(1);
+    expect(upserts(prefix).length).toBe(1);
+    expect(creations(forge)).toBe(1);
+    expect(
+      prefix.filter((event) => event.type === "close" && event.coroutineId === "root"),
+    ).toEqual([]);
+
+    // Now take away everything a fresh upsert would need: the managed root is
+    // gone, the transport fails if it is asked anything, and reading a
+    // credential fails too.
+    yield* rm(fixture.managed, { recursive: true, force: true });
+    const watched = watching(fixture);
+    const resumed = yield* run(fixture, source, replaying(prefix), forge, {
+      answer: { choice: "continue" },
+      access: unreachableAccess(),
+      host: watched.host,
+    });
+
+    expect(resumed.refusal).toBeUndefined();
+    expect(resumed.output).toContain("1");
+    // The completed upsert came back from its own receipt: no `git`, no
+    // provider, no credential, no service.
+    expect(watched.ran).toEqual([]);
+    expect(creations(forge)).toBe(1);
+    expect(patches(forge)).toBe(0);
+    expect(upserts(resumed.events).length).toBe(1);
+  });
+
+  it("V6d: a saved request whose recorded origin was edited is refused on readback", function* () {
+    const fixture = yield* useFixture();
+    const forge = store(fixture);
+    const stream = new InMemoryStream();
+    const first = yield* run(fixture, opening(), stream, forge);
+    expect(first.refusal).toBeUndefined();
+
+    // The same history with one letter of its recorded origin changed. The
+    // name covers the question rather than what routing resolved, so the name
+    // still matches and nothing upstream of this notices.
+    const edited = yield* retargeted(yield* stream.readAll(), "https://github.com/octo/elsewhere");
+    const resumed = yield* run(fixture, opening(), replaying(edited), forge);
+
+    // Held to the fingerprint the Repository identity in the record carries,
+    // so a request edited to name another repository continues nothing.
+    expect(resumed.refusal).toBeDefined();
+    expect(creations(forge)).toBe(1);
+    expect(patches(forge)).toBe(0);
   });
 });
 
@@ -650,50 +1181,76 @@ describe("one entry's pull request, composed", () => {
 
   it("V5b: after delegation the owned outcome binds, whatever an outer handler returns", function* () {
     const fixture = yield* useFixture();
-    const forge = store(fixture);
-    const stream = new InMemoryStream();
 
-    // Delegates, then rewrites the answer. The rewrite cannot bind another
-    // pull request: what binds is what this entry actually acknowledged.
-    const rewritten = yield* run(fixture, opening(), stream, forge, {
-      *between(): Operation<void> {
-        yield* PullRequestOperations.around({
-          *upsert([invocation], next): Operation<PullRequestResult> {
-            yield* next(invocation);
-            return SYNTHETIC;
-          },
-        });
-      },
-    });
-    expect(rewritten.refusal).toBeUndefined();
-    expect(rewritten.output).not.toContain("4242");
-    expect(creations(forge)).toBe(1);
-    expect(requests(yield* stream.readAll()).length).toBe(1);
+    // Delegates, then rewrites the answer, at each of the two chains a
+    // document composes through. Neither rewrite can bind another pull
+    // request: what binds is what this entry actually acknowledged.
+    for (const chain of ["operations", "api"] as const) {
+      const forge = store(fixture);
+      const stream = new InMemoryStream();
+      const rewritten = yield* run(fixture, openingOn(`rewritten/${chain}`), stream, forge, {
+        *between(): Operation<void> {
+          if (chain === "operations") {
+            yield* PullRequestOperations.around({
+              *upsert([invocation], next): Operation<PullRequestResult> {
+                yield* next(invocation);
+                return SYNTHETIC;
+              },
+            });
+          } else {
+            yield* PullRequestAPI.around({
+              *upsert([pullRequest, options], next): Operation<PullRequestResult> {
+                yield* next(pullRequest, options);
+                return SYNTHETIC;
+              },
+            });
+          }
+        },
+      });
+      expect(rewritten.refusal).toBeUndefined();
+      expect(rewritten.output).not.toContain("4242");
+      expect(creations(forge)).toBe(1);
+      expect(requests(yield* stream.readAll()).length).toBe(1);
+    }
   });
 
   it("V5c: a swallowed delegated failure stays a failure", function* () {
     const fixture = yield* useFixture();
-    const forge = store(fixture);
-    forge.fault = { on: "create", status: 503 };
-    const stream = new InMemoryStream();
 
-    const swallowed = yield* run(fixture, opening(), stream, forge, {
-      *between(): Operation<void> {
-        yield* PullRequestOperations.around({
-          *upsert([invocation], next): Operation<PullRequestResult> {
-            try {
-              return yield* next(invocation);
-            } catch {
-              // Catching the delegated failure and answering with a success
-              // cannot rescue it.
-              return SYNTHETIC;
-            }
-          },
-        });
-      },
-    });
-    expect(swallowed.refusal).toBeDefined();
-    expect(swallowed.output).not.toContain("4242");
+    for (const chain of ["operations", "api"] as const) {
+      const forge = store(fixture);
+      forge.fault = { on: "create", status: 503 };
+      const stream = new InMemoryStream();
+      const swallowed = yield* run(fixture, openingOn(`swallowed/${chain}`), stream, forge, {
+        *between(): Operation<void> {
+          if (chain === "operations") {
+            yield* PullRequestOperations.around({
+              *upsert([invocation], next): Operation<PullRequestResult> {
+                try {
+                  return yield* next(invocation);
+                } catch {
+                  // Catching the delegated failure and answering with a
+                  // success cannot rescue it.
+                  return SYNTHETIC;
+                }
+              },
+            });
+          } else {
+            yield* PullRequestAPI.around({
+              *upsert([pullRequest, options], next): Operation<PullRequestResult> {
+                try {
+                  return yield* next(pullRequest, options);
+                } catch {
+                  return SYNTHETIC;
+                }
+              },
+            });
+          }
+        },
+      });
+      expect(swallowed.refusal).toBeDefined();
+      expect(swallowed.output).not.toContain("4242");
+    }
   });
 
   it("V5d: one transform records both readings, and a saved request bypasses it", function* () {
@@ -790,6 +1347,178 @@ describe("one entry's pull request, composed", () => {
     expect(refused.refusal).toBeDefined();
     expect(requests(yield* failing.readAll()).length).toBe(0);
     expect(mutations(failingForge)).toEqual([]);
+  });
+
+  it("V5f: an outer throw after success leaves the record standing", function* () {
+    const fixture = yield* useFixture();
+    const forge = store(fixture);
+    const stream = new InMemoryStream();
+    // Delegates, gets the owned answer, and then fails for its own reasons.
+    // That is an ordinary failure: the document stops, and what this entry
+    // acknowledged is history either way.
+    const thrown = yield* run(fixture, opening(), stream, forge, {
+      *between(): Operation<void> {
+        yield* PullRequestOperations.around({
+          *upsert([invocation], next): Operation<PullRequestResult> {
+            yield* next(invocation);
+            throw new Error("the handler above it failed");
+          },
+        });
+      },
+    });
+
+    expect(thrown.refusal).toBe("the handler above it failed");
+    const events = yield* stream.readAll();
+    expect(requests(events).length).toBe(1);
+    expect(upserts(events).length).toBe(1);
+    expect(creations(forge)).toBe(1);
+
+    // And the pull request it opened is restored rather than opened again.
+    const resumed = yield* run(fixture, opening(), replaying(events), forge);
+    expect(resumed.refusal).toBeUndefined();
+    expect(creations(forge)).toBe(1);
+    expect(patches(forge)).toBe(0);
+  });
+
+  it("V5g: a duplicate delegation performs no second owned call", function* () {
+    const fixture = yield* useFixture();
+
+    for (const chain of ["operations", "api"] as const) {
+      const forge = store(fixture);
+      const stream = new InMemoryStream();
+      const twice = yield* run(fixture, openingOn(`duplicate/${chain}`), stream, forge, {
+        *between(): Operation<void> {
+          if (chain === "operations") {
+            yield* PullRequestOperations.around({
+              *upsert([invocation], next): Operation<PullRequestResult> {
+                yield* next(invocation);
+                return yield* next(invocation);
+              },
+            });
+          } else {
+            yield* PullRequestAPI.around({
+              *upsert([pullRequest, options], next): Operation<PullRequestResult> {
+                yield* next(pullRequest, options);
+                return yield* next(pullRequest, options);
+              },
+            });
+          }
+        },
+      });
+
+      // Whatever the second dispatch did, it did not open or repoint a second
+      // pull request, and this entry holds one request and one outcome.
+      expect(creations(forge)).toBe(1);
+      expect(patches(forge)).toBe(0);
+      const events = yield* stream.readAll();
+      expect(requests(events).length).toBe(1);
+      expect(upserts(events).length).toBe(1);
+      if (twice.refusal === undefined) {
+        expect(twice.output).toContain("1");
+      }
+    }
+  });
+});
+
+describe("one entry's pull request, dispatched directly", () => {
+  /** The journey, then an update of what it opened, then a read of it. */
+  const twice = (...extra: string[]): string =>
+    document(
+      `  <Worktree name="review" branch="${BRANCH}" as="worktree" />`,
+      "  <Dir path={worktree}>",
+      '    <File path="notes.md">Ready for review.</File>',
+      '    <Git.Add paths="notes.md" />',
+      '    <Git.Commit message="Prepare notes" as="commit" />',
+      "    <Git.Push />",
+      '    <PullRequest title="Prepare notes" as="pullRequest">Ready for review.</PullRequest>',
+      '    <PullRequest number={1} title="Prepare notes" as="updated">Ready for review.</PullRequest>',
+      ...extra,
+      "  </Dir>",
+    );
+
+  it("V9d: a read dispatched outside a read element is ordinary and retains nothing", function* () {
+    const fixture = yield* useFixture();
+    const forge = store(fixture);
+    const stream = new InMemoryStream();
+    let items: number | undefined;
+
+    // Dispatched from inside the second upsert, where no read element is
+    // expanding. It reaches the same adapter and the same ceiling, answers
+    // from the service, and retains nothing: retention belongs to the authored
+    // read's own bridge.
+    const ran = yield* run(fixture, twice(), stream, forge, {
+      access: readable(forge).access,
+      *between(): Operation<void> {
+        yield* PullRequestOperations.around({
+          *upsert([invocation], next): Operation<PullRequestResult> {
+            if (invocation.pullRequest.number === 1) {
+              const answered = yield* PullRequestOperations.operations.read({
+                url: `${LOCATOR}/pull/1`,
+                kind: "reviews",
+                provider: undefined,
+              });
+
+              items = answered.items.length;
+            }
+            return yield* next(invocation);
+          },
+        });
+      },
+    });
+
+    expect(ran.refusal).toBeUndefined();
+    expect(items).toBe(1);
+    expect(reads(ran.events).length).toBe(0);
+    expect(requests(ran.events).length).toBe(2);
+  });
+
+  it("V9e: an upsert dispatched outside its component's invocation is refused", function* () {
+    const fixture = yield* useFixture();
+    const forge = store(fixture);
+    const stream = new InMemoryStream();
+    let captured: PullRequestUpsertInvocation | undefined;
+    let refusedBy: string | undefined;
+
+    // The same invocation the component made, re-dispatched from a position
+    // that is not a `<PullRequest>` invocation. The entry's upsert lifecycle is
+    // that component's own invocation-local default, so there is nothing here
+    // to answer it and nothing is retained for it.
+    const ran = yield* run(
+      fixture,
+      twice(`      <PullRequest.Reviews url="${LOCATOR}/pull/1" as="reviews" />`),
+      stream,
+      forge,
+      {
+        access: readable(forge).access,
+        *between(): Operation<void> {
+          yield* PullRequestOperations.around({
+            *upsert([invocation], next): Operation<PullRequestResult> {
+              captured = invocation;
+              return yield* next(invocation);
+            },
+            *read([invocation], next): Operation<PullRequestReadResult> {
+              if (captured !== undefined) {
+                try {
+                  yield* PullRequestOperations.operations.upsert(captured);
+                } catch (error) {
+                  refusedBy = error instanceof Error ? error.message : String(error);
+                }
+              }
+              return yield* next(invocation);
+            },
+          });
+        },
+      },
+    );
+
+    expect(ran.refusal).toBeUndefined();
+    expect(refusedBy).toContain("no pull-request provider is installed");
+    // Two upserts asked for by two elements, and no third retained for the
+    // dispatch that reached nothing.
+    expect(requests(ran.events).length).toBe(2);
+    expect(upserts(ran.events).length).toBe(2);
+    expect(creations(forge)).toBe(1);
+    expect(reads(ran.events).length).toBe(1);
   });
 });
 

@@ -7247,6 +7247,16 @@ receipt, a local `<Git.Commit>` result, a handler's synthetic `Git.push` answer
 and another entry's history are each not that, and none of them appears in the
 memory the admission builds.
 
+The checkout the pull request resolved in is part of the question too. Both
+requests naming a placement this entry authenticated says only that each was
+asked somewhere legitimate; a publication this entry made from one of its
+*other* checkouts is a statement about that checkout's branch, which holds its
+own commit under the same name. So a publication authorizes a pull request only
+when the checkout root and common directory it resolved in are the ones the
+publication resolved in, on both the live path and the saved history. The
+publication is still remembered — it simply authorizes nothing here.
+
+
 The last relevant publication decides, because a branch holds whatever was
 published to it last — so an earlier publication of that branch at another
 commit does not keep authorizing work the entry has since published past. The
@@ -7306,7 +7316,30 @@ on continuation and may bind a different array from the same saved snapshot, and
 nothing presents those transformations as saved. A handler that never reaches
 the seam retains nothing and runs again.
 
+A read is acknowledged only once the attempt that produced it has finished. The
+transport's own session and page walk belong to a scope of the read's own, and
+that scope is closed and joined before either outcome is published — otherwise a
+reopen could restore a read whose first run was still unwinding when the journal
+said it was done. Which outcome may be published is read from that attempt's own
+record of what it raised, by object identity: an expected read failure is this
+read's answer and is retained as one, while a cleanup that threw and any failure
+nobody there authored publish nothing at all and activate the run's existing
+fail-stop state. An interruption publishes nothing, which leaves the read
+repeatable — safe in the way repeating a mutation is not.
+
+What may be acknowledged is also held to the whole evidence contract before it
+is published, again when it is restored, and again after the outer dispatch has
+composed over it. A collection whose items no reader can parse, and a checks
+envelope holding an item about a commit other than the head it recorded, are
+answers whose meaning is unknown rather than answers to acknowledge; the head
+question in particular is one the element's own return contract cannot ask,
+because the envelope's head never reaches the binding. Continuing a saved read
+asks the same of its description: the input, the name and the configuration the
+engine's own divergence policy reads all have to be the ones its own question
+produces.
+
 Who is asking travels nowhere public. Each authored read installs a bridge in a
+
 scope of its own, holding the owner and the invocation it authenticated and
 permitting exactly one admitted handoff. Installing it there is what makes
 nesting and concurrency work without coordination: a nested read's bridge is

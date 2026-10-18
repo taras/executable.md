@@ -610,10 +610,13 @@ function* reconcile(
     site: invocation.site,
     repository: inputs.repository,
     origin: record.resolved.origin,
+    checkoutRoot: record.resolved.checkoutRoot,
+    commonDirectory: record.resolved.commonDirectory,
     branch: inputs.branch,
     destinationRef: inputs.destinationRef,
     sourceCommit: inputs.sourceCommit,
   });
+
   return outcome;
 }
 

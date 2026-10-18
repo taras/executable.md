@@ -18,11 +18,15 @@
  * ## What is substituted, and what is not
  *
  * Two leaf boundaries, and nothing else. `git` reaches a bare repository on
- * disk rather than github.com, through Git's own `insteadOf` — so the locator
- * the entry authenticates and fingerprints stays the github.com one a document
- * wrote, which is the whole point of substituting at that layer rather than
- * rewriting the document. And the configured API endpoint points at a forge in
- * this process, which counts what it was asked.
+ * disk rather than github.com, through a `git` on PATH that rewrites that one
+ * locator in its own arguments — so the locator the entry authenticates and
+ * fingerprints stays the github.com one a document wrote, which is the whole
+ * point of substituting at that layer rather than rewriting the document.
+ * Git's own `insteadOf` cannot do it: every remote-touching invocation here
+ * runs with the invoking user's configuration off, which is exactly the
+ * property that stops a document retargeting a publication. And the configured
+ * API endpoint points at a forge in this process, which counts what it was
+ * asked.
  *
  * The CLI, the per-entry factory, the selectors, the publication, the upsert,
  * the three read adapters, the storage and the terminal are all the real ones.
@@ -44,6 +48,13 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import process from "node:process";
 import { creations, gitHubStore, mutations, respond } from "../../../git/tests/support/github.ts";
+import type { Json } from "@executablemd/durable-streams";
+import { GIT_HOST_EFFECT } from "../../../git/src/git-host/effect-type.ts";
+import { parseGitHostReconciliationRecord } from "../../../git/src/git-host/records.ts";
+import { parseClosedPullRequestResult } from "../../../git/src/composition/pull-request-records.ts";
+import { parsePullRequestReadResult } from "../../../git/src/composition/pull-request-read-records.ts";
+import type { PullRequestReadResult, PullRequestResult } from "@executablemd/git/api";
+import { PULL_REQUEST_READ } from "../../../git/src/deno/composition/pull-request-operations.ts";
 import type { GitHubHttpResponse } from "../../../git/src/deno/composition/github.ts";
 import { allocate, showing, showingAcross } from "./pty.ts";
 import type { Pty } from "./pty.ts";
@@ -204,12 +215,31 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     const number = forge.number();
     expect(number).toBeGreaterThan(0);
 
+    // And what it wrote down is what a reopen answers from: one pull request
+    // at this head, and each collection exactly as the host answered it then.
+    const saved = yield* retainedReads(home, 3, second);
+    const opened = openedPullRequest(yield* retained(home));
+    expect(opened?.number).toBe(number);
+    expect(opened?.url).toBe(`${LOCATOR}/pull/${number}`);
+    expect(opened?.state).toBe("open");
+    expect(opened?.headSha).toBe(published);
+    expect(saved.map((collection) => collection.kind)).toEqual(["reviews", "comments", "checks"]);
+
+    expect(saved[0]?.items.map((item) => ("author" in item ? item.author : ""))).toEqual([
+      "first reviewer",
+    ]);
+    expect(saved[1]?.items).toEqual([]);
+    expect(saved[2]?.items).toEqual([]);
+
     yield* reach(second, "[exit]");
     yield* second.type("\r");
     expect(yield* ended(second)).toBe(0);
 
     // ---- The service changes while the person is away. ----
     forge.change();
+    // Which the saved records do not: a second reviewer, a comment and a check
+    // now exist at the host and nothing in this history mentions them.
+
     const mutationsSoFar = forge.mutations();
     const evidenceSoFar = forge.evidenceReads();
 
@@ -234,6 +264,28 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     expect(forge.evidenceReads()).toBe(evidenceSoFar);
     expect(forge.mutations()).toBe(mutationsSoFar);
 
+    // The identity and the three arrays this session restored are the saved
+    // ones, item for item — not the ones the host would answer with now.
+    const restored = yield* retained(home);
+    const again = openedPullRequest(restored);
+    expect(again?.number).toBe(number);
+    expect(again?.url).toBe(`${LOCATOR}/pull/${number}`);
+    expect(again?.headSha).toBe(published);
+    const unchanged = readCollections(restored);
+    expect(unchanged.map((collection) => collection.kind)).toEqual([
+      "reviews",
+      "comments",
+      "checks",
+    ]);
+    expect(unchanged[0]?.items.map((item) => ("author" in item ? item.author : ""))).toEqual([
+      "first reviewer",
+    ]);
+    expect(unchanged[1]?.items).toEqual([]);
+    expect(unchanged[2]?.items).toEqual([]);
+    // The screen is not where this is read: a question's own modal covers the
+    // transcript it was asked over, which is the surface's settled behaviour.
+    // What the document bound is what these records hold.
+
     // ---- Answering performs the one later read, which sees the change. ----
     yield* click(third, "( ) continue");
     yield* showing(third, "[ok]", ACT_MS);
@@ -244,6 +296,28 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     expect(forge.evidenceReads()).toBe(evidenceSoFar + 1);
     expect(forge.mutations()).toBe(mutationsSoFar);
     expect(forge.creations()).toBe(1);
+
+    // The restored reviews are what this session printed: the array it bound
+    // came from the record, and the record is what it was read from.
+    yield* showingAcross(third, '"author": "first reviewer"', ACT_MS);
+
+    // The later read saw the change, and it is a fourth retained read rather
+    // than a rewriting of any of the three. Its own output stands below the
+    // window's fold, so what it holds is read from the record.
+    const afterwards = yield* retainedReads(home, 4, third);
+
+    expect(afterwards.map((collection) => collection.kind)).toEqual([
+      "reviews",
+      "comments",
+      "checks",
+      "reviews",
+    ]);
+    expect(afterwards[3]?.items.map((item) => ("author" in item ? item.author : ""))).toEqual([
+      "first reviewer",
+      "second reviewer",
+    ]);
+    expect(afterwards[0]?.items.length).toBe(1);
+
     // The primary branch was never touched by any of it.
     expect(yield* remoteRef(origin, "main", home)).toBe(primary);
     expect(yield* remoteRef(origin, BRANCH, home)).toBe(published);
@@ -539,6 +613,150 @@ function useForge(origin: string): Operation<Forge> {
       paths: () => [...asked],
     });
   });
+}
+
+/** One retained record of this entry's history, as the file holds it. */
+interface Retained {
+  readonly type: string;
+  readonly status: string;
+  readonly value: unknown;
+}
+
+/**
+ * Where this host keeps the REPL's histories, under the fixture's own HOME.
+ *
+ * Two candidates because the runtime answers it per platform and the pty's
+ * shell exports an XDG root of its own; whichever exists is the one this
+ * journey's sessions wrote to.
+ */
+function* journalRoot(home: string): Operation<string> {
+  const candidates = [
+    join(home, "share", "xmd", "repl"),
+    join(home, "Library", "Application Support", "xmd", "repl"),
+    join(home, ".local", "share", "xmd", "repl"),
+  ];
+  for (const candidate of candidates) {
+    if (yield* exists(candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error(`no REPL history beneath ${home}`);
+}
+
+/**
+ * Every durable record this entry's history holds, read off the file.
+ *
+ * The counters say what reached the Git host; these say what was written down,
+ * which is the half a reopen actually answers from.
+ */
+function* retained(home: string): Operation<Retained[]> {
+  const root = yield* journalRoot(home);
+  // A paired history keeps its entries beside its chat, one directory per
+  // execution; an older single-file one sits at the root. Only the entries are
+  // read: a chat record is not a durable event.
+  const files = yield* entryFiles(root);
+
+  if (files.length === 0) {
+    throw new Error(`no retained history files beneath ${root}`);
+  }
+  const records: Retained[] = [];
+  for (const file of files) {
+    for (const line of (yield* readTextFile(file)).split("\n")) {
+      if (line.trim() === "") {
+        continue;
+      }
+      const parsed: unknown = JSON.parse(line);
+      const event = parsed as {
+        type?: unknown;
+        description?: { type?: unknown };
+        result?: { status?: unknown; value?: unknown };
+      };
+      if (event.type !== "yield" || typeof event.description?.type !== "string") {
+        continue;
+      }
+      records.push({
+        type: event.description.type,
+        status: typeof event.result?.status === "string" ? event.result.status : "",
+        value: event.result?.value,
+      });
+    }
+  }
+  return records;
+}
+
+/**
+ * Wait until this entry's history holds this many retained reads.
+ *
+ * The counters say what the host was asked, which happens before the record
+ * for it is appended. What a reopen answers from is the record, so a row
+ * asserting what was retained waits for the retention rather than for the
+ * request that preceded it.
+ */
+function* retainedReads(home: string, count: number, pty: Pty): Operation<PullRequestReadResult[]> {
+  const deadline = Date.now() + ACT_MS;
+  while (true) {
+    const collections = readCollections(yield* retained(home));
+    if (collections.length >= count) {
+      return collections;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `this entry's history never held ${count} retained reads; it holds ` +
+          `${collections.length}. screen=` +
+          JSON.stringify((yield* pty.shows()).map((one) => one.trimEnd())),
+      );
+    }
+    yield* sleep(250);
+  }
+}
+
+/** Every entries file beneath this root, however the history is laid out. */
+
+function* entryFiles(directory: string): Operation<string[]> {
+  const found: string[] = [];
+  for (const entry of yield* until(readdir(directory, { withFileTypes: true }))) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      found.push(...(yield* entryFiles(path)));
+      continue;
+    }
+    if (entry.name === "entries.jsonl" || /^[^.]+\.jsonl$/.test(entry.name)) {
+      found.push(path);
+    }
+  }
+  return found;
+}
+
+/** The pull request this history says was opened, as the record holds it. */
+
+function openedPullRequest(records: readonly Retained[]): PullRequestResult | undefined {
+  for (const record of records) {
+    if (record.type !== GIT_HOST_EFFECT || record.status !== "ok") {
+      continue;
+    }
+    const reconciliation = parseGitHostReconciliationRecord(record.value);
+    if (reconciliation?.request.kind !== "pull-request") {
+      continue;
+    }
+    return parseClosedPullRequestResult(reconciliation.result, "sha1");
+  }
+  return undefined;
+}
+
+/** Every evidence collection this history retained, in the order it read them. */
+function readCollections(records: readonly Retained[]): PullRequestReadResult[] {
+  const collections: PullRequestReadResult[] = [];
+  for (const record of records) {
+    if (record.type !== PULL_REQUEST_READ || record.status !== "ok") {
+      continue;
+    }
+    const value = record.value;
+    const parsed = value === undefined ? undefined : parsePullRequestReadResult(value as Json);
+    if (parsed !== undefined) {
+      collections.push(parsed);
+    }
+  }
+  return collections;
 }
 
 /** The commit one ref on the bare remote holds. */

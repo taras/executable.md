@@ -22,7 +22,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, resource, scoped, until } from "effection";
+import { ensure, race, resource, scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp, realpath } from "node:fs/promises";
@@ -33,7 +33,8 @@ import type { FilesHandler } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 import { executeInstalled } from "@executablemd/core/host";
-import { collect } from "@executablemd/core";
+import { collect, registerComponents } from "@executablemd/core";
+import type { ComponentRegistration } from "@executablemd/core";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { gitHubSource } from "../src/deno/composition/github.ts";
 import type {
@@ -47,7 +48,13 @@ import type {
 import { PullRequestAPI } from "@executablemd/git/api";
 import type { PullRequestReadResult } from "@executablemd/git/api";
 import { PullRequestOperations } from "../src/composition/pull-request-operations.ts";
-import { parsePullRequestReadRequest } from "../src/composition/pull-request-read-records.ts";
+import {
+  parsePullRequestReadRequest,
+  parsePullRequestReadResult,
+} from "../src/composition/pull-request-read-records.ts";
+import type { CheckEvidence } from "../src/composition/pull-request-read-records.ts";
+
+import { PullRequestReadExecution } from "../src/composition/pull-request-read-execution.ts";
 import { replRepositoryInstallation } from "../src/deno/retained-repository/provider.ts";
 import { admitReplRepositoryHistory } from "../src/retained-repository/admission.ts";
 import { PULL_REQUEST_READ } from "../src/deno/composition/pull-request-operations.ts";
@@ -168,6 +175,10 @@ interface Run {
 
 interface RunOptions {
   readonly owner?: string;
+  /** Registrations this row installs beside the inherited ones. */
+  readonly shadowing?: readonly ComponentRegistration[];
+  /** Whether this row installs the entry capability at all. */
+  readonly entry?: boolean;
   /** What this deployment authorizes reading, when a row narrows it. */
   readonly allowed?: readonly string[];
   readonly between?: () => Operation<void>;
@@ -230,7 +241,16 @@ function run(
         yield* collect(
           yield* executeInstalled({ path, stream, includes: [fixture.root] }, [
             { admissions: [(retained) => admitReplRepositoryHistory(retained)] },
-            installation,
+            ...(options.entry === false ? [] : [installation]),
+            ...(options.shadowing === undefined
+              ? []
+              : [
+                  {
+                    *install(): Operation<void> {
+                      yield* registerComponents([...(options.shadowing ?? [])]);
+                    },
+                  },
+                ]),
           ]),
         ),
       );
@@ -279,6 +299,76 @@ function replaying(prefix: readonly DurableEvent[]): InMemoryStream {
   return new InMemoryStream(
     [...prefix].filter((event) => !(event.type === "close" && event.coroutineId === "root")),
   );
+}
+
+/** The retained reads that hold a collection, as opposed to a failure. */
+function settled(events: readonly DurableEvent[]): DurableEvent[] {
+  return events.filter((event) => event.type === "yield" && event.result.status === "ok");
+}
+
+/** The collection one settled read retained, read back rather than asserted. */
+function collectionOf(event: DurableEvent): PullRequestReadResult | undefined {
+  if (event.type !== "yield" || event.result.status !== "ok") {
+    return undefined;
+  }
+  const value = event.result.value;
+  return value === undefined ? undefined : parsePullRequestReadResult(value);
+}
+
+/** One check run, about whichever commit the row says it is about. */
+function check(headSha: string): CheckEvidence {
+  return {
+    kind: "check-run",
+    id: "1",
+    headSha,
+    name: "build",
+    status: "completed",
+    conclusion: "success",
+    url: null,
+    startedAt: null,
+    completedAt: null,
+    title: null,
+    summary: null,
+    text: null,
+  };
+}
+
+/**
+ * An adapter whose read opens something its own cleanup cannot close.
+ *
+ * It admits the read, answers through the seam — or fails there — and then its
+ * teardown throws. That is the one way an attempt ends in a state its outcome
+ * cannot be read from, and it is deliberately the same shape for both.
+ */
+function answering(answer: () => void): Operation<void> {
+  return PullRequestAPI.around({
+    *read([url, options]): Operation<PullRequestReadResult> {
+      return yield* PullRequestReadExecution.operations.perform(
+        { url, kind: options.kind, provider: options.provider },
+        function* (): Operation<PullRequestReadResult> {
+          yield* resource<null>(function* (provide) {
+            yield* ensure(function* (): Operation<void> {
+              throw new Error("the read's own cleanup failed");
+            });
+            yield* provide(null);
+          });
+          answer();
+          return { kind: "reviews", items: [] };
+        },
+      );
+    },
+  });
+}
+
+/** Wait for this signal, and fail the row rather than hang if it never comes. */
+function* within(signal: Operation<void>, sentence: string): Operation<void> {
+  yield* race([
+    signal,
+    (function* (): Operation<never> {
+      yield* sleep(30_000);
+      throw new Error(sentence);
+    })(),
+  ]);
 }
 
 describe("one entry's evidence reads", () => {
@@ -612,5 +702,471 @@ describe("one entry's evidence reads", () => {
       { owner: OTHER_OWNER },
     );
     expect(borrowed.refusal).toBeDefined();
+  });
+
+  it("V7f: a paged collection is retained whole, and restores whole", function* () {
+    const fixture = yield* useFixture();
+    // Two pages, so the answer is only complete once the walk has finished
+    // both. Nothing partial may be retained as the collection.
+    const host = server({
+      [PULL]: { body: pullRequestPayload() },
+      [REVIEWS]: {
+        body: JSON.stringify([review(1)]),
+        link: `<${ENDPOINT}${REVIEWS}?page=2>; rel="next"`,
+      },
+      [`${REVIEWS}?page=2`]: { body: JSON.stringify([review(2)]) },
+    });
+    const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n<Json value={reviews} />`;
+    const stream = new InMemoryStream();
+    const walked = yield* run(fixture, document, stream, host);
+
+    expect(walked.refusal).toBeUndefined();
+    expect(walked.output).toContain("review 1");
+    expect(walked.output).toContain("review 2");
+    const retained = reads(walked.events);
+    expect(retained.length).toBe(1);
+    expect(collectionOf(retained[0]!)?.items.length).toBe(2);
+    expect(reviewCalls(host)).toBe(2);
+
+    // And the whole collection comes back without walking a page.
+    const again = yield* run(fixture, document, replaying(walked.events), host);
+    expect(again.refusal).toBeUndefined();
+    expect(again.output).toContain("review 1");
+    expect(again.output).toContain("review 2");
+    expect(reviewCalls(host)).toBe(2);
+  });
+
+  it("V7g: an answer about another subject is refused before any success", function* () {
+    const fixture = yield* useFixture();
+    // The collection answers with a review belonging to pull request 9 while
+    // the read asked about 7. The adapter checks the subject it was handed
+    // rather than accepting it, so this never reaches retention as an answer.
+    const host = server({
+      [PULL]: { body: pullRequestPayload() },
+      [REVIEWS]: { body: JSON.stringify([review(1, 9)]) },
+    });
+    const stream = new InMemoryStream();
+    const wrong = yield* run(
+      fixture,
+      `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n<Json value={reviews} />`,
+      stream,
+      host,
+    );
+
+    expect(wrong.refusal).toBeDefined();
+    expect(wrong.output).not.toContain("review 1");
+    const retained = reads(wrong.events);
+    expect(settled(retained)).toEqual([]);
+    expect(retained.length).toBe(1);
+    expect(retained[0]?.type === "yield" && retained[0].result.status).toBe("err");
+  });
+
+  it("V7h: a checks answer about another commit is refused before any success", function* () {
+    const fixture = yield* useFixture();
+    const host = reviewing();
+    const stream = new InMemoryStream();
+    // An adapter that admitted the read and then answered with an envelope for
+    // one head holding a check about another. The entry owns what happens
+    // after the seam, so this is its refusal to make: an envelope that is two
+    // answers at once says nothing certain about either commit.
+    const inconsistent = yield* run(
+      fixture,
+      `<PullRequest.Checks url="${SUBJECT_URL}" as="checks" />\n<Json value={checks} />`,
+      stream,
+      host,
+      {
+        *between(): Operation<void> {
+          yield* PullRequestAPI.around({
+            *read([url, options]): Operation<PullRequestReadResult> {
+              return yield* PullRequestReadExecution.operations.perform(
+                { url, kind: options.kind, provider: options.provider },
+                // deno-lint-ignore require-yield
+                function* (): Operation<PullRequestReadResult> {
+                  return { kind: "checks", headSha: HEAD, items: [check("b".repeat(40))] };
+                },
+              );
+            },
+          });
+        },
+      },
+    );
+
+    expect(inconsistent.refusal).toBeDefined();
+    expect(inconsistent.output).not.toContain("build");
+    const retained = reads(inconsistent.events);
+    // Refused before success: the position holds this read's own failure and
+    // no collection at all.
+    expect(settled(retained)).toEqual([]);
+    expect(retained.length).toBe(1);
+  });
+
+  it("V7i: a duplicate admitted handoff and a stale one each run no second read", function* () {
+    const fixture = yield* useFixture();
+    const host = reviewing();
+    const stream = new InMemoryStream();
+    // A middleware above the entry's own policy that offers the same admitted
+    // read twice. The first handoff is this read's; the second would retain a
+    // second answer under one identity.
+    const duplicated = yield* run(
+      fixture,
+      `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />`,
+      stream,
+      host,
+      {
+        *between(): Operation<void> {
+          yield* PullRequestReadExecution.around({
+            *perform([admitted, transport], next): Operation<PullRequestReadResult> {
+              yield* next(admitted, transport);
+              return yield* next(admitted, transport);
+            },
+          });
+        },
+      },
+    );
+
+    expect(duplicated.refusal).toBeDefined();
+    expect(reads(duplicated.events).length).toBe(1);
+    // The second handoff asked the host nothing: it was refused before a
+    // session or a record existed.
+    expect(reviewCalls(host)).toBe(1);
+
+    // And one offered while the read that owns it is already unwinding reaches
+    // the same refusal, from the other guard.
+    const late = reviewing();
+    const stale = yield* run(
+      fixture,
+      `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />`,
+      new InMemoryStream(),
+      late,
+      {
+        *between(): Operation<void> {
+          yield* PullRequestReadExecution.around({
+            *perform([admitted, transport], next): Operation<PullRequestReadResult> {
+              const answered = yield* next(admitted, transport);
+              // Registered in the read's own scope, so it runs while the
+              // bridge is still installed and the read that installed it has
+              // finished.
+              yield* ensure(function* (): Operation<void> {
+                yield* next(admitted, transport);
+              });
+              return answered;
+            },
+          });
+        },
+      },
+    );
+
+    expect(stale.refusal).toBeDefined();
+    expect(reviewCalls(late)).toBe(1);
+  });
+
+  it("V7j: the final answer is validated after outer middleware, before it binds", function* () {
+    const fixture = yield* useFixture();
+    const host = reviewing();
+    const stream = new InMemoryStream();
+    // The provider answers soundly and a handler above the entry rewrites what
+    // it answered: same envelope head, an item about another commit. Each item
+    // is well formed on its own, so the element's own return contract accepts
+    // it — the question it cannot ask is whether the collection agrees with
+    // the head it was read at, and that is this boundary's to ask.
+    const rewritten = yield* run(
+      fixture,
+      `<PullRequest.Checks url="${SUBJECT_URL}" as="checks" />\n<Json value={checks} />`,
+      stream,
+      host,
+      {
+        *between(): Operation<void> {
+          yield* PullRequestOperations.around({
+            *read([invocation], next): Operation<PullRequestReadResult> {
+              const answered = yield* next(invocation);
+              return answered.kind === "checks"
+                ? { kind: "checks", headSha: answered.headSha, items: [check("b".repeat(40))] }
+                : answered;
+            },
+          });
+          yield* PullRequestAPI.around({
+            *read([url, options]): Operation<PullRequestReadResult> {
+              return yield* PullRequestReadExecution.operations.perform(
+                { url, kind: options.kind, provider: options.provider },
+                // deno-lint-ignore require-yield
+                function* (): Operation<PullRequestReadResult> {
+                  return { kind: "checks", headSha: HEAD, items: [check(HEAD)] };
+                },
+              );
+            },
+          });
+        },
+      },
+    );
+
+    expect(rewritten.refusal).toBeDefined();
+    expect(rewritten.output).not.toContain("build");
+    // What the provider answered was retained, and it is sound; what the
+    // handler made of it never became a binding.
+    const retained = reads(rewritten.events);
+    expect(retained.length).toBe(1);
+    const collection = collectionOf(retained[0]!);
+    expect(collection?.kind === "checks" && collection.headSha).toBe(HEAD);
+    expect(collection?.items.length).toBe(1);
+  });
+
+  it("V8b: cancelling a blocked read publishes nothing and joins its cleanup", function* () {
+    const fixture = yield* useFixture();
+    const host = reviewing();
+    const reached = withResolvers<void>();
+    const held = withResolvers<void>();
+    const session = { opened: false, released: false };
+    const stream = new InMemoryStream();
+
+    yield* scoped(function* (): Operation<void> {
+      const task = yield* spawn(() =>
+        run(fixture, `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />`, stream, host, {
+          *between(): Operation<void> {
+            yield* PullRequestAPI.around({
+              *read([url, options]): Operation<PullRequestReadResult> {
+                return yield* PullRequestReadExecution.operations.perform(
+                  { url, kind: options.kind, provider: options.provider },
+                  function* (): Operation<PullRequestReadResult> {
+                    yield* resource<null>(function* (provide) {
+                      session.opened = true;
+                      yield* ensure(() => {
+                        session.released = true;
+                      });
+                      yield* provide(null);
+                    });
+                    reached.resolve();
+                    yield* held.operation;
+                    return { kind: "reviews", items: [] };
+                  },
+                );
+              },
+            });
+          },
+        }),
+      );
+      yield* within(reached.operation, "the read never opened its session");
+      const halting = yield* spawn(() => task.halt());
+      held.resolve();
+      yield* halting;
+    });
+
+    // The session this read opened was released, and the halt waited for it.
+    expect(session.opened).toBe(true);
+    expect(session.released).toBe(true);
+    const events = yield* stream.readAll();
+    // An interrupted read invented no outcome, so it is repeatable.
+    expect(reads(events).length).toBe(0);
+    expect(events.filter((event) => event.type === "close")).toEqual([]);
+  });
+
+  it("V8c: cancelling a read still acquiring its session releases it", function* () {
+    const fixture = yield* useFixture();
+    const host = reviewing();
+    const reached = withResolvers<void>();
+    const held = withResolvers<void>();
+    const session = { opened: false, released: false };
+    const stream = new InMemoryStream();
+
+    yield* scoped(function* (): Operation<void> {
+      const task = yield* spawn(() =>
+        run(fixture, `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />`, stream, host, {
+          *between(): Operation<void> {
+            yield* PullRequestAPI.around({
+              *read([url, options]): Operation<PullRequestReadResult> {
+                return yield* PullRequestReadExecution.operations.perform(
+                  { url, kind: options.kind, provider: options.provider },
+                  function* (): Operation<PullRequestReadResult> {
+                    // Still being acquired when the halt arrives: the delivery
+                    // this scope is owed has not happened yet. Its release is
+                    // registered before it blocks, because a registration made
+                    // after a halt has begun is not one the scope will honour.
+                    yield* resource<null>(function* (provide) {
+                      yield* ensure(() => {
+                        session.released = true;
+                      });
+                      reached.resolve();
+                      yield* held.operation;
+                      session.opened = true;
+                      yield* provide(null);
+                    });
+
+                    return { kind: "reviews", items: [] };
+                  },
+                );
+              },
+            });
+          },
+        }),
+      );
+      yield* within(reached.operation, "the read never began acquiring its session");
+      const halting = yield* spawn(() => task.halt());
+      held.resolve();
+      yield* halting;
+    });
+
+    // The acquisition finished after the halt began, and the halt did not
+    // settle until what it delivered was released.
+    expect(session.opened).toBe(true);
+    expect(session.released).toBe(true);
+    const events = yield* stream.readAll();
+    expect(reads(events).length).toBe(0);
+    expect(events.filter((event) => event.type === "close")).toEqual([]);
+  });
+
+  it("V8d: a cleanup that throws after a successful read publishes nothing", function* () {
+    const fixture = yield* useFixture();
+    const host = reviewing();
+    const stream = new InMemoryStream();
+    const failing = yield* run(
+      fixture,
+      `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n<Json value={reviews} />`,
+      stream,
+      host,
+      { between: () => answering(() => undefined) },
+    );
+
+    expect(failing.refusal).toBeDefined();
+    expect(failing.output).not.toContain("reviewer");
+    // The read answered, but the attempt that produced the answer did not
+    // finish. Nothing is acknowledged for a position whose work is in an
+    // unknown state.
+    expect(reads(failing.events).length).toBe(0);
+    expect(failing.events.filter((event) => event.type === "close")).toEqual([]);
+  });
+
+  it("V8e: a cleanup that throws after an expected failure publishes nothing", function* () {
+    const fixture = yield* useFixture();
+    const host = reviewing();
+    const stream = new InMemoryStream();
+    const failing = yield* run(
+      fixture,
+      `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n<Json value={reviews} />`,
+      stream,
+      host,
+      {
+        between: () =>
+          answering(() => {
+            throw new Error("the collection could not be read");
+          }),
+      },
+    );
+
+    expect(failing.refusal).toBeDefined();
+    // The read's own failure would have been retained had the attempt ended
+    // cleanly. It did not, so this position holds nothing rather than a
+    // failure whose cleanup is unaccounted for.
+    expect(reads(failing.events).length).toBe(0);
+    expect(failing.events.filter((event) => event.type === "close")).toEqual([]);
+  });
+
+  it("V6c: a failed read saved under another owner is refused before replay", function* () {
+    const fixture = yield* useFixture();
+    // A walk that cannot finish, so what the history holds at that position is
+    // a failed read: no collection, and a description that still says who
+    // asked.
+    const host = server({
+      [PULL]: { body: pullRequestPayload() },
+      [REVIEWS]: {
+        body: JSON.stringify([review(1)]),
+        link: `<${ENDPOINT}${REVIEWS}?page=2>; rel="next"`,
+      },
+      [`${REVIEWS}?page=2`]: { status: 500, body: "{}" },
+    });
+    const stream = new InMemoryStream();
+    const incomplete = yield* run(
+      fixture,
+      `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />`,
+      stream,
+      host,
+    );
+    expect(incomplete.refusal).toBeDefined();
+    const retained = reads(incomplete.events);
+    expect(retained.length).toBe(1);
+    expect(retained[0]?.type === "yield" && retained[0].result.status).toBe("err");
+
+    // Offered to another entry. A failure retains no result to hold to
+    // anything, and its description is still held to this entry's owner.
+    const borrowed = yield* run(
+      fixture,
+      `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />`,
+      replaying(incomplete.events),
+      host,
+      { owner: OTHER_OWNER },
+    );
+    expect(borrowed.refusal).toBeDefined();
+    expect(borrowed.refusal).toContain("written under another owner");
+  });
+
+  it("V6e: a saved read whose configuration is not its question's is refused", function* () {
+    const fixture = yield* useFixture();
+    const host = reviewing();
+    const stream = new InMemoryStream();
+    const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />`;
+    const first = yield* run(fixture, document, stream, host);
+    expect(first.refusal).toBeUndefined();
+
+    // A description carries the configuration beside the name, and the engine's
+    // own divergence policy reads it. One edited to say another question was
+    // asked is a record that does not describe the read beside it, however
+    // correct its name and its value are.
+    const edited = first.events.map((event) =>
+      event.type === "yield" && event.description.type === PULL_REQUEST_READ
+        ? {
+            ...event,
+            description: { ...event.description, configuration: "another-question" },
+          }
+        : event,
+    );
+    const resumed = yield* run(fixture, document, replaying(edited), host);
+    expect(resumed.refusal).toBeDefined();
+    expect(resumed.refusal).toContain("configuration");
+    // Refused before replay, so the read was never performed again either.
+    expect(reviewCalls(host)).toBe(1);
+  });
+
+  it("V9b: the entry's components are ordinary registrations over a kept one", function* () {
+    const fixture = yield* useFixture();
+
+    // The first-party registration is kept: this entry's own component is an
+    // ordinary registration in the scope the execution mints for it, shadowing
+    // the inherited one rather than replacing or retiring it. So a host that
+    // registers the same name in the *inherited* scope is refused by the
+    // ordinary rule, with no special precedence anywhere.
+    const collided = yield* run(
+      fixture,
+      `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />`,
+      new InMemoryStream(),
+      reviewing(),
+      {
+        shadowing: [
+          {
+            name: "PullRequest.Reviews",
+            origin: "test",
+            props: { type: "object", additionalProperties: true },
+            // deno-lint-ignore require-yield
+            *fn(): Operation<string> {
+              return "shadowed";
+            },
+          },
+        ],
+      },
+    );
+    expect(collided.refusal).toContain("Register the name once per scope");
+
+    // And the kept registration has no identity authenticator of its own: with
+    // the entry capability not installed at all, the same element reaches the
+    // ordinary missing-provider refusal and retains nothing.
+    const host = reviewing();
+    const stream = new InMemoryStream();
+    const kept = yield* run(
+      fixture,
+      `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />`,
+      stream,
+      host,
+      { entry: false },
+    );
+    expect(kept.refusal).toBeDefined();
+    expect(reads(yield* stream.readAll()).length).toBe(0);
+    expect(host.requests).toEqual([]);
   });
 });

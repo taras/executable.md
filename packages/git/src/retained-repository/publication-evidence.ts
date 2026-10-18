@@ -14,9 +14,12 @@
  * nothing yet. A receipt belonging to another entry's segment, a synthetic
  * `Git.push` answer a handler returned, a local `<Git.Commit>` result and a
  * pull-request receipt are all records that are not publications of this
- * branch — so none of them appears here at all. The admission beside this
- * module is what proves the pair; this module is what remembers the proven ones
- * and decides which of them a pull request may rest on.
+ * branch — so none of them appears here at all. And a publication this entry
+ * made from one of its *other* checkouts is a publication of that checkout's
+ * branch: it is remembered, and it authorizes nothing here. The admission
+ * beside this module is what proves the pair; this module is what remembers the
+ * proven ones and decides which of them a pull request may rest on.
+
  *
  * ## Reached, not merely present
  *
@@ -53,7 +56,7 @@ import { sameRepositoryIdentity, type RepositoryIdentity } from "../composition/
  * restores are the same publication when they were asked for at the same
  * invocation.
  */
-export interface ReplPublication {
+export interface ReplPublication extends ReplPublicationCheckout {
   /** The invocation this publication was asked for at. */
   readonly site: string;
   readonly repository: RepositoryIdentity;
@@ -63,6 +66,19 @@ export interface ReplPublication {
   readonly destinationRef: string;
   /** The commit that was published, which is what a pull request's head must be. */
   readonly sourceCommit: string;
+}
+
+/**
+ * Which of this entry's checkouts a publication was resolved in.
+ *
+ * Two members rather than one, because a worktree and the repository it belongs
+ * to share a common directory and are still different checkouts, while two
+ * clones of the same remote share neither. Both have to agree for one
+ * publication to be the other's.
+ */
+export interface ReplPublicationCheckout {
+  readonly checkoutRoot: string;
+  readonly commonDirectory: string;
 }
 
 /** One acknowledged publication, with the durable order it was acknowledged in. */
@@ -93,10 +109,15 @@ export interface ReplPublicationMemory {
   /**
    * Admit this pull request against the publications reached so far.
    *
+   * The checkout the pull request resolved in is part of the question. A
+   * publication this entry made from another of its checkouts is a statement
+   * about that checkout's branch, and authorizing a pull request with it would
+   * let one authenticated worktree speak for work another one published.
+   *
    * Refuses rather than answers: the two closed words are the ones the ordinary
    * evidence scan uses, so one vocabulary describes both paths.
    */
-  admit(inputs: PullRequestInputs, origin: string): void;
+  admit(inputs: PullRequestInputs, origin: string, checkout: ReplPublicationCheckout): void;
 }
 
 /** This entry's publication memory, empty until a snapshot is admitted. */
@@ -127,7 +148,7 @@ export function createReplPublicationMemory(): ReplPublicationMemory {
       });
     },
 
-    admit(inputs, origin) {
+    admit(inputs, origin, checkout) {
       const destinationRef = destinationRefFor(inputs.headBranch);
       const relevant = Array.from(reached.values())
         .filter(
@@ -135,17 +156,20 @@ export function createReplPublicationMemory(): ReplPublicationMemory {
             publication.destinationRef === destinationRef &&
             publication.branch === inputs.headBranch &&
             publication.origin === origin &&
+            publication.checkoutRoot === checkout.checkoutRoot &&
+            publication.commonDirectory === checkout.commonDirectory &&
             sameRepositoryIdentity(publication.repository, inputs.repository),
         )
+
         .sort((left, right) => left.rank - right.rank);
       const last = relevant.at(-1);
       if (last === undefined) {
         throw new PullRequestAdmissionError(
           "missing-push-evidence",
           "this entry holds no acknowledged <Git.Push /> of the branch and commit it would open " +
-            "a pull request from. Write <Git.Push /> before <PullRequest>: a pull request names " +
-            "work this entry published, and publishing it is an explicit act. Nothing was " +
-            "contacted.",
+            "a pull request from, in the checkout it is opening it in. Write <Git.Push /> " +
+            "before <PullRequest>: a pull request names work this entry published, and " +
+            "publishing it is an explicit act. Nothing was contacted.",
         );
       }
       if (last.sourceCommit !== inputs.headSha) {

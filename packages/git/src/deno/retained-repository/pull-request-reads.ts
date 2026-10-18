@@ -58,8 +58,17 @@
 
 import { scoped } from "effection";
 import type { Operation } from "effection";
-import { createDurableOperation } from "@executablemd/durable-streams";
-import type { DurableEvent, Json } from "@executablemd/durable-streams";
+import { createDurableOperation, serializeError } from "@executablemd/durable-streams";
+import type {
+  AbandonedRetainedHistory,
+  ActivateDurabilityFailure,
+  DurableEvent,
+  Json,
+  JournalProvenance,
+  LiveDurableOperationCoordinator,
+  Result as DurableResult,
+} from "@executablemd/durable-streams";
+
 import { documented, formDispatcher } from "@executablemd/core";
 import type { ComponentInvocation, FunctionComponent } from "@executablemd/core";
 import type {
@@ -93,14 +102,19 @@ import type {
   PullRequestReadExecutionApi,
 } from "../../composition/pull-request-read-execution.ts";
 import {
+  parsePullRequestReadResult,
   pullRequestReadEnvelopeJson,
+  pullRequestReadHeadsAgree,
   readRequest,
 } from "../../composition/pull-request-read-records.ts";
+
 import {
   admitReplPullRequestReadRequest,
   admitReplPullRequestReadResult,
+  replPullRequestReadConfigurationRefusal,
   replPullRequestReadNameRefusal,
 } from "../../retained-repository/pull-request-read-admission.ts";
+
 import type {
   PullRequestReadKind,
   PullRequestReadRequest,
@@ -217,17 +231,18 @@ function readingBody(
       try {
         // The ordinary dispatch, so every public handler a document or a plugin
         // composed still answers, transforms, refuses and delegates. What comes
-        // back is whatever composed above the provider, and it is held to the
-        // collection this element asked for before any of it binds.
-        return pullRequestReadBinding(
-          yield* PullRequestOperations.operations.read({
-            url: target.url,
-            kind,
-            provider: target.provider,
-          }),
+        // back is whatever composed above the provider — which is why it is
+        // held to the whole evidence contract here and not only to the
+        // collection: the outer result is the value a document binds, and a
+        // handler that rewrote it into something no reader can parse must not
+        // reach the binding merely because the saved answer underneath it was
+        // sound.
+        const answered = yield* PullRequestOperations.operations.read({
+          url: target.url,
           kind,
-          element,
-        );
+          provider: target.provider,
+        });
+        return pullRequestReadBinding(validRead(answered, kind, element).result, kind, element);
       } finally {
         bridge.open = false;
       }
@@ -303,11 +318,9 @@ function retaining(
  * is not the evidence this read produces is refused rather than bound, and only
  * `items` ever becomes the component's binding.
  *
- * The transport's own session and pagination belong to the callback, so they are
- * finished and joined before this position publishes anything. An expected
- * failure after admission is retained as this read's own and binds no partial
- * array; an interruption before acknowledgement leaves the read repeatable,
- * which is safe in the way repeating a mutation is not.
+ * An expected failure after admission is retained as this read's own and binds
+ * no partial array; an interruption before acknowledgement leaves the read
+ * repeatable, which is safe in the way repeating a mutation is not.
  */
 function* retain(
   request: PullRequestReadRequest,
@@ -315,19 +328,144 @@ function* retain(
   transport: () => Operation<PullRequestReadResult>,
 ): Operation<PullRequestReadResult> {
   const description = yield* describePullRequestRead(request);
-  const stored: unknown = yield createDurableOperation<Json>(description, function* () {
-    const answered = yield* transport();
-    if (answered.kind !== request.kind) {
-      throw new PullRequestReadError(
-        "protocol",
-        element,
-        "the selected provider answered with a different collection than the one this element " +
-          "asked for.",
-      );
-    }
-    return pullRequestReadEnvelopeJson(answered);
-  });
-  return retainedPullRequestRead(stored, request.kind, element);
+  // One settlement per attempt, reachable only from the two halves of this
+  // operation. Nothing a provider, a handler or a document holds can put an
+  // answer in it.
+  const settlement: ReadSettlement = {};
+  const stored: unknown = yield createDurableOperation<Json>(
+    description,
+    function* (): Operation<Json> {
+      try {
+        const answered = yield* transport();
+        return validRead(answered, request.kind, element).envelope;
+      } catch (error) {
+        // What this attempt itself produced, held by object identity so the
+        // coordinator can tell it from whatever the unwinding raises.
+        settlement.failure = error;
+        throw error;
+      }
+    },
+    { coordinator: readCoordinator(settlement) },
+  );
+  return restoredRead(stored, request.kind, element);
+}
+
+/** What one read's own attempt produced, as only this operation can see it. */
+interface ReadSettlement {
+  /** The failure the admitted read itself raised, by object identity. */
+  failure?: unknown;
+}
+
+/**
+ * This read's attempt boundary: finish, tear down, join, then acknowledge.
+ *
+ * A read opens things — an authenticated session, a page walk, whatever a
+ * provider acquires to answer. Publishing while those are still open would
+ * acknowledge an answer the attempt that produced it has not finished
+ * producing, and a reopen would then restore a read whose first run was still
+ * unwinding when the journal said it was done. So the attempt runs in a scope
+ * of its own and the scope is closed before either outcome is published.
+ *
+ * Which outcome may be published is read from this attempt's own record of what
+ * it raised, by object identity — never from the error's name or class, which
+ * anything in the dispatch above could imitate. An expected read failure is
+ * this read's answer and is retained as one. A cleanup that threw while the
+ * attempt unwound, or any failure nobody here authored, is the boundary failing
+ * rather than a finding: it publishes nothing and activates the run's existing
+ * fail-stop state, because a live operation that appended nothing would
+ * otherwise leave the next one to append at this one's position. An
+ * interruption publishes nothing at all.
+ */
+function readCoordinator(settlement: ReadSettlement): LiveDurableOperationCoordinator {
+  return {
+    *run<T extends Json>(
+      execute: () => Operation<T>,
+      publish: (result: DurableResult) => Operation<void>,
+      activateFailure: ActivateDurabilityFailure,
+      _journalProvenance: JournalProvenance | undefined,
+      _abandoned: AbandonedRetainedHistory,
+    ): Operation<DurableResult> {
+      let result: DurableResult;
+      try {
+        result = { status: "ok", value: yield* scoped(execute) };
+      } catch (error) {
+        if (error !== settlement.failure) {
+          throw activateFailure(
+            error instanceof Error ? error : new Error("the evidence read boundary failed"),
+          );
+        }
+        result = { status: "err", error: serializeError(errorOf(error)) };
+      }
+      yield* publish(result);
+      return result;
+    },
+  };
+}
+
+function errorOf(value: unknown): Error {
+  return value instanceof Error ? value : new Error("the evidence read failed");
+}
+
+/**
+ * The envelope this answer retains, or this read's own refusal that it is none.
+ *
+ * Held to the whole contract before a success may be published, and held to it
+ * through the codec that writes the record rather than over the object in hand:
+ * what has to be the evidence that read produces is the value this position
+ * would append. An item shape no reader can parse and a checks collection
+ * describing a commit other than the head it was read at are both answers whose
+ * meaning is unknown, and an unknown answer is not one to acknowledge.
+ */
+function validRead(
+  answered: PullRequestReadResult,
+  kind: PullRequestReadKind,
+  element: string,
+): { readonly result: PullRequestReadResult; readonly envelope: Json } {
+  if (answered.kind !== kind) {
+    throw new PullRequestReadError(
+      "protocol",
+      element,
+      "the selected provider answered with a different collection than the one this element " +
+        "asked for.",
+    );
+  }
+  const envelope = pullRequestReadEnvelopeJson(answered);
+  const parsed = parsePullRequestReadResult(envelope);
+  if (parsed === undefined || parsed.kind !== kind) {
+    throw new PullRequestReadError(
+      "protocol",
+      element,
+      "the answer it received is not the evidence that read produces, so nothing was retained " +
+        "for it.",
+    );
+  }
+  if (!pullRequestReadHeadsAgree(parsed)) {
+    throw new PullRequestReadError(
+      "protocol",
+      element,
+      "the checks it received include one about a commit other than the head they were read " +
+        "at, so what they say about that commit is unknown and nothing was retained for it.",
+    );
+  }
+  return { result: parsed, envelope };
+}
+
+/** The retained value this read restores, held to the same whole contract. */
+function restoredRead(
+  stored: unknown,
+  kind: PullRequestReadKind,
+  element: string,
+): PullRequestReadResult {
+  const result = retainedPullRequestRead(stored, kind, element);
+  if (!pullRequestReadHeadsAgree(result)) {
+    throw new PullRequestReadError(
+      "protocol",
+      element,
+      "what this entry retained for it includes a check about a commit other than the head it " +
+        "recorded, so what it says about that commit is unknown.",
+    );
+  }
+  return result;
 }
 
 /**
@@ -345,12 +483,17 @@ export function replPullRequestReadAdmission(owner: string): JournalAdmission {
         continue;
       }
       const request = admitReplPullRequestReadRequest(owner, event.description["input"]);
-      // The name alone, not the whole description: this runs over a retained
-      // history before any element is expanding, and the source position a
-      // description also carries is only available there.
-      if (event.description.name !== pullRequestReadName(request).name) {
+      // The name and the configuration, but not the whole description: this
+      // runs over a retained history before any element is expanding, and the
+      // source position a description also carries is only available there.
+      const named = pullRequestReadName(request);
+      if (event.description.name !== named.name) {
         throw replPullRequestReadNameRefusal();
       }
+      if (event.description.configuration !== named.configuration) {
+        throw replPullRequestReadConfigurationRefusal();
+      }
+
       if (event.result.status !== "ok") {
         // A refused read retains no result of its own: its outcome is the
         // durable operation's failed result, and there is nothing in it to hold

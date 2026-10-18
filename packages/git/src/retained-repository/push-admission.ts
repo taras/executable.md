@@ -240,6 +240,12 @@ type ReplExternalRequest =
  * publication of `A` to that same branch does not authorize it — the branch
  * holds whatever was published to it last. Finding any exact match anywhere in
  * history would let a superseded publication keep authorizing work.
+ *
+ * Relevant includes the checkout. Both requests naming a placement this entry
+ * authenticated says only that each was asked somewhere legitimate; what
+ * authorizes this pull request is a publication from the checkout it actually
+ * resolved in, because another of this entry's checkouts has its own branch of
+ * that name holding its own commit.
  */
 function publicationAuthorizes(
   record: ReplPullRequestRequestRecord,
@@ -251,8 +257,11 @@ function publicationAuthorizes(
       (publication) =>
         publication.branch === inputs.headBranch &&
         publication.origin === record.resolved.origin &&
+        publication.checkoutRoot === record.resolved.checkoutRoot &&
+        publication.commonDirectory === record.resolved.commonDirectory &&
         sameRepositoryIdentity(publication.repository, inputs.repository),
     )
+
     .sort((left, right) => left.rank - right.rank);
   const last = relevant.at(-1);
   return last !== undefined && last.sourceCommit === inputs.headSha;
@@ -675,10 +684,13 @@ function* admitOutcome(
       rank: publications.length,
       repository: inputs.repository,
       origin: request.record.resolved.origin,
+      checkoutRoot: request.record.resolved.checkoutRoot,
+      commonDirectory: request.record.resolved.commonDirectory,
       branch: inputs.branch,
       destinationRef: inputs.destinationRef,
       sourceCommit: inputs.sourceCommit,
     });
+
     return;
   }
   if (parsePullRequestRecord(settled, request.record.resolved.inputs) === undefined) {

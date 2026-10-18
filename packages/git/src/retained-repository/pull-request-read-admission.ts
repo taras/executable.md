@@ -35,7 +35,9 @@ import type { Json } from "@executablemd/durable-streams";
 import {
   parsePullRequestReadRequest,
   parsePullRequestReadResult,
+  pullRequestReadHeadsAgree,
 } from "../composition/pull-request-read-records.ts";
+
 import type {
   PullRequestReadRequest,
   PullRequestReadResult,
@@ -108,6 +110,24 @@ export function replPullRequestReadNameRefusal(): ReplPullRequestReadHistoryErro
 }
 
 /**
+ * The refusal a read whose saved configuration is not its question's gets.
+ *
+ * A description carries the configuration beside the name, and the two are not
+ * redundant: the name a position publishes under is the invocation plus the
+ * fingerprint, so a record moved to another position keeps a fingerprint the
+ * name no longer exposes. Both are asked, because the engine's own divergence
+ * policy reads the configuration and a record whose configuration disagrees
+ * with the question beside it describes two different reads.
+ */
+export function replPullRequestReadConfigurationRefusal(): ReplPullRequestReadHistoryError {
+  return readRefusal(
+    "request-fingerprint",
+    "a retained evidence read is journaled with a configuration that is not the one its own " +
+      "question produces, so the record and the read it describes do not match.",
+  );
+}
+
+/**
  * The collection one settled read retained, or the refusal that it retained
  * something else.
  *
@@ -128,7 +148,7 @@ export function admitReplPullRequestReadResult(
         "for, so what it says was read is unknown.",
     );
   }
-  if (envelope.kind === "checks" && !sameHead(envelope.headSha, envelope.items)) {
+  if (!pullRequestReadHeadsAgree(envelope)) {
     throw readRefusal(
       "malformed-result",
       "a retained checks read holds an item for a different head than the one it recorded, so " +
@@ -136,11 +156,6 @@ export function admitReplPullRequestReadResult(
     );
   }
   return envelope;
-}
-
-/** Whether every check in this collection is about the head that was read. */
-function sameHead(headSha: string, items: readonly { readonly headSha: string }[]): boolean {
-  return items.every((item) => item.headSha === headSha);
 }
 
 function readRefusal(

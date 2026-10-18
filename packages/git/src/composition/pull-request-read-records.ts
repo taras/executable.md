@@ -331,7 +331,22 @@ function evidenceJson(item: PullRequestEvidence): JsonObject {
   return record;
 }
 
+/**
+ * Whether every check in this envelope is about the head it recorded.
+ *
+ * A checks envelope says which commit it was read at, and that head is the
+ * whole of what it reports: an item about a different commit makes the envelope
+ * two answers at once, and whichever a reader picks is wrong about the other.
+ * Asked of an empty collection too, where it is vacuously true and the recorded
+ * head is still the whole of what the envelope reports.
+
+ */
+export function pullRequestReadHeadsAgree(result: PullRequestReadResult): boolean {
+  return result.kind !== "checks" || result.items.every((item) => item.headSha === result.headSha);
+}
+
 /** The retained envelope, read back rather than asserted. */
+
 export function parsePullRequestReadResult(value: Json): PullRequestReadResult | undefined {
   if (!isJsonObject(value)) {
     return undefined;
