@@ -184,7 +184,10 @@ a REPL entry and are retained on the same terms, with one difference that
 follows from what they are: a read changes nothing, so it takes the selected
 placement's ownership of a managed checkout where it has one and no hold on the
 repository at all. An entry committing in a checkout and an entry reading it do
-not wait for each other. A completed read is answered from its record with no
+not wait for each other. Within one entry they do: every operation of that entry
+that runs `git` against one shared Git directory — the four reads, the three
+transitions and the publication's own observation — takes the same turn, and a
+read keeps it until its children have joined and its page is acknowledged. A completed read is answered from its record with no
 `git` invocation, and the page it answered with describes the repository as it
 was then — a saved `next` used in a *new* read is the one place a changed answer
 is noticed, and it refuses there rather than combining two observations.

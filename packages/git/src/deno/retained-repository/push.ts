@@ -135,7 +135,7 @@ import type { SelectionRegistry } from "../selections.ts";
 import { holdManagedPlacement } from "./leases.ts";
 import type { ReplGitCheckout } from "./git.ts";
 import { retainedRecordAhead } from "./local.ts";
-import { placementSubject } from "./selections.ts";
+import { nativeGitTurn, placementSubject } from "./selections.ts";
 import type { ReplPlacementRegistration } from "./selections.ts";
 
 /**
@@ -416,7 +416,7 @@ function* resolve(entry: ReplPushEntry, received: ReplPushPlace): Operation<Repl
   // `<Git.Commit>` of the same repository would describe a moment neither of
   // them is at. The turn is held for these two short reads and released before
   // anything is published: a network round trip never holds it.
-  const read = yield* entry.serialize(`git ${placement.commonDirectory}`, function* () {
+  const read = yield* entry.serialize(nativeGitTurn(placement.commonDirectory), function* () {
     const checkout = liveCheckout(git, routed.checkout, received.workingDirectory);
     const branch = yield* currentBranch(checkout.git, checkout.directory);
     if (branch === undefined) {

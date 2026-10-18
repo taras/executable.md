@@ -1483,12 +1483,18 @@ answer; reading one consults nothing.
 A refusal you asked for is retained as a refusal, exactly as a transition's is.
 A revision that names no commit, a path the commit does not hold, a directory or
 a nested checkout's recorded commit where a file was asked for, and a file that
-is not text each say which it was and what to write instead. None of them quotes
+is not text each say which it was and what to write instead. A directory is a
+directory under either spelling: `src` and `src/` both refuse, and neither
+answers with something found inside it. None of them quotes
 anything Git printed.
 
 These reads change nothing, so they take no hold on the repository you are
 changing: another entry committing in the same checkout does not wait for a
-read, and a read does not wait for it. The first new read inside a restored
+read, and a read does not wait for it. Inside *one* entry it is the other way
+round, and deliberately: one read runs several Git commands against one private
+index copy, so that entry's own `<Git.Add>`, `<Git.Switch>` or `<Git.Commit>`
+waits for the read to finish and be written down before it runs. Nothing moves
+under a sequence already in progress. The first new read inside a restored
 managed placement takes that placement's ownership and nothing else; a completed
 read takes neither. Hooks, signing, filesystem monitors, external diff programs,
 text conversion, content filters and repository credential helpers stay

@@ -98,6 +98,7 @@ import { performGitObservation } from "../composition/observations.ts";
 import type { ObservationPlace } from "../composition/observations.ts";
 import type { RepositoryHost } from "../composition/host.ts";
 import { selectCheckout } from "../run-composition/operations.ts";
+import { nativeGitTurn } from "./selections.ts";
 import type { SlotKind } from "../run-composition/leases.ts";
 import type { SelectionRegistry } from "../selections.ts";
 import { holdManagedPlacement } from "./leases.ts";
@@ -358,6 +359,19 @@ function readback(
  * slot another entry holds a fatal diagnostic the person can act on rather than
  * a durable outcome — and keeps temporary contention out of the journal
  * entirely.
+ *
+ * The turn is `nativeGitTurn()`, the same one this entry's Add, Switch, Commit
+ * and publication take for the same shared Git directory. A read runs several
+ * Git commands against one private index copy and one pair of resolved commit
+ * ids, and a mutation of this entry's own entering between them would move the
+ * repository underneath a sequence already in progress. A key of this read's
+ * own would be a second queue: the serializer is shared, but a turn is the key.
+ *
+ * It is held for the whole of `once()` — the native work, its joined teardown
+ * and the coordinator's acknowledged append — so the turn ends when the
+ * observation is recorded rather than when Git stops running. Cross-entry
+ * independence is unaffected: this queue is per entry, and another entry's
+ * mutation lease is a different mechanism.
  */
 function* live(
   entry: ReplObservationEntry,
@@ -366,7 +380,7 @@ function* live(
 ): Operation<unknown> {
   const target = yield* routing();
   return yield* entry.serialize(
-    `observation ${target.registration.placement.commonDirectory}`,
+    nativeGitTurn(target.registration.placement.commonDirectory),
     function* () {
       yield* own(entry, target);
       return yield* once();

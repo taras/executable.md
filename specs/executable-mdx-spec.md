@@ -10284,7 +10284,12 @@ What the record carries is the authenticated Repository identity, the checkout
 the selection named and its common Git directory, the received working directory
 as it arrived, the normalized query, the checkout the route reached, and the
 exact page including its complete `next` — never the ephemeral selection
-identifier, and never anything a Git command printed. A read takes the selected
+identifier, and never anything a Git command printed. Trusted admission holds
+that route to the entry's own history before either a completed or an unfinished
+page is reused: the selection and the checkout have to be ones a preceding
+placement in that same history made, decided from parsed historical facts
+alone. A record naming a checkout nothing placed ends the attempt, rather than
+answering from a route this entry never took. A read takes the selected
 placement's managed slot and no mutation lease, because it changes nothing: an
 entry mutating a checkout and an entry reading it do not wait for each other.
 A continuation check belongs to a live read rather than to replay — a saved

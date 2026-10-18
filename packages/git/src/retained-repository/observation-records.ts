@@ -47,8 +47,10 @@ import type { GitObservationReason } from "../composition/errors.ts";
 import {
   parseRepositoryIdentity,
   repositoryIdentityJson,
+  sameRepositoryIdentity,
   type RepositoryIdentity,
 } from "../composition/selection.ts";
+import type { ReplPlacement } from "./placement-records.ts";
 import {
   GIT_COMPARE_MODES,
   type GitComparisonRequest,
@@ -546,4 +548,66 @@ function count(value: unknown): number | undefined {
 function positive(value: unknown): number | undefined {
   const parsed = count(value);
   return parsed === undefined || parsed < 1 ? undefined : parsed;
+}
+
+/**
+ * The route one historical placement authorizes.
+ *
+ * Derived from the placement exactly as the live provider derives a registered
+ * checkout from it, so what admission compares a record against is the same
+ * relationship the runtime enforces — read out of history rather than out of
+ * today's registry.
+ */
+export function observationRouteOf(placement: ReplPlacement): ReplObservationCheckout {
+  return Object.freeze({
+    root: placement.checkoutRoot,
+    commonDirectory: placement.commonDirectory,
+    repositoryName: placement.identity.name,
+    worktreeName: placement.kind === "worktree" ? placement.displayName : null,
+  });
+}
+
+/**
+ * Whether one of these historical placements authorizes this recorded route.
+ *
+ * Every member, under the whole Repository identity the request names. A route
+ * matching on a root while naming another repository, worktree or Git directory
+ * is a route no placement in this history ever selected.
+ */
+export function routedByPlacement(
+  placements: readonly ReplPlacement[],
+  repository: RepositoryIdentity,
+  checkout: ReplObservationCheckout,
+): boolean {
+  return placements.some((placement) => {
+    if (!sameRepositoryIdentity(placement.identity, repository)) {
+      return false;
+    }
+    const route = observationRouteOf(placement);
+    return (
+      route.root === checkout.root &&
+      route.commonDirectory === checkout.commonDirectory &&
+      route.repositoryName === checkout.repositoryName &&
+      route.worktreeName === checkout.worktreeName
+    );
+  });
+}
+
+/**
+ * Whether one of these historical placements is the selection this read named.
+ *
+ * The request carries the checkout the authenticated selection pointed at and
+ * that selection's common Git directory. A record naming a selection no
+ * placement in this history made describes a read this entry never routed.
+ */
+export function selectedByPlacement(
+  placements: readonly ReplPlacement[],
+  request: ReplObservationRequest,
+): boolean {
+  return placements.some(
+    (placement) =>
+      sameRepositoryIdentity(placement.identity, request.repository) &&
+      placement.checkoutRoot === request.selectionCheckout &&
+      placement.commonDirectory === request.commonDirectory,
+  );
 }

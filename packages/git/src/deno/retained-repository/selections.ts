@@ -807,6 +807,20 @@ const placementCoordinator: LiveDurableOperationCoordinator = {
  * rather than stranding it, which is the one case the two cleanups have to tell
  * apart.
  */
+/**
+ * The one turn an entry's native Git for one shared Git directory takes.
+ *
+ * Named here rather than spelled at each caller, because the key *is* the
+ * exclusion: every operation of this entry that runs `git` against one common
+ * directory — Add, Switch, Commit, the publication's observation, and the four
+ * reads — has to name the same string. A caller that spelled its own would be
+ * handed its own queue by a serializer the two were sharing, which looks like
+ * participation and is not.
+ */
+export function nativeGitTurn(commonDirectory: string): string {
+  return `git ${commonDirectory}`;
+}
+
 export function slotTurns(): <T>(key: string, work: () => Operation<T>) => Operation<T> {
   interface Waiting {
     readonly granted: WithResolvers<void>;
