@@ -34,7 +34,6 @@ import type { Operation, Result } from "effection";
 import type { Json } from "@executablemd/core";
 
 import type { EntryVocabulary } from "../../repl-profile.ts";
-import { entryInitialBindings } from "../model.ts";
 import type { ReplModel } from "../model.ts";
 import type { ReplHostFact } from "../host.ts";
 import type { ReplPrinting, ReplSession } from "../session.ts";
@@ -77,6 +76,19 @@ export interface RootReading {
    * the entry producing it and not to whichever entry happens to be last.
    */
   printing(): ReplPrinting | undefined;
+  /**
+   * The root data as it stands, from the file and from the entry running now.
+   *
+   * Separate from {@link acknowledged} for the same reason {@link printing} is:
+   * a running entry's values are not in the file yet, and a read that only
+   * projected would tell a reply that a name its own entry had just bound does
+   * not exist. The execution that owns that entry's root answers, through its
+   * own disclosure policy, so a value it may not disclose refuses the read.
+   *
+   * Asked per request, like the projection beside it, so two reads in one
+   * response that straddle an append or a settlement each see their own moment.
+   */
+  bindings(): Operation<Result<Readonly<Record<string, Json>>>>;
   /** What an entry may write under this command's profile. */
   readonly vocabulary: EntryVocabulary;
   /** The facts this command knows and the host does not. */
@@ -133,6 +145,13 @@ export function rootReads(
       // output of the entry running now.
       return session.printing;
     },
+    bindings(): Operation<Result<Readonly<Record<string, Json>>>> {
+      // The session's own read, for the same reason `printing` is: the live
+      // half belongs to the entry running in this process, and only the
+      // session knows which entry that is and whether it is still that one
+      // when the read answers.
+      return session.bindings();
+    },
     vocabulary: profile.vocabulary,
     // What this command knows and the host does not: where a declared name is
     // looked for, which Plugins are active, and how a permission request is
@@ -179,18 +198,18 @@ export type SubmitForReply = (
  */
 export function sidekickRequests(root: RootReading, submit: SubmitForReply): SidekickRequests {
   return {
-    // deno-lint-ignore require-yield
     *bindings(): Operation<Result<Json>> {
-      const head = root.acknowledged();
-      if (!head.ok) {
-        return head;
-      }
-      // The head's own record projection: the last durably published value for
-      // each root name, in the record shape the trusted-host entrypoint takes,
-      // detached and frozen by the projection itself. A value a running entry
-      // has already published is in it, because the projection reads the file as
-      // it stands rather than as it stood when the entry started.
-      return Ok(entryInitialBindings(head.value) as Json);
+      // The root data as it stands: the retained head for every entry that has
+      // settled, and the current root of the entry running now on top of it.
+      // In the record shape the trusted-host entrypoint takes, detached and
+      // frozen by the readings it came from.
+      //
+      // The live half is what makes this answerable at all for a reply whose
+      // own entry is held at a question: those values are in no record yet, so
+      // a read that only projected would report them as absent while the entry
+      // that bound them is waiting to be told about them.
+      const read = yield* root.bindings();
+      return read.ok ? Ok(read.value as Json) : read;
     },
     *entrySyntax(names?: readonly string[]): Operation<Result<string>> {
       try {

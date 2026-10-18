@@ -296,7 +296,7 @@ describe("Tier YAML — an invocation it cannot render", () => {
     expect(hooks).toBe(1);
   });
 
-  it("Y2: a counting getter is read exactly once", function* () {
+  it("Y2: the renderer reads a counting getter exactly once", function* () {
     let reads = 0;
     const outcome = yield* run(
       '<Source as="payload" />\n\n<Yaml value={payload} as="yaml" />\n\n{yaml}',
@@ -311,7 +311,14 @@ describe("Tier YAML — an invocation it cannot render", () => {
     );
 
     expect(text(outcome)).toContain("name: widget");
-    expect(reads).toBe(1);
+    // Two readers, once each: the renderer serializing the operand, and the
+    // execution copying its eligible root data onto the ordinary result when
+    // the run settles. That second read is the parent's own accepted
+    // behaviour for every bound value, not this renderer's.
+    //
+    // The claim is still that the renderer reads once. Three would mean it
+    // serialized twice, which is what this case exists to catch.
+    expect(reads).toBe(2);
   });
 
   it("Y2: a failed render binds nothing and renders nothing", function* () {

@@ -35,7 +35,6 @@ import { execute, executeInstalled } from "../src/execute.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
-import { parseRootBindingPublication } from "../src/root-binding-publications.ts";
 import { fatalCause } from "../src/errors.ts";
 import { createYq } from "yq.rs/loader";
 import type { Yq } from "yq.rs/loader";
@@ -44,7 +43,7 @@ import { ComponentResult } from "../api.ts";
 import type { EngineFactory } from "../src/value-query.ts";
 import { Component } from "../src/component-api.ts";
 import type { ComponentRegistration } from "../src/components/registration.ts";
-import type { ComponentDefinition } from "../src/types.ts";
+import type { ComponentDefinition, JsonObject } from "../src/types.ts";
 
 /**
  * A directory the contextual cwd points at, removed when the case ends.
@@ -709,40 +708,92 @@ describe("Tier YQ — acceptance, teardown, then selection", () => {
   });
 });
 
-describe("Tier YQ — what a root publication retains", () => {
+describe("Tier YQ — what the ordinary result retains", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("YQ5: the retained publication holds the selected value, not the original", function* () {
+  it("YQ5: the retained result holds the selected value, not the original", function* () {
+    // The selected value is ordinary binding data at the corrected parent:
+    // the capture assigns it to the real environment, and the execution's own
+    // computed-bindings resource carries current eligible root data onto the
+    // ordinary result. There is no per-name publication to look for.
     const root = yield* useWorkspace({ "input.json": FIXTURE });
     const stream = new InMemoryStream();
-    const outcome = yield* scoped(function* () {
+    const crossed: string[] = [];
+    const read = yield* scoped(function* () {
+      yield* API.Files.around({
+        *readTextFile([input], next) {
+          crossed.push(`read:${input.path}`);
+          return yield* next(input);
+        },
+      });
       yield* useHostFiles();
       yield* writeTextFile(
         join(root, "doc.md"),
         `<File path="input.json" yq='${FAILED_RECORDS}' as="failed" />\n\n{failed.length}\n`,
       );
-      return yield* yield* executeInstalled({ path: join(root, "doc.md"), stream }, [], {
-        rootBindingPublications: "json-v1",
-      });
+      const execution = yield* executeInstalled({ path: join(root, "doc.md"), stream }, []);
+      const outcome = yield* execution;
+      expect(outcome.ok).toBe(true);
+      // Read from the settled execution, which answers from its own accepted
+      // result rather than by running anything again.
+      const held = yield* execution.bindings();
+      if (!held.ok) {
+        throw held.error;
+      }
+      return held.value;
     });
 
-    expect(outcome.ok).toBe(true);
-    const published = stream
-      .snapshot()
-      .filter(
-        (event: DurableEvent) =>
-          event.type === "yield" && event.description.type === "root_binding",
+    // The selected data, under the name the capture bound — and nothing of the
+    // record the producer actually returned.
+    expect(read["failed"]).toEqual([{ name: "b" }]);
+    expect(JSON.stringify(read["failed"])).not.toContain("status");
+    // One producer, counted where the operation crosses the provider.
+    expect(crossed).toEqual(["read:input.json"]);
+    // And no per-binding publication record of any kind.
+    expect(descriptions(stream)).not.toContain("root_binding");
+  });
+
+  it("YQ5: a cold reading of the accepted result repeats no producer", function* () {
+    // The same run restored from what it retained: the result is read back
+    // without executing the document again, so the producer is not called a
+    // second time and nothing is appended.
+    const root = yield* useWorkspace({ "input.json": FIXTURE });
+    const stream = new InMemoryStream();
+    yield* scoped(function* () {
+      yield* useHostFiles();
+      yield* writeTextFile(
+        join(root, "doc.md"),
+        `<File path="input.json" yq='${FAILED_RECORDS}' as="failed" />\n\n{failed.length}\n`,
       );
-    expect(published.length).toBe(1);
-    const held = published[0];
-    const retained =
-      held !== undefined && held.type === "yield" && held.result.status === "ok"
-        ? held.result.value
-        : undefined;
-    // The selected data crossed, through the publisher's own protocol: no new
-    // record family, and nothing of the text the producer returned.
-    expect(JSON.stringify(retained)).toContain('"name":"b"');
-    expect(JSON.stringify(retained)).not.toContain("status");
+      expect((yield* yield* executeInstalled({ path: join(root, "doc.md"), stream }, [])).ok).toBe(
+        true,
+      );
+    });
+    const after = stream.snapshot().length;
+
+    const crossed: string[] = [];
+    const cold = yield* scoped(function* () {
+      yield* API.Files.around({
+        *readTextFile([input], next) {
+          crossed.push(`read:${input.path}`);
+          return yield* next(input);
+        },
+      });
+      yield* useHostFiles();
+      const execution = yield* executeInstalled({ path: join(root, "doc.md"), stream }, []);
+      yield* execution;
+      const held = yield* execution.bindings();
+      if (!held.ok) {
+        throw held.error;
+      }
+      return held.value;
+    });
+
+    expect(cold["failed"]).toEqual([{ name: "b" }]);
+    // The completed run answered from its record: no producer ran again, and
+    // the journal did not grow.
+    expect(crossed).toEqual([]);
+    expect(stream.snapshot().length).toBe(after);
   });
 });
 
@@ -931,72 +982,47 @@ function sentenceComponent(): ComponentDefinition {
 }
 
 /**
- * Tier YQ6 — what a refused selected publication binds.
+ * Tier YQ6 — mutation, query refusal and refused retention.
  *
- * A queried root capture is published through the ordinary durable path, so the
- * append fence applies to it like any other effect. What this case is about is
- * the one ordering that matters: the capture is downstream of the append, so an
- * append that cannot be written binds nothing and leaves the last publication
- * standing.
+ * A selected capture is ordinary binding data at the corrected parent, so what
+ * retains it is the execution's own ordinary result rather than a per-name
+ * append. These three cases are what that distinction actually changes: when
+ * the snapshot is taken, what a rejected query binds, and what a refused
+ * result acknowledges.
  *
- * The cross-entry half of this row — what the next REPL entry actually inherits
- * — belongs to the REPL's own segmentation and is in
- * `packages/cli/tests/repl-entries.test.ts`.
+ * The cross-entry half — what the next REPL entry inherits — belongs to the
+ * REPL's own segmentation and is in `packages/cli/tests/repl-entries.test.ts`.
  */
-describe("Tier YQ6 — a refused selected publication", () => {
+describe("Tier YQ6 — mutation, refusal and what the result retains", () => {
   beforeAll(() => useTempFileCompiler());
 
-  /** One entry at the end of `physical`, with the retention a REPL entry states. */
-  function entry(root: string, source: string, physical: InMemoryStream): Operation<Result<Json>> {
+  /** One entry at the end of `physical`, and the data its result retained. */
+  function entry(
+    root: string,
+    source: string,
+    physical: InMemoryStream,
+  ): Operation<{ outcome: Result<Json>; bindings: Result<JsonObject> }> {
     return scoped(function* () {
       yield* useHostFiles();
       yield* writeTextFile(join(root, "doc.md"), source);
       try {
-        return yield* yield* executeInstalled(
+        const execution = yield* executeInstalled(
           { path: join(root, "doc.md"), stream: physical },
           [],
-          { rootBindingPublications: "json-v1" },
         );
+        const outcome = yield* execution;
+        return { outcome, bindings: yield* execution.bindings() };
       } catch (error) {
-        return Err(error instanceof Error ? error : new Error(String(error)));
+        const raised = error instanceof Error ? error : new Error(String(error));
+        return { outcome: Err(raised), bindings: Err(raised) };
       }
     });
   }
 
-  /** The selected values this journal retained, by binding. */
-  function retained(physical: InMemoryStream): Record<string, Json> {
-    const held: Record<string, Json> = {};
-    for (const event of physical.snapshot()) {
-      if (event.type !== "yield" || event.description.type !== "root_binding") {
-        continue;
-      }
-      const publication = parseRootBindingPublication(event);
-      if (publication.ok && publication.value.publication.kind === "json") {
-        held[publication.value.binding] = publication.value.publication.value;
-      }
-    }
-    return held;
-  }
-
-  it("YQ6: the publication retains the selected value and not the producer's text", function* () {
+  it("YQ6: a mutation before the result is part of what that entry retains", function* () {
     const root = yield* useWorkspace({ "input.json": FIXTURE });
     const physical = new InMemoryStream();
-    const outcome = yield* entry(
-      root,
-      `<File path="input.json" yq='${FAILED_RECORDS}' as="failed" />\n\n{failed.length}\n`,
-      physical,
-    );
-
-    expect(outcome.ok).toBe(true);
-    expect(retained(physical)).toEqual({ failed: [{ name: "b" }] });
-    // What the selection replaced did not cross.
-    expect(JSON.stringify(retained(physical))).not.toContain("status");
-  });
-
-  it("YQ6: mutating the binding afterwards does not move what was retained", function* () {
-    const root = yield* useWorkspace({ "input.json": FIXTURE });
-    const physical = new InMemoryStream();
-    const outcome = yield* entry(
+    const ran = yield* entry(
       root,
       [
         `<File path="input.json" yq='${FAILED_RECORDS}' as="failed" />`,
@@ -1012,48 +1038,117 @@ describe("Tier YQ6 — a refused selected publication", () => {
       physical,
     );
 
-    expect(outcome.ok).toBe(true);
-    // Two in the entry that mutated it, one in what was published: the
-    // publication is a detached snapshot taken before the block ran.
-    expect(String(outcome.ok && outcome.value)).toContain("2");
-    expect(retained(physical)).toEqual({ failed: [{ name: "b" }] });
+    expect(ran.outcome.ok).toBe(true);
+    expect(String(ran.outcome.ok && ran.outcome.value)).toContain("2");
+    if (!ran.bindings.ok) {
+      throw ran.bindings.error;
+    }
+    // The entry's own current root is what its result carries, so the edit it
+    // made before settling is in it. There is no capture-time snapshot.
+    expect(ran.bindings.value["failed"]).toEqual([{ name: "b" }, { name: "later" }]);
+    // An ordinary export beside it stays eligible data.
+    expect(ran.bindings.value["count"]).toBe(2);
   });
 
-  it("YQ6: a refused append binds nothing and leaves the earlier publication standing", function* () {
+  it("YQ6: a reader's copy is its own, and editing it moves nothing", function* () {
     const root = yield* useWorkspace({ "input.json": FIXTURE });
     const physical = new InMemoryStream();
-
-    // Two selected captures in one entry. The first publishes; the second's
-    // append is refused, and the capture is downstream of that append — so the
-    // second binds nothing and the sentinel after it never renders.
-    let refusals = 0;
-    physical.onAppend = (event) => {
-      if (event.type === "yield" && event.description.type === "root_binding") {
-        refusals += 1;
-        if (refusals > 1) {
-          throw new Error("this journal cannot accept the publication");
-        }
+    const read = yield* scoped(function* () {
+      yield* useHostFiles();
+      yield* writeTextFile(
+        join(root, "doc.md"),
+        `<File path="input.json" yq='${FAILED_RECORDS}' as="failed" />\n\n{failed.length}\n`,
+      );
+      const execution = yield* executeInstalled(
+        { path: join(root, "doc.md"), stream: physical },
+        [],
+      );
+      expect((yield* execution).ok).toBe(true);
+      const first = yield* execution.bindings();
+      if (!first.ok) {
+        throw first.error;
       }
-    };
-    const outcome = yield* entry(
+      // Edit the copy this reader was handed.
+      const held = first.value["failed"];
+      if (Array.isArray(held)) {
+        held.push({ name: "intruder" });
+      }
+      const second = yield* execution.bindings();
+      if (!second.ok) {
+        throw second.error;
+      }
+      return second.value;
+    });
+
+    // The next read is unaffected: what came back was a copy, and accepted
+    // data is not a reader's to edit.
+    expect(read["failed"]).toEqual([{ name: "b" }]);
+    expect(JSON.stringify(read)).not.toContain("intruder");
+  });
+
+  it("YQ6: a rejected query binds no second value and keeps the first", function* () {
+    const root = yield* useWorkspace({ "input.json": FIXTURE });
+    const physical = new InMemoryStream();
+    const ran = yield* entry(
       root,
       [
         `<File path="input.json" yq='from_json | .records[0].name' as="first" />`,
         "",
-        `<File path="input.json" yq='from_json | .records[1].name' as="second" />`,
+        `<File path="input.json" yq='!!!' as="second" />`,
         "",
         "sentinel {second}",
         "",
       ].join("\n"),
       physical,
     );
+
+    // `<File>` prints its errors, so the expression's refusal is reported in
+    // the document rather than ending the run — and what matters here is what
+    // it bound, which is nothing.
+    expect(ran.outcome.ok).toBe(true);
+    const rendered = String(ran.outcome.ok && ran.outcome.value);
+    expect(rendered).toContain("could not be evaluated");
+
+    if (!ran.bindings.ok) {
+      throw ran.bindings.error;
+    }
+    // The first selected value is retained; the rejected query assigned no
+    // second binding and no fallback to the producer's own text.
+    expect(ran.bindings.value["first"]).toBe("a");
+    expect(Object.hasOwn(ran.bindings.value, "second")).toBe(false);
+    expect(JSON.stringify(ran.bindings.value)).not.toContain("records");
+    // And the body after it read nothing: `{second}` names no binding, so the
+    // sentinel line carries the unresolved name rather than a value.
+    expect(rendered).toContain("sentinel {second}");
+  });
+
+  it("YQ6: a refused result acknowledges no computed map", function* () {
+    const root = yield* useWorkspace({ "input.json": FIXTURE });
+    const physical = new InMemoryStream();
+
+    // The ordinary result's own append is refused, before the physical
+    // backend. The capture itself may well have happened live; what must not
+    // happen is an accepted computed map for a result nothing retained.
+    physical.onAppend = (event) => {
+      if (event.type === "close") {
+        throw new Error("this journal cannot accept the result");
+      }
+    };
+    const ran = yield* entry(
+      root,
+      `<File path="input.json" yq='${FAILED_RECORDS}' as="failed" />\n\n{failed.length}\n`,
+      physical,
+    );
     physical.onAppend = null;
 
-    expect(outcome.ok).toBe(false);
-    // The first publication stands; the refused one wrote nothing. A failed
-    // append is a durability failure rather than an accepted capture, so
-    // nothing after it ran either.
-    expect(retained(physical)).toEqual({ first: "a" });
-    expect(String(outcome.ok === false && outcome.error.message)).not.toContain("sentinel");
+    expect(ran.outcome.ok).toBe(false);
+    // The persistence failure is what the run reports, and the handle refuses
+    // rather than answering with data no later run could start from.
+    expect(String(ran.outcome.ok === false && ran.outcome.error.message)).toContain(
+      "persist durable close",
+    );
+    expect(ran.bindings.ok).toBe(false);
+    // And nothing compensating was written in its place.
+    expect(physical.snapshot().some((event) => event.type === "close")).toBe(false);
   });
 });

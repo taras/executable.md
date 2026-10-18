@@ -41,6 +41,7 @@ import {
   REPL_REPOSITORY_PLACEMENT,
 } from "../../git/src/retained-repository/placement-records.ts";
 import { Execution } from "@executablemd/core/api";
+import type { Json } from "@executablemd/core";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { useReplRepositoryRecording } from "../../git/src/deno/retained-repository/provider.ts";
@@ -48,7 +49,7 @@ import type { HelperAssembly } from "../../git/src/deno/composition/credential-h
 import { gitPlugin } from "../../git/src/plugin.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
-import { entryInitialBindings } from "../src/repl/model.ts";
+import { entryInitialBindings, projectRepl } from "../src/repl/model.ts";
 import {
   createExecutionFile,
   executionPath,
@@ -58,6 +59,7 @@ import {
 import type { RepositoryHost } from "../../git/src/deno/composition/host.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
+import type { ReplModel } from "../src/repl/model.ts";
 
 /**
  * What a command contributes to an entry's execution.
@@ -241,6 +243,24 @@ function recordedText(event: DurableEvent | undefined): string | undefined {
 /** Every record of one type this history holds. */
 function recordsOf(events: readonly DurableEvent[], type: string): readonly DurableEvent[] {
   return events.filter((event) => event.type === "yield" && event.description.type === type);
+}
+
+/** The projected model, or the refusal the row reports instead of asserting past. */
+function projected(events: readonly DurableEvent[]): ReplModel {
+  const result = projectRepl(events);
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
+}
+
+/** One named value out of a reading, named so a miss says what was there. */
+function value(bindings: readonly { name: string; value: Json }[], name: string): Json {
+  const found = bindings.find((binding) => binding.name === name);
+  if (found === undefined) {
+    throw new Error(`these bindings hold ${bindings.map((one) => one.name).join(", ")}`);
+  }
+  return found.value;
 }
 
 /** One submitted entry, run to completion against this execution's history. */
@@ -849,7 +869,7 @@ describe("a root capture a REPL entry commits (#939)", () => {
     expect(committed.commits).toBe(1);
   });
 
-  it("P7: a marked unfinished entry resumes its suffix and repeats no commit", function* () {
+  it("P7: an unfinished entry resumes its suffix, repeats no commit, and settles it", function* () {
     const fixture = yield* useFixture();
     const checkout = yield* useCommittedCheckout(fixture);
     const committed: Committed = { commits: 0 };
@@ -874,12 +894,14 @@ describe("a root capture a REPL entry commits (#939)", () => {
     });
 
     const retained = yield* run.stream.readAll();
+    // The commit really happened and its own record is retained. The capture
+    // has no record of its own — the commit's effect record is what the resume
+    // restores it from — and the entry has settled nothing.
     expect(committed.commits).toBe(1);
     expect(retained.some((event) => event.type === "close")).toBe(false);
-    const published = recordsOf(retained, "root_binding");
-    expect(published.length).toBe(1);
+    expect(recordsOf(retained, "root_binding").length).toBe(0);
 
-    // Resumed, in its own publication mode, by a fresh session.
+    // Resumed by a fresh session, which replays the retained prefix.
     const settled = yield* scoped(function* (): Operation<string> {
       yield* useNodeReplHost("execution-1");
       yield* useHostFiles();
@@ -901,15 +923,23 @@ describe("a root capture a REPL entry commits (#939)", () => {
       return session.model.entries[0]?.terminal?.output ?? "";
     });
 
-    // The suffix ran and the commit did not: the capture came back from its
-    // record, and the repository was asked for nothing a second time.
+    // The suffix ran and the commit did not: the capture came back from the
+    // commit's own retained record, and the repository was asked for nothing a
+    // second time.
     expect(settled).toContain("answered go");
     expect(committed.commits).toBe(1);
     const after = yield* run.stream.readAll();
     expect(after.slice(0, retained.length)).toEqual(retained);
-    // Its suffix publishes, because this entry's own admission says it retains
-    // captures: the commit's publication is restored and the question's answer
-    // is a second one, which is how a marked entry continues.
-    expect(recordsOf(after, "root_binding").length).toBe(2);
+    // Still no record of its own for the capture, at any point: what the
+    // resumed entry hands on is in its ordinary settled result, which carries
+    // the reconstructed commit id and the answer it went on to receive.
+    expect(recordsOf(after, "root_binding").length).toBe(0);
+    const projection = projected(after);
+    const outcome = projection.entries[0]?.terminal;
+    expect(outcome?.status).toBe("ok");
+    expect(value(outcome?.bindings ?? [], "proofCommit")).toBe(
+      entryInitialBindings(projection)["proofCommit"],
+    );
+    expect(value(outcome?.bindings ?? [], "answer")).toEqual({ decision: "go" });
   });
 });

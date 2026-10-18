@@ -689,6 +689,18 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "packages/git/tests/git-observations-deno.test.ts",
+    reason:
+      "the subject is a managed selection answering a local Git read: it clones a remote into a managed root and adds a worktree, held under a kernel-released exclusive advisory lock taken through the Deno runtime, so under Node and Bun the document fails on the lock before a read happens. Everything else about which checkout answers is provider-neutral and runs on every runtime in packages/git/tests/git-observations.test.ts",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/git/tests/retained-repository-observations-deno.test.ts",
+    reason:
+      "the subject is the native side of a REPL entry's repository host: cancelling a finished read's append unwinds a Deno-backed Files provider, a held read excludes the same entry's mutation only once that mutation reaches a real `git` child, and another holder's mutation lease is the same kernel-released advisory lock. The record format, its admission, every refusal and the rest of cancellation and persistence run on every runtime in packages/git/tests/retained-repository-observations.test.ts",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "packages/git/tests/retained-repository-local.test.ts",
     reason:
       "the subject is a REPL entry's native repository host: it discovers a real checkout with a `git` subprocess and records what a real filesystem answered. The record format and the admission are provider-neutral and are proven on every runtime by packages/git/tests/retained-repository-records.test.ts",

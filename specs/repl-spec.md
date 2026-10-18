@@ -226,8 +226,8 @@ order, and the values are the entry's own to change — they behave like values
 authored earlier in the same environment, and a later export replaces one
 through the ordinary rules.
 
-A root `<Let>` and an ordinary component capture publish, and so does an `eval`
-block's export. Writing
+A root `<Let>`, an ordinary component capture and an `eval` block's export all
+reach the next entry. Writing
 
 ```xmd
 <Let as="saved" value="alpha" />
@@ -236,15 +236,20 @@ block's export. Writing
 is enough for the next entry to read `{saved}`, and the same is true of
 `<Json value={{ answer: 42 }} as="saved" />`, of a Markdown component captured
 with `as`, and of a `<Git.Commit as="commit" />` whose object id a later entry
-consumes without committing again. The capture and the export are one sequence:
-whichever of them published last under a name is the value that crosses.
+consumes without committing again.
 
-What crosses is the value as it stood when the capture happened, copied. The
-binding inside the entry is still the exact object the expression or the
-component produced, so the entry goes on using it the way it always has — but
-mutating it afterwards changes nothing the file holds, and the entry after it
-reads what was published rather than what the object became. Publish it again
-to publish the change.
+None of them is retained on its own. What the entry hands on is its **outcome**:
+when the entry settles, the data its root holds is carried on the ordinary
+result that settles it, and that is the one thing a later entry starts from. So
+the question is never which construct wrote a name, or in what order — it is
+what the root held when the entry finished.
+
+That is also why the value that crosses is the value **as it stood then**,
+rather than as it stood at the capture. The binding inside the entry is the
+exact object the expression or the component produced, so the entry goes on
+using it the way it always has; a change it makes to that object before it
+settles is part of what the entry hands on, and a change made to a copy a later
+entry received reaches nothing.
 
 ### Values that stay in the entry that made them
 
@@ -255,8 +260,9 @@ They bind exactly as they always have and stay usable for the rest of that
 entry, and they are not converted into data, not kept alive past the entry, and
 not published.
 
-A capture like that publishes no replacement, so the name keeps whichever value
-was last published under it:
+A name bound only to a value like that is simply absent from what the entry
+hands on, which is not the same as clearing it — so the name keeps whichever
+value an entry last settled under it:
 
 ```xmd
 <Let as="saved" value="alpha" />
@@ -267,14 +273,31 @@ was last published under it:
 ```
 
 The second entry uses that handle. The third entry — and a cold reading of the
-file — still reads `saved` as `"alpha"`, because nothing published over it. A
-name only ever bound to a value like that is absent from inheritance
-altogether: there is no removal, nothing is deleted, and nothing warns.
+file — still reads `saved` as `"alpha"`, because the second entry's outcome
+carried no `saved` to replace it with. A name only ever bound to a value like
+that is absent from inheritance altogether: there is no removal, nothing is
+deleted, and nothing warns.
 
-What survives is what was retained. An entry that failed, and one whose
-cancellation the file records, each settle their entry: they hand on everything
-they published before that, hand on nothing they never durably published, and
-let the next entry start. The reserved `props` namespace belongs to each entry's
+What survives is what was retained. An entry that failed settles its entry and
+hands on the root data its own failing outcome carried, because a failure is an
+outcome.
+
+A cancellation is not a result. An entry whose cancellation the file records
+settles its entry too, but it carries no computed root data of its own: there
+is no map on it, and none is reconstructed for it — whatever a cancelled run
+had computed went with it rather than standing in for a result. What it does
+not do is unretain the facts recorded before it. An `eval` export that entry
+really made is a fact the file holds, and the entry after it inherits that
+export exactly as it would from any other settled entry, while a capture the
+entry reached and never recorded stays absent. Either way the next entry may
+start.
+
+"Nothing unretained crosses" is about outcomes, not about names. An entry that
+mutated a value it inherited and never named again still hands the mutated
+value on, because what its outcome carries is the root it actually had. What
+does not cross is anything no outcome ever acknowledged — a value a running
+entry holds, a value an entry that never settled computed, a value a discarded
+result had. The reserved `props` namespace belongs to each entry's
 own validated root and is never inherited.
 
 An entry interrupted before its root closed is a different thing. The file holds
@@ -289,16 +312,18 @@ as it is. A completed entry there exposes the values it actually recorded, and
 a capture it never recorded stays absent: nothing re-runs its source, repeats
 an effect it already performed, or writes a value into it after the fact.
 
-An entry such a file shows as unfinished continues the way it began. Its
-remaining body — including the captures in it — publishes nothing, right
-through its own close, because its records say that is the entry it is. Once it
-has settled, the next entry you submit retains its captures like any other. A
-file holding both kinds of entry is an ordinary file.
+An entry such a file shows as unfinished simply continues. Nothing marks it and
+there is no mode to continue in: its retained prefix is restored — its recorded
+effects are not performed again — its remaining body runs, and the ordinary
+outcome it settles carries the root data it then holds, including the captures
+in the part that had never run. A file holding both kinds of entry is an
+ordinary file, because the only difference between them is what their own
+outcomes recorded.
 
 What is refused is a history whose records say something this version cannot
-read: an entry stating a retention it does not know, or a retained capture it
-cannot parse. That is a refusal with nothing appended and no execution started,
-and it is a different answer from an entry that simply says nothing.
+read: an outcome carrying computed data it cannot parse, or a name no binding
+could have. That is a refusal with nothing appended and no execution started,
+and it is a different answer from an outcome that simply carries none.
 
 This comes from the file and from nothing else, so a later entry begins from the
 same values whether the earlier ones ran a moment ago in this process or were
@@ -1409,6 +1434,72 @@ completed Git operation takes neither. A no-op Add, a same-branch Switch and a
 Commit that will refuse take them too: whether `git` will change anything is not
 predicted.
 
+### Reading the repository an entry is standing in
+
+Inside the same checkout, type this:
+
+```xmd
+<Git.Files prefix="src/" limit={5} as="files" />
+<Git.Changes compare="unstaged" as="changes" />
+<Git.Diff compare="unstaged" limit={4096} as="diff" />
+<Git.File commit="HEAD~1" path="src/expand.ts" as="before" />
+<Json value={files.paths} />
+```
+
+Four reads and nothing changed. `<Git.Files>` lists the tracked paths the index
+holds, relative to the repository root, excluding untracked files and the
+contents of any checkout nested beside them. `<Git.Changes>` reports each
+changed path with Git's own letter for what happened to it, for the index
+against the working tree, HEAD against the index, or two commits you name
+directly. `<Git.Diff>` answers the same comparison as patch text. `<Git.File>`
+answers the text one commit holds at one path — the commit's bytes, not the
+working copy, so it still answers after you have edited the file.
+
+A page is bounded: 100 records, or 4096 characters of text, unless you ask for
+more. Ask for more and you get more; nothing caps it beyond what a number can
+represent. When something remains, `next` holds the complete arguments of the
+read that continues it, so a later entry follows it by passing the value back:
+
+```xmd
+<Git.Files prefix={files.next.prefix} limit={files.next.limit} cursor={files.next.cursor} as="more" />
+```
+
+Follow one after the answer has changed and the read refuses rather than
+stitching two repositories together: *The Git observation changed. Restart
+`<Git.Files>` without cursor.* A change elsewhere that does not alter this
+answer needs no restart, and raising `limit` between pages is safe — a limit is
+how much of an answer to return, not which answer it is. `<Git.File>` carries
+its resolved commit in `next`, so moving the branch under it changes nothing
+about the file you are reading.
+
+Leave an entry at a question after these reads, change every file behind it, and
+come back. The saved pages answer again: the same paths, the same statuses, the
+same patch window, the same commit — and not a single `git` command. The entry
+after it inherits those bound values and can render members of them without
+reading anything. Reads after the question run for the first time, against the
+repository as it is now. Delete the checkout outright and the saved pages still
+answer; reading one consults nothing.
+
+A refusal you asked for is retained as a refusal, exactly as a transition's is.
+A revision that names no commit, a path the commit does not hold, a directory or
+a nested checkout's recorded commit where a file was asked for, and a file that
+is not text each say which it was and what to write instead. A directory is a
+directory under either spelling: `src` and `src/` both refuse, and neither
+answers with something found inside it. None of them quotes
+anything Git printed.
+
+These reads change nothing, so they take no hold on the repository you are
+changing: another entry committing in the same checkout does not wait for a
+read, and a read does not wait for it. Inside *one* entry it is the other way
+round, and deliberately: one read runs several Git commands against one private
+index copy, so that entry's own `<Git.Add>`, `<Git.Switch>` or `<Git.Commit>`
+waits for the read to finish and be written down before it runs. Nothing moves
+under a sequence already in progress. The first new read inside a restored
+managed placement takes that placement's ownership and nothing else; a completed
+read takes neither. Hooks, signing, filesystem monitors, external diff programs,
+text conversion, content filters and repository credential helpers stay
+disabled, and no read reaches a remote — a missing object refuses instead.
+
 ### The branch an entry published
 
 Inside a lexical `<Repository>` — or a `<Worktree>` of one, including a
@@ -2185,11 +2276,23 @@ resolved against the frame that published its coordinates.
   neither a retained local result nor a retained publication authorizes one.
   What an entry retains is `<Repository>` and `<Worktree>` selection, the file
   and directory work inside those checkouts and the one it was started in,
-  `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` in them, the branch
-  `<Git.Push />` published, and the issues it filed and read. A runtime that
-  installs no repository provider — Node and Bun — refuses the Git components,
-  publication included, before any native operation or remote contact, while
-  ordinary `<File>` and `<Dir>` work keeps working there.
+  `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>` in them, the page each of
+  `<Git.Files>`, `<Git.Changes>`, `<Git.Diff>` and `<Git.File>` answered with,
+  the branch `<Git.Push />` published, and the issues it filed and read. A
+  runtime that installs no repository provider — Node and Bun — refuses the Git
+  components, the four reads and publication included, before any native
+  operation or remote contact, while ordinary `<File>` and `<Dir>` work keeps
+  working there.
+- A read confers nothing. Nothing a page holds authorizes a mutation, a
+  publication, a pull request or an Agent, and the opaque `cursor` a `next`
+  carries is continuation data rather than permission: a follow-up read
+  authenticates and routes on its own terms and then checks that the cursor
+  describes the checkout it reached.
+- A read is not a snapshot. One observation may run several Git commands against
+  one private index copy and one pair of resolved commit ids, and that is as much
+  as it promises: nothing locks the repository, watches it or compares every
+  write that happened while it ran. What continuation checks is whether the
+  *answer* changed, not whether the filesystem did.
 - `<Issue>` is an ordinary shadowable default here, as it is under every other
   host. A repository component of that name keeps its ordinary precedence over
   it, and what such a component does not get is the identity an entry's own

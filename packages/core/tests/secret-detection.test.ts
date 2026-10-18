@@ -408,7 +408,7 @@ describe("default-on secret detection", () => {
       const provenance = establishJournalProvenance(backend);
       yield* useCheapScanner();
 
-      const guarded = yield* useSecretDetection(undefined, backend);
+      const { journal: guarded } = yield* useSecretDetection(undefined, backend);
 
       expect(guarded).not.toBe(backend);
       expect(yield* observedProvenance(guarded)).toBe(provenance);
@@ -419,8 +419,8 @@ describe("default-on secret detection", () => {
       const provenance = establishJournalProvenance(backend);
       yield* useCheapScanner();
 
-      const guarded = yield* useSecretDetection(undefined, backend);
-      const nested = yield* useSecretDetection(undefined, guarded);
+      const { journal: guarded } = yield* useSecretDetection(undefined, backend);
+      const { journal: nested } = yield* useSecretDetection(undefined, guarded);
 
       expect(nested).not.toBe(guarded);
       expect(yield* observedProvenance(nested)).toBe(provenance);
@@ -431,7 +431,7 @@ describe("default-on secret detection", () => {
       const provenance = establishJournalProvenance(backend);
       yield* useCheapScanner();
 
-      expect(yield* useSecretDetection(false, backend)).toBe(backend);
+      expect((yield* useSecretDetection(false, backend)).journal).toBe(backend);
       expect(yield* observedProvenance(backend)).toBe(provenance);
     });
 

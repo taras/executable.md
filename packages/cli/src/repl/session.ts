@@ -75,13 +75,12 @@ import type { Operation, Result, Stream, Task } from "effection";
 import { INLINE_SOURCE_PATH, inlineSource, validateDocument } from "@executablemd/core";
 import type { DocumentValidationDiagnostic, Json, PermissionMode } from "@executablemd/core";
 import type { GeneratedSelection } from "@executablemd/core/api";
-import { executeInstalled, recordedRootBindingPublicationMode } from "@executablemd/core/host";
+import { executeInstalled } from "@executablemd/core/host";
 import { useGeneratedFallback } from "../evaluation-profile.ts";
 import type {
   ExecutionDeclaration,
   ExecutionInstallation,
   IdentityComponent,
-  RootBindingPublicationMode,
 } from "@executablemd/core/host";
 import {
   ContinuePastCloseDivergenceError,
@@ -129,15 +128,6 @@ export class ReplPreflightError extends Error {
 }
 
 /** A history this process cannot continue, refused before anything is shown. */
-/**
- * The retention every newly admitted entry runs under.
- *
- * One mode and one spelling, stated here because this is the host that keeps a
- * journal across executions: an entry is one of several over one file, so what
- * it captures at its root is what the entry after it may start from.
- */
-const ROOT_BINDING_PUBLICATIONS: RootBindingPublicationMode = "json-v1";
-
 export class ReplReconstructionError extends Error {
   constructor(message: string) {
     super(message);
@@ -313,6 +303,18 @@ function project(
   return prefix.ok ? Ok({ whole: whole.value, prefix: prefix.value }) : prefix;
 }
 
+/**
+ * One running entry's own read of the root its execution owns.
+ *
+ * The key is carried so the answer can be credited to the entry that asked:
+ * the read suspends, and the only thing that makes the values it returns this
+ * entry's is that this entry is still the one running when they arrive.
+ */
+interface OwnedRootRead {
+  readonly key: string;
+  read(): Operation<Result<Readonly<Record<string, Json>>>>;
+}
+
 /** One execution as the application reads it. */
 export interface ReplSession {
   /** The opaque identifier this execution's history is named by. */
@@ -401,6 +403,26 @@ export interface ReplSession {
    * shows text only when something unrelated happens to move.
    */
   readonly outputs: Stream<string, never>;
+  /**
+   * The root data as it stands: the retained head, plus what the entry running
+   * in this process has computed so far.
+   *
+   * An explicit live read, and the only one. The projection answers about the
+   * file, so a name an unsettled entry has bound is not in it — this asks the
+   * execution that owns that entry's root instead, and the execution answers
+   * through its own disclosure policy, so a value it may not disclose refuses
+   * the read rather than appearing in it.
+   *
+   * The live half is the running entry's, and only while that is still the
+   * entry running: the owned read suspends, and an entry that settled or was
+   * replaced while it did has its data in the head by then. So what comes back
+   * after a suspension is either this entry's live root or the file's — never
+   * one entry's live values credited to another.
+   *
+   * Independent of where the session is navigated. A person standing at an
+   * earlier position is reading history; this answers what is true now.
+   */
+  bindings(): Operation<Result<Readonly<Record<string, Json>>>>;
   /** Wait for the entry running in this process to finish, and answer how. */
   join(): Operation<Result<unknown>>;
   /**
@@ -635,25 +657,10 @@ function* start(
 
   /** The one unfinished final entry this session resumes, and its range. */
   const finalSegment = segments[segments.length - 1];
-  const continuing =
+  const resumed =
     submitted === undefined && last !== undefined && !last.settled && finalSegment !== undefined
       ? { entry: last, segment: finalSegment }
       : undefined;
-  // The retention that entry recorded for itself, read off its own admission.
-  // An entry admitted before root captures were retained says nothing here, and
-  // continues saying nothing for the whole of its remaining body — which is
-  // what keeps its replay aligned and leaves its completed effects alone. A
-  // retention this version cannot read refuses the reconstruction rather than
-  // continuing the entry under a guess.
-  const recorded =
-    continuing === undefined
-      ? Ok(undefined)
-      : recordedRootBindingPublicationMode(continuing.segment.admission.description);
-  if (!recorded.ok) {
-    return Err(new ReplReconstructionError(recorded.error.message));
-  }
-  const resumed =
-    continuing === undefined ? undefined : { ...continuing, publications: recorded.value };
 
   if (submitted !== undefined) {
     const validated = yield* preflight(submitted, includes, installations);
@@ -921,6 +928,9 @@ function* start(
       lifecycleChanges: lifecycle.changes,
       changes,
       outputs,
+      bindings(): Operation<Result<Readonly<Record<string, Json>>>> {
+        return rootData();
+      },
       join(): Operation<Result<unknown>> {
         return joining();
       },
@@ -1120,7 +1130,6 @@ function* start(
         // this process remembers of the entry that just ran, and not from the
         // prefix somebody happens to be inspecting.
         entryInitialBindings(after.value),
-        ROOT_BINDING_PUBLICATIONS,
         pausing,
       );
       return yield* scoped(function* (): Operation<Result<ReplSubmission>> {
@@ -1161,17 +1170,6 @@ function* start(
       source: string,
       view: EntrySegmentStream,
       initialBindings: Readonly<Record<string, Json>>,
-      /**
-       * Whether this entry retains the root values its captures bind.
-       *
-       * A newly admitted entry retains them, because the entry after it reads
-       * what the file says this one published. An entry being continued runs
-       * under the retention its own admission recorded for its whole remaining
-       * body, including the suffix no record describes: that admission is
-       * already written, and publishing into the middle of a sequence it does
-       * not mention would diverge against work the entry had already done.
-       */
-      publications: RootBindingPublicationMode | undefined,
       /**
        * Whether the submission that asked for this entry wants it held.
        *
@@ -1316,7 +1314,7 @@ function* start(
         // scheduled to notice the admission instead would be ordered by the
         // scheduler rather than by the record, and the continuation it was
         // racing has no reason to lose.
-        const outcome = yield* runEntry(key, source, view, initialBindings, publications);
+        const outcome = yield* runEntry(key, source, view, initialBindings);
         settle(outcome);
         // A settled entry is past whatever its segment retained, whichever way
         // it settled — including a failure that appended nothing at all, which
@@ -1340,12 +1338,61 @@ function* start(
       return started;
     }
 
+    /**
+     * The running entry's own owned read of its root, or none.
+     *
+     * Held beside {@link running} rather than on it, because it is the
+     * execution's and the execution is created inside the task: a task exists
+     * from the moment it is allocated, and there is nothing to read until the
+     * document it runs has a root.
+     */
+    let ownedRoot: OwnedRootRead | undefined;
+
+    /**
+     * The root data as it stands, from the file and from the entry running now.
+     *
+     * The head is read first and read again after the suspension, because the
+     * owned read is an operation: between asking and answering, the entry can
+     * settle — and then its values are the file's, recorded, rather than this
+     * process's. Rechecking the identity is what keeps those two answers from
+     * being combined into one that is neither.
+     */
+    function* rootData(): Operation<Result<Readonly<Record<string, Json>>>> {
+      const before = ownedRoot;
+      if (before === undefined) {
+        return retainedRootData();
+      }
+      const answer = yield* before.read();
+      // Suspended, so this is a different moment. If the entry that owned the
+      // read is no longer the entry running, what it computed is either in the
+      // head now or was never acknowledged at all; either way the file is the
+      // only honest answer and the live half is dropped rather than carried.
+      if (ownedRoot !== before || running?.key !== before.key) {
+        return retainedRootData();
+      }
+      if (!answer.ok) {
+        return answer;
+      }
+      const head = retainedRootData();
+      if (!head.ok) {
+        return head;
+      }
+      // The live values win: they are this entry's current root, and the head
+      // holds what was true before this entry started.
+      return Ok(Object.freeze({ ...head.value, ...answer.value }));
+    }
+
+    /** What the acknowledged head holds, however this session is navigated. */
+    function retainedRootData(): Result<Readonly<Record<string, Json>>> {
+      const head = readingAt(undefined);
+      return head.ok ? Ok(entryInitialBindings(head.value.model)) : head;
+    }
+
     function* runEntry(
       key: string,
       source: string,
       view: EntrySegmentStream,
       initialBindings: Readonly<Record<string, Json>>,
-      publications: RootBindingPublicationMode | undefined,
     ): Operation<Result<unknown>> {
       try {
         // This entry's Agent attachment, acquired here and nowhere else. It is a
@@ -1397,11 +1444,20 @@ function* start(
           // observer and the permission policy are this session's, not the
           // process's, and the attachment carries the entry whose turns they are.
           [...installations, lifecycle.installation, installation, ...owned],
-          {
-            initialBindings,
-            ...(publications === undefined ? {} : { rootBindingPublications: publications }),
-          },
+          { initialBindings },
         );
+        // This entry's owned read, published for as long as this entry is the
+        // one running and withdrawn with it. Registered after the execution
+        // exists, so there is never a handle that answers about a root that
+        // has not been created; withdrawn by identity, so an entry tearing
+        // down after another has started does not retire the newer one's.
+        const handle: OwnedRootRead = { key, read: started.bindings };
+        yield* ensure(() => {
+          if (ownedRoot === handle) {
+            ownedRoot = undefined;
+          }
+        });
+        ownedRoot = handle;
         // Consumed as it arrives, inside this session's scope. Collecting until
         // the stream closed would leave the overlay empty for the whole of the
         // run and fill it in at the end, which is the opposite of what an
@@ -1529,7 +1585,6 @@ function* start(
         resumed.entry.source,
         new EntrySegmentStream(stream, { retained: resumed.segment.events, final: true }),
         entryInitialBindings(head, resumed.entry),
-        resumed.publications,
       );
     } else if (submitted !== undefined) {
       begin(
@@ -1537,7 +1592,6 @@ function* start(
         submitted,
         new EntrySegmentStream(stream),
         entryInitialBindings(head),
-        ROOT_BINDING_PUBLICATIONS,
       );
     } else {
       // Nothing to run. Every entry this history holds has settled, so the

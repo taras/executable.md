@@ -59,10 +59,19 @@ import type {
   GitAuthentication,
   GitAuthenticationSession,
 } from "./authentication.ts";
-import { runProcess, type ProcessInvocation, type ProcessOutcome } from "./subprocess.ts";
+import {
+  runProcess,
+  runProcessBytes,
+  type ProcessBytes,
+  type ProcessInvocation,
+  type ProcessOutcome,
+} from "./subprocess.ts";
 
 /** What one Git invocation reported. A nonzero exit is an answer, not a throw. */
 export type GitOutcome = ProcessOutcome;
+
+/** The same, with standard output kept as the bytes Git wrote. */
+export type GitBytes = ProcessBytes;
 
 export interface GitInvocation {
   readonly args: readonly string[];
@@ -80,9 +89,9 @@ export interface GitInvocation {
   /**
    * The whole Unix second a commit is authored and committed at.
    *
-   * Two named variables rather than an environment a caller may fill: what a
-   * run's Git state is written by is fixed, and the one thing an operation
-   * decides for itself is when. Absent for every command that writes no object.
+   * Two named variables rather than a date left to the clock: what a run's Git
+   * state is written by is fixed, and the one thing an operation decides for
+   * itself is when. Absent for every command that writes no object.
    */
   readonly committedAt?: number;
   /**
@@ -96,6 +105,17 @@ export interface GitInvocation {
    * as fixed as it is for a workflow.
    */
   readonly identity?: GitCommitIdentity;
+  /**
+   * Variables this command needs beyond the fixed environment above.
+   *
+   * The one route by which a variable is added, and it adds rather than
+   * replaces: every protection the built environment states stays stated. A
+   * read-only observation is what needs it — a private index file to read, lazy
+   * fetching to disable so a missing object refuses instead of reaching a
+   * remote, and optional locks to leave alone. Absent for every command that
+   * works inside the materialization as it is.
+   */
+  readonly variables?: Readonly<Record<string, string>>;
   /**
    * What this command's provider invocation borrowed from the host.
    *
@@ -119,6 +139,16 @@ export interface GitInvocation {
 
 export interface RepositoryHost {
   git(invocation: GitInvocation): Operation<GitOutcome>;
+  /**
+   * The same invocation, with standard output kept as the bytes Git wrote.
+   *
+   * Optional, because a suite that substitutes the whole host has already
+   * replaced the thing a byte-preserving read would be reading. A read that
+   * needs one and finds none reports that rather than decoding with
+   * replacement: a path listing is NUL-framed and a blob may not be text, and
+   * neither survives a substitution made during capture.
+   */
+  gitBytes?(invocation: GitInvocation): Operation<GitBytes>;
   /** A host directory owned by the acquiring scope, removed when it ends. */
   useDirectory(): Operation<string>;
   /**
@@ -240,36 +270,53 @@ export interface RepositoryHostOptions {
   readonly helper?: HelperAssembly;
 }
 
+/**
+ * One Git invocation, as the child process this host spawns.
+ *
+ * Both captures build it the same way, so a byte-preserving read runs under
+ * exactly the fixed configuration and built environment a decoding one does.
+ *
+ * A command with no attachment reaches no authentication mechanism. That is
+ * what makes a completed replay reach none: replay performs no remote
+ * operation, so no invocation ever opens a session to attach.
+ */
+function invoked({
+  args,
+  cwd,
+  home,
+  input,
+  committedAt,
+  identity,
+  variables,
+  attachment,
+  observe,
+}: GitInvocation): ProcessInvocation {
+  return {
+    command: "git",
+    args: [...CONFIGURATION, ...(attachment?.configuration ?? []), ...args],
+    cwd,
+    env: {
+      ...environment(home, committedAt, identity),
+      ...(variables ?? {}),
+      ...(attachment?.environment ?? {}),
+    },
+    ...(input === undefined ? {} : { input }),
+    ...(observe === undefined ? {} : { observe }),
+  };
+}
+
 export function denoRepositoryHost(options: RepositoryHostOptions = {}): RepositoryHost {
   const directories = options.directories ?? { create: (prefix: string) => mkdtemp(prefix) };
   const authentication =
     options.authentication ??
     denoGitAuthentication(options.helper === undefined ? {} : { assembly: options.helper });
   return {
-    git({
-      args,
-      cwd,
-      home,
-      input,
-      committedAt,
-      identity,
-      attachment,
-      observe,
-    }: GitInvocation): Operation<GitOutcome> {
-      // A command with no attachment reaches no authentication mechanism. That
-      // is what makes a completed replay reach none: replay performs no remote
-      // operation, so no invocation ever opens a session to attach.
-      return runProcess({
-        command: "git",
-        args: [...CONFIGURATION, ...(attachment?.configuration ?? []), ...args],
-        cwd,
-        env: {
-          ...environment(home, committedAt, identity),
-          ...(attachment?.environment ?? {}),
-        },
-        ...(input === undefined ? {} : { input }),
-        ...(observe === undefined ? {} : { observe }),
-      });
+    git(invocation: GitInvocation): Operation<GitOutcome> {
+      return runProcess(invoked(invocation));
+    },
+
+    gitBytes(invocation: GitInvocation): Operation<GitBytes> {
+      return runProcessBytes(invoked(invocation));
     },
 
     useAuthentication(locator: string): Operation<GitAuthenticationSession> {

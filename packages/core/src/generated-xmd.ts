@@ -2544,9 +2544,6 @@ function expand(
         undefined,
         environment,
         undefined,
-        // A fragment writes an environment of its own, so it has no root
-        // capture to publish and no root publisher to be given one.
-        undefined,
         // Where a result the host owns a destination for goes. A root's is its
         // execution's own; a fragment is given none, because `<Evaluate>` in a
         // document asked for a rendering rather than for somebody's operation.
@@ -2569,9 +2566,6 @@ function expand(
       // No execution terminal: this fragment's imports are answered by the
       // narrowed provider installed above, and it inherits nothing of the
       // document execution that admitted it.
-      undefined,
-      // And no root publisher: a fragment's locals are its own, and a name it
-      // binds is not something a later entry inherits.
       undefined,
       destinations,
       // A generated fragment is the engine's own text, so it owns no value body

@@ -459,30 +459,3 @@ export type { AnswersState, DeclarationScanner } from "./src/declaration-scan.ts
  * confers no execution authority.
  */
 export { useSyntax } from "./src/use-syntax.ts";
-
-/**
- * The retained root capture, for the host that projects one back.
- *
- * The eighth act of infrastructure, and the narrowest kind of all: a reader and
- * the effect type it belongs to. A host that keeps one journal across several
- * executions is the only thing with a reason to read what an earlier one
- * published, and it has to read it through the parser the live run records
- * through — a second reading of the same durable value would be a second
- * contract, and the day the two disagreed is the day a retained value reached a
- * later entry as something it is not.
- *
- * What does *not* cross is the publisher. It is built beside one execution's own
- * root environment, holds that environment in its closure, and expires with the
- * execution; a host that could reach it could publish into a document's root
- * from outside the document.
- */
-export {
-  parseRootBindingPublication,
-  recordedRootBindingPublicationMode,
-  ROOT_BINDING_PUBLICATION,
-} from "./src/root-binding-publications.ts";
-export type {
-  RootBindingOutcome,
-  RootBindingPublication,
-  RootBindingPublicationMode,
-} from "./src/root-binding-publications.ts";
