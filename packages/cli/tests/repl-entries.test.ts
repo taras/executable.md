@@ -319,6 +319,18 @@ function cancelled(coroutineId: string): DurableEvent {
   return { type: "close", coroutineId, result: { status: "cancelled" } };
 }
 
+/**
+ * A private copy of one unfinished prefix, with a cancellation recorded for it.
+ *
+ * Appended rather than substituted, because that is the shape this records: an
+ * entry that really stopped unfinished and whose cancellation the file then
+ * notes. Copied, so the prefix these bytes came from is not the prefix this
+ * reading is taken from, and the original can be compared afterwards.
+ */
+function cancelledAfter(prefix: readonly DurableEvent[]): DurableEvent[] {
+  return [...prefix.map((event) => event), cancelled("root")];
+}
+
 /** The same journal with the close of one entry replaced. */
 function withClose(
   events: readonly DurableEvent[],
@@ -4073,6 +4085,13 @@ const CAPTURES = [
   "",
   '<Reading as="functionJson" />',
   "",
+  // The one capture whose value the engine composes rather than a component:
+  // a bound command's outcome is a root binding like any other, so what the
+  // next entry reads is the three channels this process settled to.
+  '```bash exec as="ran"',
+  "printf ready; printf noted >&2",
+  "```",
+  "",
   "Captured.",
   "",
 ].join("\n");
@@ -4087,6 +4106,7 @@ const READS_CAPTURES = [
   '  markdownText.includes("Plan"),',
   "  markdownValue.steps,",
   "  functionJson.pressure,",
+  "  `${ran.exitCode}:${ran.stdout}:${ran.stderr}`,",
   '].join("/");',
   "```",
   "",
@@ -4112,12 +4132,19 @@ describe("REPL entries: the root values a capture retains (#939)", () => {
       pressure: 1013,
       station: "north",
     });
+    expect(value(first?.bindings ?? [], "ran")).toEqual({
+      exitCode: 0,
+      stdout: "ready",
+      stderr: "noted",
+    });
 
     // Read back by the entry after it, each as the kind of value it was: an
     // object stays an object, `<Json>`'s capture is the text it returned, and
     // a Markdown component's text capture is what it rendered.
     expect((yield* following(session, READS_CAPTURES)).ok).toBe(true);
-    expect(session.model.entries[1]?.terminal?.output).toContain("Read: 42/beta/42/true/2/1013");
+    expect(session.model.entries[1]?.terminal?.output).toContain(
+      "Read: 42/beta/42/true/2/1013/0:ready:noted",
+    );
 
     // One publication per capture, and the component really ran once: these
     // are values the run produced rather than a reconstruction of them.
@@ -4129,6 +4156,7 @@ describe("REPL entries: the root values a capture retains (#939)", () => {
       "markdownText",
       "markdownValue",
       "paired",
+      "ran",
     ]);
     // And no per-binding effect of any kind is in the history.
     expect(recordedTypes(events)).not.toContain("root_binding");
@@ -4295,7 +4323,7 @@ const READS_SCOPES = [
 describe("REPL entries: whose root a capture belongs to (#939)", () => {
   beforeAll(() => useTempFileCompiler());
 
-  it("P3: a transparent region publishes, and every other scope keeps its own", function* () {
+  it("P3: whose root a capture is written in decides whether it crosses", function* () {
     const { execution, session } = yield* capturing(SCOPES);
     expect((yield* session.join()).ok).toBe(true);
 
@@ -4305,32 +4333,42 @@ describe("REPL entries: whose root a capture belongs to (#939)", () => {
     expect(value(first?.bindings ?? [], "chosen")).toBe("under if");
 
     const events = yield* execution.stream.readAll();
-    // Each local capture really ran, which is what makes their absence below an
-    // absence of publication rather than an absence of work: one `<Syntax>` read
+    // Each local capture really ran, which is what makes the absences below an
+    // absence of root data rather than an absence of work: one `<Syntax>` read
     // per iteration, one per spawned branch, and one inside the fragment.
     expect(recordedTypes(events).filter((type) => type === "syntax_symbols").length).toBe(5);
     expect(recordedTypes(events)).toContain("generated_xmd");
 
     // The component's own `<Let>`, the iteration's `let` and the ordinary
-    // captures written inside the iteration, the spawned branches and the
-    // admitted fragment are each somebody else's: the environment they were
-    // written in is not this root's, so none of them becomes a root value.
-    const locals = ["shapeLocal", "n", "inEach", "inSpawn", "alsoSpawn", "inFragment"];
+    // captures written inside the iteration and the spawned branches are each
+    // somebody else's: the environment they were written in is not this root's,
+    // so none of them becomes a root value.
+    const locals = ["shapeLocal", "n", "inEach", "inSpawn", "alsoSpawn"];
     for (const local of locals) {
       expect(names(first?.bindings ?? [])).not.toContain(local);
     }
-    // `<Each as>` is the exception, and not an exception to the rule: the
-    // aggregate it names is written at the root, by the root, so it is this
-    // entry's own data even though the values it joined were iteration-local.
+    // `<Each as>` is not an exception to that rule: the aggregate it names is
+    // written at the root, by the root, so it is this entry's own data even
+    // though the values it joined were iteration-local.
     expect(typeof value(first?.bindings ?? [], "joined")).toBe("string");
-    expect(settledNames(projected(events), 1).sort()).toEqual(["chosen", "joined", "shaped"]);
+    // Neither is the admitted fragment. A fragment expands against the
+    // document's own environment rather than one of its own — that is what it
+    // has always done — so a capture written in it is written in this root,
+    // and where its source came from does not make it somebody else's.
+    expect(typeof value(first?.bindings ?? [], "inFragment")).toBe("string");
+    expect(settledNames(projected(events), 1).sort()).toEqual([
+      "chosen",
+      "inFragment",
+      "joined",
+      "shaped",
+    ]);
     expect(recordedTypes(events)).not.toContain("root_binding");
 
     expect((yield* following(session, READS_SCOPES)).ok).toBe(true);
     // `props` is the entry's own namespace, which every entry validates for
     // itself: inherited or not, it is an object here because this root has one.
     expect(session.model.entries[1]?.terminal?.output).toContain(
-      "Read: under if/undefined/undefined/string/undefined/undefined/undefined/undefined/object",
+      "Read: under if/undefined/undefined/string/undefined/undefined/undefined/string/object",
     );
   });
 });
@@ -4466,32 +4504,50 @@ describe("REPL entries: what a failure and an interruption leave published (#939
     expect(partitioned(events).map((segment) => segment.settled)).toEqual([false]);
   });
 
-  it("P5: a recorded cancelled close exposes its own facts only, and permits a successor", function* () {
-    const { execution, session } = yield* capturing(
-      ['<Let as="kept" value="one" />', "", "One.", ""].join("\n"),
-    );
-    expect((yield* session.join()).ok).toBe(true);
-    const events = yield* execution.stream.readAll();
-    const [only] = partitioned(events);
-    // The close is doctored and only the close: the entry before it really ran
-    // and really captured. Cancelling a live entry appends no close at all, so
-    // this is the one way to stand where a cancelled entry has settled.
-    const holder = replExecution(withClose(events, only, cancelled("root")));
+  it("P5: a recorded cancellation keeps the facts before it and adds no map", function* () {
+    // The real unfinished prefix the row above leaves behind: an entry that
+    // reached a capture, recorded its own eval export, and stopped at a
+    // question it was never answered. Nothing about it is doctored.
+    const execution = replExecution();
+    yield* scoped(function* () {
+      const session = opened(yield* submitReplEntry({ execution, source: PUBLISHES_THEN_ASKS }));
+      yield* asking(session);
+    });
+    const prefix = yield* execution.stream.readAll();
+    expect(prefix.some((event) => event.type === "close")).toBe(false);
+    expect(names(projected(prefix).entries[0]?.bindings ?? [])).toEqual(["schema"]);
+
+    // Cancelling a live entry appends no close at all, so a file where a
+    // cancelled entry has settled is one where the cancellation was recorded
+    // for it afterwards. Built on a copy, so the prefix stays the prefix.
+    const holder = replExecution(cancelledAfter(prefix));
 
     yield* scoped(function* () {
       const reopened = opened(yield* openReplSession({ execution: holder }));
       expect(reopened.model.entries[0]?.terminal?.status).toBe("cancelled");
-      // A cancellation is not a result, so it carries no computed data — and
-      // the successful one it replaced was discarded rather than kept. What the
-      // entry hands on is what this record actually holds, which is nothing.
+      // A cancellation is not a result, so it carries no computed data of its
+      // own: there is no map here, and none is invented for it.
       expect(reopened.model.entries[0]?.terminal?.bindings).toBeUndefined();
-      expect(reopened.model.entries[0]?.bindings ?? []).toEqual([]);
-      // It still settles the entry, so a successor may follow it; the name the
-      // cancelled entry had captured simply resolves to nothing there.
-      accepted(yield* reopened.submit("Two: {kept}\n"));
+      // What it does not do is unretain what came before it. The eval export
+      // this entry really recorded is a fact the file holds, and cancelling the
+      // entry that made it does not take it back — while the capture the entry
+      // reached, which was never recorded anywhere, is still absent.
+      expect(names(reopened.model.entries[0]?.bindings ?? [])).toEqual(["schema"]);
+
+      // It settles the entry, so a successor may follow it, and the successor
+      // inherits exactly that: the recorded fact and not the unrecorded one.
+      accepted(yield* reopened.submit("Two: {schema.type}/{held}\n"));
       yield* reopened.join();
-      expect(reopened.model.entries[1]?.terminal?.output).not.toContain("Two: one");
+      // The recorded export resolves; the unrecorded capture is not a name
+      // here at all, so its brace renders exactly as it was written.
+      expect(reopened.model.entries[1]?.terminal?.output).toContain("Two: object/{held}");
+      expect(reopened.model.entries[1]?.terminal?.output).not.toContain("acknowledged");
     });
+
+    // And the unfinished prefix this was built from is untouched: its own
+    // reading still has no outcome, and it still permits no successor.
+    expect(yield* execution.stream.readAll()).toEqual(prefix);
+    expect(projected(prefix).entries[0]?.terminal).toBeUndefined();
   });
 });
 
@@ -4618,11 +4674,24 @@ function withSettledBindings(events: readonly DurableEvent[], carried: Json): Du
   });
 }
 
-/** One entry that captures a live function and binds it again by reference. */
+/**
+ * One entry that captures a live function and binds it again by reference.
+ *
+ * `transient` is the third name and the one nothing ever retains: it holds
+ * ordinary JSON for the length of a sentence and is then bound to the handle,
+ * through captures rather than an `eval` export — an export would retain the
+ * JSON and the row would be asking a different question.
+ */
 const CAPTURES_LIVE = [
   '<Handle as="saved" />',
   "",
   '<Let as="localOnly" value={saved} />',
+  "",
+  '<Let as="transient" value={{ step: 1 }} />',
+  "",
+  "Transient here: {transient.step}",
+  "",
+  '<Handle as="transient" />',
   "",
   "```js eval",
   "const used = `${saved()}/${localOnly === saved}`;",
@@ -4648,7 +4717,10 @@ describe("REPL entries: the values that stay in the entry that made them (#939)"
     // by reference, in this entry, as the exact values the producer made.
     expect((yield* following(session, CAPTURES_LIVE)).ok).toBe(true);
     expect(session.model.entries[1]?.terminal?.output).toContain("Used: still live/true");
-    expect(counted.handle).toBe(1);
+    // The transient value really was ordinary JSON while it stood, which is
+    // what makes its absence below an absence of retention rather than of work.
+    expect(session.model.entries[1]?.terminal?.output).toContain("Transient here: 1");
+    expect(counted.handle).toBe(2);
 
     // No record of its own for either name: the second entry's own outcome
     // omits both, because neither value is JSON. What it does carry is the
@@ -4658,6 +4730,11 @@ describe("REPL entries: the values that stay in the entry that made them (#939)"
     expect(recordedTypes(events)).not.toContain("root_binding");
     expect(settledNames(projected(events), 1)).toEqual(["saved"]);
     expect(settledNames(projected(events), 2)).toEqual(["used"]);
+    // `transient` among them: a value a name held and lost before the entry
+    // settled is not history. The result reads the root as it stands, and what
+    // stands under that name is a function — so there is nothing to carry, and
+    // no earlier value to go back for.
+    expect(settledNames(projected(events), 2)).not.toContain("transient");
 
     // So the name keeps the last value anything durably retained under it,
     // and a name only ever bound to a live value is absent from inheritance.
@@ -4666,6 +4743,7 @@ describe("REPL entries: the values that stay in the entry that made them (#939)"
     const cold = projected(yield* execution.stream.readAll());
     expect(entryInitialBindings(cold)["saved"]).toBe("alpha");
     expect(Object.hasOwn(entryInitialBindings(cold), "localOnly")).toBe(false);
+    expect(Object.hasOwn(entryInitialBindings(cold), "transient")).toBe(false);
   });
 });
 

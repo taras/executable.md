@@ -4658,9 +4658,11 @@ was not granted under.
 
 #### 5.3.3 Ordinary generated composition
 
-Generated XMD uses ordinary local bindings and pure composition. It starts with
-no caller bindings and exports none. This fragment renders one JSON value from
-two bound component results:
+Generated XMD uses ordinary local bindings and pure composition. It reads no
+caller binding: a declarative expression resolves only names the fragment bound
+itself, and every other brace renders as written. It has no export or result
+channel of its own either — what it answers with is its rendered text. This
+fragment renders one JSON value from two bound component results:
 
 ```mdx
 <File path="package.json" as="package" />
@@ -4673,6 +4675,14 @@ any effect. `allow` governs only effectful components; it does not prohibit
 bindings, object composition, structural language constructs or pure renderers.
 Imports and executable code fences remain outside the generated program's
 permission.
+
+A fragment is admitted *into* a document and expands against that document's
+environment, so a name it binds with `as` is written in the containing
+execution's own root rather than in an environment of the fragment's. That
+makes it eligible root data on that execution's result like any other root
+binding (§4.5) — a consequence of which environment the write landed in, not a
+channel of the fragment's own. A generated **root** is the separate case: it
+begins with an environment of its own, so its bindings stay in it.
 
 **Every built-in structural construct is available, with its ordinary
 semantics.** `Content`, `Output`, `Return`, `Let`, `Each`, `If`, `Else`,

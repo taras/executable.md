@@ -11,17 +11,20 @@
  * document result carries the same data so a settled run can be read back
  * without being executed again.
  *
- * The owner is private to canonical invocation. It is given the actual root
- * environment once, when document expansion creates it, so what it reports is
- * that object's own data rather than something found through a name, a path, a
- * coroutine, a Context or an assignment hook. It holds data, never resources:
- * no reference here extends a task, a Session or a provider's lifetime.
+ * The owner is private to canonical invocation, and is that invocation's own
+ * resource: acquired in its owning scope before the work it holds anything
+ * for, and releasing its live references in its own finalizer. It is given the
+ * actual root environment once, when document expansion creates it, so what it
+ * reports is that object's own data rather than something found through a
+ * name, a path, a coroutine, a Context or an assignment hook. It holds data,
+ * never resources: no reference here extends a task, a Session or a provider's
+ * lifetime, and its teardown extends none either.
  */
 
-import { Err, Ok } from "effection";
+import { Err, Ok, resource } from "effection";
 import type { Operation, Result } from "effection";
 
-import { isJsonObject, parseJson } from "./json.ts";
+import { isJsonObject, parseJson, parseJsonObject } from "./json.ts";
 import { validateBindingName } from "./live-env.ts";
 import type { EvalEnv, Json, JsonObject } from "./types.ts";
 
@@ -57,15 +60,17 @@ export interface ComputedBindings {
    */
   attach(root: EvalEnv): void;
   /**
-   * Keep the data an accepted ordinary result carries, live or restored.
+   * Accept the data an ordinary result carries, live or restored.
    *
-   * After this the owner answers from the result rather than from a live
-   * environment, which is what lets a completed run be read without being
-   * executed again.
+   * What arrives here is what the journal already holds: the result reached
+   * this owner by coming back through the root's own close, so the gate that
+   * decides what may be written has already vetted it. The owner keeps that
+   * accepted data and lets go of the root and the scanner — which is what lets
+   * the handle stay readable for its promised lifetime without its teardown
+   * holding a live reference open to serve a read, and what keeps a replayed
+   * run from scanning its own journal a second time.
    */
   settle(data: JsonObject | undefined): void;
-  /** Drop every live reference this owner holds, during its owner's teardown. */
-  release(): void;
   /** The eligible data a settling result carries, or nothing before a root. */
   computed(): JsonObject | undefined;
   /** What a host reads: eligible data, or why it cannot be disclosed. */
@@ -87,57 +92,93 @@ export const NO_ACCEPTED_RESULT =
   "this execution ended without an accepted result, so it has no computed root data to read.";
 
 /**
- * Build one execution's owner.
+ * Acquire one execution's owner, for the lifetime of the scope that acquires it.
  *
- * Created before the execution establishes its secret policy, so it starts
+ * A resource rather than a value with a cleanup call beside it: what this holds
+ * while a document runs is the document's live root environment and this
+ * execution's own secret scanner, and both belong to the invocation rather than
+ * to whoever remembers to let go of them. Acquired in the canonical
+ * invocation's owning scope before the work it holds anything for, so the
+ * finalizer below is established before there is anything to release — an owner
+ * whose cleanup were registered afterwards would have a window in which a halt
+ * leaves the root attached.
+ *
+ * Acquired before the execution establishes its secret policy, so it starts
  * without one and takes it where that decision is made. A run that discloses
  * nothing special still reads through a policy, so there is one path and not
  * two.
  */
-export function createComputedBindings(): ComputedBindings {
-  let disclose: BindingsDisclosure | undefined;
-  let root: EvalEnv | undefined;
-  let held: JsonObject | undefined;
-  let accepted = false;
-  let ended = false;
-  return {
-    adopt(policy: BindingsDisclosure): void {
-      disclose = policy;
-    },
-    attach(given: EvalEnv): void {
-      root = given;
-    },
-    settle(data: JsonObject | undefined): void {
-      held = data;
-      accepted = true;
+export function useComputedBindings(): Operation<ComputedBindings> {
+  return resource(function* (provide) {
+    let disclose: BindingsDisclosure | undefined;
+    let root: EvalEnv | undefined;
+    let accepted: JsonObject | undefined;
+    let ended = false;
+    const owner: ComputedBindings = {
+      adopt(policy: BindingsDisclosure): void {
+        disclose = policy;
+      },
+      attach(given: EvalEnv): void {
+        root = given;
+      },
+      settle(data: JsonObject | undefined): void {
+        accepted = data ?? {};
+        // The accepted data is kept, not the things that produced it. From
+        // here the root the document expanded against and the scanner that
+        // vetted it on its way into the journal are this owner's no longer,
+        // whichever way the run ends.
+        root = undefined;
+        disclose = undefined;
+      },
+      computed(): JsonObject | undefined {
+        return root === undefined ? undefined : eligibleRootBindings(root);
+      },
+      *read(): Operation<Result<JsonObject>> {
+        const settled = accepted;
+        if (settled !== undefined) {
+          return Ok(detached(settled));
+        }
+        const policy = disclose;
+        if (policy === undefined) {
+          return Err(new Error(NO_DISCLOSURE_POLICY));
+        }
+        const live = root;
+        if (live === undefined) {
+          // No root yet is an empty answer; a root that is gone without an
+          // accepted result is a refusal. The two are told apart by whether
+          // this owner's teardown has run, so a read before the document
+          // starts does not look like a read after it was halted.
+          return ended ? Err(new Error(NO_ACCEPTED_RESULT)) : Ok({});
+        }
+        const disclosed = yield* policy(eligibleRootBindings(live));
+        return disclosed.ok ? Ok(detached(disclosed.value)) : disclosed;
+      },
+    };
+    try {
+      yield* provide(owner);
+    } finally {
+      // Whichever way this invocation ended. A run that settled keeps the
+      // answer it settled — that answer is data, and the handle was promised
+      // it — while a run halted or failed before settling has nothing to read
+      // and no live environment left to read instead.
       root = undefined;
-    },
-    release(): void {
-      root = undefined;
+      disclose = undefined;
       ended = true;
-    },
-    computed(): JsonObject | undefined {
-      return root === undefined ? undefined : eligibleRootBindings(root);
-    },
-    *read(): Operation<Result<JsonObject>> {
-      const policy = disclose;
-      if (policy === undefined) {
-        return Err(new Error(NO_DISCLOSURE_POLICY));
-      }
-      if (accepted) {
-        return yield* policy(held ?? {});
-      }
-      const live = root;
-      if (live !== undefined) {
-        return yield* policy(eligibleRootBindings(live));
-      }
-      // No root yet is an empty answer; a root that is gone without an accepted
-      // result is a refusal. The two are told apart by whether this owner's
-      // teardown has run, so a read before the document starts does not look
-      // like a read after it was halted.
-      return ended ? Err(new Error(NO_ACCEPTED_RESULT)) : Ok({});
-    },
-  };
+    }
+  });
+}
+
+/**
+ * One read's own graph.
+ *
+ * Every successful read is copied, not shared. The owner's accepted answer is
+ * this execution's result, and a reader that could reach into it would be
+ * editing an outcome the journal has already recorded — so two reads of one
+ * settled execution are two objects, and changing either changes neither the
+ * other nor what the execution decided.
+ */
+function detached(data: JsonObject): JsonObject {
+  return parseJsonObject(data);
 }
 
 /**

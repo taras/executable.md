@@ -48,7 +48,10 @@ Sidekick responses, and the root bindings a REPL entry inherits.
   it finishes is part of what it hands on — including to a value it inherited
   and never named again. A change made after an entry finished reaches nothing.
 - An entry that failed still hands on the state it had. One whose cancellation
-  the file records hands on nothing, and so does one still running.
+  the file records hands on no state of its own — but it does not take back
+  what it had already recorded before then, so an `eval` export it made is
+  still there for the entry after it. One still running has handed on nothing
+  yet.
 - A history written before this was retained is read as it is: a value it never
   recorded stays absent, and nothing re-runs the entry to recover it.
 

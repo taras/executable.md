@@ -4111,7 +4111,9 @@ Glob keeps its existing required `include`, optional `exclude` and value-returni
 contract. With `as` it binds a sorted, deduplicated array of relative file paths
 and renders no text. Generated evaluation supports ordinary fragment-local
 bindings, structural constructs, declarative expression props over those
-bindings, and pure components. It imports no caller bindings and exports none.
+bindings, and pure components. It reads no caller binding and has no export or
+result channel of its own; a name it binds with `as` is written in the
+containing document's environment, which is the one it expands against.
 Executable fences,
 imports and effectful components outside the selected permission remain refused.
 

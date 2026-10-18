@@ -280,10 +280,17 @@ deleted, and nothing warns.
 
 What survives is what was retained. An entry that failed settles its entry and
 hands on the root data its own failing outcome carried, because a failure is an
-outcome. An entry whose cancellation the file records settles its entry too,
-and a cancellation is not a result: it carries no data, and the successful
-outcome it stands in place of was discarded rather than kept. Either way the
-next entry may start.
+outcome.
+
+A cancellation is not a result. An entry whose cancellation the file records
+settles its entry too, but it carries no computed root data of its own: there
+is no map on it, and none is reconstructed for it — whatever a cancelled run
+had computed went with it rather than standing in for a result. What it does
+not do is unretain the facts recorded before it. An `eval` export that entry
+really made is a fact the file holds, and the entry after it inherits that
+export exactly as it would from any other settled entry, while a capture the
+entry reached and never recorded stays absent. Either way the next entry may
+start.
 
 "Nothing unretained crosses" is about outcomes, not about names. An entry that
 mutated a value it inherited and never named again still hands the mutated

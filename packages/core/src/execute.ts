@@ -35,7 +35,7 @@ import { DocumentProtocolError, issueDocument } from "./document-request.ts";
 import { claimBoundExec } from "./bound-exec.ts";
 import type { DocumentSettlement, IssuedDocument } from "./document-request.ts";
 import type { DocumentRequest, DurablePreparation } from "./document-request.ts";
-import { createComputedBindings, parseComputedBindings } from "./computed-bindings.ts";
+import { parseComputedBindings, useComputedBindings } from "./computed-bindings.ts";
 import type { ComputedBindings } from "./computed-bindings.ts";
 import type { CompletionFailure, ExecutionRequest } from "./execution-request.ts";
 import { createContext } from "effection";
@@ -2827,10 +2827,12 @@ function* executeDocument(
   const root: RootDocumentSource = options;
 
   // Build modifier registry — pure data, no scope side effects.
-  // This execution's own binding owner, created before anything it will hold:
-  // the document's root arrives when expansion creates it, and the disclosure
-  // policy when the execution establishes one.
-  const computed = createComputedBindings();
+  // This execution's own binding owner, acquired in the canonical invocation's
+  // own scope before anything it will hold: the document's root arrives when
+  // expansion creates it, and the disclosure policy when the execution
+  // establishes one. Acquired here, ahead of that work, so its finalizer is
+  // established before there is a live reference for it to release.
+  const computed = yield* useComputedBindings();
 
   const registry = createModifierRegistry();
   // Held by identity as well as by name: a bound block is authorized against
