@@ -4,11 +4,11 @@
  * Three requirements, and they are about opposite things. Describing the vocabulary
  * must reach nothing; one runtime *operates* it; and one only *describes* it.
  * All three have to be true at once, so a document written for `xmd run`
- * resolves the same twelve names everywhere, and on a runtime that operates
+ * resolves the same sixteen names everywhere, and on a runtime that operates
  * none of them every one reports an absent provider before a lock, a
  * credential, a subprocess or a request exists. `<Dir>` is canonical core's
  * rather than the Plugin's, so it is here for the opposite reason: it keeps
- * working where every one of those twelve refuses.
+ * working where every one of those sixteen refuses.
  *
  * The declarations are the same array in every case, which is why there is no
  * fourth thing to keep in agreement.
@@ -47,6 +47,10 @@ const OPERATIONS: readonly { readonly name: string; readonly source: string }[] 
   { name: "Git.Add", source: `<Git.Add paths="a.md" />` },
   { name: "Git.Commit", source: `<Git.Commit message="m" as="c" />` },
   { name: "Git.Push", source: `<Git.Push />` },
+  { name: "Git.Files", source: `<Git.Files as="v" />` },
+  { name: "Git.Changes", source: `<Git.Changes compare="unstaged" as="v" />` },
+  { name: "Git.Diff", source: `<Git.Diff compare="unstaged" as="v" />` },
+  { name: "Git.File", source: `<Git.File commit="HEAD" path="README.md" as="v" />` },
   { name: "PullRequest", source: `<PullRequest title="t" as="pr" />` },
   {
     name: "PullRequest.Reviews",
@@ -63,7 +67,11 @@ const OPERATIONS: readonly { readonly name: string; readonly source: string }[] 
   { name: "Issue", source: `<Issue url="https://github.com/o/r/issues/1" as="i" />` },
 ];
 
-/** The twelve names #643 settled that need a provider, as a document writes them. */
+/**
+ * The sixteen names that need a provider, as a document writes them.
+ *
+ * #643 settled twelve; #940 added the four reads beside the four transitions.
+ */
 const COMPOSITION_NAMES = [
   "Repository",
   "Worktree",
@@ -71,6 +79,10 @@ const COMPOSITION_NAMES = [
   "Git.Add",
   "Git.Commit",
   "Git.Push",
+  "Git.Files",
+  "Git.Changes",
+  "Git.Diff",
+  "Git.File",
   "PullRequest",
   "PullRequest.Reviews",
   "PullRequest.Comments",
@@ -193,11 +205,11 @@ describe("ORC1 — describing the vocabulary reaches nothing", () => {
 });
 
 describe("ORC2 — one language, described everywhere and operated somewhere", () => {
-  it("registers the same twelve declarations the syntax catalog describes", function* () {
+  it("registers the same sixteen declarations the syntax catalog describes", function* () {
     // The array itself, rather than a second list: the Plugin's own
     // registration and the catalog both consume this one, so there is nothing
     // for a runtime to disagree about.
-    expect(COMPOSITION_REGISTRATIONS).toHaveLength(12);
+    expect(COMPOSITION_REGISTRATIONS).toHaveLength(16);
     expect([...COMPOSITION_REGISTRATIONS].map((registration) => registration.name).sort()).toEqual(
       [...COMPOSITION_NAMES].sort(),
     );
@@ -222,7 +234,7 @@ describe("ORC2 — one language, described everywhere and operated somewhere", (
       // refusal below would then be about something else.
       const failure = yield* raisedValue(ordinaryWithoutProvider(operation.source, "."));
       // The element's name travels with the assertion, so a failure says which
-      // of the twelve reported something else.
+      // element reported something else.
       const reported = `${operation.name}: ${String(failure)}`;
       expect(reported).toMatch(
         /provider is not installed|no Repository composition provider|no Git composition provider|no issue provider|no Issue provider|no pull-request provider/,

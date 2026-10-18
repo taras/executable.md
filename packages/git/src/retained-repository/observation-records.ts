@@ -157,9 +157,7 @@ export function replObservationRecordName(record: {
 }
 
 /** The digest of everything one observation asks for. */
-export function replObservationFingerprint(
-  request: ReplObservationRequest,
-): Operation<string> {
+export function replObservationFingerprint(request: ReplObservationRequest): Operation<string> {
   return digest({
     version: REPL_REPOSITORY_VERSION,
     operation: request.query.kind,
@@ -191,9 +189,7 @@ export function replObservationRecordJson(input: {
  * did not write describes something other than an observation this host made,
  * and answering a document from it would bind a page nobody read.
  */
-export function parseReplObservationRecord(
-  value: unknown,
-): ReplObservationRecord | undefined {
+export function parseReplObservationRecord(value: unknown): ReplObservationRecord | undefined {
   const read = members(value, [
     "version",
     "operation",
@@ -314,10 +310,7 @@ function checkoutJson(checkout: ReplObservationCheckout): Json {
   };
 }
 
-function outcomeJson(
-  kind: GitObservationKind,
-  outcome: Result<GitObservationValue>,
-): Json {
+function outcomeJson(kind: GitObservationKind, outcome: Result<GitObservationValue>): Json {
   if (!outcome.ok) {
     const data = replObservationRefusalOf(outcome.error);
     if (data === undefined) {
@@ -434,12 +427,7 @@ function parseQuery(
     const path = text(read["path"]);
     const offset = count(read["offset"]);
     const limit = positive(read["limit"]);
-    if (
-      commit === undefined ||
-      path === undefined ||
-      offset === undefined ||
-      limit === undefined
-    ) {
+    if (commit === undefined || path === undefined || offset === undefined || limit === undefined) {
       return undefined;
     }
     return Object.freeze({ kind: "file" as const, commit, path, offset, limit });
@@ -540,9 +528,7 @@ function sha256(value: unknown): string | undefined {
 }
 
 function count(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-    ? value
-    : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function positive(value: unknown): number | undefined {

@@ -300,10 +300,7 @@ function* recorded(
 }
 
 /** Where the contained native read runs, once this entry has routed it. */
-function placeOf(
-  request: ReplObservationRequest,
-  target: ReplGitCheckout,
-): ObservationPlace {
+function placeOf(request: ReplObservationRequest, target: ReplGitCheckout): ObservationPlace {
   return {
     repository: request.repository,
     root: target.checkout.root,

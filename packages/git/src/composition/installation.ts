@@ -68,12 +68,7 @@ import {
   reviewsReturns,
 } from "./components/PullRequestReads.ts";
 import IssueTracker, { props as issueTrackerProps } from "./components/IssueTracker.ts";
-import {
-  changesForm,
-  diffForm,
-  fileForm,
-  filesForm,
-} from "./components/GitReads.ts";
+import { changesForm, diffForm, fileForm, filesForm } from "./components/GitReads.ts";
 import {
   changesProps,
   changesReturns,

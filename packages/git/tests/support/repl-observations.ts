@@ -212,9 +212,7 @@ export function runEntry(
     yield* Execution.around({
       *init(_args, next): Operation<void> {
         yield* useReplRepositoryRecording({
-          host:
-            options.host ??
-            countingEntryHost(counted, options.barrier, options.intercept),
+          host: options.host ?? countingEntryHost(counted, options.barrier, options.intercept),
           ...(managed === undefined ? {} : { root: managed }),
         });
         yield* next();
@@ -285,13 +283,6 @@ export function leftEntry(
     yield* task.halt();
     return prefix;
   });
-}
-
-/** Let every ready task run, so "reached its wait" is about turns. */
-export function* settled(turns = 8): Operation<void> {
-  for (let turn = 0; turn < turns; turn += 1) {
-    yield* sleep(0);
-  }
 }
 
 /** Wait until this path is there, or say what never appeared. */

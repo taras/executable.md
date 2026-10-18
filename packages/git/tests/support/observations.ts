@@ -106,11 +106,7 @@ export function* useObservationFixture(): Operation<ObservationFixture> {
   yield* until(chmod(join(root, "mode.sh"), 0o644));
   git(["add", "--", "src", "mode.sh", "doc", "gone.ts", "link-me.txt"], root, home);
   git(["add", "--", AWKWARD_PATH, MAGIC_PATH], root, home);
-  git(
-    ["update-index", "--add", "--cacheinfo", `160000,${gitlinkBefore},nested`],
-    root,
-    home,
-  );
+  git(["update-index", "--add", "--cacheinfo", `160000,${gitlinkBefore},nested`], root, home);
   git(["commit", "-m", "first"], root, home);
   const c1 = git(["rev-parse", "HEAD"], root, home);
 
@@ -127,11 +123,7 @@ export function* useObservationFixture(): Operation<ObservationFixture> {
   git(["rm", "--quiet", "--", "link-me.txt"], root, home);
   yield* until(symlink("src/a.ts", join(root, "link-me.txt")));
   git(["add", "--", "src", "mode.sh", "link-me.txt"], root, home);
-  git(
-    ["update-index", "--cacheinfo", `160000,${gitlinkAfter},nested`],
-    root,
-    home,
-  );
+  git(["update-index", "--cacheinfo", `160000,${gitlinkAfter},nested`], root, home);
   git(["commit", "-m", "second"], root, home);
   const c2 = git(["rev-parse", "HEAD"], root, home);
 
@@ -328,9 +320,12 @@ export function* useSentinelConfiguration(
   yield* until(
     writeFile(
       script,
-      ["#!/bin/sh", `printf '%s\\n' "$SENTINEL_NAME" >> ${JSON.stringify(marker)}`, "exit 0", ""].join(
-        "\n",
-      ),
+      [
+        "#!/bin/sh",
+        `printf '%s\\n' "$SENTINEL_NAME" >> ${JSON.stringify(marker)}`,
+        "exit 0",
+        "",
+      ].join("\n"),
     ),
   );
   yield* until(chmod(script, 0o755));
@@ -443,10 +438,7 @@ export function* indexFingerprints(
 }
 
 /** A component that performs one host action where a document writes it. */
-export function actionProbe(
-  name: string,
-  run: () => Operation<void>,
-): ComponentRegistration {
+export function actionProbe(name: string, run: () => Operation<void>): ComponentRegistration {
   return {
     name,
     origin: `test://${name.toLowerCase()}`,

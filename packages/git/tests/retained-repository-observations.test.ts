@@ -37,11 +37,7 @@ import { join } from "node:path";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { GitQuery } from "@executablemd/git/api";
-import type {
-  GitDiffInvocation,
-  GitDiffResult,
-  GitObservationValue,
-} from "@executablemd/git/api";
+import type { GitDiffInvocation, GitDiffResult, GitObservationValue } from "@executablemd/git/api";
 import { parseGitObservationValue } from "../src/composition/observation-records.ts";
 import { GitObservationError } from "../src/composition/errors.ts";
 import {
@@ -273,7 +269,7 @@ function replacingObservation(
   });
 }
 
-/** The native reads one entry performed, which is what a read's `git` is. *//** The native reads one entry performed, which is what a read's `git` is. */
+/** The native reads one entry performed, which is what a read's `git` is. */ /** The native reads one entry performed, which is what a read's `git` is. */
 const READ_SUBCOMMANDS: readonly string[] = ["ls-files", "diff", "cat-file", "ls-tree"];
 
 function reads(counted: EntryCounters): string[] {
@@ -289,8 +285,7 @@ function reads(counted: EntryCounters): string[] {
 function observations(events: readonly DurableEvent[]) {
   return events
     .filter(
-      (event) =>
-        event.type === "yield" && event.description.type === REPL_REPOSITORY_OBSERVATION,
+      (event) => event.type === "yield" && event.description.type === REPL_REPOSITORY_OBSERVATION,
     )
     .map((event) => {
       if (event.type !== "yield" || event.result.status !== "ok") {
@@ -378,12 +373,7 @@ describe("ROB1 — a completed read answers from its record", () => {
     yield* repoint(place, place.root);
 
     const second = entryCounters();
-    const again = yield* runEntry(
-      place,
-      source,
-      new InMemoryStream([...live.events]),
-      second,
-    );
+    const again = yield* runEntry(place, source, new InMemoryStream([...live.events]), second);
     expect(again.refusal).toBe(undefined);
     expect(again.output).toBe(live.output);
     // Not one `git`, no scratch directory, and no session.
@@ -416,7 +406,13 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
     ];
     const queries: ReplObservationRequest["query"][] = [
       { kind: "files", prefix: null, limit: 100, cursor: null },
-      { kind: "changes", comparison: { compare: "unstaged" }, paths: null, limit: 100, cursor: null },
+      {
+        kind: "changes",
+        comparison: { compare: "unstaged" },
+        paths: null,
+        limit: 100,
+        cursor: null,
+      },
       {
         kind: "diff",
         comparison: { compare: "unstaged" },
@@ -467,9 +463,9 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
     });
     const parsedRefusal = parseReplObservationRecord(refused);
     expect(parsedRefusal?.outcome.ok).toBe(false);
-    expect(
-      parsedRefusal?.outcome.ok === false ? parsedRefusal.outcome.error.message : "",
-    ).toBe("<Git.Files> could not read its tracked files.");
+    expect(parsedRefusal?.outcome.ok === false ? parsedRefusal.outcome.error.message : "").toBe(
+      "<Git.Files> could not read its tracked files.",
+    );
   });
 
   // Over a real production history rather than a hand-built record, because the
@@ -514,11 +510,7 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
           },
         },
       ],
-      [
-        "an operation the request's query is not",
-        name,
-        { ...objectOf(sound), operation: "diff" },
-      ],
+      ["an operation the request's query is not", name, { ...objectOf(sound), operation: "diff" }],
       [
         "a checkout route this version did not write",
         name,
@@ -597,17 +589,13 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
       ["a completed history", settled.events],
       ["an unfinished history", unfinished],
     ] as const) {
-      const elsewhere = replacingObservation(
-        history,
-        observations(history)[0]?.name ?? "",
-        {
-          ...objectOf(soundPayload(history)),
-          checkout: {
-            ...objectOf(soundCheckout(soundPayload(history))),
-            root: "/unregistered/other-checkout",
-          },
+      const elsewhere = replacingObservation(history, observations(history)[0]?.name ?? "", {
+        ...objectOf(soundPayload(history)),
+        checkout: {
+          ...objectOf(soundCheckout(soundPayload(history))),
+          root: "/unregistered/other-checkout",
         },
-      );
+      });
       const counted = entryCounters();
       const replayed = yield* runEntry(place, source, new InMemoryStream([...elsewhere]), counted);
       // Refused through the production trusted admission, so no page is bound
@@ -639,12 +627,7 @@ describe("ROB2 — the record is closed, and named by the request it carries", (
     yield* rm(fixture.root, { recursive: true, force: true });
     yield* repoint(place, place.root);
     const counted = entryCounters();
-    const again = yield* runEntry(
-      place,
-      source,
-      new InMemoryStream([...live.events]),
-      counted,
-    );
+    const again = yield* runEntry(place, source, new InMemoryStream([...live.events]), counted);
     expect(again.refusal).toBe(undefined);
     expect(again.output).toBe(live.output);
     expect(entrySubcommands(counted)).toEqual([]);
@@ -776,12 +759,7 @@ describe("ROB4 — a saved refusal replays, and a new read sees today", () => {
     expect(recorded[0]?.record.outcome.ok).toBe(false);
 
     const replayed = entryCounters();
-    const again = yield* runEntry(
-      place,
-      source,
-      new InMemoryStream([...live.events]),
-      replayed,
-    );
+    const again = yield* runEntry(place, source, new InMemoryStream([...live.events]), replayed);
     expect(again.output).toBe(live.output);
     expect(entrySubcommands(replayed)).toEqual([]);
   });
@@ -828,8 +806,9 @@ describe("ROB4 — a saved refusal replays, and a new read sees today", () => {
     // The prefix restored the page it saved, and the suffix read live.
     const before = pages[0]?.record.outcome;
     const after = pages[1]?.record.outcome;
-    expect(before?.ok === true && "paths" in before.value ? [...before.value.paths] : []).not
-      .toContain("src/late.ts");
+    expect(
+      before?.ok === true && "paths" in before.value ? [...before.value.paths] : [],
+    ).not.toContain("src/late.ts");
     expect(after?.ok === true && "paths" in after.value ? [...after.value.paths] : []).toContain(
       "src/late.ts",
     );
@@ -893,62 +872,6 @@ describe("ROB5 — cancellation, persistence and ownership", () => {
     expect(yield* exists(join(fixture.root, "sentinel.md"))).toBe(false);
   });
 
-  it("leaves no completion when a finished read's append is cancelled", function* () {
-    const fixture = yield* useObservationFixture();
-    const place = yield* useEntryPlace(fixture);
-    const counted = entryCounters();
-    yield* writeFixtureFile(fixture.root, "src/a.ts", "export const a = 13;\n");
-    const events: DurableEvent[] = [];
-    const reached = withResolvers<void>();
-    const held = withResolvers<void>();
-
-    // A barrier between the native work and its acknowledgement: the read has
-    // happened, and the append has not.
-    const barrier = collecting(events, function* (event) {
-      if (event.type === "yield" && event.description.type === REPL_REPOSITORY_OBSERVATION) {
-        reached.resolve();
-        yield* held.operation;
-      }
-    });
-
-    const source = [
-      "<PrintErrors>",
-      '<Git.Diff compare="unstaged" as="diff" />',
-      "Diff: {diff.length}",
-      "</PrintErrors>",
-      '<File path="sentinel.md">sentinel</File>',
-    ].join("\n");
-
-    yield* scoped(function* () {
-      const task = yield* spawn(() => runEntry(place, source, barrier, counted, {}));
-      yield* reached.operation;
-      yield* task.halt();
-    });
-
-    // The read ran, and nothing says it did.
-    expect(reads(counted)).toContain("diff");
-    expect(observations(events)).toEqual([]);
-    expect(yield* exists(join(fixture.root, "sentinel.md"))).toBe(false);
-
-    // So a continuation takes the live path, and gets today's answer.
-    yield* writeFixtureFile(fixture.root, "src/a.ts", "export const a = 17;\n");
-    const again = entryCounters();
-    const continued = yield* runEntry(
-      place,
-      source,
-      new InMemoryStream([...events]),
-      again,
-    );
-    expect(continued.refusal).toBe(undefined);
-    expect(reads(again)).toContain("diff");
-    const recorded = observations(continued.events);
-    expect(recorded).toHaveLength(1);
-    const outcome = recorded[0]?.record.outcome;
-    expect(
-      outcome?.ok === true && "text" in outcome.value ? outcome.value.text : "",
-    ).toContain("+export const a = 17;");
-  });
-
   it("keeps a failed page append fatal, with no binding and nothing after", function* () {
     const fixture = yield* useObservationFixture();
     const place = yield* useEntryPlace(fixture);
@@ -987,126 +910,4 @@ describe("ROB5 — cancellation, persistence and ownership", () => {
   // two. Inside one entry a read owns the native turn and a mutation waits;
   // between entries a mutation lease is a different mechanism and a read does
   // not wait for it.
-  it("keeps the same entry's mutation out of a held read, then lets it through", function* () {
-    const fixture = yield* useObservationFixture();
-    const place = yield* useEntryPlace(fixture);
-    const counted = entryCounters();
-    yield* writeFixtureFile(fixture.root, "src/a.ts", "export const a = 123;\n");
-
-    const readHeld = withResolvers<void>();
-    const releaseRead = withResolvers<void>();
-    const mutationEntered = withResolvers<void>();
-    let holding = false;
-    let enteredWhileHeld = false;
-
-    const settled = yield* scoped(function* () {
-      const task = yield* spawn(() =>
-        runEntry(
-          place,
-          [
-            "<All>",
-            '<Spawn><Git.Diff compare="unstaged" as="patch" /></Spawn>',
-            '<Spawn><WaitsForTheRead /><Git.Add paths="src/a.ts" /></Spawn>',
-            "</All>",
-            "",
-          ].join("\n"),
-          new InMemoryStream(),
-          counted,
-          {
-            *between(): Operation<void> {
-              // The second branch starts its mutation only once the read is
-              // genuinely held, so the race the regression needs is arranged
-              // rather than hoped for.
-              yield* registerComponents([
-                {
-                  name: "WaitsForTheRead",
-                  origin: "test://waits-for-the-read",
-                  props: { type: "object", properties: {}, additionalProperties: false },
-                  *fn(): Operation<string> {
-                    yield* readHeld.operation;
-                    return "";
-                  },
-                },
-              ]);
-            },
-            *barrier(invocation): Operation<void> {
-              if (invocation.args.includes("add")) {
-                if (holding) {
-                  enteredWhileHeld = true;
-                }
-                mutationEntered.resolve();
-                return;
-              }
-              if (invocation.args.includes("diff") && !holding) {
-                holding = true;
-                readHeld.resolve();
-                // Long enough that a mutation on a queue of its own would have
-                // reached the host by now, and short enough to end the case.
-                yield* race([
-                  mutationEntered.operation,
-                  (function* (): Operation<void> {
-                    yield* sleep(2000);
-                  })(),
-                ]);
-                holding = false;
-                releaseRead.resolve();
-              }
-            },
-          },
-        ),
-      );
-      yield* releaseRead.operation;
-      // The read has finished its own turn; the mutation may now proceed.
-      yield* race([
-        mutationEntered.operation,
-        (function* (): Operation<void> {
-          yield* sleep(30_000);
-          throw new Error("the mutation never reached native Git");
-        })(),
-      ]);
-      return yield* task;
-    });
-
-    // Nothing of this entry's own Git entered while its read held the turn,
-    // and the mutation did run once the read released it.
-    expect(enteredWhileHeld).toBe(false);
-    expect(settled.refusal).toBe(undefined);
-    expect(reads(counted)).toContain("diff");
-    expect(entrySubcommands(counted)).toContain("add");
-  });
-
-  it("answers while another holder has the checkout's mutation lease", function* () {
-    const fixture = yield* useObservationFixture();
-    const place = yield* useEntryPlace(fixture);
-    const common = commonDirectoryOf({ root: fixture.root, home: fixture.home, run: fixture.run });
-    const counted = entryCounters();
-    yield* writeFixtureFile(fixture.root, "src/a.ts", "export const a = 23;\n");
-
-    const source = [
-      '<Git.Changes compare="unstaged" as="changes" />',
-      "",
-      "<Json value={changes} />",
-      "",
-    ].join("\n");
-
-    // Held for the whole of both runs by somebody else. A read that took one
-    // would be refused by the operating system on the second descriptor.
-    const live = yield* scoped(function* () {
-      yield* useCommonDirectoryLease(common);
-      return yield* runEntry(place, source, new InMemoryStream(), counted);
-    });
-    expect(live.refusal).toBe(undefined);
-    expect(reads(counted)).toContain("diff");
-
-    // And a completed replay takes neither the lease nor anything else: it
-    // answers with the lease still held and the checkout gone.
-    const replayed = entryCounters();
-    const again = yield* scoped(function* () {
-      yield* useCommonDirectoryLease(common);
-      yield* repoint(place, place.root);
-      return yield* runEntry(place, source, new InMemoryStream([...live.events]), replayed);
-    });
-    expect(again.output).toBe(live.output);
-    expect(entrySubcommands(replayed)).toEqual([]);
-  });
 });

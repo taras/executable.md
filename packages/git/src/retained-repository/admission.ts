@@ -272,10 +272,7 @@ function* admitLocal(payload: unknown, name: string): Operation<void> {
  * It opens nothing. Whether the checkout a placement names is still there is
  * not this reader's question and is not a question a continuation asks.
  */
-function* admitPlacement(
-  payload: unknown,
-  name: string,
-): Operation<ReplPlacement | undefined> {
+function* admitPlacement(payload: unknown, name: string): Operation<ReplPlacement | undefined> {
   const record = parseReplPlacementRecord(payload);
   if (record === undefined) {
     throw malformed(REPL_REPOSITORY_PLACEMENT);
@@ -320,10 +317,7 @@ function changed(type: string): ReplRepositoryHistoryError {
 }
 
 function unrouted(sentence: string): ReplRepositoryHistoryError {
-  return refusal(
-    "unrouted-observation",
-    `a retained ${REPL_REPOSITORY_OBSERVATION} ${sentence}.`,
-  );
+  return refusal("unrouted-observation", `a retained ${REPL_REPOSITORY_OBSERVATION} ${sentence}.`);
 }
 
 function misnamed(type: string): ReplRepositoryHistoryError {

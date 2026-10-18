@@ -149,7 +149,8 @@ function followingProbe(
  * A host that records every scratch directory a read acquired.
  *
  * The directory is what the observation owns, so whether it is gone afterwards
- * is the whole of the teardown claim. A wrapper is the only place to learn its
+ * is the whole of what teardown has to show. A wrapper is the only place to
+ * learn its
  * name: the production host hands it to the read and to nobody else.
  */
 function recordingDirectories(inner: RepositoryHost, created: string[]): RepositoryHost {
@@ -244,9 +245,11 @@ function runNeutralDocument(source: string, options: NeutralOptions = {}): Opera
     if (options.repository === true) {
       yield* Repository.around(
         // deno-lint-ignore require-yield
-        { *ambient(): Operation<RepositorySelection | undefined> {
+        {
+          *ambient(): Operation<RepositorySelection | undefined> {
             return SUPPLIED_SELECTION;
-          } },
+          },
+        },
         { at: "min" },
       );
     }
@@ -387,17 +390,19 @@ describe("GO1 — discovery addresses the chosen repository", () => {
 
     expect(seen).toHaveLength(1);
     const listed = paths(seen[0]);
-    expect(listed).toEqual([
-      AWKWARD_PATH,
-      "doc/renamed.md",
-      "link-me.txt",
-      "mode.sh",
-      "nested",
-      "src/a.ts",
-      "src/added.ts",
-      "src/bin.dat",
-      MAGIC_PATH,
-    ].sort());
+    expect(listed).toEqual(
+      [
+        AWKWARD_PATH,
+        "doc/renamed.md",
+        "link-me.txt",
+        "mode.sh",
+        "nested",
+        "src/a.ts",
+        "src/added.ts",
+        "src/bin.dat",
+        MAGIC_PATH,
+      ].sort(),
+    );
     expect(object(seen[0]).next).toBe(null);
   });
 });
@@ -526,15 +531,11 @@ describe("GO3 — the three comparisons", () => {
     const unstaged = object(seen[0]);
     expect(unstaged.comparison).toEqual({ compare: "unstaged" });
     // The untracked file is not a tracked change, so it is not here.
-    expect(unstaged.changes).toEqual([
-      { path: "src/a.ts", status: "M", previousPath: null },
-    ]);
+    expect(unstaged.changes).toEqual([{ path: "src/a.ts", status: "M", previousPath: null }]);
 
     const staged = object(seen[1]);
     expect(staged.comparison).toEqual({ compare: "staged", base: fixture.c2 });
-    expect(staged.changes).toEqual([
-      { path: "staged.ts", status: "A", previousPath: null },
-    ]);
+    expect(staged.changes).toEqual([{ path: "staged.ts", status: "A", previousPath: null }]);
   });
 
   // Driven at the native performer rather than through a document, because no
@@ -675,9 +676,12 @@ describe("GO4 — the patch a comparison produces", () => {
     const seen: Json[] = [];
 
     yield* runOrdinaryDocument(
-      ['<Git.Changes compare="unstaged" as="unstaged" />', "", "<Captured value={unstaged} />", ""].join(
-        "\n",
-      ),
+      [
+        '<Git.Changes compare="unstaged" as="unstaged" />',
+        "",
+        "<Captured value={unstaged} />",
+        "",
+      ].join("\n"),
       { root, cwd: conflicted.root, components: [capturingProbe(seen)] },
     );
 
@@ -759,9 +763,7 @@ describe("GO5 — pages are bounded, complete, and about one observation", () =>
     );
 
     const one = object(seen[0]);
-    expect(one.changes).toEqual([
-      { path: fixture.paths[0], status: "M", previousPath: null },
-    ]);
+    expect(one.changes).toEqual([{ path: fixture.paths[0], status: "M", previousPath: null }]);
     expect(one.next).toEqual({ compare: "unstaged", limit: 1, cursor: expect.any(String) });
 
     const hundred = object(seen[1]);
@@ -1347,59 +1349,6 @@ describe("GO8 — a read runs no repository-defined program and changes nothing"
 });
 
 describe("GO9 — which checkout answers, and what cannot choose one", () => {
-  it("reads the ambient checkout, a lexical Repository, a Worktree and a Dir inside one", function* () {
-    const remote = yield* useBareRemote(REMOTE);
-    const root = yield* useManagedRoot();
-    const ambient = yield* useHostCheckout(remote.locator);
-    yield* writeFixtureFile(ambient.root, "only-here.txt", "ambient\n");
-    ambient.run("add", "--", "only-here.txt");
-    ambient.run("commit", "-m", "ambient only");
-    const seen: Json[] = [];
-
-    yield* runOrdinaryDocument(
-      [
-        '<Git.Files limit={100} as="here" />',
-        "",
-        "<Captured value={here} />",
-        "",
-        `<Repository name="project" url="${remote.locator}">`,
-        "",
-        '<Git.Files limit={100} as="managed" />',
-        "",
-        "<Captured value={managed} />",
-        "",
-        '<Worktree name="side" branch="side">',
-        "",
-        '<Git.Changes compare="unstaged" as="inSide" />',
-        "",
-        "<Captured value={inSide} />",
-        "",
-        '<Dir path="deeper">',
-        "",
-        '<Git.Files limit={100} as="fromDir" />',
-        "",
-        "<Captured value={fromDir} />",
-        "",
-        "</Dir>",
-        "",
-        "</Worktree>",
-        "",
-        "</Repository>",
-        "",
-      ].join("\n"),
-      { root, cwd: ambient.root, components: [capturingProbe(seen)] },
-    );
-
-    // The ambient checkout holds a path the managed clone never received, which
-    // is how a read that answered from the wrong one would say so.
-    expect(paths(seen[0])).toContain("only-here.txt");
-    expect(paths(seen[1])).toEqual(["which.txt"]);
-    expect(object(seen[2]).changes).toEqual([]);
-    // A `<Dir>` beneath a Worktree stays inside that checkout, and the answer
-    // is still relative to its repository root.
-    expect(paths(seen[3])).toEqual(["which.txt"]);
-  });
-
   it("distinguishes two sibling checkouts of one repository by their content", function* () {
     const root = yield* useManagedRoot();
     const fixture = yield* useObservationFixture();

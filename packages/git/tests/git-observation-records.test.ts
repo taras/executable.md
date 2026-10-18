@@ -182,15 +182,11 @@ describe("GOR3 — admission happens before any provider", () => {
     // A filename holding a space, a tab, a newline and a non-ASCII character
     // arrives untrimmed and unnormalized.
     const awkward = "uni/é a\tb\nc.md";
-    expect(
-      admitFileRequest("<Git.File>", { commit: "HEAD", path: awkward }).path,
-    ).toBe(awkward);
+    expect(admitFileRequest("<Git.File>", { commit: "HEAD", path: awkward }).path).toBe(awkward);
     // An empty prefix is the whole repository, which is what omission means.
     expect(admitFilesRequest("<Git.Files>", { prefix: "" }).prefix).toBe(null);
     // A prefix may stop inside its final segment.
-    expect(admitFilesRequest("<Git.Files>", { prefix: "packages/co" }).prefix).toBe(
-      "packages/co",
-    );
+    expect(admitFilesRequest("<Git.Files>", { prefix: "packages/co" }).prefix).toBe("packages/co");
   });
 
   it("refuses a limit, an offset, a path and a comparison it cannot honor", function* () {
@@ -203,10 +199,7 @@ describe("GOR3 — admission happens before any provider", () => {
         "absolute path",
         () => admitFileRequest("<Git.File>", { commit: "HEAD", path: "/etc/passwd" }),
       ],
-      [
-        "parent segment",
-        () => admitFileRequest("<Git.File>", { commit: "HEAD", path: "a/../b" }),
-      ],
+      ["parent segment", () => admitFileRequest("<Git.File>", { commit: "HEAD", path: "a/../b" })],
       [
         "empty filter entry",
         () => admitChangesRequest("<Git.Changes>", { compare: "staged", paths: [""] }),
@@ -229,9 +222,9 @@ describe("GOR3 — admission happens before any provider", () => {
         refused = error;
       }
       expect(`${named}: ${refused instanceof GitObservationError}`).toBe(`${named}: true`);
-      expect(
-        `${named}: ${refused instanceof GitObservationError ? refused.reason : "none"}`,
-      ).toBe(`${named}: invalid-invocation`);
+      expect(`${named}: ${refused instanceof GitObservationError ? refused.reason : "none"}`).toBe(
+        `${named}: invalid-invocation`,
+      );
     }
   });
 
@@ -332,9 +325,7 @@ describe("GOR5 — a result is written and parsed by one contract", () => {
       paths: ["a.ts", "b.ts"],
       next: { prefix: "src/", limit: 100, cursor: "x" },
     };
-    expect(
-      parseGitObservationValue(gitFilesResultJson(files), FILES_REQUEST),
-    ).toEqual(files);
+    expect(parseGitObservationValue(gitFilesResultJson(files), FILES_REQUEST)).toEqual(files);
 
     const changesRequest: GitChangesRequest = {
       kind: "changes",

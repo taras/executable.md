@@ -42,10 +42,7 @@ import { scoped, until } from "effection";
 import type { Operation } from "effection";
 import { copyFile, lstat, readdir } from "@effectionx/fs";
 import { utimes } from "node:fs/promises";
-import {
-  GitObservationError,
-  GitOperationInfrastructureError,
-} from "../../composition/errors.ts";
+import { GitObservationError, GitOperationInfrastructureError } from "../../composition/errors.ts";
 import type { GitObjectFormat } from "../../composition/records.ts";
 import type { RepositoryIdentity } from "../../composition/selection.ts";
 import {
@@ -162,13 +159,22 @@ interface IsolatedView {
   index(): Operation<string>;
 }
 
-function refuse(view: IsolatedView, reason: Parameters<typeof refusalOf>[1], sentence: string): never {
+function refuse(
+  view: IsolatedView,
+  reason: Parameters<typeof refusalOf>[1],
+  sentence: string,
+): never {
   throw refusalOf(view.element, reason, sentence);
 }
 
 function refusalOf(
   element: string,
-  reason: "invalid-revision" | "absent-path" | "nontext-blob" | "unusable-repository" | "stale-continuation",
+  reason:
+    | "invalid-revision"
+    | "absent-path"
+    | "nontext-blob"
+    | "unusable-repository"
+    | "stale-continuation",
   sentence: string,
 ): GitObservationError {
   return new GitObservationError(element, reason, `${element} ${sentence}`);
@@ -249,10 +255,7 @@ function isolated(view: IsolatedView, args: readonly string[], worktree: boolean
  * disabled, so resolving one reaches no remote. Nothing a repository's
  * configuration can name runs for a `rev-parse`.
  */
-function* resolveRevision(
-  view: IsolatedView,
-  revision: string,
-): Operation<string | undefined> {
+function* resolveRevision(view: IsolatedView, revision: string): Operation<string | undefined> {
   const outcome = yield* view.host.git({
     args: [
       ...READ_OPTIONS,
@@ -443,11 +446,10 @@ function* observeChanges(
 ): Operation<readonly GitChange[]> {
   const shape = comparisonArgs(view, comparison);
   const index = comparison.compare === "commits" ? undefined : yield* view.index();
-  const outcome = yield* readBytes(
-    view,
-    [...shape.args, ...STATUS_OPTIONS, "--"],
-    { worktree: shape.worktree, ...(index === undefined ? {} : { index }) },
-  );
+  const outcome = yield* readBytes(view, [...shape.args, ...STATUS_OPTIONS, "--"], {
+    worktree: shape.worktree,
+    ...(index === undefined ? {} : { index }),
+  });
   if (outcome.code !== 0) {
     return unreadable(view, "what this comparison changed");
   }
@@ -573,18 +575,18 @@ function* observePatch(
 /** The tracked paths this checkout's index holds, sorted and deduplicated. */
 function* observeTrackedPaths(view: IsolatedView): Operation<readonly string[]> {
   const index = yield* view.index();
-  const outcome = yield* readBytes(
-    view,
-    ["ls-files", "--cached", "--full-name", "-z", "--"],
-    { index },
-  );
+  const outcome = yield* readBytes(view, ["ls-files", "--cached", "--full-name", "-z", "--"], {
+    index,
+  });
   if (outcome.code !== 0) {
     return unreadable(view, "its tracked files");
   }
   // One path per entry: an unmerged path has an index entry per stage, and a
   // listing that repeated it would report a file three times.
   const listed = new Set(framed(view, outcome.stdout, "file listing"));
-  return Object.freeze([...listed].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)));
+  return Object.freeze(
+    [...listed].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+  );
 }
 
 /** The checkout one cursor is built against and held to. */
@@ -685,7 +687,15 @@ function* observeFiles(
       ? tracked
       : Object.freeze(tracked.filter((path) => path.startsWith(request.prefix ?? "")));
   const observation = yield* observationDigest({ kind: "files", paths: [...selected] });
-  const start = yield* continuedPosition(view, place, "files", request, null, observation, request.cursor);
+  const start = yield* continuedPosition(
+    view,
+    place,
+    "files",
+    request,
+    null,
+    observation,
+    request.cursor,
+  );
   const window = gitRecordWindow(selected, start, request.limit);
   if (window.nextIndex === null) {
     return Object.freeze({ paths: window.page, next: null });
@@ -708,7 +718,9 @@ function* observeChangesPage(
 ): Operation<GitChangesResult> {
   const comparison = yield* resolveComparison(view, request.comparison);
   const observed = yield* observeChanges(view, comparison);
-  const selected = Object.freeze(observed.filter((change) => selectedChange(request.paths, change)));
+  const selected = Object.freeze(
+    observed.filter((change) => selectedChange(request.paths, change)),
+  );
   const observation = yield* observationDigest({
     kind: "changes",
     comparison: gitComparisonJson(comparison),
@@ -828,7 +840,14 @@ function* observeFile(
   // whether the commit holds this path at all, and whether what it holds is a
   // file. A gitlink's commit is not in this repository's object database, so
   // asking the object first would report a path the tree does hold as absent.
-  const listed = yield* readText(view, ["ls-tree", "-z", "--full-name", commit, "--", request.path]);
+  const listed = yield* readText(view, [
+    "ls-tree",
+    "-z",
+    "--full-name",
+    commit,
+    "--",
+    request.path,
+  ]);
   if (listed.code !== 0) {
     return unreadable(view, `the tree of commit ${commit}`);
   }
@@ -908,7 +927,7 @@ type TreeEntry =
  * rather than a lookup: `dir` matches the directory entry itself and `dir/`
  * matches the things inside it. Taking the first record would answer a read of
  * `dir/` with the blob at `dir/inside.txt` — a file the caller never named,
- * under a path the result would claim was a directory.
+ * presented under a path that is really a directory.
  *
  * So a path that matched records but is not one of them is a directory, which
  * is refused as the tree it is; a path that matched nothing is absent.

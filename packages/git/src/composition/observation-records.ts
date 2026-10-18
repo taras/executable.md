@@ -242,9 +242,7 @@ function parseGitChange(value: unknown): GitChange | undefined {
     return previous === null ? Object.freeze({ path, status, previousPath: null }) : undefined;
   }
   const previousPath = text(previous);
-  return previousPath === undefined
-    ? undefined
-    : Object.freeze({ path, status, previousPath });
+  return previousPath === undefined ? undefined : Object.freeze({ path, status, previousPath });
 }
 
 function paths(value: unknown): readonly string[] | undefined {
@@ -409,7 +407,9 @@ function parseFilesNext(value: unknown): GitFilesNext | null | undefined {
  */
 function parseComparisonNext(
   read: Record<string, unknown>,
-): { compare: GitCompareMode; base?: string; head?: string; paths?: readonly string[] } | undefined {
+):
+  | { compare: GitCompareMode; base?: string; head?: string; paths?: readonly string[] }
+  | undefined {
   const compare = GIT_COMPARE_MODES.find((mode) => mode === read["compare"]);
   if (compare === undefined) {
     return undefined;
@@ -435,7 +435,10 @@ function parseComparisonNext(
 }
 
 /** Every member a comparison `next` may hold, as the parser enumerates them. */
-function comparisonNextMembers(value: unknown, own: readonly string[]): Record<string, unknown> | undefined {
+function comparisonNextMembers(
+  value: unknown,
+  own: readonly string[],
+): Record<string, unknown> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
@@ -564,7 +567,10 @@ function sameFilters(
 }
 
 /** Whether a next page's comparison repeats the mode the request asked for. */
-function sameMode(next: { compare: GitCompareMode }, request: { comparison: { compare: GitCompareMode } }): boolean {
+function sameMode(
+  next: { compare: GitCompareMode },
+  request: { comparison: { compare: GitCompareMode } },
+): boolean {
   return next.compare === request.comparison.compare;
 }
 
@@ -859,8 +865,7 @@ export function parseGitObservationCursor(encoded: string): GitObservationCursor
   ) {
     return undefined;
   }
-  const comparison =
-    read["comparison"] === null ? null : parseGitComparison(read["comparison"]);
+  const comparison = read["comparison"] === null ? null : parseGitComparison(read["comparison"]);
   if (comparison === undefined) {
     return undefined;
   }

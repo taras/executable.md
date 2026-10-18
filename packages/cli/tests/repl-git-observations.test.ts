@@ -14,7 +14,8 @@
  * "Answered from the record" is only worth asserting if the alternative was
  * reachable. So the host beneath these entries counts every `git` invocation,
  * every scratch directory and every authentication session, and the rows that
- * claim nothing ran assert on those rather than on the absence of a difference.
+ * expect nothing to have run assert on those rather than on the absence of a
+ * difference.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -259,8 +260,7 @@ const READS_AT_ROOT = (fixture: Fixture): string =>
 /** How many observation records this history holds. */
 function observationCount(records: readonly DurableEvent[]): number {
   return records.filter(
-    (record) =>
-      record.type === "yield" && record.description.type === REPL_REPOSITORY_OBSERVATION,
+    (record) => record.type === "yield" && record.description.type === REPL_REPOSITORY_OBSERVATION,
   ).length;
 }
 
@@ -491,9 +491,12 @@ describe("RGO4 — two identical entries are two questions", () => {
   it("reads the repository again rather than answering from the entry before", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
-    const source = ['<Git.Files prefix="n" as="files" />', "", "Paths: {files.paths.length}", ""].join(
-      "\n",
-    );
+    const source = [
+      '<Git.Files prefix="n" as="files" />',
+      "",
+      "Paths: {files.paths.length}",
+      "",
+    ].join("\n");
 
     const outputs = yield* scoped(function* (): Operation<string[]> {
       yield* prepare(fixture, counted);
