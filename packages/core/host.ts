@@ -296,6 +296,7 @@ export type {
   ResultDestinationInstallation,
   ResultOccurrence,
   ResultOccurrenceLookup,
+  RunningOccurrenceReader,
 } from "./src/component-result-destinations.ts";
 /**
  * The pure components every generated evaluation may write, for a host that

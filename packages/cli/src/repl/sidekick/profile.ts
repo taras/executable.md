@@ -228,8 +228,8 @@ export function sidekickCeilingInstallation(ceiling: ResponseCeiling): Execution
           .filter((control) => control.selected === true)
           .map((control) => ceiling.destinations.selected(control.name)),
       ]),
-      installed: (lookup) => {
-        ceiling.destinations.installed(lookup);
+      installed: (lookup, running) => {
+        ceiling.destinations.installed(lookup, running);
       },
     },
     *install(): Operation<void> {

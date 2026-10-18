@@ -734,6 +734,82 @@ describe("Tier R6 — a reply asks, and the Sidekick owns the answer", () => {
     expect(JSON.parse(held.fake.prompts[1] ?? "")).toBe("yes");
   });
 
+  it("R6: nested queried questions each keep their own receiver", function* () {
+    // The shape the defect was found with: a queried outer `<Elicit>` whose
+    // admitted content holds a queried inner one. Each occurrence must keep
+    // the receiver core opened for it — the inner one running inside the
+    // outer's body must not consume the outer's.
+    const TWO = {
+      type: "object",
+      properties: { public: { type: "string" }, private: { type: "string" } },
+      required: ["public", "private"],
+      additionalProperties: false,
+    } as const;
+    const schema = JSON.stringify(TWO);
+    const held = yield* useHarness();
+    held.fake.script({
+      reply:
+        `<Elicit schema={${schema}} yq='.public' as="picked">Outer.\n` +
+        `<Elicit schema={${schema}} yq='.public' as="inner">Inner.</Elicit>\n` +
+        `</Elicit>\n<Output>\n{picked}/{inner}\n</Output>\n`,
+    });
+    held.fake.script({ reply: "<Output>Both came back.</Output>\n" });
+
+    const sent = yield* sending(held, "ask me twice");
+    // The inner question is asked first: it runs while the outer's content is
+    // being rendered, which is exactly why it can take the outer's place.
+    const first = yield* asked(held.owner.questions);
+    expect(first.message).toContain("Inner.");
+    expect(first.submit({ public: "inner yes", private: "inner unselected" }).kind).toBe(
+      "answered",
+    );
+    const second = yield* asked(held.owner.questions);
+    expect(second.message).toContain("Outer.");
+    expect(second.submit({ public: "outer yes", private: "outer unselected" }).kind).toBe(
+      "answered",
+    );
+
+    const answered = yield* sent;
+    if (!answered.ok) {
+      throw answered.error;
+    }
+    // Both captures are the selected field, which is what the reply rendered.
+    expect(replied(held, 1).text.trim()).toBe("outer yes/inner yes");
+
+    const written = yield* records(held.execution);
+    const intents = pairs(written, "control").filter((one) => one["component"] === "Elicit");
+    // Two intents, in asking order, and **both** marked before their work.
+    expect(intents).toHaveLength(2);
+    expect(intents.map((one) => one["presentation"])).toEqual(["selected-v1", "selected-v1"]);
+    // Each original answer stands whole as its own occurrence's evidence.
+    const outcomes = intents.map((intent) =>
+      pairs(written, "control-outcome").find((one) => one["order"] === intent["order"]),
+    );
+    expect(outcomes.map((one) => one?.["observed"])).toEqual([
+      { public: "inner yes", private: "inner unselected" },
+      { public: "outer yes", private: "outer unselected" },
+    ]);
+    // Two acknowledged presentations, matching those orders, each holding its
+    // own selected value.
+    const presentations = written.filter((one) => one.kind === "control-presentation");
+    expect(presentations).toHaveLength(2);
+    expect(
+      presentations.map((one) =>
+        one.kind === "control-presentation" ? [one.order, one.selected] : undefined,
+      ),
+    ).toEqual([
+      [intents[0]?.["order"], "inner yes"],
+      [intents[1]?.["order"], "outer yes"],
+    ]);
+    // And what the next turn was sent is the two selected values and nothing
+    // else: neither unselected field leaks as raw feedback.
+    const delivered = held.fake.prompts[1] ?? "";
+    expect(delivered).toContain("inner yes");
+    expect(delivered).toContain("outer yes");
+    expect(delivered).not.toContain("inner unselected");
+    expect(delivered).not.toContain("outer unselected");
+  });
+
   it("R6: a queried question nobody could be asked keeps its marker and sends nothing raw", function* () {
     // The interrupted arm, reached the way the surface actually refuses one:
     // a schema the bounded form language cannot draw. The question was

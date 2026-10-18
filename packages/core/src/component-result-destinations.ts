@@ -126,13 +126,30 @@ export type ResultDestinationEntry =
  */
 export interface ResultDestinationInstallation {
   readonly destinations: readonly ResultDestinationEntry[];
-  installed?(lookup: ResultOccurrenceLookup): void;
+  installed?(lookup: ResultOccurrenceLookup, running: RunningOccurrenceReader): void;
 }
 
 /** How a host asks for the occurrence one invocation of its own is in. */
 export type ResultOccurrenceLookup = (
   invocation: ComponentInvocation,
 ) => ResultOccurrence | undefined;
+
+/**
+ * How a host asks which occurrence's body is running right now.
+ *
+ * For the one case where the lookup above is unreachable: a protected
+ * component's body is core's own, so a host that selected the name has no
+ * invocation to ask with — the only thing of its running there is whatever
+ * middleware that body crosses. This answers from the invocation canonical
+ * dispatch is executing, which nests the way the bodies do: an occurrence
+ * running inside another's content is the answer while it runs, and the
+ * enclosing one is the answer again afterwards.
+ *
+ * It is not "the last one opened". An occurrence that opened and then failed
+ * before its body ran is never the answer, and nothing here is keyed by name,
+ * by completion order or by a value a document could replace.
+ */
+export type RunningOccurrenceReader = () => ResultOccurrence | undefined;
 
 /** This execution's own destinations, as canonical expansion consults them. */
 export interface ResultDestinationRoute {
@@ -168,6 +185,16 @@ export interface ResultDestinationRoute {
     fn: unknown,
     request: { readonly component: string; readonly query: string | undefined },
   ): OpenedDestination | undefined;
+  /**
+   * Run `body` as the occurrence this invocation opened a destination for.
+   *
+   * Canonical dispatch wraps a protected component's body with this, so the
+   * answer to "which occurrence is running" is scope-bound: it is established
+   * before the body and restored when the body leaves, however it leaves. A
+   * nested body therefore shadows its enclosing one only while it runs, and an
+   * invocation that never reaches its body is never the answer.
+   */
+  entered(invocation: ComponentInvocation, body: Operation<unknown>): Operation<unknown>;
   /** End the route with its execution. */
   revoke(): void;
 }
@@ -195,6 +222,10 @@ export function createResultDestinationRoute(
   // Keyed by the exact invocation object the engine minted, held weakly: a
   // receiver's lifetime is its occurrence's, and nothing here keeps one alive.
   const open = new WeakMap<ComponentInvocation, ResultOccurrence>();
+  // The invocations whose bodies are running, innermost last. A stack rather
+  // than a cell because bodies nest: one protected component's content may
+  // hold another, and each has to be the answer while it is the one running.
+  const entering: ComponentInvocation[] = [];
   let live = true;
 
   // Canonical resolution's own answers, each standing for the implementation it
@@ -265,14 +296,36 @@ export function createResultDestinationRoute(
         },
       };
     },
+    *entered(invocation: ComponentInvocation, body: Operation<unknown>): Operation<unknown> {
+      entering.push(invocation);
+      try {
+        return yield* body;
+      } finally {
+        // Removed by identity rather than by popping blindly: a body that
+        // unwound out of order would otherwise leave somebody else's
+        // invocation standing as the one running.
+        const at = entering.lastIndexOf(invocation);
+        if (at !== -1) {
+          entering.splice(at, 1);
+        }
+      }
+    },
     revoke(): void {
       live = false;
       owned.clear();
+      entering.length = 0;
     },
   };
 
-  installation?.installed?.((invocation: ComponentInvocation) =>
-    live ? open.get(invocation) : undefined,
+  installation?.installed?.(
+    (invocation: ComponentInvocation) => (live ? open.get(invocation) : undefined),
+    () => {
+      if (!live) {
+        return undefined;
+      }
+      const invocation = entering.at(-1);
+      return invocation === undefined ? undefined : open.get(invocation);
+    },
   );
   return route;
 }

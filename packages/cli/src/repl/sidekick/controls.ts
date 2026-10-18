@@ -56,6 +56,7 @@ import type {
   ResultDestinationEntry,
   ResultOccurrence,
   ResultOccurrenceLookup,
+  RunningOccurrenceReader,
 } from "@executablemd/core/host";
 import type {
   FunctionComponentDefinition,
@@ -412,25 +413,25 @@ export interface SidekickDestinations {
   entry(definition: FunctionComponentDefinition): ResultDestinationEntry;
   /** The entry one selected protected name is routed through. */
   selected(name: string): ResultDestinationEntry;
-  /** Take the lookup canonical execution hands this host at installation. */
-  installed(lookup: ResultOccurrenceLookup): void;
+  /** Take the capabilities canonical execution hands this host at installation. */
+  installed(lookup: ResultOccurrenceLookup, running: RunningOccurrenceReader): void;
   /** The occurrence this invocation is in, when it is an owned queried one. */
   of(invocation: ComponentInvocation): SidekickOccurrence | undefined;
   /**
-   * The occurrence a selected protected control is about to run in, taken once.
+   * The occurrence whose body is running right now, when it is a selected one.
    *
    * Canonical `<Elicit>` is the only control this conversation does not answer
    * for, so its body is core's and the lookup above is unreachable from inside
    * it: the one thing that runs there on this host's behalf is the question
-   * provider. Core opens this destination for that exact occurrence and then
-   * runs that invocation, so what the provider takes here is the occurrence
-   * whose body is asking — not the last one to finish, and not a name match.
+   * provider. Core names the occurrence it is dispatching for the duration of
+   * that body, and this reads that — so a question asked inside another
+   * question's content reaches its own receiver, and the enclosing one still
+   * reaches its own afterwards.
    *
-   * Taken rather than read, because one occurrence asks one question. A
-   * provider that asked twice would find nothing the second time and file
-   * nothing, which is what an occurrence with no destination has always done.
+   * Read rather than taken. Nothing is consumed, because the answer is not a
+   * cell somebody else can empty: it is whichever body is executing.
    */
-  takeSelected(): SidekickOccurrence | undefined;
+  running(): SidekickOccurrence | undefined;
 }
 
 /**
@@ -443,70 +444,51 @@ export interface SidekickDestinations {
 export function sidekickDestinations(journal: ControlJournal): SidekickDestinations {
   const filed = new WeakMap<ResultOccurrence, Filed>();
   let lookup: ResultOccurrenceLookup | undefined;
-  /** The selected control core has opened a destination for and not yet run. */
-  let awaiting: ResultOccurrence | undefined;
+  /** Which occurrence core is dispatching right now, as core answers it. */
+  let dispatching: RunningOccurrenceReader | undefined;
   return {
     entry(definition: FunctionComponentDefinition): ResultDestinationEntry {
       return { definition, open: (query) => opened(query) };
     },
     selected(name: string): ResultDestinationEntry {
-      return {
-        selected: name,
-        open: (query) =>
-          opened(query, (occurrence) => {
-            awaiting = occurrence;
-          }),
-      };
+      return { selected: name, open: (query) => opened(query) };
     },
-    takeSelected(): SidekickOccurrence | undefined {
-      const occurrence = awaiting;
-      awaiting = undefined;
-      if (occurrence === undefined) {
-        return undefined;
-      }
-      const held = filed.get(occurrence);
-      if (held === undefined) {
-        return undefined;
-      }
-      return {
-        query: occurrence.query,
-        file(order: number, read?: Json): void {
-          held.order = order;
-          held.read = read;
-        },
-      };
+    running(): SidekickOccurrence | undefined {
+      return held(dispatching?.());
     },
-    installed(taken: ResultOccurrenceLookup): void {
+    installed(taken: ResultOccurrenceLookup, runs: RunningOccurrenceReader): void {
       lookup = taken;
+      dispatching = runs;
     },
     of(invocation: ComponentInvocation): SidekickOccurrence | undefined {
-      const occurrence = lookup?.(invocation);
-      if (occurrence === undefined) {
-        return undefined;
-      }
-      const held = filed.get(occurrence);
-      if (held === undefined) {
-        return undefined;
-      }
-      return {
-        query: occurrence.query,
-        file(order: number, read?: Json): void {
-          held.order = order;
-          held.read = read;
-        },
-      };
+      return held(lookup?.(invocation));
     },
   };
 
+  /** One occurrence of this conversation's own, as its caller files against. */
+  function held(occurrence: ResultOccurrence | undefined): SidekickOccurrence | undefined {
+    if (occurrence === undefined) {
+      return undefined;
+    }
+    const record = filed.get(occurrence);
+    if (record === undefined) {
+      return undefined;
+    }
+    return {
+      query: occurrence.query,
+      file(order: number, read?: Json): void {
+        record.order = order;
+        record.read = read;
+      },
+    };
+  }
+
   /** One occurrence's destination, which is the same for every control. */
-  function opened(
-    query: string | undefined,
-    announce?: (occurrence: ResultOccurrence) => void,
-  ): ResultDestination {
-    const held: Filed = { order: undefined, read: undefined };
+  function opened(query: string | undefined): ResultDestination {
+    const record: Filed = { order: undefined, read: undefined };
     return {
       *accept(selected: unknown): Operation<void> {
-        const order = held.order;
+        const order = record.order;
         if (order === undefined || query === undefined) {
           // An occurrence whose body filed nothing recorded no intent to
           // present, so there is nothing for a presentation to belong to — a
@@ -514,11 +496,10 @@ export function sidekickDestinations(journal: ControlJournal): SidekickDestinati
           // here, and both keep the feedback they already had.
           return;
         }
-        yield* journal.presented(order, Ok(parseSelected(selected)), held.read);
+        yield* journal.presented(order, Ok(parseSelected(selected)), record.read);
       },
       serves(occurrence: ResultOccurrence): void {
-        filed.set(occurrence, held);
-        announce?.(occurrence);
+        filed.set(occurrence, record);
       },
     };
   }

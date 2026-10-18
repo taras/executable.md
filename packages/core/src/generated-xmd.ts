@@ -1097,7 +1097,17 @@ class GeneratedComponentResolution implements ComponentResolution {
       throw new GeneratedXmdError(CONSTRUCT.component);
     }
     holdForm(plannedForm(byForm, invocation).form, invocation);
-    return yield* body;
+    // Named as the occurrence running this body, for its duration. A protected
+    // component's body is core's own, so a host that selected the name has no
+    // invocation of its own to ask the route with — and whatever of its runs
+    // in there needs to reach *this* occurrence's receiver rather than the one
+    // some other occurrence opened. Scope-bound, so a body nested in this
+    // one's content shadows it only while that body runs.
+    const destinations = this.#destinations;
+    if (destinations === undefined) {
+      return yield* body;
+    }
+    return yield* destinations.entered(invocation, body);
   }
 
   /** The frames this fragment's own imports record into. */
