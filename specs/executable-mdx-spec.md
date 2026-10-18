@@ -1943,6 +1943,52 @@ Non-serializable bindings (functions, class instances, live objects) are
 omitted. They remain in `env.values` as live references during the current
 run but are absent from the diagnostic trace.
 
+#### The computed root data a result carries
+
+A binding is not an effect, and nothing here journals one. What an execution
+retains about its root bindings is a **byproduct of running the document**: at
+the point its canonical result is formed, the execution reads the current
+eligible data of its own root binding environment and carries it on that
+result, under an optional `bindings` member. The journal gains no operation,
+no name and no sequence of its own; the one ordinary root `Close` that already
+records the result records this with it.
+
+```json
+{ "status": "ok", "value": {
+    "output": "…",
+    "bindings": { "saved": { "answer": 42 } }
+  }
+}
+```
+
+Eligible data is every own member of that root environment whose name is a
+valid binding name and whose value is whole in the strict JSON domain, except
+`props` — each execution's props namespace is the one its own root validated.
+A value outside that domain — a function, a live handle, a class instance, a
+cycle, a non-finite number, a sparse hole, `undefined` — is omitted. Omission
+carries no value, names no type and removes nothing: the member is simply
+absent, and a name that was never eligible is absent rather than cleared.
+
+What is carried is the root **as it stands when the result is formed**, copied
+through the same strict parser the initial bindings are copied through. The
+bindings themselves are untouched: each is still the exact value its producer
+made, so same-entry reference identity, resource lifetime and mutation are
+unchanged, and a nested change made before the result is part of what that
+result carries. Which construct wrote a name does not matter; whose
+environment it was written in does. A component body, an `<Each>` iteration and
+a `<Spawn>` each write an environment of their own, so their local names are
+not the root's — while a root `<Each as>` aggregate is written at the root and
+therefore is.
+
+An ordinary authored failure carries its computed data the same way, beside its
+recorded account and partial output, because a failure is an outcome. A
+durability failure and a fatal Files failure escape the canonical result
+boundary ahead of it and carry nothing. The result travels the ordinary durable
+path, so the secret gate and the append fence apply to it as they do to every
+other result: a result the journal rejects retains nothing and keeps its own
+fatal classification, and a value the secret policy will not disclose refuses
+the read that asked for it rather than appearing in it.
+
 ### 4.6 File locations
 
 | File | Contents |
@@ -4612,9 +4658,11 @@ was not granted under.
 
 #### 5.3.3 Ordinary generated composition
 
-Generated XMD uses ordinary local bindings and pure composition. It starts with
-no caller bindings and exports none. This fragment renders one JSON value from
-two bound component results:
+Generated XMD uses ordinary local bindings and pure composition. It reads no
+caller binding: a declarative expression resolves only names the fragment bound
+itself, and every other brace renders as written. It has no export or result
+channel of its own either — what it answers with is its rendered text. This
+fragment renders one JSON value from two bound component results:
 
 ```mdx
 <File path="package.json" as="package" />
@@ -4627,6 +4675,14 @@ any effect. `allow` governs only effectful components; it does not prohibit
 bindings, object composition, structural language constructs or pure renderers.
 Imports and executable code fences remain outside the generated program's
 permission.
+
+A fragment is admitted *into* a document and expands against that document's
+environment, so a name it binds with `as` is written in the containing
+execution's own root rather than in an environment of the fragment's. That
+makes it eligible root data on that execution's result like any other root
+binding (§4.5) — a consequence of which environment the write landed in, not a
+channel of the fragment's own. A generated **root** is the separate case: it
+begins with an environment of its own, so its bindings stay in it.
 
 **Every built-in structural construct is available, with its ordinary
 semantics.** `Content`, `Output`, `Return`, `Let`, `Each`, `If`, `Else`,
@@ -6398,9 +6454,17 @@ document:
 - Component invocation capture: `<Comp as="binding" />`
 - Inline binding directive: `<Let as="binding">...</Let>`
 
-Neither produces output at its site. Component `as` always writes a string.
-`<Let>` writes a string when it binds rendered content, and the exact value
-it was given when it binds a `value`.
+Neither produces output at its site. A Markdown component's `as` writes the
+text its body rendered; a function component's writes the value the
+implementation returned, validated against its `returns` where it declares one
+and taken by reference where it does not. `<Let>` writes a string when it binds
+rendered content, and the exact value it was given when it binds a `value`.
+
+Where the capture's target is the execution's own root, the value it bound is
+part of the root data the execution's canonical result carries, so a later
+execution over the same journal can start from it (§4.5,
+`specs/repl-spec.md`). The capture itself journals nothing and nothing about
+the binding changes.
 
 ##### Component `as`
 
@@ -6507,6 +6571,14 @@ again as `alias`, `alias === source` holds within that execution — neither is
 the earlier process's object.
 
 Overwrites are allowed for every mechanism here: last writer wins.
+
+A `<Let>` adds no journal entry of its own, and that is true of a root `<Let>`
+too. What a root one additionally does is leave its value in the execution's
+root environment, where the computed data the canonical result carries is read
+from at the end (§4.5, `specs/repl-spec.md`) — so a later execution over the
+same journal can start from it. The value bound is unchanged: by reference,
+un-normalized, and not replaced by the copy the result carries. A value outside
+the strict JSON domain is simply absent from that copy.
 
 ##### `select` prop — CSS selector extraction
 
@@ -11603,6 +11675,7 @@ visible warning blocks, gather into a separate error report).
 | LET9 | Last writer wins | A rendered `<Let>` and a direct `<Let>` overwrite each other in either order |
 | LET10 | Reaches the environment | A direct binding is read by later prose interpolation, by a component's expression prop, and by a later eval block |
 | LET11 | Partial replay | A `<Let value={source}>` between a replayed producer eval and a live consumer eval rebinds by reference; the journal holds the root import, the two eval effects and Close, and no record of its own |
+| LET13 | Root data on the result | A root `<Let>` journals nothing, and the value it bound is in the eligible root data the execution's canonical result carries — as it stands at that result, with every binding still the exact value the expression produced (§4.5) |
 | LET12 | `Let` is reserved, `Capture` is not | `Let` cannot be registered or bundled, while a repository component named `Capture` resolves and renders |
 
 ### Tier EU — a prop that evaluates to `undefined` (§6.5)

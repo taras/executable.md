@@ -25,7 +25,10 @@ import {
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
-import { execute } from "../src/execute.ts";
+import { execute, executeInstalled } from "../src/execute.ts";
+import { useSecretScannerFactory } from "../src/secrets/policy.ts";
+import type { SecretFinding } from "../src/secrets/findings.ts";
+import type { Json } from "../src/types.ts";
 import { inlineSource } from "../src/root-source.ts";
 
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -360,5 +363,89 @@ describe("the default scanner over a persistence backend", () => {
     const close = persisted[0]!;
     expect(close.type === "close" && close.result.status).toBe("err");
     expect(persisted.map(serializeDurableEvent).join("")).not.toContain(CANARY);
+  });
+});
+
+/**
+ * A root whose own source names no token: the value arrives from the host
+ * component it captures, so the token exists only as computed data.
+ *
+ * Scanning this document finds nothing, which is the point — what the policy
+ * has to stop is a value a reader would carry away or a journal would hold,
+ * not a string a source happens to contain.
+ */
+const CAPTURES_A_CREDENTIAL = `# Capturing
+
+<Credential as="token" />
+
+Captured.
+`;
+
+/** The host component whose unvalidated return is the canary. */
+const CREDENTIAL_COMPONENT = {
+  name: "Credential",
+  origin: "@executablemd/core/tests/guarded-journal",
+  props: { type: "object", properties: {}, additionalProperties: false },
+  factory: () =>
+    // deno-lint-ignore require-yield
+    function* Credential(): Operation<Json> {
+      return CANARY;
+    },
+};
+
+describe("computed root data crossing this execution's secret policy", () => {
+  it("C8: the owned read fails closed, and the ordinary result keeps the token off disk", function* () {
+    const dir = yield* useTempDirectory("xmd-computed-bindings-scanner-");
+    const journalPath = path.join(dir, "journal.jsonl");
+    const backend = fileStream(journalPath);
+
+    const execution = yield* executeInstalled(
+      { ...inlineSource(CAPTURES_A_CREDENTIAL), stream: backend },
+      [{ components: [CREDENTIAL_COMPONENT] }],
+    );
+    const result = yield* execution;
+
+    // Retaining the ordinary result carries the computed data, so the journal
+    // gate sees the token and refuses the append. The failure keeps its own
+    // classification and never names the value.
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error.name).toBe("SecretDetectedError");
+    const error = result.ok === false ? result.error : new Error("unreachable");
+    expect(error.message).not.toContain(CANARY);
+
+    // The live owned read fails closed on the same policy, and what comes back
+    // carries neither the map nor the matched text.
+    const read = yield* execution.bindings();
+    expect(read.ok).toBe(false);
+    expect(read.ok ? "" : read.error.message).not.toContain(CANARY);
+    expect(JSON.stringify(read)).not.toContain(CANARY);
+
+    // And it is *this execution's* captured policy answering. A scanner factory
+    // installed afterwards — the shape a counterfeit same-name policy would
+    // arrive as — finds nothing, and the read still refuses.
+    yield* useSecretScannerFactory(() => ({
+      // deno-lint-ignore require-yield
+      *scan(): Operation<SecretFinding[]> {
+        return [];
+      },
+    }));
+    const again = yield* execution.bindings();
+    expect(again.ok).toBe(false);
+    expect(JSON.stringify(again)).not.toContain(CANARY);
+
+    // Nothing holding the token reached the backend, and the bytes on disk are
+    // exactly the events it accepted.
+    const persisted = yield* backend.readAll();
+    expect(persisted.map(label)).toEqual([
+      "yield(import_component)",
+      "yield(import_component)",
+      "close(root)",
+    ]);
+    const close = persisted[persisted.length - 1]!;
+    expect(close.type === "close" && close.result.status).toBe("err");
+
+    const bytes = yield* readTextFile(journalPath);
+    expect(bytes).toBe(persisted.map(serializeDurableEvent).join(""));
+    expect(bytes).not.toContain(CANARY);
   });
 });

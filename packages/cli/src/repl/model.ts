@@ -237,6 +237,14 @@ export interface ReplTerminal {
   readonly status: "ok" | "err" | "cancelled";
   readonly output: string;
   readonly message: string | undefined;
+  /**
+   * The root data this entry's own result computed, when its record carries any.
+   *
+   * Part of the ordinary document result rather than a record of its own, so a
+   * protocol error close, a cancelled close and an older result have none —
+   * which says this outcome supplied no byproduct, not that its root was empty.
+   */
+  readonly bindings?: readonly ReplBinding[];
 }
 
 /** One semantic transcript row. Never a record dump. */
@@ -768,6 +776,21 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
         );
       }
       terminal = settled;
+      // After the eval facts this segment already recorded, and through the
+      // same publishing path: the ordinary result is the last thing this entry
+      // said, so a name it carries wins over an earlier value for that name.
+      for (const binding of settled.bindings ?? []) {
+        bind(entry, binding.name, binding.value);
+      }
+      if ((settled.bindings ?? []).length > 0) {
+        const names = settled.bindings?.map((binding) => binding.name) ?? [];
+        transcript.push({
+          kind: "binding",
+          marker,
+          scope: entry.key,
+          names: Object.freeze(names),
+        });
+      }
       transcript.push({
         kind: "terminal",
         marker,
@@ -1571,6 +1594,19 @@ function readAdmission(event: Yield): Omit<ReplGenerated, "marker"> | undefined 
 
 /** What the root coroutine's close records, read as the document outcome. */
 function readTerminal(event: Close): ReplTerminal | undefined {
+  return readSettlement(event);
+}
+
+/**
+ * The retained outcome of one entry, with the root data its result carries.
+ *
+ * Computed bindings are part of the ordinary document result, so they are read
+ * here, where that result is already interpreted, rather than by a reader of
+ * their own. A result that carries none — an older record, a protocol error
+ * close, a cancelled close — simply has none to report, which is a different
+ * thing from reporting an empty environment.
+ */
+function readSettlement(event: Close): ReplTerminal | undefined {
   if (event.result.status === "cancelled") {
     return { status: "cancelled", output: "", message: undefined };
   }
@@ -1588,8 +1624,16 @@ function readTerminal(event: Close): ReplTerminal | undefined {
   if (typeof output !== "string") {
     return undefined;
   }
+  // Read whole or not at all: a member this version cannot read refuses the
+  // outcome rather than being dropped, because dropping it would hand a later
+  // entry a smaller environment than the record describes.
+  const bindings = readResultBindings(record["bindings"]);
+  if (bindings === MALFORMED) {
+    return undefined;
+  }
+  const carried = bindings === undefined ? {} : { bindings };
   if (status === "ok") {
-    return { status, output, message: undefined };
+    return { status, output, message: undefined, ...carried };
   }
   if (status !== "err") {
     return undefined;
@@ -1598,8 +1642,43 @@ function readTerminal(event: Close): ReplTerminal | undefined {
   if (!isJsonObject(failure) || typeof failure["message"] !== "string") {
     return undefined;
   }
-  return { status, output, message: failure["message"] };
+  return { status, output, message: failure["message"], ...carried };
 }
+
+/**
+ * The computed root data one retained result carries, read as this projection
+ * will use it.
+ *
+ * Every name is checked against the parser an authored binding is checked
+ * against, and `props` is refused outright: each entry's props namespace is the
+ * one its own root validated, so a record carrying that name is not a value a
+ * later entry inherits.
+ */
+function readResultBindings(
+  carried: Json | undefined,
+): ReplBindingMap | undefined | typeof MALFORMED {
+  if (carried === undefined) {
+    return undefined;
+  }
+  if (!isJsonObject(carried)) {
+    return MALFORMED;
+  }
+  const held: [string, Json][] = [];
+  for (const [name, value] of Object.entries(carried)) {
+    if (name === ROOT_PROPS_BINDING) {
+      return MALFORMED;
+    }
+    const binding = validateBindingName(name);
+    if (!binding.ok || binding.value !== name) {
+      return MALFORMED;
+    }
+    held.push([name, detach(value)]);
+  }
+  return Object.freeze(held.map(([name, value]) => freeze({ name, value })));
+}
+
+/** One entry's computed root data, as the model holds it. */
+type ReplBindingMap = readonly ReplBinding[];
 
 function isJsonObject(value: Json | undefined): value is { [key: string]: Json } {
   return value !== null && typeof value === "object" && !Array.isArray(value);

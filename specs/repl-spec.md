@@ -226,16 +226,104 @@ order, and the values are the entry's own to change — they behave like values
 authored earlier in the same environment, and a later export replaces one
 through the ordinary rules.
 
-What survives is what was retained. An entry that failed, and one whose
-cancellation the file records, each settle their entry: they hand on everything
-they published before that, hand on nothing they never durably published, and
-let the next entry start. The reserved `props` namespace belongs to each entry's
+A root `<Let>`, an ordinary component capture and an `eval` block's export all
+reach the next entry. Writing
+
+```xmd
+<Let as="saved" value="alpha" />
+```
+
+is enough for the next entry to read `{saved}`, and the same is true of
+`<Json value={{ answer: 42 }} as="saved" />`, of a Markdown component captured
+with `as`, and of a `<Git.Commit as="commit" />` whose object id a later entry
+consumes without committing again.
+
+None of them is retained on its own. What the entry hands on is its **outcome**:
+when the entry settles, the data its root holds is carried on the ordinary
+result that settles it, and that is the one thing a later entry starts from. So
+the question is never which construct wrote a name, or in what order — it is
+what the root held when the entry finished.
+
+That is also why the value that crosses is the value **as it stood then**,
+rather than as it stood at the capture. The binding inside the entry is the
+exact object the expression or the component produced, so the entry goes on
+using it the way it always has; a change it makes to that object before it
+settles is part of what the entry hands on, and a change made to a copy a later
+entry received reaches nothing.
+
+### Values that stay in the entry that made them
+
+What crosses between entries is ordinary JSON data: text, numbers, `true`,
+`false`, `null`, lists and plain objects of those. A function, a live handle, a
+class instance, a cycle, a non-finite number and `undefined` are **entry-local**.
+They bind exactly as they always have and stay usable for the rest of that
+entry, and they are not converted into data, not kept alive past the entry, and
+not published.
+
+A name bound only to a value like that is simply absent from what the entry
+hands on, which is not the same as clearing it — so the name keeps whichever
+value an entry last settled under it:
+
+```xmd
+<Let as="saved" value="alpha" />
+```
+
+```xmd
+<Handle as="saved" />
+```
+
+The second entry uses that handle. The third entry — and a cold reading of the
+file — still reads `saved` as `"alpha"`, because the second entry's outcome
+carried no `saved` to replace it with. A name only ever bound to a value like
+that is absent from inheritance altogether: there is no removal, nothing is
+deleted, and nothing warns.
+
+What survives is what was retained. An entry that failed settles its entry and
+hands on the root data its own failing outcome carried, because a failure is an
+outcome.
+
+A cancellation is not a result. An entry whose cancellation the file records
+settles its entry too, but it carries no computed root data of its own: there
+is no map on it, and none is reconstructed for it — whatever a cancelled run
+had computed went with it rather than standing in for a result. What it does
+not do is unretain the facts recorded before it. An `eval` export that entry
+really made is a fact the file holds, and the entry after it inherits that
+export exactly as it would from any other settled entry, while a capture the
+entry reached and never recorded stays absent. Either way the next entry may
+start.
+
+"Nothing unretained crosses" is about outcomes, not about names. An entry that
+mutated a value it inherited and never named again still hands the mutated
+value on, because what its outcome carries is the root it actually had. What
+does not cross is anything no outcome ever acknowledged — a value a running
+entry holds, a value an entry that never settled computed, a value a discarded
+result had. The reserved `props` namespace belongs to each entry's
 own validated root and is never inherited.
 
 An entry interrupted before its root closed is a different thing. The file holds
 no close for it, so it is unfinished, and an unfinished entry permits no
 successor — reopen that execution and it resumes where its records stop, and
 another entry can be submitted once it has settled.
+
+### A history written before captures were retained
+
+A file whose entries were written before root captures were published is read
+as it is. A completed entry there exposes the values it actually recorded, and
+a capture it never recorded stays absent: nothing re-runs its source, repeats
+an effect it already performed, or writes a value into it after the fact.
+
+An entry such a file shows as unfinished simply continues. Nothing marks it and
+there is no mode to continue in: its retained prefix is restored — its recorded
+effects are not performed again — its remaining body runs, and the ordinary
+outcome it settles carries the root data it then holds, including the captures
+in the part that had never run. A file holding both kinds of entry is an
+ordinary file, because the only difference between them is what their own
+outcomes recorded.
+
+What is refused is a history whose records say something this version cannot
+read: an outcome carrying computed data it cannot parse, or a name no binding
+could have. That is a refusal with nothing appended and no execution started,
+and it is a different answer from an outcome that simply carries none.
 
 This comes from the file and from nothing else, so a later entry begins from the
 same values whether the earlier ones ran a moment ago in this process or were

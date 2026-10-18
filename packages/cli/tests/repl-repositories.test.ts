@@ -41,6 +41,7 @@ import {
   REPL_REPOSITORY_PLACEMENT,
 } from "../../git/src/retained-repository/placement-records.ts";
 import { Execution } from "@executablemd/core/api";
+import type { Json } from "@executablemd/core";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { useReplRepositoryRecording } from "../../git/src/deno/retained-repository/provider.ts";
@@ -48,8 +49,17 @@ import type { HelperAssembly } from "../../git/src/deno/composition/credential-h
 import { gitPlugin } from "../../git/src/plugin.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
+import { entryInitialBindings, projectRepl } from "../src/repl/model.ts";
+import {
+  createExecutionFile,
+  executionPath,
+  openExecutionFile,
+  readRecords,
+} from "../src/repl/journal.ts";
+import type { RepositoryHost } from "../../git/src/deno/composition/host.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
+import type { ReplModel } from "../src/repl/model.ts";
 
 /**
  * What a command contributes to an entry's execution.
@@ -233,6 +243,24 @@ function recordedText(event: DurableEvent | undefined): string | undefined {
 /** Every record of one type this history holds. */
 function recordsOf(events: readonly DurableEvent[], type: string): readonly DurableEvent[] {
   return events.filter((event) => event.type === "yield" && event.description.type === type);
+}
+
+/** The projected model, or the refusal the row reports instead of asserting past. */
+function projected(events: readonly DurableEvent[]): ReplModel {
+  const result = projectRepl(events);
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
+}
+
+/** One named value out of a reading, named so a miss says what was there. */
+function value(bindings: readonly { name: string; value: Json }[], name: string): Json {
+  const found = bindings.find((binding) => binding.name === name);
+  if (found === undefined) {
+    throw new Error(`these bindings hold ${bindings.map((one) => one.name).join(", ")}`);
+  }
+  return found.value;
 }
 
 /** One submitted entry, run to completion against this execution's history. */
@@ -652,5 +680,266 @@ describe("how a REPL entry gets its repository behavior", () => {
     const events = yield* submit(fixture, '<File path="note.md">first</File>', run, counted);
     expect(recordsOf(events, REPL_REPOSITORY_SELECTION).length).toBe(1);
     expect(recordsOf(events, REPL_REPOSITORY_LOCAL).length).toBe(1);
+  });
+});
+
+/**
+ * Who this suite's entries commit under.
+ *
+ * `<Git.Commit>` borrows the invoking person's identity, read with `git var`
+ * from the environment the command started in. A continuous-integration runner
+ * commonly has none, so the row would fail for a reason about the runner. This
+ * states one instead, through the seam the host reads it with.
+ */
+const STATED_IDENTITY: Readonly<Record<string, string | undefined>> = Object.freeze({
+  GIT_AUTHOR_IDENT: "Suite Author <suite-author@example.test> 1700000000 +0000",
+  GIT_COMMITTER_IDENT: "Suite Author <suite-author@example.test> 1700000000 +0000",
+});
+
+/** That identity, as the host reads one. */
+// deno-lint-ignore require-yield
+function* statedIdentity(variable: string): Operation<string | undefined> {
+  return STATED_IDENTITY[variable];
+}
+
+/** How many commits this suite's repository host was actually asked to make. */
+interface Committed {
+  commits: number;
+}
+
+/**
+ * The real repository host, with each `git commit` it is asked to run counted.
+ *
+ * Counted at the host rather than at the `Git` Api: the provider's own
+ * implementation of `commit` consults the journal, so it is entered on a
+ * replay and answers from the record. What a replay must not do is reach the
+ * repository, and this is where reaching it happens.
+ */
+function countingHost(committed: Committed): RepositoryHost {
+  const host = denoRepositoryHost();
+  return {
+    ...host,
+    git(invocation) {
+      if (invocation.args.includes("commit")) {
+        committed.commits += 1;
+      }
+      return host.git(invocation);
+    },
+  };
+}
+
+/** The production REPL recording over that counted host. */
+function* useCountedCommits(committed: Committed, fixture: Fixture): Operation<void> {
+  yield* Execution.around({
+    *init(_args, next): Operation<void> {
+      yield* useReplRepositoryRecording({
+        helper: SUITE_HELPER,
+        root: managedRoot(fixture),
+        identity: statedIdentity,
+        host: countingHost(committed),
+      });
+      yield* next();
+    },
+  });
+}
+
+/**
+ * A checkout with a commit already in it, and one file left to stage.
+ *
+ * Its own rather than the shared fixture's: discovering the ambient repository
+ * reads its head, so a checkout with no commit in it has no ambient owner for
+ * a root `<Git.Commit>` to belong to.
+ */
+function* useCommittedCheckout(fixture: Fixture): Operation<string> {
+  const checkout = join(fixture.root, "committed");
+  const git = gitSession(denoRepositoryHost(), fixture.root);
+  yield* git.run(["init", "-b", "main", checkout], fixture.root);
+  yield* until(writeFile(join(checkout, "seed.md"), "seed\n"));
+  yield* git.run(
+    ["-c", "user.name=Suite", "-c", "user.email=suite@example.test", "add", "seed.md"],
+    checkout,
+  );
+  yield* git.run(
+    ["-c", "user.name=Suite", "-c", "user.email=suite@example.test", "commit", "-m", "first"],
+    checkout,
+  );
+  yield* until(writeFile(join(checkout, "note.md"), "note\n"));
+  return checkout;
+}
+
+/** One entry that commits at its root and captures the object id. */
+const COMMITS_AT_ROOT = [
+  '<Git.Commit message="Record the note" as="proofCommit">',
+  '<Git.Add paths="note.md" />',
+  "</Git.Commit>",
+  "",
+  "Committed {proofCommit}.",
+  "",
+].join("\n");
+
+/** One entry that consumes the object id the entry before it captured. */
+const CONSUMES_THE_COMMIT = ["Earlier commit: {proofCommit}", ""].join("\n");
+
+/** The same entry, held at a question after the commit it captured. */
+const COMMITS_THEN_ASKS = [
+  '<Git.Commit message="Record the note" as="proofCommit">',
+  '<Git.Add paths="note.md" />',
+  "</Git.Commit>",
+  "",
+  '<Elicit schema={{ type: "object", properties: { decision: { type: "string" } }, required: ["decision"], additionalProperties: false }} as="answer">Continue?</Elicit>',
+  "",
+  "Committed {proofCommit}, answered {answer.decision}.",
+  "",
+].join("\n");
+
+describe("a root capture a REPL entry commits (#939)", () => {
+  it("P7: the commit id survives a cold reopen, and the commit is never made twice", function* () {
+    const fixture = yield* useFixture();
+    const checkout = yield* useCommittedCheckout(fixture);
+    const committed: Committed = { commits: 0 };
+    const journals = join(fixture.root, "journals");
+
+    // One real commit, through a root `<Git.Commit as>` capture, over a journal
+    // that is a file on disk.
+    const first = yield* scoped(function* (): Operation<{ id: string; path: string }> {
+      yield* useNodeReplHost("execution-1");
+      yield* useHostFiles();
+      yield* useWorkingDirectory(checkout);
+      yield* useCountedCommits(committed, fixture);
+      const created = yield* createExecutionFile(journals, "execution-1");
+      const session = opened(
+        yield* submitReplEntry({
+          execution: created,
+          source: COMMITS_AT_ROOT,
+          installations: yield* replInstallations(),
+          generated: ordinaryGeneratedSelection(),
+        }),
+      );
+      const outcome = yield* session.join();
+      if (!outcome.ok) {
+        throw outcome.error;
+      }
+      const published = entryInitialBindings(session.model)["proofCommit"];
+      if (typeof published !== "string") {
+        throw new Error("the entry published no commit id");
+      }
+      return { id: published, path: executionPath(journals, "execution-1") };
+    });
+
+    expect(first.id).toMatch(/^[0-9a-f]{40}$/);
+    expect(committed.commits).toBe(1);
+
+    // Reopened from the bytes on disk, by a session and a model this process has
+    // not held before: nothing of the first run's event graph, projection or
+    // live handles is reused.
+    const reread = yield* readRecords(first.path);
+    expect(reread.length).toBeGreaterThan(0);
+
+    const consumed = yield* scoped(function* (): Operation<string> {
+      yield* useNodeReplHost("execution-1");
+      yield* useHostFiles();
+      yield* useWorkingDirectory(checkout);
+      yield* useCountedCommits(committed, fixture);
+      const reopened = yield* openExecutionFile(journals, "execution-1");
+      const session = opened(
+        yield* openReplSession({
+          execution: reopened,
+          installations: yield* replInstallations(),
+          generated: ordinaryGeneratedSelection(),
+        }),
+      );
+      // A settled history is read, never resumed, so the capture is in the
+      // record this reading derives rather than in anything that ran.
+      expect(session.live).toBe(false);
+      expect(entryInitialBindings(session.model)["proofCommit"]).toBe(first.id);
+      const submitted = yield* session.submit(CONSUMES_THE_COMMIT);
+      if (!submitted.ok) {
+        throw submitted.error;
+      }
+      const outcome = yield* session.join();
+      if (!outcome.ok) {
+        throw outcome.error;
+      }
+      return session.model.entries[1]?.terminal?.output ?? "";
+    });
+
+    expect(consumed).toContain(`Earlier commit: ${first.id}`);
+    // Reopening and consuming added no commit at all: the value came from the
+    // record, and the repository was not asked to do the work again.
+    expect(committed.commits).toBe(1);
+  });
+
+  it("P7: an unfinished entry resumes its suffix, repeats no commit, and settles it", function* () {
+    const fixture = yield* useFixture();
+    const checkout = yield* useCommittedCheckout(fixture);
+    const committed: Committed = { commits: 0 };
+    const run = execution();
+
+    // Left at the question, which is what leaves the entry unfinished: the
+    // commit before it is retained and the suffix after it is not.
+    yield* scoped(function* () {
+      yield* useNodeReplHost("execution-1");
+      yield* useHostFiles();
+      yield* useWorkingDirectory(checkout);
+      yield* useCountedCommits(committed, fixture);
+      const session = opened(
+        yield* submitReplEntry({
+          execution: run,
+          source: COMMITS_THEN_ASKS,
+          installations: yield* replInstallations(),
+          generated: ordinaryGeneratedSelection(),
+        }),
+      );
+      yield* waitForQuestion(session);
+    });
+
+    const retained = yield* run.stream.readAll();
+    // The commit really happened and its own record is retained. The capture
+    // has no record of its own — the commit's effect record is what the resume
+    // restores it from — and the entry has settled nothing.
+    expect(committed.commits).toBe(1);
+    expect(retained.some((event) => event.type === "close")).toBe(false);
+    expect(recordsOf(retained, "root_binding").length).toBe(0);
+
+    // Resumed by a fresh session, which replays the retained prefix.
+    const settled = yield* scoped(function* (): Operation<string> {
+      yield* useNodeReplHost("execution-1");
+      yield* useHostFiles();
+      yield* useWorkingDirectory(checkout);
+      yield* useCountedCommits(committed, fixture);
+      const session = opened(
+        yield* openReplSession({
+          execution: run,
+          installations: yield* replInstallations(),
+          generated: ordinaryGeneratedSelection(),
+        }),
+      );
+      yield* waitForQuestion(session);
+      session.elicitation.pending?.submit({ decision: "go" });
+      const outcome = yield* session.join();
+      if (!outcome.ok) {
+        throw outcome.error;
+      }
+      return session.model.entries[0]?.terminal?.output ?? "";
+    });
+
+    // The suffix ran and the commit did not: the capture came back from the
+    // commit's own retained record, and the repository was asked for nothing a
+    // second time.
+    expect(settled).toContain("answered go");
+    expect(committed.commits).toBe(1);
+    const after = yield* run.stream.readAll();
+    expect(after.slice(0, retained.length)).toEqual(retained);
+    // Still no record of its own for the capture, at any point: what the
+    // resumed entry hands on is in its ordinary settled result, which carries
+    // the reconstructed commit id and the answer it went on to receive.
+    expect(recordsOf(after, "root_binding").length).toBe(0);
+    const projection = projected(after);
+    const outcome = projection.entries[0]?.terminal;
+    expect(outcome?.status).toBe("ok");
+    expect(value(outcome?.bindings ?? [], "proofCommit")).toBe(
+      entryInitialBindings(projection)["proofCommit"],
+    );
+    expect(value(outcome?.bindings ?? [], "answer")).toEqual({ decision: "go" });
   });
 });

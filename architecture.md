@@ -4111,7 +4111,9 @@ Glob keeps its existing required `include`, optional `exclude` and value-returni
 contract. With `as` it binds a sorted, deduplicated array of relative file paths
 and renders no text. Generated evaluation supports ordinary fragment-local
 bindings, structural constructs, declarative expression props over those
-bindings, and pure components. It imports no caller bindings and exports none.
+bindings, and pure components. It reads no caller binding and has no export or
+result channel of its own; a name it binds with `as` is written in the
+containing document's environment, which is the one it expands against.
 Executable fences,
 imports and effectful components outside the selected permission remain refused.
 
@@ -6154,6 +6156,58 @@ before any installation or document code runs, and the detached values are
 ordinarily mutable inside the execution that receives them. The REPL derives
 that record only from values durably retained before the new entry's admission,
 so replay derives the identical record from the identical bytes.
+
+#### Execution computes the root data its result hands back
+
+An `eval` block's exports are journaled because evaluating one is a durable
+effect. A root `<Let>` and an ordinary component capture are not, and nothing
+here makes them one. A binding is a **byproduct of running the document**: the
+thing a later execution over the same journal needs is not a record per
+capture but the root as it stood when the document finished — which is already
+a fact the canonical result is the place for. So the execution computes that
+data at its own result boundary and carries it on the ordinary
+`DocumentResult`, under an optional member. The journal gains no operation, no
+name, no sequence and no mode; ordinary execution behaves exactly as it did,
+and LET11's inventory is unchanged.
+
+Two consequences follow from putting it there rather than beside it. A cold
+reader answers from the record it already parses, so `parseDocumentResult`
+stays the single interpretation point for live and replayed results alike. And
+an ordinary authored failure carries its data too, because a failure is an
+outcome with a result — which is why that normalization happens inside the
+canonical boundary, with durability and fatal Files failures still escaping
+ahead of it.
+
+The owner is **execution-owned**, not described: Core creates one private owner
+per canonical invocation, adopts the disclosure policy where the secret
+detection that gates the journal is established, and is handed the actual root
+binding environment by identity where expansion creates it. What it reads is
+therefore that exact object — an identity, rather than a judgment about a file
+name, a coroutine or a source position. A component body, an `<Each>` iteration
+and a `<Spawn>` each write an environment of their own, so their local names
+are not the root's; a root `<Each as>` aggregate is written at the root and so
+is root data. The owner is not a member of `ExecutionEnvironment`, which
+describes what a document is expanded *against*; it reaches no Context, Api or
+registry, and it expires with the execution.
+
+Eligibility is a property of the data, not of its provenance. Every own member
+of that root whose name is a valid binding name and whose value is whole in the
+strict JSON domain is in, except `props`, which each execution validates for
+itself. Anything else is omitted — and omission carries no value, names no
+type and removes nothing. There is deliberately no assignment, capture or
+version ledger: "own root data" means membership of that environment, which is
+why a name an entry inherited and then mutated is part of what its result
+carries without being named again, and why a transient value overwritten
+before the result is not recoverable as history.
+
+Reading is owned the same way. `HostExecution.bindings()` is a host-only read
+that authorizes nothing, and it answers through the disclosure policy the owner
+adopted — the exact scanner the journal gate closed over, not a replaceable
+Context — so a counterfeit same-name policy installed afterwards cannot weaken
+it and a secret refuses the read whole rather than appearing in it. The REPL
+session layers that live read over the retained head and rechecks the running
+entry's identity after the read suspends, so one entry's live values are never
+credited to another.
 
 The session owns at most one entry task. Starting another needs two separate
 facts — the preceding entry has a retained terminal close, *and* its task has

@@ -1384,6 +1384,183 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     }
   }
 
+  /** One entry that captures a root value with `<Let>` and renders it. */
+  function captures(name: string, held: string, label: string): string {
+    return [`<Let as="${name}" value="${held}" />`, "", `${label}: {${name}}`, ""].join("\n");
+  }
+
+  /**
+   * One entry that captures and is then held at a question after it.
+   *
+   * The question is the barrier and the hold at once: it is reached only after
+   * the capture, and an entry waiting to be answered has settled nothing. What
+   * the row then measures is that the captured name is in no record at all and
+   * is still readable — which is the whole point of an explicit live read, and
+   * the state no projection of the file can answer.
+   */
+  const CAPTURES_THEN_ASKS = [
+    '<Let as="live" value="running" />',
+    "",
+    "```js eval",
+    "const schema = {",
+    '  type: "object",',
+    '  properties: { decision: { type: "string" } },',
+    '  required: ["decision"],',
+    "  additionalProperties: false,",
+    "};",
+    "```",
+    "",
+    '<Elicit schema={schema} as="answer">Go on?</Elicit>',
+    "",
+    "Answered: {answer.decision}",
+    "",
+  ].join("\n");
+
+  /**
+   * Wait until the running entry is held at its question.
+   *
+   * The elicitation's own announcement is the readiness signal: a question is
+   * announced when the walk reaches it, so this waits for exactly the state
+   * being asserted and nothing is slept on.
+   */
+  function* held(session: ReplSession): Operation<void> {
+    if (session.overlay.question !== undefined) {
+      return;
+    }
+    const changes = yield* session.elicitation.changes;
+    while (true) {
+      const next = yield* changes.next();
+      if (next.done === true) {
+        throw new Error("the session stopped announcing before the question arrived");
+      }
+      if (next.value !== undefined) {
+        return;
+      }
+    }
+  }
+
+  /**
+   * Evaluate one reply whose controls reach the REPL's real reads.
+   *
+   * The same held-execution shape the stub rows use, with the ceiling built
+   * over `sidekickRequests` instead of a stand-in: what the control answers is
+   * then the acknowledged head's own projection rather than a fixture.
+   */
+  function replyReading(
+    source: string,
+    session: ReplSession,
+    asked: Asked,
+  ): Operation<Result<GeneratedXmdRootResult>> {
+    return scoped(function* () {
+      const journal = journalOf(asked);
+      const ceiling = sidekickResponseCeiling(
+        sidekickRequests(reading(session), noSubmission),
+        journal,
+      );
+      const gate = withResolvers<void>();
+      const entered = withResolvers<void>();
+      const execution = yield* executeInstalled(
+        {
+          ...retainedSource("repl/sidekick.md", "<SidekickHost />\n"),
+          stream: new InMemoryStream(),
+        },
+        [
+          sidekickCeilingInstallation(ceiling),
+          {
+            components: [
+              {
+                name: "SidekickHost",
+                origin: "test://sidekick-host",
+                props: { type: "object", properties: {}, additionalProperties: false },
+                description: "Hold this execution open while its caller evaluates one reply.",
+                factory: () =>
+                  function* (): Operation<string> {
+                    entered.resolve();
+                    yield* gate.operation;
+                    return "";
+                  },
+              },
+            ],
+          },
+        ],
+      );
+      const watched = yield* spawn(() => execution);
+      yield* entered.operation;
+      const answer = yield* execution.evaluateGeneratedXmdRoot({
+        id: "turn-1",
+        source,
+        allow: [...ceiling.allow],
+      });
+      gate.resolve();
+      const ran = yield* watched;
+      if (!ran.ok) {
+        throw ran.error;
+      }
+      return answer;
+    });
+  }
+
+  it("P8: a reply reads the captures the acknowledged head published, not the prefix", function* () {
+    const stream = new InMemoryStream();
+    // Two settled entries, each capturing the same name with a different value
+    // through `<Let>` rather than through an eval block, so what the reply reads
+    // is the retained capture and not an export that happens to agree with it.
+    const marker = yield* scoped(function* (): Operation<string> {
+      const session = yield* opened("captures", stream);
+      yield* ran(session, captures("token", "alpha", "One"));
+      yield* ran(session, captures("token", "beta", "Two"));
+      const first = session.navigation.checkpoints[0]?.marker;
+      if (first === undefined) {
+        throw new Error("this history retained no position to stand at");
+      }
+      return first;
+    });
+
+    const session = yield* opened("captures", stream, marker);
+    // Both sides measured: the selected prefix is Entry 1's admission, before
+    // anything was captured, so a read answering from the screen says `{}`.
+    expect(session.model.selection).toBe(marker);
+    expect(entryInitialBindings(session.model)).toEqual({});
+
+    const direct = yield* sidekickRequests(reading(session), noSubmission).bindings();
+    if (!direct.ok) {
+      throw direct.error;
+    }
+    expect(direct.value).toEqual({ token: "beta" });
+
+    // And through the admitted control itself, in a real reply, recorded as the
+    // one occurrence it is.
+    const asked = fresh();
+    const answer = yield* replyReading("<Output>\n<REPL.Bindings />\n</Output>\n", session, asked);
+    expect(rendered(answer)).toContain("beta");
+    expect(rendered(answer)).not.toContain("alpha");
+    // Recorded as the one occurrence it is. `asked.requests` stays empty here on
+    // purpose: nothing stands in for the REPL in this row, so the only thing
+    // counting is the owner's own journal.
+    expect(asked.requests).toEqual([]);
+    expect(asked.began).toEqual([{ component: "REPL.Bindings", arguments: {} }]);
+    expect(asked.settled.map((one) => one.ok)).toEqual([true]);
+  });
+
+  it("P8: a capture of the entry held at a question is in the live reading", function* () {
+    const session = yield* opened("running-capture", new InMemoryStream());
+    const submitted = yield* session.submit(CAPTURES_THEN_ASKS);
+    if (!submitted.ok) {
+      throw submitted.error;
+    }
+    // The entry is open and held at the question written after the capture, so
+    // the capture has run and the entry has settled nothing.
+    yield* held(session);
+    expect(session.live).toBe(true);
+    // And the capture is in no record: it is not durable on its own, and this
+    // entry has not settled, so nothing the file holds mentions the name.
+    expect(Object.hasOwn(entryInitialBindings(session.model), "live")).toBe(false);
+
+    const asked = fresh();
+    const answer = yield* replyReading("<Output>\n<REPL.Bindings />\n</Output>\n", session, asked);
+    expect(rendered(answer)).toContain("running");
+  });
+
   it("R3: the latest acknowledged root, read from an earlier selected position", function* () {
     const stream = new InMemoryStream();
     // Two settled entries, each publishing the same name with a different

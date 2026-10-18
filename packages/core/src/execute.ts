@@ -35,6 +35,8 @@ import { DocumentProtocolError, issueDocument } from "./document-request.ts";
 import { claimBoundExec } from "./bound-exec.ts";
 import type { DocumentSettlement, IssuedDocument } from "./document-request.ts";
 import type { DocumentRequest, DurablePreparation } from "./document-request.ts";
+import { parseComputedBindings, useComputedBindings } from "./computed-bindings.ts";
+import type { ComputedBindings } from "./computed-bindings.ts";
 import type { CompletionFailure, ExecutionRequest } from "./execution-request.ts";
 import { createContext } from "effection";
 import type { Context } from "effection";
@@ -199,6 +201,7 @@ import { useEvalScope } from "@effectionx/scope-eval";
 import { declaredRouting, FOREGROUND, route, withRouting } from "./foreground.ts";
 import type { ForegroundRouting } from "./foreground.ts";
 import { checkedFailureLedger, refuseCheckedFailure } from "./component-failures.ts";
+import { authoredStop } from "./components/Fail.ts";
 import { provideTestHarnessInstallers } from "./test-harness.ts";
 import type { TestHarnessInstaller } from "./test-harness.ts";
 import type { CheckedFailures } from "./component-failures.ts";
@@ -1813,6 +1816,15 @@ type DocumentSuccess = {
   status: "ok";
   output: string;
   value: Json;
+  /**
+   * The eligible root data this run computed, when it created a root at all.
+   *
+   * A byproduct rather than a second value: the public `value` and the rendered
+   * `output` keep their own channels, and this is what the document's own root
+   * environment held when the result was built. Absent says this result carries
+   * no byproduct — an older record, or a run that failed before a root existed.
+   */
+  bindings?: JsonObject;
 };
 
 /**
@@ -1827,6 +1839,15 @@ type DocumentFailureResult = {
   status: "err";
   output: string;
   error: DocumentFailure;
+  /**
+   * What the run had computed before it failed.
+   *
+   * An authored failure is an outcome, and the data the document produced
+   * before reaching it is as real as the text it rendered. Carrying it here is
+   * what lets the entry after a failed one start from what that entry actually
+   * established.
+   */
+  bindings?: JsonObject;
 };
 
 /**
@@ -1881,16 +1902,21 @@ function* takeLiveFailure(slot: LiveFailureSlot): Operation<unknown> {
   return live;
 }
 
-function describeFailure(caught: unknown, documentation: DocumentationError): DocumentFailure {
+function describeFailure(
+  caught: unknown,
+  documentation: DocumentationError | undefined,
+): DocumentFailure {
   const wrapper = caught instanceof Error ? caught : new Error(String(caught));
+  // Without a printed description the failure speaks for itself: an authored
+  // `<Fail>` carries its own message and no separate segment account, so the
+  // record repeats that message rather than inventing a second one.
+  const described = documentation?.segment;
   return {
     name: wrapper.name,
     message: wrapper.message,
     segment: {
-      message: documentation.segment.message,
-      ...(documentation.segment.source === undefined
-        ? {}
-        : { source: documentation.segment.source }),
+      message: described?.message ?? wrapper.message,
+      ...(described?.source === undefined ? {} : { source: described.source }),
     },
     // An own property, not an inherited one: every Error inherits `cause` from
     // nowhere useful, and what this records is what this failure was given.
@@ -1958,17 +1984,31 @@ function parseDocumentResult(value: unknown): DocumentResult {
     throw new Error("A document result must carry its rendered output as a string.");
   }
   const status = candidate["status"];
+  const bindings = parseComputedBindings(candidate["bindings"]);
+  const carried = bindings === undefined ? {} : { bindings };
   if (status === "ok") {
-    return { status: "ok", output, value: parseJson(candidate["value"]) };
+    return { status: "ok", output, value: parseJson(candidate["value"]), ...carried };
   }
   if (status === "err") {
-    return { status: "err", output, error: parseFailure(candidate["error"]) };
+    return { status: "err", output, error: parseFailure(candidate["error"]), ...carried };
   }
   throw new Error(
     `A document result records its outcome as "ok" or "err", and this one records ` +
       `${JSON.stringify(status)}. A journal written before the outcome contract ` +
       `(#318) has no status at all and cannot be replayed by this version.`,
   );
+}
+
+/**
+ * The byproduct member an ordinary outcome carries, or nothing.
+ *
+ * Nothing before a root exists, which is a different record from one whose root
+ * computed no data: a result that never had a root says so by omitting the
+ * member rather than by reporting an empty environment.
+ */
+function carriedBindings(computed: ComputedBindings): { bindings?: JsonObject } {
+  const data = computed.computed();
+  return data === undefined ? {} : { bindings: data };
 }
 
 function parseFailure(value: unknown): DocumentFailure {
@@ -2041,6 +2081,8 @@ function* runValueRoot(
   environment: ExecutionEnvironment,
   /** This execution's own import resolution, for the expansions below. */
   importTerminal: ComponentImportTerminal,
+  /** This execution's own binding owner, for the byproduct its body computes. */
+  computed: ComputedBindings,
 ): Operation<DocumentResult> {
   // Created outside the scope the body runs in, so the value it selected is
   // still readable after that scope — and its teardown — has finished.
@@ -2090,7 +2132,12 @@ function* runValueRoot(
   if (!selected) {
     throw new Error(missingReturnMessage("__root__"));
   }
-  return { status: "ok", output: chunks.join(""), value: selected.value };
+  return {
+    status: "ok",
+    output: chunks.join(""),
+    value: selected.value,
+    ...carriedBindings(computed),
+  };
 }
 
 function* documentWorkflow(
@@ -2120,6 +2167,15 @@ function* documentWorkflow(
    * can name reaches it.
    */
   roots: GeneratedRootOwner,
+  /**
+   * This execution's own binding owner.
+   *
+   * Handed the actual root environment below, once, by the expansion that
+   * creates it. Carried as an argument beside the import terminal and the root
+   * owner for the same reason they are: it is the execution's own, and nothing
+   * a document, a component or middleware can name reaches it.
+   */
+  computed: ComputedBindings,
 ): Workflow<DocumentResult> {
   // This run's memory of a checked command failure it never authorized. Passed
   // by value into core's own expansion and reachable from nowhere else, so no
@@ -2180,6 +2236,9 @@ function* documentWorkflow(
     });
   }
   liveEnvironment(rootEnv);
+  // The one place the owner learns which object this run's root is. Identity,
+  // not a lookup: what may be reported is this environment's own data.
+  computed.attach(rootEnv);
 
   // Per-root-segment emission loop (spec §9).
   // Mutable counter preserves deterministic blockIds across
@@ -2241,7 +2300,7 @@ function* documentWorkflow(
       const text = renderSegment(yield* raise(structureError));
       yield* ephemeral(DocumentOutput.operations.output(text));
       streamed.push(text);
-      return { status: "ok", output: text, value: text };
+      return { status: "ok", output: text, value: text, ...carriedBindings(computed) };
     }
 
     if (root.returns !== undefined) {
@@ -2260,6 +2319,7 @@ function* documentWorkflow(
         checkedFailures,
         environment,
         importTerminal,
+        computed,
       );
     }
 
@@ -2293,7 +2353,7 @@ function* documentWorkflow(
       }
       const text = runs.map((run) => run.text).join("");
       yield* refuseCheckedFailure(checkedFailures);
-      return { status: "ok", output: text, value: text };
+      return { status: "ok", output: text, value: text, ...carriedBindings(computed) };
     }
 
     // Per-root-segment emission loop for roots without <Output> (spec §5.4).
@@ -2338,7 +2398,7 @@ function* documentWorkflow(
 
     const text = streamed.join("");
     yield* refuseCheckedFailure(checkedFailures);
-    return { status: "ok", output: text, value: text };
+    return { status: "ok", output: text, value: text, ...carriedBindings(computed) };
   });
 
   // The catch is outside the `yield*`, not inside the scope: the expansion's
@@ -2360,12 +2420,28 @@ function* documentWorkflow(
       yield* ephemeral(DocumentOutput.operations.output(run.text, run.exact));
     }
     // A durability failure is not something the document did, so it never
-    // becomes the document's own outcome (§6.11).
-    if (durabilityFailure(error) !== undefined) {
+    // becomes the document's own outcome (§6.11). A Files infrastructure
+    // failure is not either, and both keep escaping ahead of everything below.
+    if (durabilityFailure(error) !== undefined || filesFatalFailure(error) !== undefined) {
       throw error;
     }
+    // An authored failure the document decided is its outcome. Usually that
+    // decision arrives described, through a printing boundary. The one other
+    // eligible failure is the Error a valid `<Fail>` raised: it reaches here
+    // unchanged and undescribed, and before it was recognized it left the
+    // canonical boundary with no document result at all — so the body's own
+    // rendered text and the data it had computed were lost to every later
+    // reader, even though the run was over and had decided.
+    //
+    // Everything else undescribed is not the document's outcome and escapes as
+    // it always has: a Git protocol refusal, a retained-history rejection, an
+    // assertion abort, a missing launcher. The mark is read off the object this
+    // boundary was handed, never searched for underneath it, so a wrapper or a
+    // teardown failure that merely carries an authored stop is not adopted as
+    // one. `describeFailure` reads the wrapper for its own account when there
+    // is no description to read.
     const documentation = documentationFailure(error);
-    if (documentation === undefined) {
+    if (documentation === undefined && !authoredStop(error)) {
       throw error;
     }
     // Everything the document rendered: the buffered selection, or what the
@@ -2373,7 +2449,12 @@ function* documentWorkflow(
     const rendered =
       selected.length > 0 ? selected.map(renderSegment).join("") : streamed.join("") + tail;
     yield* ephemeral(rememberLiveFailure(error));
-    return { status: "err", output: rendered, error: describeFailure(error, documentation) };
+    return {
+      status: "err",
+      output: rendered,
+      error: describeFailure(error, documentation),
+      ...carriedBindings(computed),
+    };
   }
 }
 
@@ -2434,6 +2515,23 @@ export interface HostExecution extends DocumentExecution {
    * catching it cannot leave the document looking successful.
    */
   evaluateGeneratedXmdRoot(request: GeneratedXmdRequest): Operation<Result<GeneratedXmdRootResult>>;
+  /**
+   * The eligible root data this execution computed.
+   *
+   * Bindings are a byproduct of running the document, so this reports what the
+   * run's own root environment holds — while it is live, and from its accepted
+   * ordinary result afterwards, so a settled run answers without being executed
+   * again. `props`, engine helpers, the live overlay and every value outside
+   * the strict JSON domain are left out, and what comes back is a copy.
+   *
+   * It is a read and nothing more: it authorizes no assignment, no execution
+   * and no continuation, and it hands over no environment, resource or
+   * capability. A run that ended without an accepted result answers `Err`
+   * rather than reporting data no later run could start from, and a disclosure
+   * this execution's own secret policy rejects answers `Err` carrying neither
+   * the data nor the matched text.
+   */
+  bindings(): Operation<Result<JsonObject>>;
 }
 
 /**
@@ -2741,6 +2839,13 @@ function* executeDocument(
   const root: RootDocumentSource = options;
 
   // Build modifier registry — pure data, no scope side effects.
+  // This execution's own binding owner, acquired in the canonical invocation's
+  // own scope before anything it will hold: the document's root arrives when
+  // expansion creates it, and the disclosure policy when the execution
+  // establishes one. Acquired here, ahead of that work, so its finalizer is
+  // established before there is a live reference for it to release.
+  const computed = yield* useComputedBindings();
+
   const registry = createModifierRegistry();
   // Held by identity as well as by name: a bound block is authorized against
   // these exact factories, so a modifier registered under either name is a
@@ -2968,7 +3073,13 @@ function* executeDocument(
       // root component import is already behind the gate. What comes back is
       // the stream to journal through; the policy itself stays inside the
       // execution that owns it.
-      const journal = yield* useSecretDetection(secretDetection, stream);
+      const detection = yield* useSecretDetection(secretDetection, stream);
+      const journal = detection.journal;
+      // Adopted here, where the policy is established, and held by value: a
+      // reader asking this execution later must be answered by the scanner the
+      // journal gate closes over rather than by whatever Context is installed
+      // by then.
+      computed.adopt(detection.disclose);
 
       // The three values a generated root is evaluated under, handed over here
       // by value and reaching the public handle only as one bound operation.
@@ -3079,7 +3190,14 @@ function* executeDocument(
       const returned = yield* durableRun(
         function* (): Operation<DocumentResult> {
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
-            documentWorkflow(claimed, environment, resolveComponentImport, initialBindings, roots),
+            documentWorkflow(
+              claimed,
+              environment,
+              resolveComponentImport,
+              initialBindings,
+              roots,
+              computed,
+            ),
           );
           try {
             return yield* beforeAnyImport(issued);
@@ -3170,6 +3288,10 @@ function* executeDocument(
       // Taken rather than read, so the handoff belongs to the run that made it.
       const live = yield* takeLiveFailure(liveFailure);
       const result = parseDocumentResult(returned);
+      // Accepted, live or restored: from here the owner answers from the result
+      // rather than from a root environment, which is what lets a completed run
+      // be read without being executed again.
+      computed.settle(result.bindings);
 
       // Preserve output for any completion path that did not emit through the
       // streaming API — a replayed run restores its body text from the journal
@@ -3210,6 +3332,7 @@ function* executeDocument(
     },
     evaluateGeneratedXmdRoot: roots.evaluate,
     evaluation: roots.completion,
+    computed,
   };
 }
 
@@ -3226,6 +3349,8 @@ function* executeDocument(
 interface CanonicalInvocation {
   readonly execution: DocumentExecution;
   readonly evaluateGeneratedXmdRoot: BoundRootEvaluator;
+  /** This execution's own computed root data, for the trusted handle to read. */
+  readonly computed: ComputedBindings;
   /**
    * The authoritative failure one of this execution's root evaluations raised.
    *
@@ -3532,6 +3657,7 @@ function* runInvocation(
   const invoked = yield* ready.operation;
   return {
     evaluateGeneratedXmdRoot: invoked.evaluateGeneratedXmdRoot,
+    computed: invoked.computed,
     // Carried through unchanged. The completion this handle publishes has
     // already been reconciled with it, so nothing above reads it again; it
     // stays on the handle because it is this invocation's policy and a handle
@@ -4195,6 +4321,7 @@ export function* executeInstalled(
       return yield* execution;
     },
     evaluateGeneratedXmdRoot: invoked.evaluateGeneratedXmdRoot,
+    bindings: invoked.computed.read,
   };
 }
 
