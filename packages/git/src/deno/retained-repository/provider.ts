@@ -26,11 +26,12 @@
  * `<Git.File>`, and, for an entry whose capability was built per entry below,
  * the publication an authored `<Git.Push />` asks for.
  *
- * A pull request and an Issue tracker are not here: each has its own protocol
- * and its own evidence, and a local result and a publication authorize neither.
- * `<PullRequest>` stays declared where it already is and refuses through its
- * own unchanged missing-provider default, and what is installed here is not the
- * ordinary all-feature provider, which would enable it.
+ * A pull request is not here: it has its own protocol and its own evidence, and
+ * a local result and a publication authorize neither. `<PullRequest>` and its
+ * three evidence reads are declared with the ordinary policy beneath them, so
+ * they refuse through their own unchanged missing-provider default — and what
+ * is installed here is not the ordinary all-feature provider, which would
+ * enable them.
  *
  * ## Installing it reaches nothing
  *
@@ -80,9 +81,13 @@ import type { ReplGitCheckout, ReplGitEntry } from "./git.ts";
 import { replObservationMiddleware } from "./observations.ts";
 import type { ReplObservationEntry } from "./observations.ts";
 import { GitQuery } from "../../git.ts";
-import { replPushAdmission, replPushComponent } from "./push.ts";
+import { replPushAdmission, replPushPolicy } from "./push.ts";
 import type { ReplPushEntry } from "./push.ts";
-import { replIssueInstallation } from "./issues.ts";
+import { replIssueAdmission, replIssuePolicy, useEntryIssueTransport } from "./issues.ts";
+import {
+  compositionDeclarations,
+  ordinaryCompositionPolicy,
+} from "../../composition/installation.ts";
 import { Execution } from "@executablemd/core/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type { IdentityComponent, JournalAdmission } from "@executablemd/core/host";
@@ -168,9 +173,11 @@ export function useReplRepositoryRecording(options: ReplRecordingOptions = {}): 
  * never returned to the CLI, published through Context or reachable from a
  * document.
  *
- * The issue capability an entry runs with is composed in whole, declarations,
- * admissions and installation together, because one entry installs one
- * capability and neither feature's internals belong to the other.
+ * One entry declares the common vocabulary once, with this host's policy under
+ * the two operations it retains and the ordinary policy under the rest. There
+ * is no inherited executable default here for an entry registration to shadow:
+ * the declarations an execution captures are these, and a host that recorded
+ * nothing for an operation leaves that operation its own refusal.
  */
 export function* replRepositoryInstallation(
   owner: string,
@@ -196,17 +203,16 @@ export function* replRepositoryInstallation(
     },
   });
 
-  const issues = replIssueInstallation(owner);
-  const components: IdentityComponent[] = [
-    ...(issues.components ?? []),
-    replPushComponent(owner, () => (usable ? held.entry : undefined)),
-  ];
-  const admissions: JournalAdmission[] = [...(issues.admissions ?? []), replPushAdmission(owner)];
-  const install = issues.install;
+  const components: readonly IdentityComponent[] = compositionDeclarations({
+    ...ordinaryCompositionPolicy(),
+    issue: replIssuePolicy(owner),
+    push: replPushPolicy(owner, () => (usable ? held.entry : undefined)),
+  });
+  const admissions: JournalAdmission[] = [replIssueAdmission(owner), replPushAdmission(owner)];
   return {
     components,
     admissions,
-    ...(install === undefined ? {} : { install: () => install.call(issues) }),
+    install: () => useEntryIssueTransport({}),
   };
 }
 

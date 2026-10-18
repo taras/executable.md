@@ -90,6 +90,15 @@ export { gitDirectorySelection } from "./src/composition/definitions.ts";
  * one this package ships.
  */
 export { declaresFor as gitPluginDeclaresFor } from "./src/plugin.ts";
+/**
+ * Whether this command's executions install their own policy under the six
+ * operations no local transaction encloses, rather than registering them.
+ *
+ * Named for the Plugin it classifies, for the same reason as the predicate
+ * above: a host assembling a command needs this answer and the vocabulary's own
+ * gating to agree.
+ */
+export { declaresOperationPolicy as gitPluginDeclaresOperationPolicy } from "./src/plugin.ts";
 export { GitObjectError, GitRepositoryError, GitRevisionError } from "./src/git.ts";
 export type { GitObjectFormat } from "./src/git.ts";
 export {
@@ -228,9 +237,22 @@ export type {
 export { admitPushEvidence } from "./src/composition/push-evidence.ts";
 export {
   COMPOSITION_REGISTRATIONS,
+  compositionDeclarations,
   compositionDocumentation,
+  compositionNames,
+  ordinaryCompositionPolicy,
+  SELECTION_REGISTRATIONS,
   useCompositionComponents,
+  useCompositionSelections,
 } from "./src/composition/installation.ts";
+export type { CompositionPolicy } from "./src/composition/installation.ts";
+export { BoundOperationError } from "./src/composition/invocation-binding.ts";
+export type {
+  BindOperations,
+  ComponentBody,
+  FacadeRefusal,
+  InvocationGate,
+} from "./src/composition/invocation-binding.ts";
 export type {
   IssueDetails,
   IssueInput,

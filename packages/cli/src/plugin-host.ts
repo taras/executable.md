@@ -25,6 +25,7 @@ import { incompleteStructural } from "@executablemd/core/host";
 import type {
   ExecutionDeclaration,
   ExecutionInstallation,
+  IdentityComponent,
   IncompleteStructural,
 } from "@executablemd/core/host";
 
@@ -55,6 +56,19 @@ export interface CommandPlugins {
    */
   readonly declarations: readonly ExecutionDeclaration[];
   /**
+   * The components this command's profile declares whose implementations name
+   * durable work after their own invocation.
+   *
+   * Not a Plugin's contribution and deliberately not on `PluginInstallation`:
+   * that member means exact Markdown. These are the repository operations whose
+   * one implementation asks a semantic feature operation — `<Git.Push />`,
+   * `<PullRequest>`, its three evidence reads and `<Issue>` — and which host
+   * policy performs them is settled by the profile that assembled this. They
+   * travel beside the installations so every surface that executes, describes
+   * or validates this command's vocabulary reads one list.
+   */
+  readonly components: readonly IdentityComponent[];
+  /**
    * The original argv these Plugins were installed from.
    *
    * Retained because a nested `host="run"` child installs the same values again
@@ -69,6 +83,7 @@ export const NO_PLUGINS: CommandPlugins = Object.freeze({
   plugins: Object.freeze([]),
   installations: Object.freeze([]),
   declarations: Object.freeze([]),
+  components: Object.freeze([]),
   args: Object.freeze([]),
 });
 
@@ -184,6 +199,9 @@ export function* installPlugins(
     plugins,
     installations: Object.freeze(installations),
     declarations: Object.freeze(declared),
+    // Filled by the profile that assembled this command, which is the one place
+    // that knows whether this command carries the bundled vocabulary at all.
+    components: Object.freeze([]),
     args: request.args,
   };
 }

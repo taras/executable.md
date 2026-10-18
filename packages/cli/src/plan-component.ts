@@ -152,7 +152,7 @@ export function structuralValidation(
       return yield* validateDocumentStructure({
         ...retainedSource(PLAN_IDENTITY, candidate),
         includes: [...includes],
-        components: agentIdentityComponents(),
+        components: [...agentIdentityComponents(), ...plugins.components],
         // Whatever the installed Plugins declare travels with the profile, so a
         // Plan is checked against the same vocabulary the later `xmd run`
         // supplies. Checking it against a narrower one would refuse a program

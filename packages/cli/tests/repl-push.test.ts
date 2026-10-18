@@ -32,6 +32,10 @@ import { denoRepositoryHost } from "../../git/src/deno/composition/host.ts";
 import { gitSession } from "../../git/src/deno/composition/git.ts";
 import { gitPlugin } from "../../git/src/plugin.ts";
 import { replRepositoryInstallation } from "../../git/src/deno/retained-repository/provider.ts";
+import {
+  compositionDeclarations,
+  ordinaryCompositionPolicy,
+} from "../../git/src/composition/installation.ts";
 import { REPL_REPOSITORY_PUSH_REQUEST } from "../../git/src/retained-repository/push-records.ts";
 import { GIT_HOST_EFFECT } from "../../git/src/git-host/effect-type.ts";
 import type { HelperAssembly } from "../../git/src/deno/composition/credential-helper.ts";
@@ -213,6 +217,7 @@ function submit(
         execution: run,
         source,
         installations: [...(yield* replInstallations())],
+        entryComponents: compositionDeclarations(ordinaryCompositionPolicy()),
         generated: ordinaryGeneratedSelection(),
         ...(options.host === false
           ? {}
@@ -255,6 +260,7 @@ function reopen(
       yield* openReplSession({
         execution: run,
         installations: [...(yield* replInstallations())],
+        entryComponents: compositionDeclarations(ordinaryCompositionPolicy()),
         generated: ordinaryGeneratedSelection(),
         entryInstallation: (owner: string) => {
           seen.owners.push(owner);
@@ -424,14 +430,19 @@ describe("how a REPL entry gets its publication capability", () => {
     }
 
     // Building one reaches nothing — no directory, no `git`, no credential and
-    // no managed root — and what it declares is both of an entry's external
-    // capabilities.
+    // no managed root — and what it declares is the whole common vocabulary
+    // once, with this host's policy under the two operations it retains and the
+    // ordinary policy under the rest.
     const built = yield* scoped(function* (): Operation<ExecutionInstallation> {
       return yield* factory('["executablemd.repl.issue-owner",1,"execution-cli-6","1"]');
     });
     expect([...(built.components ?? [])].map((component) => component.name).sort()).toEqual([
       "Git.Push",
       "Issue",
+      "PullRequest",
+      "PullRequest.Checks",
+      "PullRequest.Comments",
+      "PullRequest.Reviews",
     ]);
     expect((built.admissions ?? []).length).toBe(2);
     expect(yield* nothingUnder(fixture.managed)).toBe(true);

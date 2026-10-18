@@ -139,6 +139,7 @@ const INSTALLATIONS: readonly ExecutionInstallation[] = [];
 const PROFILE: ReplExecutionProfile = {
   includes: [REFERENCE_DIRECTORY],
   installations: INSTALLATIONS,
+  entryComponents: [],
   generated: ordinaryGeneratedSelection(),
   permissionMode: "deny-all",
   // No row here opens a Sidekick conversation, so the selection is the one an

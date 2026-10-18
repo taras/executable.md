@@ -64,6 +64,7 @@ const PROVIDER_NEUTRAL: readonly string[] = [
   "src/composition/git-push-records.ts",
   "src/composition/git-records.ts",
   "src/composition/installation.ts",
+  "src/composition/invocation-binding.ts",
   "src/composition/locator.ts",
   "src/composition/observation-api.ts",
   "src/composition/observation-records.ts",

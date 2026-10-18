@@ -1,0 +1,441 @@
+[
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "__root__"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "repository",
+        "path": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/entry.md",
+        "content": "<Repository name=\"project\" url=\"/private/tmp/xmd-retained-history/h3-push-unacknowledged/origin.git\">\n  <Git.Switch branch=\"review/adopt\" />\n  <File path=\"notes.md\">ready</File>\n  <Git.Add paths=\"notes.md\" />\n  <Git.Commit message=\"Prepare notes\" as=\"commit\" />\n  <Git.Push />\n  <Elicit schema={{ type: \"object\", properties: { choice: { enum: [\"continue\"] } },\n    required: [\"choice\"], additionalProperties: false }} as=\"answer\">\nThe branch was published. Continue?\n  </Elicit>\n  <File path=\"after.md\">continued</File>\n</Repository>\n"
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "Repository",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/entry.md",
+        "offset": 0,
+        "line": 1,
+        "column": 1
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/workflow/composition",
+        "reserved": false
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "repl_repository_placement",
+      "name": "[\"executablemd.git.repl-repository\",\"placement\",1,\"repository\",\"b5b15bcdb981a05bedbef7b6f3b6cf2aa11be0aad3d140f7356225db9b7029b8\"]"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "version": 1,
+        "kind": "repository",
+        "fingerprint": "b5b15bcdb981a05bedbef7b6f3b6cf2aa11be0aad3d140f7356225db9b7029b8",
+        "request": {
+          "name": "project",
+          "locatorFingerprint": "04891fd8d3054394dea246f089541b4482c804645175ffe315b47d6567f554df",
+          "base": null
+        },
+        "placement": {
+          "managedRoot": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories",
+          "checkoutRoot": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout",
+          "commonDirectory": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout/.git",
+          "identity": {
+            "name": "project",
+            "locatorFingerprint": "04891fd8d3054394dea246f089541b4482c804645175ffe315b47d6567f554df",
+            "requestedBase": null,
+            "creationCommit": "c3556c9f8e2a8e7ec144abd7ab116282ae120839",
+            "primaryBranch": "main",
+            "objectFormat": "sha1"
+          },
+          "displayName": "project",
+          "ownerCheckout": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout"
+        }
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "Git.Switch",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/entry.md",
+        "offset": 104,
+        "line": 2,
+        "column": 3
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/workflow/composition",
+        "reserved": false
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "repl_repository_git",
+      "name": "[\"executablemd.git.repl-repository\",\"git\",1,\"switch\",\"0172e6c6560ad5798d060239c5fd1f54b121dd052d5528d974a591735be66aeb\"]"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "version": 1,
+        "operation": "switch",
+        "fingerprint": "0172e6c6560ad5798d060239c5fd1f54b121dd052d5528d974a591735be66aeb",
+        "request": {
+          "repository": {
+            "name": "project",
+            "locatorFingerprint": "04891fd8d3054394dea246f089541b4482c804645175ffe315b47d6567f554df",
+            "requestedBase": null,
+            "creationCommit": "c3556c9f8e2a8e7ec144abd7ab116282ae120839",
+            "primaryBranch": "main",
+            "objectFormat": "sha1"
+          },
+          "selectionCheckout": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout",
+          "commonDirectory": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout/.git",
+          "workingDirectory": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout",
+          "branch": "review/adopt",
+          "base": null
+        },
+        "outcome": {
+          "ok": true,
+          "value": {
+            "checkout": {
+              "repositoryName": "project",
+              "worktreeName": null,
+              "checkoutPath": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout"
+            },
+            "requestedBranch": "review/adopt",
+            "resolvedBranch": "review/adopt",
+            "requestedBase": null,
+            "resolvedBase": "c3556c9f8e2a8e7ec144abd7ab116282ae120839",
+            "before": {
+              "branch": "main",
+              "commit": "c3556c9f8e2a8e7ec144abd7ab116282ae120839",
+              "headTree": "15587c8d6ad8e073e7178240a8117246bdfba4eb",
+              "indexTree": "15587c8d6ad8e073e7178240a8117246bdfba4eb"
+            },
+            "after": {
+              "branch": "review/adopt",
+              "commit": "c3556c9f8e2a8e7ec144abd7ab116282ae120839",
+              "headTree": "15587c8d6ad8e073e7178240a8117246bdfba4eb",
+              "indexTree": "15587c8d6ad8e073e7178240a8117246bdfba4eb"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "File",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/entry.md",
+        "offset": 143,
+        "line": 3,
+        "column": 3
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "protected"
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "repl_repository_local",
+      "name": "[\"executablemd.git.repl-repository\",\"local\",1,\"file-write\",\"a1f719e4102a1347d6c29b2a17184fc9b6ac5e97564f2dae047944e7a052336e\"]"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "version": 1,
+        "operation": "file-write",
+        "fingerprint": "a1f719e4102a1347d6c29b2a17184fc9b6ac5e97564f2dae047944e7a052336e",
+        "request": {
+          "cwd": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout",
+          "path": "notes.md",
+          "content": "ready"
+        },
+        "success": {
+          "type": "executablemd.runtime.files-write-success/v1",
+          "publication": "host-committed"
+        }
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "Git.Add",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/entry.md",
+        "offset": 180,
+        "line": 4,
+        "column": 3
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/workflow/composition",
+        "reserved": false
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "repl_repository_git",
+      "name": "[\"executablemd.git.repl-repository\",\"git\",1,\"add\",\"d3a1f237217281bd2cb5bb47240769b8bdf536a92e2d6346feb2b7c3e154a0aa\"]"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "version": 1,
+        "operation": "add",
+        "fingerprint": "d3a1f237217281bd2cb5bb47240769b8bdf536a92e2d6346feb2b7c3e154a0aa",
+        "request": {
+          "repository": {
+            "name": "project",
+            "locatorFingerprint": "04891fd8d3054394dea246f089541b4482c804645175ffe315b47d6567f554df",
+            "requestedBase": null,
+            "creationCommit": "c3556c9f8e2a8e7ec144abd7ab116282ae120839",
+            "primaryBranch": "main",
+            "objectFormat": "sha1"
+          },
+          "selectionCheckout": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout",
+          "commonDirectory": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout/.git",
+          "workingDirectory": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout",
+          "paths": ["notes.md"]
+        },
+        "outcome": {
+          "ok": true,
+          "value": {
+            "checkout": {
+              "repositoryName": "project",
+              "worktreeName": null,
+              "checkoutPath": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout"
+            },
+            "paths": ["notes.md"],
+            "before": {
+              "branch": "review/adopt",
+              "commit": "c3556c9f8e2a8e7ec144abd7ab116282ae120839",
+              "headTree": "15587c8d6ad8e073e7178240a8117246bdfba4eb",
+              "indexTree": "15587c8d6ad8e073e7178240a8117246bdfba4eb"
+            },
+            "after": {
+              "branch": "review/adopt",
+              "commit": "c3556c9f8e2a8e7ec144abd7ab116282ae120839",
+              "headTree": "15587c8d6ad8e073e7178240a8117246bdfba4eb",
+              "indexTree": "17b0bdfbe7c7c448d7214f8910598edd1321ea6f"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "Git.Commit",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/entry.md",
+        "offset": 211,
+        "line": 5,
+        "column": 3
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/workflow/composition",
+        "reserved": false
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "repl_repository_git",
+      "name": "[\"executablemd.git.repl-repository\",\"git\",1,\"commit\",\"c34fb246cdb3336e115db3e438d6e6a3f2b685c36a7e24f5e72dfb22089e2a3e\"]"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "version": 1,
+        "operation": "commit",
+        "fingerprint": "c34fb246cdb3336e115db3e438d6e6a3f2b685c36a7e24f5e72dfb22089e2a3e",
+        "request": {
+          "repository": {
+            "name": "project",
+            "locatorFingerprint": "04891fd8d3054394dea246f089541b4482c804645175ffe315b47d6567f554df",
+            "requestedBase": null,
+            "creationCommit": "c3556c9f8e2a8e7ec144abd7ab116282ae120839",
+            "primaryBranch": "main",
+            "objectFormat": "sha1"
+          },
+          "selectionCheckout": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout",
+          "commonDirectory": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout/.git",
+          "workingDirectory": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout",
+          "messageSource": "prop",
+          "messageDigest": "352f8f95e3173a75a2f287e20aa909e8207d03e6d9fac50a5cef8aa14b28ef88",
+          "messageLength": 14
+        },
+        "outcome": {
+          "ok": true,
+          "value": {
+            "checkout": {
+              "repositoryName": "project",
+              "worktreeName": null,
+              "checkoutPath": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout"
+            },
+            "messageSource": "prop",
+            "messageDigest": "352f8f95e3173a75a2f287e20aa909e8207d03e6d9fac50a5cef8aa14b28ef88",
+            "messageLength": 14,
+            "parent": "c3556c9f8e2a8e7ec144abd7ab116282ae120839",
+            "tree": "17b0bdfbe7c7c448d7214f8910598edd1321ea6f",
+            "commit": "ae88e480853fe1ab3e600c085c0ecf2519f1fa0d",
+            "committedAt": 1792337427,
+            "before": {
+              "branch": "review/adopt",
+              "commit": "c3556c9f8e2a8e7ec144abd7ab116282ae120839",
+              "headTree": "15587c8d6ad8e073e7178240a8117246bdfba4eb",
+              "indexTree": "17b0bdfbe7c7c448d7214f8910598edd1321ea6f"
+            },
+            "after": {
+              "branch": "review/adopt",
+              "commit": "ae88e480853fe1ab3e600c085c0ecf2519f1fa0d",
+              "headTree": "17b0bdfbe7c7c448d7214f8910598edd1321ea6f",
+              "indexTree": "17b0bdfbe7c7c448d7214f8910598edd1321ea6f"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "Git.Push",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/entry.md",
+        "offset": 264,
+        "line": 6,
+        "column": 3
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/workflow/composition",
+        "reserved": false
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "repl_repository_push_request",
+      "name": "22cd3e9f6ef80e9f7db277de8a67c39c1655bc4f601ea41dc953038394ac7b17"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "version": 1,
+        "owner": "[\"executablemd.repl.issue-owner\",1,\"h3\",\"1\"]",
+        "site": "97a2ec6c878610f58a0b2262d6f57e80213251ef590379f2de89ac0cb6ceadfc",
+        "requested": {
+          "repository": {
+            "name": "project",
+            "locatorFingerprint": "04891fd8d3054394dea246f089541b4482c804645175ffe315b47d6567f554df",
+            "requestedBase": null,
+            "creationCommit": "c3556c9f8e2a8e7ec144abd7ab116282ae120839",
+            "primaryBranch": "main",
+            "objectFormat": "sha1"
+          },
+          "selectionCheckout": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout",
+          "commonDirectory": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout/.git",
+          "workingDirectory": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout"
+        },
+        "received": {
+          "repository": {
+            "name": "project",
+            "locatorFingerprint": "04891fd8d3054394dea246f089541b4482c804645175ffe315b47d6567f554df",
+            "requestedBase": null,
+            "creationCommit": "c3556c9f8e2a8e7ec144abd7ab116282ae120839",
+            "primaryBranch": "main",
+            "objectFormat": "sha1"
+          },
+          "selectionCheckout": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout",
+          "commonDirectory": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout/.git",
+          "workingDirectory": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout"
+        },
+        "resolved": {
+          "checkoutRoot": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout",
+          "commonDirectory": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout/.git",
+          "origin": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/origin.git",
+          "inputs": {
+            "repository": {
+              "name": "project",
+              "locatorFingerprint": "04891fd8d3054394dea246f089541b4482c804645175ffe315b47d6567f554df",
+              "requestedBase": null,
+              "creationCommit": "c3556c9f8e2a8e7ec144abd7ab116282ae120839",
+              "primaryBranch": "main",
+              "objectFormat": "sha1"
+            },
+            "remote": "origin",
+            "branch": "review/adopt",
+            "destinationRef": "refs/heads/review/adopt",
+            "sourceCommit": "ae88e480853fe1ab3e600c085c0ecf2519f1fa0d"
+          }
+        }
+      }
+    }
+  }
+]

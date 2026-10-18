@@ -18,20 +18,28 @@
  * into an evidence read.
  */
 
+import { documented, formDispatcher } from "@executablemd/core";
 import type {
+  ComponentRegistration,
+  FirstPartyDocumentation,
   FormDeclaration,
+  FunctionComponent,
   InvocationForm,
   JsonObject,
   PropsSchema,
   ReturnsSchema,
 } from "@executablemd/core";
+import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/host";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
+import { COMPOSITION_ORIGIN } from "../definitions.ts";
 import { PullRequestReadError } from "../errors.ts";
 import { pullRequestReadResultJson } from "../pull-request-read-records.ts";
 import { canonicalPullRequestUrl, pullRequestProviderName } from "../pull-request-target.ts";
 import type { PullRequestReadKind } from "../pull-request-read-records.ts";
-import { PullRequestOperations } from "../pull-request-operations.ts";
+import type { PullRequestOperationsApi } from "../pull-request-operations.ts";
+import { boundComponent, unboundComponent } from "../invocation-binding.ts";
+import type { BindOperations, ComponentBody, InvocationGate } from "../invocation-binding.ts";
 
 /** The component names, as a document writes them and a refusal names them. */
 export const REVIEWS_ELEMENT = "<PullRequest.Reviews>";
@@ -163,8 +171,11 @@ export const checksReturns: ReturnsSchema = array({
     }),
   ],
 });
-function read(kind: PullRequestReadKind, element: string) {
-  return function* PullRequestRead(props: Record<string, Json>): Operation<Json> {
+function read(kind: PullRequestReadKind, element: string): ComponentBody<PullRequestOperationsApi> {
+  return function* PullRequestRead(
+    props: Record<string, Json>,
+    operations: PullRequestOperationsApi,
+  ): Operation<Json> {
     // The props schema refuses a missing or empty `url` before this function is
     // entered, and therefore before any provider is asked anything.
     // Canonicalized before any provider sees it, so the component, the durable
@@ -188,7 +199,7 @@ function read(kind: PullRequestReadKind, element: string) {
       );
     }
 
-    const result = yield* PullRequestOperations.operations.read({ url, kind, provider });
+    const result = yield* operations.read({ url, kind, provider });
     if (result.kind !== kind) {
       throw new PullRequestReadError(
         "protocol",
@@ -201,10 +212,10 @@ function read(kind: PullRequestReadKind, element: string) {
   };
 }
 
-function declare(kind: PullRequestReadKind, element: string): FormDeclaration {
+function declare(fn: FunctionComponent, element: string): FormDeclaration {
   return {
     forms: "self-closing",
-    fn: read(kind, element),
+    fn,
     refuse: (_props: Record<string, Json>, written: InvocationForm | undefined) =>
       new PullRequestReadError(
         "unexpected-content",
@@ -218,6 +229,98 @@ function declare(kind: PullRequestReadKind, element: string): FormDeclaration {
   };
 }
 
-export const reviewsForm: FormDeclaration = declare("reviews", REVIEWS_ELEMENT);
-export const commentsForm: FormDeclaration = declare("comments", COMMENTS_ELEMENT);
-export const checksForm: FormDeclaration = declare("checks", CHECKS_ELEMENT);
+/** What the catalog says about each of the three reads. */
+const DOCUMENTATION: Readonly<Record<PullRequestReadKind, FirstPartyDocumentation>> = Object.freeze(
+  {
+    reviews: {
+      description:
+        `Read pull request reviews. \`<PullRequest.Reviews url={pullRequest.url} as="reviews" />\` ` +
+        `reads reviews from the specified pull request.`,
+      as: "Required. Each review's author, state, body, submission time, commit and url.",
+      context: null,
+    },
+    comments: {
+      description:
+        `Read pull request comments. \`<PullRequest.Comments url={pullRequest.url} as="comments" />\` ` +
+        `reads both conversation and review comments.`,
+      as:
+        "Required. Each comment's kind, author, body, timestamps and url, and a review " +
+        "comment's file, hunk and line.",
+      context: null,
+    },
+    checks: {
+      description:
+        `Read pull request checks. \`<PullRequest.Checks url={pullRequest.url} as="checks" />\` ` +
+        `reads check runs and commit statuses for its head.`,
+      as: "Required. Each check's kind, name, head commit and outcome.",
+      context: null,
+    },
+  },
+);
+
+/** The three evidence reads, as the names a document writes. */
+const NAMES: Readonly<Record<PullRequestReadKind, string>> = Object.freeze({
+  reviews: "PullRequest.Reviews",
+  comments: "PullRequest.Comments",
+  checks: "PullRequest.Checks",
+});
+
+const ELEMENTS: Readonly<Record<PullRequestReadKind, string>> = Object.freeze({
+  reviews: REVIEWS_ELEMENT,
+  comments: COMMENTS_ELEMENT,
+  checks: CHECKS_ELEMENT,
+});
+
+const RETURNS: Readonly<Record<PullRequestReadKind, ReturnsSchema>> = Object.freeze({
+  reviews: reviewsReturns,
+  comments: commentsReturns,
+  checks: checksReturns,
+});
+
+/** What a catalog says about one read, whichever path declares it. */
+function metadata(kind: PullRequestReadKind) {
+  return {
+    name: NAMES[kind],
+    origin: COMPOSITION_ORIGIN,
+    props,
+    returns: RETURNS[kind],
+    forms: ["self-closing"] as const,
+    ...documented(DOCUMENTATION[kind]),
+  };
+}
+
+/** One evidence read as an ordinary registered default, over the public Api. */
+export function pullRequestReadRegistration(
+  kind: PullRequestReadKind,
+  operations: (gate: InvocationGate) => PullRequestOperationsApi,
+): ComponentRegistration {
+  const element = ELEMENTS[kind];
+  return {
+    ...metadata(kind),
+    fn: formDispatcher(
+      declare(unboundComponent(element, operations, read(kind, element)), element),
+    ),
+  };
+}
+
+/** One evidence read as a declaration, for a host that supplies its own policy. */
+export function pullRequestReadDeclaration(
+  kind: PullRequestReadKind,
+  bind: BindOperations<PullRequestOperationsApi>,
+): IdentityComponent {
+  const element = ELEMENTS[kind];
+  return {
+    ...metadata(kind),
+    factory: (claim: IdentityClaimant) =>
+      formDispatcher(
+        declare(boundComponent(claim, { element, bind, body: read(kind, element) }), element),
+      ),
+  };
+}
+
+/** The three kinds, in the order a catalog lists them. */
+export const PULL_REQUEST_READ_KINDS: readonly PullRequestReadKind[] = Object.freeze([
+  "reviews",
+  "comments",
+  "checks",
+]);

@@ -749,6 +749,12 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "packages/git/tests/retained-repository-history.test.ts",
+    reason:
+      "continues seven histories the merged implementation wrote through the production per-entry capability, so its module graph reaches @executablemd/git/deno — the native repository host, the GitHub issue adapter and Workflow's storage adapter with node:sqlite. The construction those histories are continued through is provider-neutral and is proven on every runtime by packages/git/tests/composition-component-binding.test.ts; the records themselves are proven everywhere by packages/git/tests/retained-repository-push-records.test.ts and packages/git/tests/issue-owned.test.ts",
+    issue: "https://github.com/taras/executable.md/issues/181",
+  },
+  {
     path: "packages/cli/tests/repl-push.test.ts",
     reason:
       "drives the production per-entry capability, which only Deno and the compiled binary select: its module graph reaches @executablemd/git/deno and so Workflow's storage adapter and node:sqlite, and its rows publish to a real bare remote with real `git` children. That a runtime selecting no entry capability reports no Git provider for <Git.Push /> is proven by packages/cli/tests/repl-push-pty.test.ts, which runs everywhere",

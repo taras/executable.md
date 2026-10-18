@@ -3062,9 +3062,20 @@ Markdown or TypeScript component of any of those names is chosen ahead of them,
 for its own scope alone. `Dir` is a separate protected core component and is
 available without the Git Plugin.
 
-They are one array declared by the bundled Git Plugin and read wherever its
-profile is assembled: an ordinary document execution, `xmd syntax`, `xmd plan`'s
-validation and generation, and a workflow action that executes a document. A
+They are one declaration source, read wherever the bundled Git Plugin's profile
+is assembled: an ordinary document execution, `xmd syntax`, `xmd plan`'s
+validation and generation, and a workflow action that executes a document.
+
+Six of them reach something no local transaction encloses — `Git.Push`,
+`PullRequest`, its three evidence reads and `Issue` — and each has exactly one
+implementation, which asks a semantic feature operation for its work and
+receives nothing else. A command whose executions retain nothing named after an
+invocation registers all twelve. A command whose executions install their own
+policy under those six registers the other six and receives these as
+declarations carrying that policy, so no executable default is registered for a
+declaration to shadow; `repl` is the one such command. The names, props, forms,
+return contracts, origins and prose are the same either way, and a
+repository-local component of one of those names is still chosen ahead of it. A
 Workspace attachment installs that run's providers and durable state and
 declares none of them.
 Registering them installs no provider, discovers no repository, acquires no
@@ -10441,11 +10452,12 @@ own: the execution and the entry's admission-order position, derived by the host
 that opened the session and reaching the component as a trusted closure rather
 than as a prop, a Context value, a tracker or a middleware answer. The authored
 site inside it is the identity canonical core minted where it selected that
-implementation. The `<Issue>` and the `<Git.Push />` an entry runs are ordinary
-shadowable registrations of names the Plugin already declares, so a repository
-component of either name keeps its ordinary precedence and obtains no identity
-of the entry's — and a direct `Git.operations.push(...)` outside the trusted
-invocation reaches the ordinary missing-provider refusal.
+implementation. The `<Issue>` and the `<Git.Push />` an entry runs are the same
+shared components every other host runs, declared to this execution with the
+entry's policy beneath them, so a repository component of either name keeps its
+ordinary precedence and obtains no identity of the entry's — and a direct
+`Git.operations.push(...)` outside that invocation reaches the ordinary
+missing-provider refusal.
 
 Node and Bun install none of them. They register the same declarations (§5.3), and
 every repository operation there reports an absent provider before a lock, a

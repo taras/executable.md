@@ -1,0 +1,463 @@
+[
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "__root__"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "repository",
+        "path": "/private/tmp/xmd-retained-history/h4-push-failed/entry.md",
+        "content": "<Repository name=\"project\" url=\"/private/tmp/xmd-retained-history/h4-push-failed/origin.git\">\n  <Git.Switch branch=\"review/divergent\" />\n  <File path=\"notes.md\">ready</File>\n  <Git.Add paths=\"notes.md\" />\n  <Git.Commit message=\"Prepare notes\" as=\"commit\" />\n  <Git.Push />\n  <Elicit schema={{ type: \"object\", properties: { choice: { enum: [\"continue\"] } },\n    required: [\"choice\"], additionalProperties: false }} as=\"answer\">\nThe branch was published. Continue?\n  </Elicit>\n  <File path=\"after.md\">continued</File>\n</Repository>\n"
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "Repository",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h4-push-failed/entry.md",
+        "offset": 0,
+        "line": 1,
+        "column": 1
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/workflow/composition",
+        "reserved": false
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "repl_repository_placement",
+      "name": "[\"executablemd.git.repl-repository\",\"placement\",1,\"repository\",\"bdc7b9d0a31b6eeb807528dcedd423fe46fe173eefa8bf545b59474ff10a232a\"]"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "version": 1,
+        "kind": "repository",
+        "fingerprint": "bdc7b9d0a31b6eeb807528dcedd423fe46fe173eefa8bf545b59474ff10a232a",
+        "request": {
+          "name": "project",
+          "locatorFingerprint": "63795a9624d8c13b2b3c59f9603c65e945ef841d0a239704d052388372d9c9d9",
+          "base": null
+        },
+        "placement": {
+          "managedRoot": "/private/tmp/xmd-retained-history/h4-push-failed/repositories",
+          "checkoutRoot": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout",
+          "commonDirectory": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout/.git",
+          "identity": {
+            "name": "project",
+            "locatorFingerprint": "63795a9624d8c13b2b3c59f9603c65e945ef841d0a239704d052388372d9c9d9",
+            "requestedBase": null,
+            "creationCommit": "21e1b841c8c804e61b2a1f3f931c486d5d765eb9",
+            "primaryBranch": "main",
+            "objectFormat": "sha1"
+          },
+          "displayName": "project",
+          "ownerCheckout": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout"
+        }
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "Git.Switch",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h4-push-failed/entry.md",
+        "offset": 96,
+        "line": 2,
+        "column": 3
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/workflow/composition",
+        "reserved": false
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "repl_repository_git",
+      "name": "[\"executablemd.git.repl-repository\",\"git\",1,\"switch\",\"18c51820273363169dec3febab2f7dc4218c098ee2a16fd68e1cc15f8efb0100\"]"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "version": 1,
+        "operation": "switch",
+        "fingerprint": "18c51820273363169dec3febab2f7dc4218c098ee2a16fd68e1cc15f8efb0100",
+        "request": {
+          "repository": {
+            "name": "project",
+            "locatorFingerprint": "63795a9624d8c13b2b3c59f9603c65e945ef841d0a239704d052388372d9c9d9",
+            "requestedBase": null,
+            "creationCommit": "21e1b841c8c804e61b2a1f3f931c486d5d765eb9",
+            "primaryBranch": "main",
+            "objectFormat": "sha1"
+          },
+          "selectionCheckout": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout",
+          "commonDirectory": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout/.git",
+          "workingDirectory": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout",
+          "branch": "review/divergent",
+          "base": null
+        },
+        "outcome": {
+          "ok": true,
+          "value": {
+            "checkout": {
+              "repositoryName": "project",
+              "worktreeName": null,
+              "checkoutPath": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout"
+            },
+            "requestedBranch": "review/divergent",
+            "resolvedBranch": "review/divergent",
+            "requestedBase": null,
+            "resolvedBase": null,
+            "before": {
+              "branch": "review/divergent",
+              "commit": "d0868e870b9b02aae353c4a5a59ffd905c405787",
+              "headTree": "7a866ef129320f8135d0914db9cd3e55c7f60951",
+              "indexTree": "7a866ef129320f8135d0914db9cd3e55c7f60951"
+            },
+            "after": {
+              "branch": "review/divergent",
+              "commit": "d0868e870b9b02aae353c4a5a59ffd905c405787",
+              "headTree": "7a866ef129320f8135d0914db9cd3e55c7f60951",
+              "indexTree": "7a866ef129320f8135d0914db9cd3e55c7f60951"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "File",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h4-push-failed/entry.md",
+        "offset": 139,
+        "line": 3,
+        "column": 3
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "protected"
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "repl_repository_local",
+      "name": "[\"executablemd.git.repl-repository\",\"local\",1,\"file-write\",\"2db6f78cb8ea8583beb61c55312a6fd3f90b2b3a7336fbc780d495039dd8646f\"]"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "version": 1,
+        "operation": "file-write",
+        "fingerprint": "2db6f78cb8ea8583beb61c55312a6fd3f90b2b3a7336fbc780d495039dd8646f",
+        "request": {
+          "cwd": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout",
+          "path": "notes.md",
+          "content": "ready"
+        },
+        "success": {
+          "type": "executablemd.runtime.files-write-success/v1",
+          "publication": "host-committed"
+        }
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "Git.Add",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h4-push-failed/entry.md",
+        "offset": 176,
+        "line": 4,
+        "column": 3
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/workflow/composition",
+        "reserved": false
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "repl_repository_git",
+      "name": "[\"executablemd.git.repl-repository\",\"git\",1,\"add\",\"ad0ffd1b71b214c11911ff7d1bd7c8a59b6c354fa0e7dfa26faad954ac66d8fa\"]"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "version": 1,
+        "operation": "add",
+        "fingerprint": "ad0ffd1b71b214c11911ff7d1bd7c8a59b6c354fa0e7dfa26faad954ac66d8fa",
+        "request": {
+          "repository": {
+            "name": "project",
+            "locatorFingerprint": "63795a9624d8c13b2b3c59f9603c65e945ef841d0a239704d052388372d9c9d9",
+            "requestedBase": null,
+            "creationCommit": "21e1b841c8c804e61b2a1f3f931c486d5d765eb9",
+            "primaryBranch": "main",
+            "objectFormat": "sha1"
+          },
+          "selectionCheckout": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout",
+          "commonDirectory": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout/.git",
+          "workingDirectory": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout",
+          "paths": ["notes.md"]
+        },
+        "outcome": {
+          "ok": true,
+          "value": {
+            "checkout": {
+              "repositoryName": "project",
+              "worktreeName": null,
+              "checkoutPath": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout"
+            },
+            "paths": ["notes.md"],
+            "before": {
+              "branch": "review/divergent",
+              "commit": "d0868e870b9b02aae353c4a5a59ffd905c405787",
+              "headTree": "7a866ef129320f8135d0914db9cd3e55c7f60951",
+              "indexTree": "7a866ef129320f8135d0914db9cd3e55c7f60951"
+            },
+            "after": {
+              "branch": "review/divergent",
+              "commit": "d0868e870b9b02aae353c4a5a59ffd905c405787",
+              "headTree": "7a866ef129320f8135d0914db9cd3e55c7f60951",
+              "indexTree": "5554eaaccabd1fc76ed5b370a80034cfb1db92d6"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "Git.Commit",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h4-push-failed/entry.md",
+        "offset": 207,
+        "line": 5,
+        "column": 3
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/workflow/composition",
+        "reserved": false
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "repl_repository_git",
+      "name": "[\"executablemd.git.repl-repository\",\"git\",1,\"commit\",\"692e8e11c03f9738badd26c07629f8614f5105101d9c1289e89dde22fcd75378\"]"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "version": 1,
+        "operation": "commit",
+        "fingerprint": "692e8e11c03f9738badd26c07629f8614f5105101d9c1289e89dde22fcd75378",
+        "request": {
+          "repository": {
+            "name": "project",
+            "locatorFingerprint": "63795a9624d8c13b2b3c59f9603c65e945ef841d0a239704d052388372d9c9d9",
+            "requestedBase": null,
+            "creationCommit": "21e1b841c8c804e61b2a1f3f931c486d5d765eb9",
+            "primaryBranch": "main",
+            "objectFormat": "sha1"
+          },
+          "selectionCheckout": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout",
+          "commonDirectory": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout/.git",
+          "workingDirectory": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout",
+          "messageSource": "prop",
+          "messageDigest": "352f8f95e3173a75a2f287e20aa909e8207d03e6d9fac50a5cef8aa14b28ef88",
+          "messageLength": 14
+        },
+        "outcome": {
+          "ok": true,
+          "value": {
+            "checkout": {
+              "repositoryName": "project",
+              "worktreeName": null,
+              "checkoutPath": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout"
+            },
+            "messageSource": "prop",
+            "messageDigest": "352f8f95e3173a75a2f287e20aa909e8207d03e6d9fac50a5cef8aa14b28ef88",
+            "messageLength": 14,
+            "parent": "d0868e870b9b02aae353c4a5a59ffd905c405787",
+            "tree": "5554eaaccabd1fc76ed5b370a80034cfb1db92d6",
+            "commit": "e87288a89f54e0e7927649039656af7918e20a2e",
+            "committedAt": 1792337430,
+            "before": {
+              "branch": "review/divergent",
+              "commit": "d0868e870b9b02aae353c4a5a59ffd905c405787",
+              "headTree": "7a866ef129320f8135d0914db9cd3e55c7f60951",
+              "indexTree": "5554eaaccabd1fc76ed5b370a80034cfb1db92d6"
+            },
+            "after": {
+              "branch": "review/divergent",
+              "commit": "e87288a89f54e0e7927649039656af7918e20a2e",
+              "headTree": "5554eaaccabd1fc76ed5b370a80034cfb1db92d6",
+              "indexTree": "5554eaaccabd1fc76ed5b370a80034cfb1db92d6"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "Git.Push",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h4-push-failed/entry.md",
+        "offset": 260,
+        "line": 6,
+        "column": 3
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/workflow/composition",
+        "reserved": false
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "repl_repository_push_request",
+      "name": "5494bb45fc35876d97584c0582dae9bf7d6789fb0edeea3991d094e04b55174d"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "version": 1,
+        "owner": "[\"executablemd.repl.issue-owner\",1,\"h4\",\"1\"]",
+        "site": "5f1ae2248c6f42f5e28db560ea25100ae707a4ee9dca21af22cd0213e2a8d811",
+        "requested": {
+          "repository": {
+            "name": "project",
+            "locatorFingerprint": "63795a9624d8c13b2b3c59f9603c65e945ef841d0a239704d052388372d9c9d9",
+            "requestedBase": null,
+            "creationCommit": "21e1b841c8c804e61b2a1f3f931c486d5d765eb9",
+            "primaryBranch": "main",
+            "objectFormat": "sha1"
+          },
+          "selectionCheckout": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout",
+          "commonDirectory": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout/.git",
+          "workingDirectory": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout"
+        },
+        "received": {
+          "repository": {
+            "name": "project",
+            "locatorFingerprint": "63795a9624d8c13b2b3c59f9603c65e945ef841d0a239704d052388372d9c9d9",
+            "requestedBase": null,
+            "creationCommit": "21e1b841c8c804e61b2a1f3f931c486d5d765eb9",
+            "primaryBranch": "main",
+            "objectFormat": "sha1"
+          },
+          "selectionCheckout": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout",
+          "commonDirectory": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout/.git",
+          "workingDirectory": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout"
+        },
+        "resolved": {
+          "checkoutRoot": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout",
+          "commonDirectory": "/private/tmp/xmd-retained-history/h4-push-failed/repositories/repositories/efe1211d5a599a3dae1e51da703e2a8e3903ba4c77e3a093913b30bca3cc1033/checkout/.git",
+          "origin": "/private/tmp/xmd-retained-history/h4-push-failed/origin.git",
+          "inputs": {
+            "repository": {
+              "name": "project",
+              "locatorFingerprint": "63795a9624d8c13b2b3c59f9603c65e945ef841d0a239704d052388372d9c9d9",
+              "requestedBase": null,
+              "creationCommit": "21e1b841c8c804e61b2a1f3f931c486d5d765eb9",
+              "primaryBranch": "main",
+              "objectFormat": "sha1"
+            },
+            "remote": "origin",
+            "branch": "review/divergent",
+            "destinationRef": "refs/heads/review/divergent",
+            "sourceCommit": "e87288a89f54e0e7927649039656af7918e20a2e"
+          }
+        }
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "git_host_effect",
+      "name": "4686933e0a1055e6a444d7985549d8a4b4d58d16cd41cde9253e5f73d01da9b1",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h4-push-failed/entry.md",
+        "offset": 260,
+        "line": 6,
+        "column": 3
+      }
+    },
+    "result": {
+      "status": "err",
+      "error": {
+        "message": "the Git host already holds state this effect conflicts with. Nothing was performed: conflicting external state is diagnosed rather than overwritten or duplicated.",
+        "name": "GitHostConflictError",
+        "stack": "GitHostConflictError: the Git host already holds state this effect conflicts with. Nothing was performed: conflicting external state is diagnosed rather than overwritten or duplicated.\n    at reconcile (file:///Users/tarasmankovski/Repositories/taras/executable.md/.claude/worktrees/issue-181-boundary-a/packages/git/src/git-host/effect.ts:429:30)\n    at reconcile.next (<anonymous>)\n    at validated (file:///Users/tarasmankovski/Repositories/taras/executable.md/.claude/worktrees/issue-181-boundary-a/packages/git/src/git-host/effect.ts:826:27)\n    at validated.next (<anonymous>)\n    at file:///Users/tarasmankovski/Repositories/taras/executable.md/.claude/worktrees/issue-181-boundary-a/packages/git/src/git-host/effect.ts:184:5\n    at Generator.next (<anonymous>)\n    at trap (file:///Users/tarasmankovski/Repositories/taras/executable.md/.claude/worktrees/issue-181-boundary-a/node_modules/.deno/effection@4.1.0/node_modules/effection/esm/lib/trap.js:13:28)\n    at trap.next (<anonymous>)\n    at Object.scoped (file:///Users/tarasmankovski/Repositories/taras/executable.md/.claude/worktrees/issue-181-boundary-a/node_modules/.deno/effection@4.1.0/node_modules/effection/esm/lib/scoped.js:38:44)\n    at scoped.next (<anonymous>)"
+      }
+    }
+  }
+]

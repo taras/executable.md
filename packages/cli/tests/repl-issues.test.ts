@@ -31,12 +31,16 @@ import { content, hasContent } from "@executablemd/core";
 import type { Json } from "@executablemd/core";
 import { Component, Execution } from "@executablemd/core/api";
 import type { ComponentDefinition, FunctionComponentDefinition } from "@executablemd/core";
-import type { ExecutionInstallation } from "@executablemd/core/host";
+import type { ExecutionInstallation, IdentityComponent } from "@executablemd/core/host";
 import { denoRepositoryHost } from "../../git/src/deno/composition/host.ts";
 import { gitSession } from "../../git/src/deno/composition/git.ts";
 import { useReplRepositoryRecording } from "../../git/src/deno/retained-repository/provider.ts";
 import type { GitOutcome, RepositoryHost } from "../../git/src/deno/composition/host.ts";
 import { gitPlugin } from "../../git/src/plugin.ts";
+import {
+  compositionDeclarations,
+  ordinaryCompositionPolicy,
+} from "../../git/src/composition/installation.ts";
 import { ISSUE_EFFECT } from "../../git/src/issue/effect-type.ts";
 import { issueIdempotencyKey, parseIssueRequest } from "../../git/src/issue/records.ts";
 import { issueOriginMarker } from "../../git/src/deno/issue/github.ts";
@@ -94,6 +98,18 @@ function useReplRepositories(root: string): Operation<void> {
       yield* next();
     },
   });
+}
+
+/**
+ * The repository operations every entry of this command declares, as the REPL
+ * profile supplies them.
+ *
+ * Metadata for the preflight that runs before an entry exists, and — for a
+ * session whose host selected no entry capability — the declarations that entry
+ * runs with, ordinary policy beneath them.
+ */
+function entryComponents(): readonly IdentityComponent[] {
+  return compositionDeclarations(ordinaryCompositionPolicy());
 }
 
 /**
@@ -271,6 +287,7 @@ function submit(
         execution: run,
         source,
         installations,
+        entryComponents: entryComponents(),
         generated: ordinaryGeneratedSelection(),
         ...(options.includes === undefined ? {} : { includes: options.includes }),
         ...(options.host === undefined ? {} : { entryInstallation: options.host }),
@@ -300,6 +317,7 @@ function reopen(fixture: Fixture, run: ReplExecution, options: RunOptions = {}):
       yield* openReplSession({
         execution: run,
         installations,
+        entryComponents: entryComponents(),
         generated: ordinaryGeneratedSelection(),
         ...(options.includes === undefined ? {} : { includes: options.includes }),
         ...(options.host === undefined ? {} : { entryInstallation: options.host }),
@@ -835,6 +853,7 @@ describe("how a REPL entry gets its issues", () => {
       const installations = yield* replInstallations();
       const session = opened(
         yield* submitReplEntry({
+          entryComponents: entryComponents(),
           execution: run,
           source: FILES_ONE,
           installations,
@@ -950,6 +969,7 @@ describe("how a REPL entry gets its issues", () => {
       const installations = yield* replInstallations();
       opened(
         yield* submitReplEntry({
+          entryComponents: entryComponents(),
           execution: run,
           source: [FILES_ONE, SUFFIX].join("\n"),
           installations,
@@ -1033,6 +1053,7 @@ describe("how a REPL entry gets its issues", () => {
       const installations = yield* replInstallations();
       opened(
         yield* submitReplEntry({
+          entryComponents: entryComponents(),
           execution: run,
           source,
           installations,
@@ -1169,6 +1190,7 @@ describe("how a REPL entry gets its issues", () => {
       const installations = yield* replInstallations();
       const session = opened(
         yield* submitReplEntry({
+          entryComponents: entryComponents(),
           execution: run,
           source: FILES_ONE,
           installations,
@@ -1252,6 +1274,7 @@ describe("how a REPL entry gets its issues", () => {
       const installations = yield* replInstallations();
       const session = opened(
         yield* submitReplEntry({
+          entryComponents: entryComponents(),
           execution: run,
           source: FILES_ONE,
           installations,
@@ -1275,6 +1298,7 @@ describe("how a REPL entry gets its issues", () => {
       const installations = yield* replInstallations();
       opened(
         yield* openReplSession({
+          entryComponents: entryComponents(),
           execution: run,
           installations,
           generated: ordinaryGeneratedSelection(),
@@ -1417,6 +1441,7 @@ describe("how a REPL entry gets its issues", () => {
         const installations = [...(yield* replInstallations()), heldCleanup(cleanup)];
         opened(
           yield* submitReplEntry({
+            entryComponents: entryComponents(),
             execution: run,
             source: FILES_ONE,
             installations,
@@ -1485,9 +1510,11 @@ describe("how a REPL entry gets its issues", () => {
     });
     expect(absent.entryInstallation).toBe(undefined);
 
-    // Selecting reaches nothing, and what it selected declares both halves of
-    // an entry's external capability: an installation is built per entry, and
-    // this command has run none.
+    // Selecting reaches nothing, and what it selected declares the whole common
+    // vocabulary once: an entry installs one set of these names, with this
+    // host's policy under the two operations it retains and the ordinary policy
+    // under the rest. An installation is built per entry, and this command has
+    // run none.
     const built = yield* scoped(function* (): Operation<ExecutionInstallation> {
       if (factory === undefined) {
         throw new Error("the production selector selected no entry capability");
@@ -1497,6 +1524,10 @@ describe("how a REPL entry gets its issues", () => {
     expect([...(built.components ?? [])].map((component) => component.name).sort()).toEqual([
       "Git.Push",
       "Issue",
+      "PullRequest",
+      "PullRequest.Checks",
+      "PullRequest.Comments",
+      "PullRequest.Reviews",
     ]);
   });
 

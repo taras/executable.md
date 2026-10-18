@@ -206,6 +206,14 @@ it: the objects a publication reads come from the caller's own checkout through 
 read-only door rather than from an exported Workspace family, and no Workspace
 root, savepoint or frontier takes part.
 
+The components themselves are the same in all three environments. `<Git.Push
+/>`, `<Issue>` and `<PullRequest>` have one implementation each: it interprets
+its props and forms, expands its own content, normalizes what the document wrote
+and asks a semantic feature operation. What differs between a workflow run, an
+ordinary run and a REPL entry is the policy beneath that operation — which
+journal it writes to, what it reconciles and what it replays — and nothing a
+document can see.
+
 `<PullRequest>` is not available to a REPL entry and refuses there as it does
 under any host that installs no provider for it; neither a retained local result
 nor a retained publication authorizes one. `<Issue>` is available on the same
@@ -2926,7 +2934,7 @@ A REPL entry retains its issue work too, under this same effect type and these
 same records, and names it after the entry rather than after a run: a REPL entry
 is not a WorkflowRun and installs no synthetic one. What the entry adds is where
 the live attempt goes. One durable boundary encloses the operation; inside a
-live attempt the trusted implementation composes `IssueOperations` — so a
+live attempt the entry's own policy composes `IssueOperations` — so a
 document's own middleware answers, transforms, refuses and delegates there as it
 does anywhere — over a transport-facing default of its own that reaches the
 `IssueApi` provider and adds no second envelope. The composed answer is what the

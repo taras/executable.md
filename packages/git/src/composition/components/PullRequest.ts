@@ -70,14 +70,23 @@
  */
 
 import { cwd } from "@executablemd/runtime";
-import { content, hasContent } from "@executablemd/core";
-import type { PropsSchema, ReturnsSchema } from "@executablemd/core";
+import { content, documented, hasContent } from "@executablemd/core";
+import type {
+  ComponentRegistration,
+  FirstPartyDocumentation,
+  PropsSchema,
+  ReturnsSchema,
+} from "@executablemd/core";
+import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/host";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { PullRequestOperations } from "../pull-request-operations.ts";
+import type { PullRequestOperationsApi } from "../pull-request-operations.ts";
+import { COMPOSITION_ORIGIN } from "../definitions.ts";
 import { selectedRepository } from "../context.ts";
 import { PullRequestAdmissionError } from "../errors.ts";
 import { pullRequestResultJson } from "../pull-request-records.ts";
+import { boundComponent, unboundComponent } from "../invocation-binding.ts";
+import type { BindOperations, ComponentBody, InvocationGate } from "../invocation-binding.ts";
 
 /** The component name, as a document writes it and as a refusal names it. */
 export const PULL_REQUEST_ELEMENT = "<PullRequest>";
@@ -137,7 +146,28 @@ export const returns: ReturnsSchema = {
   additionalProperties: false,
 };
 
-export default function* PullRequest(props: Record<string, Json>): Operation<Json> {
+/** What the catalog says about `<PullRequest>`. */
+export const documentation: FirstPartyDocumentation = {
+  description:
+    `Open or update a pull request. \`<PullRequest title="Prepare 1.4">…</PullRequest>\` uses its ` +
+    `content as the body after \`<Git.Push />\`.`,
+  as: "Optional. The pull request's repository, number, url, state and head and base commits.",
+  context: "The pull request's body.",
+};
+
+/**
+ * The one implementation, whatever host performs it.
+ *
+ * It expands its own content, observes the Repository in scope and the
+ * contextual working directory, normalizes what the document wrote and asks the
+ * upsert operation this invocation was bound to. Whether that operation saves
+ * its request, proves a publication or restores a completed one belongs to the
+ * host policy beneath it.
+ */
+export const body: ComponentBody<PullRequestOperationsApi> = function* PullRequest(
+  props: Record<string, Json>,
+  operations: PullRequestOperationsApi,
+): Operation<Json> {
   // Before anything of this element's own exists — before a Repository is
   // observed, before a checkout is selected, before retained Push evidence is
   // read and long before a Git host is contacted. The body is what the pull
@@ -154,7 +184,7 @@ export default function* PullRequest(props: Record<string, Json>): Operation<Jso
     );
   }
 
-  const result = yield* PullRequestOperations.operations.upsert({
+  const result = yield* operations.upsert({
     pullRequest: {
       // Normalized once, here: absence is `null` from this point on, because
       // the durable request is JSON and a member that is sometimes missing
@@ -176,4 +206,35 @@ export default function* PullRequest(props: Record<string, Json>): Operation<Jso
     workingDirectory: yield* cwd(),
   });
   return pullRequestResultJson(result);
+};
+
+/** What a catalog says about this component, whichever path declares it. */
+const METADATA = {
+  name: "PullRequest",
+  origin: COMPOSITION_ORIGIN,
+  props,
+  returns,
+  forms: ["self-closing", "paired"] as const,
+  ...documented(documentation),
+};
+
+/** `PullRequest` as an ordinary registered default, over the public Api. */
+export function pullRequestRegistration(
+  operations: (gate: InvocationGate) => PullRequestOperationsApi,
+): ComponentRegistration {
+  return {
+    ...METADATA,
+    fn: unboundComponent(PULL_REQUEST_ELEMENT, operations, body),
+  };
+}
+
+/** `PullRequest` as a declaration, for a host that supplies its own policy. */
+export function pullRequestDeclaration(
+  bind: BindOperations<PullRequestOperationsApi>,
+): IdentityComponent {
+  return {
+    ...METADATA,
+    factory: (claim: IdentityClaimant) =>
+      boundComponent(claim, { element: PULL_REQUEST_ELEMENT, bind, body }),
+  };
 }

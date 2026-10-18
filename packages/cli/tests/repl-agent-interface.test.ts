@@ -438,6 +438,7 @@ function* useStub(stub: Stub): Operation<void> {
 const PROFILE: ReplExecutionProfile = {
   includes: [],
   installations: [{ components: agentIdentityComponents() }],
+  entryComponents: [],
   generated: ordinaryGeneratedSelection(),
   permissionMode: "approve-reads",
   // No row here opens a Sidekick conversation, so the selection is the one an

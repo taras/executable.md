@@ -271,6 +271,7 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
     execution,
     includes: options.profile.includes,
     installations: options.profile.installations,
+    entryComponents: options.profile.entryComponents,
     generated: options.profile.generated,
     permissionMode: options.profile.permissionMode,
     ...(options.profile.entryInstallation === undefined
