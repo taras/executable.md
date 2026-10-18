@@ -34,7 +34,7 @@ import { gitSession } from "../../git/src/deno/composition/git.ts";
 import { gitPlugin } from "../../git/src/plugin.ts";
 import { replRepositoryInstallation } from "../../git/src/deno/retained-repository/provider.ts";
 import { REPL_REPOSITORY_PULL_REQUEST_REQUEST } from "../../git/src/retained-repository/pull-request-records.ts";
-import { PULL_REQUEST_READ } from "../../git/src/deno/composition/pull-request-operations.ts";
+import { PULL_REQUEST_READ } from "../../git/src/composition/pull-request-read-records.ts";
 import { GIT_HOST_EFFECT } from "../../git/src/git-host/effect-type.ts";
 import type { HelperAssembly } from "../../git/src/deno/composition/credential-helper.ts";
 import { selectReplEntryHost } from "../src/deno-repositories.ts";

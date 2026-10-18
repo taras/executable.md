@@ -103,6 +103,7 @@ import type {
 } from "../../composition/pull-request-read-execution.ts";
 import {
   parsePullRequestReadResult,
+  PULL_REQUEST_READ,
   pullRequestReadEnvelopeJson,
   pullRequestReadHeadsAgree,
   readRequest,
@@ -123,7 +124,6 @@ import type {
 import type { FirstPartyDocumentation, ReturnsSchema } from "@executablemd/core";
 import {
   describePullRequestRead,
-  PULL_REQUEST_READ,
   pullRequestReadElement,
   pullRequestReadName,
   retainedPullRequestRead,

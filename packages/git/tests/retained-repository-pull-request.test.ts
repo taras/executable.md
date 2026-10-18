@@ -81,7 +81,7 @@ import {
   REPL_REPOSITORY_PLACEMENT,
 } from "../src/retained-repository/placement-records.ts";
 import { parsePullRequestReadRequest } from "../src/composition/pull-request-read-records.ts";
-import { PULL_REQUEST_READ } from "../src/deno/composition/pull-request-operations.ts";
+import { PULL_REQUEST_READ } from "../src/composition/pull-request-read-records.ts";
 import { gitOutput } from "./support/git-remotes.ts";
 import { useGitHubServer } from "./support/github.ts";
 import {

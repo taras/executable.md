@@ -332,7 +332,18 @@ function evidenceJson(item: PullRequestEvidence): JsonObject {
 }
 
 /**
+ * The durable effect type one evidence read is retained under.
+ *
+ * Here with the records rather than beside the describing code: the type name
+ * is part of what a journal says, so a reader that has the file needs it
+ * without reaching for a runtime-named module. Both retained profiles name the
+ * same one, which is what lets a fork read either one's history.
+ */
+export const PULL_REQUEST_READ = "pull_request_read";
+
+/**
  * Whether every check in this envelope is about the head it recorded.
+
  *
  * A checks envelope says which commit it was read at, and that head is the
  * whole of what it reports: an item about a different commit makes the envelope

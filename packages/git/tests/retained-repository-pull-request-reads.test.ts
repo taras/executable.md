@@ -57,7 +57,8 @@ import type { CheckEvidence } from "../src/composition/pull-request-read-records
 import { PullRequestReadExecution } from "../src/composition/pull-request-read-execution.ts";
 import { replRepositoryInstallation } from "../src/deno/retained-repository/provider.ts";
 import { admitReplRepositoryHistory } from "../src/retained-repository/admission.ts";
-import { PULL_REQUEST_READ } from "../src/deno/composition/pull-request-operations.ts";
+import { PULL_REQUEST_READ, readRequest } from "../src/composition/pull-request-read-records.ts";
+import { pullRequestReadName } from "../src/deno/composition/pull-request-operations.ts";
 
 const OWNER = '["executablemd.repl.issue-owner",1,"execution-pr-reads","1"]';
 const OTHER_OWNER = '["executablemd.repl.issue-owner",1,"execution-pr-reads","2"]';
@@ -67,6 +68,9 @@ const SUBJECT_REPO = "https://github.com/octo/project";
 const SUBJECT_URL = `${SUBJECT_REPO}/pull/7`;
 const OTHER_URL = `${SUBJECT_REPO}/pull/9`;
 const HEAD = "a".repeat(40);
+
+/** The invocation a name vector states, since a name carries one. */
+const SITE = "expansion-9c1";
 
 const PULL = "/repos/octo/project/pulls/7";
 const REVIEWS = "/repos/octo/project/pulls/7/reviews";
@@ -1122,6 +1126,45 @@ describe("one entry's evidence reads", () => {
     expect(resumed.refusal).toContain("configuration");
     // Refused before replay, so the read was never performed again either.
     expect(reviewCalls(host)).toBe(1);
+  });
+
+  it("V6f: one read-name vector keeps the length-prefixed fingerprint, odd text and all", function* () {
+    // The other naming algorithm this feature touches, and deliberately not
+    // the canonical-JSON digest above: an evidence read is named the way every
+    // other Git operation in this package is named, so a journal a fork reads
+    // keeps answering.
+    //
+    // The vector is the first 16 hex digits of SHA-256 over the UTF-16
+    // big-endian code units of `4:read38:<url>-6:checks` — a null discriminator
+    // is "-" rather than a length, and the 38 counts code units, so the "ö"
+    // counts once.
+    const named = pullRequestReadName(
+      readRequest("https://github.com/octo/pröject/pull/7", "checks", undefined, OWNER, SITE),
+    );
+    expect(named.configuration).toBe("6e1959358a175d22");
+    expect(named.name).toBe(`${SITE}:6e1959358a175d22`);
+
+    // The discriminator is part of the question, so naming one changes it.
+    expect(
+      pullRequestReadName(
+        readRequest("https://github.com/octo/pröject/pull/7", "checks", "github", OWNER, SITE),
+      ).configuration,
+    ).not.toBe(named.configuration);
+
+    // The owner is deliberately not: a fork is a different run asking the same
+    // question at the same position, and a name carrying the run would make
+    // every inherited read unforkable.
+    expect(
+      pullRequestReadName(
+        readRequest(
+          "https://github.com/octo/pröject/pull/7",
+          "checks",
+          undefined,
+          OTHER_OWNER,
+          SITE,
+        ),
+      ),
+    ).toEqual(named);
   });
 
   it("V9b: the entry's components are ordinary registrations over a kept one", function* () {

@@ -36,7 +36,6 @@ import {
   type GitPushInputs,
 } from "../src/composition/git-push-records.ts";
 import { locatorFingerprint } from "../src/deno/composition/locator.ts";
-import { pullRequestReadName } from "../src/deno/composition/pull-request-operations.ts";
 import {
   createReplPublicationMemory,
   type RankedReplPublication,
@@ -872,45 +871,6 @@ describe("Tier RPR — admitting a history that published and then opened", () =
       result: { status: "ok", value: { anything: true } },
     };
     expect(yield* refusalOf([...prefix, unrelated])).toBeUndefined();
-  });
-
-  it("RPR24: one read-name vector keeps the length-prefixed fingerprint, odd text and all", function* () {
-    // The other naming algorithm this feature touches, and deliberately not
-    // the canonical-JSON digest above: an evidence read is named the way every
-    // other Git operation in this package is named, so a journal a fork reads
-    // keeps answering.
-    //
-    // The vector is the first 16 hex digits of SHA-256 over the UTF-16
-    // big-endian code units of `4:read38:<url>-6:checks` — a null discriminator
-    // is "-" rather than a length, and the 38 counts code units, so the "ö"
-    // counts once.
-    const named = pullRequestReadName(
-      readRequest("https://github.com/octo/pröject/pull/7", "checks", undefined, OWNER, SITE),
-    );
-    expect(named.configuration).toBe("6e1959358a175d22");
-    expect(named.name).toBe(`${SITE}:6e1959358a175d22`);
-
-    // The discriminator is part of the question, so naming one changes it.
-    expect(
-      pullRequestReadName(
-        readRequest("https://github.com/octo/pröject/pull/7", "checks", "github", OWNER, SITE),
-      ).configuration,
-    ).not.toBe(named.configuration);
-
-    // The owner is deliberately not: a fork is a different run asking the same
-    // question at the same position, and a name carrying the run would make
-    // every inherited read unforkable.
-    expect(
-      pullRequestReadName(
-        readRequest(
-          "https://github.com/octo/pröject/pull/7",
-          "checks",
-          undefined,
-          OTHER_OWNER,
-          SITE,
-        ),
-      ),
-    ).toEqual(named);
   });
 
   it("RPR25: a pull request resolved in another authenticated checkout is refused", function* () {

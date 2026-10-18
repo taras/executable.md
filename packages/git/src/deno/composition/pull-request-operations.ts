@@ -52,10 +52,12 @@ import {
 } from "../../composition/pull-request-operations.ts";
 import {
   parsePullRequestReadResult,
+  PULL_REQUEST_READ,
   pullRequestReadEnvelopeJson,
   pullRequestReadRequestJson,
   readRequest,
 } from "../../composition/pull-request-read-records.ts";
+
 import type {
   PullRequestReadKind,
   PullRequestReadRequest,
@@ -65,9 +67,6 @@ import type { PullRequestResult } from "../../composition/pull-request-records.t
 import { parseJsonValue } from "@executablemd/workflow";
 import { getWorkflowRun } from "@executablemd/workflow";
 import { gitOperationFingerprint } from "./operations.ts";
-
-/** The durable effect type one evidence read is retained under. */
-export const PULL_REQUEST_READ = "pull_request_read";
 
 /** Which element a refusal names, by the collection it was reading. */
 const ELEMENT: Readonly<Record<PullRequestReadKind, string>> = Object.freeze({

@@ -54,7 +54,7 @@ import { parseGitHostReconciliationRecord } from "../../../git/src/git-host/reco
 import { parseClosedPullRequestResult } from "../../../git/src/composition/pull-request-records.ts";
 import { parsePullRequestReadResult } from "../../../git/src/composition/pull-request-read-records.ts";
 import type { PullRequestReadResult, PullRequestResult } from "@executablemd/git/api";
-import { PULL_REQUEST_READ } from "../../../git/src/deno/composition/pull-request-operations.ts";
+import { PULL_REQUEST_READ } from "../../../git/src/composition/pull-request-read-records.ts";
 import type { GitHubHttpResponse } from "../../../git/src/deno/composition/github.ts";
 import { allocate, showing, showingAcross } from "./pty.ts";
 import type { Pty } from "./pty.ts";
