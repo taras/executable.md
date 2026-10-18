@@ -7320,12 +7320,14 @@ A read is acknowledged only once the attempt that produced it has finished. The
 transport's own session and page walk belong to a scope of the read's own, and
 that scope is closed and joined before either outcome is published — otherwise a
 reopen could restore a read whose first run was still unwinding when the journal
-said it was done. Which outcome may be published is read from that attempt's own
-record of what it raised, by object identity: an expected read failure is this
-read's answer and is retained as one, while a cleanup that threw and any failure
-nobody there authored publish nothing at all and activate the run's existing
-fail-stop state. An interruption publishes nothing, which leaves the read
-repeatable — safe in the way repeating a mutation is not.
+said it was done. The attempt reports its own outcome rather than raising it,
+so a scope that returns at all is a scope that closed, and that return is what
+admits an outcome to publication: an expected read failure is this read's answer and is
+retained as one, while a throw from that boundary — a cleanup that threw, or any
+failure nobody there authored, including one indistinguishable from the read's
+own — publishes nothing at all and activates the run's existing fail-stop state.
+An interruption publishes nothing, which leaves the read repeatable — safe in
+the way repeating a mutation is not.
 
 What may be acknowledged is also held to the whole evidence contract before it
 is published, again when it is restored, and again after the outer dispatch has

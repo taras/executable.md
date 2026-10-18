@@ -328,10 +328,9 @@ function* retain(
   transport: () => Operation<PullRequestReadResult>,
 ): Operation<PullRequestReadResult> {
   const description = yield* describePullRequestRead(request);
-  // One settlement per attempt, reachable only from the two halves of this
-  // operation. Nothing a provider, a handler or a document holds can put an
-  // answer in it.
-  const settlement: ReadSettlement = {};
+  // One attempt per read, reachable only from the two halves of this operation.
+  // Nothing a provider, a handler or a document holds can put an answer in it.
+  const attempt: ReadAttempt = {};
   const stored: unknown = yield createDurableOperation<Json>(
     description,
     function* (): Operation<Json> {
@@ -339,21 +338,31 @@ function* retain(
         const answered = yield* transport();
         return validRead(answered, request.kind, element).envelope;
       } catch (error) {
-        // What this attempt itself produced, held by object identity so the
-        // coordinator can tell it from whatever the unwinding raises.
-        settlement.failure = error;
-        throw error;
+        // Reported rather than raised. An expected read failure is this read's
+        // own answer, and raising it would carry it out through the same
+        // channel that reports a scope which failed to close — where no
+        // inspection of the error could tell one of those from the other. A
+        // refusal has no envelope, and the value it returns is never read.
+        attempt.refusal = { error };
+        return null;
       }
     },
-    { coordinator: readCoordinator(settlement) },
+    { coordinator: readCoordinator(attempt) },
   );
   return restoredRead(stored, request.kind, element);
 }
 
-/** What one read's own attempt produced, as only this operation can see it. */
-interface ReadSettlement {
-  /** The failure the admitted read itself raised, by object identity. */
-  failure?: unknown;
+/**
+ * What one read's own attempt reported, as only this operation can see it.
+ *
+ * Present and holding the failure when the admitted read raised instead of
+ * answering, and absent otherwise — boxed, so a read that raised something
+ * undefined still reports a refusal. It is written before the attempt's scope
+ * begins to close and read only after that scope has closed, which is what
+ * keeps it an account of the read rather than of the unwinding.
+ */
+interface ReadAttempt {
+  refusal?: { readonly error: unknown };
 }
 
 /**
@@ -366,17 +375,18 @@ interface ReadSettlement {
  * unwinding when the journal said it was done. So the attempt runs in a scope
  * of its own and the scope is closed before either outcome is published.
  *
- * Which outcome may be published is read from this attempt's own record of what
- * it raised, by object identity — never from the error's name or class, which
- * anything in the dispatch above could imitate. An expected read failure is
- * this read's answer and is retained as one. A cleanup that threw while the
- * attempt unwound, or any failure nobody here authored, is the boundary failing
- * rather than a finding: it publishes nothing and activates the run's existing
- * fail-stop state, because a live operation that appended nothing would
- * otherwise leave the next one to append at this one's position. An
- * interruption publishes nothing at all.
+ * The attempt reports its own outcome rather than raising it, so a scope that
+ * returns at all is a scope that closed, and that return is what admits an
+ * outcome to publication. Nothing about the exception a failure arrives as
+ * takes part in the decision. An expected read failure is this read's answer
+ * and is retained as one; a throw reaching here is the boundary itself failing
+ * — a cleanup that threw while the attempt unwound, or any failure nobody here
+ * authored, including one indistinguishable from the read's own — and it
+ * publishes nothing and activates the run's existing fail-stop state, because a
+ * live operation that appended nothing would otherwise leave the next one to
+ * append at this one's position. An interruption publishes nothing at all.
  */
-function readCoordinator(settlement: ReadSettlement): LiveDurableOperationCoordinator {
+function readCoordinator(attempt: ReadAttempt): LiveDurableOperationCoordinator {
   return {
     *run<T extends Json>(
       execute: () => Operation<T>,
@@ -385,17 +395,21 @@ function readCoordinator(settlement: ReadSettlement): LiveDurableOperationCoordi
       _journalProvenance: JournalProvenance | undefined,
       _abandoned: AbandonedRetainedHistory,
     ): Operation<DurableResult> {
-      let result: DurableResult;
+      let answered: T;
       try {
-        result = { status: "ok", value: yield* scoped(execute) };
+        answered = yield* scoped(execute);
       } catch (error) {
-        if (error !== settlement.failure) {
-          throw activateFailure(
-            error instanceof Error ? error : new Error("the evidence read boundary failed"),
-          );
-        }
-        result = { status: "err", error: serializeError(errorOf(error)) };
+        throw activateFailure(
+          error instanceof Error ? error : new Error("the evidence read boundary failed"),
+        );
       }
+      // The scope returned, so the attempt and everything it opened are closed,
+      // and what the attempt reported is now this read's outcome.
+      const refusal = attempt.refusal;
+      const result: DurableResult =
+        refusal === undefined
+          ? { status: "ok", value: answered }
+          : { status: "err", error: serializeError(errorOf(refusal.error)) };
       yield* publish(result);
       return result;
     },

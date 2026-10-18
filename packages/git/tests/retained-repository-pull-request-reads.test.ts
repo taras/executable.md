@@ -364,6 +364,32 @@ function answering(answer: () => void): Operation<void> {
   });
 }
 
+/**
+ * Answer by raising this error, and raise the very same object from cleanup.
+ *
+ * Both failures are one object, so nothing about the exception that arrives at
+ * the attempt's boundary separates the read's own refusal from a scope that
+ * could not close.
+ */
+function sharing(failure: Error): Operation<void> {
+  return PullRequestAPI.around({
+    *read([url, options]): Operation<PullRequestReadResult> {
+      return yield* PullRequestReadExecution.operations.perform(
+        { url, kind: options.kind, provider: options.provider },
+        function* (): Operation<PullRequestReadResult> {
+          yield* resource<null>(function* (provide) {
+            yield* ensure(function* (): Operation<void> {
+              throw failure;
+            });
+            yield* provide(null);
+          });
+          throw failure;
+        },
+      );
+    },
+  });
+}
+
 /** Wait for this signal, and fail the row rather than hang if it never comes. */
 function* within(signal: Operation<void>, sentence: string): Operation<void> {
   yield* race([
@@ -1059,6 +1085,28 @@ describe("one entry's evidence reads", () => {
     // The read's own failure would have been retained had the attempt ended
     // cleanly. It did not, so this position holds nothing rather than a
     // failure whose cleanup is unaccounted for.
+    expect(reads(failing.events).length).toBe(0);
+    expect(failing.events.filter((event) => event.type === "close")).toEqual([]);
+  });
+
+  it("V8f: a cleanup that throws the read's own error publishes nothing", function* () {
+    const fixture = yield* useFixture();
+    const host = reviewing();
+    const stream = new InMemoryStream();
+    const failure = new Error("the collection could not be read");
+    const failing = yield* run(
+      fixture,
+      `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n<Json value={reviews} />`,
+      stream,
+      host,
+      { between: () => sharing(failure) },
+    );
+
+    expect(failing.refusal).toBeDefined();
+    // The read's refusal and its cleanup's are the same object, so only what
+    // the attempt reported says which happened here — and it reports a scope
+    // that did not close. A comparison of errors would have retained a failed
+    // read for a position whose cleanup is unaccounted for.
     expect(reads(failing.events).length).toBe(0);
     expect(failing.events.filter((event) => event.type === "close")).toEqual([]);
   });
