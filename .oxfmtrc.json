@@ -4,9 +4,14 @@
   // the exact indentation the rule tests assert on.
   // `packages/*/npm` is generated dnt output, written by a test while the
   // battery runs; format-checking it fails on a file nobody wrote by hand.
+  // The retained-repository history fixtures are journals an older revision
+  // emitted, held to the SHA-256 their own receipt records: reserializing one
+  // changes the bytes the evidence is, and the suite that continues them
+  // verifies those hashes.
   "ignorePatterns": [
     "**/*.md",
     "scripts/tests/fixtures/**",
+    "packages/git/tests/fixtures/retained-repository-history/**",
     "**/npm/**",
     "packages/workflow/vendor/cloudflare-computer-dofs/**",
     "packages/acp/vendor/acpx/**",

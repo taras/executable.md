@@ -244,7 +244,9 @@
           "selectionCheckout": "/private/tmp/xmd-retained-history/h2-push-pending/repositories/repositories/85e770fa023edae002ab459e9fcaf91b1e79b2addaf2d89ba6104ae3fe3e9f90/checkout",
           "commonDirectory": "/private/tmp/xmd-retained-history/h2-push-pending/repositories/repositories/85e770fa023edae002ab459e9fcaf91b1e79b2addaf2d89ba6104ae3fe3e9f90/checkout/.git",
           "workingDirectory": "/private/tmp/xmd-retained-history/h2-push-pending/repositories/repositories/85e770fa023edae002ab459e9fcaf91b1e79b2addaf2d89ba6104ae3fe3e9f90/checkout",
-          "paths": ["notes.md"]
+          "paths": [
+            "notes.md"
+          ]
         },
         "outcome": {
           "ok": true,
@@ -254,7 +256,9 @@
               "worktreeName": null,
               "checkoutPath": "/private/tmp/xmd-retained-history/h2-push-pending/repositories/repositories/85e770fa023edae002ab459e9fcaf91b1e79b2addaf2d89ba6104ae3fe3e9f90/checkout"
             },
-            "paths": ["notes.md"],
+            "paths": [
+              "notes.md"
+            ],
             "before": {
               "branch": "review/pending",
               "commit": "68dde90e63566966c4b3a51b254211f44894a21b",

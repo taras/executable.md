@@ -244,7 +244,9 @@
           "selectionCheckout": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout",
           "commonDirectory": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout/.git",
           "workingDirectory": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout",
-          "paths": ["notes.md"]
+          "paths": [
+            "notes.md"
+          ]
         },
         "outcome": {
           "ok": true,
@@ -254,7 +256,9 @@
               "worktreeName": null,
               "checkoutPath": "/private/tmp/xmd-retained-history/h3-push-unacknowledged/repositories/repositories/d6a48dd563a972b779463a1dc6c62060aba1f1861af4ebbe6110d52658e2c3d9/checkout"
             },
-            "paths": ["notes.md"],
+            "paths": [
+              "notes.md"
+            ],
             "before": {
               "branch": "review/adopt",
               "commit": "c3556c9f8e2a8e7ec144abd7ab116282ae120839",

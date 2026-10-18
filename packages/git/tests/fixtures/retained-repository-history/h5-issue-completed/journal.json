@@ -144,7 +144,10 @@
         "url": "https://github.com/octo/project/issues/1",
         "title": "What the middleware answered",
         "description": "answered without reaching a tracker",
-        "tags": ["alpha", "beta"],
+        "tags": [
+          "alpha",
+          "beta"
+        ],
         "assignee": null
       }
     }
