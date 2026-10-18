@@ -9,7 +9,7 @@
  */
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Err, scoped } from "effection";
+import { scoped, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
@@ -487,6 +487,41 @@ function readingComponent(counted: Produced): ExecutionInstallation {
   };
 }
 
+/**
+ * One host component that says it was reached and then never finishes.
+ *
+ * The barrier is the component itself rather than a delay: the run is held at
+ * a real unfinished operation, and the row below reads the handle while it is
+ * genuinely in that state instead of while a timer happens to be pending.
+ */
+function holdingComponent(reached: { open: () => void }): ExecutionInstallation {
+  return {
+    components: [
+      {
+        name: "Holding",
+        origin: COMPUTED_ORIGIN,
+        props: { type: "object", properties: {}, additionalProperties: false },
+        factory: () =>
+          function* Holding(): Operation<Json> {
+            reached.open();
+            yield* suspend();
+            return null;
+          },
+      },
+    ],
+  };
+}
+
+/** One entry that captures at its root and is then held, unfinished. */
+const HOLDS_AFTER_CAPTURE = [
+  '<Let as="held" value={{ answer: 42 }} />',
+  "",
+  "<Holding />",
+  "",
+  "Never reached.",
+  "",
+].join("\n");
+
 /** One entry that captures at its root through both sources. */
 const COMPUTES_ROOT = [
   '<Let as="direct" value={{ answer: 42 }} />',
@@ -580,10 +615,9 @@ describe("Tier LET — the computed root data an execution hands back", () => {
   it("C1: the owner reports every actual root capture, and output and value stay separate", function* () {
     const counted: Produced = { calls: 0 };
     const stream = new InMemoryStream();
-    const execution = yield* executeInstalled(
-      { ...inlineSource(COMPUTES_ROOT), stream },
-      [readingComponent(counted)],
-    );
+    const execution = yield* executeInstalled({ ...inlineSource(COMPUTES_ROOT), stream }, [
+      readingComponent(counted),
+    ]);
     const rendered = String(yield* collect(execution));
     const settled = yield* execution;
     expect(settled.ok).toBe(true);
@@ -622,19 +656,68 @@ describe("Tier LET — the computed root data an execution hands back", () => {
     expect(held["verdict"]).toBe(undefined);
   });
 
+  it("C5: a halted execution's own handle refuses the root it was reading", function* () {
+    const stream = new InMemoryStream();
+    const arrived = withResolvers<void>();
+    const reached = { open: () => arrived.resolve() };
+    let retained: HostExecution | undefined;
+
+    yield* scoped(function* () {
+      const execution = yield* executeInstalled({ ...inlineSource(HOLDS_AFTER_CAPTURE), stream }, [
+        holdingComponent(reached),
+      ]);
+      // Kept past this scope on purpose: the question is what the handle a host
+      // is still holding answers once the run behind it is gone.
+      retained = execution;
+      yield* arrived.operation;
+
+      // While it is unfinished the handle reads, and reads the real thing —
+      // which is what makes the refusal below a refusal rather than an owner
+      // that never had anything.
+      expect(yield* readBindings(execution)).toEqual({ held: { answer: 42 } });
+    });
+
+    // Leaving that scope halts the execution and joins its teardown. The
+    // document settled nothing, so there is no result to read and no live
+    // environment left to read instead: the same handle refuses, with no map.
+    if (retained === undefined) {
+      throw new Error("this run never produced a handle to retain");
+    }
+    const after = yield* retained.bindings();
+    expect(after.ok).toBe(false);
+    expect(after.ok ? undefined : after.error).toBeInstanceOf(Error);
+    expect(Object.hasOwn(after, "value")).toBe(false);
+    // And halting it acknowledged nothing of its own.
+    expect(stream.snapshot().some((event) => event.type === "close")).toBe(false);
+  });
+
   it("C2: an ordinary failure keeps its computed data, and a cold reader finds both", function* () {
     const counted: Produced = { calls: 0 };
     const stream = new InMemoryStream();
-    const execution = yield* executeInstalled(
-      { ...inlineSource(COMPUTES_THEN_FAILS), stream },
-      [readingComponent(counted)],
-    );
+    const execution = yield* executeInstalled({ ...inlineSource(COMPUTES_THEN_FAILS), stream }, [
+      readingComponent(counted),
+    ]);
     const settled = yield* execution;
 
     // The public outcome is the failure it was, and the live error survives.
     expect(settled.ok).toBe(false);
     expect(settled.ok ? "" : settled.error.message).toContain("stopped on purpose");
     // And the data computed before the failure is still the execution's own.
+    const answered = yield* readBindings(execution);
+    expect(answered).toEqual({
+      direct: { answer: 42 },
+      functionJson: { answer: 42 },
+    });
+    expect(counted.calls).toBe(1);
+
+    // C4: the answer is the reader's own graph. Writing through it is allowed
+    // and reaches nothing: the accepted result is what the execution decided,
+    // and a consumer editing its copy cannot edit that.
+    const nested = answered["direct"];
+    if (nested === null || typeof nested !== "object" || Array.isArray(nested)) {
+      throw new Error("this control needs a nested object to write through");
+    }
+    nested["answer"] = 999;
     expect(yield* readBindings(execution)).toEqual({
       direct: { answer: 42 },
       functionJson: { answer: 42 },
@@ -667,5 +750,8 @@ describe("Tier LET — the computed root data an execution hands back", () => {
     });
     expect(cold.calls).toBe(0);
     expect(reread.snapshot().length).toBe(records.length);
+    // Neither the bytes the mutation was made against nor a separate execution
+    // over them moved: the same records, and the same accepted data.
+    expect(stream.snapshot()).toEqual(records);
   });
 });
