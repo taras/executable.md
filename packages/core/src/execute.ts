@@ -201,6 +201,7 @@ import { useEvalScope } from "@effectionx/scope-eval";
 import { declaredRouting, FOREGROUND, route, withRouting } from "./foreground.ts";
 import type { ForegroundRouting } from "./foreground.ts";
 import { checkedFailureLedger, refuseCheckedFailure } from "./component-failures.ts";
+import { authoredStop } from "./components/Fail.ts";
 import { provideTestHarnessInstallers } from "./test-harness.ts";
 import type { TestHarnessInstaller } from "./test-harness.ts";
 import type { CheckedFailures } from "./component-failures.ts";
@@ -2003,7 +2004,7 @@ function parseDocumentResult(value: unknown): DocumentResult {
  *
  * Nothing before a root exists, which is a different record from one whose root
  * computed no data: a result that never had a root says so by omitting the
- * member rather than by claiming an empty environment.
+ * member rather than by reporting an empty environment.
  */
 function carriedBindings(computed: ComputedBindings): { bindings?: JsonObject } {
   const data = computed.computed();
@@ -2424,14 +2425,25 @@ function* documentWorkflow(
     if (durabilityFailure(error) !== undefined || filesFatalFailure(error) !== undefined) {
       throw error;
     }
-    // An authored failure the document decided is its outcome, whether or not
-    // it arrived wrapped in a printing boundary's description. A plain `<Fail>`
-    // throws an ordinary Error, and before this it left the canonical boundary
-    // without a document result at all — so the body's own rendered text and
-    // the data it had computed were lost to every later reader, even though the
-    // run was over and had decided. `describeFailure` reads the wrapper for its
-    // own account when there is no description to read.
+    // An authored failure the document decided is its outcome. Usually that
+    // decision arrives described, through a printing boundary. The one other
+    // eligible failure is the Error a valid `<Fail>` raised: it reaches here
+    // unchanged and undescribed, and before it was recognized it left the
+    // canonical boundary with no document result at all — so the body's own
+    // rendered text and the data it had computed were lost to every later
+    // reader, even though the run was over and had decided.
+    //
+    // Everything else undescribed is not the document's outcome and escapes as
+    // it always has: a Git protocol refusal, a retained-history rejection, an
+    // assertion abort, a missing launcher. The mark is read off the object this
+    // boundary was handed, never searched for underneath it, so a wrapper or a
+    // teardown failure that merely carries an authored stop is not adopted as
+    // one. `describeFailure` reads the wrapper for its own account when there
+    // is no description to read.
     const documentation = documentationFailure(error);
+    if (documentation === undefined && !authoredStop(error)) {
+      throw error;
+    }
     // Everything the document rendered: the buffered selection, or what the
     // streaming loop emitted together with that tail.
     const rendered =

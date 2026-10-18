@@ -790,7 +790,6 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
           scope: entry.key,
           names: Object.freeze(names),
         });
-        checkpoints.push({ marker, kind: "binding", label: names.join(", ") });
       }
       transcript.push({
         kind: "terminal",
@@ -1655,7 +1654,9 @@ function readSettlement(event: Close): ReplTerminal | undefined {
  * one its own root validated, so a record carrying that name is not a value a
  * later entry inherits.
  */
-function readResultBindings(carried: Json | undefined): ReplBindingMap | undefined | typeof MALFORMED {
+function readResultBindings(
+  carried: Json | undefined,
+): ReplBindingMap | undefined | typeof MALFORMED {
   if (carried === undefined) {
     return undefined;
   }
