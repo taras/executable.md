@@ -1884,14 +1884,25 @@ describe("one entry's publication", () => {
   it("P21: cancelling a pending authentication releases it, and keeps the request", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
-    const held = withResolvers<void>();
+    const held = withResolvers<GitAuthenticationSession>();
     const reached = withResolvers<void>();
+    const cleaning = withResolvers<void>();
     const session: { opened: boolean; released: boolean } = { opened: false, released: false };
+    let returned = false;
 
-    // The credential session a live attempt opens for its destination, held
-    // pending until this row releases it. The managed clone opens one of its
-    // own first, so only the publication's is held: holding the clone's would
-    // stop the entry before a publication existed at all.
+    // The credential session a live attempt opens for its destination, owed a
+    // delivery this row makes only once cancellation has reached it. The
+    // managed clone opens one of its own first, so only the publication's is
+    // held: holding the clone's would stop the entry before a publication
+    // existed at all.
+    //
+    // Its cleanup is registered before the pending acquisition is announced,
+    // because the halt below is started off that announcement: an `ensure`
+    // yielded afterwards registers nothing on a scope already unwinding, and
+    // the cancellation would reach an acquisition with no cleanup on it. That
+    // cleanup suspends, so it is an `ensure` and not a `finally` — a `finally`
+    // that yields takes the frame out of return-mode while the scope is being
+    // torn down.
     let opened = 0;
     const sessions = (): Operation<GitAuthenticationSession> =>
       resource<GitAuthenticationSession>(function* (provide) {
@@ -1900,13 +1911,18 @@ describe("one entry's publication", () => {
           yield* provide(UNAUTHENTICATED);
           return;
         }
-        reached.resolve();
-        yield* held.operation;
-        session.opened = true;
-        yield* ensure(() => {
+        yield* ensure(function* () {
+          cleaning.resolve();
+          // The same delivery the cancelled acquisition was waiting for. A
+          // settled resolver answers every later read, so the session this
+          // attempt was owed arrives here instead of at the initializer the
+          // halt unwound, and the halt cannot settle until it is released.
+          yield* held.operation;
           session.released = true;
         });
-        yield* provide(UNAUTHENTICATED);
+        reached.resolve();
+        const delivered = yield* held.operation;
+        yield* provide(delivered);
       });
 
     const stream = new InMemoryStream();
@@ -1923,8 +1939,33 @@ describe("one entry's publication", () => {
           throw new Error("the publication never opened a session for its destination");
         })(),
       ]);
-      const halting = yield* spawn(() => task.halt());
-      held.resolve();
+      // The halt is observed rather than merely started, so `returned` says
+      // that `task.halt()` came back and not that something asked it to.
+      const halting = yield* spawn(function* (): Operation<void> {
+        yield* task.halt();
+        returned = true;
+      });
+      try {
+        // What orders this row is that acknowledgement and nothing else:
+        // until the cleanup says it started, nothing proves the cancellation
+        // reached the acquisition this delivery is owed to.
+        yield* race([
+          cleaning.operation,
+          (function* (): Operation<never> {
+            yield* sleep(30_000);
+            throw new Error("the cancelled authentication never started its cleanup");
+          })(),
+        ]);
+        expect(session.opened).toBe(false);
+        expect(session.released).toBe(false);
+        expect(returned).toBe(false);
+      } finally {
+        // External arrival, from this row rather than from the acquisition the
+        // halt unwound. In a `finally` with no yield in it, so an assertion
+        // that failed above leaves the joined cleanup nothing to wait for.
+        session.opened = true;
+        held.resolve(UNAUTHENTICATED);
+      }
       yield* halting;
     });
 
@@ -1936,10 +1977,12 @@ describe("one entry's publication", () => {
     // one this row held.
     expect(new Set(counted.sessions)).toEqual(new Set([fixture.origin]));
     expect(counted.sessions.length).toBeGreaterThan(1);
-    // The delivery this attempt's own scope was still owed arrived after the
-    // halt began, and the halt did not settle before it was released.
+    // The delivery this attempt's own scope was still owed arrived after that
+    // scope's cleanup had started, the cleanup released it, and only then did
+    // the halt return.
     expect(session.opened).toBe(true);
     expect(session.released).toBe(true);
+    expect(returned).toBe(true);
     expect(subcommands(counted).filter((name) => name === "push")).toEqual([]);
     expect(yield* remoteCommit(fixture, "review/credential")).toBe(undefined);
 
