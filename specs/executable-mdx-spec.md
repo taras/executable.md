@@ -10262,6 +10262,91 @@ a partial replay both reach it through normal expansion and take a window of the
 text that execution reconstructed; completed-root terminal reuse is unchanged.
 
 
+### 6.22 Selecting part of a value: `<Query>`
+
+A document that read a file, globbed a list or computed data usually wants part
+of what it has rather than all of it. `<Query>` is core's own component (§5.3)
+for that:
+
+```md
+<File path="package.json" as="packageText" />
+<Query value={packageText} yq="from_json | .scripts" as="scripts" />
+<Query value={scripts} yq=".test" />
+```
+
+It takes two ordinary props, both required: `value` is any JSON value, and `yq`
+is the expression, written in the syntax `yq.rs` implements. `as` is optional
+and ordinary (§6.10): with it the selected value is bound and the invocation
+emits nothing, and without it the selected value is written as JSON.
+
+**Every unbound type is written as JSON**, through the same formatting `<Json>`
+uses (§6.12): an object and an array as JSON, `false` as `false`, `null` as
+`null`, `[]` as `[]`, and a string JSON-quoted and escaped. There is no
+raw-text branch, so what a reader sees never depends on which type the
+expression happened to select. The text carries no added newline or framing of
+its own; enclosing output and normalization rules still apply.
+
+The supplied value is queried as it arrives. A string stays a string until the
+expression decodes it with `from_json` or `from_yaml`, so a document that meant
+to match a quoted body matches the body and one that meant to match the text
+matches the text. Nothing is re-read or re-requested: the producer that bound
+the value has already finished, several queries over one value cost one
+production, and a producer's own next-page marker is ordinary data this never
+follows.
+
+**Exactly one JSON value is an answer.** `null`, `false` and `[]` are answers.
+An expression that selects nothing and one that selects several both refuse,
+and both say to collect results with `[ … ]`. The whole evaluation output is
+accepted as one JSON value or not at all — it is never split into lines — and a
+refusal binds nothing: a name the invocation would have written keeps the value
+it already had, and no input is substituted as a fallback.
+
+An invalid expression and an evaluation failure refuse with the engine's own
+failure as the cause. Refusals follow ordinary component error policy (§6.8),
+so a printed diagnostic does not make a rejected selection successful.
+
+The engine reaches nothing of the host. It is evaluated with an empty
+environment and an empty file map and with no clock, so `strenv` reads an empty
+string, `load` and `now` refuse, and no process is started.
+
+#### Resolution and replay
+
+The registration is an ordinary overridable default, not a reserved name: a
+repository `Query.md` is chosen ahead of it. Inspection reports the
+self-closing form, the props schema above, no captures and no `returns` — a
+declared return contract would make `as` required, and `as` is optional here.
+The component has no durable effect of its own: a live run and a replay both
+reach it through normal expansion and select again from the value expansion
+reconstructed.
+
+### 6.23 Rendering a value as YAML: `<Yaml>`
+
+`<Json>`'s sibling (§6.12), for a document going somewhere that reads YAML:
+
+```md
+<Yaml value={scripts} />
+```
+
+The operand is a **capture** (§6.5), as `<Json>`'s is, so the exact evaluation
+result arrives by reference. Shape is decided before the operand runs: content
+refuses, then a missing `value` refuses, and only then is the operand evaluated
+and serialized. `JSON.stringify` runs once; a value with no JSON text and a
+serialization that threw are different refusals, and the thrown value is
+preserved as the cause.
+
+The text is the query engine's own rendering of that value with an identity
+expression and YAML output: two-space indentation, no document separators,
+scalar quoting as the renderer writes it, and the terminating newline it
+produced. It is returned unchanged. `as` captures that text instead of emitting
+it, and a value bound elsewhere stays data — rendering it here transforms
+nothing.
+
+#### Resolution and replay
+
+An ordinary overridable default, like `<Json>`: inspection reports the
+self-closing form, the `value` capture and text return mode, and the component
+has no durable effect of its own.
+
 ## 7. Entry point
 
 ### 8.1 `execute`

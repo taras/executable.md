@@ -37,6 +37,8 @@ import Glob, {
   returns as globReturns,
 } from "./Glob.ts";
 import Json, { props as jsonProps } from "./Json.ts";
+import Query, { props as queryProps } from "./Query.ts";
+import Yaml, { props as yamlProps } from "./Yaml.ts";
 import Parse, { props as parseProps, returns as parseReturns } from "./Parse.ts";
 import SafeParse, { props as safeParseProps, returns as safeParseReturns } from "./SafeParse.ts";
 import Slice, { props as sliceProps } from "./Slice.ts";
@@ -259,6 +261,35 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
         "Render a value as JSON text. `<Json value={config} />` writes the JSON where you " +
         "put it.",
       as: "Optional. Captures the JSON text instead of emitting it.",
+      context: null,
+    },
+    { captures: ["value"], forms: ["self-closing"] },
+  ),
+  core(
+    "Query",
+    Query,
+    parseJsonObject(queryProps),
+    {
+      description:
+        "Select part of a value with a yq expression. " +
+        '`<Query value={packageText} yq="from_json | .scripts" as="scripts" />` binds the ' +
+        "scripts object; the same element without `as` writes the selected value as JSON. " +
+        "Text is decoded only where the expression says `from_json` or `from_yaml`, and an " +
+        "expression that selects nothing or several values says to collect them with `[ … ]`.",
+      as: "Optional. Binds the selected value as data instead of writing it as JSON.",
+      context: null,
+    },
+    { forms: ["self-closing"] },
+  ),
+  core(
+    "Yaml",
+    Yaml,
+    parseJsonObject(yamlProps),
+    {
+      description:
+        "Render a value as YAML text. `<Yaml value={config} />` writes the YAML where you " +
+        "put it.",
+      as: "Optional. Captures the YAML text instead of emitting it.",
       context: null,
     },
     { captures: ["value"], forms: ["self-closing"] },
