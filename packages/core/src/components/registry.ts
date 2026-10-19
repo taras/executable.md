@@ -39,6 +39,7 @@ import Glob, {
 import Json, { props as jsonProps } from "./Json.ts";
 import Parse, { props as parseProps, returns as parseReturns } from "./Parse.ts";
 import SafeParse, { props as safeParseProps, returns as safeParseReturns } from "./SafeParse.ts";
+import Slice, { props as sliceProps } from "./Slice.ts";
 import Test, { props as testProps } from "./Test.ts";
 import { parseJsonObject } from "../json.ts";
 import { declaredForms, formDispatcher } from "../invocation-identity.ts";
@@ -240,6 +241,14 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
       "close.",
     as: "Optional. Captures the exact fenced Markdown instead of emitting it.",
     context: null,
+  }),
+  core("Slice", Slice, parseJsonObject(sliceProps), {
+    description:
+      "Show a window of rendered text. " +
+      "`<Slice offset={-4096} length={4096}>…</Slice>` counts Unicode code points and labels " +
+      "partial excerpts.",
+    as: "Optional. Captures the resulting text, including any range note, instead of emitting it.",
+    context: "The content whose completed rendering the window is taken from.",
   }),
   core(
     "Json",

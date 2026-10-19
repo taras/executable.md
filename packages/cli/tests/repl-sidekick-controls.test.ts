@@ -1711,6 +1711,63 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     expect(missing.ok ? "" : missing.error.message).toContain('no entry "entry-9"');
   });
 
+  /**
+   * One entry that renders a window of a captured value's JSON.
+   *
+   * `record` stays the complete structured value the document bound; `excerpt`
+   * is text taken from its rendering, and the `<Output>` region is what puts
+   * that text in the entry's own output. The emoji is written as an escape so
+   * the source in this file and the source the entry runs are the same bytes.
+   */
+  const SLICED_JSON = [
+    '<Let as="record" value={{ message: "A\u{1F600}BCDEF" }} />',
+    '<Slice offset={2} length={8} as="excerpt"><Json value={record} /></Slice>',
+    "<Output>{excerpt}</Output>",
+    "",
+  ].join("\n");
+
+  it("S8: a reply reads a sliced entry's output and its complete root data", function* () {
+    const session = yield* opened("sliced", new InMemoryStream());
+    yield* ran(session, SLICED_JSON);
+
+    // The window the entry took, spelled here rather than derived: the JSON of
+    // `{ message: "A😀BCDEF" }` is twenty-six code points, and points two
+    // through nine of it are the two spaces and the first six of `"message"`.
+    const NOTE = "Text excerpt: code points [2, 10) of 26 (zero-based, end exclusive).";
+    const EXCERPT = `${NOTE}\n  "messa`;
+
+    const asked = fresh();
+    const answer = yield* replyReading(
+      '<Output>\n<REPL.EntryOutput entry="entry-1" />\n<REPL.Bindings />\n</Output>\n',
+      session,
+      asked,
+    );
+
+    const text = rendered(answer);
+    // What the entry put on the screen, read back through the existing control:
+    // the labelled excerpt, not the whole JSON it was taken from.
+    expect(text).toContain(NOTE);
+    expect(text).toContain('  "messa');
+    expect(text).not.toContain('A\u{1F600}BCDEF"\n}');
+
+    // The root data the entry handed back: the producer's value complete, and
+    // the window exactly as it was captured, note included.
+    const bindings = yield* sidekickRequests(reading(session), noSubmission).bindings();
+    if (!bindings.ok) {
+      throw bindings.error;
+    }
+    expect(bindings.value).toEqual({
+      record: { message: "A\u{1F600}BCDEF" },
+      excerpt: EXCERPT,
+    });
+
+    // Both reads succeeded, and the journal holds exactly the two explicit
+    // reads the reply wrote — no feedback the slice produced on its own.
+    expect(asked.settled.map((one) => one.ok)).toEqual([true, true]);
+    expect(asked.began.map((one) => one.component)).toEqual(["REPL.EntryOutput", "REPL.Bindings"]);
+    expect(asked.requests).toEqual([]);
+  });
+
   it("R3: the vocabulary a reply is told about is the entry's, not its own", function* () {
     const session = yield* opened("vocabulary", new InMemoryStream());
     const requested = sidekickRequests(reading(session), noSubmission);
