@@ -3072,13 +3072,14 @@ implementation, which asks a semantic feature operation for its work and
 receives nothing else. Every command that carries this vocabulary registers all
 sixteen, `repl` included: that registry is what says which names exist, and it is
 what a run, `xmd syntax`, `xmd plan` and a REPL entry's preflight all read. An
-execution that retains one of those six operations declares that same name again
-in its own scope with its own policy under it, where a nearer declaration
-shadows the registered default. The names, props, forms, return contracts,
-origins and prose are the same either way, and a repository-local component of
-one of those names is still chosen ahead of the default. A
-Workspace attachment installs that run's providers and durable state and
-declares none of them.
+execution that owns a retained boundary over one of those six operations,
+authenticated per invocation, declares that same name again in its own scope
+with its own policy under it, where a nearer declaration shadows the registered
+default. The names, props, forms, return contracts, origins and prose are the
+same either way, and a repository-local component of one of those names is still
+chosen ahead of the default. A Workspace attachment installs that run's
+providers and durable state — the retention its pull-request lifecycle puts
+beneath the feature operation among them — and declares none of them.
 Registering them installs no provider, discovers no repository, acquires no
 lock, spawns no Git and reads no credential — describing an environment mints
 nothing. What each name *does* is decided by whichever repository provider the

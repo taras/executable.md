@@ -5223,12 +5223,16 @@ it, and no Context holds it.
 
 A host that retains nothing named after an invocation runs the same bodies over
 the public feature operations, with no identity authenticated, because there is
-nothing for one to name. Only an operation some host actually retains takes its
-operation as an argument, and that is `Git.Push` and `Issue`: the four reads and
-upsert no profile retains ask their feature Api directly, as any other component
-does. That is what makes an ordinary run, a workflow run, a
-provider-absent runtime and a REPL entry four policies rather than four
-components.
+nothing for one to name. Only an operation a host retains *above* the public
+chain, named after an invocation it authenticates, takes its operation as an
+argument, and that is `Git.Push` and `Issue`. A workflow run retains
+`PullRequest` and its three evidence reads too — the upsert through the Git-host
+reconciliation beneath it, each read as policy on `PullRequestReadExecution` —
+but it installs that retention under their feature Api instead of owning a
+boundary over it, and no REPL entry owns one either, so those four ask their Api
+directly as any other component does. That is what makes an ordinary run, a
+workflow run, a provider-absent runtime and a REPL entry four policies rather
+than four components.
 
 The lifetime of what a policy hands over is the ordinary one: an operation runs
 in the scope of the invocation that asked for it, and cancellation, teardown and
