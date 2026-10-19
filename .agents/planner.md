@@ -96,6 +96,9 @@ Distinguish accepted behavioral and structural requirements from proposed
 mechanics. Do not turn an unsupported mechanism into an acceptance criterion
 and then use tests of that criterion to justify the mechanism.
 
+Apply the [security model](../architecture.md#security-model) when justifying
+defensive mechanisms. Identify reliability and compatibility needs separately.
+
 ## Plan contents
 
 The plan records:

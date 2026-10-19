@@ -11,6 +11,7 @@ after the product behavior is approved.
 2. Product verification covers user journeys, observable behavior, important failures, recovery and incomplete implementations.
 3. Interface and product verification approval precede finalized architecture or implementation handoffs.
 4. The Architect and Planner derive lower-level tests from approved product verification without further approval.
+5. Add adversarial tests for distinct failure paths that matter under the security model or a supported reliability contract.
 
 ## Feature review
 

@@ -153,6 +153,9 @@ Tests and fake consumers created only to exercise proposed machinery do not
 establish its necessity. Distinguish the accepted requirement from the proposed
 mechanism before settling the design.
 
+Apply the [security model](../architecture.md#security-model) when judging
+defensive mechanisms. Identify reliability and compatibility needs separately.
+
 When the Product Owner says they do not understand, stop the current design
 discussion and run this interview before continuing:
 
