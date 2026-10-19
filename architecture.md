@@ -57,6 +57,124 @@ prove that the earlier effect happened. These distinctions govern
 
 Start with the properties every execution shares: predictable behavior, scoped ownership and composition across independently loaded package copies.
 
+### Security model
+
+Installed plugins, providers, middleware and TypeScript components are trusted
+application code. XMD does not contain malicious behavior from these extensions.
+Their code runs with whatever access the surrounding runtime permits; selecting
+an extension requires trusting that code.
+
+Documents explicitly selected for execution, such as `xmd run document.md`, are
+trusted programs. Their `exec` and `eval` blocks run with the access their host
+and runtime permit. Choosing to run a document requires trusting its contents.
+
+Text passed to generated evaluation, including `<Evaluate>`, is untrusted
+input. The evaluator enforces the host's allowed components and effects before
+performing any effects. For example, a read-only evaluation refuses a generated
+file write or shell command before any effect. The admitted component
+implementations remain trusted application code.
+
+Service responses, file contents and saved records are external data. The API
+that owns their interpretation validates them at entry; internal code may rely
+on the validated contract. Security tests exercise inputs that boundary can
+receive. Missing fields and invalid values in a JSON response are relevant;
+deliberately malicious JavaScript getters require executable code covered by
+the trusted-extension assumption.
+
+Saved history is checked for format, supported version and consistency with
+the intended run and effects. These checks protect continuation from corrupted
+or mismatched records. XMD makes no authenticity guarantee against someone who
+can deliberately rewrite the underlying local database and construct a
+consistent replacement history.
+
+Credentials and explicitly identified secrets receive protection against
+accidental disclosure. Paths and ordinary error details are not inherently
+secret. An absolute project path can appear in a diagnostic; a path explicitly
+identified as sensitive still receives protection. Relative-path formats can
+serve portability and compatibility independently of secrecy.
+
+A deliberately malicious installed extension is outside the project's threat
+model. A security mechanism or adversarial test needs a threat within the model
+to justify its complexity; malicious extension behavior alone supplies no such
+justification.
+
+Trusted code can still contain bugs. Supported API behavior remains part of
+each feature's contract.
+
+Defensive complexity needs a concrete in-scope threat or consequential failure
+to justify it, with the simplest sufficient implementation and evidence.
+Correct replay, preventing duplicate external writes and completing
+cancellation cleanup can justify defenses as reliability requirements.
+Additional adversarial tests cover distinct failure paths that matter under
+this model or a supported reliability contract.
+
+### Middleware and hooks
+
+The hook adapter below is an approved design contract. The current packages
+do not implement `createHooks`.
+
+An API's extension contract distinguishes control over execution from control
+over values. Middleware can omit or repeat delegation and transform inputs or
+results where that API permits it. Operations whose handlers may only observe
+use before/after hooks, with invocation controlled by the operation's owner.
+
+The hook primitive composes the existing `createApi` without modifying it.
+`createHooks<"expand", TArgs, TResult>(...)` returns the callable `expand` and
+the independent registration functions `beforeExpand` and `afterExpand`:
+
+```ts
+yield* beforeExpand(recordExpansionStart);
+yield* afterExpand(recordExpansionEnd);
+const result = yield* expand(args);
+```
+
+Both handlers return `Operation<void>`. Before observes the arguments; after
+observes those arguments and the outcome reached before after hooks run,
+including cancellation. Neither receives `next` or returns replacement data.
+The adapter keeps its middleware private. Operations offering continuation
+control retain their existing `.around(...)`.
+
+The after-hook outcome is Effection's `Result<TResult>`. A successful
+implementation supplies `Ok(value)`; a before-hook rejection or implementation
+failure supplies `Err(error)`. Cancellation supplies `Err` containing a dedicated
+cancellation error. This representation is a notification to after hooks; the
+call continues to unwind as cancellation. All after hooks receive the same
+outcome selected before they run.
+
+A before hook receives no continuation and returns no replacement input.
+Returning normally lets the owner proceed automatically; throwing prevents the
+underlying operation from starting. A hook cannot omit or repeat a delegation
+because it receives no `next`.
+
+An after hook receives the operation's success or failure and returns no
+replacement value. If the operation succeeded and an after hook fails, the
+call reports the hook failure; the completed operation and its saved result
+remain unchanged. If both fail, the operation's failure stays primary and the
+hook failure is reported alongside it. The hook primitive never repeats the
+operation to recover from a hook failure.
+
+Hooks nest in the same order as middleware: before hooks run from outer to
+inner, and after hooks run from inner to outer.
+
+```text
+A.before
+  B.before
+    operation
+  B.after
+A.after
+```
+
+Registered after hooks run when the call unwinds on success, failure or
+cancellation, including when a before hook rejects execution. They observe that
+rejection while the underlying operation remains unexecuted. Before and after
+registrations have no matching-pair requirement. One failing after hook does not
+prevent the remaining after hooks from running. They observe cancellation
+explicitly, and cancellation remains cancellation.
+
+The call owns all hook work and waits for its cleanup. A before hook
+interrupted partway through uses its own Effection cleanup for anything it
+acquired.
+
 ### Three axes
 
 The UX has 3 axes: determinism, resilience and debuggability. If we pull too
