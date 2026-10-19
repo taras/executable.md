@@ -2254,11 +2254,12 @@ resolved against the frame that published its coordinates.
   *answer* changed, not whether the filesystem did.
 - `<Issue>` is the same component here as under every other host: one
   implementation, the same props, forms and return contract, asking a semantic
-  issue operation for its work. What an entry supplies is the policy beneath it,
-  so it is declared to the execution rather than registered as a default — and a
-  repository component of that name keeps its ordinary precedence over it. What
-  such a component does not get is the identity an entry's own issue work is
-  named by.
+  issue operation for its work. The `repl` command registers it as an ordinary
+  default like every other command does; what an entry supplies is the policy
+  beneath it, declared to that entry's own execution over the default — and a
+  repository component of that name keeps its ordinary precedence over both.
+  What such a component does not get is the identity an entry's own issue work
+  is named by.
 - Generated selection is unchanged. An admitted generated `<File>` read, write
   or `<File.Delete />` is retained exactly as an authored one is, because both
   cross the one document filesystem. `<Glob>` stays ordinary and is retained by

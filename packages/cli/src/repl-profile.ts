@@ -17,7 +17,7 @@ import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { agentIdentityComponents } from "@executablemd/core";
 import type { PermissionMode } from "@executablemd/core";
 import type { GeneratedSelection } from "@executablemd/core/api";
-import type { ExecutionInstallation, IdentityComponent } from "@executablemd/core/host";
+import type { ExecutionInstallation } from "@executablemd/core/host";
 import { useScope } from "effection";
 import type { Operation } from "effection";
 
@@ -135,17 +135,6 @@ export interface ReplExecutionProfile {
    */
   readonly entryInstallation?: ReplEntryInstallation;
   /**
-   * The repository operations this command declares, as metadata.
-   *
-   * The preflight that runs before an entry exists validates against these,
-   * and a session whose host selected no entry capability declares them as they
-   * stand — the ordinary policy, which is each feature Api's own refusal where
-   * nothing is installed. An entry with a capability declares its own set
-   * instead, with this host's policy under the operations it retains, so one
-   * execution captures one declaration of each name.
-   */
-  readonly entryComponents: readonly IdentityComponent[];
-  /**
    * Which agent this command's Sidekick opens a fresh conversation under.
    *
    * Its own selection, settled from `--sidekick-agent` and falling back to the
@@ -262,7 +251,6 @@ export function* assembleReplProfile(
     generated: ordinaryGeneratedSelection(),
     permissionMode: stack.permissionMode,
     ...(entryInstallation === undefined ? {} : { entryInstallation }),
-    entryComponents: plugins.components,
     // Settled here, with the stack and the Plugins, because it is a fact about
     // the command a person invoked rather than about any conversation they
     // later have. Resolved rather than retained as "unstated": a profile that

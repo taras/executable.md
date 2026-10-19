@@ -77,7 +77,6 @@ import type {
   PropsSchema,
   ReturnsSchema,
 } from "@executablemd/core";
-import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/host";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import type { PullRequestOperationsApi } from "../pull-request-operations.ts";
@@ -85,8 +84,8 @@ import { COMPOSITION_ORIGIN } from "../definitions.ts";
 import { selectedRepository } from "../context.ts";
 import { PullRequestAdmissionError } from "../errors.ts";
 import { pullRequestResultJson } from "../pull-request-records.ts";
-import { boundComponent, unboundComponent } from "../invocation-binding.ts";
-import type { BindOperations, ComponentBody, InvocationGate } from "../invocation-binding.ts";
+import { unboundComponent } from "../invocation-binding.ts";
+import type { ComponentBody, InvocationGate } from "../invocation-binding.ts";
 
 /** The component name, as a document writes it and as a refusal names it. */
 export const PULL_REQUEST_ELEMENT = "<PullRequest>";
@@ -225,16 +224,5 @@ export function pullRequestRegistration(
   return {
     ...METADATA,
     fn: unboundComponent(PULL_REQUEST_ELEMENT, operations, body),
-  };
-}
-
-/** `PullRequest` as a declaration, for a host that supplies its own policy. */
-export function pullRequestDeclaration(
-  bind: BindOperations<PullRequestOperationsApi>,
-): IdentityComponent {
-  return {
-    ...METADATA,
-    factory: (claim: IdentityClaimant) =>
-      boundComponent(claim, { element: PULL_REQUEST_ELEMENT, bind, body }),
   };
 }

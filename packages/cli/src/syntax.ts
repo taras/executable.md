@@ -100,10 +100,10 @@ export function* useCommandSyntax(
   const inputs = {
     includes: [...includes],
     registry: new Map(yield* Component.operations.registry),
-    // The engine's own invocation-named components, and this command's
-    // profile's: inspection reads their metadata and calls no factory, so
-    // describing the repository operations mints nothing.
-    components: [...agentIdentityComponents(), ...plugins.components],
+    // The engine's own invocation-named components. A Plugin's vocabulary is
+    // in the registry this captured above, so describing it reaches no
+    // identity: inspection reads metadata and calls no factory.
+    components: agentIdentityComponents(),
     // `<Plan>` is part of the run profile, so symbols that left it out would
     // describe a vocabulary no run has. Described from the packaged bytes:
     // inspection mints nothing, so it reports the Component's identity and

@@ -30,15 +30,8 @@
 import { createContext } from "effection";
 import type { Context, Operation } from "effection";
 import { cwd } from "@executablemd/runtime";
-import {
-  compositionDeclarations,
-  gitPlugin,
-  gitPluginDeclaresFor,
-  gitPluginDeclaresOperationPolicy,
-  ordinaryCompositionPolicy,
-} from "@executablemd/git";
+import { gitPlugin, gitPluginDeclaresFor } from "@executablemd/git";
 import type { Plugin } from "@executablemd/core/api";
-import type { IdentityComponent } from "@executablemd/core/host";
 import { loadPlugins, type PluginModuleLoader } from "./plugin-loader.ts";
 import type { PluginSelection } from "./plugin-selection.ts";
 
@@ -96,33 +89,6 @@ export const BundledRunPlugin: Context<Plugin> = createContext<Plugin>(
  */
 export function carriesBundledPlugin(selection: PluginSelection): boolean {
   return gitPluginDeclaresFor({ command: selection.command, args: selection.args });
-}
-
-/**
- * The repository operations this command's executions declare, where they
- * declare any.
- *
- * `<Git.Push />`, `<PullRequest>`, its three evidence reads and `<Issue>` have
- * one implementation each, and each asks a semantic feature operation for its
- * work. Most commands register them as ordinary defaults, where a nearer
- * registration still shadows one; a command whose executions install their own
- * policy under them declares them instead, and the Plugin is what says which
- * this is.
- *
- * The policy here is the ordinary one — the public feature Apis — because this
- * is what a session declares before any entry supplies its own: an entry that
- * retains publications and issues replaces it with its own for exactly those,
- * and a runtime that selected no entry capability keeps this and reaches each
- * Api's own refusal.
- *
- * Built per call rather than held as a value: a declaration is closed over the
- * policy it was built with, and one execution's declarations are never
- * another's.
- */
-export function profileComponents(selection: PluginSelection): readonly IdentityComponent[] {
-  return gitPluginDeclaresOperationPolicy({ command: selection.command, args: selection.args })
-    ? compositionDeclarations(ordinaryCompositionPolicy())
-    : [];
 }
 
 /**

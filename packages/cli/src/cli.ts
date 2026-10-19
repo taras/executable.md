@@ -146,7 +146,7 @@ import {
   syntaxSymbols,
   useCommandSyntax,
 } from "./syntax.ts";
-import { assembleRunProfile, BundledRunPlugin, profileComponents } from "./run-profile.ts";
+import { assembleRunProfile, BundledRunPlugin } from "./run-profile.ts";
 import type { PluginModuleLoader } from "./plugin-loader.ts";
 import { installPlugins, NO_PLUGINS } from "./plugin-host.ts";
 import type { CommandPlugins } from "./plugin-host.ts";
@@ -3441,16 +3441,10 @@ function* withPlugins(
     let plugins: CommandPlugins;
     try {
       const loaded = yield* assembleRunProfile(selection, loadPluginModule);
-      // The profile's own repository operations travel with the installations
-      // its Plugins contributed, because every surface that executes, describes
-      // or validates this command's vocabulary reads one assembly.
-      plugins = {
-        ...(yield* installPlugins(loaded, {
-          command: selection.command,
-          args: selection.args,
-        })),
-        components: profileComponents(selection),
-      };
+      plugins = yield* installPlugins(loaded, {
+        command: selection.command,
+        args: selection.args,
+      });
     } catch (error) {
       reportFailure(error instanceof Error ? error : new Error(String(error)));
       yield* exit(1);

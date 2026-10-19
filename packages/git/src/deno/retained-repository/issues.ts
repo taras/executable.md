@@ -48,10 +48,7 @@ import type { ExecutionInstallation, JournalAdmission } from "@executablemd/core
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { StaleInputError } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
-import {
-  compositionDeclarations,
-  ordinaryCompositionPolicy,
-} from "../../composition/installation.ts";
+import { issueDeclaration } from "../../composition/components/Issue.ts";
 import type { BindOperations } from "../../composition/invocation-binding.ts";
 import { IssueApi } from "../../issue/api.ts";
 import type { IssueDetails, IssueReference } from "../../issue/api.ts";
@@ -118,14 +115,11 @@ export function replIssueInstallation(
   options: GitHubIssuesOptions = {},
 ): ExecutionInstallation {
   return {
-    // The whole common vocabulary, declared once with this entry's issue policy
-    // under it. The other five keep the ordinary policy, so `<Git.Push />` and
-    // `<PullRequest>` in an entry whose host recorded only issues reach their
-    // own unchanged missing-provider refusals.
-    components: compositionDeclarations({
-      ...ordinaryCompositionPolicy(),
-      issue: replIssuePolicy(owner),
-    }),
+    // The one operation this entry retains. Every other name stays the
+    // registered default, so `<Git.Push />` and `<PullRequest>` in an entry
+    // whose host recorded only issues reach their own unchanged
+    // missing-provider refusals.
+    components: [issueDeclaration(replIssuePolicy(owner))],
     admissions: [replIssueAdmission(owner)],
     install: () => useEntryIssueTransport(options),
   };

@@ -538,21 +538,6 @@ export interface ReplSessionOptions {
    * no issue host, which is every runtime that selected none.
    */
   readonly entryInstallation?: ReplEntryInstallation;
-  /**
-   * The repository operations this command declares, as metadata.
-   *
-   * Read twice and for two reasons. The preflight that runs before an entry
-   * exists validates against them, because a declaration's metadata is what
-   * resolves a name and no factory is called to read it. And an entry whose
-   * host selected no capability declares them as they stand — the ordinary
-   * policy, which is each feature Api's own refusal where nothing is
-   * installed — so `<Issue>` in such a session is refused by the provider that
-   * is missing rather than unknown to the language.
-   *
-   * An entry with a capability declares its own set instead, so one execution
-   * captures one declaration of each name.
-   */
-  readonly entryComponents?: readonly IdentityComponent[];
 }
 
 /**
@@ -621,7 +606,6 @@ function* start(
     selection,
     permissionMode,
     entryInstallation,
-    entryComponents = [],
   } = options;
   const stream = execution.stream;
 
@@ -679,7 +663,7 @@ function* start(
       : undefined;
 
   if (submitted !== undefined) {
-    const validated = yield* preflight(submitted, includes, installations, entryComponents);
+    const validated = yield* preflight(submitted, includes, installations);
     if (!validated.ok) {
       return validated;
     }
@@ -1118,7 +1102,7 @@ function* start(
       if (!before.ok) {
         return before;
       }
-      const validated = yield* preflight(source, includes, installations, entryComponents);
+      const validated = yield* preflight(source, includes, installations);
       if (!validated.ok) {
         return validated;
       }
@@ -1432,9 +1416,7 @@ function* start(
         // the entry rather than to a scope that has already closed.
         const owned =
           entryInstallation === undefined
-            ? entryComponents.length === 0
-              ? []
-              : [{ components: entryComponents }]
+            ? []
             : [yield* entryInstallation(entryOwner(execution.id, key))];
         // This entry's own selection, offered in the scope this execution runs
         // in. Every entry installs it again: core reads the final contextual
@@ -1664,16 +1646,17 @@ function* preflight(
   source: string,
   includes: readonly string[] | undefined,
   installations: readonly ExecutionInstallation[],
-  entryComponents: readonly IdentityComponent[],
 ): Operation<Result<void>> {
   const validation = yield* scoped(function* () {
     return yield* validateDocument({
       ...inlineSource(source),
       includes,
-      // The command's own declarations and the repository operations every
-      // entry of it declares. Metadata alone: validation resolves a name from a
-      // declaration and calls no factory, so nothing here initializes policy.
-      components: [...declaredComponents(installations), ...entryComponents],
+      // The command's own declarations. A Plugin's vocabulary is registered in
+      // the scope this session was opened in, so the names an entry may write
+      // are already resolvable here — and metadata alone: validation resolves a
+      // name from a declaration and calls no factory, so nothing initializes
+      // policy.
+      components: declaredComponents(installations),
       declarations: declaredMarkdown(installations),
     });
   });

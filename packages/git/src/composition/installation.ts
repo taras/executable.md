@@ -9,7 +9,7 @@
  * name (`core/src/components/fixed-filesystem.ts`), and a document reaches it
  * with or without this package.
  *
- * ## One implementation, two ways of carrying it
+ * ## One registry, and the policy an execution attaches underneath it
  *
  * Ten of the sixteen reach nothing beyond the selected checkout: Repository and
  * Worktree choose one, Git.Switch, Git.Add and Git.Commit change one, the four
@@ -23,14 +23,15 @@
  * Apis, a runtime with no provider keeps each Api's own refusing default, and a
  * REPL entry retains and reconciles beneath them.
  *
- * A host that retains nothing named after an invocation registers them
- * ordinarily, through {@link useCompositionComponents}, so a nearer
- * registration still shadows one. A host that does — a REPL entry — declares
- * the same six through {@link compositionDeclarations} with its own policy, and
- * registers the rest through {@link useCompositionSelections} so there is no
- * executable default for its declaration to shadow. Either way the component is
- * the same: one body, one set of forms, one return contract, because typing
- * `<Issue>` means the same authored operation wherever it is typed.
+ * All sixteen are registered here, for every command that carries this
+ * vocabulary, because this is what says the names exist: it is what `xmd
+ * syntax` describes, what validation resolves against and what an execution
+ * inherits. A host that retains one of these operations does not register a
+ * different component for it — it declares this same body with its own policy
+ * from inside its own execution's scope, where a nearer registration shadows a
+ * farther one. Either way the component is the same: one body, one set of
+ * forms, one return contract, because typing `<Issue>` means the same authored
+ * operation wherever it is typed.
  *
  * Nothing here installs a provider, performs repository discovery, acquires a
  * lock or reaches a network: what a name *does* is the installed policy's, and
@@ -55,7 +56,6 @@ import type {
   DocumentationContribution,
   DocumentationReader,
 } from "@executablemd/core";
-import type { IdentityComponent } from "@executablemd/core/host";
 import { COMPOSITION_ORIGIN } from "./definitions.ts";
 import { Git } from "./git-api.ts";
 import type { GitApi } from "./git-api.ts";
@@ -63,7 +63,7 @@ import { IssueOperations } from "../issue/operations.ts";
 import type { IssueOperationsApi } from "../issue/operations.ts";
 import { PullRequestOperations } from "./pull-request-operations.ts";
 import type { PullRequestOperationsApi } from "./pull-request-operations.ts";
-import type { BindOperations, InvocationGate } from "./invocation-binding.ts";
+import type { InvocationGate } from "./invocation-binding.ts";
 import Repository, { props as repositoryProps } from "./components/Repository.ts";
 import Worktree, { props as worktreeProps } from "./components/Worktree.ts";
 import GitSwitch, { props as gitSwitchProps } from "./components/GitSwitch.ts";
@@ -72,14 +72,13 @@ import GitCommit, {
   props as gitCommitProps,
   returns as gitCommitReturns,
 } from "./components/GitCommit.ts";
-import { pushDeclaration, pushRegistration } from "./components/GitPush.ts";
-import { pullRequestDeclaration, pullRequestRegistration } from "./components/PullRequest.ts";
+import { pushRegistration } from "./components/GitPush.ts";
+import { pullRequestRegistration } from "./components/PullRequest.ts";
 import {
   PULL_REQUEST_READ_KINDS,
-  pullRequestReadDeclaration,
   pullRequestReadRegistration,
 } from "./components/PullRequestReads.ts";
-import { issueDeclaration, issueRegistration } from "./components/Issue.ts";
+import { issueRegistration } from "./components/Issue.ts";
 import IssueTracker, { props as issueTrackerProps } from "./components/IssueTracker.ts";
 import { changesForm, diffForm, fileForm, filesForm } from "./components/GitReads.ts";
 import {
@@ -92,28 +91,6 @@ import {
   filesProps,
   filesReturns,
 } from "./observation-api.ts";
-
-/**
- * How one host performs the six operations no local transaction encloses.
- *
- * One member per authored operation, each a constructor rather than an
- * operation: it is called with the site that authenticated one invocation, and
- * what it answers with is that invocation's own operations. Nothing a document,
- * a prop, a tracker, a Context value or middleware holds takes part in
- * selecting it — a host states its policy as direct code before any document
- * runs.
- *
- * The two pull-request members are separate because the policies are: an upsert
- * owns its delegated result and a read retains an admitted provider snapshot
- * beneath live transformations, and a host that shared one member between them
- * would be making those two policies equal.
- */
-export interface CompositionPolicy {
-  readonly push: BindOperations<GitApi["push"]>;
-  readonly issue: BindOperations<IssueOperationsApi>;
-  readonly pullRequest: BindOperations<PullRequestOperationsApi>;
-  readonly pullRequestRead: BindOperations<PullRequestOperationsApi>;
-}
 
 /**
  * The operations an ordinary run, a workflow run and a provider-absent runtime
@@ -142,60 +119,23 @@ const ORDINARY = {
 };
 
 /**
- * That same wiring, as the policy a declaring host would supply.
- *
- * What a host declaring these operations gets where it retains none of them
- * itself: a REPL entry that records publications and issues still leaves
- * `<PullRequest>` and its reads their own unchanged missing-provider refusal,
- * and a runtime with no provider at all declares every one of them this way.
- */
-export function ordinaryCompositionPolicy(): CompositionPolicy {
-  return {
-    push: (_site, gate) => ORDINARY.push(gate),
-    issue: (_site, gate) => ORDINARY.issue(gate),
-    pullRequest: (_site, gate) => ORDINARY.pullRequest(gate),
-    pullRequestRead: (_site, gate) => ORDINARY.pullRequest(gate),
-  };
-}
-
-/**
- * The six declarations whose implementations name their own durable work.
- *
- * Built in one place, from one policy, so an ordinary run, a workflow run, a
- * REPL entry, a provider-absent runtime and a descriptive command all declare
- * the same names, origins, props, forms, return contracts and prose. A host
- * that wanted a different implementation would have to supply a different
- * policy, which is the only thing a host is allowed to differ on.
- */
-export function compositionDeclarations(policy: CompositionPolicy): readonly IdentityComponent[] {
-  return Object.freeze([
-    pushDeclaration(policy.push),
-    pullRequestDeclaration(policy.pullRequest),
-    ...PULL_REQUEST_READ_KINDS.map((kind) =>
-      pullRequestReadDeclaration(kind, policy.pullRequestRead),
-    ),
-    issueDeclaration(policy.issue),
-  ]);
-}
-
-/**
  * Every name this boundary carries, in catalog order.
  *
  * Derived from the one registration array rather than listed again, so a
  * component added to it cannot disappear from the documentation this package
- * contributes or from an inventory held to it. The declaring path carries the
- * same six operations under the same names, which is what makes one catalog
- * true of both.
+ * contributes or from an inventory held to it. An execution that declares one
+ * of these operations with policy of its own declares it under this same name,
+ * which is what makes one catalog true of every host.
  */
-export function compositionNames(): readonly string[] {
+function compositionNames(): readonly string[] {
   return Object.freeze(COMPOSITION_REGISTRATIONS.map((registration) => registration.name));
 }
 
 /**
  * This boundary's long-form documentation, and the components it must cover.
  *
- * Derived from the two declaration paths rather than listed again, so a
- * component added to either cannot be left undocumented here.
+ * Derived from the registration array rather than listed again, so a component
+ * added to it cannot be left undocumented here.
  */
 export function* compositionDocumentation(
   read?: DocumentationReader,
@@ -345,10 +285,11 @@ const TRACKER: ComponentRegistration = {
 /**
  * The six operations no local transaction encloses, as ordinary registrations.
  *
- * The same bodies the declaring path carries, over the public feature Apis.
- * Registered rather than declared, because a host that retains nothing named
- * after an invocation has no identity for one to name — and because these stay
- * ordinary defaults a nearer registration shadows.
+ * The same bodies an owning execution declares, over the public feature Apis.
+ * Registered, because this is where the names come from, and because an
+ * ordinary default is what a nearer registration — a repository-local
+ * component, an enclosing host, an execution that owns the operation — is
+ * entitled to shadow.
  */
 const EXTERNAL_OPERATIONS: readonly ComponentRegistration[] = [
   pushRegistration(ORDINARY.push),
@@ -356,16 +297,6 @@ const EXTERNAL_OPERATIONS: readonly ComponentRegistration[] = [
   ...PULL_REQUEST_READ_KINDS.map((kind) => pullRequestReadRegistration(kind, ORDINARY.pullRequest)),
   issueRegistration(ORDINARY.issue),
 ];
-
-/**
- * The selection, local-operation and tracker half: everything a host that
- * installs its own policy under the six operations still registers ordinarily.
- */
-export const SELECTION_REGISTRATIONS: readonly ComponentRegistration[] = Object.freeze([
-  ...SELECTIONS,
-  ...LOCAL_OPERATIONS,
-  TRACKER,
-]);
 
 /** All sixteen, in catalog order. */
 export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = Object.freeze([
@@ -378,26 +309,16 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = Objec
 /**
  * Register the whole vocabulary as ordinary defaults for this scope.
  *
+ * Every command that carries this vocabulary calls this, `repl` included: one
+ * registry is what says which names exist, and an execution that owns one of
+ * these operations attaches its policy to the same body from inside its own
+ * scope rather than arriving with a vocabulary of its own.
+ *
  * Every one of them is a declaration: this installs no provider, discovers no
  * ambient repository, acquires no lock, spawns no Git and reads no credential,
  * which is what lets `xmd syntax` enter it to describe the profile.
  */
 export function* useCompositionComponents(): Operation<void> {
   yield* registerComponents(COMPOSITION_REGISTRATIONS);
-  yield* contributeDocumentation(compositionDocumentation);
-}
-
-/**
- * Register everything except the six operations, for a command whose
- * executions install their own policy under them.
- *
- * A REPL entry declares those six through {@link compositionDeclarations} with
- * the policy it retains them under, so registering an executable default here
- * would be registering a body for the entry's declaration to shadow. The
- * documentation still describes all sixteen: it is the same vocabulary either
- * way, and a reader asking about `<Issue>` is asking about one component.
- */
-export function* useCompositionSelections(): Operation<void> {
-  yield* registerComponents(SELECTION_REGISTRATIONS);
   yield* contributeDocumentation(compositionDocumentation);
 }

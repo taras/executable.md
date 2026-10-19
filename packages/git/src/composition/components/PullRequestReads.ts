@@ -29,7 +29,6 @@ import type {
   PropsSchema,
   ReturnsSchema,
 } from "@executablemd/core";
-import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/host";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { COMPOSITION_ORIGIN } from "../definitions.ts";
@@ -38,8 +37,8 @@ import { pullRequestReadResultJson } from "../pull-request-read-records.ts";
 import { canonicalPullRequestUrl, pullRequestProviderName } from "../pull-request-target.ts";
 import type { PullRequestReadKind } from "../pull-request-read-records.ts";
 import type { PullRequestOperationsApi } from "../pull-request-operations.ts";
-import { boundComponent, unboundComponent } from "../invocation-binding.ts";
-import type { BindOperations, ComponentBody, InvocationGate } from "../invocation-binding.ts";
+import { unboundComponent } from "../invocation-binding.ts";
+import type { ComponentBody, InvocationGate } from "../invocation-binding.ts";
 
 /** The component names, as a document writes them and a refusal names them. */
 export const REVIEWS_ELEMENT = "<PullRequest.Reviews>";
@@ -300,21 +299,6 @@ export function pullRequestReadRegistration(
     fn: formDispatcher(
       declare(unboundComponent(element, operations, read(kind, element)), element),
     ),
-  };
-}
-
-/** One evidence read as a declaration, for a host that supplies its own policy. */
-export function pullRequestReadDeclaration(
-  kind: PullRequestReadKind,
-  bind: BindOperations<PullRequestOperationsApi>,
-): IdentityComponent {
-  const element = ELEMENTS[kind];
-  return {
-    ...metadata(kind),
-    factory: (claim: IdentityClaimant) =>
-      formDispatcher(
-        declare(boundComponent(claim, { element, bind, body: read(kind, element) }), element),
-      ),
   };
 }
 

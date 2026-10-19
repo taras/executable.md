@@ -98,7 +98,6 @@ export { declaresFor as gitPluginDeclaresFor } from "./src/plugin.ts";
  * above: a host assembling a command needs this answer and the vocabulary's own
  * gating to agree.
  */
-export { declaresOperationPolicy as gitPluginDeclaresOperationPolicy } from "./src/plugin.ts";
 export { GitObjectError, GitRepositoryError, GitRevisionError } from "./src/git.ts";
 export type { GitObjectFormat } from "./src/git.ts";
 export {
@@ -237,15 +236,9 @@ export type {
 export { admitPushEvidence } from "./src/composition/push-evidence.ts";
 export {
   COMPOSITION_REGISTRATIONS,
-  compositionDeclarations,
   compositionDocumentation,
-  compositionNames,
-  ordinaryCompositionPolicy,
-  SELECTION_REGISTRATIONS,
   useCompositionComponents,
-  useCompositionSelections,
 } from "./src/composition/installation.ts";
-export type { CompositionPolicy } from "./src/composition/installation.ts";
 export { BoundOperationError } from "./src/composition/invocation-binding.ts";
 export type {
   BindOperations,

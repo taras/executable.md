@@ -84,10 +84,8 @@ import { GitQuery } from "../../git.ts";
 import { replPushAdmission, replPushPolicy } from "./push.ts";
 import type { ReplPushEntry } from "./push.ts";
 import { replIssueAdmission, replIssuePolicy, useEntryIssueTransport } from "./issues.ts";
-import {
-  compositionDeclarations,
-  ordinaryCompositionPolicy,
-} from "../../composition/installation.ts";
+import { pushDeclaration } from "../../composition/components/GitPush.ts";
+import { issueDeclaration } from "../../composition/components/Issue.ts";
 import { Execution } from "@executablemd/core/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type { IdentityComponent, JournalAdmission } from "@executablemd/core/host";
@@ -203,11 +201,16 @@ export function* replRepositoryInstallation(
     },
   });
 
-  const components: readonly IdentityComponent[] = compositionDeclarations({
-    ...ordinaryCompositionPolicy(),
-    issue: replIssuePolicy(owner),
-    push: replPushPolicy(owner, () => (usable ? held.entry : undefined)),
-  });
+  // The two operations this entry retains, and only those. Every name this
+  // vocabulary has is already registered in the command's scope; what an entry
+  // adds here is the policy it owns, attached to those same two bodies from
+  // inside its own execution. `<PullRequest>`, its three reads and everything
+  // local keep the registered defaults, because this entry retains nothing of
+  // them to answer with.
+  const components: readonly IdentityComponent[] = [
+    pushDeclaration(replPushPolicy(owner, () => (usable ? held.entry : undefined))),
+    issueDeclaration(replIssuePolicy(owner)),
+  ];
   const admissions: JournalAdmission[] = [replIssueAdmission(owner), replPushAdmission(owner)];
   return {
     components,

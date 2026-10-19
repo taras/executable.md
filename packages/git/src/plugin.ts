@@ -33,7 +33,7 @@ import type {
   PluginInstallRequest,
   PluginInstallation,
 } from "@executablemd/core/api";
-import { useCompositionComponents, useCompositionSelections } from "./composition/installation.ts";
+import { useCompositionComponents } from "./composition/installation.ts";
 import { admitReplRepositoryHistory } from "./retained-repository/admission.ts";
 import { gitHostIdentityAdmission, issueIdentityAdmission } from "./identities.ts";
 
@@ -187,31 +187,6 @@ export function declaresFor(request: PluginInstallRequest): boolean {
   return request.command === "workflow" && executesDocument(request.args);
 }
 
-/**
- * The commands whose executions install their own policy under the six
- * operations no local transaction encloses.
- *
- * `repl` alone: an entry retains what it published and what it filed, so each
- * of those operations is declared with that entry's policy under it rather than
- * registered with the ordinary one. Every other command registers them
- * ordinarily, where a nearer registration still shadows one.
- */
-const RETAINING_COMMANDS: ReadonlySet<string> = new Set(["repl"]);
-
-/**
- * Whether this command's executions declare those six rather than register
- * them.
- *
- * Asked of the Plugin, because the answer is the Plugin's: it is the value that
- * decides which commands carry this vocabulary at all, and a host assembling
- * one needs the two halves to agree. A command answering true registers the
- * selection half and declares the operations; one answering false registers all
- * twelve.
- */
-export function declaresOperationPolicy(request: PluginInstallRequest): boolean {
-  return declaresFor(request) && RETAINING_COMMANDS.has(request.command);
-}
-
 export const gitPlugin: Plugin = Plugin({
   name: "@executablemd/git",
   *install(request: PluginInstallRequest): Operation<PluginInstallation | undefined> {
@@ -222,15 +197,11 @@ export const gitPlugin: Plugin = Plugin({
     // provider that performs what they name is attached by the host, lazily,
     // when a run actually has a Workspace to perform it in.
     //
-    // A command whose executions retain their own external work registers the
-    // selection half alone: the six operations arrive as declarations carrying
-    // that host's policy, and registering an executable default for them here
-    // would be registering a body for those declarations to shadow.
-    if (declaresOperationPolicy(request)) {
-      yield* useCompositionSelections();
-    } else {
-      yield* useCompositionComponents();
-    }
+    // Every command that carries this vocabulary carries all of it, `repl`
+    // included: what a name means is the same wherever it is typed, and an
+    // execution that retains one of these operations attaches its policy to
+    // this same body from inside its own scope.
+    yield* useCompositionComponents();
     return {
       admissions: [
         gitHostIdentityAdmission(),

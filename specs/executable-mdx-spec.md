@@ -3069,13 +3069,14 @@ validation and generation, and a workflow action that executes a document.
 Six of them reach something no local transaction encloses — `Git.Push`,
 `PullRequest`, its three evidence reads and `Issue` — and each has exactly one
 implementation, which asks a semantic feature operation for its work and
-receives nothing else. A command whose executions retain nothing named after an
-invocation registers all twelve. A command whose executions install their own
-policy under those six registers the other six and receives these as
-declarations carrying that policy, so no executable default is registered for a
-declaration to shadow; `repl` is the one such command. The names, props, forms,
-return contracts, origins and prose are the same either way, and a
-repository-local component of one of those names is still chosen ahead of it. A
+receives nothing else. Every command that carries this vocabulary registers all
+sixteen, `repl` included: that registry is what says which names exist, and it is
+what a run, `xmd syntax`, `xmd plan` and a REPL entry's preflight all read. An
+execution that retains one of those six operations declares that same name again
+in its own scope with its own policy under it, where a nearer declaration
+shadows the registered default. The names, props, forms, return contracts,
+origins and prose are the same either way, and a repository-local component of
+one of those names is still chosen ahead of the default. A
 Workspace attachment installs that run's providers and durable state and
 declares none of them.
 Registering them installs no provider, discovers no repository, acquires no

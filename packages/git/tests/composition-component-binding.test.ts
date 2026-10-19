@@ -1,11 +1,12 @@
 /**
- * One declaration source, one body, and a facade that ends with its invocation.
+ * One registry, one body, and a facade that ends with its invocation.
  *
  * Every row here drives the actual shared components through canonical
- * execution. What differs between rows is the policy underneath: these are
- * neutral constructors and fake policies, so what is proven is the binding and
- * the bodies rather than any host's retention. The real native assembly is
- * covered by the CLI and native suites.
+ * execution, over the whole vocabulary registered as the Plugin registers it.
+ * What differs between rows is the policy an owning execution declares
+ * underneath: these are neutral constructors and fake policies, so what is
+ * proven is the binding and the bodies rather than any host's retention. The
+ * real native assembly is covered by the CLI and native suites.
  *
  * These rows carry A1, A2 and the binding half of A5 of the component-boundary
  * repair matrix.
@@ -34,22 +35,21 @@ import type { ComponentRegistration, Json } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation, IdentityComponent } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import {
-  compositionDeclarations,
-  COMPOSITION_REGISTRATIONS,
-  ordinaryCompositionPolicy,
-  SELECTION_REGISTRATIONS,
-} from "../src/composition/installation.ts";
-import type { CompositionPolicy } from "../src/composition/installation.ts";
+import { COMPOSITION_REGISTRATIONS } from "../src/composition/installation.ts";
+import { pushDeclaration } from "../src/composition/components/GitPush.ts";
+import { issueDeclaration } from "../src/composition/components/Issue.ts";
 import { BoundOperationError } from "../src/composition/invocation-binding.ts";
-import type { InvocationGate } from "../src/composition/invocation-binding.ts";
+import type { BindOperations, InvocationGate } from "../src/composition/invocation-binding.ts";
 // From the subpath that publishes them rather than from the source modules:
 // these are public types, and reaching them by relative path would bypass the
 // export map the partition test holds every consumer to.
-import type { GitApi, IssueDetails, IssueReference } from "@executablemd/git/api";
+import type { IssueDetails, IssueReference } from "@executablemd/git/api";
 import type { IssueOperationsApi } from "../src/issue/operations.ts";
 import type { PullRequestOperationsApi } from "../src/composition/pull-request-operations.ts";
 import { COMPOSITION_ORIGIN } from "../src/composition/definitions.ts";
+
+/** The two operations A's retained entry owns, by the names a document writes. */
+const OWNED: readonly string[] = ["Git.Push", "Issue"];
 
 /** The six operations no local transaction encloses, by the names a document writes. */
 const OPERATIONS: readonly string[] = [
@@ -117,28 +117,17 @@ function fakeIssuePolicy(seen: Watched, hold = false) {
   };
 }
 
-/** A policy whose push suspends until this row releases it. */
-function suspendingPushPolicy(seen: Watched, reached: { resolve(): void }) {
-  return (site: string, gate: InvocationGate): GitApi["push"] => {
-    seen.sites.push(site);
-    return () =>
-      gate.once(function* (): Operation<never> {
-        seen.performed.push("push");
-        reached.resolve();
-        yield* suspend();
-        throw new Error("a suspended publication resumed");
-      });
-  };
-}
-
-/** The policy a row builds its declarations with. */
-function policy(overrides: Partial<CompositionPolicy>): CompositionPolicy {
-  return { ...ordinaryCompositionPolicy(), ...overrides };
-}
-
-/** The declarations one row installs, as a host installs them. */
-function declaring(overrides: Partial<CompositionPolicy>): ExecutionInstallation {
-  return { components: compositionDeclarations(policy(overrides)) };
+/**
+ * The declarations one row installs, as an owning execution installs them.
+ *
+ * One constructor per operation, the same ones the retained entry calls: an
+ * execution declares what it owns and nothing else, and every other name in
+ * this vocabulary stays the ordinary registration {@link run} makes below.
+ */
+function declaring(owned: {
+  readonly issue: BindOperations<IssueOperationsApi>;
+}): ExecutionInstallation {
+  return { components: [issueDeclaration(owned.issue)] };
 }
 
 interface Ran {
@@ -156,8 +145,12 @@ function run(
   return scoped(function* (): Operation<Ran> {
     const path = join(root, `entry-${crypto.randomUUID()}.md`);
     yield* writeTextFile(path, source);
-    // The selection half, as a host that declares the operations registers it.
-    yield* registerComponents(SELECTION_REGISTRATIONS);
+    // The whole vocabulary, as the Plugin registers it for every command. What
+    // a row declares below is attached inside the execution, over the ordinary
+    // registration of that same name — so a declaration that failed to reach
+    // its policy would reach the registered default's missing provider here
+    // rather than silently resolving to nothing.
+    yield* registerComponents(COMPOSITION_REGISTRATIONS);
     if (before !== undefined) {
       yield* before();
     }
@@ -187,26 +180,41 @@ function useRoot(): Operation<string> {
   });
 }
 
-/** The registration and the declaration of one name, for comparison. */
+/**
+ * One declaration of each operation A's retained entry owns.
+ *
+ * Built with policy nothing reaches: these rows are about what a declaration
+ * says, and a constructor that had to perform in order to describe would be
+ * telling an inspector something only a run can know.
+ */
+function ownedDeclarations(): readonly IdentityComponent[] {
+  return [
+    pushDeclaration(() => () => {
+      throw new Error("a described declaration performed");
+    }),
+    issueDeclaration(fakeIssuePolicy(watched())),
+  ];
+}
+
+/** The registration and the owned declaration of one name, for comparison. */
 function paired(name: string): {
   registration: ComponentRegistration | undefined;
   declaration: IdentityComponent | undefined;
 } {
   return {
     registration: COMPOSITION_REGISTRATIONS.find((entry) => entry.name === name),
-    declaration: compositionDeclarations(ordinaryCompositionPolicy()).find(
-      (entry) => entry.name === name,
-    ),
+    declaration: ownedDeclarations().find((entry) => entry.name === name),
   };
 }
 
-describe("one declaration source for every repository operation", () => {
+describe("one registry for every repository operation, and the policy an execution owns", () => {
   it("A1: describes one component whichever path carries it", function* (): Operation<void> {
-    // The whole vocabulary is registered ordinarily, and the six operations are
-    // also offered as declarations. What a reader is told is the same either
-    // way: same origin, same props, same return contract, same forms, same
-    // prose. A metadata difference here would be two components under one name.
-    for (const name of OPERATIONS) {
+    // The whole vocabulary is registered ordinarily, and an execution that owns
+    // one of these operations declares that same name again with its own policy
+    // under it. What a reader is told is the same either way: same origin, same
+    // props, same return contract, same forms, same prose. A metadata
+    // difference here would be two components under one name.
+    for (const name of OWNED) {
       const { registration, declaration } = paired(name);
       expect(registration).toBeDefined();
       expect(declaration).toBeDefined();
@@ -219,37 +227,38 @@ describe("one declaration source for every repository operation", () => {
     }
   });
 
-  it("A1: the selection half carries none of the six, and all twelve names exist once", function* (): Operation<void> {
+  it("A1: one registry carries all twelve names, the six operations included", function* (): Operation<void> {
+    // There is no second catalog and no reduced one. Every command that carries
+    // this vocabulary registers the same twelve, which is what says the names
+    // exist — to a run, to validation and to `xmd syntax` alike.
     const registered = COMPOSITION_REGISTRATIONS.map((entry) => entry.name);
     expect(registered).toHaveLength(12);
     expect(new Set(registered).size).toBe(12);
-    // A host that installs its own policy under the six registers everything
-    // else, so there is no executable default for its declarations to shadow.
-    const selections = SELECTION_REGISTRATIONS.map((entry) => entry.name);
-    expect(selections).toHaveLength(6);
     for (const name of OPERATIONS) {
-      expect(selections).not.toContain(name);
       expect(registered).toContain(name);
     }
-    // And the two halves together are the whole vocabulary, in catalog order.
-    expect([...selections, ...OPERATIONS].sort()).toEqual([...registered].sort());
+    // What an owning execution adds is policy for the operations it retains,
+    // under names this registry already has. It establishes no name of its own.
+    const owned = ownedDeclarations().map((entry) => entry.name);
+    expect(owned).toEqual([...OWNED]);
+    for (const name of owned) {
+      expect(registered).toContain(name);
+    }
   });
 
   it("A1: building declarations calls no factory and initializes no policy", function* (): Operation<void> {
     let built = 0;
-    const declarations = compositionDeclarations(
-      policy({
-        issue: (site: string, gate: InvocationGate): IssueOperationsApi => {
-          built += 1;
-          return fakeIssuePolicy(watched())(site, gate);
-        },
+    const declarations = [
+      issueDeclaration((site: string, gate: InvocationGate): IssueOperationsApi => {
+        built += 1;
+        return fakeIssuePolicy(watched())(site, gate);
       }),
-    );
-    expect(declarations).toHaveLength(6);
-    // Inspection and validation read these. Nothing has been claimed, nothing
-    // has been bound, and no policy exists yet.
+    ];
+    expect(declarations).toHaveLength(1);
+    // Inspection and validation read these. Nothing has been authenticated,
+    // nothing has been bound, and no policy exists yet.
     expect(built).toBe(0);
-    expect(declarations.map((entry) => entry.name).sort()).toEqual([...OPERATIONS].sort());
+    expect(declarations.map((entry) => entry.name)).toEqual(["Issue"]);
   });
 
   it("A1: canonical dispatch decides the form, whatever a contextual answer says", function* (): Operation<void> {

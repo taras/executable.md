@@ -99,7 +99,6 @@ await main(function* (args) {
     profile: {
       includes: [process.cwd()],
       installations: [holdingTeardown()],
-      entryComponents: [],
       generated: ordinaryGeneratedSelection(),
       permissionMode: "deny-all",
       // This host opens no Sidekick conversation, so the selection is the one
