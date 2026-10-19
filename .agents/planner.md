@@ -84,6 +84,18 @@ Prefer a focused PR stack when independent invariants can be reviewed and
 merged separately. Do not split work at a point that requires a temporary
 architecture or leaves `main` contradicting its specifications.
 
+## Mechanism necessity
+
+Before freezing a plan, justify each new registry, protocol, lifecycle guard or
+generic interface. Name the accepted behavior it serves, trace a supported
+production consumer and show why existing primitives are insufficient. A test
+or fake consumer created only to exercise the proposed mechanism does not
+establish its necessity.
+
+Distinguish accepted behavioral and structural requirements from proposed
+mechanics. Do not turn an unsupported mechanism into an acceptance criterion
+and then use tests of that criterion to justify the mechanism.
+
 ## Plan contents
 
 The plan records:
@@ -154,6 +166,16 @@ evidence pass. Do not inspect, monitor or wait for CI: its status is neither
 positive nor negative evidence for this verdict, and it is inspected only when
 the user explicitly assigns CI troubleshooting. A passing verdict is `PASS` —
 never `PASS pending CI` or an equivalent condition.
+
+During review, assess necessity independently of plan compliance. Ask what can
+be removed while preserving the accepted behavior and boundaries. An accepted
+plan or passing tests do not establish that machinery is needed; return a
+specific unsupported assumption for plan correction instead of hardening it.
+
+Apply the repository's comment rule to the final diff. Keep explanations of
+surprising constraints; remove narration of names, types and straightforward
+code. Lengthy commentary defending a mechanism calls for reconsidering the
+mechanism, not adding more explanation.
 
 Planning review closes when the frozen criteria and evidence pass. It does not
 reopen for CI, diagnostic hardening, speculative permutations, unrelated

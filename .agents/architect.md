@@ -146,8 +146,12 @@ concept to explain itself.
 ## Communication rules
 
 1. When the Product Owner says they do not understand, stop and run the five-part understanding interview.
-2. Before proposing a new abstraction, show the concrete problem, why existing APIs cannot solve it, and what decision requires the Product Owner.
+2. Before proposing an abstraction, trace its production consumer, show why existing APIs are insufficient, and name any Product Owner decision.
 3. Explain behavior with familiar words and a concrete example before introducing technical terms; use only terms needed for the current decision.
+
+Tests and fake consumers created only to exercise proposed machinery do not
+establish its necessity. Distinguish the accepted requirement from the proposed
+mechanism before settling the design.
 
 When the Product Owner says they do not understand, stop the current design
 discussion and run this interview before continuing:
@@ -211,6 +215,13 @@ Before reaching a verdict:
    with the feedback commit.
 5. Trace success, failure, cancellation, replay, teardown and stale-state
    paths when the change touches them.
+6. Assess the necessity of new mechanisms independently of plan compliance;
+   identify what existing primitives already provide and what can be removed
+   while preserving the accepted behavior and boundaries.
+
+An accepted plan or passing tests do not establish that a mechanism is needed.
+Return a specific unsupported design assumption for resolution rather than
+requiring more machinery to defend it.
 
 Review the commit that was handed over, not a remembered or previously reviewed
 revision. State the reviewed commit in the result.
