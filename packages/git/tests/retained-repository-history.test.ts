@@ -1,36 +1,44 @@
 /**
- * Seven histories the merged implementation wrote, continued through the shared
- * components that replaced it.
+ * Seven histories the merged implementation wrote, four of them continued
+ * through the shared components that replaced it.
  *
  * The fixtures beside this file were emitted by old `main`
  * `7ee526665dcadd9ec79dca9f8b6a4726903d9a4f` before the component-boundary
  * repair touched production, and their receipt records the revision, the
  * command, the owner, the paths each record addresses, where each history was
- * cut and what service state the capture left behind. Nothing here regenerates
+ * cut and what service state the capture left behind. All seven are held to the
+ * bytes that receipt names, source and journal alike. Nothing here regenerates
  * one: a fixture a verification rewrote would prove only that the new code
  * agrees with itself.
  *
- * Every history is cut while its root is unfinished, so a continuation has to
- * re-enter the component rather than replay a settled root. Every recorded path
- * is used exactly as captured, and every physical thing a continuation needs
- * belongs to that invocation: its own temporary directory, its own filesystem
- * holding the recorded logical paths, its own component search path and its own
- * entry installation. The root source is supplied by value at the path its
- * record holds, so no invocation writes a file another invocation shares.
+ * Four are continued: the definitive publication failure, the completed Issue
+ * read and upsert, the unacknowledged upsert and the definitive Issue failure.
+ * Each is cut while its root is unfinished, so continuing one re-enters the
+ * component rather than replaying a settled root. Every recorded path is used
+ * exactly as captured, and every physical thing a continuation needs belongs to
+ * that invocation: its own temporary directory, its own filesystem holding the
+ * recorded logical paths, its own component search path and its own entry
+ * installation. The root source is supplied by value at the path its record
+ * holds, so no invocation writes a file another invocation shares, and none of
+ * them needs anything the capture left on disk.
  *
- * What a continuation still reaches outside itself is the managed placement's
- * own durable location — the slot lock under the root the placement recorded,
- * and that checkout's object database. Both are production's, read and taken
- * through `@effectionx/fs`, `node:fs` and the advisory-lock file rather than
- * through a contextual Api, so no supported substitution stands in for them.
- * Denying reads of everything else the capture left behind — the clone, the
- * bare origin, the seed and the entry document — leaves all nine rows passing;
- * denying that one directory fails exactly the three rows whose continuation
- * performs new covered file work or a pending publication. That remaining
- * consumer is recorded for architecture resolution rather than worked around
- * here.
+ * ## What this suite does not prove
  *
- * These rows carry A3 of the component-boundary repair matrix.
+ * The three publication histories — a completed publication, a pending one and
+ * one the remote accepted before the journal could record it — are held to their
+ * captured bytes here and are not continued. Continuing any of them performs
+ * new covered file work or resumes a pending publication, which takes the
+ * recorded placement's slot lock and proves that checkout's object database at
+ * the absolute paths the journal holds. Both belong to the real native host and
+ * stay there, so no invocation-owned substitute reaches them.
+ *
+ * So this suite does not show that those three old histories continue through
+ * the extraction. The current-code replay and reconciliation evidence —
+ * `retained-repository-push.test.ts`, `retained-repository-push-records.test.ts`
+ * and `git-host-owned.test.ts` — remains required, and does not stand in for
+ * that omitted historical proof.
+ *
+ * These rows carry A3 of the component-boundary repair matrix, as amended.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -57,17 +65,10 @@ import { executeInstalled } from "@executablemd/core/host";
 import { gitPlugin } from "../src/plugin.ts";
 import { replRepositoryInstallation } from "../src/deno/retained-repository/provider.ts";
 import { replIssueInstallation } from "../src/deno/retained-repository/issues.ts";
-import { UNAUTHENTICATED } from "../src/deno/composition/authentication.ts";
 import type { GitAuthenticationSession } from "../src/deno/composition/authentication.ts";
 import type { GitInvocation, GitOutcome, RepositoryHost } from "../src/deno/composition/host.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect-type.ts";
 import { ISSUE_EFFECT } from "../src/issue/effect-type.ts";
-import {
-  parseReplPushRequestRecord,
-  REPL_REPOSITORY_PUSH_REQUEST,
-} from "../src/retained-repository/push-records.ts";
-import type { ReplPushRequestRecord } from "../src/retained-repository/push-records.ts";
-import { parseGitHostReconciliationRecord } from "../src/git-host/records.ts";
 import { gitHubSource } from "../src/deno/composition/github.ts";
 // From the subpath that publishes them rather than from the source module:
 // these are public, and reaching them by relative path would bypass the export
@@ -264,11 +265,6 @@ function asked(): Asked {
   return { commands: [], directories: 0, sessions: [] };
 }
 
-/** The subcommand of each native invocation, in order. */
-function subcommands(seen: Asked): string[] {
-  return seen.commands.map((args) => args.find((arg) => !arg.startsWith("-")) ?? "");
-}
-
 /**
  * A native host that answers nothing and records everything.
  *
@@ -446,24 +442,6 @@ function* statedIdentity(variable: string): Operation<string | undefined> {
   return STATED_IDENTITY[variable];
 }
 
-/** Every saved publication request this history holds, parsed. */
-function requests(events: readonly DurableEvent[]): ReplPushRequestRecord[] {
-  const found: ReplPushRequestRecord[] = [];
-  for (const event of events) {
-    if (event.type !== "yield" || event.description.type !== REPL_REPOSITORY_PUSH_REQUEST) {
-      continue;
-    }
-    if (event.result.status !== "ok") {
-      continue;
-    }
-    const record = parseReplPushRequestRecord(event.result.value);
-    if (record !== undefined) {
-      found.push(record);
-    }
-  }
-  return found;
-}
-
 /** Every Git-host outcome this history holds, as the journal holds it. */
 function outcomes(events: readonly DurableEvent[]): DurableEvent[] {
   return events.filter(
@@ -545,8 +523,11 @@ function useScratch(): Operation<string> {
   });
 }
 
-describe("histories the merged implementation wrote, continued through the shared components", () => {
-  it("A3: the fixtures are the ones old main emitted, and verification rewrites none", function* (): Operation<void> {
+describe("histories the merged implementation wrote, held to their bytes and continued", () => {
+  it("A3: all seven fixtures are the ones old main emitted, and verification rewrites none", function* (): Operation<void> {
+    // Every captured history, including the three this suite no longer
+    // continues: what they are held to here is their bytes, which is what makes
+    // them available to a later continuation unchanged.
     const record = yield* receipt();
     expect(record.capturedFrom.commit).toBe("7ee526665dcadd9ec79dca9f8b6a4726903d9a4f");
     expect(record.capturedFrom.tree).toBe("942739ff98195a0113ad6508da48b05874deaf97");
@@ -570,31 +551,6 @@ describe("histories the merged implementation wrote, continued through the share
       // names, which is what a continuation presents again.
       expect(scenario.owner).toContain("executablemd.repl.issue-owner");
     }
-  });
-
-  it("H1: a completed publication restores with no native work at all", function* (): Operation<void> {
-    const scenario = yield* recorded("h1-push-completed");
-    const text = yield* source("h1-push-completed");
-    const inherited = yield* journal("h1-push-completed");
-    const seen = asked();
-    const stream = new InMemoryStream([...inherited]);
-
-    const again = yield* continueHistory(scenario, text, stream, {
-      host: refusingHost(seen),
-      answer: { choice: "continue" },
-    });
-
-    expect(again.refusal).toBe(undefined);
-    // Nothing native, no provider, no configuration and no credential.
-    expect(seen.commands).toEqual([]);
-    expect(seen.directories).toBe(0);
-    expect(seen.sessions).toEqual([]);
-    // The prefix is untouched, and the publication is still one request and one
-    // outcome at the positions the old implementation wrote them at.
-    expect(prefix(again.events, inherited.length)).toEqual(inherited);
-    expect(requests(again.events)).toHaveLength(1);
-    expect(outcomes(again.events)).toHaveLength(1);
-    expect(requests(again.events)[0]?.owner).toBe(scenario.owner);
   });
 
   it("H4: a definitive publication failure restores as itself, provider-free", function* (): Operation<void> {
@@ -763,201 +719,4 @@ function seededIssues(scenario: Recorded): ServedIssue[] {
     parsed.push(issue as unknown as ServedIssue);
   }
   return parsed;
-}
-
-/**
- * What a substituted remote holds at the destination a saved request names.
- *
- * The one fact a pending continuation observes about the outside world. A row
- * states it, because that is what distinguishes the two pending histories: a
- * destination that never received the branch, and one that received it before
- * the journal could record so.
- */
-interface Destination {
-  /** The commit the destination ref holds, or absence. */
-  readonly commit: string | undefined;
-}
-
-/**
- * A native host that answers only the four questions a pending continuation
- * asks, addressing the paths the captured request recorded.
- *
- * Deterministic and leaf-level: the objects a captured checkout held are not
- * reproducible from a fixture, so what stands in for them is an answer about
- * the one object the saved request names. Everything else — the destination,
- * the control repository, the push — is answered from the row's stated
- * destination, and every argument list is recorded so a row can show which
- * facts were used.
- */
-function savedObjectHost(
-  seen: Asked,
-  scratch: string,
-  saved: ReplPushRequestRecord,
-  destination: Destination,
-): RepositoryHost {
-  const inputs = saved.resolved.inputs;
-  return {
-    // deno-lint-ignore require-yield
-    *git(invocation: GitInvocation): Operation<GitOutcome> {
-      seen.commands.push([...invocation.args]);
-      const args = invocation.args;
-      if (args[0] === "rev-parse") {
-        // The exact object the saved request published, which has to still be
-        // readable. Anything else is absent rather than invented.
-        const asked = (args[args.length - 1] ?? "").replace("^{commit}", "");
-        return asked === inputs.sourceCommit
-          ? { code: 0, stdout: `${inputs.sourceCommit}\n`, stderr: "" }
-          : { code: 1, stdout: "", stderr: "" };
-      }
-      if (args[0] === "init") {
-        return { code: 0, stdout: "", stderr: "" };
-      }
-      if (args[0] === "ls-remote") {
-        return {
-          code: 0,
-          stdout:
-            destination.commit === undefined
-              ? ""
-              : `${destination.commit}\t${inputs.destinationRef}\n`,
-          stderr: "",
-        };
-      }
-      if (args[0] === "push") {
-        return {
-          code: 0,
-          stdout:
-            `To ${inputs.repository.name}\n` +
-            `*\t${inputs.sourceCommit}:${inputs.destinationRef}\t[new branch]\nDone\n`,
-          stderr: "",
-        };
-      }
-      throw new Error(`a pending continuation ran git ${args.join(" ")}`);
-    },
-    // deno-lint-ignore require-yield
-    *useDirectory(): Operation<string> {
-      seen.directories += 1;
-      return scratch;
-    },
-    // deno-lint-ignore require-yield
-    *useAuthentication(locator: string): Operation<GitAuthenticationSession> {
-      seen.sessions.push(locator);
-      return UNAUTHENTICATED;
-    },
-  };
-}
-
-/** The commit a push invocation named as its source, and the ref it named. */
-function pushed(seen: Asked): { source: string; ref: string } | undefined {
-  const invocation = seen.commands.find((args) => args[0] === "push");
-  const refspec = invocation?.[invocation.length - 1];
-  if (refspec === undefined) {
-    return undefined;
-  }
-  const [source, ref] = refspec.split(":");
-  return source === undefined || ref === undefined ? undefined : { source, ref };
-}
-
-/** The decision one retained Git-host outcome records. */
-function decisionOf(event: DurableEvent | undefined): string | undefined {
-  if (event?.type !== "yield" || event.result.status !== "ok") {
-    return undefined;
-  }
-  return parseGitHostReconciliationRecord(event.result.value)?.decision;
-}
-
-describe("pending publications the merged implementation left behind", () => {
-  it("H2: continues with the saved branch, commit, ref and origin after HEAD moved", function* (): Operation<void> {
-    const scenario = yield* recorded("h2-push-pending");
-    const text = yield* source("h2-push-pending");
-    const inherited = yield* journal("h2-push-pending");
-    const saved = requests(inherited)[0];
-    expect(saved).toBeDefined();
-    if (saved === undefined) {
-      throw new Error("h2 holds no saved publication request");
-    }
-    // The capture advanced that checkout's branch after cutting the entry, so
-    // today's HEAD and the saved commit are different objects.
-    const moved = movedHead(scenario);
-    expect(moved).not.toBe(saved.resolved.inputs.sourceCommit);
-
-    const seen = asked();
-    const scratch = yield* useScratch();
-    const stream = new InMemoryStream([...inherited]);
-    const again = yield* continueHistory(scenario, text, stream, {
-      host: savedObjectHost(seen, scratch, saved, { commit: undefined }),
-      answer: { choice: "continue" },
-    });
-
-    expect(again.refusal).toBe(undefined);
-    expect(prefix(again.events, inherited.length)).toEqual(inherited);
-    // One request still, written once by the old implementation and consumed
-    // rather than rewritten.
-    expect(requests(again.events)).toHaveLength(1);
-    expect(requests(again.events)[0]).toEqual(saved);
-    // The destination it observed and the refspec it published are the saved
-    // ones. The moved HEAD was never read: no live routing happens here.
-    expect(seen.commands.filter((args) => args[0] === "ls-remote")).toEqual([
-      ["ls-remote", "--", saved.resolved.origin, saved.resolved.inputs.destinationRef],
-    ]);
-    expect(pushed(seen)).toEqual({
-      source: saved.resolved.inputs.sourceCommit,
-      ref: saved.resolved.inputs.destinationRef,
-    });
-    expect(subcommands(seen)).not.toContain("symbolic-ref");
-    // And one outcome, at the position the old history left empty.
-    expect(outcomes(again.events)).toHaveLength(1);
-    expect(decisionOf(outcomes(again.events)[0])).toBe("performed");
-  });
-
-  it("H3: adopts a destination the remote already holds, without mutating it again", function* (): Operation<void> {
-    const scenario = yield* recorded("h3-push-unacknowledged");
-    const text = yield* source("h3-push-unacknowledged");
-    const inherited = yield* journal("h3-push-unacknowledged");
-    const saved = requests(inherited)[0];
-    expect(saved).toBeDefined();
-    if (saved === undefined) {
-      throw new Error("h3 holds no saved publication request");
-    }
-    // The capture's remote accepted this exact commit and the journal refused
-    // to record it, which is the window this protocol exists for.
-    expect(remoteCommitOf(scenario)).toBe(saved.resolved.inputs.sourceCommit);
-
-    const seen = asked();
-    const scratch = yield* useScratch();
-    const stream = new InMemoryStream([...inherited]);
-    const again = yield* continueHistory(scenario, text, stream, {
-      host: savedObjectHost(seen, scratch, saved, {
-        commit: saved.resolved.inputs.sourceCommit,
-      }),
-      answer: { choice: "continue" },
-    });
-
-    expect(again.refusal).toBe(undefined);
-    expect(prefix(again.events, inherited.length)).toEqual(inherited);
-    expect(requests(again.events)).toHaveLength(1);
-    // Observed, recognized and adopted. Nothing was published a second time.
-    expect(subcommands(seen)).toContain("ls-remote");
-    expect(subcommands(seen)).not.toContain("push");
-    expect(outcomes(again.events)).toHaveLength(1);
-    expect(decisionOf(outcomes(again.events)[0])).toBe("adopted");
-  });
-});
-
-/** The commit the capture advanced that checkout to after cutting the entry. */
-function movedHead(scenario: Recorded): string | undefined {
-  return stringField(scenario, "movedCheckoutHead");
-}
-
-/** The commit the capture's remote was left holding at the destination. */
-function remoteCommitOf(scenario: Recorded): string | undefined {
-  return stringField(scenario, "remoteCommit");
-}
-
-function stringField(scenario: Recorded, name: string): string | undefined {
-  const service = scenario.service;
-  if (typeof service !== "object" || service === null || Array.isArray(service)) {
-    return undefined;
-  }
-  const value = (service as Record<string, Json>)[name];
-  return typeof value === "string" ? value : undefined;
 }
