@@ -14107,7 +14107,7 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | RV11b | Caller projection | A caller's `<Return>` selects through a Markdown `<Content />` wrapper and through a function component's `content()` |
 | RV11c | Reservation | A `<Return>` an invoked body writes, and one `render()` generates beneath an active value frame, are diagnosed and never resolve a component named `Return` |
 | RV12 | Execution order and precedence | Documentation after `<Return>` runs and the value sees only preceding bindings; a later failure, a teardown failure, and a halt after selection each win, teardown completing and no selected value being published |
-| RV13 | Function components | `export const returns` gives the same validation and capture; a text component returning a non-string errors |
+| RV13 | Function components | `export const returns` gives the same validation and capture; an uncaptured function component returning a non-string renders nothing (§5.3) |
 | RV14 | Nested value bodies | A value component invoked inside another component's body; the outer captures the inner and then executes its own return, and neither execution is a duplicate |
 | RV15 | Value roots | Completion carries the validated value; body text stays on `.output`; every failure completes `Err` |
 | RV16 | Inspection | `returns` and `returnMode` report the effective schema without executing |

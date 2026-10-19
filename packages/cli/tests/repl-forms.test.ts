@@ -1839,6 +1839,7 @@ describe("F3 — the drawers that show a retained reading (#875 R1)", () => {
         settled: true,
         bindings: Object.freeze([]),
         turns: Object.freeze([]),
+        records: Object.freeze([]),
       }),
     );
     return Object.freeze({

@@ -4823,7 +4823,11 @@ describe("Tier HI — a submission reserves from the acknowledged history", () =
           .flatMap((one) => (one.kind === "feedback" ? [one.text] : []))
           .join("\n");
         expect(feedback).toContain("Entry entry-3 completed.");
-        expect(feedback).toContain('<REPL.EntryOutput entry="entry-3" limit={4096} />');
+        expect(feedback).toContain("Read what it printed with <REPL.Entry.Output entry={3} />.");
+        // The admitted entry's own number, whichever position the screen was
+        // opened at: a receipt keyed to what somebody is reading would name
+        // the first entry in the historical arm.
+        expect(feedback).not.toContain("entry={1}");
       });
     });
   }
@@ -4880,7 +4884,14 @@ describe("Tier HI — a submission reserves from the acknowledged history", () =
         .join("\n");
       expect(feedback).toContain("Entry entry-3 failed.");
       expect(feedback).toContain("It failed:");
-      expect(feedback).toContain('<REPL.EntryOutput entry="entry-3" limit={4096} />');
+      // A failed entry is pointed at its saved evidence, by the number of the
+      // entry the submission admitted — not by the position the screen was
+      // frozen at before it went back to the head.
+      expect(feedback).toContain(
+        "Inspect its saved evidence with <REPL.Entry.Journal entry={3} />.",
+      );
+      expect(feedback).not.toContain("entry={1}");
+      expect(feedback).not.toContain("entry={2}");
     });
   });
 

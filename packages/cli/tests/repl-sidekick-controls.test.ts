@@ -35,10 +35,11 @@ import { isJsonObject } from "../../core/src/json.ts";
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { Err, Ok, scoped, spawn, until, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import type { Json } from "@executablemd/durable-streams";
+import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { Component, Execution, retainedSource, useTempFileCompiler } from "@executablemd/core";
 import type { FunctionComponentDefinition } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
@@ -56,7 +57,10 @@ import type { ReplHostFact } from "../src/repl/host.ts";
 import { assembleReplProfile, entryVocabulary } from "../src/repl-profile.ts";
 import { installPlugins, NO_PLUGINS } from "../src/plugin-host.ts";
 import { ADAPTERS, AGENT } from "./support/plan-harness.ts";
-import { entryInitialBindings } from "../src/repl/model.ts";
+import { entryInitialBindings, projectRepl } from "../src/repl/model.ts";
+import { readRecords } from "../src/repl/journal.ts";
+import type { ReplPrinting } from "../src/repl/session.ts";
+import { BALLOT_REPLY, PROMPT_REPLIES } from "./fixtures/repl/issue-932/history.ts";
 import type {
   ControlJournal,
   ControlOccurrence,
@@ -72,6 +76,13 @@ import {
 } from "../src/repl/sidekick/profile.ts";
 import type { ResponseCeiling } from "../src/repl/sidekick/profile.ts";
 import type { OutputRead, OutputReadRequest } from "../src/repl/sidekick/output.ts";
+import type {
+  EntryJournalPage,
+  EntryPromptPage,
+  EntryPromptRequest,
+  EntryReadRequest,
+  EntryTextPage,
+} from "../src/repl/sidekick/entry-inspection.ts";
 import {
   fillable,
   initialRevisions,
@@ -221,6 +232,53 @@ function requests(
           next: undefined,
         },
       ),
+    inspectSource: (request: EntryReadRequest) =>
+      answer("inspectSource", textPage("admitted source", request)),
+    inspectOutput: (request: EntryReadRequest) =>
+      answer("inspectOutput", textPage("printed text", request)),
+    inspectPrompt: (request: EntryPromptRequest) =>
+      answer("inspectPrompt", {
+        entry: 1,
+        status: "failed" as const,
+        prompt: request.prompt ?? 1,
+        agent: "scripted",
+        promptStatus: "failed" as const,
+        position: null,
+        field: "reply" as const,
+        text: "a saved reply",
+        offset: request.offset ?? 0,
+        limit: request.limit ?? 4096,
+        length: 13,
+        previous: null,
+        next: null,
+      }),
+    inspectJournal: (request: EntryReadRequest) =>
+      answer("inspectJournal", {
+        entry: 1,
+        status: "failed" as const,
+        failure: "the entry failed",
+        prompts: { completed: 0, failed: 1, cancelled: 0 },
+        records: [],
+        offset: request.offset ?? 0,
+        limit: request.limit ?? 20,
+        length: 0,
+        previous: null,
+        next: null,
+      }),
+  };
+}
+
+/** One stand-in text page, so a row can see what the element became. */
+function textPage(text: string, request: EntryReadRequest): EntryTextPage {
+  return {
+    entry: 1,
+    status: "failed",
+    text,
+    offset: request.offset ?? 0,
+    limit: request.limit ?? 4096,
+    length: [...text].length,
+    previous: null,
+    next: null,
   };
 }
 
@@ -317,6 +375,73 @@ function reply(
     }
     return answer;
   });
+}
+
+/**
+ * Evaluate one reply whose controls reach a real root, through a held execution.
+ *
+ * The same held-execution shape the stub rows use, with the ceiling built over
+ * `sidekickRequests` and whatever root the caller supplies — so what a control
+ * answers is that root's own reading rather than a fixture handed to the
+ * element.
+ */
+function replyThrough(
+  source: string,
+  root: RootReading,
+  asked: Asked,
+): Operation<Result<GeneratedXmdRootResult>> {
+  return scoped(function* () {
+    const journal = journalOf(asked);
+    const ceiling = sidekickResponseCeiling(sidekickRequests(root, noSubmission), journal);
+    const gate = withResolvers<void>();
+    const entered = withResolvers<void>();
+    const execution = yield* executeInstalled(
+      {
+        ...retainedSource("repl/sidekick.md", "<SidekickHost />\n"),
+        stream: new InMemoryStream(),
+      },
+      [
+        sidekickCeilingInstallation(ceiling),
+        {
+          components: [
+            {
+              name: "SidekickHost",
+              origin: "test://sidekick-host",
+              props: { type: "object", properties: {}, additionalProperties: false },
+              description: "Hold this execution open while its caller evaluates one reply.",
+              factory: () =>
+                function* (): Operation<string> {
+                  entered.resolve();
+                  yield* gate.operation;
+                  return "";
+                },
+            },
+          ],
+        },
+      ],
+    );
+    const watched = yield* spawn(() => execution);
+    yield* entered.operation;
+    const answer = yield* execution.evaluateGeneratedXmdRoot({
+      id: "turn-1",
+      source,
+      allow: [...ceiling.allow],
+    });
+    gate.resolve();
+    const ran = yield* watched;
+    if (!ran.ok) {
+      throw ran.error;
+    }
+    return answer;
+  });
+}
+
+/** A submit nobody is supposed to reach, so a read that admits one is caught. */
+function noSubmission(): Operation<Result<SubmitReceipt>> {
+  // deno-lint-ignore require-yield
+  return (function* (): Operation<Result<SubmitReceipt>> {
+    throw new Error("a read admitted an entry");
+  })();
 }
 
 /**
@@ -499,6 +624,11 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.Environment",
         "REPL.Submit",
         "REPL.Syntax",
+        // The four bounded reads of one entry's saved evidence.
+        "REPL.Entry.Source",
+        "REPL.Entry.Prompt",
+        "REPL.Entry.Output",
+        "REPL.Entry.Journal",
       ].sort(),
     );
 
@@ -531,6 +661,25 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
       "limit",
     ]);
     expect(surface.find((entry) => entry.name === "REPL.Bindings")?.props).toEqual([]);
+    // The saved-evidence reads keep their props closed, and only Prompt takes
+    // the two that choose a turn and which of its texts to read.
+    expect(surface.find((entry) => entry.name === "REPL.Entry.Journal")?.props).toEqual([
+      "entry",
+      "offset",
+      "limit",
+    ]);
+    expect(surface.find((entry) => entry.name === "REPL.Entry.Prompt")?.props).toEqual([
+      "entry",
+      "offset",
+      "limit",
+      "prompt",
+      "field",
+    ]);
+    expect(
+      surface
+        .filter((entry) => entry.name.startsWith("REPL.Entry."))
+        .map((entry) => `${entry.effect}:${entry.form}`),
+    ).toEqual(["read:self-closing", "read:self-closing", "read:self-closing", "read:self-closing"]);
 
     // A reply reads the description, so it has to say the spellings.
     const described = describeSurface(surface);
@@ -560,6 +709,10 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.Environment",
         "REPL.Submit",
         "REPL.Syntax",
+        "REPL.Entry.Source",
+        "REPL.Entry.Prompt",
+        "REPL.Entry.Output",
+        "REPL.Entry.Journal",
       ].sort(),
     );
     // Core's own self-description is deliberately not designated: its ordinary
@@ -679,8 +832,29 @@ describe("Tier R3 — each control asks once, and records before and after", () 
     const text = rendered(answer);
     expect(text).toContain("Entry entry-4 failed.");
     expect(text).toContain("the entry raised");
-    // The read is an instruction, pinned to that entry. No output body here.
-    expect(text).toContain('<REPL.EntryOutput entry="entry-4"');
+    // The instruction is pinned to the entry the submission admitted, by the
+    // number a read names an entry with, and it points at the saved evidence:
+    // an entry that failed may well have printed nothing at all. No output
+    // body here either way.
+    expect(text).toContain("Inspect its saved evidence with <REPL.Entry.Journal entry={4} />.");
+    expect(text).not.toContain("printed text");
+  });
+
+  it("R3i: a submission that completed points at what that entry printed", function* () {
+    const asked = fresh();
+
+    const answer = yield* reply("<Output>\n<REPL.Submit />\n</Output>\n", asked, {
+      receipt: {
+        entry: "entry-4",
+        status: "completed",
+        failure: undefined,
+        read: { entry: "entry-4", limit: 4096 },
+      },
+    });
+
+    const text = rendered(answer);
+    expect(text).toContain("Entry entry-4 completed.");
+    expect(text).toContain("Read what it printed with <REPL.Entry.Output entry={4} />.");
     expect(text).not.toContain("printed text");
   });
 
@@ -1303,14 +1477,6 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     };
   }
 
-  /** A submit nobody is supposed to reach, so a read that admits one is caught. */
-  function noSubmission(): Operation<Result<SubmitReceipt>> {
-    // deno-lint-ignore require-yield
-    return (function* (): Operation<Result<SubmitReceipt>> {
-      throw new Error("a read admitted an entry");
-    })();
-  }
-
   /** Open one session over this stream, failing the row if it cannot be read. */
   function* opened(id: string, stream: InMemoryStream, at?: string): Operation<ReplSession> {
     const answer = yield* openReplSession({
@@ -1451,53 +1617,7 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     session: ReplSession,
     asked: Asked,
   ): Operation<Result<GeneratedXmdRootResult>> {
-    return scoped(function* () {
-      const journal = journalOf(asked);
-      const ceiling = sidekickResponseCeiling(
-        sidekickRequests(reading(session), noSubmission),
-        journal,
-      );
-      const gate = withResolvers<void>();
-      const entered = withResolvers<void>();
-      const execution = yield* executeInstalled(
-        {
-          ...retainedSource("repl/sidekick.md", "<SidekickHost />\n"),
-          stream: new InMemoryStream(),
-        },
-        [
-          sidekickCeilingInstallation(ceiling),
-          {
-            components: [
-              {
-                name: "SidekickHost",
-                origin: "test://sidekick-host",
-                props: { type: "object", properties: {}, additionalProperties: false },
-                description: "Hold this execution open while its caller evaluates one reply.",
-                factory: () =>
-                  function* (): Operation<string> {
-                    entered.resolve();
-                    yield* gate.operation;
-                    return "";
-                  },
-              },
-            ],
-          },
-        ],
-      );
-      const watched = yield* spawn(() => execution);
-      yield* entered.operation;
-      const answer = yield* execution.evaluateGeneratedXmdRoot({
-        id: "turn-1",
-        source,
-        allow: [...ceiling.allow],
-      });
-      gate.resolve();
-      const ran = yield* watched;
-      if (!ran.ok) {
-        throw ran.error;
-      }
-      return answer;
-    });
+    return replyThrough(source, reading(session), asked);
   }
 
   it("P8: a reply reads the captures the acknowledged head published, not the prefix", function* () {
@@ -2068,3 +2188,497 @@ describe("Tier R3 — what a capture seals, and what cannot reach across it", ()
     expect(asked.requests).toEqual(["bindings"]);
   });
 });
+
+/**
+ * Tier R3 — four bounded reads of one entry's saved evidence (#932).
+ *
+ * The history is the one `fixtures/repl/issue-932/` holds: a real run of this
+ * REPL, its entry executions and the canonical Prompt path, with a scripted
+ * agent. Its first entry failed with nothing printed after nine saved turns,
+ * the ninth of which streamed a complete ballot and ended failed. That is the
+ * situation these reads exist for, and nothing here hand-writes it.
+ *
+ * Every row reads it through the production path: `readRecords` and
+ * `projectRepl` for the file, `sidekickRequests` for the request, and the
+ * ceiling `profile.ts` builds for the element. The negative controls below
+ * doctor a copy of those real records rather than inventing a history.
+ */
+describe("Tier R3 — four bounded reads of one entry's saved evidence", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** The run-produced history these rows read, and never write. */
+  const SAVED = new URL("./fixtures/repl/issue-932/entries.jsonl", import.meta.url);
+
+  /** The profile a read describes this command with. */
+  const READING_PROFILE = {
+    includes: ["components", "."],
+    permissionMode: "deny-all",
+    plugins: NO_PLUGINS.plugins.map((plugin) => plugin.name),
+    vocabulary: entryVocabulary(["components", "."], NO_PLUGINS),
+  } as const;
+
+  /** The saved events, read with the reader the command reads them with. */
+  function* savedEvents(): Operation<DurableEvent[]> {
+    return yield* readRecords(fileURLToPath(SAVED));
+  }
+
+  /** The projection of one history, or a failure naming why there is none. */
+  function projectedOf(events: readonly DurableEvent[]): ReplModel {
+    const model = projectRepl(events);
+    if (!model.ok) {
+      throw model.error;
+    }
+    return model.value;
+  }
+
+  /**
+   * A root that can only read, over one projection and one printing fact.
+   *
+   * Every hook that would reach an execution throws: a saved-evidence read
+   * that opened an entry, asked the running one for its root, filled the draft
+   * or admitted anything would fail the row where it did it rather than
+   * somewhere downstream.
+   */
+  function cold(model: ReplModel, printing?: ReplPrinting): RootReading {
+    return {
+      acknowledged: () => Ok(model),
+      printing: () => printing,
+      // deno-lint-ignore require-yield
+      *bindings(): Operation<Result<Readonly<Record<string, Json>>>> {
+        throw new Error("a saved-evidence read asked a running entry for its root");
+      },
+      vocabulary: READING_PROFILE.vocabulary,
+      session: Object.freeze([]),
+      // deno-lint-ignore require-yield
+      *fill(): Operation<Result<void>> {
+        throw new Error("a saved-evidence read filled the shared draft");
+      },
+    };
+  }
+
+  /** The reads, over one projection. */
+  function readsOver(model: ReplModel, printing?: ReplPrinting) {
+    return sidekickRequests(cold(model, printing), noSubmission);
+  }
+
+  /** The value one read answered with, or a failure naming its refusal. */
+  function answered<T>(read: Result<T>): T {
+    if (!read.ok) {
+      throw read.error;
+    }
+    return read.value;
+  }
+
+  /** The reason one read refused, or a failure saying it did not. */
+  function refused<T>(read: Result<T>): string {
+    if (read.ok) {
+      throw new Error(`this read answered where it had to refuse: ${JSON.stringify(read.value)}`);
+    }
+    return read.error.message;
+  }
+
+  /** What one control recorded as its observation, by the order it settled. */
+  function observed(asked: Asked, order: number): Json {
+    const held = asked.settled.find((one) => one.order === order)?.observed;
+    if (held === undefined) {
+      throw new Error(`no control settled with an observation at ${order}`);
+    }
+    return held;
+  }
+
+  it("E2: a relative read pins its continuation to the entry it resolved", function* () {
+    const events = yield* savedEvents();
+    // A real session over the saved history, so the later admission below is
+    // an entry this execution genuinely admits rather than an edited model.
+    const opened = yield* openReplSession({
+      execution: { id: "pinned", stream: new InMemoryStream(events) },
+    });
+    if (!opened.ok) {
+      throw opened.error;
+    }
+    const session = opened.value;
+    const root: RootReading = {
+      ...rootReads(session, READING_PROFILE),
+      // deno-lint-ignore require-yield
+      *fill(): Operation<Result<void>> {
+        throw new Error("a saved-evidence read filled the shared draft");
+      },
+    };
+
+    // Relative on both selectors: the entry before the latest, and that
+    // entry's last saved turn.
+    const asked = fresh();
+    const answer = yield* replyThrough(
+      '<REPL.Entry.Prompt entry={-2} prompt={-1} field="reply" limit={16} />\n',
+      root,
+      asked,
+    );
+    // An uncaptured page renders nothing: it is a value with no destination,
+    // and a reply that wanted it in the chat writes an `<Output>` of its own.
+    expect(rendered(answer).trim()).toBe("");
+    expect(answer.ok && answer.value.hasOutput).toBe(false);
+    const page = observed(asked, 0);
+    expect(page).toMatchObject({
+      entry: 1,
+      status: "failed",
+      prompt: 9,
+      promptStatus: "failed",
+      field: "reply",
+      offset: 0,
+      limit: 16,
+      previous: null,
+      next: { entry: 1, prompt: 9, field: "reply", offset: 16, limit: 16 },
+    });
+    // Counted in code points, which is what makes the length differ from the
+    // UTF-16 length of the same saved reply.
+    const points = [...BALLOT_REPLY];
+    expect(page).toMatchObject({ length: points.length, text: points.slice(0, 16).join("") });
+    expect(points.length).not.toBe(BALLOT_REPLY.length);
+
+    // A later entry is admitted, so `-2` now names a different entry and `-1`
+    // a different turn.
+    const admitted = yield* session.submit("One more entry, admitted after the read.\n");
+    if (!admitted.ok) {
+      throw admitted.error;
+    }
+    const settled = yield* admitted.value.join();
+    if (!settled.ok) {
+      throw settled.error;
+    }
+    expect(session.model.entries).toHaveLength(3);
+
+    // The continuation the first read returned still reads the entry and the
+    // turn it was about, because it states them absolutely.
+    const following = fresh();
+    yield* replyThrough(
+      '<REPL.Entry.Prompt entry={1} prompt={9} field="reply" offset={16} limit={16} />\n',
+      root,
+      following,
+    );
+    const next = observed(following, 0);
+    expect(next).toMatchObject({
+      entry: 1,
+      prompt: 9,
+      field: "reply",
+      offset: 16,
+      limit: 16,
+      text: points.slice(16, 32).join(""),
+      previous: { entry: 1, prompt: 9, field: "reply", offset: 0, limit: 16 },
+    });
+  });
+
+  it("E2: Journal pages its records in append order, to the final close", function* () {
+    const model = projectedOf(yield* savedEvents());
+    const reads = readsOver(model);
+    const whole = answered(yield* reads.inspectJournal({ entry: 1, limit: 100 }));
+    expect(whole.length).toBe(20);
+    expect(whole.records).toHaveLength(20);
+
+    const markers: string[] = [];
+    let offset = 0;
+    while (true) {
+      const page = answered(yield* reads.inspectJournal({ entry: 1, offset, limit: 8 }));
+      expect(page.limit).toBe(8);
+      markers.push(...page.records.map((record) => record.marker));
+      if (page.next === null) {
+        // The last page holds the root close, which is the record that says
+        // what the entry settled to.
+        expect(page.records[page.records.length - 1].marker).toBe("close:root");
+        break;
+      }
+      expect(page.next).toEqual({ entry: 1, offset: offset + 8, limit: 8 });
+      offset = page.next.offset;
+    }
+    // Append order, with nothing repeated and nothing dropped across the
+    // boundaries.
+    expect(markers).toEqual(whole.records.map((record) => record.marker));
+
+    // A record offset counts records, not code points: the whole saved reply
+    // is longer than this window and no window of it ever appears here.
+    expect(JSON.stringify(whole.records)).not.toContain("open_watch");
+
+    // The failure is the complete saved message whatever the window holds, and
+    // the counts are the entry's rather than the window's.
+    const narrow = answered(yield* reads.inspectJournal({ entry: 1, limit: 1 }));
+    expect(narrow.records).toHaveLength(1);
+    expect(narrow.failure).toBe(whole.failure);
+    expect(narrow.prompts).toEqual({ completed: 8, failed: 1, cancelled: 0 });
+  });
+
+  it("E2: defaults, the tail, and every position outside the text", function* () {
+    const model = projectedOf(yield* savedEvents());
+    const reads = readsOver(model);
+    const source = model.entries[0].source;
+    const points = [...source];
+
+    // Source starts at the beginning and takes the default window.
+    const whole = answered(yield* reads.inspectSource({ entry: 1 }));
+    expect(whole).toMatchObject({ offset: 0, limit: 4096, length: points.length });
+    expect(whole.text).toBe(source);
+
+    // Output's omitted offset is the tail; explicit zero is the beginning,
+    // which omission cannot express. Entry 2 printed something, so the two
+    // windows are different windows.
+    const printed = model.entries[1].terminal?.output ?? "";
+    expect(printed.length).toBeGreaterThan(8);
+    const tail = answered(yield* reads.inspectOutput({ entry: 2, limit: 8 }));
+    const start = answered(yield* reads.inspectOutput({ entry: 2, offset: 0, limit: 8 }));
+    expect(tail.offset).toBe([...printed].length - 8);
+    expect(tail.text).toBe([...printed].slice(-8).join(""));
+    expect(start.offset).toBe(0);
+    expect(start.text).toBe([...printed].slice(0, 8).join(""));
+
+    // A negative offset counts back from the end of what is there.
+    const back = answered(yield* reads.inspectSource({ entry: 1, offset: -5, limit: 5 }));
+    expect(back.offset).toBe(points.length - 5);
+    expect(back.text).toBe(points.slice(-5).join(""));
+    // And one further back than the text is long clamps to the beginning
+    // rather than refusing: the last 4096 points of a shorter text is that
+    // text.
+    const clamped = answered(yield* reads.inspectSource({ entry: 1, offset: -100000 }));
+    expect(clamped.offset).toBe(0);
+    expect(clamped.text).toBe(source);
+
+    // A positive offset past the end stays where it was asked for, and the
+    // window there is empty — which is the truth about that range.
+    const beyond = answered(yield* reads.inspectSource({ entry: 1, offset: 100000, limit: 10 }));
+    expect(beyond).toMatchObject({ offset: 100000, text: "", next: null });
+    expect(beyond.previous).toEqual({ entry: 1, offset: 99990, limit: 10 });
+
+    // A limit larger than the default is a limit: there is no cap of its own,
+    // and the span is bounded by the evidence.
+    const wide = answered(yield* reads.inspectSource({ entry: 1, limit: 100000 }));
+    expect(wide.limit).toBe(100000);
+    expect(wide.text).toBe(source);
+    expect(wide.next).toBe(null);
+  });
+
+  it("E3: a saved sequence is not renumbered, and relative reads sort by it", function* () {
+    const events = yield* savedEvents();
+    // A copy of those real records with their saved sequences changed: two
+    // turns that completed out of order, and a gap where no turn was saved.
+    // The file itself is untouched — this is a negative control over records
+    // the run genuinely produced.
+    const doctored = resequenced(events, [0, 1, 2, 3, 4, 5, 7, 6, 9]);
+    const reads = readsOver(projectedOf(doctored));
+
+    // The last turn in canonical sequence order, which is the ninth appended.
+    const last = answered(yield* reads.inspectPrompt({ entry: 1, prompt: -1 }));
+    expect(last).toMatchObject({ prompt: 10, promptStatus: "failed" });
+    expect(last.text).toBe(BALLOT_REPLY);
+
+    // Absolute 8 is the turn whose saved sequence is 7 — the seventh appended
+    // — rather than the eighth thing in the list.
+    const eighth = answered(yield* reads.inspectPrompt({ entry: 1, prompt: 8 }));
+    expect(eighth.text).toBe(PROMPT_REPLIES[6]);
+    const seventh = answered(yield* reads.inspectPrompt({ entry: 1, prompt: 7 }));
+    expect(seventh.text).toBe(PROMPT_REPLIES[7]);
+
+    // The gap refuses rather than selecting the turn next to it.
+    expect(refused(yield* reads.inspectPrompt({ entry: 1, prompt: 9 }))).toContain(
+      "saved no prompt 9",
+    );
+  });
+
+  it("E3: absence, emptiness and a refusal are three different answers", function* () {
+    const events = yield* savedEvents();
+    const reads = readsOver(projectedOf(events));
+
+    // A completed turn recorded no failure at all, so its error is null — not
+    // an empty window, which would say it failed saying nothing.
+    const none = answered(yield* reads.inspectPrompt({ entry: 1, prompt: 1, field: "error" }));
+    expect(none).toMatchObject({
+      promptStatus: "completed",
+      text: null,
+      offset: 0,
+      length: 0,
+      previous: null,
+      next: null,
+    });
+
+    // A turn that saved an empty reply answers with the empty string it saved.
+    const silent = readsOver(projectedOf(retexted(events, 0, "")));
+    const empty = answered(yield* silent.inspectPrompt({ entry: 1, prompt: 1 }));
+    expect(empty.text).toBe("");
+    expect(empty.length).toBe(0);
+
+    // Evidence that is not there refuses rather than being substituted.
+    expect(refused(yield* reads.inspectSource({ entry: 9 }))).toContain("no entry at 9");
+    expect(refused(yield* reads.inspectPrompt({ entry: 2, prompt: 1 }))).toContain(
+      "saved no agent turns",
+    );
+
+    // Selectors are nonzero whole numbers, and a limit is a positive one.
+    expect(refused(yield* reads.inspectSource({ entry: 0 }))).toContain("admission number");
+    expect(refused(yield* reads.inspectSource({ entry: 1.5 }))).toContain("admission number");
+    expect(refused(yield* reads.inspectPrompt({ entry: 1, prompt: 0 }))).toContain(
+      "saved sequence",
+    );
+    expect(refused(yield* reads.inspectPrompt({ entry: 1, prompt: 2.5 }))).toContain(
+      "saved sequence",
+    );
+    expect(refused(yield* reads.inspectPrompt({ entry: 1, field: "notes" }))).toContain(
+      '"notes" cannot be read',
+    );
+    expect(refused(yield* reads.inspectJournal({ entry: 1, limit: 0 }))).toContain(
+      "positive whole",
+    );
+    expect(refused(yield* reads.inspectSource({ entry: 1, limit: -3 }))).toContain(
+      "positive whole",
+    );
+    expect(refused(yield* reads.inspectSource({ entry: 1, limit: 2.5 }))).toContain(
+      "positive whole",
+    );
+  });
+
+  it("E3: a refusal is this operation's outcome and the response goes on", function* () {
+    const model = projectedOf(yield* savedEvents());
+    const asked = fresh();
+    const answer = yield* replyThrough(
+      "<Output>\n<REPL.Entry.Source entry={9} />\n</Output>\n",
+      cold(model),
+      asked,
+    );
+    // The reason is rendered where the read was asked for, and the response
+    // finished: a read that could not answer is not the end of a reply.
+    expect(rendered(answer)).toContain("no entry at 9");
+    expect(asked.began.map((one) => one.component)).toEqual(["REPL.Entry.Source"]);
+    expect(asked.settled).toEqual([{ order: 0, ok: false }]);
+  });
+
+  it("E4: a cold unfinished entry is readable, and reading it performs nothing", function* () {
+    const events = yield* savedEvents();
+    const before = yield* until(readFile(fileURLToPath(SAVED)));
+    // The prefix that stops immediately before the failed entry's root close,
+    // taken as a private copy. The file is never truncated.
+    const close = events.findIndex((event) => event.type === "close");
+    const prefix = events.slice(0, close);
+    const model = projectedOf(prefix);
+    expect(model.settled).toBe(false);
+    expect(model.entries).toHaveLength(1);
+
+    // No owner is printing anything, so there is nobody this entry could be
+    // running in. Every hook that would reach an execution throws.
+    const asked = fresh();
+    const answer = yield* replyThrough(
+      [
+        "<REPL.Entry.Journal entry={1} limit={4} />",
+        "<REPL.Entry.Source entry={1} limit={32} />",
+        '<REPL.Entry.Prompt entry={1} prompt={9} field="reply" limit={8} />',
+        "<REPL.Entry.Output entry={1} />",
+        "",
+      ].join("\n"),
+      cold(model),
+      asked,
+    );
+    // Four pages, none of them captured, so the response declared no output
+    // region and rendered none of them into its body.
+    expect(answer.ok && answer.value.hasOutput).toBe(false);
+    expect(rendered(answer)).not.toContain("open_watch");
+    expect(rendered(answer)).not.toContain('"entry"');
+    expect(asked.began.map((one) => one.component)).toEqual([
+      "REPL.Entry.Journal",
+      "REPL.Entry.Source",
+      "REPL.Entry.Prompt",
+      "REPL.Entry.Output",
+    ]);
+
+    // Unfinished rather than running: there is no terminal and no owner.
+    expect(observed(asked, 0)).toMatchObject({
+      entry: 1,
+      status: "unfinished",
+      failure: null,
+      prompts: { completed: 8, failed: 1, cancelled: 0 },
+      length: 19,
+    });
+    // The saved evidence it does hold is there to be read.
+    expect(observed(asked, 1)).toMatchObject({ status: "unfinished", length: 817 });
+    expect(observed(asked, 2)).toMatchObject({
+      status: "unfinished",
+      prompt: 9,
+      promptStatus: "failed",
+    });
+    // And the output nobody retained is an empty window rather than an
+    // invented one.
+    expect(observed(asked, 3)).toMatchObject({
+      status: "unfinished",
+      text: "",
+      length: 0,
+      previous: null,
+      next: null,
+    });
+
+    // Nothing was performed: the file is the file, byte for byte.
+    expect(yield* until(readFile(fileURLToPath(SAVED)))).toEqual(before);
+  });
+
+  it("E4: only the exact owner is running, and terminal evidence wins", function* () {
+    const events = yield* savedEvents();
+    const close = events.findIndex((event) => event.type === "close");
+    const unfinished = projectedOf(events.slice(0, close));
+    const whole = projectedOf(events);
+
+    // The entry this process is printing is the one that is running, and its
+    // text is the text this process has observed for it.
+    const owned = readsOver(unfinished, { entry: "entry-1", output: "live so far" });
+    const running = answered(yield* owned.inspectOutput({ entry: 1 }));
+    expect(running).toMatchObject({ status: "running", text: "live so far" });
+
+    // An owner printing a different entry attributes nothing to this one.
+    const other = readsOver(unfinished, { entry: "entry-7", output: "live so far" });
+    const unattributed = answered(yield* other.inspectOutput({ entry: 1 }));
+    expect(unattributed).toMatchObject({ status: "unfinished", text: "", length: 0 });
+
+    // Terminal evidence wins while the task that produced it unwinds: the
+    // close is retained, the owner is still named, and the read reports what
+    // the entry settled to rather than what the process remembers.
+    const settled = readsOver(whole, { entry: "entry-1", output: "live so far" });
+    const outcome = answered(yield* settled.inspectOutput({ entry: 1 }));
+    expect(outcome).toMatchObject({ status: "failed", text: "", length: 0 });
+  });
+});
+
+/** The same records, with their saved Prompt sequences replaced in append order. */
+function resequenced(
+  events: readonly DurableEvent[],
+  sequences: readonly number[],
+): DurableEvent[] {
+  let at = 0;
+  return events.map((event) => {
+    if (
+      event.type !== "yield" ||
+      event.description.type !== "agent_prompt" ||
+      event.result.status !== "ok" ||
+      !isJsonObject(event.result.value)
+    ) {
+      return event;
+    }
+    const sequence = sequences[at];
+    at += 1;
+    if (sequence === undefined) {
+      return event;
+    }
+    return { ...event, result: { status: "ok", value: { ...event.result.value, sequence } } };
+  });
+}
+
+/** The same records, with the text one saved Prompt streamed replaced. */
+function retexted(events: readonly DurableEvent[], ordinal: number, text: string): DurableEvent[] {
+  let at = 0;
+  return events.map((event) => {
+    if (
+      event.type !== "yield" ||
+      event.description.type !== "agent_prompt" ||
+      event.result.status !== "ok" ||
+      !isJsonObject(event.result.value)
+    ) {
+      return event;
+    }
+    const held = at;
+    at += 1;
+    if (held !== ordinal) {
+      return event;
+    }
+    return { ...event, result: { status: "ok", value: { ...event.result.value, text } } };
+  });
+}

@@ -2071,6 +2071,92 @@ is a different thing from an entry that ran and failed. An output read is the
 window the read itself renders, fenced long enough to hold its text, with its
 adjacent instructions pinned to that entry.
 
+A reply reads one entry's saved evidence through four reads of its own, and
+each of them answers with a page rather than with prose:
+
+```xmd
+<REPL.Entry.Source entry={22} offset={0} limit={4096} />
+<REPL.Entry.Prompt entry={22} prompt={9} field="reply" />
+<REPL.Entry.Output entry={22} />
+<REPL.Entry.Journal entry={22} offset={0} limit={20} />
+```
+
+Source is the exact source that entry was admitted with. Prompt is one saved
+agent turn's text — its reply, the request it was sent, or the complete message
+it failed with. Output is what the entry printed. Journal says where that
+evidence is: the entry's complete saved failure, how its turns ended, and a
+record for each thing it saved, in the order the file holds them. Journal
+locates and Prompt reads, which is why neither carries the other's body — a
+record states a turn's number, its kind, its status and where it was written,
+and never a reply, a request, a result payload, a checkpoint or a stack.
+
+`entry` and `prompt` are nonzero whole numbers. A positive entry number is
+immutable admission order counting from one, and a positive prompt number is a
+saved turn's own sequence plus one rather than its position in the list, so two
+turns that finished in the order their providers answered keep the numbers
+their records state and a number no turn saved refuses rather than being
+renumbered into its neighbour. Omitted and `-1` are the latest, and a further
+negative counts back from it. Each selector resolves once, when the read
+happens.
+
+Text windows count Unicode code points and default to 4096 of them; Journal
+counts records and defaults to twenty. Source and Prompt start at the
+beginning. Output's omitted offset is the last window, which is what a reader
+of output wants, and an explicit zero is the beginning, which omission cannot
+express. A negative offset counts back from what is available and clamps there,
+and a positive one past the end stays where it was asked for and answers with
+an empty window. A limit is a positive whole number with no maximum of its own,
+and what comes back is bounded by the evidence. Every page carries `previous`
+and `next`: either null, or the complete arguments of the read beside it, with
+the entry and prompt stated as the numbers they resolved to, an absolute offset,
+the limit that was asked for and the same Prompt field. A continuation followed
+after another entry has been admitted therefore reads the entry it was about.
+
+A page states the entry's status and, for a Prompt read, the turn's own
+separately. An entry is completed, failed, cancelled, running or unfinished; a
+saved turn is completed, failed or cancelled, and a turn that returned
+well-formed text and ended failed is failed. A turn that saved nothing for the
+field being read answers `text: null` with no window either side of it, which
+is a different answer from the empty string a turn that saved emptiness gives.
+Evidence the history does not hold refuses, as does a zero, fractional or
+out-of-range selector, an unknown field and a limit that is not a positive
+whole number; a refusal is that operation's outcome and the response goes on.
+
+Terminal evidence decides an entry's status even while the task that produced
+it is still unwinding. Without one, the entry this process is executing is
+running and any other is unfinished, so a cold reader of an interrupted history
+is told it is unfinished rather than that it is still going. Output is the
+retained terminal output where there is one, the text this process has observed
+for exactly that entry where there is not, and an empty window otherwise —
+nothing invents output a cold reader cannot have. These reads take the
+acknowledged head whatever position, scope or tab the screen is on, and they
+open no entry, resume none, wait for none, execute no source, reach no entry's
+provider and change nothing they read.
+
+A successful read answers with its page object. An ordinary `as` binds that
+object, an uncaptured read renders nothing, and the page goes back to the
+conversation as the read's own result either way — capturing one does not
+switch its feedback off. Only an explicit Output region is chat, so a reply
+that wants a page in front of the person composes one:
+
+```xmd
+<REPL.Entry.Prompt entry={22} prompt={9} as="turn" />
+<Output>{turn}</Output>
+```
+
+A submission's receipt names the entry that was admitted and the read that
+explains it: an entry that completed is pointed at its output, and one that
+failed or was cancelled at its Journal, because an entry that failed may have
+printed nothing at all. The number is the admitted entry's, whatever entry or
+recorded position the screen is showing.
+
+These reads are of the validated journal projection and of this process's own
+observed output, and of nothing else. They reach no provider session file, and
+the retained publication, secret and persistence protections stand in front of
+anything a page carries. A chat that already holds an output read from before
+these existed keeps it: its retained observation is still rendered as the
+window it was, and nothing re-evaluates the record to show it.
+
 One result is its own value, because one question has one answer — a binding map
 delivered alone is the map, parseable as it stands, with no heading, fence or
 envelope. Several each get a short heading naming the control that produced

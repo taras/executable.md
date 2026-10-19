@@ -555,6 +555,80 @@ describe("REPL model: the Agent conversations it projects", () => {
     expect(refused.text).toBe("");
   });
 
+  it("E3: one record per saved event, with each one's semantic outcome", function* () {
+    const events = yield* agentReferenceEvents();
+    const spelling = markers(events);
+    const model = projected(events);
+    const entry = model.entries[0];
+    if (entry === undefined) {
+      throw new Error("the agent reference journal admits an entry");
+    }
+
+    // One row per event, in append order, the admission and the root close
+    // included. A transcript is a presentation and leaves effects out; this is
+    // the file.
+    expect(entry.records).toHaveLength(events.length);
+    expect(entry.records.map((record) => record.marker)).toEqual(spelling);
+    expect(entry.records[0]).toEqual({
+      marker: spelling[0],
+      type: "import_component",
+      name: "__root__",
+      status: "ok",
+      position: undefined,
+      prompt: undefined,
+      agent: undefined,
+    });
+
+    // A saved Prompt's row carries its absolute number, which is its retained
+    // sequence plus one, and its own agent.
+    const prompts = entry.records.filter((record) => record.type === "agent_prompt");
+    expect(prompts.map((record) => record.prompt)).toEqual([1, 2, 3, 4]);
+    expect(prompts.map((record) => record.agent)).toEqual([
+      "planner",
+      "builder",
+      "planner",
+      "planner",
+    ]);
+    expect(prompts.map((record) => record.position?.line)).toEqual([6, 10, 14, 19]);
+
+    // The fourth turn failed, and its protocol wrapper says `ok`: a record is
+    // how the journal retained the turn, and the turn is what failed. Reading
+    // the wrapper would promote it into an execution that succeeded.
+    const refused = prompts[3];
+    const wrapper = events[spelling.indexOf(refused.marker)];
+    expect(wrapper.result.status).toBe("ok");
+    expect(refused.status).toBe("failed");
+    expect(prompts.slice(0, 3).map((record) => record.status)).toEqual([
+      "completed",
+      "completed",
+      "completed",
+    ]);
+
+    // The root close reports the outcome of the entry rather than the protocol
+    // status of its close, and names no prompt, agent or position.
+    const close = entry.records[entry.records.length - 1];
+    expect(close).toEqual({
+      marker: "close:root",
+      type: "close",
+      name: undefined,
+      status: "completed",
+      position: undefined,
+      prompt: undefined,
+      agent: undefined,
+    });
+
+    // Metadata and nothing else: no reply, no request, no recorded result and
+    // no retained payload travels on a row.
+    const written = JSON.stringify(entry.records);
+    expect(written).not.toContain("[draft the plan]");
+    expect(written).not.toContain("draft the plan");
+    expect(written).not.toContain("this provider has nothing to run that on");
+
+    // Detached and frozen with the rest of the reading.
+    expect(Object.isFrozen(entry.records)).toBe(true);
+    expect(reachable(entry.records).filter((member) => !Object.isFrozen(member))).toEqual([]);
+  });
+
   it("M1: groups conversations by session key and by nothing else", function* () {
     const events = yield* agentReferenceEvents();
     const model = projected(events);

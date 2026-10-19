@@ -82,6 +82,7 @@ function entryOf(source: string, over: Partial<ReplEntry> = {}): ReplEntry {
     settled: false,
     bindings: Object.freeze([]),
     turns: Object.freeze([]),
+    records: Object.freeze([]),
     ...over,
   });
 }
