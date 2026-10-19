@@ -63,7 +63,6 @@ import { IssueOperations } from "../issue/operations.ts";
 import type { IssueOperationsApi } from "../issue/operations.ts";
 import { PullRequestOperations } from "./pull-request-operations.ts";
 import type { PullRequestOperationsApi } from "./pull-request-operations.ts";
-import type { InvocationGate } from "./invocation-binding.ts";
 import Repository, { props as repositoryProps } from "./components/Repository.ts";
 import Worktree, { props as worktreeProps } from "./components/Worktree.ts";
 import GitSwitch, { props as gitSwitchProps } from "./components/GitSwitch.ts";
@@ -99,23 +98,23 @@ import {
  * Each one is the public feature Api, so every handler a document, a plugin or
  * a host composed answers exactly as it did before any of this was declared —
  * and where nothing is installed, each Api's own default refuses. No site is
- * taken because none is authenticated: a profile that retains no
- * invocation-named work has nothing for a site to name, and inventing one would
- * be a name for work nobody is doing.
+ * authenticated, because a profile that retains no invocation-named work has
+ * nothing for one to name.
  */
-const ORDINARY = {
-  push:
-    (gate: InvocationGate): GitApi["push"] =>
-    (invocation) =>
-      gate.once(() => Git.operations.push(invocation)),
-  issue: (gate: InvocationGate): IssueOperationsApi => ({
-    read: (invocation) => gate.once(() => IssueOperations.operations.read(invocation)),
-    upsert: (invocation) => gate.once(() => IssueOperations.operations.upsert(invocation)),
-  }),
-  pullRequest: (gate: InvocationGate): PullRequestOperationsApi => ({
-    read: (invocation) => gate.once(() => PullRequestOperations.operations.read(invocation)),
-    upsert: (invocation) => gate.once(() => PullRequestOperations.operations.upsert(invocation)),
-  }),
+const ORDINARY: {
+  readonly push: GitApi["push"];
+  readonly issue: IssueOperationsApi;
+  readonly pullRequest: PullRequestOperationsApi;
+} = {
+  push: (invocation) => Git.operations.push(invocation),
+  issue: {
+    read: (invocation) => IssueOperations.operations.read(invocation),
+    upsert: (invocation) => IssueOperations.operations.upsert(invocation),
+  },
+  pullRequest: {
+    read: (invocation) => PullRequestOperations.operations.read(invocation),
+    upsert: (invocation) => PullRequestOperations.operations.upsert(invocation),
+  },
 };
 
 /**

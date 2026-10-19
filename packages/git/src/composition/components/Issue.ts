@@ -34,8 +34,8 @@ import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/hos
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { COMPOSITION_ORIGIN } from "../definitions.ts";
-import { boundComponent, unboundComponent } from "../invocation-binding.ts";
-import type { BindOperations, ComponentBody, InvocationGate } from "../invocation-binding.ts";
+import { boundComponent, registeredComponent } from "../invocation-binding.ts";
+import type { BindOperations, ComponentBody } from "../invocation-binding.ts";
 import { currentIssueTracker } from "../../issue/context.ts";
 import {
   canonicalIssueTarget,
@@ -278,14 +278,12 @@ function dispatched(read: FunctionComponent, upsert: FunctionComponent): Functio
 }
 
 /** An ordinary registered default, over whichever provider the host installed. */
-export function issueRegistration(
-  operations: (gate: InvocationGate) => IssueOperationsApi,
-): ComponentRegistration {
+export function issueRegistration(operations: IssueOperationsApi): ComponentRegistration {
   return {
     ...METADATA,
     fn: dispatched(
-      unboundComponent(ISSUE_ELEMENT, operations, readBody),
-      unboundComponent(ISSUE_ELEMENT, operations, upsertBody),
+      registeredComponent(operations, readBody),
+      registeredComponent(operations, upsertBody),
     ),
   };
 }
@@ -295,10 +293,7 @@ export function issueDeclaration(bind: BindOperations<IssueOperationsApi>): Iden
   return {
     ...METADATA,
     factory: (claim: IdentityClaimant) =>
-      dispatched(
-        boundComponent(claim, { element: ISSUE_ELEMENT, bind, body: readBody }),
-        boundComponent(claim, { element: ISSUE_ELEMENT, bind, body: upsertBody }),
-      ),
+      dispatched(boundComponent(claim, bind, readBody), boundComponent(claim, bind, upsertBody)),
   };
 }
 

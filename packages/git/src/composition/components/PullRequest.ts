@@ -44,8 +44,8 @@ import { COMPOSITION_ORIGIN } from "../definitions.ts";
 import { selectedRepository } from "../context.ts";
 import { PullRequestAdmissionError } from "../errors.ts";
 import { pullRequestResultJson } from "../pull-request-records.ts";
-import { unboundComponent } from "../invocation-binding.ts";
-import type { ComponentBody, InvocationGate } from "../invocation-binding.ts";
+import { registeredComponent } from "../invocation-binding.ts";
+import type { ComponentBody } from "../invocation-binding.ts";
 
 export const PULL_REQUEST_ELEMENT = "<PullRequest>";
 
@@ -164,10 +164,7 @@ const METADATA = {
 
 /** An ordinary registered default, over whichever provider the host installed. */
 export function pullRequestRegistration(
-  operations: (gate: InvocationGate) => PullRequestOperationsApi,
+  operations: PullRequestOperationsApi,
 ): ComponentRegistration {
-  return {
-    ...METADATA,
-    fn: unboundComponent(PULL_REQUEST_ELEMENT, operations, body),
-  };
+  return { ...METADATA, fn: registeredComponent(operations, body) };
 }

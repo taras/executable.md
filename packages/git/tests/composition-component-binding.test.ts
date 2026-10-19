@@ -1,12 +1,14 @@
 /**
- * One registry, one body, and a facade that ends with its invocation.
+ * One registry, one authored body, and the invocation an owning execution
+ * authenticates for it.
  *
- * Every row here drives the actual shared components through canonical
- * execution, over the whole vocabulary registered as the Plugin registers it.
- * What differs between rows is the policy an owning execution declares
- * underneath: these are neutral constructors and fake policies, so what is
- * proven is the binding and the bodies rather than any host's retention. The
- * real native assembly is covered by the CLI and native suites.
+ * Every row drives the actual shared components through canonical execution,
+ * over the whole vocabulary registered as the Plugin registers it. What differs
+ * between rows is the policy an owning execution declares underneath: these are
+ * neutral constructors and fake policies, so what is proven is the authored
+ * behavior and the identity each invocation runs under rather than any host's
+ * retention. The real native assembly, its retention and its cancellation are
+ * covered by the CLI and native suites.
  *
  * These rows carry A1, A2 and the binding half of A5 of the component-boundary
  * repair matrix.
@@ -38,8 +40,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { COMPOSITION_REGISTRATIONS } from "../src/composition/installation.ts";
 import { pushDeclaration } from "../src/composition/components/GitPush.ts";
 import { issueDeclaration } from "../src/composition/components/Issue.ts";
-import { BoundOperationError } from "../src/composition/invocation-binding.ts";
-import type { BindOperations, InvocationGate } from "../src/composition/invocation-binding.ts";
+import type { BindOperations } from "../src/composition/invocation-binding.ts";
 // From the subpath that publishes them rather than from the source modules:
 // these are public types, and reaching them by relative path would bypass the
 // export map the partition test holds every consumer to.
@@ -70,8 +71,6 @@ interface Watched {
   readonly sites: string[];
   /** Each operation performed, in the order the bodies asked for them. */
   readonly performed: string[];
-  /** The issue facade of the most recent invocation, kept past its own life. */
-  kept?: IssueOperationsApi;
 }
 
 function watched(): Watched {
@@ -95,25 +94,19 @@ function details(url: string): IssueDetails {
  * below reaches no service, no journal and no provider. A real one is the
  * entry's, and the native suites drive that.
  */
-function fakeIssuePolicy(seen: Watched, hold = false) {
-  return (site: string, gate: InvocationGate): IssueOperationsApi => {
+function fakeIssuePolicy(seen: Watched) {
+  return (site: string): IssueOperationsApi => {
     seen.sites.push(site);
-    const operations: IssueOperationsApi = {
-      read: (invocation) =>
-        gate.once(function* (): Operation<IssueDetails> {
-          seen.performed.push(`read ${invocation.url}`);
-          return details(invocation.url);
-        }),
-      upsert: (invocation) =>
-        gate.once(function* (): Operation<IssueReference> {
-          seen.performed.push(`upsert ${invocation.target}`);
-          return reference(`${invocation.target}/issues/1`);
-        }),
+    return {
+      read: function* (invocation): Operation<IssueDetails> {
+        seen.performed.push(`read ${invocation.url}`);
+        return details(invocation.url);
+      },
+      upsert: function* (invocation): Operation<IssueReference> {
+        seen.performed.push(`upsert ${invocation.target}`);
+        return reference(`${invocation.target}/issues/1`);
+      },
     };
-    if (hold) {
-      seen.kept = operations;
-    }
-    return operations;
   };
 }
 
@@ -249,9 +242,9 @@ describe("one registry for every repository operation, and the policy an executi
   it("A1: building declarations calls no factory and initializes no policy", function* (): Operation<void> {
     let built = 0;
     const declarations = [
-      issueDeclaration((site: string, gate: InvocationGate): IssueOperationsApi => {
+      issueDeclaration((site: string): IssueOperationsApi => {
         built += 1;
-        return fakeIssuePolicy(watched())(site, gate);
+        return fakeIssuePolicy(watched())(site);
       }),
     ];
     expect(declarations).toHaveLength(1);
@@ -342,122 +335,26 @@ describe("one registry for every repository operation, and the policy an executi
     expect(new Set(seen.sites).size).toBe(2);
   });
 
-  it("A2: a facade kept past its invocation performs nothing", function* (): Operation<void> {
-    const root = yield* useRoot();
-    const seen = watched();
-
-    const ran = yield* run(
-      root,
-      [
-        `<IssueTracker url=${JSON.stringify(TRACKER)}>`,
-        `<Issue title="Filed" as="filed">described</Issue>`,
-        `</IssueTracker>`,
-        "",
-      ].join("\n"),
-      [declaring({ issue: fakeIssuePolicy(seen, true) })],
-    );
-
-    expect(ran.refusal).toBe(undefined);
-    expect(seen.performed).toEqual([`upsert ${TRACKER}`]);
-
-    const kept = seen.kept;
-    expect(kept).toBeDefined();
-    // The invocation is over, so this names nothing to perform under. Both
-    // members refuse, and the policy beneath was never reached again.
-    const refusals: unknown[] = [];
-    for (const attempt of [
-      () => kept?.read({ url: `${TRACKER}/issues/1`, provider: undefined }),
-      () => kept?.upsert({ target: TRACKER, provider: undefined, issue: ISSUE_INPUT }),
-    ]) {
-      try {
-        yield* attempt() ?? suspend();
-      } catch (error) {
-        refusals.push(error);
-      }
-    }
-    expect(refusals).toHaveLength(2);
-    for (const refusal of refusals) {
-      expect(refusal).toBeInstanceOf(BoundOperationError);
-      expect((refusal as BoundOperationError).reason).toBe("ended");
-    }
-    expect(seen.performed).toEqual([`upsert ${TRACKER}`]);
-  });
-
-  it("A2: one invocation performs one external operation", function* (): Operation<void> {
-    const root = yield* useRoot();
-    const seen = watched();
-    const second: unknown[] = [];
-
-    // A policy that performs its upsert and then asks the same facade again,
-    // which is what a duplicate delegation would look like from underneath.
-    const twice = (site: string, gate: InvocationGate): IssueOperationsApi => {
-      seen.sites.push(site);
-      return {
-        read: (invocation) =>
-          gate.once(function* (): Operation<IssueDetails> {
-            return details(invocation.url);
-          }),
-        *upsert(invocation) {
-          const first = yield* gate.once(function* (): Operation<IssueReference> {
-            seen.performed.push(`upsert ${invocation.target}`);
-            return reference(`${invocation.target}/issues/1`);
-          });
-          try {
-            yield* gate.once(function* (): Operation<IssueReference> {
-              seen.performed.push("repeated");
-              return first;
-            });
-          } catch (error) {
-            second.push(error);
-          }
-          return first;
-        },
-      };
-    };
-
-    const ran = yield* run(
-      root,
-      [
-        `<IssueTracker url=${JSON.stringify(TRACKER)}>`,
-        `<Issue title="Filed" as="filed">described</Issue>`,
-        `</IssueTracker>`,
-        "",
-      ].join("\n"),
-      [declaring({ issue: twice })],
-    );
-
-    expect(ran.refusal).toBe(undefined);
-    expect(seen.performed).toEqual([`upsert ${TRACKER}`]);
-    expect(second).toHaveLength(1);
-    expect(second[0]).toBeInstanceOf(BoundOperationError);
-    expect((second[0] as BoundOperationError).reason).toBe("spent");
-  });
-
-  it("A5: a cancelled invocation revokes its facade", function* (): Operation<void> {
+  it("A5: cancelling an invocation stops the operation it was performing", function* (): Operation<void> {
     const root = yield* useRoot();
     const seen = watched();
     const reached = withResolvers<void>();
-    const held: { kept?: IssueOperationsApi } = {};
 
-    // The upsert suspends inside the facade, and this row halts the whole
-    // execution while it is standing there.
-    const suspending = (site: string, gate: InvocationGate): IssueOperationsApi => {
+    // The upsert suspends where a slow service would, and this row halts the
+    // whole execution while it is standing there.
+    const suspending = (site: string): IssueOperationsApi => {
       seen.sites.push(site);
-      const operations: IssueOperationsApi = {
-        read: (invocation) =>
-          gate.once(function* (): Operation<IssueDetails> {
-            return details(invocation.url);
-          }),
-        upsert: (invocation) =>
-          gate.once(function* (): Operation<IssueReference> {
-            seen.performed.push(`upsert ${invocation.target}`);
-            reached.resolve();
-            yield* suspend();
-            throw new Error("a suspended upsert resumed");
-          }),
+      return {
+        read: function* (invocation): Operation<IssueDetails> {
+          return details(invocation.url);
+        },
+        upsert: function* (invocation): Operation<IssueReference> {
+          seen.performed.push(`upsert ${invocation.target}`);
+          reached.resolve();
+          yield* suspend();
+          throw new Error("a suspended upsert resumed");
+        },
       };
-      held.kept = operations;
-      return operations;
     };
 
     yield* scoped(function* (): Operation<void> {
@@ -480,32 +377,13 @@ describe("one registry for every repository operation, and the policy an executi
           throw new Error("the upsert never reached its policy");
         })(),
       ]);
+      // Joined here: the halt returns once the suspended upsert has been torn
+      // down, so what follows cannot be read before cancellation finished.
       yield* task.halt();
     });
 
+    // The upsert was entered once, never resumed and never performed again.
     expect(seen.performed).toEqual([`upsert ${TRACKER}`]);
-
-    // Nothing of that invocation survives it. Revocation was armed before the
-    // facade could be used, so a cancellation part-way through leaves a facade
-    // that performs nothing rather than one that still reaches the policy.
-    const kept = held.kept;
-    expect(kept).toBeDefined();
-    let refusal: unknown;
-    try {
-      yield* kept?.read({ url: `${TRACKER}/issues/1`, provider: undefined }) ?? suspend();
-    } catch (error) {
-      refusal = error;
-    }
-    expect(refusal).toBeInstanceOf(BoundOperationError);
-    expect((refusal as BoundOperationError).reason).toBe("ended");
-    expect(seen.performed).toEqual([`upsert ${TRACKER}`]);
+    expect(seen.sites).toHaveLength(1);
   });
-});
-
-/** The issue one refused attempt would have filed, had it been performed. */
-const ISSUE_INPUT = Object.freeze({
-  title: "refused",
-  description: "refused",
-  tags: Object.freeze([]),
-  assignee: null,
 });

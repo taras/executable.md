@@ -5212,27 +5212,25 @@ projects what came back. None of them receives an authenticator, an owner, a
 site, native access, a policy object, a record codec or any publication state,
 and none of them names a journal record.
 
-Between the component and the host is one feature-owned binding. For a host that
+Between the component and the host is one feature-owned handoff. For a host that
 retains work named after an invocation it authenticates the actual invocation
 canonical core issued — once, in the engine frame the component was entered in,
 before the body projects any content, because a projecting ancestor is
-deliberately ineligible for one — then builds that invocation's own operation
-facade from the host's policy and runs the one body against it. The site it
-authenticated is private to the policy it is handed to: no facade method answers
-with it, no public request carries it, and no Context holds it.
+deliberately ineligible for one — hands that site to the host's own policy, and
+runs the one body against the operations the policy answers with. The site is
+private to that policy: no operation answers with it, no public request carries
+it, and no Context holds it.
 
-Revocation is armed before the facade can be used and runs on success, failure
-and cancellation alike, so an invocation halted while its facade is being built
-leaves nothing usable behind. A facade kept past its own invocation performs
-nothing, and one authored element performs one external operation: a second call
-through the same facade is refused rather than repeating work this invocation
-has already asked for.
-
-A host that retains nothing named after an invocation uses the same bodies over
-the same kind of facade with no identity authenticated, because there is nothing
-for one to name. That is what makes an ordinary run, a workflow run, a
+A host that retains nothing named after an invocation runs the same bodies over
+the public feature operations, with no identity authenticated, because there is
+nothing for one to name. That is what makes an ordinary run, a workflow run, a
 provider-absent runtime and a REPL entry four policies rather than four
 components.
+
+The lifetime of what a policy hands over is the ordinary one: an operation runs
+in the scope of the invocation that asked for it, and cancellation, teardown and
+the joined cleanup of any attempt beneath it are owned by that scope rather than
+by a guard around the handoff.
 
 #### Command declaration ownership
 

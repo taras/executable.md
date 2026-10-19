@@ -31,8 +31,8 @@ import { pullRequestReadResultJson } from "../pull-request-read-records.ts";
 import { canonicalPullRequestUrl, pullRequestProviderName } from "../pull-request-target.ts";
 import type { PullRequestReadKind } from "../pull-request-read-records.ts";
 import type { PullRequestOperationsApi } from "../pull-request-operations.ts";
-import { unboundComponent } from "../invocation-binding.ts";
-import type { ComponentBody, InvocationGate } from "../invocation-binding.ts";
+import { registeredComponent } from "../invocation-binding.ts";
+import type { ComponentBody } from "../invocation-binding.ts";
 
 export const REVIEWS_ELEMENT = "<PullRequest.Reviews>";
 export const COMMENTS_ELEMENT = "<PullRequest.Comments>";
@@ -284,14 +284,12 @@ function metadata(kind: PullRequestReadKind) {
 /** An ordinary registered default, over whichever provider the host installed. */
 export function pullRequestReadRegistration(
   kind: PullRequestReadKind,
-  operations: (gate: InvocationGate) => PullRequestOperationsApi,
+  operations: PullRequestOperationsApi,
 ): ComponentRegistration {
   const element = ELEMENTS[kind];
   return {
     ...metadata(kind),
-    fn: formDispatcher(
-      declare(unboundComponent(element, operations, read(kind, element)), element),
-    ),
+    fn: formDispatcher(declare(registeredComponent(operations, read(kind, element)), element)),
   };
 }
 

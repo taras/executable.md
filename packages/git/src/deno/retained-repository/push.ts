@@ -185,16 +185,14 @@ export function replPushPolicy(
   owner: string,
   access: ReplPushAccess,
 ): BindOperations<GitApi["push"]> {
-  return (site: string, gate) => (request: GitPushInvocation) =>
-    gate.once(() =>
-      publish({
-        owner,
-        site,
-        access,
-        repository: request.repository,
-        workingDirectory: request.workingDirectory,
-      }),
-    );
+  return (site: string) => (request: GitPushInvocation) =>
+    publish({
+      owner,
+      site,
+      access,
+      repository: request.repository,
+      workingDirectory: request.workingDirectory,
+    });
 }
 
 interface Invocation {

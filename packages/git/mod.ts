@@ -239,13 +239,6 @@ export {
   compositionDocumentation,
   useCompositionComponents,
 } from "./src/composition/installation.ts";
-export { BoundOperationError } from "./src/composition/invocation-binding.ts";
-export type {
-  BindOperations,
-  ComponentBody,
-  FacadeRefusal,
-  InvocationGate,
-} from "./src/composition/invocation-binding.ts";
 export type {
   IssueDetails,
   IssueInput,

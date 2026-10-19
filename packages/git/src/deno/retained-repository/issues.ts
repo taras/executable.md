@@ -151,17 +151,15 @@ export function useEntryIssueTransport(options: GitHubIssuesOptions): Operation<
  * nothing about which attempt this is.
  */
 export function replIssuePolicy(owner: string): BindOperations<IssueOperationsApi> {
-  return (site: string, gate) => ({
+  return (site: string) => ({
     read: (invocation: IssueReadInvocation) =>
-      gate.once(() => readOwnedIssue({ owner, site, request: invocation }, liveRead(invocation))),
+      readOwnedIssue({ owner, site, request: invocation }, liveRead(invocation)),
     upsert: (invocation: IssueUpsertInvocation) =>
-      gate.once(() =>
-        upsertOwnedIssue(
-          { owner, site, request: invocation },
-          liveUpsert(
-            invocation,
-            issueIdempotencyKey({ runId: owner, expansionId: site }, "upsert", invocation.target),
-          ),
+      upsertOwnedIssue(
+        { owner, site, request: invocation },
+        liveUpsert(
+          invocation,
+          issueIdempotencyKey({ runId: owner, expansionId: site }, "upsert", invocation.target),
         ),
       ),
   });

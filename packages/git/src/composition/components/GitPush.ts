@@ -24,8 +24,8 @@ import type { GitApi } from "../git-api.ts";
 import { COMPOSITION_ORIGIN } from "../definitions.ts";
 import { selectedRepository } from "../context.ts";
 import { GitOperationAdmissionError, GitOperationError } from "../errors.ts";
-import { boundComponent, unboundComponent } from "../invocation-binding.ts";
-import type { BindOperations, ComponentBody, InvocationGate } from "../invocation-binding.ts";
+import { boundComponent, registeredComponent } from "../invocation-binding.ts";
+import type { BindOperations, ComponentBody } from "../invocation-binding.ts";
 
 export const PUSH = "<Git.Push>";
 
@@ -85,17 +85,14 @@ function dispatched(fn: FunctionComponent): FunctionComponent {
 }
 
 /** An ordinary registered default, over whichever provider the host installed. */
-export function pushRegistration(
-  operations: (gate: InvocationGate) => GitApi["push"],
-): ComponentRegistration {
-  return { ...METADATA, fn: dispatched(unboundComponent(PUSH, operations, body)) };
+export function pushRegistration(push: GitApi["push"]): ComponentRegistration {
+  return { ...METADATA, fn: dispatched(registeredComponent(push, body)) };
 }
 
 /** A declaration, for an execution that owns this operation's policy. */
 export function pushDeclaration(bind: BindOperations<GitApi["push"]>): IdentityComponent {
   return {
     ...METADATA,
-    factory: (claim: IdentityClaimant) =>
-      dispatched(boundComponent(claim, { element: PUSH, bind, body })),
+    factory: (claim: IdentityClaimant) => dispatched(boundComponent(claim, bind, body)),
   };
 }
