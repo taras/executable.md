@@ -1,70 +1,230 @@
-name: Measure test weights
+name: 948 GO5 process-filesystem diagnostic
 
-# Dispatch only. Weights are repository data, not a build product: they change
-# when someone decides to remeasure, and a workflow that refreshed them on push
-# would make every unrelated commit a silent remeasurement.
-#
-# GitHub accepts a dispatch against a branch only once the workflow file exists
-# on the default branch, so this hook merges before anything consumes what it
-# produces.
 on:
   workflow_dispatch:
 
-# Read-only, and nothing here commits or pushes. The measurement's product is an
-# artifact a human downloads and commits deliberately, which is what keeps the
-# provenance in the file honest about which run produced it.
 permissions:
   contents: read
 
 jobs:
-  measure:
+  diagnostic:
     runs-on: ubuntu-latest
-    # Every applicable file is run alone under all three runtimes, so this job
-    # is far longer than any suite: it pays a process start per file per
-    # runtime, which is exactly the cost a shard will pay.
-    timeout-minutes: 180
+    timeout-minutes: 15
+    env:
+      DIAG_PRODUCT_SHA: 7671540b18273940cd231d8ff301c1371b9bf905
+      DIAG_PRODUCT_TREE: c15896298fb8d3485d32932bb1955f34303c6083
+      DIAG_WORKFLOW_REF: ${{ github.workflow_ref }}
+      DIAG_WORKFLOW_SHA: ${{ github.workflow_sha }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Create invocation-owned evidence before preparation
+        id: evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/948-go5-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir "$evidence"
+          export DIAG_EVIDENCE="$evidence"
+          export DIAG_START_EPOCH="$(date +%s)"
+          printf 'DIAG_EVIDENCE=%s\nDIAG_START_EPOCH=%s\n' "$DIAG_EVIDENCE" "$DIAG_START_EPOCH" >> "$GITHUB_ENV"
+          python3 - <<'PYINIT'
+          import json, os, pathlib, time
+          p = pathlib.Path(os.environ['DIAG_EVIDENCE'])
+          keys = ['GITHUB_REPOSITORY', 'GITHUB_SERVER_URL', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT',
+                  'GITHUB_SHA', 'GITHUB_REF', 'GITHUB_WORKFLOW', 'DIAG_WORKFLOW_REF', 'DIAG_WORKFLOW_SHA',
+                  'DIAG_PRODUCT_SHA', 'DIAG_PRODUCT_TREE', 'RUNNER_NAME', 'RUNNER_OS', 'RUNNER_ARCH',
+                  'ImageOS', 'ImageVersion', 'DIAG_START_EPOCH']
+          context = {k: os.environ.get(k) for k in keys}
+          context['run_url'] = f"{context['GITHUB_SERVER_URL']}/{context['GITHUB_REPOSITORY']}/actions/runs/{context['GITHUB_RUN_ID']}"
+          context['budget_origin'] = 'first evidence step; 60s additional scheduling margin; hard runner loss can censor evidence'
+          (p / 'context.json').write_text(json.dumps(context, indent=2) + '\n')
+          (p / 'stage-manifest.json').write_text(json.dumps({'created_epoch': time.time(), 'setup': 'not_started', 'trace': 'not_started', 'first_failure': None}, indent=2) + '\n')
+          PYINIT
 
-      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+      - id: checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: 7671540b18273940cd231d8ff301c1371b9bf905
+          persist-credentials: false
+
+      - id: deno
+        uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb
         with:
           deno-version: v2.9.5
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - id: node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
 
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - id: pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - id: bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.4.0
 
-      # One preparation, in the repository's load-bearing order: `deno install`,
-      # then `pnpm install` beside it, then the browser bundle. The measured
-      # commands resolve through the same tree the CI suites resolve through, so
-      # a weight is not measuring a different module layout.
-      - name: Prepare the checkout
-        run: deno task setup
-
-      # The versions are read from the executables this job just installed, not
-      # from the pins above: a pin says what was asked for and these say what
-      # ran.
-      - name: Measure every applicable test file under every runtime
-        env:
-          WEIGHTS_COMMIT: ${{ github.sha }}
-          WEIGHTS_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          WEIGHTS_ATTEMPT: ${{ github.run_attempt }}
-          WEIGHTS_RUNNER: ubuntu-latest
+      - name: Validate existing tools, prepare once, and trace GO5 once
+        id: diagnose
+        shell: bash
         run: |
-          set -euo pipefail
-          WEIGHTS_DENO="$(deno --version | head -1)" \
-          WEIGHTS_NODE="$(node --version)" \
-          WEIGHTS_BUN="$(bun --version)" \
-            deno task weights:measure
+          python3 - <<'PYDIAG'
+          import json, os, pathlib, platform, re, shutil, subprocess, sys, time
+          p = pathlib.Path(os.environ['DIAG_EVIDENCE'])
+          cwd = os.environ['GITHUB_WORKSPACE']
+          m = json.loads((p / 'stage-manifest.json').read_text())
+          m['cwd'] = cwd
+          m['commands'] = []
+          def save():
+              (p / 'stage-manifest.json').write_text(json.dumps(m, indent=2) + '\n')
+          def fail(stage, reason, code=1):
+              if m['first_failure'] is None:
+                  m['first_failure'] = {'stage': stage, 'reason': reason, 'epoch': time.time(), 'exit': code}
+              save()
+              raise SystemExit(code)
+          def run(name, argv):
+              record = {'name': name, 'argv': argv, 'cwd': cwd, 'start_epoch': time.time()}
+              m['commands'].append(record)
+              save()
+              with (p / (name + '.stdout')).open('xb') as out, (p / (name + '.stderr')).open('xb') as err:
+                  result = subprocess.run(argv, cwd=cwd, stdout=out, stderr=err)
+              record.update(end_epoch=time.time(), numeric_exit=result.returncode)
+              save()
+              return result.returncode, (p / (name + '.stdout')).read_text(errors='replace')
+          def admit(stage, hard_seconds):
+              elapsed = time.time() - int(os.environ['DIAG_START_EPOCH'])
+              m[stage + '_budget'] = {'elapsed_seconds': elapsed, 'hard_seconds': hard_seconds,
+                                      'evidence_reserve_seconds': 180, 'scheduling_margin_seconds': 60,
+                                      'admitted': elapsed + hard_seconds + 180 <= 840}
+              save()
+              if not m[stage + '_budget']['admitted']:
+                  fail(stage, 'Insufficient fifteen-minute budget with evidence reserve; no launch')
+          try:
+              m['host'] = {'system': platform.system(), 'machine': platform.machine(), 'kernel': platform.release()}
+              m['executables'] = {name: shutil.which(name) for name in ['git', 'deno', 'node', 'pnpm', 'bun', 'strace', 'timeout', 'bash']}
+              save()
+              if m['host']['system'] != 'Linux' or any(v is None for v in m['executables'].values()):
+                  fail('capabilities', 'Required existing Linux tool absent; no installation or fallback')
+              versions = {}
+              for name, argv in [('git', ['git', '--version']), ('deno', ['deno', '--version']),
+                                 ('node', ['node', '--version']), ('pnpm', ['pnpm', '--version']),
+                                 ('bun', ['bun', '--version']), ('strace', ['strace', '--version']),
+                                 ('strace-help', ['strace', '--help']), ('kernel', ['uname', '-a'])]:
+                  code, output = run('identity-' + name, argv)
+                  versions[name] = output
+                  if code != 0:
+                      fail('capabilities', 'First identity/feature command failed: ' + name, code)
+              m['versions'] = versions
+              match = re.search(r'version\s+(\d+)\.(\d+)', versions['strace'])
+              supported = match is not None and tuple(map(int, match.groups())) >= (6, 8)
+              if (versions['git'].strip() != 'git version 2.55.0'
+                  or not re.match(r'^deno 2\.9\.5(?:\s|$)', versions['deno'])
+                  or not versions['node'].strip().startswith('v22.')
+                  or versions['bun'].strip() != '1.4.0'
+                  or not supported or '--kill-on-exit' not in versions['strace-help']):
+                  fail('capabilities', 'Exact pins or existing strace6.8+/EXITKILL option absent; STOP, no version change')
+              m['strace_features'] = {'validated_floor': '6.8', 'kill_on_exit_in_help': True,
+                  'flags_primary_source': 'strace/strace v6.8 doc/strace.1.in and src/strace.c',
+                  'kernel_EXITKILL': 'strace validates on the single real launch; refusal stops before test, no dummy trace'}
+              code, identity = run('checkout-identity', ['git', '-C', cwd, 'rev-parse', 'HEAD', 'HEAD^{tree}'])
+              if code != 0 or identity.splitlines() != [os.environ['DIAG_PRODUCT_SHA'], os.environ['DIAG_PRODUCT_TREE']]:
+                  fail('checkout', 'Exact historical product checkout/tree differs')
+              run('checkout-status-before', ['git', '-C', cwd, 'status', '--porcelain=v1'])
+              admit('setup', 420)
+              m['setup'] = 'started_once'
+              save()
+              code, _ = run('setup-first', ['timeout', '--signal=TERM', '--kill-after=10s', '410s', 'deno', 'task', 'setup'])
+              m['setup'] = {'foreground_numeric_exit': code, 'term_after_seconds': 410, 'hard_bound_seconds': 420,
+                            'canonical_argv': ['deno', 'task', 'setup'], 'interrupted': code in (124, 137),
+                            'canonical_exit': None if code in (124, 137) else code}
+              save()
+              if code != 0:
+                  fail('setup', 'First canonical setup failed/interrupted; test skipped, no retry', code)
+              run('checkout-status-after-setup', ['git', '-C', cwd, 'status', '--porcelain=v1'])
+              admit('trace', 190)
+              test = ['deno', 'test', '--allow-all', '--frozen',
+                      '--filter=/^GO5 — pages are bounded, complete, and about one observation$/',
+                      'packages/git/tests/git-observations.test.ts']
+              tracer = ['strace', '-ff', '-ttt', '-T', '-yy', '-s', '4096', '-I', '2', '--kill-on-exit',
+                        '-e', 'trace=all', '-o', str(p / 'trace'), '--', 'bash', '-c',
+                        'exec "$@" > "$DIAG_EVIDENCE/test.stdout" 2> "$DIAG_EVIDENCE/test.stderr"', 'diagnostic-deno', *test]
+              outer = ['timeout', '--signal=TERM', '--kill-after=10s', '180s', 'bash', '-c',
+                       'set +e; "$@" > "$DIAG_EVIDENCE/tracer.stdout" 2> "$DIAG_EVIDENCE/tracer.stderr"; status=$?; printf "%s\\n" "$status" > "$DIAG_EVIDENCE/tracer.exit"; exit "$status"',
+                       'diagnostic-strace', *tracer]
+              m['trace'] = {'state': 'started_once', 'test_argv': test, 'tracer_argv': tracer, 'outer_argv': outer,
+                            'scheduled_static_selection': 'one GO5 suite / three direct cases; actual completion only from raw test/trace',
+                            'test_numeric_exit': None, 'tracer_numeric_exit': None, 'timeout_numeric_exit': None}
+              save()
+              code, _ = run('trace-outer-first', outer)
+              m['trace']['timeout_numeric_exit'] = code
+              m['trace']['interrupted'] = code in (124, 137)
+              m['trace']['tracer_numeric_exit'] = int((p / 'tracer.exit').read_text().strip()) if (p / 'tracer.exit').exists() else None
+              m['trace']['foreground_tracer_wait_returned'] = (p / 'tracer.exit').exists() and code not in (124, 137)
+              m['trace']['completion_limits'] = 'Normal foreground strace waits until no tracees. Raw lineage/terminal records still require review. EXITKILL interruption is containment, never normal teardown proof.'
+              save()
+              if code != 0:
+                  fail('trace', 'Single trace/test failed or interrupted; preserve first evidence, no retry', code)
+          except BaseException as error:
+              if not isinstance(error, SystemExit) and m['first_failure'] is None:
+                  m['first_failure'] = {'stage': 'diagnostic', 'reason': repr(error), 'epoch': time.time()}
+              raise
+          finally:
+              m['diagnostic_step_end_epoch'] = time.time()
+              save()
+          PYDIAG
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - name: Preserve statuses, observed native exits and artifact manifest
+        id: finalize
+        if: always()
+        shell: bash
+        env:
+          DIAG_STEPS_JSON: ${{ toJSON(steps) }}
+        run: |
+          python3 - <<'PYFINAL'
+          import hashlib, json, os, pathlib, re, time
+          p = pathlib.Path(os.environ['DIAG_EVIDENCE'])
+          (p / 'actions-step-outcomes.json').write_text(os.environ['DIAG_STEPS_JSON'] + '\n')
+          terminals = {}
+          candidates = []
+          for f in sorted(p.glob('trace.*')):
+              pid = f.name.removeprefix('trace.')
+              for line in f.open(errors='replace'):
+                  if 'execve' in line and '"test"' in line and '"--allow-all"' in line and '= 0' in line:
+                      candidates.append({'pid': pid, 'exec_line': line.rstrip()})
+                  match = re.search(r'\+\+\+ exited with (\d+) \+\+\+', line)
+                  killed = re.search(r'\+\+\+ killed by (SIG\w+)', line)
+                  if match or killed:
+                      terminals[pid] = {'numeric_exit': int(match.group(1)) if match else None,
+                                        'signal': killed.group(1) if killed else None, 'raw_line': line.rstrip()}
+          native = {'observed_deno_exec_candidates': candidates, 'observed_tracee_terminal_records': terminals,
+                    'deno_native_exit': terminals.get(candidates[0]['pid']) if len(candidates) == 1 else None,
+                    'limits': 'No inferred child status. Missing records are unknown. Complete descendant/lifetime attribution requires full trace review; interrupted EXITKILL is not normal completion.'}
+          (p / 'observed-native-exits.json').write_text(json.dumps(native, indent=2) + '\n')
+          stage = json.loads((p / 'stage-manifest.json').read_text())
+          if isinstance(stage.get('trace'), dict):
+              observed = native['deno_native_exit']
+              stage['trace']['test_numeric_exit'] = observed['numeric_exit'] if observed else None
+              stage['trace']['test_signal'] = observed['signal'] if observed else None
+              stage['trace']['test_exit_source'] = 'observed-native-exits.json; null if unobserved or ambiguous'
+              (p / 'stage-manifest.json').write_text(json.dumps(stage, indent=2) + '\n')
+          selected = []
+          if (p / 'test.stdout').exists():
+              selected = [line for line in (p / 'test.stdout').read_text(errors='replace').splitlines()
+                          if any(s in line for s in ['GO5', 'defaults to 100 records', 'pages changes at a limit', 'windows a patch', 'test result:'])]
+          (p / 'observed-test-outcome-lines.json').write_text(json.dumps({'raw_source': 'test.stdout', 'lines': selected,
+              'limits': 'Scheduled three cases is not a claim that all ran/completed; full raw output remains authoritative.'}, indent=2) + '\n')
+          (p / 'evidence-limits.txt').write_text('Hard job timeout, forced cancellation or runner loss can censor raw output/native exits/finalization/upload. Artifact upload outcome is separate from the first diagnostic failure. No rerun follows.\n')
+          files = {str(f.relative_to(p)): {'bytes': f.stat().st_size, 'sha256': hashlib.sha256(f.read_bytes()).hexdigest()}
+                   for f in sorted(p.rglob('*')) if f.is_file() and f.name != 'artifact-manifest.json'}
+          (p / 'artifact-manifest.json').write_text(json.dumps({'created_epoch': time.time(), 'files': files}, indent=2) + '\n')
+          PYFINAL
+
+      - name: Upload complete first diagnostic evidence
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: test-weights
-          path: test-weights.json
+          name: 948-go5-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ env.DIAG_EVIDENCE }}/
           if-no-files-found: error
+          retention-days: 14
