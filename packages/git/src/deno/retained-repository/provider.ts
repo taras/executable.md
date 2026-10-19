@@ -201,12 +201,17 @@ export function* replRepositoryInstallation(
     },
   });
 
-  // The two operations this entry retains, and only those. Every name this
+  // The two names this entry declares, and only those. Every name this
   // vocabulary has is already registered in the command's scope; what an entry
   // adds here is the policy it owns, attached to those same two bodies from
-  // inside its own execution. `<PullRequest>`, its three reads and everything
-  // local keep the registered defaults, because this entry retains nothing of
-  // them to answer with.
+  // inside its own execution.
+  //
+  // Retaining an operation is not by itself a reason to declare its name. This
+  // entry retains the pages its four Git reads answer with and the file work
+  // beneath them too, and both are middleware under the component rather than a
+  // policy named after an invocation — so they keep the registered default and
+  // appear nowhere here. These two need the invocation: a durable boundary that
+  // has to enclose the public chain cannot be installed inside it.
   const components: readonly IdentityComponent[] = [
     pushDeclaration(replPushPolicy(owner, () => (usable ? held.entry : undefined))),
     issueDeclaration(replIssuePolicy(owner)),

@@ -5230,9 +5230,12 @@ argument, and that is `Git.Push` and `Issue`. A workflow run retains
 reconciliation beneath it, each read as policy on `PullRequestReadExecution` —
 but it installs that retention under their feature Api instead of owning a
 boundary over it, and no REPL entry owns one either, so those four ask their Api
-directly as any other component does. That is what makes an ordinary run, a
-workflow run, a provider-absent runtime and a REPL entry four policies rather
-than four components.
+directly as any other component does. A REPL entry retains the four Git reads
+the same way — `GitQuery` middleware at its own implementation slot — which is
+what lets those four stay ordinary registrations under a host that retains every
+page they answer with. That is what makes an ordinary run, a workflow run, a
+provider-absent runtime and a REPL entry four policies rather than four
+components.
 
 The lifetime of what a policy hands over is the ordinary one: an operation runs
 in the scope of the invocation that asked for it, and cancellation, teardown and

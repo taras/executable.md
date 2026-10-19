@@ -2,12 +2,12 @@
  * The sixteen repository-composition components, declared once for every host.
  *
  * Repository, Worktree, the four Git operations, the four Git reads,
- * PullRequest and its three evidence reads, IssueTracker and Issue are
- * ordinary registered defaults — not
- * reserved and not structural — so a repository-local component may shadow one
- * for its own scope. `<Dir>` is not among them: canonical core reserves that
- * name (`core/src/components/fixed-filesystem.ts`), and a document reaches it
- * with or without this package.
+ * PullRequest and its three evidence reads, IssueTracker and Issue are ordinary
+ * registered defaults — not reserved and not structural — so a
+ * repository-local component may shadow one for its own scope. `<Dir>` is not
+ * among them: canonical core reserves that name
+ * (`core/src/components/fixed-filesystem.ts`), and a document reaches it with
+ * or without this package.
  *
  * ## One registry, and the policy an execution attaches underneath it
  *

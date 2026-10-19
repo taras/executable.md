@@ -220,13 +220,13 @@ describe("one registry for every repository operation, and the policy an executi
     }
   });
 
-  it("A1: one registry carries all twelve names, the six operations included", function* (): Operation<void> {
+  it("A1: one registry carries all sixteen names, the six operations included", function* (): Operation<void> {
     // There is no second catalog and no reduced one. Every command that carries
-    // this vocabulary registers the same twelve, which is what says the names
+    // this vocabulary registers the same sixteen, which is what says the names
     // exist — to a run, to validation and to `xmd syntax` alike.
     const registered = COMPOSITION_REGISTRATIONS.map((entry) => entry.name);
-    expect(registered).toHaveLength(12);
-    expect(new Set(registered).size).toBe(12);
+    expect(registered).toHaveLength(16);
+    expect(new Set(registered).size).toBe(16);
     for (const name of OPERATIONS) {
       expect(registered).toContain(name);
     }
