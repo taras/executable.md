@@ -49,7 +49,8 @@
     "typescript": "npm:typescript@^5.0.0",
     "unist-util-select": "npm:unist-util-select@^5",
     "zod": "npm:zod@^4.3.6",
-    "mdast-util-to-string": "npm:mdast-util-to-string@^4"
+    "mdast-util-to-string": "npm:mdast-util-to-string@^4",
+    "yq.rs": "npm:yq.rs@0.1.4"
   },
   "tasks": {
     "xmd": "deno run --allow-all packages/cli/src/deno.ts",
