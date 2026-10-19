@@ -3062,11 +3062,24 @@ Markdown or TypeScript component of any of those names is chosen ahead of them,
 for its own scope alone. `Dir` is a separate protected core component and is
 available without the Git Plugin.
 
-They are one array declared by the bundled Git Plugin and read wherever its
-profile is assembled: an ordinary document execution, `xmd syntax`, `xmd plan`'s
-validation and generation, and a workflow action that executes a document. A
-Workspace attachment installs that run's providers and durable state and
-declares none of them.
+They are one declaration source, read wherever the bundled Git Plugin's profile
+is assembled: an ordinary document execution, `xmd syntax`, `xmd plan`'s
+validation and generation, and a workflow action that executes a document.
+
+Six of them reach something no local transaction encloses — `Git.Push`,
+`PullRequest`, its three evidence reads and `Issue` — and each has exactly one
+implementation, which asks a semantic feature operation for its work and
+receives nothing else. Every command that carries this vocabulary registers all
+sixteen, `repl` included: that registry is what says which names exist, and it is
+what a run, `xmd syntax`, `xmd plan` and a REPL entry's preflight all read. An
+execution that owns a retained boundary over one of those six operations,
+authenticated per invocation, declares that same name again in its own scope
+with its own policy under it, where a nearer declaration shadows the registered
+default. The names, props, forms, return contracts, origins and prose are the
+same either way, and a repository-local component of one of those names is still
+chosen ahead of the default. A Workspace attachment installs that run's
+providers and durable state — the retention its pull-request lifecycle puts
+beneath the feature operation among them — and declares none of them.
 Registering them installs no provider, discovers no repository, acquires no
 lock, spawns no Git and reads no credential — describing an environment mints
 nothing. What each name *does* is decided by whichever repository provider the
@@ -10441,11 +10454,12 @@ own: the execution and the entry's admission-order position, derived by the host
 that opened the session and reaching the component as a trusted closure rather
 than as a prop, a Context value, a tracker or a middleware answer. The authored
 site inside it is the identity canonical core minted where it selected that
-implementation. The `<Issue>` and the `<Git.Push />` an entry runs are ordinary
-shadowable registrations of names the Plugin already declares, so a repository
-component of either name keeps its ordinary precedence and obtains no identity
-of the entry's — and a direct `Git.operations.push(...)` outside the trusted
-invocation reaches the ordinary missing-provider refusal.
+implementation. The `<Issue>` and the `<Git.Push />` an entry runs are the same
+shared components every other host runs, declared to this execution with the
+entry's policy beneath them, so a repository component of either name keeps its
+ordinary precedence and obtains no identity of the entry's — and a direct
+`Git.operations.push(...)` outside that invocation reaches the ordinary
+missing-provider refusal.
 
 Node and Bun install none of them. They register the same declarations (§5.3), and
 every repository operation there reports an absent provider before a lock, a

@@ -2,89 +2,48 @@
  * One REPL entry's issues: what the entry executing right now may file and read.
  *
  * `provider.ts` beside this answers the same question for files and managed
- * checkouts. This one is smaller and differs in what it reaches: an issue lives
- * at a service rather than in a checkout, so there is no discovery, no lease and
- * no managed root here at all — just the GitHub adapter this platform can talk
- * to, and the durable envelope that makes one entry's issue work answerable
- * again after the person walks away from it.
+ * checkouts. This one differs in what it reaches: an issue lives at a service
+ * rather than in a checkout, so there is no discovery, no lease and no managed
+ * root here at all — just the GitHub adapter this platform can talk to, and the
+ * shared durable envelope in `issue/owned.ts` that makes one entry's issue work
+ * answerable again after the person walks away from it.
  *
- * ## What the entry owns, and what it cannot be told
- *
- * An entry's issue work is retained under an owner the CLI derives from the
- * execution and the entry key, and each invocation inside it is named by the
- * identity canonical core minted where it selected this exact implementation.
- * The factory closes over the owner and core delivers the identity
- * authenticator, so neither
- * arrives through a prop, a tracker, a Context, a middleware answer or a
- * registry: a party that could name either could file an issue under somebody
- * else's entry, or read back the result of one.
- *
- * ## One envelope, with live composition inside it
- *
- * The trusted body owns the one durable boundary. Inside a live attempt it
- * composes `IssueOperations` — so a document's own middleware still answers,
- * transforms, refuses and delegates exactly as it does anywhere else — over a
- * transport-facing default of its own that reaches `IssueApi` and adds no
- * second envelope. A completed replay invokes none of that: no middleware, no
- * transport, no configuration and no credential.
- *
- * The fallback is installed in a scope of the attempt's own and closes over that
- * attempt's idempotency key, so two concurrent `<Issue>` elements each dispatch
- * through their own and neither can present the other's key. Its lifetime ends
- * when the attempt's live operation returns, which is before the envelope
- * publishes anything.
- *
- * ## Installing it reaches nothing
- *
- * No configuration, no token, no network, no Git session, no ambient discovery,
- * no checkout lease and no managed root. The adapter reads what this deployment
- * authorized when an invoked request turns out to be its own, so an entry that
- * writes no `<Issue>` reads neither variable and obtains no credential, and a
- * passive view — a settled history, a frozen position — initializes nothing.
+ * Installing it reaches nothing: no configuration, no token, no network, no Git
+ * session, no ambient discovery, no checkout lease and no managed root. The
+ * adapter reads what this deployment authorized when an invoked request turns
+ * out to be its own, so an entry that writes no `<Issue>` obtains no credential,
+ * and a passive view — a settled history, a frozen position — initializes
+ * nothing.
  */
-
 import { scoped } from "effection";
 import type { Operation } from "effection";
-import { documented, formDispatcher } from "@executablemd/core";
-import type { ComponentInvocation, FunctionComponent } from "@executablemd/core";
-import type {
-  ExecutionInstallation,
-  IdentityClaimant,
-  IdentityComponent,
-  JournalAdmission,
-} from "@executablemd/core/host";
+import type { ExecutionInstallation, JournalAdmission } from "@executablemd/core/host";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { StaleInputError } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
-import { COMPOSITION_ORIGIN } from "../../composition/definitions.ts";
-import {
-  documentation as issueDocumentation,
-  issueMode,
-  issueReadBinding,
-  issueReadRequest,
-  issueUpsertRequest,
-  props as issueProps,
-  returns as issueReturns,
-} from "../../composition/components/Issue.ts";
-import { IssueApi } from "../../issue/api.ts";
-import type { IssueDetails, IssueReference } from "../../issue/api.ts";
+import { issueDeclaration } from "../../composition/components/Issue.ts";
+import type { BindOperations } from "../../composition/invocation-binding.ts";
 import { IssueOperations } from "../../issue/operations.ts";
 import type {
   IssueOperationsApi,
   IssueReadInvocation,
   IssueUpsertInvocation,
 } from "../../issue/operations.ts";
-import { IssueProtocolError } from "../../issue/errors.ts";
 import { ISSUE_EFFECT } from "../../issue/effect-type.ts";
 import {
-  issueIdempotencyKey,
   issueRequestFingerprint,
   parseIssueDetails,
   parseIssueRecord,
   parseIssueRequest,
 } from "../../issue/records.ts";
 import type { IssueRequest } from "../../issue/records.ts";
-import { readOwnedIssue, upsertOwnedIssue } from "../../issue/owned.ts";
+import {
+  liveIssueRead,
+  liveIssueUpsert,
+  ownedUpsertKey,
+  readOwnedIssue,
+  upsertOwnedIssue,
+} from "../../issue/owned.ts";
 import { useGitHubIssues } from "../issue/github.ts";
 import type { GitHubIssuesOptions } from "../issue/github.ts";
 import { denoGitHubSource } from "../composition/github-host.ts";
@@ -131,163 +90,78 @@ export function replIssueInstallation(
   options: GitHubIssuesOptions = {},
 ): ExecutionInstallation {
   return {
-    components: [ownedIssueComponent(owner)],
-    admissions: [ownedIssueAdmission(owner)],
-    *install(): Operation<void> {
-      // The platform's transport, handed to an adapter that knows the protocol
-      // and not the platform. Naming it here is not building one: it is a
-      // factory the adapter calls if and when a request turns out to be its own.
-      yield* useGitHubIssues({ host: denoGitHubSource, ...options });
-    },
+    // The one operation this entry retains. Every other name stays the
+    // registered default, so `<Git.Push />` and `<PullRequest>` in an entry
+    // whose host recorded only issues reach their own unchanged
+    // missing-provider refusals.
+    components: [issueDeclaration(replIssuePolicy(owner))],
+    admissions: [replIssueAdmission(owner)],
+    install: () => useEntryIssueTransport(options),
   };
 }
 
 /**
- * The entry's own `Issue`, declared as an ordinary shadowable component.
+ * The platform's transport, handed to an adapter that knows the protocol and
+ * not the platform.
  *
- * It shadows the inherited bundled default for this execution's scope without
- * registering two defaults in one scope and without touching that inherited
- * registration, so a repository-local `<Issue>` keeps its ordinary precedence
- * over both. The name is neither reserved nor protected: what a replacement
- * does not get is an identity authenticator, so it names no durable work of
- * this entry's.
- *
- * Inspection describes one `Issue` — the same origin, props, return contract
- * and prose the bundled registration carries — because it is the same component
- * with the entry's identity behind it.
+ * Naming it is not building one: it is a factory the adapter calls if and when
+ * a request turns out to be its own.
  */
-function ownedIssueComponent(owner: string): IdentityComponent {
-  return {
-    name: "Issue",
-    origin: COMPOSITION_ORIGIN,
-    props: issueProps,
-    returns: issueReturns,
-    forms: ["self-closing", "paired"],
-    ...documented(issueDocumentation),
-    factory: (claim: IdentityClaimant) =>
-      // Canonical form dispatch, so which of the two external effects this
-      // element asks for is settled by the scan before the body runs. A
-      // contextual `hasContent()` answer cannot select it: the chain that
-      // answers one is composed by whoever installed a handler, and an
-      // irreversible effect is not something a handler may choose.
-      formDispatcher({
-        forms: "both",
-        "self-closing": readingBody(owner, claim),
-        paired: upsertingBody(owner, claim),
-      }),
-  };
-}
-
-function readingBody(owner: string, claim: IdentityClaimant): FunctionComponent {
-  return function* Issue(
-    props: Record<string, Json>,
-    invocation: ComponentInvocation,
-  ): Operation<Json> {
-    // The same input checks the ordinary component makes, for the form that was
-    // dispatched here. Which of the two this is was decided by the engine, so
-    // the answer is not read back: what is wanted from this call is its
-    // refusals, which are the component's settled sentences.
-    issueMode(props, false);
-    const site = yield* claim(invocation);
-    const request = issueReadRequest(props);
-    const details = yield* readOwnedIssue({ owner, site, request }, liveRead(request));
-    return issueReadBinding(details);
-  };
-}
-
-function upsertingBody(owner: string, claim: IdentityClaimant): FunctionComponent {
-  return function* Issue(
-    props: Record<string, Json>,
-    invocation: ComponentInvocation,
-  ): Operation<Json> {
-    issueMode(props, true);
-    // Before this element projects its own content, because an invocation names
-    // nothing while it is expanding what is inside it — and after it would be
-    // naming the identity from a frame the children have already left.
-    const site = yield* claim(invocation);
-    // The description is rendered here, outside the envelope below. A child
-    // `<Issue>` or any other durable operation inside this content therefore
-    // finishes at its own journal position, before this upsert is offered.
-    const request = yield* issueUpsertRequest(props);
-    const reference = yield* upsertOwnedIssue(
-      { owner, site, request },
-      liveUpsert(
-        request,
-        issueIdempotencyKey({ runId: owner, expansionId: site }, "upsert", request.target),
-      ),
-    );
-    return { url: reference.url };
-  };
+export function useEntryIssueTransport(options: GitHubIssuesOptions): Operation<void> {
+  return useGitHubIssues({ host: denoGitHubSource, ...options });
 }
 
 /**
- * One live read attempt: the composed `IssueOperations` question, answered
- * beneath by this entry's transport-facing default.
+ * How this entry performs one `<Issue>`, in either of its two forms.
+ *
+ * The owner is closed over and the site arrives as the argument the authenticated
+ * binding hands in, so neither reaches here through a prop, a tracker, a Context,
+ * a middleware answer or a registry: a party that could name either could file an
+ * issue under somebody else's entry, or read back the result of one.
+ *
+ * This is a policy rather than `IssueOperations` middleware — which is where the
+ * workflow profile installs the same envelope — because an entry's envelope has
+ * to enclose the public chain rather than sit beneath it. A handler that answers
+ * a read itself is retained as this entry's answer, and a completed replay
+ * invokes no handler at all.
+ */
+export function replIssuePolicy(owner: string): BindOperations<IssueOperationsApi> {
+  return (site: string) => ({
+    read: (invocation: IssueReadInvocation) =>
+      readOwnedIssue({ owner, site, request: invocation }, () =>
+        attempted({ read: ([request]) => liveIssueRead(request) }, () =>
+          IssueOperations.operations.read(invocation),
+        ),
+      ),
+    upsert: (invocation: IssueUpsertInvocation) => {
+      const key = ownedUpsertKey(owner, site, invocation.target);
+      return upsertOwnedIssue({ owner, site, request: invocation }, () =>
+        attempted({ upsert: ([request]) => liveIssueUpsert(request, key) }, () =>
+          IssueOperations.operations.upsert(invocation),
+        ),
+      );
+    },
+  });
+}
+
+/**
+ * One live attempt: the public `IssueOperations` chain, over a transport-facing
+ * default of this attempt's own.
  *
  * Scoped, so the default is gone before the envelope publishes anything, and
  * installed at `min`, so every public handler a document or a plugin composed
- * still wraps the dispatch.
+ * still wraps the dispatch. The default closes over this attempt's key, so two
+ * concurrent `<Issue>` elements each dispatch through their own and neither can
+ * present the other's.
  */
-function liveRead(request: IssueReadInvocation): () => Operation<unknown> {
-  return () =>
-    scoped(function* (): Operation<unknown> {
-      yield* IssueOperations.around(transportRead(), { at: "min" });
-      return yield* IssueOperations.operations.read(request);
-    });
-}
-
-/** One live upsert attempt, on the same terms, under this attempt's own key. */
-function liveUpsert(request: IssueUpsertInvocation, key: string): () => Operation<unknown> {
-  return () =>
-    scoped(function* (): Operation<unknown> {
-      yield* IssueOperations.around(transportUpsert(key), { at: "min" });
-      return yield* IssueOperations.operations.upsert(request);
-    });
-}
-
-function transportRead(): Partial<Around<IssueOperationsApi>> {
-  return {
-    *read([invocation]: [IssueReadInvocation]): Operation<IssueDetails> {
-      const answered = yield* IssueApi.operations.read(invocation.url, {
-        ...(invocation.provider === undefined ? {} : { provider: invocation.provider }),
-      });
-      const details = parseIssueDetails(answered);
-      if (details === undefined) {
-        throw new IssueProtocolError(
-          "the issue provider answered a read with something that is not an issue's shared " +
-            "fields",
-        );
-      }
-      return details;
-    },
-  };
-}
-
-/**
- * The transport-facing default for one upsert attempt.
- *
- * The key is this attempt's, derived from the complete request's own identity
- * and target before any middleware saw it. A handler that transformed the
- * issue, the target or the discriminator changes what is sent — that is what
- * middleware is for — and changes nothing about which attempt this is.
- */
-function transportUpsert(key: string): Partial<Around<IssueOperationsApi>> {
-  return {
-    *upsert([invocation]: [IssueUpsertInvocation]): Operation<IssueReference> {
-      const answered = yield* IssueApi.operations.upsert(invocation.issue, {
-        url: invocation.target,
-        ...(invocation.provider === undefined ? {} : { provider: invocation.provider }),
-        idempotencyKey: key,
-      });
-      const record = parseIssueRecord(answered);
-      if (record === undefined) {
-        throw new IssueProtocolError(
-          "the issue provider answered an upsert with something that is not a URL",
-        );
-      }
-      return record;
-    },
-  };
+function attempted(
+  transport: Partial<Around<IssueOperationsApi>>,
+  ask: () => Operation<unknown>,
+): Operation<unknown> {
+  return scoped(function* (): Operation<unknown> {
+    yield* IssueOperations.around(transport, { at: "min" });
+    return yield* ask();
+  });
 }
 
 /**
@@ -306,7 +180,7 @@ function transportUpsert(key: string): Partial<Around<IssueOperationsApi>> {
  * refused rather than continued — and borrowing it is exactly what is not
  * allowed, however the record came to be in this segment.
  */
-function ownedIssueAdmission(owner: string): JournalAdmission {
+export function replIssueAdmission(owner: string): JournalAdmission {
   return function* (retained: readonly DurableEvent[]): Operation<void> {
     for (const event of retained) {
       if (event.type !== "yield" || event.description.type !== ISSUE_EFFECT) {

@@ -5181,12 +5181,66 @@ The bundled Git Plugin declares sixteen ordinary shadowable defaults:
 `Git.Files`, `Git.Changes`, `Git.Diff`, `Git.File`, `PullRequest`,
 `PullRequest.Reviews`, `PullRequest.Comments`,
 `PullRequest.Checks`, `IssueTracker` and `Issue`. Dir is core-protected and
-remains available without this Plugin. One declaration array serves execution,
+remains available without this Plugin. One declaration source serves execution,
 syntax inspection, Plan validation/generation and executing workflow actions.
 A Workspace attachment installs providers and durable state, not vocabulary.
 Declaration alone starts nothing: no provider, repository discovery, lock, Git
 process or credential read. A repository component may shadow any of these
 ordinary defaults.
+
+Six of the sixteen reach something no local transaction encloses — `Git.Push`,
+`PullRequest`, its three evidence reads and `Issue` — and each has exactly one
+implementation, which asks a semantic feature operation for its work. Every
+command that carries this vocabulary registers all sixteen, `repl` included: one
+registry is what says which names exist, and it is what syntax inspection, Plan
+validation and preflight read. An execution that *retains* one of those
+operations — a REPL entry, for what it publishes and what it files — declares
+that same name again from inside its own scope with its own policy under it,
+through the ordinary trusted installation and the same component module, so a
+nearer declaration shadows the registered default in the one place it applies.
+The component is the same either way — one body, one set of forms, one return
+contract — and a repository component of the name still outranks the default.
+
+#### One invocation binding for the external repository operations
+
+`Git.Push`, `PullRequest`, its three evidence reads and `Issue` have one
+implementation each, in the provider-neutral half of `@executablemd/git`. Each
+of those bodies interprets its own props and forms, expands its own content,
+normalizes what the document wrote, asks a semantic feature operation —
+`GitApi["push"]`, `IssueOperationsApi` or `PullRequestOperationsApi` — and
+projects what came back. None of them receives an authenticator, an owner, a
+site, native access, a policy object, a record codec or any publication state,
+and none of them names a journal record.
+
+Between the component and the host is one feature-owned handoff. For a host that
+retains work named after an invocation it authenticates the actual invocation
+canonical core issued — once, in the engine frame the component was entered in,
+before the body projects any content, because a projecting ancestor is
+deliberately ineligible for one — hands that site to the host's own policy, and
+runs the one body against the operations the policy answers with. The site is
+private to that policy: no operation answers with it, no public request carries
+it, and no Context holds it.
+
+A host that retains nothing named after an invocation runs the same bodies over
+the public feature operations, with no identity authenticated, because there is
+nothing for one to name. Only an operation a host retains *above* the public
+chain, named after an invocation it authenticates, takes its operation as an
+argument, and that is `Git.Push` and `Issue`. A workflow run retains
+`PullRequest` and its three evidence reads too — the upsert through the Git-host
+reconciliation beneath it, each read as policy on `PullRequestReadExecution` —
+but it installs that retention under their feature Api instead of owning a
+boundary over it, and no REPL entry owns one either, so those four ask their Api
+directly as any other component does. A REPL entry retains the four Git reads
+the same way — `GitQuery` middleware at its own implementation slot — which is
+what lets those four stay ordinary registrations under a host that retains every
+page they answer with. That is what makes an ordinary run, a workflow run, a
+provider-absent runtime and a REPL entry four policies rather than four
+components.
+
+The lifetime of what a policy hands over is the ordinary one: an operation runs
+in the scope of the invocation that asked for it, and cancellation, teardown and
+the joined cleanup of any attempt beneath it are owned by that scope rather than
+by a guard around the handoff.
 
 #### Command declaration ownership
 
@@ -7114,10 +7168,11 @@ flag is retained, and host paths are kept as the bytes they arrived as.
 
 Identity is the entry's own owner and the invocation identity canonical core
 minted, encoded in the same two record fields a workflow run uses for its run
-and expansion. The trusted body takes that invocation once and owns the pair
-throughout; neither reaches public Git input, so a replacement registration and
-a direct `Git.operations.push(...)` name no durable work of this entry's and
-reach the ordinary missing-provider refusal.
+and expansion. The common invocation binding authenticates the invocation once
+and hands the site it authenticated to this host's policy, which owns the pair
+throughout; neither reaches public Git input or the shared component, so a
+replacement registration and a direct `Git.operations.push(...)` name no durable
+work of this entry's and reach the ordinary missing-provider refusal.
 
 Composition is ordinary. A fresh invocation dispatches through an
 operation-local default under the stable Git Api name, so every public handler a
@@ -7193,20 +7248,22 @@ implementation for this exact invocation. The `runId` and `expansionId` field
 spellings in the record are a compatibility encoding of those two and nothing
 more.
 
-Neither member can be supplied from outside. The owner reaches the
-implementation as a trusted closure the host built for one entry, the identity
-authenticator is delivered to that implementation by canonical execution and
-exists only as the argument of that call, and neither appears in a prop, a
-tracker, a Context, a middleware request or a journal field a document can
-write. The entry's `<Issue>` is an ordinary shadowable registration of the name
-the Plugin already declares, so a repository component of that name keeps its
-ordinary precedence — and such a replacement obtains no identity of the entry's.
-Which of the two external effects an invocation asks for is settled by canonical
-form dispatch from the form the scan recorded, because a composable answer about
-an element's shape is not something an irreversible effect may be selected by.
+Neither member can be supplied from outside. The owner reaches the host's policy
+as a trusted closure built for one entry, the identity authenticator is
+delivered to the common binding by canonical execution and exists only as the
+argument of that call, and neither appears in a prop, a tracker, a Context, a
+middleware request or a journal field a document can write. `<Issue>` here is
+the one shared component with this entry's policy under it: the name is the
+registered default the command installed, and the entry declares it again in its
+own execution because it retains work named after each invocation — a repository
+component of that name keeps its ordinary precedence, and such a replacement
+obtains no identity of the entry's. Which of the two external
+effects an invocation asks for is settled by canonical form dispatch from the
+form the scan recorded, because a composable answer about an element's shape is
+not something an irreversible effect may be selected by.
 
 One durable boundary encloses the operation, and the live attempt inside it is
-composed rather than hard-wired: the trusted implementation dispatches
+composed rather than hard-wired: the entry's policy dispatches
 `IssueOperations`, where a document's own middleware answers, transforms,
 refuses and delegates as it does anywhere else, over a transport-facing default
 of the entry's own that reaches `IssueApi` and adds no second envelope. That
@@ -8479,7 +8536,7 @@ Status is measured against main.
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in [Invariant](#one-database-at-a-time-and-a-transaction-a-caller-can-hold). | built on main |
 | REPL entry retained file work | one executing REPL entry's own recording, established by core initialization in the scope the invocation owns and ending with it: it retains the `<File>` reads, `<File>` writes, `<File.Delete />` deletions and `<Dir>` ensures that land inside a checkout the entry is working in — the ambient one it was started in, or a managed one it selected — authored and admitted-generated alike, because both cross the one document filesystem. A completed operation answers from its saved result without live path canonicalization, ambient discovery, a lease, a permission lookup or a filesystem call — so only *new* work needs the environment, a continuation still binds the text its read answered with while the file says something else, and a new entry reading that path sees what is there now. A record's name is the digest of the record version, the operation kind and the complete received request, so two equal requests in one entry are one name at two ordered positions and the durable engine's positional matching tells them apart; equal work in two entries is the same name, and each entry executing against its own stream segment is what keeps those apart. Recording is ordinary ancestor-max `Files` middleware, so a provider beneath that answers directly or transforms and delegates is kept as provider behavior while the received request stays the operation's identity. A shared Git directory admits one live *mutating* entry at a time, held lazily for as long as the execution lasts and refused rather than queued; no read acquires it, so a new read proceeds while another entry holds it. The local Git and issue work an entry retains have rows of their own beside this one; work outside every checkout the entry is working in stays ordinary and unrecorded, and a passive reading initializes nothing [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
 | REPL entry retained selection | one executing REPL entry's own `<Repository>` and `<Worktree>` selections, recorded beside its file work as small routing records: the canonical managed root, the checkout root, the common Git directory, the credential-free repository identity, the display name and the owner checkout, with a root-level `<Worktree>`'s ambient owner recorded as its own answer. The selector is the ordinary managed one, with its own creation, compatible-reuse, conflict and interrupted-adoption policy; what this adds is that a completed selection answers from its record, calling no selector and reaching no clone, `worktree add`, sidecar, credential or lock — so a continuation works in a checkout somebody has since changed or removed, while only new work meets today's filesystem. Parsed facts are held to the call they stand at with pure slot arithmetic against the root the record itself carries, registered in entry-private state and minted as a fresh selection, so a copied or edited Repository value can misname a target and never reach one. One entry at a time *owns* a managed slot, held until teardown and reacquired lazily by the first new operation inside a restored placement; that is a different hold from the shared Git directory's mutation lease, which only a new `<Worktree>` selector and a new mutation take. A selection is acknowledged before its path is bound, and native work that was never acknowledged runs live again under the ordinary partial-creation policy [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
-| REPL entry retained issue work | one executing REPL entry's own `<Issue>` work, retained under the ordinary `issue_effect` records beside its file work and needing no checkout at all: no repository is discovered for it, no managed root is made and no hold is taken. A completed read answers with the snapshot it saw and a completed upsert with the URL it was filed under, neither resolving a provider, reading configuration nor opening a credential. What names it is the entry's own owner — derived by the session from the execution and the entry's admission-order position — with the identity canonical execution minted where it selected this implementation for this invocation; the `runId` and `expansionId` spellings are a compatibility encoding of those two, and a REPL entry installs no synthetic WorkflowRun. Neither member is reachable from a prop, a tracker, a Context, a middleware request or a record field a document can write, and the entry's `<Issue>` is an ordinary shadowable registration a repository component still outranks. One durable boundary encloses the operation and the live attempt inside it composes `IssueOperations` over a transport-facing default of the entry's own, bound in the attempt's own scope under the attempt's own idempotency key and gone before the envelope publishes; canonical form dispatch selects which of the two effects an invocation asks for. An upsert the service accepted and this end never acknowledged retains nothing and presents the same key next time, which is what the provider adopts under; a read has no key and may be made again. The entry's retained issue records are held to its own owner before any of them are replayed [Reference](#what-one-entry-retains-about-the-issue-it-filed). | built on the #181 stack |
+| REPL entry retained issue work | one executing REPL entry's own `<Issue>` work, retained under the ordinary `issue_effect` records beside its file work and needing no checkout at all: no repository is discovered for it, no managed root is made and no hold is taken. A completed read answers with the snapshot it saw and a completed upsert with the URL it was filed under, neither resolving a provider, reading configuration nor opening a credential. What names it is the entry's own owner — derived by the session from the execution and the entry's admission-order position — with the identity canonical execution minted where it selected this implementation for this invocation; the `runId` and `expansionId` spellings are a compatibility encoding of those two, and a REPL entry installs no synthetic WorkflowRun. Neither member is reachable from a prop, a tracker, a Context, a middleware request or a record field a document can write, and the entry's `<Issue>` is the one shared component with this entry's policy declared over the command's registered default, which a repository component still outranks. One durable boundary encloses the operation and the live attempt inside it composes `IssueOperations` over a transport-facing default of the entry's own, bound in the attempt's own scope under the attempt's own idempotency key and gone before the envelope publishes; canonical form dispatch selects which of the two effects an invocation asks for. An upsert the service accepted and this end never acknowledged retains nothing and presents the same key next time, which is what the provider adopts under; a read has no key and may be made again. The entry's retained issue records are held to its own owner before any of them are replayed [Reference](#what-one-entry-retains-about-the-issue-it-filed). | built on the #181 stack |
 | REPL entry retained local Git | one executing REPL entry's own `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>`, recorded beside its file work and its selections. The performers are the ordinary ones — exactly the pathspecs a document wrote, the ordinary branch rules, the current index and nothing else — installed as ordinary Git dispatch at the implementation slot, so middleware above may answer, refuse, or transform and delegate, and a call answered wholly by a replacement acquires no retention. One durable operation per call and no outer envelope, so a staging child inside a Commit is an earlier journal operation of its own. A completed operation answers from its saved result and runs no `git` at all, writing no tree and reading no identity; a saved commit object id names the commit that was made then and is never re-resolved against today's HEAD. A result is fixed-size evidence — the checkout, the branch, commit, HEAD tree and index tree on both sides, and the operation's own arguments and products — never a file list, a checkout snapshot or Git output, and a commit message appears as a digest and a byte length rather than a second copy of the text. Routing is private and live-only: the received working directory is canonicalized and the ordinary selector chooses the longest covering checkout among this entry's registrations under the whole authenticated Repository identity, and a saved result's checkout is held to those registrations with parsed facts alone. The invoking person's author and committer are read once per entry, lazily, and only by a genuinely live Commit; a host that cannot say becomes the existing Commit-only refusal. A live operation takes the selected placement's managed slot and then the shared Git directory's mutation lease, keeps both until teardown and takes neither on replay, with this entry's own native attempts serialized per shared Git directory. An ordinary refusal is retained under the route that reported it, so a native ignored-path Add says what `git` reported and promises no rollback; contention, admission and infrastructure failures are fatal and unrecorded. Native completion and acknowledgement are separate: an unacknowledged Commit runs live again and may instead refuse empty-index, and a failed append fences later work with no success binding and no compensating Close. A local result confers no publication evidence, and publication is the row below rather than part of these three [Reference](#the-three-local-git-operations-and-what-a-saved-object-id-means). | built on the #181 stack |
 | REPL entry retained publication | one executing REPL entry's own `<Git.Push />`, retained as a request record written before anything is contacted and the shared `git_host_effect` outcome that answers it. The request is resolved from the checkout — the authenticated selection, its common Git directory, the covering checkout for the received working directory, the admitted credential-free origin held to the identity's own fingerprint, and the branch and commit read inside the entry's native turn — and keeps the question asked, the reading the live dispatch received and what routing resolved, with no selection identifier, source object, credential, Git output, HEAD inventory or publication flag. Identity is the entry's owner and core's minted invocation identity, encoded in the run and expansion fields the workflow profile uses; a replacement registration and a direct `Git.operations.push(...)` reach the ordinary missing-provider refusal. Dispatch is ordinary Git composition through an operation-local default: a synthetic answer retains nothing, a second delegation of one invocation is refused, and a continuation consumes the saved request before any dispatch. A publication takes the managed slot and no mutation lease, reads objects through a bare control repository with a read-only alternate rather than through the checkout, reconciles a pending request against the exact commit it named without fetching, and publishes only after every per-attempt resource has closed. A completed publication reaches no provider, credential or remote; a failed request append contacts nothing and a failed outcome append leaves no false receipt [Reference](#what-one-entry-asked-to-publish-and-what-the-git-host-did-about-it). | built on the #181 stack |
 | live durable-operation coordinator | explicitly coordinates structured live execution with existing Yield publication while leaving replay and callback effects unchanged [Invariant](#live-effect-coordination). | built on the #365 stack |
@@ -8509,7 +8566,7 @@ Status is measured against main.
 | transactional Git effects (`Git.Switch` / `Git.Add` / `Git.Commit`) under a workflow run | publish local Git mutations with their journal result; the enclosing Repository and the contextual working directory select which retained checkout one runs in, and neither observation admits anything — the observed record is compared with the retained row and the directory with the checkouts that row holds, so a failure of admission, of retained state or of an unrecognized native condition fails the run instead of publishing a result [Invariant](#workspace-local-transactions); [Interface and evidence](specs/workflow-workspace-spec.md#7-git-operations). | built on the #294 stack, Deno provider only |
 | `Git.Push` under a workflow run | Publishes or adopts the selected named branch through authenticated non-force reconciliation. [Authored contract](specs/workflow-workspace-spec.md#74-push) and [effect mechanics](#replay-and-effect-transactions). | built on the #370 stack, Deno provider only |
 | `<PullRequest>` under a workflow run | Upserts the exact published branch and returns stable evidence only after this run proves matching Push history. [Props, results and refusals](specs/workflow-workspace-spec.md#75-pull-request); [positive-integer number and reconciliation](#issue-effects). | built on the #295 stack, Deno provider only |
-| repository composition vocabulary | Declares sixteen ordinary shadowable defaults without installing an operational provider. [Names and profile ownership](#ordinary-repository-vocabulary). | built on the #643 stack |
+| repository composition vocabulary | Declares sixteen ordinary shadowable defaults for every command that carries it, without installing an operational provider; an execution that retains one of the six external operations declares that name again with its own policy over the default. [Names and profile ownership](#ordinary-repository-vocabulary). | built on the #643 stack |
 | `<Repository>` / `<Worktree>` composition under an ordinary run | Selects an authenticated persistent checkout under an execution-owned exclusive lock [Full contract](#ordinary-repository-ownership). | built on the #643 stack, Deno and compiled only |
 | local Git operations (`Git.Switch` / `Git.Add` / `Git.Commit`) under an ordinary run | Performs explicit local transitions against the authenticated checkout without rollback or replay [Full contract](#ordinary-repository-ownership). | built on the #643 stack, Deno and compiled only |
 | `Git.Push` under an ordinary run | Publishes or adopts a non-force branch result and keeps invocation-private evidence [Full contract](#ordinary-repository-ownership). | built on the #643 stack, Deno and compiled only |

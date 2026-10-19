@@ -8,18 +8,16 @@
  * the host owns endpoint, credential and pagination configuration. Each requires
  * `as` so an Agent prompt can explicitly render the evidence it receives.
  *
- * Providers compose ordinary PullRequestAPI middleware. Once a provider matches,
- * its normalized answer, validation and refusal are final. Each collection has its
- * own durable effect, replay and failure, so a partial answer cannot masquerade as
- * all three collections.
- *
- * Self-closing form is declared to canonical dispatch. Neither replaceable
- * `hasContent()` nor a caller-made invocation object can turn a paired element
- * into an evidence read.
+ * Each collection has its own durable effect, replay and failure, so a partial
+ * answer cannot masquerade as all three collections.
  */
 
+import { documented, formDispatcher } from "@executablemd/core";
 import type {
+  ComponentRegistration,
+  FirstPartyDocumentation,
   FormDeclaration,
+  FunctionComponent,
   InvocationForm,
   JsonObject,
   PropsSchema,
@@ -27,13 +25,13 @@ import type {
 } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
+import { COMPOSITION_ORIGIN } from "../definitions.ts";
 import { PullRequestReadError } from "../errors.ts";
 import { pullRequestReadResultJson } from "../pull-request-read-records.ts";
 import { canonicalPullRequestUrl, pullRequestProviderName } from "../pull-request-target.ts";
 import type { PullRequestReadKind } from "../pull-request-read-records.ts";
 import { PullRequestOperations } from "../pull-request-operations.ts";
 
-/** The component names, as a document writes them and a refusal names them. */
 export const REVIEWS_ELEMENT = "<PullRequest.Reviews>";
 export const COMMENTS_ELEMENT = "<PullRequest.Comments>";
 export const CHECKS_ELEMENT = "<PullRequest.Checks>";
@@ -163,10 +161,8 @@ export const checksReturns: ReturnsSchema = array({
     }),
   ],
 });
-function read(kind: PullRequestReadKind, element: string) {
+function read(kind: PullRequestReadKind, element: string): FunctionComponent {
   return function* PullRequestRead(props: Record<string, Json>): Operation<Json> {
-    // The props schema refuses a missing or empty `url` before this function is
-    // entered, and therefore before any provider is asked anything.
     // Canonicalized before any provider sees it, so the component, the durable
     // request and every adapter read one answer.
     const url = canonicalPullRequestUrl(props.url);
@@ -201,10 +197,15 @@ function read(kind: PullRequestReadKind, element: string) {
   };
 }
 
-function declare(kind: PullRequestReadKind, element: string): FormDeclaration {
+/**
+ * The self-closing form comes from the scan: neither a replaceable
+ * `hasContent()` answer nor a caller-made invocation object can turn a paired
+ * element into an evidence read.
+ */
+function declare(fn: FunctionComponent, element: string): FormDeclaration {
   return {
     forms: "self-closing",
-    fn: read(kind, element),
+    fn,
     refuse: (_props: Record<string, Json>, written: InvocationForm | undefined) =>
       new PullRequestReadError(
         "unexpected-content",
@@ -218,6 +219,71 @@ function declare(kind: PullRequestReadKind, element: string): FormDeclaration {
   };
 }
 
-export const reviewsForm: FormDeclaration = declare("reviews", REVIEWS_ELEMENT);
-export const commentsForm: FormDeclaration = declare("comments", COMMENTS_ELEMENT);
-export const checksForm: FormDeclaration = declare("checks", CHECKS_ELEMENT);
+const DOCUMENTATION: Readonly<Record<PullRequestReadKind, FirstPartyDocumentation>> = Object.freeze(
+  {
+    reviews: {
+      description:
+        `Read pull request reviews. \`<PullRequest.Reviews url={pullRequest.url} as="reviews" />\` ` +
+        `reads reviews from the specified pull request.`,
+      as: "Required. Each review's author, state, body, submission time, commit and url.",
+      context: null,
+    },
+    comments: {
+      description:
+        `Read pull request comments. \`<PullRequest.Comments url={pullRequest.url} as="comments" />\` ` +
+        `reads both conversation and review comments.`,
+      as:
+        "Required. Each comment's kind, author, body, timestamps and url, and a review " +
+        "comment's file, hunk and line.",
+      context: null,
+    },
+    checks: {
+      description:
+        `Read pull request checks. \`<PullRequest.Checks url={pullRequest.url} as="checks" />\` ` +
+        `reads check runs and commit statuses for its head.`,
+      as: "Required. Each check's kind, name, head commit and outcome.",
+      context: null,
+    },
+  },
+);
+
+const NAMES: Readonly<Record<PullRequestReadKind, string>> = Object.freeze({
+  reviews: "PullRequest.Reviews",
+  comments: "PullRequest.Comments",
+  checks: "PullRequest.Checks",
+});
+
+const ELEMENTS: Readonly<Record<PullRequestReadKind, string>> = Object.freeze({
+  reviews: REVIEWS_ELEMENT,
+  comments: COMMENTS_ELEMENT,
+  checks: CHECKS_ELEMENT,
+});
+
+const RETURNS: Readonly<Record<PullRequestReadKind, ReturnsSchema>> = Object.freeze({
+  reviews: reviewsReturns,
+  comments: commentsReturns,
+  checks: checksReturns,
+});
+
+function metadata(kind: PullRequestReadKind) {
+  return {
+    name: NAMES[kind],
+    origin: COMPOSITION_ORIGIN,
+    props,
+    returns: RETURNS[kind],
+    forms: ["self-closing"] as const,
+    ...documented(DOCUMENTATION[kind]),
+  };
+}
+
+/** An ordinary registered default, over whichever provider the host installed. */
+export function pullRequestReadRegistration(kind: PullRequestReadKind): ComponentRegistration {
+  const element = ELEMENTS[kind];
+  return { ...metadata(kind), fn: formDispatcher(declare(read(kind, element), element)) };
+}
+
+export const PULL_REQUEST_READ_KINDS: readonly PullRequestReadKind[] = Object.freeze([
+  "reviews",
+  "comments",
+  "checks",
+]);

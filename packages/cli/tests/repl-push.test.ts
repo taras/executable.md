@@ -133,7 +133,14 @@ function useWorkingDirectory(directory: string): Operation<void> {
   );
 }
 
-/** What the Git Plugin contributes for the `repl` command. */
+/**
+ * What the Git Plugin contributes for the `repl` command.
+ *
+ * Called in the scope the session is opened in, because installing is what
+ * registers the vocabulary: `<Git.Push />` resolves in preflight and in the
+ * entry through this registry, exactly as it does under the real command, and
+ * this harness supplies no component catalog of its own.
+ */
 function* replInstallations(): Operation<readonly ExecutionInstallation[]> {
   const install = gitPlugin.install;
   if (install === undefined) {
@@ -424,8 +431,8 @@ describe("how a REPL entry gets its publication capability", () => {
     }
 
     // Building one reaches nothing — no directory, no `git`, no credential and
-    // no managed root — and what it declares is both of an entry's external
-    // capabilities.
+    // no managed root — and what it declares is the two operations this entry
+    // retains, under names the command's scope has already registered.
     const built = yield* scoped(function* (): Operation<ExecutionInstallation> {
       return yield* factory('["executablemd.repl.issue-owner",1,"execution-cli-6","1"]');
     });

@@ -1,0 +1,99 @@
+[
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "__root__"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "repository",
+        "path": "/private/tmp/xmd-retained-history/h7-issue-failed/entry.md",
+        "content": "<IssueTracker url=\"https://github.com/octo/elsewhere\">\n<Issue title=\"Filed\" as=\"filed\">a described issue</Issue>\n</IssueTracker>\n<Elicit schema={{ type: \"object\", properties: { choice: { enum: [\"continue\"] } },\n  required: [\"choice\"], additionalProperties: false }} as=\"answer\">\nContinue?\n</Elicit>\n<File path=\"after.md\">continued</File>\n"
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "IssueTracker",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h7-issue-failed/entry.md",
+        "offset": 0,
+        "line": 1,
+        "column": 1
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/workflow/composition",
+        "reserved": false
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "Issue",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h7-issue-failed/entry.md",
+        "offset": 55,
+        "line": 2,
+        "column": 1
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/workflow/composition",
+        "reserved": false
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "issue_effect",
+      "name": "2766aaca6683d5ea4405752dd0070163af48dc7ba865b58c445944f5525a98a6",
+      "request": {
+        "operation": "upsert",
+        "identity": {
+          "runId": "[\"executablemd.repl.issue-owner\",1,\"h7\",\"1\"]",
+          "expansionId": "a369ea1cb4ae5100e19fe60c9819e31b736d641d7c6972888358936b51004eee"
+        },
+        "target": "https://github.com/octo/elsewhere",
+        "provider": null,
+        "issue": {
+          "title": "Filed",
+          "description": "a described issue",
+          "tags": [],
+          "assignee": null
+        }
+      },
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h7-issue-failed/entry.md",
+        "offset": 55,
+        "line": 2,
+        "column": 1
+      }
+    },
+    "result": {
+      "status": "err",
+      "error": {
+        "message": "the issue tracker is temporarily unavailable, so this request's state is unknown. Nothing was created on this answer, and nothing was retried: an explicit retry observes again before it may create.",
+        "name": "IssueUnavailableError",
+        "stack": "IssueUnavailableError: the issue tracker is temporarily unavailable, so this request's state is unknown. Nothing was created on this answer, and nothing was retried: an explicit retry observes again before it may create.\n    at upsert (file:///Users/tarasmankovski/Repositories/taras/executable.md/.claude/worktrees/issue-181-boundary-a/packages/git/src/deno/issue/github.ts:442:17)\n    at upsert.next (<anonymous>)\n    at Object.[Symbol.iterator] (file:///Users/tarasmankovski/Repositories/taras/executable.md/.claude/worktrees/issue-181-boundary-a/node_modules/.deno/@effectionx+context-api@0.6.0/node_modules/@effectionx/context-api/dist/mod.js:20:61)\n    at [Symbol.iterator].next (<anonymous>)\n    at upsert (file:///Users/tarasmankovski/Repositories/taras/executable.md/.claude/worktrees/issue-181-boundary-a/packages/git/src/deno/retained-repository/issues.ts:277:51)\n    at upsert.next (<anonymous>)\n    at Object.[Symbol.iterator] (file:///Users/tarasmankovski/Repositories/taras/executable.md/.claude/worktrees/issue-181-boundary-a/node_modules/.deno/@effectionx+context-api@0.6.0/node_modules/@effectionx/context-api/dist/mod.js:20:61)\n    at [Symbol.iterator].next (<anonymous>)\n    at file:///Users/tarasmankovski/Repositories/taras/executable.md/.claude/worktrees/issue-181-boundary-a/packages/git/src/deno/retained-repository/issues.ts:244:48\n    at Generator.next (<anonymous>)"
+      }
+    }
+  }
+]

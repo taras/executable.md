@@ -1,0 +1,177 @@
+[
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "__root__"
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "repository",
+        "path": "/private/tmp/xmd-retained-history/h5-issue-completed/entry.md",
+        "content": "<IssueTracker url=\"https://github.com/octo/project\">\n<Issue title=\"Filed\" as=\"filed\">a described issue</Issue>\n<Issue url=\"https://github.com/octo/project/issues/1\" as=\"found\" />\n</IssueTracker>\n<Elicit schema={{ type: \"object\", properties: { choice: { enum: [\"continue\"] } },\n  required: [\"choice\"], additionalProperties: false }} as=\"answer\">\nContinue?\n</Elicit>\n<File path=\"after.md\">continued</File>\n"
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "IssueTracker",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h5-issue-completed/entry.md",
+        "offset": 0,
+        "line": 1,
+        "column": 1
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/workflow/composition",
+        "reserved": false
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "Issue",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h5-issue-completed/entry.md",
+        "offset": 53,
+        "line": 2,
+        "column": 1
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/workflow/composition",
+        "reserved": false
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "issue_effect",
+      "name": "98d2a35d8f3f04011ad86bcdff746499d26ab5f7be99e67b32cc5829ae59d23c",
+      "request": {
+        "operation": "upsert",
+        "identity": {
+          "runId": "[\"executablemd.repl.issue-owner\",1,\"h5\",\"1\"]",
+          "expansionId": "4e08c2338224512e2ad865715d1b98d7af2000a0f5c40ec1b730c8eabff4dd18"
+        },
+        "target": "https://github.com/octo/project",
+        "provider": null,
+        "issue": {
+          "title": "Filed",
+          "description": "a described issue",
+          "tags": [],
+          "assignee": null
+        }
+      },
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h5-issue-completed/entry.md",
+        "offset": 53,
+        "line": 2,
+        "column": 1
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "url": "https://github.com/octo/project/issues/1"
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "Issue",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h5-issue-completed/entry.md",
+        "offset": 111,
+        "line": 3,
+        "column": 1
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/workflow/composition",
+        "reserved": false
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "issue_effect",
+      "name": "19d1eeb0fb33b427db6f0dbb7bc9d2ebc51dd4391c09f94b3500526deeb6f2af",
+      "request": {
+        "operation": "read",
+        "identity": {
+          "runId": "[\"executablemd.repl.issue-owner\",1,\"h5\",\"1\"]",
+          "expansionId": "8239678a5e2945ecb9c53ff66eed177aeb4232d66d1d3ca18c47d3816f790957"
+        },
+        "url": "https://github.com/octo/project/issues/1",
+        "provider": null
+      },
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h5-issue-completed/entry.md",
+        "offset": 111,
+        "line": 3,
+        "column": 1
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "url": "https://github.com/octo/project/issues/1",
+        "title": "What the middleware answered",
+        "description": "answered without reaching a tracker",
+        "tags": [
+          "alpha",
+          "beta"
+        ],
+        "assignee": null
+      }
+    }
+  },
+  {
+    "type": "yield",
+    "coroutineId": "root",
+    "description": {
+      "type": "import_component",
+      "name": "Elicit",
+      "executablemd.source-position": {
+        "path": "/private/tmp/xmd-retained-history/h5-issue-completed/entry.md",
+        "offset": 195,
+        "line": 5,
+        "column": 1
+      }
+    },
+    "result": {
+      "status": "ok",
+      "value": {
+        "kind": "registered",
+        "origin": "@executablemd/core",
+        "reserved": false
+      }
+    }
+  }
+]

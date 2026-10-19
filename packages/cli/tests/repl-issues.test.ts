@@ -100,7 +100,10 @@ function useReplRepositories(root: string): Operation<void> {
  * What a command contributes to an entry's execution.
  *
  * Taken from the Git Plugin's own contribution for the `repl` command rather
- * than written out here, because that contribution is the production path.
+ * than written out here, because that contribution is the production path — and
+ * called in the scope the session is opened in, because installing it is what
+ * registers the vocabulary. `<Issue>` resolves in preflight and in the entry
+ * through that registry, with no component catalog supplied beside it.
  */
 function* replInstallations(): Operation<readonly ExecutionInstallation[]> {
   const install = gitPlugin.install;
@@ -1485,9 +1488,11 @@ describe("how a REPL entry gets its issues", () => {
     });
     expect(absent.entryInstallation).toBe(undefined);
 
-    // Selecting reaches nothing, and what it selected declares both halves of
-    // an entry's external capability: an installation is built per entry, and
-    // this command has run none.
+    // Selecting reaches nothing, and what it selected declares exactly the
+    // operations an entry retains — publication and filing, and neither
+    // `<PullRequest>` nor its reads, which stay the defaults the command's
+    // scope registered. An installation is built per entry, and this command
+    // has run none.
     const built = yield* scoped(function* (): Operation<ExecutionInstallation> {
       if (factory === undefined) {
         throw new Error("the production selector selected no entry capability");

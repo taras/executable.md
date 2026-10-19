@@ -196,6 +196,11 @@ export const gitPlugin: Plugin = Plugin({
     // Declarations only. Every one of these is a name and a description; the
     // provider that performs what they name is attached by the host, lazily,
     // when a run actually has a Workspace to perform it in.
+    //
+    // Every command that carries this vocabulary carries all of it, `repl`
+    // included: what a name means is the same wherever it is typed, and an
+    // execution that retains one of these operations attaches its policy to
+    // this same body from inside its own scope.
     yield* useCompositionComponents();
     return {
       admissions: [

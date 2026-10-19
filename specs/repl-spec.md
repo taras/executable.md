@@ -2252,10 +2252,14 @@ resolved against the frame that published its coordinates.
   as it promises: nothing locks the repository, watches it or compares every
   write that happened while it ran. What continuation checks is whether the
   *answer* changed, not whether the filesystem did.
-- `<Issue>` is an ordinary shadowable default here, as it is under every other
-  host. A repository component of that name keeps its ordinary precedence over
-  it, and what such a component does not get is the identity an entry's own
-  issue work is named by.
+- `<Issue>` is the same component here as under every other host: one
+  implementation, the same props, forms and return contract, asking a semantic
+  issue operation for its work. The `repl` command registers it as an ordinary
+  default like every other command does; what an entry supplies is the policy
+  beneath it, declared to that entry's own execution over the default — and a
+  repository component of that name keeps its ordinary precedence over both.
+  What such a component does not get is the identity an entry's own issue work
+  is named by.
 - Generated selection is unchanged. An admitted generated `<File>` read, write
   or `<File.Delete />` is retained exactly as an authored one is, because both
   cross the one document filesystem. `<Glob>` stays ordinary and is retained by

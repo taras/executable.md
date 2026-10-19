@@ -1651,6 +1651,11 @@ function* preflight(
     return yield* validateDocument({
       ...inlineSource(source),
       includes,
+      // The command's own declarations. A Plugin's vocabulary is registered in
+      // the scope this session was opened in, so the names an entry may write
+      // are already resolvable here — and metadata alone: validation resolves a
+      // name from a declaration and calls no factory, so nothing initializes
+      // policy.
       components: declaredComponents(installations),
       declarations: declaredMarkdown(installations),
     });

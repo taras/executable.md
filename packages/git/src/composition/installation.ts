@@ -1,23 +1,43 @@
 /**
- * The sixteen repository-composition components, as one array of ordinary
- * declarations.
+ * The sixteen repository-composition components, declared once for every host.
  *
  * Repository, Worktree, the four Git operations, the four Git reads,
- * PullRequest and its three evidence reads, IssueTracker and Issue are
- * ordinary registered defaults — not
- * reserved and not structural — so a repository-local component may shadow one
- * for its own scope. `<Dir>` is not among them: canonical core reserves that
- * name (`core/src/components/fixed-filesystem.ts`), and a document reaches it
- * with or without this package.
+ * PullRequest and its three evidence reads, IssueTracker and Issue are ordinary
+ * registered defaults — not reserved and not structural — so a
+ * repository-local component may shadow one for its own scope. `<Dir>` is not
+ * among them: canonical core reserves that name
+ * (`core/src/components/fixed-filesystem.ts`), and a document reaches it with
+ * or without this package.
  *
- * One array, three consumers, because three descriptions of one vocabulary
- * would drift. `useCompositionComponents()` registers it inside a workflow
- * attachment; `useCommandComponents()` registers it for `xmd syntax` and for
- * `xmd plan`'s validation and generation; `installDocumentComponents()`
- * registers it for an ordinary run. Registering it installs no provider,
- * performs no repository discovery, acquires no lock and reaches no network:
- * what a name *does* is the installed provider's, and describing the
- * environment mints none.
+ * ## One registry, and the policy an execution attaches underneath it
+ *
+ * Ten of the sixteen reach nothing beyond the selected checkout: Repository and
+ * Worktree choose one, Git.Switch, Git.Add and Git.Commit change one, the four
+ * Git reads observe one, and IssueTracker names a destination.
+ *
+ * The other six — `<Git.Push />`, `<PullRequest>`, its three evidence reads and
+ * `<Issue>` — reach something no local transaction encloses. Each of those has
+ * exactly one implementation, here, and it asks a semantic feature operation
+ * for its work. How that operation is performed, retained and replayed is the
+ * host's: an ordinary run and a workflow run forward to the public feature
+ * Apis, a runtime with no provider keeps each Api's own refusing default, and a
+ * REPL entry retains and reconciles beneath them.
+ *
+ * All sixteen are registered here, for every command that carries this
+ * vocabulary, because this is what says the names exist: it is what `xmd
+ * syntax` describes, what validation resolves against and what an execution
+ * inherits. A host that retains one of these operations does not register a
+ * different component for it — it declares this same body with its own policy
+ * from inside its own execution's scope, where a nearer registration shadows a
+ * farther one. Either way the component is the same: one body, one set of
+ * forms, one return contract, because typing `<Issue>` means the same authored
+ * operation wherever it is typed.
+ *
+ * Nothing here installs a provider, performs repository discovery, acquires a
+ * lock or reaches a network: what a name *does* is the installed policy's, and
+ * describing the environment selects none. Inspection and validation read the
+ * declarations' metadata without calling a factory, which is what lets
+ * `xmd syntax` and `<Plan>` describe this vocabulary.
  *
  * A completed root replay attaches no provider and registers nothing, so a
  * document that already ran through completion re-registers none of these.
@@ -37,6 +57,8 @@ import type {
   DocumentationReader,
 } from "@executablemd/core";
 import { COMPOSITION_ORIGIN } from "./definitions.ts";
+import { Git } from "./git-api.ts";
+import { IssueOperations } from "../issue/operations.ts";
 import Repository, { props as repositoryProps } from "./components/Repository.ts";
 import Worktree, { props as worktreeProps } from "./components/Worktree.ts";
 import GitSwitch, { props as gitSwitchProps } from "./components/GitSwitch.ts";
@@ -45,28 +67,13 @@ import GitCommit, {
   props as gitCommitProps,
   returns as gitCommitReturns,
 } from "./components/GitCommit.ts";
-import GitPush, {
-  documentation as gitPushDocumentation,
-  props as gitPushProps,
-} from "./components/GitPush.ts";
-import PullRequest, {
-  props as pullRequestProps,
-  returns as pullRequestReturns,
-} from "./components/PullRequest.ts";
-import Issue, {
-  documentation as issueDocumentation,
-  props as issueProps,
-  returns as issueReturns,
-} from "./components/Issue.ts";
+import { pushRegistration } from "./components/GitPush.ts";
+import { pullRequestRegistration } from "./components/PullRequest.ts";
 import {
-  checksForm,
-  checksReturns,
-  commentsForm,
-  commentsReturns,
-  props as pullRequestReadProps,
-  reviewsForm,
-  reviewsReturns,
+  PULL_REQUEST_READ_KINDS,
+  pullRequestReadRegistration,
 } from "./components/PullRequestReads.ts";
+import { issueRegistration } from "./components/Issue.ts";
 import IssueTracker, { props as issueTrackerProps } from "./components/IssueTracker.ts";
 import { changesForm, diffForm, fileForm, filesForm } from "./components/GitReads.ts";
 import {
@@ -81,10 +88,23 @@ import {
 } from "./observation-api.ts";
 
 /**
+ * Every name this boundary carries, in catalog order.
+ *
+ * Derived from the one registration array rather than listed again, so a
+ * component added to it cannot disappear from the documentation this package
+ * contributes or from an inventory held to it. An execution that declares one
+ * of these operations with policy of its own declares it under this same name,
+ * which is what makes one catalog true of every host.
+ */
+function compositionNames(): readonly string[] {
+  return Object.freeze(COMPOSITION_REGISTRATIONS.map((registration) => registration.name));
+}
+
+/**
  * This boundary's long-form documentation, and the components it must cover.
  *
- * Derived from `COMPOSITION_REGISTRATIONS` below rather than listed again, so a
- * component added to that array cannot be left undocumented here.
+ * Derived from the registration array rather than listed again, so a component
+ * added to it cannot be left undocumented here.
  */
 export function* compositionDocumentation(
   read?: DocumentationReader,
@@ -95,12 +115,13 @@ export function* compositionDocumentation(
       owner: COMPOSITION_ORIGIN,
       asset: "packages/git/src/composition/components.md",
     },
-    COMPOSITION_REGISTRATIONS.map((registration) => registration.name),
+    compositionNames(),
     read,
   );
 }
 
-export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
+/** Repository and Worktree: which checkout the Markdown inside them expands in. */
+const SELECTIONS: readonly ComponentRegistration[] = [
   {
     name: "Repository",
     origin: COMPOSITION_ORIGIN,
@@ -123,6 +144,16 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
       context: "The Markdown expanded in that checkout.",
     }),
   },
+];
+
+/**
+ * What one selected checkout answers about itself, or changes inside itself.
+ *
+ * Git.Switch, Git.Add and Git.Commit change one and the four reads observe one;
+ * either way a local transaction encloses the work, so none of them is an
+ * operation a declaring execution names an invocation of.
+ */
+const LOCAL_OPERATIONS: readonly ComponentRegistration[] = [
   {
     name: "Git.Switch",
     origin: COMPOSITION_ORIGIN,
@@ -156,13 +187,6 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
       as: "Optional. The full object id of the commit.",
       context: "The message body, expanded before the commit is made.",
     }),
-  },
-  {
-    name: "Git.Push",
-    origin: COMPOSITION_ORIGIN,
-    props: gitPushProps,
-    fn: GitPush,
-    ...documented(gitPushDocumentation),
   },
   {
     name: "Git.Files",
@@ -212,83 +236,56 @@ export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = [
       context: null,
     }),
   },
-  {
-    name: "PullRequest",
-    origin: COMPOSITION_ORIGIN,
-    props: pullRequestProps,
-    returns: pullRequestReturns,
-    fn: PullRequest,
-    ...documented({
-      description: `Open or update a pull request. \`<PullRequest title="Prepare 1.4">…</PullRequest>\` uses its content as the body after \`<Git.Push />\`.`,
-      as: "Optional. The pull request's repository, number, url, state and head and base commits.",
-      context: "The pull request's body.",
-    }),
-  },
-  {
-    name: "PullRequest.Reviews",
-    origin: COMPOSITION_ORIGIN,
-    props: pullRequestReadProps,
-    returns: reviewsReturns,
-    fn: formDispatcher(reviewsForm),
-    ...documented({
-      description: `Read pull request reviews. \`<PullRequest.Reviews url={pullRequest.url} as="reviews" />\` reads reviews from the specified pull request.`,
-      as: "Required. Each review's author, state, body, submission time, commit and url.",
-      context: null,
-    }),
-  },
-  {
-    name: "PullRequest.Comments",
-    origin: COMPOSITION_ORIGIN,
-    props: pullRequestReadProps,
-    returns: commentsReturns,
-    fn: formDispatcher(commentsForm),
-    ...documented({
-      description: `Read pull request comments. \`<PullRequest.Comments url={pullRequest.url} as="comments" />\` reads both conversation and review comments.`,
-      as: "Required. Each comment's kind, author, body, timestamps and url, and a review comment's file, hunk and line.",
-      context: null,
-    }),
-  },
-  {
-    name: "PullRequest.Checks",
-    origin: COMPOSITION_ORIGIN,
-    props: pullRequestReadProps,
-    returns: checksReturns,
-    fn: formDispatcher(checksForm),
-    ...documented({
-      description: `Read pull request checks. \`<PullRequest.Checks url={pullRequest.url} as="checks" />\` reads check runs and commit statuses for its head.`,
-      as: "Required. Each check's kind, name, head commit and outcome.",
-      context: null,
-    }),
-  },
-  {
-    name: "IssueTracker",
-    origin: COMPOSITION_ORIGIN,
-    props: issueTrackerProps,
-    fn: IssueTracker,
-    ...documented({
-      description: `Select an issue tracker. \`<IssueTracker url={props.tracker}>…</IssueTracker>\` expands its content with the specified tracker in scope.`,
-      as: null,
-      context: "The Markdown whose issues are filed there.",
-    }),
-  },
-  {
-    name: "Issue",
-    origin: COMPOSITION_ORIGIN,
-    props: issueProps,
-    returns: issueReturns,
-    fn: Issue,
-    ...documented(issueDocumentation),
-  },
 ];
 
+/** The destination an `<Issue>` inside it is filed at. */
+const TRACKER: ComponentRegistration = {
+  name: "IssueTracker",
+  origin: COMPOSITION_ORIGIN,
+  props: issueTrackerProps,
+  fn: IssueTracker,
+  ...documented({
+    description: `Select an issue tracker. \`<IssueTracker url={props.tracker}>…</IssueTracker>\` expands its content with the specified tracker in scope.`,
+    as: null,
+    context: "The Markdown whose issues are filed there.",
+  }),
+};
+
 /**
- * Register the composition vocabulary as ordinary defaults for this scope.
+ * The six operations no local transaction encloses, as ordinary registrations.
  *
- * The registrations and the documentation that describes them, installed
- * together so a scope that has one has the other. Both are declarations: this
- * installs no provider, discovers no ambient repository, acquires no lock,
- * spawns no Git and reads no credential, which is what lets `xmd syntax` enter
- * it to describe the profile.
+ * The same bodies an owning execution declares, over the public feature Apis.
+ * Registered, because this is where the names come from, and because an
+ * ordinary default is what a nearer registration — a repository-local
+ * component, an enclosing host, an execution that owns the operation — is
+ * entitled to shadow.
+ */
+const EXTERNAL_OPERATIONS: readonly ComponentRegistration[] = [
+  pushRegistration(Git.operations.push),
+  pullRequestRegistration,
+  ...PULL_REQUEST_READ_KINDS.map(pullRequestReadRegistration),
+  issueRegistration(IssueOperations.operations),
+];
+
+/** All sixteen, in catalog order. */
+export const COMPOSITION_REGISTRATIONS: readonly ComponentRegistration[] = Object.freeze([
+  ...SELECTIONS,
+  ...LOCAL_OPERATIONS,
+  ...EXTERNAL_OPERATIONS,
+  TRACKER,
+]);
+
+/**
+ * Register the whole vocabulary as ordinary defaults for this scope.
+ *
+ * Every command that carries this vocabulary calls this, `repl` included: one
+ * registry is what says which names exist, and an execution that owns one of
+ * these operations attaches its policy to the same body from inside its own
+ * scope rather than arriving with a vocabulary of its own.
+ *
+ * Every one of them is a declaration: this installs no provider, discovers no
+ * ambient repository, acquires no lock, spawns no Git and reads no credential,
+ * which is what lets `xmd syntax` enter it to describe the profile.
  */
 export function* useCompositionComponents(): Operation<void> {
   yield* registerComponents(COMPOSITION_REGISTRATIONS);

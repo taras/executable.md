@@ -14,72 +14,38 @@
  * </Repository>
  * ```
  *
- * `title` is required, `number` defaults to none, `base` defaults to the
- * Repository's recorded initial branch, `draft` defaults to false, and the
- * rendered content is the body. The head is the branch the selected checkout is
- * on — decided the way §7.1 decides every Git operation's place, by the
- * enclosing `<Repository>` and the contextual working directory — so there is no
- * `head`, `repository`, `remote` or `provider` prop to say it a second way.
+ * The head is the branch the selected checkout is on, decided the way §7.1
+ * decides every Git operation's place, so there is no `head`, `repository`,
+ * `remote` or `provider` prop to say it a second way. Whether the document
+ * named a number is the document's own word rather than a search: without one
+ * it asks for a pull request from this head to this base, with one it asks for
+ * that pull request, and a number belonging elsewhere is a conflict rather than
+ * a rewrite onto unrelated state.
  *
- * ## An upsert over one explicit identity
- *
- * Without a number the document is asking for *a pull request from this head to
- * this base*: one is created, or the compatible one an interrupted earlier
- * attempt already created is adopted. With a number it is asking for *that pull
- * request*: its title, body, draft state and base are brought to what this
- * invocation says, and if they already say it, nothing is performed and the
- * no-op is recorded.
- *
- * Which of the two it is, is the document's own word rather than a search. A
- * number that names a pull request belonging to another Repository, opened from
- * another head, or no longer open is a conflict — never a rewrite onto
- * unrelated state. The head is never rewritten either: an update moves the four
- * fields it names and nothing else.
- *
- * ## It publishes nothing
- *
- * A pull request is a statement about a branch that already exists on the Git
- * host, and this component never makes one exist. `<Git.Push />` is written
- * explicitly, and the run must already hold that Push's own successful result
- * for this exact Repository, head branch, destination ref and commit — before a
- * creation and before an update alike. Direct remote observation is not a
- * substitute: a branch this run finds at the host may have been put there by
- * anything, and opening or repointing a pull request for it would be publishing
- * somebody else's work under this run's name.
- *
- * ## What it produces
- *
- * Stable evidence of what this effect settled on, bound through `as`: the
- * filtered Repository identity, the provider's own stable identity for the pull
- * request, its number, its URL, its open state, and the head and base commits
- * of the snapshot the reconciliation finished at. Reviews, comments, checks,
- * labels, merge state and later edits are separate reads rather than freshness
- * smuggled into the result — a replayed run hands back exactly what the run
- * recorded, whatever the pull request looks like now.
- *
- * ## Failure
- *
- * Content expands first and completely, so a body that failed to render stops
- * everything this component owns before a Repository is even observed. After
- * that, a missing Repository context, a checkout whose HEAD names no branch and
- * missing, conflicting or unreadable Push evidence are all decided locally,
- * before the Git host exists in the story, and each fails the run rather than
- * printing: a later sibling must not run as though a pull request had been
- * opened. What the Git host itself answers — a conflict, an ambiguity, an
- * unavailability — travels under §10.2's shared vocabulary.
+ * It publishes nothing. A pull request is a statement about a branch that
+ * already exists at the Git host, and the run must already hold `<Git.Push />`'s
+ * own successful result for this exact Repository, head, destination ref and
+ * commit. Direct remote observation is not a substitute: a branch found at the
+ * host may have been put there by anything, and opening a pull request for it
+ * would be publishing somebody else's work under this run's name.
  */
-
 import { cwd } from "@executablemd/runtime";
-import { content, hasContent } from "@executablemd/core";
-import type { PropsSchema, ReturnsSchema } from "@executablemd/core";
+import { content, documented, hasContent } from "@executablemd/core";
+import type {
+  ComponentRegistration,
+  FirstPartyDocumentation,
+  FunctionComponent,
+  PropsSchema,
+  ReturnsSchema,
+} from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { PullRequestOperations } from "../pull-request-operations.ts";
+import { COMPOSITION_ORIGIN } from "../definitions.ts";
 import { selectedRepository } from "../context.ts";
 import { PullRequestAdmissionError } from "../errors.ts";
 import { pullRequestResultJson } from "../pull-request-records.ts";
 
-/** The component name, as a document writes it and as a refusal names it. */
 export const PULL_REQUEST_ELEMENT = "<PullRequest>";
 
 export const props: PropsSchema = {
@@ -137,12 +103,21 @@ export const returns: ReturnsSchema = {
   additionalProperties: false,
 };
 
-export default function* PullRequest(props: Record<string, Json>): Operation<Json> {
-  // Before anything of this element's own exists — before a Repository is
-  // observed, before a checkout is selected, before retained Push evidence is
-  // read and long before a Git host is contacted. The body is what the pull
-  // request would say, and a body that never finished rendering must not become
-  // one that was published.
+export const documentation: FirstPartyDocumentation = {
+  description:
+    `Open or update a pull request. \`<PullRequest title="Prepare 1.4">…</PullRequest>\` uses its ` +
+    `content as the body after \`<Git.Push />\`.`,
+  as: "Optional. The pull request's repository, number, url, state and head and base commits.",
+  context: "The pull request's body.",
+};
+
+const body: FunctionComponent = function* PullRequest(
+  props: Record<string, Json>,
+): Operation<Json> {
+  // Before a Repository is observed, a checkout selected or retained Push
+  // evidence read: a body that never finished rendering must not become one
+  // that was published, and a child that retains work of its own finishes at
+  // its own journal position first.
   const body = (yield* hasContent()) ? yield* content() : "";
 
   const repository = yield* selectedRepository();
@@ -156,13 +131,11 @@ export default function* PullRequest(props: Record<string, Json>): Operation<Jso
 
   const result = yield* PullRequestOperations.operations.upsert({
     pullRequest: {
-      // Normalized once, here: absence is `null` from this point on, because
-      // the durable request is JSON and a member that is sometimes missing
-      // would be a second shape rather than a value.
+      // Absence is `null` from here on: the durable request is JSON, and a
+      // member that is sometimes missing would be a second shape.
       number: typeof props.number === "number" ? props.number : null,
       title: typeof props.title === "string" ? props.title : "",
-      // Verbatim. What a document wrote is the pull request's body, and
-      // trimming or reflowing it here would publish something nobody authored.
+      // Verbatim: trimming or reflowing it would publish something nobody wrote.
       body,
       draft: props.draft === true,
       // The Repository's own initial branch, pinned when it was selected,
@@ -176,4 +149,16 @@ export default function* PullRequest(props: Record<string, Json>): Operation<Jso
     workingDirectory: yield* cwd(),
   });
   return pullRequestResultJson(result);
-}
+};
+
+const METADATA = {
+  name: "PullRequest",
+  origin: COMPOSITION_ORIGIN,
+  props,
+  returns,
+  forms: ["self-closing", "paired"] as const,
+  ...documented(documentation),
+};
+
+/** An ordinary registered default, over whichever provider the host installed. */
+export const pullRequestRegistration: ComponentRegistration = { ...METADATA, fn: body };

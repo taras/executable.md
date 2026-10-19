@@ -25,6 +25,7 @@ import { incompleteStructural } from "@executablemd/core/host";
 import type {
   ExecutionDeclaration,
   ExecutionInstallation,
+  IdentityComponent,
   IncompleteStructural,
 } from "@executablemd/core/host";
 

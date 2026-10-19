@@ -17,14 +17,13 @@
  *
  * ## What a document writes, and what it cannot reach
  *
- * `<Git.Push />` stays an ordinary shadowable component with the origin, props
- * and prose it already had. What the entry's own declaration adds is the
- * identity canonical core mints for each invocation: the trusted body takes that
- * identity from the invocation once, snapshots the Repository in scope and the
- * contextual working directory, and owns its private owner and site throughout. None of
- * them reaches public Git input, so a replacement registration — or a direct
- * `Git.operations.push(...)` from anywhere — names no durable work of this
- * entry's and reaches the ordinary missing-provider refusal.
+ * `<Git.Push />` is the one shared component, with the origin, props and prose
+ * it already had. What this host adds is policy beneath it: the common
+ * invocation binding authenticates each invocation and hands this policy the
+ * site it authenticated, and the policy owns its private owner and site
+ * throughout. Neither reaches public Git input, so a replacement registration —
+ * or a direct `Git.operations.push(...)` from anywhere — names no durable work
+ * of this entry's and reaches the ordinary missing-provider refusal.
  *
  * A fresh invocation dispatches through an operation-local default under the
  * stable Git Api name, so every public handler a document or a plugin composed
@@ -67,30 +66,17 @@ import type {
   LiveDurableOperationCoordinator,
   Result as ProtocolResult,
 } from "@executablemd/durable-streams";
-import { documented, formDispatcher } from "@executablemd/core";
-import type { ComponentInvocation, FunctionComponent } from "@executablemd/core";
-import type {
-  IdentityClaimant,
-  IdentityComponent,
-  JournalAdmission,
-} from "@executablemd/core/host";
-import { cwd } from "@executablemd/runtime";
-import { COMPOSITION_ORIGIN } from "../../composition/definitions.ts";
-import {
-  documentation as gitPushDocumentation,
-  PUSH,
-  props as gitPushProps,
-} from "../../composition/components/GitPush.ts";
-import { selectedRepository } from "../../composition/context.ts";
+import type { JournalAdmission } from "@executablemd/core/host";
+import { PUSH } from "../../composition/components/GitPush.ts";
 import {
   GitCompositionProviderError,
   GitOperationAdmissionError,
-  GitOperationError,
   GitOperationInfrastructureError,
   GitOperationProtocolError,
 } from "../../composition/errors.ts";
 import { GIT_API } from "../../composition/git-api.ts";
 import type { GitApi, GitPushInvocation } from "../../composition/git-api.ts";
+import type { BindOperations } from "../../composition/invocation-binding.ts";
 import {
   destinationRefFor,
   parseGitPushRecord,
@@ -183,76 +169,30 @@ export function replPushAdmission(owner: string): JournalAdmission {
 }
 
 /**
- * The entry's own `Git.Push`, declared as an ordinary shadowable component.
+ * How this entry performs one `<Git.Push />`.
  *
- * It shadows the inherited bundled registration for this execution's scope
- * without touching it, so a repository-local `<Git.Push>` keeps its ordinary
- * precedence over both. The name is neither reserved nor protected: what a
- * replacement does not get is an identity authenticator.
+ * The policy the common declaration is built with. It is called once per
+ * invocation, with the site the binding authenticated, and what it answers with
+ * is that invocation's own publication operation: the shared component asks it,
+ * and everything about retention, dispatch and reconciliation happens below
+ * this line.
  *
- * Inspection describes one `Git.Push` — the same origin, props, forms and prose
- * the bundled registration carries — because it is the same component with this
- * entry's identity behind it.
+ * The site reaches no public Git input and no journal name of its own. Its
+ * parsed facts are what the saved request carries, because the opaque
+ * identifier this entry minted names nothing once the entry ends.
  */
-export function replPushComponent(owner: string, access: ReplPushAccess): IdentityComponent {
-  return {
-    name: "Git.Push",
-    origin: COMPOSITION_ORIGIN,
-    props: gitPushProps,
-    forms: ["self-closing"],
-    // The bundled registration's own prose, read from the component module both
-    // of them read: inspection describes one `Git.Push`, so the two cannot
-    // drift into describing two.
-    ...documented(gitPushDocumentation),
-    // Canonical form dispatch, so the form is settled by the scan before the
-    // body runs. A contextual `hasContent()` answer cannot admit a paired
-    // publication: the chain that answers one is composed by whoever installed
-    // a handler, and an irreversible external effect is not something a handler
-    // may choose.
-    factory: (claim: IdentityClaimant) =>
-      formDispatcher({
-        forms: "self-closing",
-        fn: publishingBody(owner, access, claim),
-        refuse: () =>
-          new GitOperationError(
-            PUSH,
-            "invalid-invocation",
-            `${PUSH} renders nothing, so it takes no content. Write it as <Git.Push />.`,
-          ),
-      }),
-  };
-}
-
-function publishingBody(
+export function replPushPolicy(
   owner: string,
   access: ReplPushAccess,
-  claim: IdentityClaimant,
-): FunctionComponent {
-  return function* GitPush(
-    _props: Record<string, Json>,
-    invocation: ComponentInvocation,
-  ): Operation<Json> {
-    // The same lexical refusal the ordinary component makes, in the same order
-    // and with the same sentence: there is nowhere to publish to before there
-    // is anything to publish.
-    const repository = yield* selectedRepository();
-    if (repository === undefined) {
-      throw new GitOperationAdmissionError(
-        PUSH,
-        "it is written outside a lexical <Repository>, so there is no repository in scope whose " +
-          "origin a branch could be published to",
-      );
-    }
-    const site = yield* claim(invocation);
-    yield* publish({
+): BindOperations<GitApi["push"]> {
+  return (site: string) => (request: GitPushInvocation) =>
+    publish({
       owner,
       site,
       access,
-      repository,
-      workingDirectory: yield* cwd(),
+      repository: request.repository,
+      workingDirectory: request.workingDirectory,
     });
-    return "";
-  };
 }
 
 interface Invocation {
@@ -271,7 +211,7 @@ interface Invocation {
  * request, and only an invocation with nothing saved dispatches, resolves and
  * writes one down.
  */
-function* publish(invocation: Invocation): Operation<void> {
+function* publish(invocation: Invocation): Operation<GitPushOutcome> {
   const entry = held(invocation.access);
   // Authenticated before anything else, and its *parsed* facts are what the
   // request carries. The opaque identifier this entry minted never appears: it
@@ -294,8 +234,7 @@ function* publish(invocation: Invocation): Operation<void> {
 
   if (yield* retainedRecordAhead(REPL_REPOSITORY_PUSH_REQUEST, name)) {
     const saved = yield* restored(entry, invocation, requested, name);
-    yield* reconcile(entry, invocation, saved);
-    return;
+    return yield* reconcile(entry, invocation, saved);
   }
 
   // One operation-local default under the stable Api name: the shared
@@ -316,10 +255,10 @@ function* publish(invocation: Invocation): Operation<void> {
     commit: refusing("<Git.Commit>"),
   });
   try {
-    // What a handler answers with is not read. A synthetic answer has answered
-    // the document; it is not a receipt, and this operation retains nothing for
-    // it.
-    yield* local.operations.push({
+    // What a handler answers with is not read as evidence. A synthetic answer
+    // has answered the document; it is not a receipt, and this operation
+    // retains nothing for it.
+    return yield* local.operations.push({
       repository: invocation.repository,
       workingDirectory: invocation.workingDirectory,
     });
