@@ -34,6 +34,7 @@
     "mdast-util-to-string": "^4",
     "remark": "15",
     "remend": "^1.2.2",
-    "unist-util-select": "^5"
+    "unist-util-select": "^5",
+    "yq.rs": "0.1.4"
   }
 }
