@@ -305,6 +305,46 @@ It chooses a fence the value cannot break out of, so a value that itself
 contains fences is still shown rather than escaping into the surrounding
 document. `as` captures the exact fenced Markdown instead of emitting it.
 
+## Slice
+
+Shows a window of text that something else rendered.
+
+```mdx
+<Slice offset={-4096} length={4096}>
+  <File path="build.log" />
+</Slice>
+```
+
+Reach for it when what belongs in the document is part of something too long to
+read whole — the tail of a build log, the first screen of a diff, the head of a
+file you are deciding about. The content renders completely first and the window
+is taken from the text it produced, so the work behind it still happens: the log
+is still read, a command inside still finishes, and a value another element
+captured is still the whole value. This bounds what a reader is shown, not what
+a producer does.
+
+Positions count Unicode code points, so an emoji is one position and a window
+never lands inside one. `offset` counts from the start, or from the end when it
+is negative — `offset={-4096}` is the last four thousand and ninety-six points.
+A position before the beginning starts at the beginning, and one at or past the
+end selects nothing. `length` is how many points to take, and has no maximum.
+
+A window that leaves something out says so, on a line of its own before the
+text. For `<Slice offset={1} length={3}>A😀BCDEF</Slice>`:
+
+```text
+Text excerpt: code points [1, 4) of 7 (zero-based, end exclusive).
+😀BC
+```
+
+That line is what tells a short excerpt from a short input, and an empty window
+from work that produced nothing at all. A window covering the whole input
+carries no line and returns the text exactly as it arrived — nothing is trimmed
+or normalized on either path.
+
+The note is ordinary text written outside the window it describes, so a `<Slice>`
+around another one counts the inner note and may cut through it.
+
 ## Json
 
 Renders a value as JSON text.

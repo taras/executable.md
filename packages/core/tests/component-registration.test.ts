@@ -377,6 +377,7 @@ describe("Tier CR — resolution order", () => {
       "Json",
       "Parse",
       "SafeParse",
+      "Slice",
       "TempDir",
     ]) {
       yield* writeTextFile(join(dir, `${name}.md`), "mine\n");
@@ -408,6 +409,7 @@ describe("Tier CR — resolution order", () => {
       "Json",
       "Parse",
       "SafeParse",
+      "Slice",
       "TempDir",
     ]) {
       const selection = yield* select(name, [dir]);

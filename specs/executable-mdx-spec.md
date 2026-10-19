@@ -10147,6 +10147,107 @@ Its skipped body is absence, not a retained decision. Replay of a completed root
 is unchanged, and a live or partial expansion reads the value that applies to
 that execution.
 
+### 6.21 Showing a text window: `<Slice>`
+
+A document that renders something too long to read whole — a build log, a diff,
+a file it is deciding about — needs a part of it rather than all of it.
+`<Slice>` is core's own component (§5.3) for exactly that:
+
+```md
+<Slice offset={-4096} length={4096}>
+  <File path="build.log" />
+</Slice>
+```
+
+What it bounds is the rendered text, and nothing else. The content expands
+completely and `content()` is called exactly once (§6.3), so the window is taken
+from a finished string: the file is still read whole, a command inside still
+runs to completion, and a value a nested element captured is still that whole
+value. Reaching the requested number of characters stops, cancels, retries and
+reruns nothing. This is a limit on what a reader is shown rather than on the
+producer's work or on memory.
+
+#### Props and form
+
+`offset` is an integer and defaults to `0`. `length` is an integer of at least
+`1`, defaults to `4096`, and has no maximum. The schema is closed, so a
+fractional position, a non-integer type, a nonpositive length and an unknown
+prop are each the engine's ordinary structured prop-validation failure (§6.5) —
+decided before the body, so an invalid window expands no content and performs no
+enclosed effect.
+
+`as` stays engine-owned and optional, and no `returns` schema is declared, so
+the component is not forced into value-component capture. Both authored forms
+are accepted: a self-closing invocation and an empty paired one have no content,
+which is ordinary empty content rather than a refusal.
+
+#### The window, and the exact result
+
+Positions are **Unicode code points**. An astral character is one position, so a
+window can never land between the two halves of one; they are not bytes, UTF-16
+code units or grapheme clusters.
+
+Let `total` be the content's code-point count. A negative `offset` resolves as
+`total + offset` and any other as itself; that result is clamped to
+`[0, total]` to give `start`; and `end` is the smaller of `total` and
+`start + length`. The selected interval is the half-open `[start, end)`.
+
+When that interval covers the complete input, the component returns the original
+body string unchanged. Otherwise it returns exactly the following note, one line
+feed, then the selected text, with no further trailing newline:
+
+```text
+Text excerpt: code points [start, end) of total (zero-based, end exclusive).
+```
+
+The three words are replaced by decimal counts. For `A😀BCDEF`, `offset={1}` and
+`length={3}`, the result is exactly:
+
+```text
+Text excerpt: code points [1, 4) of 7 (zero-based, end exclusive).
+😀BC
+```
+
+A `start` at or beyond a nonempty input's end selects nothing and reports the
+interval `[total, total)`, so only the note and its line feed are returned — an
+empty window is distinguishable from work that produced nothing. An empty input
+omits nothing and returns `""`.
+
+Nothing else about the text is read. It is not trimmed, normalized, parsed,
+escaped or rescanned, and authored whitespace counts toward `total` like any
+other character. The note is composed after the selection and lies outside the
+payload it describes; downstream `DocumentOutput` presentation (§9) still
+governs what happens to emitted output, as it does for every component.
+
+#### Captures, composition and failure
+
+A nested element's `as` binding keeps its complete value and its ordinary
+visibility (§6.5): a captured child contributes no text unless authored content
+renders that binding, and `<Slice>` never reaches in to replace a child's
+result. Its own `as="name"` binds the exact resulting string — the note
+included — and the invocation emits nothing at its site.
+
+Everything the content renders shares **one** window, in the order `content()`
+supplies it; siblings written outside the element are unaffected. Nested
+invocations finish inside out, and the outer input holds the complete inner note
+and payload as ordinary text, so an outer window may cut either and its own note
+describes that outer input.
+
+An unrecovered content failure is never a successful excerpt or a successful
+capture. The existing content-failure path, partial-output handling,
+fatal-failure precedence and invocation teardown (§6.8.1) all stay in charge,
+and caller cancellation remains cancellation. `<Slice>` opens no scope, acquires
+no resource, owns no task, adds no recovery and has no durable effect of its
+own — resolving it is the ordinary `import_component` every resolution produces.
+
+#### Resolution and replay
+
+The registration is an ordinary overridable default, not a reserved name: a
+repository `Slice.md` is chosen ahead of it. Inspection reports both authored
+forms, the props schema above, no captures and text return mode. A live run and
+a partial replay both reach it through normal expansion and take a window of the
+text that execution reconstructed; completed-root terminal reuse is unchanged.
+
 
 ## 7. Entry point
 
@@ -14147,6 +14248,26 @@ row: it inspects the symbols without running anything.
 | VB8 | A direct `xmd test --verbose` root does not have `<Verbose>` |
 | VB9 | Host false is overridden to true for one lexical subtree |
 | VB10 | Host true is overridden to false, the body is skipped, and sibling state is restored |
+
+### Tier SL1 — `<Slice>` (§6.21)
+
+The contract is an exact string, so every window row compares a whole rendering
+or a whole captured value rather than a substring, and none of them trims what
+it compares. The rows drive core's registered component through `execute()`,
+because the prop boundary, the one `content()` call and the capture boundary
+around it are what is being proved. S8 runs in a real open REPL session and
+reads back through the existing controls.
+
+| Criterion | Evidence |
+| --- | --- |
+| S1 | Code-point windows, the omitted `[0, 4096)` default, clamping, the empty window and the exact note |
+| S2 | An invalid window is refused by prop validation and expands no content |
+| S3 | The content completes once, and every capture inside it stays complete |
+| S4 | Enclosed renderings share one window; siblings outside it are unaffected |
+| S5 | Nesting finishes inside out, and an inner note is ordinary text the outer window may cut |
+| S6 | A content failure is neither a successful excerpt nor a successful capture |
+| S7 | Cancellation joins the producer's own cleanup, and the component owns no lifetime of its own |
+| S8 | A reply reads a sliced entry's output and its complete root data through the existing controls |
 
 ### Tier DM — Declared Markdown selection and exact source (§5.3)
 
