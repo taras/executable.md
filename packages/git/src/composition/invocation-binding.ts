@@ -1,15 +1,16 @@
 /**
- * The handoff between a repository component's invocation and the host policy
- * that performs it, for the six operations no local transaction encloses.
+ * How a declaring execution attaches its own policy to a shared component body.
  *
- * `boundComponent` is for a host that retains work named after the invocation:
- * it authenticates the invocation core issued and hands the site to
- * feature-owned policy, which answers with this invocation's own semantic
- * operations. An ordinary registration needs none of that and calls the public
- * feature operations directly.
+ * `<Git.Push />` and `<Issue>` are the two operations a REPL entry retains, so
+ * their bodies take the operation they ask as an argument: an ordinary
+ * registration passes the feature Api's own operations, and the entry's
+ * declaration passes an envelope that encloses that Api. A body that reached
+ * the Api itself could not be enclosed by a durable boundary above it, which is
+ * what retention here means. The other four — `<PullRequest>` and its three
+ * evidence reads — retain nothing in this delivery and ask their Api directly.
  *
- * Either way the body receives semantic operations and nothing else — no
- * authenticator, no owner, no site, no native access, no record codec — and the
+ * Either way the body receives semantic operations and nothing else: no
+ * authenticator, no owner, no site, no native access and no record codec. The
  * site stays private to the policy it was handed to.
  */
 
@@ -26,14 +27,6 @@ export type ComponentBody<Operations> = (
 
 /** How a host answers with one authenticated invocation's own operations. */
 export type BindOperations<Operations> = (site: string) => Operations;
-
-/** The body an ordinary registration carries, over the public feature operations. */
-export function registeredComponent<Operations>(
-  operations: Operations,
-  body: ComponentBody<Operations>,
-): FunctionComponent {
-  return (props: Record<string, Json>) => body(props, operations);
-}
 
 /**
  * The body a declaration carries, over the policy the declaring execution owns.

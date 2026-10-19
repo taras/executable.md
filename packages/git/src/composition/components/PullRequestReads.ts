@@ -30,9 +30,7 @@ import { PullRequestReadError } from "../errors.ts";
 import { pullRequestReadResultJson } from "../pull-request-read-records.ts";
 import { canonicalPullRequestUrl, pullRequestProviderName } from "../pull-request-target.ts";
 import type { PullRequestReadKind } from "../pull-request-read-records.ts";
-import type { PullRequestOperationsApi } from "../pull-request-operations.ts";
-import { registeredComponent } from "../invocation-binding.ts";
-import type { ComponentBody } from "../invocation-binding.ts";
+import { PullRequestOperations } from "../pull-request-operations.ts";
 
 export const REVIEWS_ELEMENT = "<PullRequest.Reviews>";
 export const COMMENTS_ELEMENT = "<PullRequest.Comments>";
@@ -163,11 +161,8 @@ export const checksReturns: ReturnsSchema = array({
     }),
   ],
 });
-function read(kind: PullRequestReadKind, element: string): ComponentBody<PullRequestOperationsApi> {
-  return function* PullRequestRead(
-    props: Record<string, Json>,
-    operations: PullRequestOperationsApi,
-  ): Operation<Json> {
+function read(kind: PullRequestReadKind, element: string): FunctionComponent {
+  return function* PullRequestRead(props: Record<string, Json>): Operation<Json> {
     // Canonicalized before any provider sees it, so the component, the durable
     // request and every adapter read one answer.
     const url = canonicalPullRequestUrl(props.url);
@@ -189,7 +184,7 @@ function read(kind: PullRequestReadKind, element: string): ComponentBody<PullReq
       );
     }
 
-    const result = yield* operations.read({ url, kind, provider });
+    const result = yield* PullRequestOperations.operations.read({ url, kind, provider });
     if (result.kind !== kind) {
       throw new PullRequestReadError(
         "protocol",
@@ -282,15 +277,9 @@ function metadata(kind: PullRequestReadKind) {
 }
 
 /** An ordinary registered default, over whichever provider the host installed. */
-export function pullRequestReadRegistration(
-  kind: PullRequestReadKind,
-  operations: PullRequestOperationsApi,
-): ComponentRegistration {
+export function pullRequestReadRegistration(kind: PullRequestReadKind): ComponentRegistration {
   const element = ELEMENTS[kind];
-  return {
-    ...metadata(kind),
-    fn: formDispatcher(declare(registeredComponent(operations, read(kind, element)), element)),
-  };
+  return { ...metadata(kind), fn: formDispatcher(declare(read(kind, element), element)) };
 }
 
 export const PULL_REQUEST_READ_KINDS: readonly PullRequestReadKind[] = Object.freeze([

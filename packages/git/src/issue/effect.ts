@@ -41,13 +41,18 @@ import { getExpansion } from "@executablemd/core";
 import { getWorkflowRun } from "@executablemd/workflow";
 import { retainedIssueIdentitiesHere } from "../identities.ts";
 import { claimRetainedIssueIdentity, exhaustRetainedIssueIdentities } from "./identities.ts";
-import { IssueApi } from "./api.ts";
 import { IssueOperations } from "./operations.ts";
 import type { IssueReadInvocation, IssueUpsertInvocation } from "./operations.ts";
 import type { IssueDetails, IssueReference } from "./api.ts";
 import { IssueProtocolError } from "./errors.ts";
-import { issueIdempotencyKey } from "./records.ts";
-import { ownedUpsertRequest, readOwnedIssue, upsertOwnedIssue } from "./owned.ts";
+import {
+  liveIssueRead,
+  liveIssueUpsert,
+  ownedUpsertKey,
+  ownedUpsertRequest,
+  readOwnedIssue,
+  upsertOwnedIssue,
+} from "./owned.ts";
 import type { IssueReadEffectRequest, IssueUpsertEffectRequest } from "./owned.ts";
 
 export type { IssueReadEffectRequest, IssueUpsertEffectRequest } from "./owned.ts";
@@ -63,11 +68,9 @@ export function* readIssue(request: IssueReadEffectRequest): Operation<IssueDeta
   const identity = yield* effectIdentity();
   return yield* readOwnedIssue(
     { owner: identity.runId, site: identity.expansionId, request },
-    function* (): Operation<unknown> {
-      return yield* IssueApi.operations.read(request.url, {
-        ...(request.provider === undefined ? {} : { provider: request.provider }),
-      });
-    },
+    // Directly: this profile installs the envelope at the `IssueOperations`
+    // seam, so the public chain has already wrapped it.
+    () => liveIssueRead(request),
   );
 }
 
@@ -95,11 +98,7 @@ export function* upsertIssue(request: IssueUpsertEffectRequest): Operation<Issue
     ownedUpsertRequest({ owner: identity.runId, site: identity.expansionId, request }),
   );
   const owner = borrowed ?? identity.runId;
-  const key = issueIdempotencyKey(
-    { runId: owner, expansionId: identity.expansionId },
-    "upsert",
-    request.target,
-  );
+  const key = ownedUpsertKey(owner, identity.expansionId, request.target);
 
   return yield* upsertOwnedIssue(
     { owner, site: identity.expansionId, request },
@@ -115,11 +114,7 @@ export function* upsertIssue(request: IssueUpsertEffectRequest): Operation<Issue
             "here would repeat work that already happened outside this journal",
         );
       }
-      return yield* IssueApi.operations.upsert(request.issue, {
-        url: request.target,
-        ...(request.provider === undefined ? {} : { provider: request.provider }),
-        idempotencyKey: key,
-      });
+      return yield* liveIssueUpsert(request, key);
     },
   );
 }

@@ -34,18 +34,17 @@ import { content, documented, hasContent } from "@executablemd/core";
 import type {
   ComponentRegistration,
   FirstPartyDocumentation,
+  FunctionComponent,
   PropsSchema,
   ReturnsSchema,
 } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import type { PullRequestOperationsApi } from "../pull-request-operations.ts";
+import { PullRequestOperations } from "../pull-request-operations.ts";
 import { COMPOSITION_ORIGIN } from "../definitions.ts";
 import { selectedRepository } from "../context.ts";
 import { PullRequestAdmissionError } from "../errors.ts";
 import { pullRequestResultJson } from "../pull-request-records.ts";
-import { registeredComponent } from "../invocation-binding.ts";
-import type { ComponentBody } from "../invocation-binding.ts";
 
 export const PULL_REQUEST_ELEMENT = "<PullRequest>";
 
@@ -112,9 +111,8 @@ export const documentation: FirstPartyDocumentation = {
   context: "The pull request's body.",
 };
 
-export const body: ComponentBody<PullRequestOperationsApi> = function* PullRequest(
+const body: FunctionComponent = function* PullRequest(
   props: Record<string, Json>,
-  operations: PullRequestOperationsApi,
 ): Operation<Json> {
   // Before a Repository is observed, a checkout selected or retained Push
   // evidence read: a body that never finished rendering must not become one
@@ -131,7 +129,7 @@ export const body: ComponentBody<PullRequestOperationsApi> = function* PullReque
     );
   }
 
-  const result = yield* operations.upsert({
+  const result = yield* PullRequestOperations.operations.upsert({
     pullRequest: {
       // Absence is `null` from here on: the durable request is JSON, and a
       // member that is sometimes missing would be a second shape.
@@ -163,8 +161,4 @@ const METADATA = {
 };
 
 /** An ordinary registered default, over whichever provider the host installed. */
-export function pullRequestRegistration(
-  operations: PullRequestOperationsApi,
-): ComponentRegistration {
-  return { ...METADATA, fn: registeredComponent(operations, body) };
-}
+export const pullRequestRegistration: ComponentRegistration = { ...METADATA, fn: body };

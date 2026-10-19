@@ -10,10 +10,14 @@
  * What one of these workers does is fixed: build the complete request, name the
  * durable operation after a digest of it, invoke the caller's live operation
  * exactly once inside that operation, validate what came back before it is
- * retained, and validate it again when it is read back. The live operation is a
- * callback because what a live attempt *is* differs — a workflow run calls
- * `IssueApi` directly, and an entry composes `IssueOperations` over it — and
- * neither of those belongs to the envelope.
+ * retained, and validate it again when it is read back.
+ *
+ * The transport call a live attempt ends in is fixed too, and is here:
+ * {@link liveIssueRead} and {@link liveIssueUpsert}. What differs is only what
+ * the profile wraps around it — a workflow run installs this envelope at the
+ * `IssueOperations` seam and calls the transport directly beneath the public
+ * chain, and a REPL entry owns the envelope above that chain and composes it
+ * per live attempt. That is why the live operation is still a callback.
  *
  * ## Owner and site, rather than run and expansion
  *
@@ -39,10 +43,12 @@ import {
 } from "@executablemd/durable-streams";
 import { getExpansion, sourceDescription } from "@executablemd/core";
 import { ISSUE_EFFECT } from "./effect-type.ts";
+import { IssueApi } from "./api.ts";
 import type { IssueDetails, IssueInput, IssueReference } from "./api.ts";
 import { IssueProtocolError } from "./errors.ts";
 import {
   issueDetailsJson,
+  issueIdempotencyKey,
   issueRecordJson,
   issueRequestFingerprint,
   issueRequestJson,
@@ -84,6 +90,37 @@ export interface OwnedIssueRead extends OwnedIssue {
 
 export interface OwnedIssueUpsert extends OwnedIssue {
   readonly request: IssueUpsertEffectRequest;
+}
+
+/** The live transport call one read ends in, whichever profile retains it. */
+export function liveIssueRead(request: IssueReadEffectRequest): Operation<IssueDetails> {
+  return IssueApi.operations.read(request.url, {
+    ...(request.provider === undefined ? {} : { provider: request.provider }),
+  });
+}
+
+/** The live transport call one upsert ends in, under this attempt's own key. */
+export function liveIssueUpsert(
+  request: IssueUpsertEffectRequest,
+  key: string,
+): Operation<IssueReference> {
+  return IssueApi.operations.upsert(request.issue, {
+    url: request.target,
+    ...(request.provider === undefined ? {} : { provider: request.provider }),
+    idempotencyKey: key,
+  });
+}
+
+/**
+ * What makes a second upsert attempt the same attempt.
+ *
+ * Derived from the complete request's own identity and target before any
+ * middleware saw it: a handler that transformed the issue, the target or the
+ * discriminator changes what is sent and changes nothing about which attempt
+ * this is.
+ */
+export function ownedUpsertKey(owner: string, site: string, target: string): string {
+  return issueIdempotencyKey({ runId: owner, expansionId: site }, "upsert", target);
 }
 
 /**

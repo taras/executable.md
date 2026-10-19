@@ -5223,7 +5223,10 @@ it, and no Context holds it.
 
 A host that retains nothing named after an invocation runs the same bodies over
 the public feature operations, with no identity authenticated, because there is
-nothing for one to name. That is what makes an ordinary run, a workflow run, a
+nothing for one to name. Only an operation some host actually retains takes its
+operation as an argument, and that is `Git.Push` and `Issue`: the four reads and
+upsert no profile retains ask their feature Api directly, as any other component
+does. That is what makes an ordinary run, a workflow run, a
 provider-absent runtime and a REPL entry four policies rather than four
 components.
 

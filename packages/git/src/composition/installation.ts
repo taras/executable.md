@@ -58,11 +58,7 @@ import type {
 } from "@executablemd/core";
 import { COMPOSITION_ORIGIN } from "./definitions.ts";
 import { Git } from "./git-api.ts";
-import type { GitApi } from "./git-api.ts";
 import { IssueOperations } from "../issue/operations.ts";
-import type { IssueOperationsApi } from "../issue/operations.ts";
-import { PullRequestOperations } from "./pull-request-operations.ts";
-import type { PullRequestOperationsApi } from "./pull-request-operations.ts";
 import Repository, { props as repositoryProps } from "./components/Repository.ts";
 import Worktree, { props as worktreeProps } from "./components/Worktree.ts";
 import GitSwitch, { props as gitSwitchProps } from "./components/GitSwitch.ts";
@@ -90,32 +86,6 @@ import {
   filesProps,
   filesReturns,
 } from "./observation-api.ts";
-
-/**
- * The operations an ordinary run, a workflow run and a provider-absent runtime
- * perform through.
- *
- * Each one is the public feature Api, so every handler a document, a plugin or
- * a host composed answers exactly as it did before any of this was declared —
- * and where nothing is installed, each Api's own default refuses. No site is
- * authenticated, because a profile that retains no invocation-named work has
- * nothing for one to name.
- */
-const ORDINARY: {
-  readonly push: GitApi["push"];
-  readonly issue: IssueOperationsApi;
-  readonly pullRequest: PullRequestOperationsApi;
-} = {
-  push: (invocation) => Git.operations.push(invocation),
-  issue: {
-    read: (invocation) => IssueOperations.operations.read(invocation),
-    upsert: (invocation) => IssueOperations.operations.upsert(invocation),
-  },
-  pullRequest: {
-    read: (invocation) => PullRequestOperations.operations.read(invocation),
-    upsert: (invocation) => PullRequestOperations.operations.upsert(invocation),
-  },
-};
 
 /**
  * Every name this boundary carries, in catalog order.
@@ -291,10 +261,10 @@ const TRACKER: ComponentRegistration = {
  * entitled to shadow.
  */
 const EXTERNAL_OPERATIONS: readonly ComponentRegistration[] = [
-  pushRegistration(ORDINARY.push),
-  pullRequestRegistration(ORDINARY.pullRequest),
-  ...PULL_REQUEST_READ_KINDS.map((kind) => pullRequestReadRegistration(kind, ORDINARY.pullRequest)),
-  issueRegistration(ORDINARY.issue),
+  pushRegistration(Git.operations.push),
+  pullRequestRegistration,
+  ...PULL_REQUEST_READ_KINDS.map(pullRequestReadRegistration),
+  issueRegistration(IssueOperations.operations),
 ];
 
 /** All sixteen, in catalog order. */

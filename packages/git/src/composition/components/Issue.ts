@@ -34,7 +34,7 @@ import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/hos
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { COMPOSITION_ORIGIN } from "../definitions.ts";
-import { boundComponent, registeredComponent } from "../invocation-binding.ts";
+import { boundComponent } from "../invocation-binding.ts";
 import type { BindOperations, ComponentBody } from "../invocation-binding.ts";
 import { currentIssueTracker } from "../../issue/context.ts";
 import {
@@ -282,8 +282,8 @@ export function issueRegistration(operations: IssueOperationsApi): ComponentRegi
   return {
     ...METADATA,
     fn: dispatched(
-      registeredComponent(operations, readBody),
-      registeredComponent(operations, upsertBody),
+      (props) => readBody(props, operations),
+      (props) => upsertBody(props, operations),
     ),
   };
 }
