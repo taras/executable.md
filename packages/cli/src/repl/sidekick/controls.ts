@@ -27,7 +27,8 @@
  * ## Reads, writes, and which returns become feedback
  *
  * The read class observes and returns: bindings, the entry vocabulary, the six
- * guide chapters, the environment and an entry's output. The write class is
+ * guide chapters, the environment, and the four bounded reads of one entry's
+ * saved evidence. The write class is
  * what changes something a person can see or asks them something: filling the
  * shared draft, submitting it, and canonical `<Elicit>`. Keeping them in
  * separate classes is what lets the captured ceiling say, exactly, that a reply
@@ -47,7 +48,7 @@
  * installs is where its pair is written. See `questions.ts`.
  */
 
-import { Ok } from "effection";
+import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 import { content } from "@executablemd/core";
 import type { InvocationForm } from "@executablemd/core";
@@ -61,6 +62,13 @@ import type { Json } from "@executablemd/durable-streams";
 
 import type { RetainedPrefix } from "./history.ts";
 import type { OutputRead, OutputReadRequest } from "./output.ts";
+import type {
+  EntryJournalPage,
+  EntryPromptPage,
+  EntryPromptRequest,
+  EntryReadRequest,
+  EntryTextPage,
+} from "./entry-inspection.ts";
 
 /** Where this feature's pinned identities come from. */
 const ORIGIN = "@executablemd/cli:repl/sidekick";
@@ -129,6 +137,14 @@ export interface SidekickRequests {
   submit(): Operation<Result<SubmitReceipt>>;
   /** Read one window of one entry's observed output. */
   entryOutput(request: OutputReadRequest): Operation<Result<OutputRead>>;
+  /** Read one window of the exact source one entry was admitted with. */
+  inspectSource(request: EntryReadRequest): Operation<Result<EntryTextPage>>;
+  /** Read one window of one saved turn's reply, request or failure message. */
+  inspectPrompt(request: EntryPromptRequest): Operation<Result<EntryPromptPage>>;
+  /** Read one window of what one entry printed, by its admission number. */
+  inspectOutput(request: EntryReadRequest): Operation<Result<EntryTextPage>>;
+  /** Read where one entry's saved evidence is, and what it failed at. */
+  inspectJournal(request: EntryReadRequest): Operation<Result<EntryJournalPage>>;
 }
 
 /**
@@ -207,6 +223,21 @@ export interface ReservedSlot {
 export const ELICIT_CONTROL = "Elicit";
 
 /**
+ * The four saved-evidence reads, by the names a reply writes them under.
+ *
+ * Dotted under `REPL.Entry` because they are four questions about one entry,
+ * and a reply that has learned one has learned where the others are. Named
+ * once, so the designated set and the definitions below cannot disagree about
+ * which names this conversation owns.
+ */
+export const ENTRY_INSPECTIONS = [
+  "REPL.Entry.Source",
+  "REPL.Entry.Prompt",
+  "REPL.Entry.Output",
+  "REPL.Entry.Journal",
+] as const;
+
+/**
  * Which returns the root collects as the next turn's input.
  *
  * Every control this CLI supplies, reads and writes alike. A write is
@@ -225,6 +256,13 @@ export const ELICIT_CONTROL = "Elicit";
  * component return. `<Syntax />` describes this response context, and its
  * return is the reply's own to render or capture; intercepting it would turn
  * every self-description into an operation result.
+ *
+ * `REPL.EntryOutput` is here and is no longer a control a response may write.
+ * The set is what decides which *retained* results come back, and a chat
+ * saved before `<REPL.Entry.Output />` replaced it still holds that control's
+ * own pairs: dropping the name would stop a reopened conversation being told
+ * what its own history says it asked for. Admitting the name again is a
+ * separate question, and `sidekickObservations()` answers it with nothing.
  */
 export const DESIGNATED: ReadonlySet<string> = new Set([
   "REPL.Bindings",
@@ -233,6 +271,7 @@ export const DESIGNATED: ReadonlySet<string> = new Set([
   "REPL.EntryInput",
   "REPL.Submit",
   "REPL.EntryOutput",
+  ...ENTRY_INSPECTIONS,
   ELICIT_CONTROL,
   ...GUIDE_CHAPTERS.map((chapter) => `Guide.${chapter}`),
 ]);
@@ -345,13 +384,54 @@ function* performed<T>(
   render: (value: T) => string,
   observed?: (value: T) => Json,
 ): Operation<string> {
+  const answer = yield* settled(journal, occurrence, work, observed);
+  return answer.ok ? render(answer.value) : answer.error.message;
+}
+
+/**
+ * Run one read and hand its page back as the object it is.
+ *
+ * The saved-evidence reads answer with structured pages rather than with
+ * prose, so the element becomes that page: an ordinary `as` binds it by
+ * reference, and an uncaptured one renders nothing. A refusal still renders
+ * its reason, in the place the read was asked for, exactly as every other
+ * control's does.
+ *
+ * The page is also what the outcome retains, which is why it is not serialized
+ * first: a reply that captured one and a reply that did not are told the same
+ * thing, and the thing they are told is the page the control answered with.
+ */
+function* inspected<T extends Json>(
+  journal: ControlJournal,
+  occurrence: ControlOccurrence,
+  work: () => Operation<Result<T>>,
+): Operation<T | string> {
+  const answer = yield* settled(journal, occurrence, work, (page) => page);
+  return answer.ok ? answer.value : answer.error.message;
+}
+
+/**
+ * Record one control's intent, run its work, and record what it answered.
+ *
+ * One place, because the gap between the two records is the state an
+ * interrupted control has to be readable as: an intent written after the work
+ * would make a control that never finished indistinguishable from one that
+ * never began. A thrown failure is recorded before it travels on, for the same
+ * reason.
+ */
+function* settled<T>(
+  journal: ControlJournal,
+  occurrence: ControlOccurrence,
+  work: () => Operation<Result<T>>,
+  observed?: (value: T) => Json,
+): Operation<Result<T>> {
   const order = yield* journal.began(occurrence);
   let answer: Result<T>;
   try {
     answer = yield* work();
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
-    yield* journal.settled(order, { ok: false, error: failure } as Result<T>);
+    yield* journal.settled(order, Err(failure));
     throw failure;
   }
   yield* journal.settled(
@@ -359,7 +439,7 @@ function* performed<T>(
     answer,
     answer.ok && observed !== undefined ? observed(answer.value) : undefined,
   );
-  return answer.ok ? render(answer.value) : answer.error.message;
+  return answer;
 }
 
 /**
@@ -454,33 +534,8 @@ export function sidekickObservations(
         );
       },
     }),
-    reading("REPL.EntryOutput", "EntryOutput", {
-      kind: "function",
-      name: "REPL.EntryOutput",
-      props: {
-        type: "object",
-        properties: {
-          // One prop accepting either spelling, because that is the contract:
-          // an exact id, or a negative position back from the latest. A union
-          // is written as `anyOf` rather than a type array, which the schema
-          // compiler reads in strict mode.
-          entry: { anyOf: [{ type: "string" }, { type: "number" }] },
-          offset: { type: "number" },
-          limit: { type: "number" },
-        },
-        additionalProperties: false,
-      },
-      *fn(props: OutputReadRequest): Operation<string> {
-        return yield* performed(
-          journal,
-          { component: "REPL.EntryOutput", arguments: { ...props } as Json },
-          () => requests.entryOutput(props),
-          renderRead,
-          (value) => ({ ...value }) as unknown as Json,
-        );
-      },
-    }),
   ];
+  observations.push(...entryInspections(requests, journal));
   for (const chapter of GUIDE_CHAPTERS) {
     const name = `Guide.${chapter}`;
     observations.push(
@@ -504,6 +559,111 @@ export function sidekickObservations(
     );
   }
   return observations;
+}
+
+/** The selector props every saved-evidence read takes. */
+const ENTRY_SELECTION = {
+  entry: { type: "number" },
+  offset: { type: "number" },
+  limit: { type: "number" },
+} as const;
+
+/**
+ * The four reads of one entry's saved evidence.
+ *
+ * Each returns its page as the object it is, so an ordinary `as` binds the
+ * page and an uncaptured read renders nothing — no `returns` declaration,
+ * which would make `as` mandatory and take the shortest form away. What the
+ * outcome retains is that same page, which is what the next turn is sent.
+ */
+function entryInspections(requests: SidekickRequests, journal: ControlJournal): SidekickControl[] {
+  return [
+    reading("REPL.Entry.Source", "Entry.Source", {
+      kind: "function",
+      name: "REPL.Entry.Source",
+      props: {
+        type: "object",
+        properties: { ...ENTRY_SELECTION },
+        additionalProperties: false,
+      },
+      description:
+        "Read the exact source one entry was admitted with. " +
+        "`<REPL.Entry.Source entry={22} />` answers with a window of that source, counted in " +
+        "Unicode code points, and the arguments of the windows either side of it.",
+      *fn(props: EntryReadRequest): Operation<EntryTextPage | string> {
+        return yield* inspected(
+          journal,
+          { component: "REPL.Entry.Source", arguments: { ...props } },
+          () => requests.inspectSource(props),
+        );
+      },
+    }),
+    reading("REPL.Entry.Prompt", "Entry.Prompt", {
+      kind: "function",
+      name: "REPL.Entry.Prompt",
+      props: {
+        type: "object",
+        properties: {
+          ...ENTRY_SELECTION,
+          prompt: { type: "number" },
+          field: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+      description:
+        "Read one saved agent turn of one entry. " +
+        '`<REPL.Entry.Prompt entry={22} prompt={9} field="error" />` answers with that turn\'s ' +
+        "reply, request or complete failure message, its own status and where it was written. " +
+        "A turn that recorded no failure answers with null text rather than an empty one.",
+      *fn(props: EntryPromptRequest): Operation<EntryPromptPage | string> {
+        return yield* inspected(
+          journal,
+          { component: "REPL.Entry.Prompt", arguments: { ...props } },
+          () => requests.inspectPrompt(props),
+        );
+      },
+    }),
+    reading("REPL.Entry.Output", "Entry.Output", {
+      kind: "function",
+      name: "REPL.Entry.Output",
+      props: {
+        type: "object",
+        properties: { ...ENTRY_SELECTION },
+        additionalProperties: false,
+      },
+      description:
+        "Read what one entry printed. `<REPL.Entry.Output entry={22} />` answers with the last " +
+        "window of that entry's output; `offset={0}` reads from the beginning. An entry that " +
+        "retained none answers with an empty window.",
+      *fn(props: EntryReadRequest): Operation<EntryTextPage | string> {
+        return yield* inspected(
+          journal,
+          { component: "REPL.Entry.Output", arguments: { ...props } },
+          () => requests.inspectOutput(props),
+        );
+      },
+    }),
+    reading("REPL.Entry.Journal", "Entry.Journal", {
+      kind: "function",
+      name: "REPL.Entry.Journal",
+      props: {
+        type: "object",
+        properties: { ...ENTRY_SELECTION },
+        additionalProperties: false,
+      },
+      description:
+        "Find where one entry's saved evidence is. `<REPL.Entry.Journal entry={22} />` answers " +
+        "with that entry's complete failure message, how its agent turns ended, and a window of " +
+        "its saved records — each naming what it was and which prompt to read next.",
+      *fn(props: EntryReadRequest): Operation<EntryJournalPage | string> {
+        return yield* inspected(
+          journal,
+          { component: "REPL.Entry.Journal", arguments: { ...props } },
+          () => requests.inspectJournal(props),
+        );
+      },
+    }),
+  ];
 }
 
 /**
@@ -582,6 +742,12 @@ export function sidekickMutations(
  * The status, the exact entry and the read to follow. No body: a reply that
  * wants the output asks for it, with its own bounds.
  *
+ * Which read it points at follows what happened. An entry that completed has
+ * output to read; one that failed or was cancelled has evidence to inspect,
+ * and output alone would send a reply to an empty window for an entry that
+ * never printed. Both name the entry the submission actually admitted, taken
+ * from the receipt rather than from whatever a person has selected.
+ *
  * Exported because the same receipt is read twice — once where the control was
  * written, and once as the operation result the next turn is sent — and two
  * renderings of one fact would be two accounts of one entry.
@@ -591,24 +757,45 @@ export function renderReceipt(receipt: SubmitReceipt): string {
   if (receipt.failure !== undefined) {
     lines.push(`It failed: ${receipt.failure}`);
   }
-  lines.push(
-    `Read what it printed with <REPL.EntryOutput entry="${receipt.entry}" ` +
-      `limit={${receipt.read.limit ?? 4096}} />.`,
-  );
+  const admitted = admissionNumber(receipt.entry);
+  if (admitted !== undefined) {
+    lines.push(
+      receipt.status === "completed"
+        ? `Read what it printed with <REPL.Entry.Output entry={${admitted}} />.`
+        : `Inspect its saved evidence with <REPL.Entry.Journal entry={${admitted}} />.`,
+    );
+  }
   return lines.join("\n");
 }
 
 /**
- * What one output window reads as.
+ * The admission number one entry key spells.
+ *
+ * A read names an entry by that number, so a receipt that could not read one
+ * off its own key says what happened and stops there: an invocation written
+ * without it would name the latest entry, which is the one case a receipt must
+ * never point at.
+ */
+function admissionNumber(entry: string): number | undefined {
+  const spelled = /^entry-([1-9][0-9]*)$/.exec(entry);
+  return spelled === null ? undefined : Number(spelled[1]);
+}
+
+/**
+ * What one retained `REPL.EntryOutput` window reads as.
+ *
+ * Historical. The control that produced these windows is no longer one a
+ * response may write — `<REPL.Entry.Output />` answers that question now, with
+ * a page — but a chat saved before the replacement still holds its retained
+ * observations, and a reopened conversation is told what its own history says.
+ * So this renders a saved window as the window it was, rather than
+ * reinterpreting the record it is reading.
  *
  * The output goes in a fence long enough to hold it, because entry output is
  * exactly the text most likely to contain one of its own. The range is stated
  * beside it so a reply knows what it is looking at, and the next instruction is
  * given only when there is more — a reply told there is more when there is not
  * would keep reading forever.
- *
- * Exported for the same reason the receipt is: the window a reply reads where it
- * asked and the window it is sent afterwards are one window.
  */
 export function renderRead(held: OutputRead): string {
   const fence = "`".repeat(Math.max(3, longestRun(held.text, "`") + 1));

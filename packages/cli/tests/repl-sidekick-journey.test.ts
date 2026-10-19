@@ -16,9 +16,11 @@
  * is what somebody actually does and reads.
  */
 
+import { readFile } from "node:fs/promises";
+
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Ok, spawn, suspend, useScope, withResolvers } from "effection";
+import { Ok, spawn, suspend, until, useScope, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 
 import { previewGeneratedXmdRoot } from "@executablemd/core/host";
@@ -34,6 +36,14 @@ import type { SidekickRecord } from "../src/repl/sidekick/history.ts";
 import type { SubmitReceipt } from "../src/repl/sidekick/controls.ts";
 import { AGENT, records, useHarness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
 import type { Harness } from "./fixtures/repl/issue-883/sidekick-harness.ts";
+import {
+  BALLOT_REPLY,
+  BALLOT_REQUEST,
+  FAILED_ENTRY,
+  PROMPT_REPLIES,
+  SETTLED_ENTRY,
+  STOP_REASON,
+} from "./fixtures/repl/issue-932/history.ts";
 import {
   appendGate,
   awaiting,
@@ -533,7 +543,7 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     expect(delivered).toContain("Entry input updated.");
     expect(delivered).toContain("## REPL.Submit");
     expect(delivered).toContain("Entry entry-1 completed.");
-    expect(delivered).toContain('<REPL.EntryOutput entry="entry-1"');
+    expect(delivered).toContain("Read what it printed with <REPL.Entry.Output entry={1} />.");
     expect(delivered.indexOf("## REPL.EntryInput")).toBeLessThan(
       delivered.indexOf("## REPL.Submit"),
     );
@@ -805,10 +815,14 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     expect(held.state().draft).toBe("");
 
     const delivered = held.fake.prompts[1] ?? "";
-    // The entry's own receipt: the entry, its reason, and the read for it.
+    // The entry's own receipt: the entry, its reason, and where its evidence
+    // is. An entry that failed may well have printed nothing, so the read it
+    // is pointed at is the one that explains what ran.
     expect(delivered).toContain("Entry entry-1 failed");
     expect(delivered).toContain("entry failed on purpose");
-    expect(delivered).toContain('<REPL.EntryOutput entry="entry-1"');
+    expect(delivered).toContain(
+      "Inspect its saved evidence with <REPL.Entry.Journal entry={1} />.",
+    );
     // And emphatically not a refusal. The submission happened; the entry is
     // what failed, and a reply told otherwise would try to submit again.
     expect(delivered).not.toContain("REPL.Submit refused");
@@ -868,7 +882,7 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     if (!settled.ok) {
       throw settled.error;
     }
-    held.fake.script({ reply: '<REPL.EntryOutput entry="entry-1" />\n' });
+    held.fake.script({ reply: "<REPL.Entry.Output entry={1} />\n" });
     held.fake.script({ reply: "<Output>I read it.</Output>\n" });
 
     const answered = yield* held.owner.message("what did it print?");
@@ -876,15 +890,21 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
       throw answered.error;
     }
     const delivered = held.fake.prompts[1] ?? "";
-    // The rendering the control itself produces: the resolved entry, the
-    // observed range, and the text in a fence long enough to hold it.
-    expect(delivered).toContain("entry-1");
-    expect(delivered).toContain("Printed by the entry.");
-    expect(delivered).toContain("```");
-    // Not the internal snapshot serialized as JSON, which is what a generic
-    // envelope would have sent.
-    expect(delivered).not.toContain('"text":');
-    expect(delivered).not.toContain('"offset":');
+    // The page the read resolved to, as the page it is: the entry it named,
+    // what that entry printed, and the window it sat in.
+    const page = JSON.parse(delivered);
+    expect(page).toMatchObject({
+      entry: 1,
+      status: "completed",
+      text: "Printed by the entry.\n",
+      offset: 0,
+      previous: null,
+      next: null,
+    });
+    // One result is its own value, with no heading or fence around it: the
+    // reply asked one question and this is the answer, parseable as it stands.
+    expect(delivered).not.toContain("## REPL.Entry.Output");
+    expect(delivered).not.toContain("```");
     expect(answered.value.output).toContain("I read it.");
   });
 
@@ -1950,7 +1970,7 @@ describe("Tier TE — a failed entry is corrected as a new entry", () => {
     const receipt = repl.fake.prompts[1] ?? "";
     expect(receipt).toContain("Entry entry-1 failed");
     expect(receipt).toContain("entry failed on purpose");
-    expect(receipt).toContain('<REPL.EntryOutput entry="entry-1"');
+    expect(receipt).toContain("Inspect its saved evidence with <REPL.Entry.Journal entry={1} />.");
     expect(receipt).not.toContain("REPL.Submit refused");
 
     // And the correction is a *different* entry, admitted through the same
@@ -2353,7 +2373,7 @@ describe("Tier R5 — two live owners, and the controls each conversation captur
    * a different string rather than a refusal.
    */
   const SHARED = [
-    '<REPL.EntryOutput entry="entry-1" />',
+    "<REPL.Entry.Output entry={1} />",
     "<REPL.EntryInput>a prepared body</REPL.EntryInput>",
     "<Output>Read it.</Output>",
     "",
@@ -2515,7 +2535,7 @@ describe("Tier R5 — two live owners, and the controls each conversation captur
     // sessions have one, so this is the fact that distinguishes the handles: an
     // owner holding the other's captured controls would read the other's entry.
     const toOther = other.fake.prompts[2] ?? "";
-    expect(toOther).toContain("## REPL.EntryOutput");
+    expect(toOther).toContain("## REPL.Entry.Output");
     expect(toOther).toContain(SECOND);
     expect(toOther).not.toContain(FIRST);
     // And its write reached its own session's draft, while the first owner's is
@@ -2553,7 +2573,7 @@ describe("Tier R5 — two live owners, and the controls each conversation captur
 
     // The same source, the other REPL's answer.
     const toOne = one.fake.prompts[2] ?? "";
-    expect(toOne).toContain("## REPL.EntryOutput");
+    expect(toOne).toContain("## REPL.Entry.Output");
     expect(toOne).toContain(FIRST);
     expect(toOne).not.toContain(SECOND);
 
@@ -2568,13 +2588,13 @@ describe("Tier R5 — two live owners, and the controls each conversation captur
     const oneRecords = yield* records(one.execution);
     const otherRecords = yield* records(other.execution);
     expect(controlsIn(oneRecords)).toEqual([
-      ownControl(one.owner, "response:2", 0, "REPL.EntryOutput"),
+      ownControl(one.owner, "response:2", 0, "REPL.Entry.Output"),
       ownControl(one.owner, "response:2", 1, "REPL.EntryInput"),
     ]);
     expect(controlsIn(otherRecords)).toEqual([
-      ownControl(other.owner, "response:2", 0, "REPL.EntryOutput"),
+      ownControl(other.owner, "response:2", 0, "REPL.Entry.Output"),
       ownControl(other.owner, "response:2", 1, "REPL.EntryInput"),
-      ownControl(other.owner, "response:4", 0, "REPL.EntryOutput"),
+      ownControl(other.owner, "response:4", 0, "REPL.Entry.Output"),
       ownControl(other.owner, "response:4", 1, "REPL.EntryInput"),
     ]);
     expect(JSON.stringify(oneRecords)).not.toContain(active(other.owner));
@@ -2582,5 +2602,322 @@ describe("Tier R5 — two live owners, and the controls each conversation captur
     // Neither session ran the other's entry either: one apiece, each its own.
     expect(one.session.model.entries).toHaveLength(1);
     expect(other.session.model.entries).toHaveLength(1);
+  });
+});
+
+/**
+ * Tier EI — a saved failure explains itself (#932).
+ *
+ * The history these rows read is produced here, by really running an entry
+ * whose nine agent turns are the ones `fixtures/repl/issue-932/history.ts`
+ * states: eight that complete, and a ninth that streams a complete ballot and
+ * ends failed. Every prompt captures its reply, so the entry prints nothing at
+ * all — which is the situation a reader is in when an entry fails and its
+ * output is empty.
+ *
+ * What the rows then drive is one real Sidekick exchange over that history:
+ * the owner, the conversation, the response ceiling, the controls and the
+ * designated feedback are all the production ones, and the provider is the
+ * same scripted one every journey row uses.
+ */
+describe("Tier EI — four reads make a saved failure diagnosable", () => {
+  /** The entry history every row here starts from, really run. */
+  function* savedFailure(held: Harness): Operation<void> {
+    for (const reply of PROMPT_REPLIES) {
+      held.fake.script({ reply });
+    }
+    held.fake.script({ reply: BALLOT_REPLY, stopReason: STOP_REASON });
+    const failing = yield* held.session.submit(FAILED_ENTRY);
+    if (!failing.ok) {
+      throw failing.error;
+    }
+    // Joined and not checked: this entry is supposed to fail, and its outcome
+    // is what the rows below read.
+    yield* failing.value.join();
+    const settling = yield* held.session.submit(SETTLED_ENTRY);
+    if (!settling.ok) {
+      throw settling.error;
+    }
+    const settled = yield* settling.value.join();
+    if (!settled.ok) {
+      throw settled.error;
+    }
+  }
+
+  /** This execution's entry file, which no read may change. */
+  function entryFile(held: Harness): string {
+    const chat = held.execution.chat;
+    if (chat.form !== "paired") {
+      throw new Error("this execution has no published pair");
+    }
+    return chat.location.entries;
+  }
+
+  /**
+   * How many turns the provider has already answered.
+   *
+   * The entry's own nine turns reach the same scripted provider, so a row that
+   * counted from zero would be reading a watch request where it meant to read
+   * the feedback its own exchange produced.
+   */
+  function answeredSoFar(held: Harness): number {
+    return held.fake.prompts.length;
+  }
+
+  /** One JSON page a turn was sent, parsed as the value it is. */
+  function page(text: string): Record<string, unknown> {
+    const parsed = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error(`that feedback is not one page: ${text.slice(0, 120)}`);
+    }
+    return parsed as Record<string, unknown>;
+  }
+
+  it("E1: Journal locates the failed turn, and Prompt reads what it said", function* () {
+    const held = yield* useHarness();
+    yield* savedFailure(held);
+
+    const [failed, later] = held.session.model.entries;
+    expect(failed?.key).toBe("entry-1");
+    expect(failed?.terminal?.status).toBe("err");
+    expect(failed?.terminal?.output).toBe("");
+    expect(failed?.turns).toHaveLength(9);
+    expect(later?.terminal?.status).toBe("ok");
+    const before = yield* until(readFile(entryFile(held), "utf8"));
+    const base = answeredSoFar(held);
+
+    // One exchange: find the failure, then read the turn it names, then check
+    // what ran and what it printed.
+    held.fake.script({ reply: "<REPL.Entry.Journal entry={1} />\n" });
+    held.fake.script({
+      reply: [
+        '<REPL.Entry.Prompt entry={1} prompt={9} field="reply" />',
+        '<REPL.Entry.Prompt entry={1} prompt={9} field="request" />',
+        '<REPL.Entry.Prompt entry={1} prompt={9} field="error" />',
+        "",
+      ].join("\n"),
+    });
+    held.fake.script({
+      reply: "<REPL.Entry.Source entry={1} />\n<REPL.Entry.Output entry={1} />\n",
+    });
+    held.fake.script({ reply: "<Output>The ninth ballot failed.</Output>\n" });
+
+    const answered = yield* held.owner.message("the entry failed — what happened?");
+    if (!answered.ok) {
+      throw answered.error;
+    }
+    expect(answered.value.output).toContain("The ninth ballot failed.");
+    expect(held.fake.prompts).toHaveLength(base + 4);
+
+    // The Journal page: the complete saved failure, how the entry's turns
+    // ended, and the record that says which prompt to read.
+    const located = page(held.fake.prompts[base + 1] ?? "");
+    expect(located).toMatchObject({
+      entry: 1,
+      status: "failed",
+      failure: 'agent prompt failed with stop reason "refusal"',
+      prompts: { completed: 8, failed: 1, cancelled: 0 },
+    });
+    const records = located.records;
+    if (!Array.isArray(records)) {
+      throw new Error("a Journal page carries its records");
+    }
+    expect(records.filter((record) => (record as { prompt: unknown }).prompt === 9)).toHaveLength(
+      1,
+    );
+    // A locator, not a transcript: no reply, request or source travels on it.
+    expect(JSON.stringify(records)).not.toContain("open_watch");
+    expect(JSON.stringify(records)).not.toContain("harbour ballot");
+
+    // The turn it named: the valid JSON it returned, the complete request it
+    // was sent, the complete failure it ended with, and where it was written.
+    const turn = held.fake.prompts[base + 2] ?? "";
+    expect(turn).toContain("## REPL.Entry.Prompt");
+    expect(turn).toContain(JSON.stringify(BALLOT_REPLY).slice(1, 60));
+    expect(turn).toContain(JSON.stringify(BALLOT_REQUEST).slice(1, 60));
+    expect(turn).toContain('agent prompt failed with stop reason \\"refusal\\"');
+    // The entry failed and so did this turn, and they are stated separately.
+    expect(turn).toContain('"status": "failed"');
+    expect(turn).toContain('"promptStatus": "failed"');
+    expect(turn).toContain('"line": 9');
+    // Returning parseable JSON is not succeeding: nothing calls this accepted.
+    expect(turn).not.toContain('"promptStatus": "completed"');
+
+    // What ran, and what it printed — which is nothing.
+    const ran = held.fake.prompts[base + 3] ?? "";
+    expect(ran).toContain("## REPL.Entry.Source");
+    expect(ran).toContain("Set watch 1 of the harbour ballot");
+    expect(ran).toContain("## REPL.Entry.Output");
+    expect(ran).toContain('"text": ""');
+
+    // Reading changed nothing: the entry file is the file, and the entry still
+    // holds the nine turns it held.
+    expect(yield* until(readFile(entryFile(held), "utf8"))).toBe(before);
+    expect(held.session.model.entries[0]?.turns).toHaveLength(9);
+    expect(held.session.model.entries).toHaveLength(2);
+  });
+
+  it("E5: a page is the object when captured, and the same feedback either way", function* () {
+    const held = yield* useHarness();
+    yield* savedFailure(held);
+
+    const base = answeredSoFar(held);
+
+    // Read once with nothing capturing it. The reply says nothing, so the
+    // conversation gets work and no utterance.
+    held.fake.script({ reply: "<REPL.Entry.Journal entry={1} />\n" });
+    held.fake.script({ reply: "<Output>Read it.</Output>\n" });
+    const uncaptured = yield* held.owner.message("what failed?");
+    if (!uncaptured.ok) {
+      throw uncaptured.error;
+    }
+
+    // Read again, captured, and composed into the reply's own Output. The
+    // binding is the page object: `<Json>` serializes a value rather than
+    // parsing rendered text.
+    held.fake.script({
+      reply:
+        '<REPL.Entry.Journal entry={1} as="page" />\n<Output>\n<Json value={page} />\n</Output>\n',
+    });
+    held.fake.script({ reply: "<Output>And again.</Output>\n" });
+    const captured = yield* held.owner.message("show me");
+    if (!captured.ok) {
+      throw captured.error;
+    }
+
+    // Read a third time, captured and with no Output at all. Capturing is not
+    // publishing: the binding exists inside the response and the person is
+    // told nothing, which is the case a reply that reads before deciding is in.
+    held.fake.script({ reply: '<REPL.Entry.Journal entry={1} as="page" />\n' });
+    held.fake.script({ reply: "<Output>Nothing to add.</Output>\n" });
+    const quietly = yield* held.owner.message("look again");
+    if (!quietly.ok) {
+      throw quietly.error;
+    }
+
+    // Capturing a designated control does not switch its feedback off, and
+    // what comes back is the same page every time — uncaptured, captured and
+    // published, and captured and silent.
+    expect(held.fake.prompts).toHaveLength(base + 6);
+    expect(held.fake.prompts[base + 1]).toBe(held.fake.prompts[base + 3]);
+    expect(held.fake.prompts[base + 1]).toBe(held.fake.prompts[base + 5]);
+    expect(page(held.fake.prompts[base + 5] ?? "")).toMatchObject({
+      entry: 1,
+      status: "failed",
+    });
+
+    // The captured page reached the chat because the reply wrote an Output for
+    // it, and only then.
+    const chat = yield* records(held.execution);
+    const replies = chat.filter((record) => (record as { kind: string }).kind === "response");
+    expect(replies.map((record) => (record as { hasOutput: boolean }).hasOutput)).toEqual([
+      // The control-only read published nothing.
+      false,
+      true,
+      true,
+      true,
+      // Captured, and still control-only: a binding is not an utterance.
+      false,
+      true,
+    ]);
+
+    // And neither control-only response said anything. Each is in the chat as
+    // the reply it was — the work happened and the history holds it — with no
+    // output region and nothing to show, which is what keeps a reply that only
+    // read from being padded with a fallback utterance.
+    const reading = held.owner.reading;
+    if (!reading.ok) {
+      throw reading.error;
+    }
+    // Trimmed, because what is being compared is what each reply said rather
+    // than the blank lines its own Output region was written across.
+    const said = reading.value.chat.flatMap((item) =>
+      item.kind === "reply" ? [{ hasOutput: item.hasOutput, text: item.text.trim() }] : [],
+    );
+    expect(said).toEqual([
+      { hasOutput: false, text: "" },
+      { hasOutput: true, text: "Read it." },
+      { hasOutput: true, text: JSON.stringify(page(held.fake.prompts[base + 3] ?? ""), null, 2) },
+      { hasOutput: true, text: "And again." },
+      // The captured control-only read: a binding is not an utterance.
+      { hasOutput: false, text: "" },
+      { hasOutput: true, text: "Nothing to add." },
+    ]);
+  });
+
+  it("E5: a read that cannot answer comes back as the refusal it is", function* () {
+    const held = yield* useHarness();
+    yield* savedFailure(held);
+
+    const base = answeredSoFar(held);
+    held.fake.script({ reply: "<REPL.Entry.Prompt entry={2} prompt={1} />\n" });
+    held.fake.script({ reply: "<Output>No turns there.</Output>\n" });
+    const answered = yield* held.owner.message("read the second entry's prompt");
+    if (!answered.ok) {
+      throw answered.error;
+    }
+
+    const delivered = held.fake.prompts[base + 1] ?? "";
+    expect(delivered).toContain("REPL.Entry.Prompt failed");
+    expect(delivered).toContain("saved no agent turns");
+    expect(answered.value.output).toContain("No turns there.");
+  });
+
+  it("E6: an unfamiliar first turn is told the four reads and where to learn them", function* () {
+    const held = yield* useHarness();
+    held.fake.script({ reply: "<Output>Ready.</Output>\n" });
+
+    const answered = yield* held.owner.message("help me");
+    if (!answered.ok) {
+      throw answered.error;
+    }
+    const first = held.fake.prompts[0] ?? "";
+    // The derived surface, which is read off the ceiling this response is
+    // admitted under rather than kept beside it.
+    expect(first).toContain("<REPL.Entry.Source /> — read.");
+    expect(first).toContain("<REPL.Entry.Prompt /> — read.");
+    expect(first).toContain("<REPL.Entry.Output /> — read.");
+    expect(first).toContain("<REPL.Entry.Journal /> — read.");
+    expect(first).toContain("props: entry, offset, limit, prompt, field");
+    // And the chapter that teaches what to do with them, by its own exact
+    // invocation.
+    expect(first).toContain("<Guide.Recovery />");
+  });
+
+  it("E6: the shipped chapter is enough to read a failure without a path", function* () {
+    const held = yield* useHarness();
+    yield* savedFailure(held);
+
+    const base = answeredSoFar(held);
+
+    // An agent that has not seen this feature: it reads the chapter, then does
+    // what the chapter says, and nothing tells it where anything is on disk.
+    held.fake.script({ reply: "<Guide.Recovery />\n" });
+    held.fake.script({ reply: "<REPL.Entry.Journal entry={1} />\n" });
+    held.fake.script({ reply: '<REPL.Entry.Prompt entry={1} prompt={9} field="error" />\n' });
+    held.fake.script({ reply: "<Output>The ninth turn was refused.</Output>\n" });
+
+    const answered = yield* held.owner.message("something went wrong");
+    if (!answered.ok) {
+      throw answered.error;
+    }
+    expect(answered.value.output).toContain("The ninth turn was refused.");
+
+    // The chapter it actually read, as it ships: the four calls, and no
+    // filesystem hint of any kind.
+    const chapter = held.fake.prompts[base + 1] ?? "";
+    expect(chapter).toContain("<REPL.Entry.Journal");
+    expect(chapter).toContain("<REPL.Entry.Prompt");
+    expect(chapter).toContain("<REPL.Entry.Source");
+    expect(chapter).toContain("<REPL.Entry.Output");
+    expect(chapter).not.toContain("entries.jsonl");
+    expect(chapter).not.toContain("/repl/v1");
+
+    // And the calls it made from it answered.
+    expect(page(held.fake.prompts[base + 2] ?? "")).toMatchObject({
+      entry: 1,
+      status: "failed",
+    });
+    expect(held.fake.prompts[base + 3] ?? "").toContain('stop reason \\"refusal\\"');
   });
 });

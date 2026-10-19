@@ -31,7 +31,10 @@ Sidekick responses that write an entry, and the REPL entry program they write.
 - Add `<REPL.Submit />` after `<REPL.EntryInput>` only when the request calls
   for execution. Submit runs the actual shared draft, waits for that entry to
   finish and release its resources, and returns status and a read instruction —
-  not the output. Read the output with `<REPL.EntryOutput />`.
+  not the output. Read the output with `<REPL.Entry.Output />`.
+- When an entry fails, its receipt points at `<REPL.Entry.Journal />` rather
+  than at its output, because an entry that failed may have printed nothing.
+  Read `<Guide.Recovery />` for what to do with what it answers.
 
 ## Example
 
@@ -70,7 +73,7 @@ before writing one; each requires `as`, renders nothing, and binds JSON.
 </Let>
 <REPL.EntryInput>{code}</REPL.EntryInput>
 <REPL.Submit />
-<REPL.EntryOutput />
+<REPL.Entry.Output />
 ````
 
 A page is bounded — 100 records, or 4096 characters of text — and `next` holds

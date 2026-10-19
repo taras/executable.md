@@ -30,6 +30,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ensure, Ok, scoped, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { useTempFileCompiler } from "@executablemd/core";
@@ -47,6 +48,7 @@ import {
   serializeSidekickRecord,
 } from "../src/repl/sidekick/history.ts";
 import type { ControlRecord, SidekickRecord } from "../src/repl/sidekick/history.ts";
+import { designatedResults } from "../src/repl/sidekick/feedback.ts";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";
 import { sidekickChatRows } from "../src/repl/program.ts";
 import type { ReplSidekickChatRow } from "../src/repl/application.ts";
@@ -2330,5 +2332,62 @@ describe("Tier IN5 — a chat saved by the build before this one", () => {
       (one) => one.kind === "control" && one.component === "REPL.EntryInput",
     );
     expect(fills).toHaveLength(1);
+  });
+});
+
+/**
+ * Tier IN5 — a saved output read still reads as the window it was (#932).
+ *
+ * The four dotted reads answer with structured pages, and the designated
+ * branch sends a structured observation as JSON. `REPL.EntryOutput` came
+ * before them and answered with a rendered window, and a chat that holds one
+ * is a chat whose history has to go on meaning what it meant.
+ *
+ * The pair read here was produced by a real run — the producer under
+ * `fixtures/repl/issue-932/` ran a reply that wrote `<REPL.EntryOutput />`
+ * over an entry that had printed something, and the control's own intent and
+ * outcome are what the chat retained. It was taken before that name was
+ * retired from response admission, and its receipt says so: a reply written
+ * now cannot produce one, which is exactly the situation a reopened chat is
+ * in. The `issue-883/old-chat` fixture beside it holds an `REPL.EntryInput`
+ * pair and a waiting `Elicit` and no output read at all, which is why this row
+ * reads this one.
+ */
+describe("Tier IN5 — a saved EntryOutput result keeps its own renderer", () => {
+  const SAVED = new URL("./fixtures/repl/issue-932/sidekick.jsonl", import.meta.url);
+
+  it("E5: a historical output read is rendered, not reinterpreted, and nothing runs it", function* () {
+    const path = fileURLToPath(SAVED);
+    const before = yield* until(readFile(path));
+    const saved = yield* readSidekickRecords(path);
+
+    // The pair this chat holds, found in the records rather than named here.
+    const intent = saved.find(
+      (record): record is ControlRecord =>
+        record.kind === "control" && record.component === "REPL.EntryOutput",
+    );
+    if (intent === undefined) {
+      throw new Error("this chat holds no saved REPL.EntryOutput control");
+    }
+
+    const results = designatedResults(saved, {
+      conversation: intent.conversation,
+      response: intent.response,
+    });
+    const read = results.find((result) => result.component === "REPL.EntryOutput");
+    expect(read).toMatchObject({ kind: "answered", json: false });
+    // The historical renderer's own words: the entry, its state, the range it
+    // read, and the text in a fence. Not a serialized page, which is what a
+    // reader of this record would be told if the new reads had taken its
+    // rendering with them.
+    expect(read?.text).toContain("Entry entry-2 (completed), code points 0–");
+    expect(read?.text).toContain("The harbour register");
+    expect(read?.text).toContain("```");
+    expect(read?.text).not.toContain('"offset"');
+    expect(read?.text).not.toContain('"previous"');
+
+    // Reading a record is not running the control it describes, and nothing
+    // rewrote the file to make it readable.
+    expect(yield* until(readFile(path))).toEqual(before);
   });
 });

@@ -7589,6 +7589,42 @@ credited by the key of the task producing it: the overlay a screen shows answers
 at the position its session was opened at, so it would report an earlier entry's
 retained output as the output of the entry running now.
 
+**One entry's saved evidence is read through the projection, and metadata is
+part of it.** A reader of a failed entry needs what it ran, what its turns
+said, what it printed and where each of those sits in the file, and the last of
+those is the only one the model did not already hold: a transcript is a
+presentation and says nothing about the effects it does not draw. So
+`buildEntry` forms one row per retained `Yield` and `Close` of the range it is
+already reading — marker, type, name, status, position, prompt number and
+agent, and no body, result payload, checkpoint or stack — and detaches and
+freezes it with everything else the entry carries. A saved Prompt's row takes
+its semantic outcome, its number and its agent from the turn the same reading
+parsed, matched by the marker it was retained under, and the root close takes
+the outcome that reading already produced; every other row states the protocol
+outcome its record states. Raw `DurableEvent`s still terminate at the model,
+and no new record, index or stored position is written anywhere.
+
+The reads over it are a feature-local module of the Sidekick's own
+(`sidekick/entry-inspection.ts`): pure selectors, Unicode and record windows,
+and four page builders over frozen entry facts and the one exact printing fact
+the session already publishes. It owns no task, listener, stream or cache, so
+cancelling a read is cancelling its caller and nothing else, and it performs
+nothing — no entry is opened, resumed, waited for or executed, and no entry's
+provider is reached. `requests.ts` takes one acknowledged head and one printing
+fact per read before handing them to it, which is the same per-read moment
+every other read takes, and `controls.ts` records the ordinary intent and
+outcome pair around it. Execution ownership, the journal partition and the
+publication and secret boundaries are untouched by any of it.
+
+The single output read these four replaced is retired from admission rather
+than from history. A response written now cannot name it — the capture seals
+the table `sidekick/controls.ts` publishes, and it is no longer in it — while
+the designated set, the renderer and the legacy reader stay exactly as they
+were, because a conversation reopened from a chat that holds that control's
+own pairs is told what its history says it asked for. Current executable
+admission and the decoding of a retained result are separate responsibilities,
+and only the first one moved.
+
 The reply's vocabulary and the entry's are described separately because they
 differ — `<Each>` is ordinary in an entry and unavailable in a reply. What a
 reply may write is the compact surface derived from the pinned ceiling; what an

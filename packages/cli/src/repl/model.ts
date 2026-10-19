@@ -217,6 +217,30 @@ export interface ReplAgentSession {
   readonly turns: readonly ReplAgentTurn[];
 }
 
+/**
+ * One saved event of an entry, as metadata that locates evidence.
+ *
+ * A row per retained `Yield` and `Close`, the admission and the root close
+ * included, in the order the file holds them. It says where a thing is and what
+ * became of it; it holds no body, result payload, checkpoint or stack, because
+ * what a reader does with it is ask for the evidence it names.
+ *
+ * `status` is the semantic outcome for a saved Prompt and for the root close —
+ * an `ok` protocol wrapper never promotes a failed prompt into completed
+ * execution — and the protocol outcome for every other effect.
+ */
+export interface ReplRecord {
+  readonly marker: string;
+  /** The saved effect's type, or `close` for a coroutine's close. */
+  readonly type: string;
+  readonly name: string | undefined;
+  readonly status: string;
+  readonly position: ReplPosition | undefined;
+  /** A saved Prompt's absolute number, which is its retained sequence plus one. */
+  readonly prompt: number | undefined;
+  readonly agent: string | undefined;
+}
+
 /** One offered history position, in append order. */
 export interface ReplCheckpoint {
   readonly marker: string;
@@ -357,6 +381,15 @@ export interface ReplEntry {
   readonly bindings: readonly ReplBinding[];
   /** This entry's retained turns, in its own Prompt sequence order. */
   readonly turns: readonly ReplAgentTurn[];
+  /**
+   * One row per saved event of this entry, in append order.
+   *
+   * Detached and frozen with the rest of the reading, so it is metadata about
+   * the file rather than a second hold on the events — and it is the whole
+   * range rather than the transcript's rows, because a transcript is a
+   * presentation and says nothing about the effects it does not draw.
+   */
+  readonly records: readonly ReplRecord[];
 }
 
 /** One frozen reading of one validated Journal prefix. */
@@ -621,6 +654,7 @@ function build(
         settled: reading.terminal !== undefined,
         bindings,
         turns: reading.turns,
+        records: reading.records,
       }),
     );
     transcript.push(...reading.transcript);
@@ -686,6 +720,7 @@ interface EntryReading {
   readonly transcript: readonly ReplRow[];
   readonly checkpoints: readonly ReplCheckpoint[];
   readonly turns: readonly ReplAgentTurn[];
+  readonly records: readonly ReplRecord[];
   readonly terminal: ReplTerminal | undefined;
 }
 
@@ -1132,9 +1167,71 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
       transcript: Object.freeze(transcript.map((row) => freeze({ ...row }))),
       checkpoints: Object.freeze(checkpoints.map((checkpoint) => freeze({ ...checkpoint }))),
       turns: Object.freeze(chronology),
+      records: entryRecords(events, markers, chronology, terminal),
       terminal: terminal === undefined ? undefined : freeze({ ...terminal }),
     }),
   );
+}
+
+/**
+ * One row per saved event of one entry's range, in append order.
+ *
+ * Read from the same range the entry was read from, and told what a Prompt and
+ * the root close mean by the readings that already parsed them: a turn is
+ * matched by the marker it was retained under rather than by parsing its record
+ * a second time, and the root close takes the outcome `readTerminal` produced.
+ * Every other effect reports the protocol outcome its result states, which is
+ * the only thing that record says about itself.
+ */
+function entryRecords(
+  events: readonly DurableEvent[],
+  markers: readonly string[],
+  turns: readonly ReplAgentTurn[],
+  terminal: ReplTerminal | undefined,
+): readonly ReplRecord[] {
+  const saved = new Map(turns.map((turn) => [turn.marker, turn]));
+  return Object.freeze(
+    events.map((event, index) => {
+      const marker = markers[index];
+      if (event.type === "close") {
+        return freeze({
+          marker,
+          type: "close",
+          name: undefined,
+          status:
+            event.coroutineId === "root" && terminal !== undefined
+              ? semanticOutcome(terminal.status)
+              : event.result.status,
+          position: undefined,
+          prompt: undefined,
+          agent: undefined,
+        });
+      }
+      const read = readPosition(event);
+      const turn = saved.get(marker);
+      return freeze({
+        marker,
+        type: event.description.type,
+        name: typeof event.description.name === "string" ? event.description.name : undefined,
+        status: turn === undefined ? event.result.status : turn.status,
+        position: read === MALFORMED || read === undefined ? undefined : freeze({ ...read }),
+        prompt: turn === undefined ? undefined : turn.sequence + 1,
+        agent: turn?.agent,
+      });
+    }),
+  );
+}
+
+/** What an entry's own outcome is called, as a reader of its records reads it. */
+function semanticOutcome(status: ReplTerminal["status"]): string {
+  switch (status) {
+    case "ok":
+      return "completed";
+    case "err":
+      return "failed";
+    default:
+      return "cancelled";
+  }
 }
 
 /**

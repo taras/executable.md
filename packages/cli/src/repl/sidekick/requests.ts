@@ -3,7 +3,7 @@
  *
  * `controls.ts` turns an element into a semantic request and waits. This is the
  * other side of that wait. Nothing here decides admission, holds a slot or owns
- * a conversation: it resolves five reads against state the root already has,
+ * a conversation: it resolves every read against state the root already has,
  * and hands the two writes to the things that own them.
  *
  * ## The reads answer about the history, not about the screen
@@ -22,11 +22,13 @@
  *
  * ## A read performs nothing, including waiting
  *
- * None of the five starts an entry, resumes one or waits for one. The output
- * read in particular answers from what has been observed *so far* — a running
- * entry's snapshot is a truthful snapshot of a running entry, not a promise
- * that more is coming — which is what keeps a reply that wants to watch an
- * entry reading again instead of blocking a response on work it did not admit.
+ * No read starts an entry, resumes one or waits for one. The output reads in
+ * particular answer from what has been observed *so far* — a running entry's
+ * snapshot is a truthful snapshot of a running entry, not a promise that more
+ * is coming — which is what keeps a reply that wants to watch an entry reading
+ * again instead of blocking a response on work it did not admit. An inspection
+ * of saved evidence never opens an entry, contacts the provider that produced
+ * it, or writes to what it read.
  */
 
 import { Err, Ok } from "effection";
@@ -42,6 +44,20 @@ import { replEnvironment } from "./environment.ts";
 import { readGuideChapter } from "./guide.ts";
 import { readEntryOutput } from "./output.ts";
 import type { ObservedEntry, OutputRead, OutputReadRequest } from "./output.ts";
+import {
+  readEntryJournal,
+  readEntryOutputWindow,
+  readEntryPrompt,
+  readEntrySource,
+} from "./entry-inspection.ts";
+import type {
+  EntryJournalPage,
+  EntryPromptPage,
+  EntryPromptRequest,
+  EntryReadRequest,
+  EntryTextPage,
+  InspectedHistory,
+} from "./entry-inspection.ts";
 
 /**
  * What the root holds, as a reply's requests need to see it.
@@ -238,7 +254,43 @@ export function sidekickRequests(root: RootReading, submit: SubmitForReply): Sid
       }
       return readEntryOutput(request, observedEntries(head.value, root.printing()));
     },
+    // deno-lint-ignore require-yield
+    *inspectSource(request: EntryReadRequest): Operation<Result<EntryTextPage>> {
+      const read = inspected(root);
+      return read.ok ? readEntrySource(request, read.value) : read;
+    },
+    // deno-lint-ignore require-yield
+    *inspectPrompt(request: EntryPromptRequest): Operation<Result<EntryPromptPage>> {
+      const read = inspected(root);
+      return read.ok ? readEntryPrompt(request, read.value) : read;
+    },
+    // deno-lint-ignore require-yield
+    *inspectOutput(request: EntryReadRequest): Operation<Result<EntryTextPage>> {
+      const read = inspected(root);
+      return read.ok ? readEntryOutputWindow(request, read.value) : read;
+    },
+    // deno-lint-ignore require-yield
+    *inspectJournal(request: EntryReadRequest): Operation<Result<EntryJournalPage>> {
+      const read = inspected(root);
+      return read.ok ? readEntryJournal(request, read.value) : read;
+    },
   };
+}
+
+/**
+ * The saved evidence one inspection reads, taken once.
+ *
+ * One acknowledged head and one printing fact per read, like every other read
+ * here: two inspections in one response that straddle an append see the file
+ * either side of it rather than one copy taken when the response started. An
+ * unreadable file refuses rather than answering from a stale projection.
+ */
+function inspected(root: RootReading): Result<InspectedHistory> {
+  const head = root.acknowledged();
+  if (!head.ok) {
+    return head;
+  }
+  return Ok({ entries: head.value.entries, printing: root.printing() });
 }
 
 /**
