@@ -47,7 +47,7 @@ import type { ExecutionInstallation, GeneratedXmdRootResult } from "@executablem
 
 import { cwd, platform } from "@executablemd/runtime";
 
-import { GUIDE_CHAPTERS } from "../src/repl/sidekick/controls.ts";
+import { DESIGNATED, GUIDE_CHAPTERS } from "../src/repl/sidekick/controls.ts";
 import { openReplSession } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import { rootReads, sidekickRequests } from "../src/repl/sidekick/requests.ts";
@@ -585,6 +585,21 @@ function intercepting(name: string, reached: string[], invoked: string[]): Execu
   };
 }
 
+/**
+ * The page one control retained as its observation, by the order it settled.
+ *
+ * Read off the journal rather than off the rendered body, because that is what
+ * the next turn is actually sent: a structured read answers with a value, and
+ * an uncaptured one renders nothing at all.
+ */
+function pageOf(asked: Asked, order: number): { [key: string]: Json } {
+  const held = asked.settled.find((one) => one.order === order)?.observed;
+  if (!isJsonObject(held)) {
+    throw new Error(`no page was observed at order ${order}`);
+  }
+  return held;
+}
+
 function rendered(answer: Result<GeneratedXmdRootResult>): string {
   if (!answer.ok) {
     throw answer.error;
@@ -620,17 +635,23 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         ...GUIDE_CHAPTERS.map((chapter) => `Guide.${chapter}`),
         "REPL.Bindings",
         "REPL.EntryInput",
-        "REPL.EntryOutput",
         "REPL.Environment",
         "REPL.Submit",
         "REPL.Syntax",
-        // The four bounded reads of one entry's saved evidence.
+        // The four bounded reads of one entry's saved evidence, which are what
+        // a response reads an entry with now.
         "REPL.Entry.Source",
         "REPL.Entry.Prompt",
         "REPL.Entry.Output",
         "REPL.Entry.Journal",
       ].sort(),
     );
+    // The name they replaced is not among them. A response written now cannot
+    // write it, and the set that decides which *retained* results come back
+    // still holds it, because a chat saved before the replacement holds its
+    // pairs and has to be told what its own history says it asked for.
+    expect(surface.map((entry) => entry.name)).not.toContain("REPL.EntryOutput");
+    expect(DESIGNATED.has("REPL.EntryOutput")).toBe(true);
 
     // The two classes, and the forms each name is admitted for. The question is
     // a write because asking is not reading: a reply admitted to read alone
@@ -655,7 +676,7 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
     );
 
     // The props come from each definition's own schema.
-    expect(surface.find((entry) => entry.name === "REPL.EntryOutput")?.props).toEqual([
+    expect(surface.find((entry) => entry.name === "REPL.Entry.Output")?.props).toEqual([
       "entry",
       "offset",
       "limit",
@@ -705,7 +726,6 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         ...GUIDE_CHAPTERS.map((chapter) => `Guide.${chapter}`),
         "REPL.Bindings",
         "REPL.EntryInput",
-        "REPL.EntryOutput",
         "REPL.Environment",
         "REPL.Submit",
         "REPL.Syntax",
@@ -858,36 +878,42 @@ describe("Tier R3 — each control asks once, and records before and after", () 
     expect(text).not.toContain("printed text");
   });
 
-  it("R3j: an output read states its range and fences the output it returns", function* () {
+  it("R3j: an output read answers with the page it resolved, and renders none of it", function* () {
     const asked = fresh();
 
     const answer = yield* reply(
-      '<Output>\n<REPL.EntryOutput entry="entry-1" offset={0} limit={6} />\n</Output>\n',
+      "<Output>\n<REPL.Entry.Output entry={1} offset={0} limit={6} />\n</Output>\n",
       asked,
-      {
-        read: {
-          entry: "entry-1",
-          status: "running",
-          length: 40,
-          offset: 0,
-          limit: 6,
-          // Output containing a fence of its own, which is the ordinary case
-          // for entry output and the reason the fence is measured.
-          text: "```xmd\ninside\n```",
-          previous: undefined,
-          next: { entry: "entry-1", offset: 6, limit: 6 },
-        },
-      },
     );
 
-    const text = rendered(answer);
-    expect(text).toContain("Entry entry-1 (running)");
-    expect(text).toContain("of 40");
-    // A longer fence than the output holds, so the output survives being quoted.
-    expect(text).toContain("````");
-    expect(text).toContain("```xmd\ninside\n```");
-    // More to read, and the instruction says where from.
-    expect(text).toContain("offset={6}");
+    // The page is what the request answered and what the outcome retained,
+    // with the window it was asked for stated on it. Nothing is serialized
+    // before it is retained, and nothing fences it: a page is structured, and
+    // the next turn is sent the structure.
+    expect(asked.requests).toEqual(["inspectOutput"]);
+    expect(pageOf(asked, 0)).toMatchObject({
+      entry: 1,
+      status: "failed",
+      offset: 0,
+      limit: 6,
+      text: "printed text",
+    });
+    // Uncaptured, so the element became nothing: a value with no destination
+    // renders nothing rather than being stringified into the reply.
+    expect(rendered(answer)).not.toContain("printed text");
+    expect(rendered(answer)).not.toContain("```");
+  });
+
+  it("R3j: the name the four reads replaced is refused before any control runs", function* () {
+    const asked = fresh();
+
+    // A response written now, naming the retired control. The capture never
+    // sealed it, so the whole reply is refused at admission.
+    expect(
+      refusal(yield* reply('<Output>\n<REPL.EntryOutput entry="entry-1" />\n</Output>\n', asked)),
+    ).toContain("did not admit");
+    expect(asked.requests).toEqual([]);
+    expect(asked.began).toEqual([]);
   });
 
   it("R3k: a refused request is this operation's outcome, not the end of the reply", function* () {
@@ -1858,17 +1884,30 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
 
     const asked = fresh();
     const answer = yield* replyReading(
-      '<Output>\n<REPL.EntryOutput entry="entry-1" />\n<REPL.Bindings />\n</Output>\n',
+      [
+        '<REPL.Entry.Output entry={1} as="page" />',
+        "<REPL.Bindings />",
+        "<Output>",
+        "<Json value={page} />",
+        "</Output>",
+        "",
+      ].join("\n"),
       session,
       asked,
     );
 
+    // What the entry put on the screen, read back through the control that
+    // reads an entry's output: the labelled excerpt, not the whole JSON it was
+    // taken from.
+    const window = pageOf(asked, 0);
+    expect(window).toMatchObject({ entry: 1, status: "completed" });
+    expect(String(window["text"])).toContain(NOTE);
+    expect(String(window["text"])).toContain('  "messa');
+    expect(String(window["text"])).not.toContain('A\u{1F600}BCDEF"\n}');
+    // The capture is the page object, so composing it into Output is what puts
+    // it in front of the person.
     const text = rendered(answer);
-    // What the entry put on the screen, read back through the existing control:
-    // the labelled excerpt, not the whole JSON it was taken from.
     expect(text).toContain(NOTE);
-    expect(text).toContain('  "messa');
-    expect(text).not.toContain('A\u{1F600}BCDEF"\n}');
 
     // The root data the entry handed back: the producer's value complete, and
     // the window exactly as it was captured, note included.
@@ -1884,7 +1923,7 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     // Both reads succeeded, and the journal holds exactly the two explicit
     // reads the reply wrote — no feedback the slice produced on its own.
     expect(asked.settled.map((one) => one.ok)).toEqual([true, true]);
-    expect(asked.began.map((one) => one.component)).toEqual(["REPL.EntryOutput", "REPL.Bindings"]);
+    expect(asked.began.map((one) => one.component)).toEqual(["REPL.Entry.Output", "REPL.Bindings"]);
     expect(asked.requests).toEqual([]);
   });
 

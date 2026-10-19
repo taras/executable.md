@@ -103,6 +103,7 @@ import {
   SIDEKICK_FILE,
 } from "../src/repl/sidekick/history.ts";
 import type { ControlRecord, SidekickRecord } from "../src/repl/sidekick/history.ts";
+import { renderReceipt } from "../src/repl/sidekick/controls.ts";
 
 /**
  * Write an older single-file history for one execution.
@@ -4893,6 +4894,87 @@ describe("Tier HI — a submission reserves from the acknowledged history", () =
       expect(feedback).not.toContain("entry={1}");
       expect(feedback).not.toContain("entry={2}");
     });
+  });
+
+  /**
+   * HI2b — the receipt is delivered while an earlier position is selected.
+   *
+   * HI2 above reopens at a recorded position and goes back live before it
+   * submits, so what it establishes is attribution after a historical
+   * reopening. This is the other half: the entry is admitted at the live
+   * head, its own outcome is held inside the host before it can be
+   * appended, the screen is frozen at an earlier recorded position while it
+   * waits, and only then is the failure released. The receipt is therefore
+   * composed and delivered with a different entry selected, which is the one
+   * state in which a receipt keyed to the screen would name the wrong entry.
+   */
+  it("HI2b: a failure released while an earlier position is selected still names its own entry", function* () {
+    const gate = appendGate();
+    const repl = yield* useMountedRepl({ gate });
+    yield* runs(repl, FIRST, "the first entry", 1);
+    yield* runs(repl, SECOND, "the second entry", 2);
+
+    /**
+     * The third entry's own outcome, held inside the host before it lands.
+     *
+     * Registered before the message is sent and decided at append time:
+     * waiting for the entry to be admitted and *then* asking to hold would
+     * be racing the record it means to hold. The two entries before it have
+     * already closed, so the next close on this file is this entry's.
+     */
+    const outcome = gate.holdNext(
+      (path, record) => path.endsWith(ENTRIES_FILE) && record.includes('"type":"close"'),
+    );
+
+    repl.fake.script({ reply: submitting(FAILING) });
+    repl.fake.script({ reply: "<Output>Noted.</Output>\n" });
+    yield* sendMessage(repl, "run one that fails");
+    yield* outcome.started();
+
+    // Frozen at the first entry's recorded outcome, with the submission
+    // still waiting for its own. The drawer is closed and the head is
+    // deliberately *not* returned to.
+    yield* freezeAt(repl, FIRST_OUTCOME);
+    yield* click(repl.terminal, "[close]");
+    yield* awaiting(repl.terminal, "the drawer closing", (one) => !shows(one, "[close]"));
+    expect(shows(repl.terminal, "[live]")).toBe(true);
+
+    outcome.release();
+    yield* awaiting(repl.terminal, "the reply that follows the failure", (one) =>
+      shows(one, "Noted."),
+    );
+    // Still frozen when the receipt was composed and delivered: the control
+    // that goes back to the head is still the one being offered.
+    expect(shows(repl.terminal, "[live]")).toBe(true);
+
+    const read = yield* mountedReading(repl);
+    const intent = lastSubmit(read.chat);
+    expect(read.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2", "entry-3"]);
+    expect(read.model.entries[2]?.terminal?.status).toBe("err");
+    expect(intent.entry).toBe("entry-3");
+
+    // The retained feedback names the entry the submission admitted, with
+    // the exact instruction, and neither of the entries that already exist —
+    // one of which is the one being read.
+    const feedback = read.chat
+      .flatMap((one) => (one.kind === "feedback" ? [one.text] : []))
+      .join("\n");
+    expect(feedback).toContain("Entry entry-3 failed.");
+    expect(feedback).toContain("Inspect its saved evidence with <REPL.Entry.Journal entry={3} />.");
+    expect(feedback).not.toContain("entry={1}");
+    expect(feedback).not.toContain("entry={2}");
+
+    // And the immediate rendering is the same words, because one renderer
+    // produces both: what the control returned where it was written and what
+    // the next turn was sent are one receipt.
+    expect(
+      renderReceipt({
+        entry: intent.entry,
+        status: "failed",
+        failure: "the third entry failed",
+        read: { entry: intent.entry },
+      }),
+    ).toContain("Inspect its saved evidence with <REPL.Entry.Journal entry={3} />.");
   });
 
   /**

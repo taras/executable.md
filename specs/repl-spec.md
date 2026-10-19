@@ -2153,9 +2153,14 @@ recorded position the screen is showing.
 These reads are of the validated journal projection and of this process's own
 observed output, and of nothing else. They reach no provider session file, and
 the retained publication, secret and persistence protections stand in front of
-anything a page carries. A chat that already holds an output read from before
-these existed keeps it: its retained observation is still rendered as the
-window it was, and nothing re-evaluates the record to show it.
+anything a page carries.
+
+These four are what a response reads an entry with. The single output read they
+replaced is no longer one a reply may write, and a response that names it is
+refused at admission like any other name the capture did not seal. What a chat
+saved before the replacement holds still reads as what it was: its retained
+observation comes back as the rendered window it was recorded as, under the
+name that produced it, and nothing re-evaluates the record to show it.
 
 One result is its own value, because one question has one answer — a binding map
 delivered alone is the map, parseable as it stands, with no heading, fence or

@@ -27,8 +27,8 @@
  * ## Reads, writes, and which returns become feedback
  *
  * The read class observes and returns: bindings, the entry vocabulary, the six
- * guide chapters, the environment, an entry's output, and the four bounded
- * reads of one entry's saved evidence. The write class is
+ * guide chapters, the environment, and the four bounded reads of one entry's
+ * saved evidence. The write class is
  * what changes something a person can see or asks them something: filling the
  * shared draft, submitting it, and canonical `<Elicit>`. Keeping them in
  * separate classes is what lets the captured ceiling say, exactly, that a reply
@@ -256,6 +256,13 @@ export const ENTRY_INSPECTIONS = [
  * component return. `<Syntax />` describes this response context, and its
  * return is the reply's own to render or capture; intercepting it would turn
  * every self-description into an operation result.
+ *
+ * `REPL.EntryOutput` is here and is no longer a control a response may write.
+ * The set is what decides which *retained* results come back, and a chat
+ * saved before `<REPL.Entry.Output />` replaced it still holds that control's
+ * own pairs: dropping the name would stop a reopened conversation being told
+ * what its own history says it asked for. Admitting the name again is a
+ * separate question, and `sidekickObservations()` answers it with nothing.
  */
 export const DESIGNATED: ReadonlySet<string> = new Set([
   "REPL.Bindings",
@@ -527,32 +534,6 @@ export function sidekickObservations(
         );
       },
     }),
-    reading("REPL.EntryOutput", "EntryOutput", {
-      kind: "function",
-      name: "REPL.EntryOutput",
-      props: {
-        type: "object",
-        properties: {
-          // One prop accepting either spelling, because that is the contract:
-          // an exact id, or a negative position back from the latest. A union
-          // is written as `anyOf` rather than a type array, which the schema
-          // compiler reads in strict mode.
-          entry: { anyOf: [{ type: "string" }, { type: "number" }] },
-          offset: { type: "number" },
-          limit: { type: "number" },
-        },
-        additionalProperties: false,
-      },
-      *fn(props: OutputReadRequest): Operation<string> {
-        return yield* performed(
-          journal,
-          { component: "REPL.EntryOutput", arguments: { ...props } as Json },
-          () => requests.entryOutput(props),
-          renderRead,
-          (value) => ({ ...value }) as unknown as Json,
-        );
-      },
-    }),
   ];
   observations.push(...entryInspections(requests, journal));
   for (const chapter of GUIDE_CHAPTERS) {
@@ -801,16 +782,20 @@ function admissionNumber(entry: string): number | undefined {
 }
 
 /**
- * What one output window reads as.
+ * What one retained `REPL.EntryOutput` window reads as.
+ *
+ * Historical. The control that produced these windows is no longer one a
+ * response may write — `<REPL.Entry.Output />` answers that question now, with
+ * a page — but a chat saved before the replacement still holds its retained
+ * observations, and a reopened conversation is told what its own history says.
+ * So this renders a saved window as the window it was, rather than
+ * reinterpreting the record it is reading.
  *
  * The output goes in a fence long enough to hold it, because entry output is
  * exactly the text most likely to contain one of its own. The range is stated
  * beside it so a reply knows what it is looking at, and the next instruction is
  * given only when there is more — a reply told there is more when there is not
  * would keep reading forever.
- *
- * Exported for the same reason the receipt is: the window a reply reads where it
- * asked and the window it is sent afterwards are one window.
  */
 export function renderRead(held: OutputRead): string {
   const fence = "`".repeat(Math.max(3, longestRun(held.text, "`") + 1));

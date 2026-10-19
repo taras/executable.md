@@ -7559,6 +7559,15 @@ every other read takes, and `controls.ts` records the ordinary intent and
 outcome pair around it. Execution ownership, the journal partition and the
 publication and secret boundaries are untouched by any of it.
 
+The single output read these four replaced is retired from admission rather
+than from history. A response written now cannot name it — the capture seals
+the table `sidekick/controls.ts` publishes, and it is no longer in it — while
+the designated set, the renderer and the legacy reader stay exactly as they
+were, because a conversation reopened from a chat that holds that control's
+own pairs is told what its history says it asked for. Current executable
+admission and the decoding of a retained result are separate responsibilities,
+and only the first one moved.
+
 The reply's vocabulary and the entry's are described separately because they
 differ — `<Each>` is ordinary in an entry and unavailable in a reply. What a
 reply may write is the compact surface derived from the pinned ceiling; what an

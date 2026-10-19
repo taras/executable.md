@@ -1,5 +1,5 @@
 /**
- * Produce the saved-failure fixture these rows read (#932).
+ * Produce the saved-failure entry history these rows read (#932).
  *
  * Run by hand, never by a test:
  *
@@ -8,20 +8,33 @@
  * ```
  *
  * What it writes is the bytes a real run left behind. The REPL session, the
- * entry executions, the canonical Prompt path, the Sidekick conversation and
- * the paired storage are all the production ones, assembled by the same
- * harness the journey rows use; only the agent is scripted, because what the
- * fixture has to hold is a saved failure rather than something a model said.
- * A history hand-authored to this shape would prove that the readers agree
- * with the author, which is the one thing it must not be able to do.
+ * entry executions, the canonical Prompt path and the paired storage are all
+ * the production ones, assembled by the same harness the journey rows use;
+ * only the agent is scripted, because what the fixture has to hold is a saved
+ * failure rather than something a model said. A history hand-authored to this
+ * shape would prove that the readers agree with the author, which is the one
+ * thing it must not be able to do.
  *
- * Everything in it is written here: the entry source, the prompts, the replies
- * and the failure message. No host path, home directory, transcript or
- * credential of anybody's is involved, so the file is sanitary by construction
- * rather than by being cleaned afterwards.
+ * It writes `entries.jsonl` and nothing else. The chat half beside it is a
+ * **pinned snapshot** taken before `<REPL.Entry.Output />` replaced
+ * `REPL.EntryOutput` in response admission: it holds that retired control's
+ * own saved pair, which a current ceiling cannot produce because a response
+ * can no longer write the name. `RECEIPT.md` states both halves, when each was
+ * taken and the exact recipe for the pinned one, and is maintained by hand.
+ *
+ * Everything in the entry half is written here: the entry source, the prompts,
+ * the replies and the failure message. No host path, home directory,
+ * transcript or credential of anybody's is involved, so the file is sanitary
+ * by construction rather than by being cleaned afterwards — with one
+ * substitution the receipt names.
+ *
+ * Re-running this produces a history with different provider session keys,
+ * because a key digests the working directory the run was made in and that
+ * directory is a fresh temporary one. The receipt's digests describe the
+ * checked-in bytes; refresh them by hand after deliberately regenerating.
  */
 
-import { copyFile, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { main, until } from "effection";
@@ -68,34 +81,16 @@ await main(function* (): Operation<void> {
     throw after.error;
   }
 
-  // One Sidekick exchange that reads an entry through the legacy control, so
-  // the chat half holds a genuine `REPL.EntryOutput` pair for the
-  // compatibility row to read without running the control again.
-  held.fake.script({ reply: '<REPL.EntryOutput entry="entry-2" />\n' });
-  held.fake.script({ reply: "<Output>Read it.</Output>\n" });
-  const answered = yield* held.owner.message("what did the second entry print?");
-  if (!answered.ok) {
-    throw answered.error;
-  }
-
   const chat = held.execution.chat;
   if (chat.form !== "paired") {
     throw new Error("this execution has no published pair to copy");
   }
-  const held932 = fileURLToPath(new URL("entries.jsonl", FIXTURE));
-  const chatFile = fileURLToPath(new URL("sidekick.jsonl", FIXTURE));
-  yield* until(
-    writeFile(held932, sanitized(yield* until(readFile(chat.location.entries, "utf8"))), "utf8"),
-  );
-  yield* until(copyFile(chat.location.sidekick, chatFile));
-  yield* until(
-    writeFile(
-      fileURLToPath(new URL("RECEIPT.md", FIXTURE)),
-      yield* receipt(held932, chatFile),
-      "utf8",
-    ),
-  );
-  console.log(`wrote the fixture from ${chat.location.directory}`);
+  const entries = fileURLToPath(new URL("entries.jsonl", FIXTURE));
+  const produced = sanitized(yield* until(readFile(chat.location.entries, "utf8")));
+  yield* until(writeFile(entries, produced, "utf8"));
+  console.log(`wrote ${entries} from ${chat.location.directory}`);
+  console.log(`${produced.length} bytes, sha256 ${digest(produced)}`);
+  console.log("update RECEIPT.md by hand with those figures");
 });
 
 /**
@@ -125,67 +120,6 @@ function sanitized(history: string): string {
     .join("\n");
 }
 
-/** What the produced files are, and what produced them. */
-function* receipt(entries: string, sidekick: string): Operation<string> {
-  const entryBytes = yield* until(readFile(entries));
-  const chatBytes = yield* until(readFile(sidekick));
-  return [
-    "# Issue 932 saved-failure fixture — producer receipt",
-    "",
-    "Produced by running",
-    "`deno run --allow-all packages/cli/tests/fixtures/repl/issue-932/produce.ts`",
-    "against the production REPL session, entry execution, canonical Prompt path",
-    "and paired chat storage assembled by",
-    "`packages/cli/tests/fixtures/repl/issue-883/sidekick-harness.ts`. The only",
-    "scripted part is the agent: `createFakeAcp()` answers each turn with the",
-    "reply `history.ts` states, and the ninth turn settles with stop reason",
-    `\`${STOP_REASON}\`, which is how a saved turn that streamed a complete reply and`,
-    "still failed is produced. Nothing was appended by hand.",
-    "",
-    "## What it holds",
-    "",
-    `\`entries.jsonl\` — ${lines(entryBytes)} records, ${entryBytes.length} bytes,`,
-    `sha256 \`${digest(entryBytes)}\``,
-    "",
-    "- **Entry 1 — failed, printed nothing.** Nine saved agent turns: eight",
-    "  completed, and a ninth that streamed a valid ballot JSON object and ended",
-    "  failed. Every prompt captures its reply with `as`, so the entry rendered",
-    "  nothing before the failure stopped it.",
-    "- **Entry 2 — completed.** A later settled entry, so the latest entry and",
-    "  the failed one are different entries.",
-    "",
-    `\`sidekick.jsonl\` — ${lines(chatBytes)} records, ${chatBytes.length} bytes,`,
-    `sha256 \`${digest(chatBytes)}\``,
-    "",
-    'One exchange whose reply wrote `<REPL.EntryOutput entry="entry-2" />`, so the',
-    "chat retains a genuine control and control-outcome pair for that historical",
-    "read.",
-    "",
-    "## Sanitation",
-    "",
-    "Every string in both files is written in `history.ts` or by the harness: the",
-    "entry source, the prompts, the replies, the failure message and the chat.",
-    "The producing run's temporary data root is removed with its scope, and the",
-    "fake provider's own session store is no part of the fixture.",
-    "",
-    "One byte of the run is not kept. The failed entry's close retains its error",
-    "the way the stream serializes one, and that includes the stack of the",
-    "process that raised it, which names the producing checkout's absolute paths.",
-    "The producer replaces exactly that member with",
-    `\`${SUBSTITUTED_STACK}\`, and nothing else. No reader of this history looks`,
-    "at it: the projection takes a failed outcome's message alone, so the stack",
-    "reaches no page, no record and no screen.",
-    "",
-  ].join("\n");
-}
-
-function digest(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-function lines(bytes: Uint8Array): number {
-  return new TextDecoder()
-    .decode(bytes)
-    .split("\n")
-    .filter((line) => line.length > 0).length;
+function digest(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
 }

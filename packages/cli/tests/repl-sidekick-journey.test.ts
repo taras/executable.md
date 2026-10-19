@@ -882,7 +882,7 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
     if (!settled.ok) {
       throw settled.error;
     }
-    held.fake.script({ reply: '<REPL.EntryOutput entry="entry-1" />\n' });
+    held.fake.script({ reply: "<REPL.Entry.Output entry={1} />\n" });
     held.fake.script({ reply: "<Output>I read it.</Output>\n" });
 
     const answered = yield* held.owner.message("what did it print?");
@@ -890,15 +890,21 @@ describe("Tier R5 — one message becomes one turn, and its reply runs", () => {
       throw answered.error;
     }
     const delivered = held.fake.prompts[1] ?? "";
-    // The rendering the control itself produces: the resolved entry, the
-    // observed range, and the text in a fence long enough to hold it.
-    expect(delivered).toContain("entry-1");
-    expect(delivered).toContain("Printed by the entry.");
-    expect(delivered).toContain("```");
-    // Not the internal snapshot serialized as JSON, which is what a generic
-    // envelope would have sent.
-    expect(delivered).not.toContain('"text":');
-    expect(delivered).not.toContain('"offset":');
+    // The page the read resolved to, as the page it is: the entry it named,
+    // what that entry printed, and the window it sat in.
+    const page = JSON.parse(delivered);
+    expect(page).toMatchObject({
+      entry: 1,
+      status: "completed",
+      text: "Printed by the entry.\n",
+      offset: 0,
+      previous: null,
+      next: null,
+    });
+    // One result is its own value, with no heading or fence around it: the
+    // reply asked one question and this is the answer, parseable as it stands.
+    expect(delivered).not.toContain("## REPL.Entry.Output");
+    expect(delivered).not.toContain("```");
     expect(answered.value.output).toContain("I read it.");
   });
 
@@ -2367,7 +2373,7 @@ describe("Tier R5 — two live owners, and the controls each conversation captur
    * a different string rather than a refusal.
    */
   const SHARED = [
-    '<REPL.EntryOutput entry="entry-1" />',
+    "<REPL.Entry.Output entry={1} />",
     "<REPL.EntryInput>a prepared body</REPL.EntryInput>",
     "<Output>Read it.</Output>",
     "",
@@ -2529,7 +2535,7 @@ describe("Tier R5 — two live owners, and the controls each conversation captur
     // sessions have one, so this is the fact that distinguishes the handles: an
     // owner holding the other's captured controls would read the other's entry.
     const toOther = other.fake.prompts[2] ?? "";
-    expect(toOther).toContain("## REPL.EntryOutput");
+    expect(toOther).toContain("## REPL.Entry.Output");
     expect(toOther).toContain(SECOND);
     expect(toOther).not.toContain(FIRST);
     // And its write reached its own session's draft, while the first owner's is
@@ -2567,7 +2573,7 @@ describe("Tier R5 — two live owners, and the controls each conversation captur
 
     // The same source, the other REPL's answer.
     const toOne = one.fake.prompts[2] ?? "";
-    expect(toOne).toContain("## REPL.EntryOutput");
+    expect(toOne).toContain("## REPL.Entry.Output");
     expect(toOne).toContain(FIRST);
     expect(toOne).not.toContain(SECOND);
 
@@ -2582,13 +2588,13 @@ describe("Tier R5 — two live owners, and the controls each conversation captur
     const oneRecords = yield* records(one.execution);
     const otherRecords = yield* records(other.execution);
     expect(controlsIn(oneRecords)).toEqual([
-      ownControl(one.owner, "response:2", 0, "REPL.EntryOutput"),
+      ownControl(one.owner, "response:2", 0, "REPL.Entry.Output"),
       ownControl(one.owner, "response:2", 1, "REPL.EntryInput"),
     ]);
     expect(controlsIn(otherRecords)).toEqual([
-      ownControl(other.owner, "response:2", 0, "REPL.EntryOutput"),
+      ownControl(other.owner, "response:2", 0, "REPL.Entry.Output"),
       ownControl(other.owner, "response:2", 1, "REPL.EntryInput"),
-      ownControl(other.owner, "response:4", 0, "REPL.EntryOutput"),
+      ownControl(other.owner, "response:4", 0, "REPL.Entry.Output"),
       ownControl(other.owner, "response:4", 1, "REPL.EntryInput"),
     ]);
     expect(JSON.stringify(oneRecords)).not.toContain(active(other.owner));
@@ -2779,11 +2785,23 @@ describe("Tier EI — four reads make a saved failure diagnosable", () => {
       throw captured.error;
     }
 
+    // Read a third time, captured and with no Output at all. Capturing is not
+    // publishing: the binding exists inside the response and the person is
+    // told nothing, which is the case a reply that reads before deciding is in.
+    held.fake.script({ reply: '<REPL.Entry.Journal entry={1} as="page" />\n' });
+    held.fake.script({ reply: "<Output>Nothing to add.</Output>\n" });
+    const quietly = yield* held.owner.message("look again");
+    if (!quietly.ok) {
+      throw quietly.error;
+    }
+
     // Capturing a designated control does not switch its feedback off, and
-    // what comes back is the same page either way.
-    expect(held.fake.prompts).toHaveLength(base + 4);
+    // what comes back is the same page every time — uncaptured, captured and
+    // published, and captured and silent.
+    expect(held.fake.prompts).toHaveLength(base + 6);
     expect(held.fake.prompts[base + 1]).toBe(held.fake.prompts[base + 3]);
-    expect(page(held.fake.prompts[base + 3] ?? "")).toMatchObject({
+    expect(held.fake.prompts[base + 1]).toBe(held.fake.prompts[base + 5]);
+    expect(page(held.fake.prompts[base + 5] ?? "")).toMatchObject({
       entry: 1,
       status: "failed",
     });
@@ -2798,6 +2816,32 @@ describe("Tier EI — four reads make a saved failure diagnosable", () => {
       true,
       true,
       true,
+      // Captured, and still control-only: a binding is not an utterance.
+      false,
+      true,
+    ]);
+
+    // And neither control-only response said anything. Each is in the chat as
+    // the reply it was — the work happened and the history holds it — with no
+    // output region and nothing to show, which is what keeps a reply that only
+    // read from being padded with a fallback utterance.
+    const reading = held.owner.reading;
+    if (!reading.ok) {
+      throw reading.error;
+    }
+    // Trimmed, because what is being compared is what each reply said rather
+    // than the blank lines its own Output region was written across.
+    const said = reading.value.chat.flatMap((item) =>
+      item.kind === "reply" ? [{ hasOutput: item.hasOutput, text: item.text.trim() }] : [],
+    );
+    expect(said).toEqual([
+      { hasOutput: false, text: "" },
+      { hasOutput: true, text: "Read it." },
+      { hasOutput: true, text: JSON.stringify(page(held.fake.prompts[base + 3] ?? ""), null, 2) },
+      { hasOutput: true, text: "And again." },
+      // The captured control-only read: a binding is not an utterance.
+      { hasOutput: false, text: "" },
+      { hasOutput: true, text: "Nothing to add." },
     ]);
   });
 

@@ -2346,9 +2346,12 @@ describe("Tier IN5 — a chat saved by the build before this one", () => {
  * The pair read here was produced by a real run — the producer under
  * `fixtures/repl/issue-932/` ran a reply that wrote `<REPL.EntryOutput />`
  * over an entry that had printed something, and the control's own intent and
- * outcome are what the chat retained. The `issue-883/old-chat` fixture beside
- * it holds an `REPL.EntryInput` pair and a waiting `Elicit` and no output read
- * at all, which is why this row reads this one.
+ * outcome are what the chat retained. It was taken before that name was
+ * retired from response admission, and its receipt says so: a reply written
+ * now cannot produce one, which is exactly the situation a reopened chat is
+ * in. The `issue-883/old-chat` fixture beside it holds an `REPL.EntryInput`
+ * pair and a waiting `Elicit` and no output read at all, which is why this row
+ * reads this one.
  */
 describe("Tier IN5 — a saved EntryOutput result keeps its own renderer", () => {
   const SAVED = new URL("./fixtures/repl/issue-932/sidekick.jsonl", import.meta.url);
