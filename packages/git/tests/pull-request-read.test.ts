@@ -12,13 +12,15 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { call, race, resource, scoped, suspend, until, withResolvers } from "effection";
+import { call, ensure, race, resource, scoped, suspend, until, withResolvers } from "effection";
 import { exists } from "@effectionx/fs";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { Operation } from "effection";
 import type { PullRequestReadResult } from "@executablemd/git/api";
 import { PullRequestAPI } from "@executablemd/git/api";
+import { PullRequestReadExecution } from "../src/composition/pull-request-read-execution.ts";
 import {
   parseGitHubPullRequestUrl,
   recognizesGitHubPullRequestUrl,
@@ -238,6 +240,98 @@ function headOf(reading: EvidenceReading): string | undefined {
   return reading.state === "read" && reading.result.kind === "checks"
     ? reading.result.headSha
     : undefined;
+}
+
+const MOVED = "c".repeat(40);
+
+/** One check run, in the shape a checks envelope carries. */
+function check(headSha: string) {
+  return {
+    kind: "check-run" as const,
+    id: "1",
+    headSha,
+    name: "build",
+    status: "completed" as const,
+    conclusion: "success" as const,
+    url: null,
+    startedAt: null,
+    completedAt: null,
+    title: null,
+    summary: null,
+    text: null,
+  };
+}
+
+/**
+ * Run this document with the retained seam handed exactly this answer.
+ *
+ * In front of the adapter, so what the retained read is given is the answer a
+ * case names rather than a provider's — which is how a case says what the
+ * boundary must make of an answer it could otherwise never receive. The
+ * adapter below is configured and simply never asked.
+ */
+function answering(
+  database: WorkflowRunDatabase,
+  source: string,
+  envelope?: PullRequestReadResult,
+  transport?: () => Operation<PullRequestReadResult>,
+): Operation<Json> {
+  return scoped(function* () {
+    yield* PullRequestAPI.around({
+      *read([url, options]): Operation<PullRequestReadResult> {
+        return yield* PullRequestReadExecution.operations.perform(
+          { url, kind: options.kind, provider: options.provider },
+          transport ??
+            // deno-lint-ignore require-yield
+            function* (): Operation<PullRequestReadResult> {
+              if (envelope === undefined) {
+                throw new Error("this case named no answer");
+              }
+              return envelope;
+            },
+        );
+      },
+    });
+    return yield* runWorkflowDocument(database, source, reading(server({})));
+  });
+}
+
+/** Whether this event is a retained evidence read. */
+function isRead(event: DurableEvent): boolean {
+  return event.type === "yield" && event.description.type === PULL_REQUEST_READ;
+}
+
+/**
+ * One history captured before this boundary existed.
+ *
+ * Read from the bytes committed beside this suite rather than produced again:
+ * the whole question these rows ask is what today's code makes of what
+ * yesterday's wrote, and a regenerated fixture would answer it with itself.
+ */
+function* fixture(name: string): Operation<{
+  readonly source: string;
+  readonly events: DurableEvent[];
+  /** The run this history belongs to, which it is replayed as rather than onto. */
+  readonly runId: string;
+}> {
+  const path = join(import.meta.dirname ?? ".", "fixtures", "pull-request-reads", `${name}.json`);
+  const saved: { source: string; events: DurableEvent[] } = JSON.parse(
+    new TextDecoder().decode(yield* until(readFile(path))),
+  );
+  const read = saved.events.find(isRead);
+  const input = read?.type === "yield" ? read.description.input : undefined;
+  const runId = isJsonObject(input) ? input.runId : undefined;
+  if (typeof runId !== "string") {
+    throw new Error(`${name} holds no retained read naming the run it belongs to`);
+  }
+  return { ...saved, runId };
+}
+
+/** Put a saved history in front of a fresh run, as an unfinished one. */
+function* seed(database: WorkflowRunDatabase, events: readonly DurableEvent[]): Operation<void> {
+  for (const event of events) {
+    yield* database.journal.append(event);
+  }
 }
 
 describe("Tier PRR — pull-request evidence", () => {
@@ -1362,19 +1456,132 @@ describe("Tier PRR — pull-request evidence", () => {
     });
   });
 
-  it("PRR24: the access session is opened once per read and disposed with it", function* () {
+  it("PRR22b: an inconsistent checks envelope appends no success and binds nothing", function* () {
+    // Through the actual Workflow profile, with the envelope handed to the
+    // retained seam by a handler in front of the adapter: each item is well
+    // formed on its own, and what the collection cannot be is two answers at
+    // once — one about the head it recorded and one about another commit.
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const refused = yield* raised(
+        answering(
+          database,
+          `<PullRequest.Checks url="${SUBJECT_URL}" as="checks" />\n{checks.length}\n`,
+          {
+            kind: "checks",
+            headSha: HEAD,
+            items: [check(MOVED)],
+          },
+        ),
+      );
+      expect(String(refused)).toContain("other than the head");
+
+      // A live protocol failure, which is this read's own answer: the position
+      // holds a failed read rather than a success, and no array was bound.
+      const retained = yield* reads(database);
+      expect(retained).toHaveLength(1);
+      const outcome = retained[0]?.result;
+      expect(outcome?.status).toBe("err");
+      expect(outcome && "value" in outcome).toBe(false);
+    });
+  });
+
+  it("PRR22c: a malformed whole envelope appends no success and binds nothing", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const refused = yield* raised(
+        answering(
+          database,
+          `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n{reviews.length}\n`,
+          {
+            kind: "reviews",
+            // An item shape no reader can parse: the envelope is the collection
+            // asked for and still is not evidence.
+            items: [{ kind: "review", id: 1 }],
+          } as unknown as PullRequestReadResult,
+        ),
+      );
+      expect(String(refused)).toContain("not the evidence that read produces");
+
+      const retained = yield* reads(database);
+      expect(retained).toHaveLength(1);
+      expect(retained[0]?.result.status).toBe("err");
+    });
+  });
+
+  it("PRR22d: a meaningful failure keeps its own details, and anything else gets one sentence", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      // An actual Error: name, message and stack are what a reader of a failed
+      // read needs, so they are preserved through the existing encoding.
+      const database = yield* createRun();
+      const named = new Error("the review index is being rebuilt");
+      named.name = "EvidenceUnavailable";
+      yield* raised(
+        answering(
+          database,
+          `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n`,
+          undefined,
+          function* (): Operation<PullRequestReadResult> {
+            throw named;
+          },
+        ),
+      );
+      const first = (yield* reads(database))[0]?.result;
+      expect(first?.status === "err" && first.error.name).toBe("EvidenceUnavailable");
+      expect(first?.status === "err" && first.error.message).toBe(
+        "the review index is being rebuilt",
+      );
+
+      // Anything that is not an Error carries no diagnosis worth encoding, and
+      // one fixed sentence is better than a rendering of a value nobody can
+      // interpret. The same rule runs for an entry's reads: one normalization,
+      // not one per host.
+      const second = yield* createRun({ runId: "not-an-error" });
+      yield* raised(
+        answering(
+          second,
+          `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n`,
+          undefined,
+          // deno-lint-ignore require-yield
+          function* (): Operation<PullRequestReadResult> {
+            throw "the transport said no";
+          },
+        ),
+      );
+      const outcome = (yield* reads(second))[0]?.result;
+      expect(outcome?.status === "err" && outcome.error.message).toBe(
+        "the pull-request evidence read failed",
+      );
+    });
+  });
+
+  it("PRR24: the session closes before the read it answered is acknowledged", function* () {
     const host = server({ [REVIEWS]: { body: "[]" } });
     const events: string[] = [];
+    // What this read holds the boundary to is not that the session eventually
+    // closed, but that it had closed *before* the answer was acknowledged: a
+    // reopen that restored a read whose first run was still unwinding would be
+    // reading a journal that claimed work which had not finished. So the
+    // session's own teardown is the barrier, and it asks the journal what it
+    // holds at the moment it runs.
+    let acknowledgedAtClose: number | undefined;
+    let watched: WorkflowRunDatabase | undefined;
     const counted: GitHubSource = {
       endpoint: host.access.endpoint,
       open(): Operation<GitHubAccess> {
         return resource(function* (provide) {
           events.push("open");
-          try {
-            yield* provide(host.access);
-          } finally {
+          yield* ensure(function* (): Operation<void> {
             events.push("close");
-          }
+            const journal = watched === undefined ? [] : yield* watched.journal.readAll();
+            acknowledgedAtClose = journal.filter(
+              (event) => event.type === "yield" && event.description.type === PULL_REQUEST_READ,
+            ).length;
+          });
+          yield* provide(host.access);
         });
       },
     };
@@ -1382,6 +1589,7 @@ describe("Tier PRR — pull-request evidence", () => {
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
       const database = yield* createRun();
+      watched = database;
       yield* runWorkflowDocument(
         database,
         `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n`,
@@ -1390,9 +1598,113 @@ describe("Tier PRR — pull-request evidence", () => {
           gitHubPullRequests: { access: counted, configuration: { allowed: [SUBJECT_REPO] } },
         },
       );
+      // Opened once, disposed with the read, and nothing was acknowledged
+      // while it was still open.
+      expect(events).toEqual(["open", "close"]);
+      expect(acknowledgedAtClose).toBe(0);
+      expect(yield* reads(database)).toHaveLength(1);
     });
+  });
 
-    expect(events).toEqual(["open", "close"]);
+  it("PRR24b: a cleanup that throws the read's own error acknowledges nothing", function* () {
+    const root = yield* useStorageRoot();
+    const failure = new Error("the collection could not be read");
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      // One Error object raised by the read and again by its registered
+      // cleanup. Nothing about the exception separates the read's own refusal
+      // from a scope that could not close, so only what the attempt reported
+      // may decide — and a scope that did not close reports nothing.
+      const refused = yield* raised(
+        answering(
+          database,
+          `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n` +
+            `<PullRequest.Comments url="${SUBJECT_URL}" as="comments" />\n`,
+          undefined,
+          function* (): Operation<PullRequestReadResult> {
+            yield* resource<null>(function* (provide) {
+              yield* ensure(function* (): Operation<void> {
+                throw failure;
+              });
+              yield* provide(null);
+            });
+            throw failure;
+          },
+        ),
+      );
+      expect(refused).toBeDefined();
+
+      // No outcome at all for the read whose attempt failed to close, and the
+      // fence the first failure activates means the read after it acknowledges
+      // nothing either.
+      expect(yield* reads(database)).toHaveLength(0);
+    });
+  });
+
+  it("PRR32: a valid history captured before this boundary existed restores unchanged", function* () {
+    const legacy = yield* fixture("legacy-valid-success");
+    const host = server({ [REVIEWS]: { body: "{}" } });
+
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId: legacy.runId });
+      yield* seed(database, legacy.events);
+      const output = yield* runWorkflowDocument(database, legacy.source, reading(host));
+
+      // The saved answer, restored: the collection it recorded is what the
+      // document printed, nothing was asked of the service, and the record is
+      // the one that was already there rather than a new one beside it.
+      expect(String(output)).toContain("1 reviews");
+      expect(host.requests).toEqual([]);
+      const retained = yield* reads(database);
+      expect(retained).toHaveLength(1);
+      expect(retained[0]).toEqual(legacy.events.find(isRead));
+    });
+  });
+
+  it("PRR33: a failure captured before this boundary existed replays its own payload", function* () {
+    const legacy = yield* fixture("legacy-saved-error");
+    const host = server({ [REVIEWS]: { body: "{}" } });
+
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId: legacy.runId });
+      yield* seed(database, legacy.events);
+      const refused = yield* raised(runWorkflowDocument(database, legacy.source, reading(host)));
+
+      // The old failure is this read's answer and stays exactly as it was
+      // written: no normalization of a payload that is already saved, no
+      // second append, and nothing asked of the service.
+      expect(String(refused)).toContain("did not answer with the complete collection");
+      expect(host.requests).toEqual([]);
+      const retained = yield* reads(database);
+      expect(retained).toHaveLength(1);
+      expect(retained[0]).toEqual(legacy.events.find(isRead));
+    });
+  });
+
+  it("PRR34: a checks success whose item names another commit is refused, not repaired", function* () {
+    const legacy = yield* fixture("legacy-inconsistent-checks");
+    const host = server({ [REVIEWS]: { body: "{}" } });
+
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun({ runId: legacy.runId });
+      yield* seed(database, legacy.events);
+      const refused = yield* raised(runWorkflowDocument(database, legacy.source, reading(host)));
+
+      // This record was appended by a worker that asked only for the
+      // collection kind. It is refused before any of the history replays, and
+      // deliberately: what it says about one commit and what it says about the
+      // other cannot both be true, so there is no reading of it to continue
+      // from. Refused is the whole of it — the journal is not rewritten, the
+      // record is not deleted or coerced, and nothing is fetched again.
+      expect(String(refused)).toContain("different head");
+      expect(host.requests).toEqual([]);
+      const retained = yield* reads(database);
+      expect(retained).toHaveLength(1);
+      expect(retained[0]).toEqual(legacy.events.find(isRead));
+    });
   });
 
   it("PRR26: an interruption in flight unwinds and retains no result", function* () {

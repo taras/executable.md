@@ -34,7 +34,16 @@ import { gitSession } from "../../git/src/deno/composition/git.ts";
 import { gitPlugin } from "../../git/src/plugin.ts";
 import { replRepositoryInstallation } from "../../git/src/deno/retained-repository/provider.ts";
 import { REPL_REPOSITORY_PULL_REQUEST_REQUEST } from "../../git/src/retained-repository/pull-request-records.ts";
-import { PULL_REQUEST_READ } from "../../git/src/composition/pull-request-read-records.ts";
+import {
+  PULL_REQUEST_READ,
+  pullRequestReadRequestJson,
+  readRequest,
+} from "../../git/src/composition/pull-request-read-records.ts";
+import type { PullRequestReadRequest } from "../../git/src/composition/pull-request-read-records.ts";
+import {
+  PullRequestReadHistoryError,
+  pullRequestReadName,
+} from "../../git/src/composition/pull-request-read-retention.ts";
 import { GIT_HOST_EFFECT } from "../../git/src/git-host/effect-type.ts";
 import type { HelperAssembly } from "../../git/src/deno/composition/credential-helper.ts";
 import { selectReplEntryHost } from "../src/deno-repositories.ts";
@@ -385,17 +394,36 @@ describe("how a REPL entry gets its pull-request capability", () => {
     expect(passive.initialized).toBe(0);
   });
 
-  it("D5: the entry declares one admission for its reads beside the others", function* () {
+  it("D5: the entry's own admission accepts its reads and refuses another entry's", function* () {
     const fixture = yield* useFixture();
+    const owner = '["executablemd.repl.issue-owner",1,"execution-pr-cli-5","1"]';
     const built = yield* scoped(function* (): Operation<ExecutionInstallation> {
-      return yield* replRepositoryInstallation(
-        '["executablemd.repl.issue-owner",1,"execution-pr-cli-5","1"]',
-        { host: denoRepositoryHost(), root: fixture.managed },
-      );
+      return yield* replRepositoryInstallation(owner, {
+        host: denoRepositoryHost(),
+        root: fixture.managed,
+      });
     });
     // Three: the issues history, this entry's publication and pull-request
     // history, and its evidence reads.
     expect((built.admissions ?? []).length).toBe(3);
+
+    // What the third one is for. The read name deliberately omits the owner so
+    // an inherited read can restore, so the question a name cannot answer —
+    // whose read this is — is the one this entry's own policy asks, through the
+    // same reader every host uses.
+    const url = "https://github.com/octo/project/pull/7";
+    const mine = yield* readEvent(readRequest(url, "reviews", undefined, owner, "7"));
+    const theirs = yield* readEvent(readRequest(url, "reviews", undefined, `${owner}-other`, "7"));
+    expect(yield* admitted(built, [mine])).toBeUndefined();
+    expect(yield* admitted(built, [theirs])).toBe("foreign-owner");
+
+    // Asked of a failed read's description too: a refusal retains no result,
+    // and its description is the only thing that says who asked.
+    expect(
+      yield* admitted(built, [
+        { ...theirs, result: { status: "err", error: { message: "unreadable" } } },
+      ]),
+    ).toBe("foreign-owner");
   });
 });
 
@@ -407,4 +435,35 @@ function* nothingUnder(path: string): Operation<boolean> {
   } catch {
     return true;
   }
+}
+
+/** One retained evidence read, described the way the feature describes its own. */
+function* readEvent(request: PullRequestReadRequest): Operation<DurableEvent> {
+  const named = yield* pullRequestReadName(request);
+  return {
+    type: "yield",
+    coroutineId: "root",
+    description: {
+      type: PULL_REQUEST_READ,
+      name: named.name,
+      configuration: named.configuration,
+      input: pullRequestReadRequestJson(request),
+    },
+    result: { status: "ok", value: { kind: "reviews", items: [] } },
+  };
+}
+
+/** What every admission this entry contributed makes of a history. */
+function* admitted(
+  installation: ExecutionInstallation,
+  events: readonly DurableEvent[],
+): Operation<string | undefined> {
+  try {
+    for (const admission of installation.admissions ?? []) {
+      yield* admission(events);
+    }
+  } catch (error) {
+    return error instanceof PullRequestReadHistoryError ? error.reason : "unexpected";
+  }
+  return undefined;
 }

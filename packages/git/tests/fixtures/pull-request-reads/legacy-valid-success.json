@@ -1,0 +1,99 @@
+{
+  "source": "<PullRequest.Reviews url=\"https://github.com/octo/project/pull/7\" as=\"reviews\" />\n\n{reviews.length} reviews\n",
+  "events": [
+    {
+      "type": "yield",
+      "coroutineId": "root",
+      "description": {
+        "type": "workflow_run",
+        "name": "workflow_run",
+        "bundleHash": "e22b9d94280c8b07aac19569452576323e1662e729d36609f72fd8be44a74d6c"
+      },
+      "result": {
+        "status": "ok",
+        "value": {
+          "runId": "release-1.4",
+          "bundleHash": "e22b9d94280c8b07aac19569452576323e1662e729d36609f72fd8be44a74d6c"
+        }
+      }
+    },
+    {
+      "type": "yield",
+      "coroutineId": "root",
+      "description": {
+        "type": "import_component",
+        "name": "__root__"
+      },
+      "result": {
+        "status": "ok",
+        "value": {
+          "kind": "repository",
+          "path": "<eval>",
+          "content": "<PullRequest.Reviews url=\"https://github.com/octo/project/pull/7\" as=\"reviews\" />\n\n{reviews.length} reviews\n"
+        }
+      }
+    },
+    {
+      "type": "yield",
+      "coroutineId": "root",
+      "description": {
+        "type": "import_component",
+        "name": "PullRequest.Reviews",
+        "executablemd.source-position": {
+          "path": "<eval>",
+          "offset": 0,
+          "line": 1,
+          "column": 1
+        }
+      },
+      "result": {
+        "status": "ok",
+        "value": {
+          "kind": "registered",
+          "origin": "@executablemd/workflow/composition",
+          "reserved": false
+        }
+      }
+    },
+    {
+      "type": "yield",
+      "coroutineId": "root",
+      "description": {
+        "type": "pull_request_read",
+        "name": "46c689c2e470e024ba6344caffd83ee83b6e376a20b1157365115b20c95aa097:6af2737ac2d30964",
+        "input": {
+          "operation": "read",
+          "url": "https://github.com/octo/project/pull/7",
+          "provider": null,
+          "kind": "reviews",
+          "runId": "release-1.4",
+          "expansionId": "46c689c2e470e024ba6344caffd83ee83b6e376a20b1157365115b20c95aa097"
+        },
+        "configuration": "6af2737ac2d30964",
+        "executablemd.source-position": {
+          "path": "<eval>",
+          "offset": 0,
+          "line": 1,
+          "column": 1
+        }
+      },
+      "result": {
+        "status": "ok",
+        "value": {
+          "kind": "reviews",
+          "items": [
+            {
+              "id": "1",
+              "author": "reviewer",
+              "state": "approved",
+              "body": "ship it",
+              "submittedAt": "2026-08-24T00:00:00Z",
+              "commitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "url": "https://github.test/pr/7#r1"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

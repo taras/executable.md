@@ -37,12 +37,8 @@
  * is not.
  */
 
-import { getExpansion, sourceDescription } from "@executablemd/core";
-import { createDurableOperation } from "@executablemd/durable-streams";
-import type { EffectDescription, Json as DurableJson } from "@executablemd/durable-streams";
+import { getExpansion } from "@executablemd/core";
 import type { Operation } from "effection";
-import { scoped } from "effection";
-import { PullRequestReadError } from "../../composition/errors.ts";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
 import { PullRequestReadExecution } from "../../composition/pull-request-read-execution.ts";
 import {
@@ -50,160 +46,12 @@ import {
   type PullRequestReadInvocation,
   type PullRequestUpsertInvocation,
 } from "../../composition/pull-request-operations.ts";
-import {
-  parsePullRequestReadResult,
-  PULL_REQUEST_READ,
-  pullRequestReadEnvelopeJson,
-  pullRequestReadRequestJson,
-  readRequest,
-} from "../../composition/pull-request-read-records.ts";
+import { readRequest } from "../../composition/pull-request-read-records.ts";
+import { retainPullRequestRead } from "../../composition/pull-request-read-retention.ts";
 
-import type {
-  PullRequestReadKind,
-  PullRequestReadRequest,
-  PullRequestReadResult,
-} from "../../composition/pull-request-read-records.ts";
+import type { PullRequestReadResult } from "../../composition/pull-request-read-records.ts";
 import type { PullRequestResult } from "../../composition/pull-request-records.ts";
-import { parseJsonValue } from "@executablemd/workflow";
 import { getWorkflowRun } from "@executablemd/workflow";
-import { gitOperationFingerprint } from "./operations.ts";
-
-/** Which element a refusal names, by the collection it was reading. */
-const ELEMENT: Readonly<Record<PullRequestReadKind, string>> = Object.freeze({
-  reviews: "<PullRequest.Reviews>",
-  comments: "<PullRequest.Comments>",
-  checks: "<PullRequest.Checks>",
-});
-
-/**
- * The durable description one read is retained under.
- *
- * Shared with the entry's own retained reads: the name is already in journals a
- * fork reads, so there is one algorithm for it and this is where it lives. The
- * entry supplies its owner as the run and its authenticated invocation as the
- * expansion; nothing else about it differs.
- */
-/**
- * The name one read is published under, and the configuration it covers.
- *
- * Separate from the description below because a name has to be computable
- * where a description is not. An entry's admission recomputes it over a
- * retained history, before any element is expanding, and the source position a
- * description also carries is diagnostic and only available there.
- *
- * The run is in the retained request, and deliberately not in this
- * fingerprint. A fork is a different run reaching the same position with the
- * same question, and a name that carried the run would make every inherited
- * read a different effect — which is to say, unforkable. What the name has to
- * separate is different *questions*, and the four members below are what a
- * question is made of.
- */
-export function pullRequestReadName(request: PullRequestReadRequest): {
-  readonly name: string;
-  readonly configuration: string;
-} {
-  const configuration = gitOperationFingerprint([
-    request.operation,
-    request.url,
-    request.provider,
-    request.kind,
-  ]);
-  return { name: `${request.expansionId}:${configuration}`, configuration };
-}
-
-export function* describePullRequestRead(
-  request: PullRequestReadRequest,
-): Operation<EffectDescription> {
-  const expansion = yield* getExpansion();
-  const { name, configuration } = pullRequestReadName(request);
-  return {
-    type: PULL_REQUEST_READ,
-    name,
-    input: pullRequestReadRequestJson(request),
-    configuration,
-    ...sourceDescription(expansion.position),
-  };
-}
-
-/**
- * Retain one admitted read, or restore what is already retained.
- *
- * Reached only through `PullRequestReadExecution`, after a transport has
- * matched the request, admitted it against the host ceiling and validated the
- * target — so the effect this creates always describes a question this run was
- * permitted to ask. Everything from here is durable: a transport or evidence
- * failure retains the failed read, and a completed one restores its snapshot
- * without opening a session or reaching the network.
- */
-function retainDurableRead(
-  request: PullRequestReadRequest,
-  perform: () => Operation<PullRequestReadResult>,
-): Operation<PullRequestReadResult> {
-  const element = ELEMENT[request.kind];
-
-  return scoped(function* () {
-    const description = yield* describePullRequestRead(request);
-
-    const stored = yield createDurableOperation<DurableJson>(
-      description,
-      function* (): Operation<DurableJson> {
-        const answered = yield* perform();
-        if (answered.kind !== request.kind) {
-          throw new PullRequestReadError(
-            "protocol",
-            element,
-            "the selected provider answered with a different collection than the one this " +
-              "element asked for.",
-          );
-        }
-        return pullRequestReadEnvelopeJson(answered);
-      },
-    );
-
-    return retainedPullRequestRead(stored, request.kind, element);
-  });
-}
-
-/**
- * The read this retained value describes, or the refusal that it describes none.
- *
- * Shared by both retained profiles, and applied on both of their paths: a live
- * answer is held to it before it is appended, and a restored one before it is
- * handed back. A retained value that is not the evidence that read produces,
- * or that is a different collection than the one asked for, is refused rather
- * than bound.
- */
-export function retainedPullRequestRead(
-  stored: unknown,
-  kind: PullRequestReadKind,
-  element: string,
-): PullRequestReadResult {
-  const result = parsePullRequestReadResult(
-    parseJsonValue(
-      stored,
-      "$",
-      (reason, path) =>
-        new PullRequestReadError(
-          "protocol",
-          element,
-          `what this run retained for it is not a value it can carry: ${reason} at ${path}.`,
-        ),
-    ),
-  );
-  if (result === undefined || result.kind !== kind) {
-    throw new PullRequestReadError(
-      "protocol",
-      element,
-      "what this run retained for it is not the evidence that read produces.",
-    );
-  }
-  return result;
-}
-
-/** Which element a pull-request read refusal names, by its collection. */
-export function pullRequestReadElement(kind: PullRequestReadKind): string {
-  return ELEMENT[kind];
-}
 
 /**
  * Make an admitted read durable, for this scope and below.
@@ -218,7 +66,7 @@ export function useRetainedPullRequestReads(): Operation<void> {
       *perform([admitted, transport]): Operation<PullRequestReadResult> {
         const run = yield* getWorkflowRun();
         const expansion = yield* getExpansion();
-        return yield* retainDurableRead(
+        return yield* retainPullRequestRead(
           readRequest(admitted.url, admitted.kind, admitted.provider, run.runId, expansion.id),
           transport,
         );

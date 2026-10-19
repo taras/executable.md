@@ -70,12 +70,12 @@ import { type WorkflowRun, type WorkflowRunRecord } from "@executablemd/workflow
  * admission that derives this execution's identities from this execution's own
  * retained history.
  */
-export function* gitPluginAdmissions(): Operation<ExecutionInstallation> {
+export function* gitPluginAdmissions(command = "run"): Operation<ExecutionInstallation> {
   const install = gitPlugin.install;
   if (install === undefined) {
     throw new Error("the Git Plugin installed nothing");
   }
-  const installed = yield* install.call(gitPlugin, { command: "run", args: [] });
+  const installed = yield* install.call(gitPlugin, { command, args: [command] });
   return { admissions: [...(installed?.admissions ?? [])] };
 }
 

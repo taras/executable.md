@@ -87,10 +87,10 @@ import { useGitHubPullRequestReads } from "../composition/pull-request-reads.ts"
 import type { GitHubPullRequestsOptions } from "../composition/pull-request-reads.ts";
 import { replPullRequestPolicy } from "./pull-request.ts";
 import {
-  replPullRequestReadAdmission,
   replPullRequestReadPolicy,
   useReplPullRequestReadOperations,
 } from "./pull-request-reads.ts";
+import { pullRequestReadAdmission } from "../../composition/pull-request-read-retention.ts";
 import { pullRequestDeclaration } from "../../composition/components/PullRequest.ts";
 import {
   PULL_REQUEST_READ_KINDS,
@@ -231,7 +231,12 @@ export function* replRepositoryInstallation(
   const admissions: JournalAdmission[] = [
     replIssueAdmission(owner),
     replPushAdmission(owner, publications),
-    replPullRequestReadAdmission(owner),
+    // This entry's own reads and nobody else's. The read name deliberately
+    // omits the owner so an inherited read can restore, so the one question a
+    // name cannot answer is asked here, against the owner this entry was
+    // derived for — of a failed read's description too, which still says who
+    // asked.
+    pullRequestReadAdmission((recordedOwner) => recordedOwner === owner),
   ];
   return {
     components,

@@ -1,0 +1,90 @@
+{
+  "source": "<PullRequest.Reviews url=\"https://github.com/octo/project/pull/7\" as=\"reviews\" />\n",
+  "events": [
+    {
+      "type": "yield",
+      "coroutineId": "root",
+      "description": {
+        "type": "workflow_run",
+        "name": "workflow_run",
+        "bundleHash": "e22b9d94280c8b07aac19569452576323e1662e729d36609f72fd8be44a74d6c"
+      },
+      "result": {
+        "status": "ok",
+        "value": {
+          "runId": "legacy-error",
+          "bundleHash": "e22b9d94280c8b07aac19569452576323e1662e729d36609f72fd8be44a74d6c"
+        }
+      }
+    },
+    {
+      "type": "yield",
+      "coroutineId": "root",
+      "description": {
+        "type": "import_component",
+        "name": "__root__"
+      },
+      "result": {
+        "status": "ok",
+        "value": {
+          "kind": "repository",
+          "path": "<eval>",
+          "content": "<PullRequest.Reviews url=\"https://github.com/octo/project/pull/7\" as=\"reviews\" />\n"
+        }
+      }
+    },
+    {
+      "type": "yield",
+      "coroutineId": "root",
+      "description": {
+        "type": "import_component",
+        "name": "PullRequest.Reviews",
+        "executablemd.source-position": {
+          "path": "<eval>",
+          "offset": 0,
+          "line": 1,
+          "column": 1
+        }
+      },
+      "result": {
+        "status": "ok",
+        "value": {
+          "kind": "registered",
+          "origin": "@executablemd/workflow/composition",
+          "reserved": false
+        }
+      }
+    },
+    {
+      "type": "yield",
+      "coroutineId": "root",
+      "description": {
+        "type": "pull_request_read",
+        "name": "46c689c2e470e024ba6344caffd83ee83b6e376a20b1157365115b20c95aa097:6af2737ac2d30964",
+        "input": {
+          "operation": "read",
+          "url": "https://github.com/octo/project/pull/7",
+          "provider": null,
+          "kind": "reviews",
+          "runId": "legacy-error",
+          "expansionId": "46c689c2e470e024ba6344caffd83ee83b6e376a20b1157365115b20c95aa097"
+        },
+        "configuration": "6af2737ac2d30964",
+        "executablemd.source-position": {
+          "path": "<eval>",
+          "offset": 0,
+          "line": 1,
+          "column": 1
+        }
+      },
+      "result": {
+        "status": "err",
+        "error": {
+          "message": "<PullRequest.Reviews> could not read the evidence it names: the Git host did not answer with the complete collection. None of what it did answer is evidence that there is nothing there.",
+          "name": "PullRequestReadError",
+          "stack": "PullRequestReadError: <PullRequest.Reviews> could not read the evidence it names: the Git host did not answer with the complete collection. None of what it did answer is evidence that there is nothing there.\n    at file:///Users/tarasmankovski/Repositories/taras/executable.md/.claude/worktrees/issue-181-pr945-sharedread/packages/git/src/deno/composition/pull-request-reads.ts:339:19\n    at Generator.next (<anonymous>)\n    at file:///Users/tarasmankovski/Repositories/taras/executable.md/.claude/worktrees/issue-181-pr945-sharedread/packages/git/src/deno/composition/pull-request-operations.ts:150:33\n    at Generator.next (<anonymous>)\n    at Object.run (file:///Users/tarasmankovski/Repositories/taras/executable.md/.claude/worktrees/issue-181-pr945-sharedread/packages/durable-streams/live-coordinator.ts:60:46)\n    at run.next (<anonymous>)\n    at file:///Users/tarasmankovski/Repositories/taras/executable.md/.claude/worktrees/issue-181-pr945-sharedread/packages/durable-streams/effect.ts:405:45\n    at Generator.next (<anonymous>)\n    at TaskGroup (file:///Users/tarasmankovski/Repositories/taras/executable.md/.claude/worktrees/issue-181-pr945-sharedread/node_modules/.deno/effection@4.1.0/node_modules/effection/esm/lib/task-group.js:35:27)\n    at TaskGroup.next (<anonymous>)"
+        }
+      }
+    }
+  ]
+}

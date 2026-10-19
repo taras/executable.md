@@ -224,6 +224,24 @@ function paired(name: string): {
   };
 }
 
+/** One check run, in the shape a checks envelope carries. */
+function check(headSha: string) {
+  return {
+    kind: "check-run" as const,
+    id: "1",
+    headSha,
+    name: "build",
+    status: "completed" as const,
+    conclusion: "success" as const,
+    url: null,
+    startedAt: null,
+    completedAt: null,
+    title: null,
+    summary: null,
+    text: null,
+  };
+}
+
 describe("one registry for every repository operation, and the policy an execution owns", () => {
   it("A1: describes one component whichever path carries it", function* (): Operation<void> {
     // The whole vocabulary is registered ordinarily, and an execution that owns
@@ -446,6 +464,46 @@ describe("one registry for every repository operation, and the policy an executi
       runs.push({ output: ran.output, calls });
     }
     expect(runs[0]).toEqual(runs[1]);
+  });
+
+  it("B2: an ordinary read binds evidence or nothing, whatever answered it", function* () {
+    const root = yield* useRoot();
+    const head = "c".repeat(40);
+    const other = "e".repeat(40);
+    const source = [
+      `<PullRequest.Checks url="${TRACKER}/pull/1" as="checks" />`,
+      "<Json value={checks} />",
+    ].join("\n");
+
+    // An ordinary run retains nothing, so this answer is never written down —
+    // and it still has to be evidence before it becomes a binding. The
+    // envelope says it was read at one commit and carries an item about
+    // another, which is two answers at once, and whichever a reader picked
+    // would be wrong about the other.
+    const refused = yield* run(root, source, [], function* () {
+      yield* PullRequestOperations.around({
+        // deno-lint-ignore require-yield
+        *read(): Operation<PullRequestReadResult> {
+          return { kind: "checks", headSha: head, items: [check(other)] };
+        },
+      });
+    });
+    expect(refused.refusal).toBeDefined();
+    expect(refused.output).not.toContain("build");
+
+    // The control: the same shape, agreeing with the head it was read at, and
+    // answered entirely by a handler. An ordinary read is fresh — nothing here
+    // is restored from anywhere — and a sound answer binds.
+    const bound = yield* run(root, source, [], function* () {
+      yield* PullRequestOperations.around({
+        // deno-lint-ignore require-yield
+        *read(): Operation<PullRequestReadResult> {
+          return { kind: "checks", headSha: head, items: [check(head)] };
+        },
+      });
+    });
+    expect(bound.refusal).toBeUndefined();
+    expect(bound.output).toContain("build");
   });
 
   it("A5: cancelling an invocation stops the operation it was performing", function* (): Operation<void> {

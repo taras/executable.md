@@ -36,6 +36,7 @@ import type {
 import { useCompositionComponents } from "./composition/installation.ts";
 import { admitReplRepositoryHistory } from "./retained-repository/admission.ts";
 import { gitHostIdentityAdmission, issueIdentityAdmission } from "./identities.ts";
+import { pullRequestReadAdmission } from "./composition/pull-request-read-retention.ts";
 
 /**
  * The commands that execute a document, or describe what one could write.
@@ -206,6 +207,14 @@ export const gitPlugin: Plugin = Plugin({
       admissions: [
         gitHostIdentityAdmission(),
         issueIdentityAdmission(),
+        // Every retained evidence read, wherever it was retained: that its
+        // description parses, is named by the question it carries and holds the
+        // collection that question asked for. Who may have asked is the only
+        // part a host decides, and this contribution decides nothing about it —
+        // a run's own journal construction already settled whose history it
+        // inherited, and an entry adds its stricter policy from its own
+        // installation.
+        pullRequestReadAdmission(() => true),
         // The REPL's own: what an entry retained about the checkout it was
         // standing in has to be readable before any of it is replayed. It
         // belongs to this contribution because an admission is applied inside

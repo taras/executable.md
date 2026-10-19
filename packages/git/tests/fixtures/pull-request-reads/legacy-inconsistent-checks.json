@@ -1,0 +1,105 @@
+{
+  "source": "<PullRequest.Checks url=\"https://github.com/octo/project/pull/7\" as=\"checks\" />\n\n{checks.length} checks\n",
+  "events": [
+    {
+      "type": "yield",
+      "coroutineId": "root",
+      "description": {
+        "type": "workflow_run",
+        "name": "workflow_run",
+        "bundleHash": "e22b9d94280c8b07aac19569452576323e1662e729d36609f72fd8be44a74d6c"
+      },
+      "result": {
+        "status": "ok",
+        "value": {
+          "runId": "legacy-checks",
+          "bundleHash": "e22b9d94280c8b07aac19569452576323e1662e729d36609f72fd8be44a74d6c"
+        }
+      }
+    },
+    {
+      "type": "yield",
+      "coroutineId": "root",
+      "description": {
+        "type": "import_component",
+        "name": "__root__"
+      },
+      "result": {
+        "status": "ok",
+        "value": {
+          "kind": "repository",
+          "path": "<eval>",
+          "content": "<PullRequest.Checks url=\"https://github.com/octo/project/pull/7\" as=\"checks\" />\n\n{checks.length} checks\n"
+        }
+      }
+    },
+    {
+      "type": "yield",
+      "coroutineId": "root",
+      "description": {
+        "type": "import_component",
+        "name": "PullRequest.Checks",
+        "executablemd.source-position": {
+          "path": "<eval>",
+          "offset": 0,
+          "line": 1,
+          "column": 1
+        }
+      },
+      "result": {
+        "status": "ok",
+        "value": {
+          "kind": "registered",
+          "origin": "@executablemd/workflow/composition",
+          "reserved": false
+        }
+      }
+    },
+    {
+      "type": "yield",
+      "coroutineId": "root",
+      "description": {
+        "type": "pull_request_read",
+        "name": "a8ba70b07ca74f5df8e9e9bfb000d4bab32f17a5657f4d4d4275b747183b6674:9ef3d4bde8322ffc",
+        "input": {
+          "operation": "read",
+          "url": "https://github.com/octo/project/pull/7",
+          "provider": null,
+          "kind": "checks",
+          "runId": "legacy-checks",
+          "expansionId": "a8ba70b07ca74f5df8e9e9bfb000d4bab32f17a5657f4d4d4275b747183b6674"
+        },
+        "configuration": "9ef3d4bde8322ffc",
+        "executablemd.source-position": {
+          "path": "<eval>",
+          "offset": 0,
+          "line": 1,
+          "column": 1
+        }
+      },
+      "result": {
+        "status": "ok",
+        "value": {
+          "kind": "checks",
+          "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "items": [
+            {
+              "kind": "check-run",
+              "id": "1",
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "name": "build",
+              "status": "completed",
+              "conclusion": "success",
+              "url": null,
+              "startedAt": null,
+              "completedAt": null,
+              "title": null,
+              "summary": null,
+              "text": null
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

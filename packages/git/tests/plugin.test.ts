@@ -25,6 +25,16 @@ import type { PluginInstallRequest } from "@executablemd/core/api";
 import { retainedWorkflowInstallation } from "../../workflow/src/run.ts";
 import type { WorkflowRun } from "../../workflow/src/run.ts";
 import { declaresFor, gitPlugin } from "../src/plugin.ts";
+import {
+  PullRequestReadHistoryError,
+  pullRequestReadName,
+} from "../src/composition/pull-request-read-retention.ts";
+import {
+  PULL_REQUEST_READ,
+  pullRequestReadRequestJson,
+  readRequest,
+} from "../src/composition/pull-request-read-records.ts";
+import type { PullRequestReadRequest } from "../src/composition/pull-request-read-records.ts";
 import { retainedGitHostIdentitiesHere, retainedIssueIdentitiesHere } from "../src/identities.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect.ts";
 import { reconcileGitHostEffect, withGitHostProvider } from "@executablemd/git/api";
@@ -365,9 +375,97 @@ describe("the Git Plugin's command profile", () => {
       yield* install.call(gitPlugin, { command: "workflow", args: ["workflow", "list"] }),
     ).toBe(undefined);
     const contribution = yield* install.call(gitPlugin, { command: "run", args: ["run"] });
-    expect(contribution?.admissions).toHaveLength(2);
+    expect(contribution?.admissions).toHaveLength(3);
+  });
+
+  it("admits every retained evidence read, under any owner, for a command it declares for", function* () {
+    const contribution = yield* installed({ command: "run", args: ["run"] });
+    const readable = yield* readEvent(
+      readRequest(READ_URL, "reviews", undefined, "some-other-execution", "7"),
+      { status: "ok", value: { kind: "reviews", items: [] } },
+    );
+
+    // The general contribution restricts no owner: a run's own journal
+    // construction already settled whose history it inherited, which is what
+    // lets a fork read the reads it was forked from.
+    expect(yield* admit(contribution, [readable])).toBeUndefined();
+
+    // What it does require is that the record is readable and says what it is.
+    // This is the shared reader, so a checks envelope describing another commit
+    // is refused here exactly as it is in an entry.
+    const inconsistent = yield* readEvent(
+      readRequest(READ_URL, "checks", undefined, "some-other-execution", "7"),
+      {
+        status: "ok",
+        value: {
+          kind: "checks",
+          headSha: "a".repeat(40),
+          items: [
+            {
+              kind: "check-run",
+              id: "1",
+              headSha: "b".repeat(40),
+              name: "build",
+              status: "completed",
+              conclusion: "success",
+              url: null,
+              startedAt: null,
+              completedAt: null,
+              title: null,
+              summary: null,
+              text: null,
+            },
+          ],
+        },
+      },
+    );
+    expect(yield* admit(contribution, [inconsistent])).toBe("malformed-result");
+
+    const misnamed = yield* readEvent(
+      readRequest(READ_URL, "reviews", undefined, "some-other-execution", "7"),
+      { status: "ok", value: { kind: "reviews", items: [] } },
+      "7:0123456789abcdef",
+    );
+    expect(yield* admit(contribution, [misnamed])).toBe("request-fingerprint");
   });
 });
+
+const READ_URL = "https://github.com/octo/project/pull/7";
+
+/** One retained evidence read, described the way the feature describes its own. */
+function* readEvent(
+  request: PullRequestReadRequest,
+  result: DurableEvent["result"],
+  name?: string,
+): Operation<DurableEvent> {
+  const named = yield* pullRequestReadName(request);
+  return {
+    type: "yield",
+    coroutineId: "root",
+    description: {
+      type: PULL_REQUEST_READ,
+      name: name ?? named.name,
+      configuration: named.configuration,
+      input: pullRequestReadRequestJson(request),
+    },
+    result,
+  };
+}
+
+/** What every admission this contribution carries makes of a history. */
+function* admit(
+  contribution: ExecutionInstallation,
+  events: readonly DurableEvent[],
+): Operation<string | undefined> {
+  try {
+    for (const admission of contribution.admissions ?? []) {
+      yield* admission(events);
+    }
+  } catch (error) {
+    return error instanceof PullRequestReadHistoryError ? error.reason : "unexpected";
+  }
+  return undefined;
+}
 
 describe("one Plugin value, one execution's retained identities", () => {
   it("derives each execution's identities from its own history and no other", function* () {

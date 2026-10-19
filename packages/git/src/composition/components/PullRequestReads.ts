@@ -28,6 +28,7 @@ import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { COMPOSITION_ORIGIN } from "../definitions.ts";
 import { PullRequestReadError } from "../errors.ts";
+import { validatePullRequestReadResult } from "../pull-request-read-retention.ts";
 import { pullRequestReadResultJson } from "../pull-request-read-records.ts";
 import { canonicalPullRequestUrl, pullRequestProviderName } from "../pull-request-target.ts";
 import type { PullRequestReadKind } from "../pull-request-read-records.ts";
@@ -194,15 +195,12 @@ function read(
       );
     }
 
-    const result = yield* read({ url, kind, provider });
-    if (result.kind !== kind) {
-      throw new PullRequestReadError(
-        "protocol",
-        element,
-        "the selected provider answered with a different collection than the one this element " +
-          "asked for.",
-      );
-    }
+    // Whatever the public chain composed over the answer, what this element
+    // binds has to be evidence. The same validator the retained path appends
+    // and restores through is asked here, after every live transformation and
+    // before any of it becomes a binding — a question the element's own return
+    // contract cannot ask, because an envelope's head never reaches the array.
+    const result = validatePullRequestReadResult(yield* read({ url, kind, provider }), kind);
     return pullRequestReadResultJson(result);
   };
 }

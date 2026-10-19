@@ -2591,6 +2591,17 @@ Git-host evidence read is an ordinary durable effect, and the machinery that
 makes a mutation exactly-once is deliberately absent rather than reused where it
 would only add a second identity to keep in agreement.
 
+One implementation of that read serves every host that retains one. A workflow
+run and a REPL entry ask the same questions — what a sound answer is, when one
+may be acknowledged, what a saved one has to be before it is restored, how a
+failure is written down, and what a composed answer has to be before it binds —
+and those questions have one answer each, in the feature. What a host supplies
+is only what nothing else can know: the identity a fresh read is asked under,
+and which recorded owners its own history may inherit. A host supplies no
+validator, no coordinator, no serializer and no choice of worker, because two
+implementations of one rule is one implementation too many: they drift, and the
+drift is invisible until a journal written under one is read under the other.
+
 What such a read must not do is answer partially. A collection the host
 completed and a collection nobody could finish reading are opposite facts, and
 only one of them is `[]`; a truncated list would report the first while meaning
@@ -7330,29 +7341,41 @@ on continuation and may bind a different array from the same saved snapshot, and
 nothing presents those transformations as saved. A handler that never reaches
 the seam retains nothing and runs again.
 
-A read is acknowledged only once the attempt that produced it has finished. The
-transport's own session and page walk belong to a scope of the read's own, and
-that scope is closed and joined before either outcome is published — otherwise a
-reopen could restore a read whose first run was still unwinding when the journal
-said it was done. The attempt reports its own outcome rather than raising it,
-so a scope that returns at all is a scope that closed, and that return is what
-admits an outcome to publication: an expected read failure is this read's answer and is
-retained as one, while a throw from that boundary — a cleanup that threw, or any
-failure nobody there authored, including one indistinguishable from the read's
-own — publishes nothing at all and activates the run's existing fail-stop state.
-An interruption publishes nothing, which leaves the read repeatable — safe in
-the way repeating a mutation is not.
+From the seam inward, an entry's read is the feature's read and nothing about it
+is this host's own. A read is acknowledged only once the attempt that produced
+it has finished: the transport's own session and page walk belong to a scope of
+the read's own, and that scope is closed and joined before either outcome is
+published — otherwise a reopen could restore a read whose first run was still
+unwinding when the journal said it was done. The attempt reports its own outcome
+rather than raising it, so a scope that returns at all is a scope that closed,
+and that return is what admits an outcome to publication: an expected read
+failure is this read's answer and is retained as one, while a throw from that
+boundary — a cleanup that threw, or any failure nobody there authored,
+including one indistinguishable from the read's own — publishes nothing and
+activates the run's existing fail-stop state. An interruption publishes nothing,
+which leaves the read repeatable — safe in the way repeating a mutation is not.
 
 What may be acknowledged is also held to the whole evidence contract before it
-is published, again when it is restored, and again after the outer dispatch has
-composed over it. A collection whose items no reader can parse, and a checks
-envelope holding an item about a commit other than the head it recorded, are
-answers whose meaning is unknown rather than answers to acknowledge; the head
-question in particular is one the element's own return contract cannot ask,
-because the envelope's head never reaches the binding. Continuing a saved read
-asks the same of its description: the input, the name and the configuration the
-engine's own divergence policy reads all have to be the ones its own question
-produces.
+is published, again when it is restored, again when a history is admitted before
+any of it replays, and again after the outer dispatch has composed over it. A
+collection whose items no reader can parse, and a checks envelope holding an
+item about a commit other than the head it recorded, are answers whose meaning
+is unknown rather than answers to acknowledge; the head question in particular
+is one the element's own return contract cannot ask, because the envelope's head
+never reaches the binding. Continuing a saved read asks the same of its
+description: the input, the name and the configuration the engine's own
+divergence policy reads all have to be the ones its own question produces.
+
+Those are the feature's rules, so a workflow run obeys them too. It had its own
+read worker once, checking only the collection kind and acknowledging from
+inside the durable operation, and the difference was not a policy — it was a
+drift. A workflow run therefore now refuses a checks envelope describing another
+commit, refuses an answer it cannot record, and closes a read's attempt before
+acknowledging it, and a saved checks success whose items contradict its recorded
+head is refused rather than continued from. That last one is deliberate about
+old records: what such a record says about one commit and what it says about the
+other cannot both be true, so there is no reading of it to continue from, and
+nothing repairs, deletes, coerces or re-fetches it.
 
 Who is asking travels nowhere public. Each authored read installs a bridge in a
 
@@ -7365,7 +7388,12 @@ borrow. An entry-wide pointer, a value on `next` or a Context identity would
 each have to be correct about an ordering nothing guarantees. The read's own
 durable name deliberately omits the owner, so a fork can inherit it; ownership
 is therefore checked explicitly from the record, including on a failed read's
-description, which is the only thing a refusal retains.
+description, which is the only thing a refusal retains — by an owner policy the
+host supplies to the one history reader, strictly here and permissively for a
+run whose own journal construction already settled whose history it inherited.
+The name's digest is computed where every host can reach it, over the platform's
+`crypto` rather than a synchronous native one, because a journal's own
+vocabulary has to be readable wherever a record is read.
 
 ### What one entry retains about the issue it filed
 

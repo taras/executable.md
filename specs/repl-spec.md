@@ -2434,7 +2434,13 @@ resolved against the frame that published its coordinates.
   is the answer the provider gave inside that boundary: middleware composed
   above it runs again and may bind a different array from the same saved
   snapshot, and an answer a handler produced without ever reaching the provider
-  is retained not at all and runs again.
+  is retained not at all and runs again. From that boundary inward the read is
+  the feature's, not this host's: one implementation decides what a sound
+  answer is, acknowledges one only after the attempt that produced it has
+  closed, and holds a saved one to the same contract before restoring it. What
+  an entry supplies is its own identity and the one question a read's name
+  cannot answer — whose read this is — because the name omits the owner so a
+  fork can inherit it.
 - `<Issue>` is the same component here as under every other host: one
   implementation, the same props, forms and return contract, asking a semantic
   issue operation for its work. The `repl` command registers it as an ordinary

@@ -1883,6 +1883,29 @@ The retained result is a discriminated envelope: `{ kind: "reviews", items }`,
 checks result has a head, so the other two carry no member a reader must know to
 ignore. Only `items` becomes the component's binding.
 
+**One implementation, whichever host retains the read.** A workflow run and a
+REPL entry retain these reads through the same feature implementation. What a
+host supplies is the identity a fresh read is asked under — this run and this
+expansion — and which recorded owners its journal may inherit. A run accepts
+the owners its journal construction already settled, which is what keeps an
+inherited read inheritable, and it supplies no validator, no settlement policy
+and no serializer.
+
+So these hold here as they hold anywhere the feature is retained. An answer is
+held to the whole envelope contract before a success is appended, again when one
+is restored, again when a history is admitted before any of it replays, and
+again after the public chain has composed over it and before `items` reaches a
+binding. A checks envelope carrying an item about a commit other than the head
+it recorded is two answers at once and is refused rather than acknowledged —
+including a saved one, which is refused rather than continued from, with no
+repair, deletion, coercion or re-fetch of the record. A read is acknowledged
+only after the attempt that produced it has closed: an expected failure is the
+read's own answer and is retained as one, while a cleanup that threw — even
+throwing the read's own error object — appends nothing and activates the run's
+existing first-failure fence. An actual failure keeps its own name, message and
+stack; anything else that is raised is recorded as "the pull-request evidence
+read failed".
+
 The records are closed and provider-neutral. Bodies and provider messages are
 retained byte-for-byte, because a reviewer reading a summary of an objection has
 not read the objection; identifiers are decimal strings, because a provider

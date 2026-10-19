@@ -3079,7 +3079,11 @@ default. The names, props, forms, return contracts, origins and prose are the
 same either way, and a repository-local component of one of those names is still
 chosen ahead of the default. A Workspace attachment installs that run's
 providers and durable state — the retention its pull-request lifecycle puts
-beneath the feature operation among them — and declares none of them.
+beneath the feature operation among them — and declares none of them. The
+retained evidence read beneath that operation is one implementation for every
+host, so an attachment installs where a read is performed and never what a read
+is: the Plugin's own contribution is what makes a retained read's history
+readable, for every execution it declares for.
 Registering them installs no provider, discovers no repository, acquires no
 lock, spawns no Git and reads no credential — describing an environment mints
 nothing. What each name *does* is decided by whichever repository provider the
@@ -10454,8 +10458,11 @@ Repository, working directory or checkout at all, so they are installed for an
 entry holding none — but they stay under today's configured allowed list on
 every execution, including the one that reopens a read already saved, and what
 a reopened read answers with is the snapshot the provider gave inside that
-boundary rather than whatever composition above it now returns. Constructing the
-provider acquires nothing, including no managed root, no commit identity, no
+boundary rather than whatever composition above it now returns. Inside that
+boundary the read is the feature's own: one implementation validates, retains,
+restores and settles it for every host that retains one, and this entry supplies
+only its identity and which recorded owners its history may inherit.
+Constructing the provider acquires nothing, including no managed root, no commit identity, no
 credential and no configuration read, and a passive reading of a settled history
 initializes nothing at all.
 

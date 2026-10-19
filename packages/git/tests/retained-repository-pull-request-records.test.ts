@@ -25,7 +25,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { Ok } from "effection";
 import type { Operation } from "effection";
 import { serializeError } from "@executablemd/durable-streams";
-import type { DurableEvent, Json } from "@executablemd/durable-streams";
+import type { DurableEvent, Json, Result } from "@executablemd/durable-streams";
 import {
   destinationRefFor,
   gitPushObservationsJson,
@@ -84,14 +84,16 @@ import {
 } from "../src/retained-repository/push-records.ts";
 import { parseReplPushRequestRecord } from "../src/retained-repository/push-records.ts";
 import {
-  admitReplPullRequestReadRequest,
-  admitReplPullRequestReadResult,
-  ReplPullRequestReadHistoryError,
-} from "../src/retained-repository/pull-request-read-admission.ts";
+  PullRequestReadHistoryError,
+  pullRequestReadAdmission,
+  pullRequestReadName,
+} from "../src/composition/pull-request-read-retention.ts";
 import {
+  PULL_REQUEST_READ,
   pullRequestReadRequestJson,
   readRequest,
 } from "../src/composition/pull-request-read-records.ts";
+import type { PullRequestReadRequest } from "../src/composition/pull-request-read-records.ts";
 import {
   replPlacementFingerprint,
   replPlacementRecordJson,
@@ -158,10 +160,6 @@ const PUSH_INPUTS: GitPushInputs = Object.freeze({
   destinationRef: destinationRefFor(BRANCH),
   sourceCommit: HEAD,
 });
-
-const HELD: readonly ReplPushPlacement[] = [
-  { identity: IDENTITY, checkoutRoot: CHECKOUT, commonDirectory: COMMON },
-];
 
 const PLACEMENT: ReplPlacement = Object.freeze({
   kind: "repository",
@@ -932,68 +930,133 @@ describe("Tier RPR — admitting a history that published and then opened", () =
 describe("Tier RPR — whose retained evidence read is whose", () => {
   const request5 = readRequest(URL, "reviews", undefined, OWNER, SITE);
 
+  /** One retained read, described the way the feature describes its own. */
+  function* readEvent(
+    request: PullRequestReadRequest,
+    result: Result,
+    overrides: { readonly name?: string; readonly configuration?: string } = {},
+  ): Operation<DurableEvent> {
+    const named = yield* pullRequestReadName(request);
+    return {
+      type: "yield",
+      coroutineId: "root",
+      description: {
+        type: PULL_REQUEST_READ,
+        name: overrides.name ?? named.name,
+        configuration: overrides.configuration ?? named.configuration,
+        input: pullRequestReadRequestJson(request),
+      },
+      result,
+    };
+  }
+
+  /** What this entry's own policy makes of a history, as a reason or nothing. */
+  function* refusalOfReads(
+    events: readonly DurableEvent[],
+    owner: string = OWNER,
+  ): Operation<string | undefined> {
+    try {
+      yield* pullRequestReadAdmission((recorded) => recorded === owner)(events);
+    } catch (error) {
+      return error instanceof PullRequestReadHistoryError ? error.reason : "unexpected";
+    }
+    return undefined;
+  }
+
   it("RPR19: admits this entry's own read, settled or failed", function* () {
-    const admitted = admitReplPullRequestReadRequest(OWNER, pullRequestReadRequestJson(request5));
-    expect(admitted.runId).toBe(OWNER);
-    expect(admitted.url).toBe(URL);
-    expect(admitted.kind).toBe("reviews");
-    expect(admitted.provider).toBeNull();
+    expect(
+      yield* refusalOfReads([
+        yield* readEvent(request5, { status: "ok", value: { kind: "reviews", items: [] } }),
+        yield* readEvent(request5, {
+          status: "err",
+          error: { message: "the collection could not be read" },
+        }),
+      ]),
+    ).toBeUndefined();
   });
 
   it("RPR20: refuses a foreign owner, which the name alone cannot say", function* () {
     // The name omits the owner, so two entries reading the same URL at the same
-    // position produce the same name. What tells them apart is `runId`, and
-    // this is the case that proves the check is independent of the name.
+    // position produce the same name. What tells them apart is `runId`, and the
+    // owner policy is the only thing that asks.
     const foreign = readRequest(URL, "reviews", undefined, OTHER_OWNER, SITE);
-    let refusal: ReplPullRequestReadHistoryError | undefined;
-    try {
-      admitReplPullRequestReadRequest(OWNER, pullRequestReadRequestJson(foreign));
-    } catch (error) {
-      refusal = error instanceof ReplPullRequestReadHistoryError ? error : undefined;
-    }
-    expect(refusal?.reason).toBe("foreign-owner");
-
+    const settled = yield* readEvent(foreign, {
+      status: "ok",
+      value: { kind: "reviews", items: [] },
+    });
     // Asked of a failed read's description too: a refusal retains no result,
     // and its description is the only thing that says who asked.
-    let failedRefusal: ReplPullRequestReadHistoryError | undefined;
-    try {
-      admitReplPullRequestReadRequest(OWNER, pullRequestReadRequestJson(foreign));
-    } catch (error) {
-      failedRefusal = error instanceof ReplPullRequestReadHistoryError ? error : undefined;
-    }
-    expect(failedRefusal?.reason).toBe("foreign-owner");
+    const failed = yield* readEvent(foreign, { status: "err", error: { message: "unreadable" } });
+
+    expect(yield* refusalOfReads([settled])).toBe("foreign-owner");
+    expect(yield* refusalOfReads([failed])).toBe("foreign-owner");
+
+    // And a host whose journal construction already settled its provenance
+    // inherits the very same records: the policy is the whole difference.
+    expect(yield* pullRequestReadAdmission(() => true)([settled, failed])).toBeUndefined();
   });
 
   it("RPR21: refuses a description this host cannot read", function* () {
-    for (const value of [
+    for (const input of [
       undefined,
       "a read",
       { ...pullRequestReadRequestJson(request5), surplus: true },
       { ...pullRequestReadRequestJson(request5), operation: "write" },
       { ...pullRequestReadRequestJson(request5), kind: "labels" },
     ]) {
-      let refusal: ReplPullRequestReadHistoryError | undefined;
-      try {
-        admitReplPullRequestReadRequest(OWNER, value as Json);
-      } catch (error) {
-        refusal = error instanceof ReplPullRequestReadHistoryError ? error : undefined;
-      }
-      expect(refusal?.reason).toBe("malformed-record");
+      const event: DurableEvent = {
+        type: "yield",
+        coroutineId: "root",
+        description: { type: PULL_REQUEST_READ, name: `${SITE}:0123456789abcdef` },
+        result: { status: "ok", value: { kind: "reviews", items: [] } },
+      };
+      expect(
+        yield* refusalOfReads([
+          input === undefined
+            ? event
+            : { ...event, description: { ...event.description, input: input as Json } },
+        ]),
+      ).toBe("malformed-record");
     }
   });
 
+  it("RPR21b: refuses a read journaled under another question's name or configuration", function* () {
+    // Both, because they are not redundant: the name a position publishes under
+    // is the invocation plus the fingerprint, so a record moved to another
+    // position keeps a fingerprint its name no longer exposes.
+    expect(
+      yield* refusalOfReads([
+        yield* readEvent(
+          request5,
+          { status: "ok", value: { kind: "reviews", items: [] } },
+          { name: `${SITE}:0123456789abcdef` },
+        ),
+      ]),
+    ).toBe("request-fingerprint");
+    expect(
+      yield* refusalOfReads([
+        yield* readEvent(
+          request5,
+          { status: "ok", value: { kind: "reviews", items: [] } },
+          { configuration: "0123456789abcdef" },
+        ),
+      ]),
+    ).toBe("request-fingerprint");
+  });
+
   it("RPR22: holds a settled read to the collection its own question asked for", function* () {
-    const reviews = admitReplPullRequestReadResult(request5, { kind: "reviews", items: [] });
-    expect(reviews.kind).toBe("reviews");
+    expect(
+      yield* refusalOfReads([
+        yield* readEvent(request5, { status: "ok", value: { kind: "reviews", items: [] } }),
+      ]),
+    ).toBeUndefined();
 
     // Another collection entirely, however well-formed.
-    let refusal: ReplPullRequestReadHistoryError | undefined;
-    try {
-      admitReplPullRequestReadResult(request5, { kind: "comments", items: [] });
-    } catch (error) {
-      refusal = error instanceof ReplPullRequestReadHistoryError ? error : undefined;
-    }
-    expect(refusal?.reason).toBe("malformed-result");
+    expect(
+      yield* refusalOfReads([
+        yield* readEvent(request5, { status: "ok", value: { kind: "comments", items: [] } }),
+      ]),
+    ).toBe("malformed-result");
   });
 
   it("RPR23: holds every check to the head the read recorded, empty or not", function* () {
@@ -1015,24 +1078,75 @@ describe("Tier RPR — whose retained evidence read is whose", () => {
 
     // An empty collection still says which head was read, and that is admitted.
     expect(
-      admitReplPullRequestReadResult(checks, { kind: "checks", headSha: HEAD, items: [] }).kind,
-    ).toBe("checks");
+      yield* refusalOfReads([
+        yield* readEvent(checks, {
+          status: "ok",
+          value: { kind: "checks", headSha: HEAD, items: [] },
+        }),
+      ]),
+    ).toBeUndefined();
+    expect(
+      yield* refusalOfReads([
+        yield* readEvent(checks, {
+          status: "ok",
+          value: { kind: "checks", headSha: HEAD, items: [run] },
+        }),
+      ]),
+    ).toBeUndefined();
 
     expect(
-      admitReplPullRequestReadResult(checks, { kind: "checks", headSha: HEAD, items: [run] }).kind,
-    ).toBe("checks");
+      yield* refusalOfReads([
+        yield* readEvent(checks, {
+          status: "ok",
+          value: {
+            kind: "checks",
+            headSha: HEAD,
+            items: [{ ...run, headSha: MOVED_HEAD }],
+          },
+        }),
+      ]),
+    ).toBe("malformed-result");
+  });
 
-    let refusal: ReplPullRequestReadHistoryError | undefined;
-    try {
-      admitReplPullRequestReadResult(checks, {
-        kind: "checks",
-        headSha: HEAD,
-        items: [{ ...run, headSha: MOVED_HEAD }],
-      });
-    } catch (error) {
-      refusal = error instanceof ReplPullRequestReadHistoryError ? error : undefined;
-    }
-    expect(refusal?.reason).toBe("malformed-result");
+  it("RPR24: one read-name vector keeps the length-prefixed fingerprint, odd text and all", function* () {
+    // The other naming algorithm this feature touches, and deliberately not
+    // the canonical-JSON digest above: an evidence read is named the way every
+    // other Git operation in this package is named, so a journal a fork reads
+    // keeps answering. It is computed here rather than in a runtime-named half,
+    // because a journal's own vocabulary has to be readable wherever a record
+    // is read.
+    //
+    // The vector is the first 16 hex digits of SHA-256 over the UTF-16
+    // big-endian code units of `4:read38:<url>-6:checks` — a null discriminator
+    // is "-" rather than a length, and the 38 counts code units, so the "ö"
+    // counts once.
+    const named = yield* pullRequestReadName(
+      readRequest("https://github.com/octo/pröject/pull/7", "checks", undefined, OWNER, SITE),
+    );
+    expect(named.configuration).toBe("6e1959358a175d22");
+    expect(named.name).toBe(`${SITE}:6e1959358a175d22`);
+
+    // The discriminator is part of the question, so naming one changes it.
+    expect(
+      (yield* pullRequestReadName(
+        readRequest("https://github.com/octo/pröject/pull/7", "checks", "github", OWNER, SITE),
+      )).configuration,
+    ).not.toBe(named.configuration);
+
+    // The owner is deliberately not: a fork is a different run asking the same
+    // question at the same position, and a name carrying the run would make
+    // every inherited read unforkable.
+    expect(
+      yield* pullRequestReadName(
+        readRequest(
+          "https://github.com/octo/pröject/pull/7",
+          "checks",
+          undefined,
+          OTHER_OWNER,
+          SITE,
+        ),
+      ),
+    ).toEqual(named);
   });
 });
 
