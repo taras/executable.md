@@ -19,8 +19,9 @@ import type { Operation } from "effection";
 import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { API, Files, useHostFiles } from "@executablemd/runtime";
+import { API, env, Files, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { Component } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
@@ -325,15 +326,17 @@ describe("Tier QRY — what the engine can reach", () => {
    */
   function useEnvironmentCanary(name: string, value: string): Operation<string> {
     return resource(function* (provide) {
-      const before = Deno.env.get(name);
-      Deno.env.set(name, value);
+      const before = process.env[name];
+      // Registered before the value is set, so a scope that ends between the
+      // two still puts back what this process had.
       yield* ensure(() => {
         if (before === undefined) {
-          Deno.env.delete(name);
+          delete process.env[name];
         } else {
-          Deno.env.set(name, before);
+          process.env[name] = before;
         }
       });
+      process.env[name] = value;
       yield* provide(value);
     });
   }
@@ -348,8 +351,9 @@ describe("Tier QRY — what the engine can reach", () => {
 
   it("Q3: an environment read answers empty rather than the host's own value", function* () {
     const canary = yield* useEnvironmentCanary("QUERY_CANARY", "host-visible-secret");
-    // The host really holds it, read the ordinary way.
-    expect(Deno.env.get("QUERY_CANARY")).toBe(canary);
+    // The host really holds it, read through the same host surface a document
+    // reaches the environment by.
+    expect(yield* env("QUERY_CANARY")).toBe(canary);
 
     const result = yield* run(
       '<Query value={data} yq="strenv(QUERY_CANARY)" as="seen" />\n\n[{seen}]\n',
