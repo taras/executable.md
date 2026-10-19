@@ -18,12 +18,8 @@
  * refusals; provider conflicts, ambiguity, availability and ceiling failures keep
  * the provider's own vocabulary.
  *
- * Which form this is comes from canonical dispatch rather than from the
- * invocation: an irreversible external effect is not something a composable
- * `hasContent()` answer may select. What a read asks for and what an upsert
- * asks for are decided from the props alone, before a tracker is read and
- * before the boundary is reached — and the host beneath this component decides
- * how the operation it asks for is performed, retained and replayed.
+ * The host beneath this component decides how the operation it asks for is
+ * performed, retained and replayed.
  */
 
 import { content, documented, formDispatcher } from "@executablemd/core";
@@ -55,7 +51,6 @@ import type { IssueDetails, IssueInput } from "../../issue/api.ts";
 import { normalizedTags } from "../../issue/records.ts";
 import { IssueContentError, IssueProtocolError, IssueTrackerError } from "../../issue/errors.ts";
 
-/** The component name, as a document writes it and as a refusal names it. */
 const ISSUE_ELEMENT = "<Issue>";
 
 export const props: PropsSchema = {
@@ -124,19 +119,12 @@ export const returns: ReturnsSchema = {
   ],
 };
 
-/** What the shape of this invocation asks for. */
 type IssueMode = "read" | "upsert";
 
 /**
- * Which of the two this invocation is, or the refusal that says why neither.
- *
- * Decided from the props and the shape alone, before a tracker is read and
- * before the boundary is reached. Every branch names what to write instead,
- * because each of them is a document that meant one of the two forms.
- *
- * `paired` is how the element was written. Canonical form dispatch enters the
- * body for the form the scan recorded, and that body states it here — so the
- * fact is established somewhere nothing composable can answer for it.
+ * Decided from the props and from `paired` — the form the scan recorded, which
+ * the dispatched body states here — before a tracker is read or the boundary is
+ * reached.
  */
 function issueMode(props: Record<string, Json>, paired: boolean): IssueMode {
   const url = typeof props.url === "string" && props.url !== "";
@@ -186,12 +174,8 @@ function issueMode(props: Record<string, Json>, paired: boolean): IssueMode {
   );
 }
 
-/**
- * What this read asks for: a canonical issue URL, and a discriminator or none.
- *
- * No tracker is consulted. The URL is the identity, so a tracker written
- * around a read has nothing to add to it and changes nothing about it.
- */
+/** No tracker is consulted: the URL is the identity, and one written around a
+ * read has nothing to add to it. */
 function issueReadRequest(props: Record<string, Json>): IssueReadInvocation {
   const url = canonicalIssueTarget(props.url);
   if (url === undefined) {
@@ -205,14 +189,8 @@ function issueReadRequest(props: Record<string, Json>): IssueReadInvocation {
 }
 
 /**
- * What this upsert asks for: the rendered description, the destination the
- * enclosing tracker names, and the normalized issue.
- *
- * The description before the destination, so a body that failed to render stops
- * this element before a tracker is read. Rendering it is this element's own
- * content projection and belongs outside whatever durable boundary the caller
- * puts around the request: a child that retains work of its own finishes in its
- * own order, before this request exists.
+ * The description renders before the destination is read, so a body that failed
+ * to render stops this element before a tracker is reached.
  */
 function* issueUpsertRequest(props: Record<string, Json>): Operation<IssueUpsertInvocation> {
   const description = yield* content();
@@ -241,7 +219,6 @@ function* issueUpsertRequest(props: Record<string, Json>): Operation<IssueUpsert
   return { target: destination.target, provider: destination.provider, issue };
 }
 
-/** What the catalog says about `<Issue>`. */
 export const documentation: FirstPartyDocumentation = {
   description:
     `Read or file an issue. \`<Issue url={finding.issueUrl} as="found" />\` reads one. ` +
@@ -251,7 +228,6 @@ export const documentation: FirstPartyDocumentation = {
   context: "The issue's description, for the form that files one.",
 };
 
-/** What a read binds, as a document reads it. */
 function issueReadBinding(details: IssueDetails): Json {
   return {
     url: details.url,
@@ -262,13 +238,6 @@ function issueReadBinding(details: IssueDetails): Json {
   };
 }
 
-/**
- * The one read implementation, whatever host performs it.
- *
- * Entered by canonical dispatch for the self-closing form, so the props checks
- * below are this element's refusals rather than a second decision about which
- * of the two questions is being asked.
- */
 const readBody: ComponentBody<IssueOperationsApi> = function* Issue(
   props: Record<string, Json>,
   operations: IssueOperationsApi,
@@ -278,7 +247,6 @@ const readBody: ComponentBody<IssueOperationsApi> = function* Issue(
   return issueReadBinding(details);
 };
 
-/** The one upsert implementation, on the same terms. */
 const upsertBody: ComponentBody<IssueOperationsApi> = function* Issue(
   props: Record<string, Json>,
   operations: IssueOperationsApi,
@@ -291,7 +259,6 @@ const upsertBody: ComponentBody<IssueOperationsApi> = function* Issue(
   return { url: reference.url };
 };
 
-/** What a catalog says about this component, whichever path declares it. */
 const METADATA = {
   name: "Issue",
   origin: COMPOSITION_ORIGIN,
@@ -302,14 +269,15 @@ const METADATA = {
 };
 
 /**
- * Canonical form dispatch, so which of the two external effects this element
- * asks for is settled by the scan before the body runs.
+ * Which of the two external effects this element asks for comes from the scan,
+ * not from a contextual `hasContent()` answer: an irreversible effect is not
+ * something an installed handler may select.
  */
 function dispatched(read: FunctionComponent, upsert: FunctionComponent): FunctionComponent {
   return formDispatcher({ forms: "both", "self-closing": read, paired: upsert });
 }
 
-/** `Issue` as an ordinary registered default, over the public IssueOperations Api. */
+/** An ordinary registered default, over whichever provider the host installed. */
 export function issueRegistration(
   operations: (gate: InvocationGate) => IssueOperationsApi,
 ): ComponentRegistration {
@@ -322,7 +290,7 @@ export function issueRegistration(
   };
 }
 
-/** `Issue` as a declaration, for a host that supplies its own policy. */
+/** A declaration, for an execution that owns this operation's policy. */
 export function issueDeclaration(bind: BindOperations<IssueOperationsApi>): IdentityComponent {
   return {
     ...METADATA,
@@ -334,7 +302,6 @@ export function issueDeclaration(bind: BindOperations<IssueOperationsApi>): Iden
   };
 }
 
-/** The discriminator this prop names, or `undefined` when it names none. */
 function named(value: Json | undefined): string | undefined {
   if (value === undefined) {
     return undefined;

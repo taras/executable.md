@@ -8,14 +8,8 @@
  * the host owns endpoint, credential and pagination configuration. Each requires
  * `as` so an Agent prompt can explicitly render the evidence it receives.
  *
- * Providers compose ordinary PullRequestAPI middleware. Once a provider matches,
- * its normalized answer, validation and refusal are final. Each collection has its
- * own durable effect, replay and failure, so a partial answer cannot masquerade as
- * all three collections.
- *
- * Self-closing form is declared to canonical dispatch. Neither replaceable
- * `hasContent()` nor a caller-made invocation object can turn a paired element
- * into an evidence read.
+ * Each collection has its own durable effect, replay and failure, so a partial
+ * answer cannot masquerade as all three collections.
  */
 
 import { documented, formDispatcher } from "@executablemd/core";
@@ -40,7 +34,6 @@ import type { PullRequestOperationsApi } from "../pull-request-operations.ts";
 import { unboundComponent } from "../invocation-binding.ts";
 import type { ComponentBody, InvocationGate } from "../invocation-binding.ts";
 
-/** The component names, as a document writes them and a refusal names them. */
 export const REVIEWS_ELEMENT = "<PullRequest.Reviews>";
 export const COMMENTS_ELEMENT = "<PullRequest.Comments>";
 export const CHECKS_ELEMENT = "<PullRequest.Checks>";
@@ -175,8 +168,6 @@ function read(kind: PullRequestReadKind, element: string): ComponentBody<PullReq
     props: Record<string, Json>,
     operations: PullRequestOperationsApi,
   ): Operation<Json> {
-    // The props schema refuses a missing or empty `url` before this function is
-    // entered, and therefore before any provider is asked anything.
     // Canonicalized before any provider sees it, so the component, the durable
     // request and every adapter read one answer.
     const url = canonicalPullRequestUrl(props.url);
@@ -211,6 +202,11 @@ function read(kind: PullRequestReadKind, element: string): ComponentBody<PullReq
   };
 }
 
+/**
+ * The self-closing form comes from the scan: neither a replaceable
+ * `hasContent()` answer nor a caller-made invocation object can turn a paired
+ * element into an evidence read.
+ */
 function declare(fn: FunctionComponent, element: string): FormDeclaration {
   return {
     forms: "self-closing",
@@ -228,7 +224,6 @@ function declare(fn: FunctionComponent, element: string): FormDeclaration {
   };
 }
 
-/** What the catalog says about each of the three reads. */
 const DOCUMENTATION: Readonly<Record<PullRequestReadKind, FirstPartyDocumentation>> = Object.freeze(
   {
     reviews: {
@@ -257,7 +252,6 @@ const DOCUMENTATION: Readonly<Record<PullRequestReadKind, FirstPartyDocumentatio
   },
 );
 
-/** The three evidence reads, as the names a document writes. */
 const NAMES: Readonly<Record<PullRequestReadKind, string>> = Object.freeze({
   reviews: "PullRequest.Reviews",
   comments: "PullRequest.Comments",
@@ -276,7 +270,6 @@ const RETURNS: Readonly<Record<PullRequestReadKind, ReturnsSchema>> = Object.fre
   checks: checksReturns,
 });
 
-/** What a catalog says about one read, whichever path declares it. */
 function metadata(kind: PullRequestReadKind) {
   return {
     name: NAMES[kind],
@@ -288,7 +281,7 @@ function metadata(kind: PullRequestReadKind) {
   };
 }
 
-/** One evidence read as an ordinary registered default, over the public Api. */
+/** An ordinary registered default, over whichever provider the host installed. */
 export function pullRequestReadRegistration(
   kind: PullRequestReadKind,
   operations: (gate: InvocationGate) => PullRequestOperationsApi,
@@ -302,7 +295,6 @@ export function pullRequestReadRegistration(
   };
 }
 
-/** The three kinds, in the order a catalog lists them. */
 export const PULL_REQUEST_READ_KINDS: readonly PullRequestReadKind[] = Object.freeze([
   "reviews",
   "comments",
