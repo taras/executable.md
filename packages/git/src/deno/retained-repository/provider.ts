@@ -26,12 +26,9 @@
  * `<Git.File>`, and, for an entry whose capability was built per entry below,
  * the publication an authored `<Git.Push />` asks for.
  *
- * A pull request is not here: it has its own protocol and its own evidence, and
- * a local result and a publication authorize neither. `<PullRequest>` and its
- * three evidence reads are declared with the ordinary policy beneath them, so
- * they refuse through their own unchanged missing-provider default — and what
- * is installed here is not the ordinary all-feature provider, which would
- * enable them.
+ * Authored pull requests use the publication this entry has acknowledged;
+ * their URL-based reads retain the provider's admitted answer independently of
+ * checkout selection.
  *
  * ## Installing it reaches nothing
  *
@@ -81,6 +78,24 @@ import type { ReplGitCheckout, ReplGitEntry } from "./git.ts";
 import { replObservationMiddleware } from "./observations.ts";
 import type { ReplObservationEntry } from "./observations.ts";
 import { GitQuery } from "../../git.ts";
+import {
+  createReplPublicationMemory,
+  type ReplPublicationMemory,
+} from "../../retained-repository/publication-evidence.ts";
+import { denoGitHubSource } from "../composition/github-host.ts";
+import { useGitHubPullRequestReads } from "../composition/pull-request-reads.ts";
+import type { GitHubPullRequestsOptions } from "../composition/pull-request-reads.ts";
+import { replPullRequestPolicy } from "./pull-request.ts";
+import {
+  replPullRequestReadAdmission,
+  replPullRequestReadPolicy,
+  useReplPullRequestReadOperations,
+} from "./pull-request-reads.ts";
+import { pullRequestDeclaration } from "../../composition/components/PullRequest.ts";
+import {
+  PULL_REQUEST_READ_KINDS,
+  pullRequestReadDeclaration,
+} from "../../composition/components/PullRequestReads.ts";
 import { replPushAdmission, replPushPolicy } from "./push.ts";
 import type { ReplPushEntry } from "./push.ts";
 import { replIssueAdmission, replIssuePolicy, useEntryIssueTransport } from "./issues.ts";
@@ -130,6 +145,7 @@ export interface ReplRecordingOptions {
    * Context value holds can select or replace it.
    */
   readonly identity?: IdentityReader;
+  readonly pullRequests?: GitHubPullRequestsOptions;
 }
 
 /**
@@ -143,7 +159,7 @@ export interface ReplRecordingOptions {
  * directory is discovered from that.
  */
 export function useReplRepositoryRecording(options: ReplRecordingOptions = {}): Operation<void> {
-  return initializeReplRepository(options);
+  return initializeReplRepository(options, createReplPublicationMemory());
 }
 
 /**
@@ -171,11 +187,8 @@ export function useReplRepositoryRecording(options: ReplRecordingOptions = {}): 
  * never returned to the CLI, published through Context or reachable from a
  * document.
  *
- * One entry declares the common vocabulary once, with this host's policy under
- * the two operations it retains and the ordinary policy under the rest. There
- * is no inherited executable default here for an entry registration to shadow:
- * the declarations an execution captures are these, and a host that recorded
- * nothing for an operation leaves that operation its own refusal.
+ * The common vocabulary is registered by the Git Plugin. This entry declares
+ * only the six operations whose policies need an authenticated invocation.
  */
 export function* replRepositoryInstallation(
   owner: string,
@@ -183,6 +196,7 @@ export function* replRepositoryInstallation(
 ): Operation<ExecutionInstallation> {
   const held: { entry?: ReplPushEntry } = {};
   let usable = false;
+  const publications = createReplPublicationMemory();
 
   yield* Execution.around({
     *init(_args, next): Operation<void> {
@@ -193,7 +207,7 @@ export function* replRepositoryInstallation(
         usable = false;
         delete held.entry;
       });
-      yield* initializeReplRepository(options, (entry) => {
+      yield* initializeReplRepository(options, publications, (entry) => {
         held.entry = entry;
         usable = true;
       });
@@ -201,26 +215,32 @@ export function* replRepositoryInstallation(
     },
   });
 
-  // The two names this entry declares, and only those. Every name this
-  // vocabulary has is already registered in the command's scope; what an entry
-  // adds here is the policy it owns, attached to those same two bodies from
-  // inside its own execution.
-  //
-  // Retaining an operation is not by itself a reason to declare its name. This
-  // entry retains the pages its four Git reads answer with and the file work
-  // beneath them too, and both are middleware under the component rather than a
-  // policy named after an invocation — so they keep the registered default and
-  // appear nowhere here. These two need the invocation: a durable boundary that
-  // has to enclose the public chain cannot be installed inside it.
+  const access = () => (usable ? held.entry : undefined);
+  const reads = replPullRequestReadPolicy(owner);
   const components: readonly IdentityComponent[] = [
-    pushDeclaration(replPushPolicy(owner, () => (usable ? held.entry : undefined))),
+    pushDeclaration(replPushPolicy(owner, access)),
     issueDeclaration(replIssuePolicy(owner)),
+    pullRequestDeclaration(
+      replPullRequestPolicy(owner, access, {
+        host: denoGitHubSource,
+        ...options.pullRequests,
+      }),
+    ),
+    ...PULL_REQUEST_READ_KINDS.map((kind) => pullRequestReadDeclaration(kind, reads)),
   ];
-  const admissions: JournalAdmission[] = [replIssueAdmission(owner), replPushAdmission(owner)];
+  const admissions: JournalAdmission[] = [
+    replIssueAdmission(owner),
+    replPushAdmission(owner, publications),
+    replPullRequestReadAdmission(owner),
+  ];
   return {
     components,
     admissions,
-    install: () => useEntryIssueTransport({}),
+    *install(): Operation<void> {
+      yield* useEntryIssueTransport({});
+      yield* useGitHubPullRequestReads({ host: denoGitHubSource, ...options.pullRequests });
+      yield* useReplPullRequestReadOperations();
+    },
   };
 }
 
@@ -243,6 +263,7 @@ export function* replRepositoryInstallation(
  */
 function* initializeReplRepository(
   options: ReplRecordingOptions,
+  publications: ReplPublicationMemory,
   deliver?: (entry: ReplPushEntry) => void,
 ): Operation<void> {
   const host =
@@ -549,6 +570,7 @@ function* initializeReplRepository(
   // which is what leaves `<Git.Push />` the same missing-provider refusal it
   // reaches when nothing selected a checkout.
   deliver?.({
+    publications,
     host,
     git: useGit,
     holdSlot,

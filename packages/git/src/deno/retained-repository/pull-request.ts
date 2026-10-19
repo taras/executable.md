@@ -48,35 +48,19 @@
  * external work this entry has already admitted.
  */
 
+import { checkoutOrigin, own, placements, route, placeOf } from "./checkout.ts";
+import { savedRequest } from "./requests.ts";
+
 import { createApi } from "@effectionx/context-api";
-import { Err, Ok, until } from "effection";
+import { Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
-import { realpath } from "node:fs/promises";
-import { createDurableOperation } from "@executablemd/durable-streams";
-import type {
-  ActivateDurabilityFailure,
-  Json,
-  LiveDurableOperationCoordinator,
-  Result as ProtocolResult,
-} from "@executablemd/durable-streams";
-import { content, documented, hasContent } from "@executablemd/core";
-import type { ComponentInvocation, FunctionComponent } from "@executablemd/core";
-import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/host";
-import { cwd } from "@executablemd/runtime";
-import { COMPOSITION_ORIGIN } from "../../composition/definitions.ts";
-import {
-  authoredPullRequest,
-  documentation as pullRequestDocumentation,
-  props as pullRequestProps,
-  PULL_REQUEST_ELEMENT,
-  returns as pullRequestReturns,
-} from "../../composition/components/PullRequest.ts";
-import { selectedRepository } from "../../composition/context.ts";
+
+import { PULL_REQUEST_ELEMENT } from "../../composition/components/PullRequest.ts";
+import type { BindOperations } from "../../composition/invocation-binding.ts";
 import {
   GitOperationAdmissionError,
   GitOperationInfrastructureError,
   GitOperationProtocolError,
-  PullRequestAdmissionError,
 } from "../../composition/errors.ts";
 import { NoPullRequestProvider, PULL_REQUEST_API } from "../../composition/pull-request-api.ts";
 import type {
@@ -118,7 +102,6 @@ import {
   type ReplPullRequestRequestRecord,
   type ReplPullRequestResolution,
 } from "../../retained-repository/pull-request-records.ts";
-import type { ReplPushPlace } from "../../retained-repository/push-records.ts";
 import { locatorFingerprint } from "../composition/locator.ts";
 import { currentBranch, resolveCommit } from "../composition/git.ts";
 import type { GitHubSource } from "../composition/github.ts";
@@ -126,87 +109,18 @@ import { gitHubPullRequestAccess } from "../composition/pull-request-reads.ts";
 import type { GitHubPullRequestsOptions } from "../composition/pull-request-reads.ts";
 import { pullRequestProvider } from "../composition/github-pull-request.ts";
 import { gitRefusal } from "../composition/refusals.ts";
-import { liveCheckout, selectCheckout } from "../run-composition/operations.ts";
-import { holdManagedPlacement } from "./leases.ts";
-import type { ReplGitCheckout } from "./git.ts";
+import { liveCheckout } from "../run-composition/operations.ts";
 import { retainedRecordAhead } from "./local.ts";
 import type { ReplPushAccess, ReplPushEntry } from "./push.ts";
-import { placementSubject } from "./selections.ts";
-import type { ReplPlacementRegistration } from "./selections.ts";
+import { nativeGitTurn } from "./selections.ts";
 
-/**
- * The entry's own `PullRequest`, declared as an ordinary shadowable component.
- *
- * It shadows the inherited bundled registration for this execution's scope
- * without touching it, so a repository-local `<PullRequest>` keeps its ordinary
- * precedence over both. The name is neither reserved nor protected: what a
- * replacement does not get is an identity authenticator, so it names no durable
- * work of this entry's.
- *
- * Inspection describes one `PullRequest` — the same origin, props, return
- * contract, forms and prose the bundled registration carries — because it is
- * the same component with this entry's identity behind it.
- */
-export function replPullRequestComponent(
+export function replPullRequestPolicy(
   owner: string,
   access: ReplPushAccess,
   options: GitHubPullRequestsOptions = {},
-): IdentityComponent {
+): BindOperations<PullRequestOperationsApi["upsert"]> {
   const upstream = gitHubPullRequestAccess(options);
-  return {
-    name: "PullRequest",
-    origin: COMPOSITION_ORIGIN,
-    props: pullRequestProps,
-    returns: pullRequestReturns,
-    // Both authored forms, as the bundled registration has them: a pull request
-    // with no body is written `<PullRequest title="..." />` and its body is the
-    // empty string. Unlike `<Issue>`, the form selects no second effect, so
-    // reading the content contextually decides nothing but what the body says.
-    forms: ["self-closing", "paired"],
-    ...documented(pullRequestDocumentation),
-    factory: (claim: IdentityClaimant) => upsertingBody(owner, access, upstream, claim),
-  };
-}
-
-function upsertingBody(
-  owner: string,
-  access: ReplPushAccess,
-  upstream: () => Operation<GitHubSource>,
-  claim: IdentityClaimant,
-): FunctionComponent {
-  return function* PullRequest(
-    props: Record<string, Json>,
-    invocation: ComponentInvocation,
-  ): Operation<Json> {
-    // Before this element projects its own content, because an invocation names
-    // nothing while it is expanding what is inside it — and after it would be
-    // naming the identity from a frame the children have already left.
-    const site = yield* claim(invocation);
-    // Then the body, and completely, before a Repository is observed and before
-    // this upsert has a position of its own. A child durable operation in that
-    // content finishes at its own earlier position, and a body that failed to
-    // render stops everything this component owns before a request exists.
-    const body = (yield* hasContent()) ? yield* content() : "";
-
-    const repository = yield* selectedRepository();
-    if (repository === undefined) {
-      throw new PullRequestAdmissionError(
-        "no-repository-context",
-        "it is written outside a lexical <Repository>, so there is no repository in scope for a " +
-          "pull request to be opened in.",
-      );
-    }
-    const result = yield* upsert({
-      owner,
-      site,
-      access,
-      upstream,
-      pullRequest: authoredPullRequest(props, body, repository.identity.primaryBranch),
-      repository,
-      workingDirectory: yield* cwd(),
-    });
-    return pullRequestResultJson(result);
-  };
+  return (site) => (invocation) => upsert({ owner, site, access, upstream, ...invocation });
 }
 
 interface Invocation {
@@ -230,17 +144,9 @@ interface Invocation {
  */
 function* upsert(invocation: Invocation): Operation<PullRequestResult> {
   const entry = held(invocation.access);
-  const registration = authenticated(entry, invocation.repository);
   const requested: ReplPullRequestAsk = Object.freeze({
     pullRequest: invocation.pullRequest,
-    place: Object.freeze({
-      repository: registration.placement.identity,
-      selectionCheckout: registration.placement.checkoutRoot,
-      commonDirectory: registration.placement.commonDirectory,
-      // Exactly as received. Resolving it is live routing, which a continuation
-      // does not do, so the name cannot depend on it.
-      workingDirectory: invocation.workingDirectory,
-    }),
+    place: placeOf(entry, invocation.repository, invocation.workingDirectory, PULL_REQUEST_ELEMENT),
   });
   const name = yield* replPullRequestRequestName({
     owner: invocation.owner,
@@ -365,24 +271,10 @@ function* ownedUpsert(
   }
   live.delegated = true;
 
-  // Read once, here. The arguments are the caller's own objects and everything
-  // below suspends, so reading them again later would let one pull request be
-  // authenticated and another opened.
-  const received: ReplPullRequestAsk = Object.freeze({
-    pullRequest: Object.freeze({
-      number: pullRequest.number,
-      title: pullRequest.title,
-      body: pullRequest.body,
-      draft: pullRequest.draft,
-      base: pullRequest.base,
-    }),
-    place: placeOf(entry, options.repository, options.workingDirectory),
-  });
-
   // Held privately whichever way it goes, before anything up the chain can see
   // it. A failure recorded here is what stops a handler from catching it and
   // answering the document with a success instead.
-  const outcome = yield* attempt(entry, invocation, requested, received, name);
+  const outcome = yield* attempt(entry, invocation, requested, pullRequest, options, name);
   live.owned = outcome;
   if (!outcome.ok) {
     throw outcome.error;
@@ -411,11 +303,26 @@ function* attempt(
   entry: ReplPushEntry,
   invocation: Invocation,
   requested: ReplPullRequestAsk,
-  received: ReplPullRequestAsk,
+  pullRequest: PullRequestInput,
+  options: PullRequestUpsertOptions,
   name: string,
 ): Operation<Result<PullRequestResult>> {
   try {
-    const resolved = yield* resolve(entry, invocation, received);
+    // Read once, here. The arguments are the caller's own objects and everything
+    // below suspends, so reading them again later would let one pull request be
+    // authenticated and another opened.
+    const received: ReplPullRequestAsk = Object.freeze({
+      pullRequest: Object.freeze({
+        number: pullRequest.number,
+        title: pullRequest.title,
+        body: pullRequest.body,
+        draft: pullRequest.draft,
+        base: pullRequest.base,
+      }),
+      place: placeOf(entry, options.repository, options.workingDirectory, PULL_REQUEST_ELEMENT),
+    });
+
+    const resolved = yield* resolve(entry, received);
     const record = yield* publishRequest(entry, invocation, requested, received, resolved, name);
     return Ok(yield* reconcile(entry, invocation, record));
   } catch (error) {
@@ -438,12 +345,19 @@ function* attempt(
  */
 function* resolve(
   entry: ReplPushEntry,
-  invocation: Invocation,
   received: ReplPullRequestAsk,
 ): Operation<ReplPullRequestResolution> {
-  const routed = yield* route(entry, received.place);
+  const routed = yield* route(entry, received.place, PULL_REQUEST_ELEMENT);
   const placement = routed.registration.placement;
-  const origin = yield* destination(routed.registration);
+  const origin = yield* checkoutOrigin(
+    routed.registration,
+    PULL_REQUEST_ELEMENT,
+    "the checkout it selected records no usable origin, so there is no repository for this " +
+      "pull request to be opened in. No credential was read and nothing was contacted",
+    "the origin this checkout records is not the one the Repository in scope was selected " +
+      "from, so a pull request opened against it would name a repository this entry never " +
+      "authenticated",
+  );
 
   yield* own(entry, routed);
 
@@ -452,7 +366,7 @@ function* resolve(
   // `<Git.Commit>` of the same repository would describe a moment neither of
   // them is at. The turn is held for these two short reads and released before
   // anything is contacted: a network round trip never holds it.
-  const read = yield* entry.serialize(`git ${placement.commonDirectory}`, function* () {
+  const read = yield* entry.serialize(nativeGitTurn(placement.commonDirectory), function* () {
     const checkout = liveCheckout(git, routed.checkout, received.place.workingDirectory);
     const branch = yield* currentBranch(checkout.git, checkout.directory);
     if (branch === undefined) {
@@ -495,34 +409,6 @@ function* resolve(
 }
 
 /**
- * Where this checkout's pull requests belong, as this entry can see it now.
- *
- * The locator the entry admitted, held to the fingerprint the Repository
- * identity carries — the same question publication asks, because a pull request
- * opened against an origin nothing authenticated would be a statement about
- * somebody else's repository.
- */
-function* destination(registration: ReplPlacementRegistration): Operation<string> {
-  const origin = yield* registration.origin();
-  if (origin === undefined) {
-    throw new GitOperationAdmissionError(
-      PULL_REQUEST_ELEMENT,
-      "the checkout it selected records no usable origin, so there is no repository for this " +
-        "pull request to be opened in. No credential was read and nothing was contacted",
-    );
-  }
-  if (locatorFingerprint(origin) !== registration.placement.identity.locatorFingerprint) {
-    throw new GitOperationAdmissionError(
-      PULL_REQUEST_ELEMENT,
-      "the origin this checkout records is not the one the Repository in scope was selected " +
-        "from, so a pull request opened against it would name a repository this entry never " +
-        "authenticated",
-    );
-  }
-  return origin;
-}
-
-/**
  * Write this request down, and read it back before it is acknowledged.
  *
  * The request is one durable position and the reconciliation below is another:
@@ -538,22 +424,18 @@ function* publishRequest(
   resolved: ReplPullRequestResolution,
   name: string,
 ): Operation<ReplPullRequestRequestRecord> {
-  const stored: unknown = yield createDurableOperation<Json>(
+  return yield* savedRequest(
     { type: REPL_REPOSITORY_PULL_REQUEST_REQUEST, name },
-    function* () {
-      const payload = replPullRequestRequestJson({
+    () =>
+      replPullRequestRequestJson({
         owner: invocation.owner,
         site: invocation.site,
         requested,
         received,
         resolved,
-      });
-      readback(entry, invocation, requested, payload);
-      return payload;
-    },
-    { coordinator: requestCoordinator },
+      }),
+    (stored) => readback(entry, invocation, requested, stored),
   );
-  return readback(entry, invocation, requested, stored);
 }
 
 /**
@@ -570,19 +452,17 @@ function* restored(
   requested: ReplPullRequestAsk,
   name: string,
 ): Operation<ReplPullRequestRequestRecord> {
-  const stored: unknown = yield createDurableOperation<Json>(
+  return yield* savedRequest(
     { type: REPL_REPOSITORY_PULL_REQUEST_REQUEST, name },
-    // deno-lint-ignore require-yield
-    function* (): Operation<Json> {
+    () => {
       throw new GitOperationInfrastructureError(
         PULL_REQUEST_ELEMENT,
         "its retained history named a saved pull-request request at this position and then had " +
           "none, so what this entry asked the Git host for is unknown",
       );
     },
-    { coordinator: requestCoordinator },
+    (stored) => readback(entry, invocation, requested, stored),
   );
-  return readback(entry, invocation, requested, stored);
 }
 
 /**
@@ -647,15 +527,6 @@ function placesHeld(
         sameRepositoryIdentity(placement.identity, record.received.place.repository),
     ),
   );
-}
-
-/** The places this entry's reconstructed registry holds, as parsed facts. */
-function placements(entry: ReplPushEntry): readonly ReplPushPlacement[] {
-  return entry.checkouts().map((checkout) => ({
-    identity: checkout.registration.placement.identity,
-    checkoutRoot: checkout.registration.placement.checkoutRoot,
-    commonDirectory: checkout.registration.placement.commonDirectory,
-  }));
 }
 
 /**
@@ -748,84 +619,6 @@ function* upstreamProvider(
   return pullRequestProvider(access, resolved.origin, resolved.inputs);
 }
 
-/**
- * Which registered checkout this repository and working directory select.
- *
- * The ordinary selector over this entry's own registrations, restricted by the
- * whole authenticated Repository identity and resolving the received directory
- * first. The longest covering checkout wins, so a subdirectory, a linked
- * worktree and a captured path entered through `<Dir>` each select the checkout
- * their own paths belong to.
- */
-function* route(entry: ReplPushEntry, received: ReplPushPlace): Operation<ReplGitCheckout> {
-  const registered = entry.checkouts();
-  const selected = selectCheckout(
-    registered.map((checkout) => checkout.checkout),
-    received.repository,
-    yield* canonical(received.workingDirectory),
-    PULL_REQUEST_ELEMENT,
-  );
-  const found = registered.find((checkout) => checkout.checkout.root === selected.root);
-  if (found === undefined) {
-    throw new GitOperationAdmissionError(
-      PULL_REQUEST_ELEMENT,
-      "the checkout it selected is not one this entry holds a placement for",
-    );
-  }
-  return found;
-}
-
-/**
- * Take ownership of the checkout this pull request is opened from.
- *
- * The managed slot alone, as publication takes it: the slot says which entry
- * owns a managed checkout, which is what reading its branch and head needs. No
- * mutation lease, because a pull request changes no checkout, index, branch or
- * tracking configuration.
- */
-function* own(entry: ReplPushEntry, target: ReplGitCheckout): Operation<void> {
-  const registration = target.registration;
-  const slot = registration.slot;
-  const root = registration.placement.managedRoot;
-  if (slot === undefined || root === undefined) {
-    return;
-  }
-  yield* holdManagedPlacement(() =>
-    entry.holdSlot(root, slot.kind, slot.path, placementSubject(registration.placement)),
-  );
-}
-
-/** One reading of where this pull request was asked for. */
-function placeOf(
-  entry: ReplPushEntry,
-  selection: RepositorySelection,
-  workingDirectory: string,
-): ReplPushPlace {
-  const registration = authenticated(entry, selection);
-  return Object.freeze({
-    repository: registration.placement.identity,
-    selectionCheckout: registration.placement.checkoutRoot,
-    commonDirectory: registration.placement.commonDirectory,
-    workingDirectory,
-  });
-}
-
-/**
- * The canonical directory this path resolves to, or the path as written.
- *
- * Routing resolves the received directory exactly as recorded local Git and
- * publication do, because a working directory reached through a link is the
- * same place under another name. Only live routing resolves anything: a saved
- * request's roots are authenticated against parsed placements instead.
- */
-function* canonical(path: string): Operation<string> {
-  try {
-    return yield* until(realpath(path));
-  } catch {
-    return path;
-  }
-}
-
 /** The private entry state this execution holds, or the ordinary refusal. */
 function held(access: ReplPushAccess): ReplPushEntry {
   const entry = access();
@@ -837,50 +630,3 @@ function held(access: ReplPushAccess): ReplPushEntry {
   }
   return entry;
 }
-
-/** What this selection names in this entry's registry, or an admission refusal. */
-function authenticated(
-  entry: ReplPushEntry,
-  selection: RepositorySelection,
-): ReplPlacementRegistration {
-  return entry.selections.authenticate(
-    selection,
-    () =>
-      new GitOperationAdmissionError(
-        PULL_REQUEST_ELEMENT,
-        "the Repository in scope is not one this entry selected, so it names no checkout",
-      ),
-  );
-}
-
-/**
- * The live boundary one written request passes through.
- *
- * The default coordinator would serialize whatever was thrown and publish it as
- * this operation's outcome, which is the one thing that must not happen here: a
- * request written for work nobody resolved would send a continuation to
- * reconcile a pull request this entry never asked for.
- *
- * A throw therefore activates the run's existing fail-stop state and is
- * re-raised with its identity intact, writing nothing. A valid request is
- * written once and returned only after the append is acknowledged, which is what
- * makes "no service contact before the request exists" a property of the
- * ordering rather than a promise.
- */
-const requestCoordinator: LiveDurableOperationCoordinator = {
-  *run<T extends Json>(
-    execute: () => Operation<T>,
-    publish: (result: ProtocolResult) => Operation<void>,
-    activateFailure: ActivateDurabilityFailure,
-  ): Operation<ProtocolResult> {
-    let value: T;
-    try {
-      value = yield* execute();
-    } catch (error) {
-      throw activateFailure(error);
-    }
-    const result: ProtocolResult = { status: "ok", value };
-    yield* publish(result);
-    return result;
-  },
-};

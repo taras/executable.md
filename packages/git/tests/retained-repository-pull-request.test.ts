@@ -44,7 +44,7 @@ import type { FilesHandler } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 import { executeInstalled } from "@executablemd/core/host";
-import { collect, Elicitation } from "@executablemd/core";
+import { collect, Elicitation, registerComponents } from "@executablemd/core";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import type { GitInvocation, GitOutcome, RepositoryHost } from "../src/deno/composition/host.ts";
@@ -1252,6 +1252,74 @@ describe("one entry's pull request, composed", () => {
       expect(swallowed.output).not.toContain("4242");
     }
   });
+
+  for (const chain of ["operations", "api"] as const) {
+    it(`V5c: a swallowed selection-authentication refusal stays a failure through ${chain}`, function* () {
+      const fixture = yield* useFixture();
+      const forge = store(fixture);
+      const stream = new InMemoryStream();
+      let caught = "";
+      let later = false;
+      const result = yield* run(
+        fixture,
+        openingOn(`auth-refusal/${chain}`).replace("</Repository>", "<After />\n</Repository>"),
+        stream,
+        forge,
+        {
+          *between(): Operation<void> {
+            yield* registerComponents([
+              {
+                name: "After",
+                origin: "test",
+                props: { type: "object", properties: {}, additionalProperties: false },
+                // deno-lint-ignore require-yield
+                *fn(): Operation<string> {
+                  later = true;
+                  return "";
+                },
+              },
+            ]);
+            if (chain === "operations") {
+              yield* PullRequestOperations.around({
+                *upsert([invocation], next): Operation<PullRequestResult> {
+                  try {
+                    return yield* next({
+                      ...invocation,
+                      repository: { ...invocation.repository, selection: "stale-selection" },
+                    });
+                  } catch (error) {
+                    caught = error instanceof Error ? error.message : String(error);
+                    return SYNTHETIC;
+                  }
+                },
+              });
+            } else {
+              yield* PullRequestAPI.around({
+                *upsert([input, options], next): Operation<PullRequestResult> {
+                  try {
+                    return yield* next(input, {
+                      ...options,
+                      repository: { ...options.repository, selection: "stale-selection" },
+                    });
+                  } catch (error) {
+                    caught = error instanceof Error ? error.message : String(error);
+                    return SYNTHETIC;
+                  }
+                },
+              });
+            }
+          },
+        },
+      );
+      expect(caught).toContain("not one this entry selected");
+      expect(result.refusal).toBeDefined();
+      expect(result.output).not.toContain("4242");
+      expect(later).toBe(false);
+      expect(requests(result.events)).toEqual([]);
+      expect(upserts(result.events)).toEqual([]);
+      expect(mutations(forge)).toEqual([]);
+    });
+  }
 
   it("V5d: one transform records both readings, and a saved request bypasses it", function* () {
     const fixture = yield* useFixture();

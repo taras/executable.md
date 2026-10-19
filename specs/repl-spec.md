@@ -1596,6 +1596,10 @@ read whose answer arrived but whose own session could not be closed records
 nothing either, because what it did is in a state its outcome cannot be read
 from.
 
+The entry uses the same authored PR and read bodies as ordinary runs and
+workflows. Its private policies supply retention beneath those bodies through
+the shared invocation binding.
+
 What `<PullRequest>` binds is evidence of what the upsert settled on, not
 
 freshness: the repository, the provider's own identity for the pull request, its

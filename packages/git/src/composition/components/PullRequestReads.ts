@@ -23,6 +23,7 @@ import type {
   PropsSchema,
   ReturnsSchema,
 } from "@executablemd/core";
+import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/host";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { COMPOSITION_ORIGIN } from "../definitions.ts";
@@ -31,6 +32,9 @@ import { pullRequestReadResultJson } from "../pull-request-read-records.ts";
 import { canonicalPullRequestUrl, pullRequestProviderName } from "../pull-request-target.ts";
 import type { PullRequestReadKind } from "../pull-request-read-records.ts";
 import { PullRequestOperations } from "../pull-request-operations.ts";
+import type { PullRequestOperationsApi } from "../pull-request-operations.ts";
+import { boundComponent } from "../invocation-binding.ts";
+import type { BindOperations, ComponentBody } from "../invocation-binding.ts";
 
 export const REVIEWS_ELEMENT = "<PullRequest.Reviews>";
 export const COMMENTS_ELEMENT = "<PullRequest.Comments>";
@@ -161,8 +165,14 @@ export const checksReturns: ReturnsSchema = array({
     }),
   ],
 });
-function read(kind: PullRequestReadKind, element: string): FunctionComponent {
-  return function* PullRequestRead(props: Record<string, Json>): Operation<Json> {
+function read(
+  kind: PullRequestReadKind,
+  element: string,
+): ComponentBody<PullRequestOperationsApi["read"]> {
+  return function* PullRequestRead(
+    props: Record<string, Json>,
+    read: PullRequestOperationsApi["read"],
+  ): Operation<Json> {
     // Canonicalized before any provider sees it, so the component, the durable
     // request and every adapter read one answer.
     const url = canonicalPullRequestUrl(props.url);
@@ -184,7 +194,7 @@ function read(kind: PullRequestReadKind, element: string): FunctionComponent {
       );
     }
 
-    const result = yield* PullRequestOperations.operations.read({ url, kind, provider });
+    const result = yield* read({ url, kind, provider });
     if (result.kind !== kind) {
       throw new PullRequestReadError(
         "protocol",
@@ -279,7 +289,26 @@ function metadata(kind: PullRequestReadKind) {
 /** An ordinary registered default, over whichever provider the host installed. */
 export function pullRequestReadRegistration(kind: PullRequestReadKind): ComponentRegistration {
   const element = ELEMENTS[kind];
-  return { ...metadata(kind), fn: formDispatcher(declare(read(kind, element), element)) };
+  const body = read(kind, element);
+  return {
+    ...metadata(kind),
+    fn: formDispatcher(
+      declare((props) => body(props, PullRequestOperations.operations.read), element),
+    ),
+  };
+}
+
+export function pullRequestReadDeclaration(
+  kind: PullRequestReadKind,
+  bind: BindOperations<PullRequestOperationsApi["read"]>,
+): IdentityComponent {
+  const element = ELEMENTS[kind];
+  const body = read(kind, element);
+  return {
+    ...metadata(kind),
+    factory: (claim: IdentityClaimant) =>
+      formDispatcher(declare(boundComponent(claim, bind, body), element)),
+  };
 }
 
 export const PULL_REQUEST_READ_KINDS: readonly PullRequestReadKind[] = Object.freeze([

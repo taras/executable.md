@@ -69,33 +69,16 @@ import type {
   Result as DurableResult,
 } from "@executablemd/durable-streams";
 
-import { documented, formDispatcher } from "@executablemd/core";
-import type { ComponentInvocation, FunctionComponent } from "@executablemd/core";
-import type {
-  IdentityClaimant,
-  IdentityComponent,
-  JournalAdmission,
-} from "@executablemd/core/host";
+import type { JournalAdmission } from "@executablemd/core/host";
 import type { Around } from "@effectionx/context-api";
-import { COMPOSITION_ORIGIN } from "../../composition/definitions.ts";
-import {
-  checksDocumentation,
-  checksReturns,
-  CHECKS_ELEMENT,
-  commentsDocumentation,
-  commentsReturns,
-  COMMENTS_ELEMENT,
-  props as pullRequestReadProps,
-  pullRequestReadBinding,
-  pullRequestReadTarget,
-  reviewsDocumentation,
-  reviewsReturns,
-  REVIEWS_ELEMENT,
-} from "../../composition/components/PullRequestReads.ts";
+import type { BindOperations } from "../../composition/invocation-binding.ts";
 import { PullRequestReadError } from "../../composition/errors.ts";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
 import { PullRequestOperations } from "../../composition/pull-request-operations.ts";
-import type { PullRequestReadInvocation } from "../../composition/pull-request-operations.ts";
+import type {
+  PullRequestOperationsApi,
+  PullRequestReadInvocation,
+} from "../../composition/pull-request-operations.ts";
 import { PullRequestReadExecution } from "../../composition/pull-request-read-execution.ts";
 import type {
   AdmittedPullRequestRead,
@@ -121,7 +104,6 @@ import type {
   PullRequestReadRequest,
   PullRequestReadResult,
 } from "../../composition/pull-request-read-records.ts";
-import type { FirstPartyDocumentation, ReturnsSchema } from "@executablemd/core";
 import {
   describePullRequestRead,
   pullRequestReadElement,
@@ -139,115 +121,27 @@ interface ReadBridge {
   open: boolean;
 }
 
-/** The three collections, with everything their declarations differ by. */
-const COLLECTIONS: readonly {
-  readonly kind: PullRequestReadKind;
-  readonly name: string;
-  readonly element: string;
-  readonly returns: ReturnsSchema;
-  readonly documentation: FirstPartyDocumentation;
-}[] = [
-  {
-    kind: "reviews",
-    name: "PullRequest.Reviews",
-    element: REVIEWS_ELEMENT,
-    returns: reviewsReturns,
-    documentation: reviewsDocumentation,
-  },
-  {
-    kind: "comments",
-    name: "PullRequest.Comments",
-    element: COMMENTS_ELEMENT,
-    returns: commentsReturns,
-    documentation: commentsDocumentation,
-  },
-  {
-    kind: "checks",
-    name: "PullRequest.Checks",
-    element: CHECKS_ELEMENT,
-    returns: checksReturns,
-    documentation: checksDocumentation,
-  },
-];
-
-/**
- * The entry's own three evidence reads, as ordinary shadowable components.
- *
- * Each shadows the inherited bundled registration for this execution's scope
- * without touching it, so a repository-local replacement keeps its ordinary
- * precedence over both. What a replacement does not get is an identity
- * authenticator, so it names no retained read of this entry's.
- *
- * Inspection describes one component per collection — the same origin, props,
- * return contract, self-closing form and prose the bundled registrations carry.
- */
-export function replPullRequestReadComponents(owner: string): IdentityComponent[] {
-  return COLLECTIONS.map((collection) => ({
-    name: collection.name,
-    origin: COMPOSITION_ORIGIN,
-    props: pullRequestReadProps,
-    returns: collection.returns,
-    forms: ["self-closing"] as const,
-    ...documented(collection.documentation),
-    factory: (claim: IdentityClaimant) =>
-      // Canonical form dispatch, so the form is settled by the scan before the
-      // body runs, and a paired invocation is refused with the component's own
-      // sentence rather than reaching a read.
-      formDispatcher({
-        forms: "self-closing",
-        fn: readingBody(owner, claim, collection.kind, collection.element),
-        refuse: () =>
-          new PullRequestReadError(
-            "unexpected-content",
-            collection.element,
-            "it names a pull request to read and renders nothing of its own, so it is written " +
-              "self-closing.",
-          ),
-      }),
-  }));
+export function replPullRequestReadPolicy(
+  owner: string,
+): BindOperations<PullRequestOperationsApi["read"]> {
+  return (site) => (invocation) => read(owner, site, invocation);
 }
 
-function readingBody(
+function* read(
   owner: string,
-  claim: IdentityClaimant,
-  kind: PullRequestReadKind,
-  element: string,
-): FunctionComponent {
-  return function* PullRequestRead(
-    props: Record<string, Json>,
-    invocation: ComponentInvocation,
-  ): Operation<Json> {
-    // The same reading of the same props the bundled component makes, and its
-    // refusals are the component's own settled sentences. A URL this element
-    // cannot name is refused here, before a provider is asked anything.
-    const target = pullRequestReadTarget(props, element);
-    const site = yield* claim(invocation);
-
-    return yield* scoped(function* (): Operation<Json> {
-      // This read's own bridge, in this read's own scope. It is gone when this
-      // scope ends, which is what leaves a finished read nothing to borrow.
-      const bridge: ReadBridge = { owner, site, spent: false, open: true };
-      yield* PullRequestReadExecution.around(retaining(bridge, kind), { at: "min" });
-      try {
-        // The ordinary dispatch, so every public handler a document or a plugin
-        // composed still answers, transforms, refuses and delegates. What comes
-        // back is whatever composed above the provider — which is why it is
-        // held to the whole evidence contract here and not only to the
-        // collection: the outer result is the value a document binds, and a
-        // handler that rewrote it into something no reader can parse must not
-        // reach the binding merely because the saved answer underneath it was
-        // sound.
-        const answered = yield* PullRequestOperations.operations.read({
-          url: target.url,
-          kind,
-          provider: target.provider,
-        });
-        return pullRequestReadBinding(validRead(answered, kind, element).result, kind, element);
-      } finally {
-        bridge.open = false;
-      }
-    });
-  };
+  site: string,
+  invocation: PullRequestReadInvocation,
+): Operation<PullRequestReadResult> {
+  return yield* scoped(function* () {
+    const bridge: ReadBridge = { owner, site, spent: false, open: true };
+    yield* PullRequestReadExecution.around(retaining(bridge, invocation.kind), { at: "min" });
+    try {
+      const answered = yield* PullRequestOperations.operations.read(invocation);
+      return validRead(answered, invocation.kind, pullRequestReadElement(invocation.kind)).result;
+    } finally {
+      bridge.open = false;
+    }
+  });
 }
 
 /**

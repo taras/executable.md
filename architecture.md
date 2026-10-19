@@ -7238,9 +7238,10 @@ receipt this build cannot read are fatal unreadable history.
 
 `<PullRequest>` is a statement about a branch a Git host already holds, and this
 entry never makes one exist. So before anything is written down it has to show
-that *this entry* published the head the pull request names. An ordinary run
-proves that by scanning its own journal; an entry cannot, because its segment is
-reopened hours later beside other entries and what has to be proven is narrower:
+that *this entry* published the head the pull request names. A workflow uses its
+own journal and an ordinary run uses its provider's private publication state.
+An entry's segment is reopened hours later beside other entries, and what has
+to be proven is narrower:
 this entry asked for that publication, its own request was answered by its own
 acknowledged receipt, and this execution has actually reached it. A bare
 receipt, a local `<Git.Commit>` result, a handler's synthetic `Git.push` answer
@@ -7268,6 +7269,15 @@ revisit two concurrent children in either order, so arrival order is not that
 order and ordering by it would let a replayed history authorize a superseded
 head.
 
+The shared `<PullRequest>` body receives the upsert operation from the host's
+policy. Ordinary registrations use the public feature Api; an entry declares
+that same body through the common invocation binding, with its owner and site
+kept inside the private policy. The three read components use the same
+construction. There is one authored body and one metadata definition per name.
+Push and PR policies share checkout routing, origin authentication, managed-slot
+ownership and the request-append boundary; their codecs and reconciliation stay
+with their respective protocols.
+
 Everything after that follows publication's shape. The invocation is
 authenticated, then the body is rendered completely — before the Repository is
 observed and before this upsert has a position of its own, so a child durable
@@ -7289,8 +7299,10 @@ document and nothing more — no request, no receipt, and none of the stability 
 retained result has — and it may bind only the closed result contract. Once the
 owned terminal has run, its outcome is held privately and that outcome binds or
 fails: a rewritten return cannot bind a different pull request, and a delegated
-failure a handler caught and answered past stays a failure. An outer throw after
-a success is ordinary surrounding failure; a persistence failure stays fatal.
+failure a handler caught and answered past stays a failure. This includes
+selection authentication: its refusal belongs to the accepted delegation even
+when no request was resolved. An outer throw after a success is ordinary
+surrounding failure; a persistence failure stays fatal.
 
 #### The evidence reads an entry retains, and the ceiling they stay under
 

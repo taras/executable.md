@@ -55,17 +55,15 @@
  * repeating it.
  */
 
+import type { ReplPlacementRegistration } from "./selections.ts";
+import type { ReplGitCheckout } from "./git.ts";
+import { checkoutOrigin, own, placements, route, placeOf } from "./checkout.ts";
+import { savedRequest } from "./requests.ts";
+
 import { createApi } from "@effectionx/context-api";
-import { until, useScope } from "effection";
+import { useScope } from "effection";
 import type { Operation, Scope } from "effection";
-import { realpath } from "node:fs/promises";
-import { createDurableOperation } from "@executablemd/durable-streams";
-import type {
-  ActivateDurabilityFailure,
-  Json,
-  LiveDurableOperationCoordinator,
-  Result as ProtocolResult,
-} from "@executablemd/durable-streams";
+
 import type { JournalAdmission } from "@executablemd/core/host";
 import { PUSH } from "../../composition/components/GitPush.ts";
 import {
@@ -95,7 +93,6 @@ import {
   admitReplPushHistory,
   replPushEffectRequest,
   replPushPlacesHeld,
-  type ReplPushPlacement,
 } from "../../retained-repository/push-admission.ts";
 import type { ReplPublicationMemory } from "../../retained-repository/publication-evidence.ts";
 import {
@@ -117,13 +114,10 @@ import { pushProvider } from "../composition/push.ts";
 import { gitRefusal } from "../composition/refusals.ts";
 import { lazily } from "../run-composition/lazy.ts";
 import type { SlotKind } from "../run-composition/leases.ts";
-import { liveCheckout, selectCheckout } from "../run-composition/operations.ts";
+import { liveCheckout } from "../run-composition/operations.ts";
 import type { SelectionRegistry } from "../selections.ts";
-import { holdManagedPlacement } from "./leases.ts";
-import type { ReplGitCheckout } from "./git.ts";
 import { retainedRecordAhead } from "./local.ts";
-import { nativeGitTurn, placementSubject } from "./selections.ts";
-import type { ReplPlacementRegistration } from "./selections.ts";
+import { nativeGitTurn } from "./selections.ts";
 
 /**
  * What recorded publication needs from the entry that owns it.
@@ -235,19 +229,7 @@ interface Invocation {
  */
 function* publish(invocation: Invocation): Operation<GitPushOutcome> {
   const entry = held(invocation.access);
-  // Authenticated before anything else, and its *parsed* facts are what the
-  // request carries. The opaque identifier this entry minted never appears: it
-  // names nothing once the entry ends, so a durable name built from one would
-  // differ on every reopen of the same question.
-  const registration = authenticated(entry, invocation.repository);
-  const requested: ReplPushPlace = Object.freeze({
-    repository: registration.placement.identity,
-    selectionCheckout: registration.placement.checkoutRoot,
-    commonDirectory: registration.placement.commonDirectory,
-    // Exactly as received. Resolving it is live routing, which a continuation
-    // does not do, so the name cannot depend on it.
-    workingDirectory: invocation.workingDirectory,
-  });
+  const requested = placeOf(entry, invocation.repository, invocation.workingDirectory, PUSH);
   const name = yield* replPushRequestName({
     owner: invocation.owner,
     site: invocation.site,
@@ -336,15 +318,7 @@ function* delegated(
   // Read once, here. The invocation is the caller's own object and everything
   // below suspends, so reading it again later would let one Repository be
   // authenticated and another published for.
-  const receivedSelection = request.repository;
-  const receivedDirectory = request.workingDirectory;
-  const registration = authenticated(entry, receivedSelection);
-  const received: ReplPushPlace = Object.freeze({
-    repository: registration.placement.identity,
-    selectionCheckout: registration.placement.checkoutRoot,
-    commonDirectory: registration.placement.commonDirectory,
-    workingDirectory: receivedDirectory,
-  });
+  const received = placeOf(entry, request.repository, request.workingDirectory, PUSH);
 
   const resolved = yield* resolve(entry, received);
   const record = yield* publishRequest(entry, invocation, requested, received, resolved, name);
@@ -366,9 +340,16 @@ function* delegated(
  * a checkout with no usable origin both stop here, before a request exists.
  */
 function* resolve(entry: ReplPushEntry, received: ReplPushPlace): Operation<ReplPushResolution> {
-  const routed = yield* route(entry, received);
+  const routed = yield* route(entry, received, PUSH);
   const placement = routed.registration.placement;
-  const origin = yield* destination(routed.registration);
+  const origin = yield* checkoutOrigin(
+    routed.registration,
+    PUSH,
+    "the checkout it selected records no usable origin, so there is nowhere for this branch " +
+      "to be published to. No credential was read and nothing was contacted",
+    "the origin this checkout records is not the one the Repository in scope was selected " +
+      "from, so a branch published to it would go somewhere this entry never authenticated",
+  );
 
   yield* own(entry, routed);
 
@@ -409,34 +390,6 @@ function* resolve(entry: ReplPushEntry, received: ReplPushPlace): Operation<Repl
 }
 
 /**
- * Where this checkout's branch is published to, as this entry can see it now.
- *
- * The locator the entry admitted, held to the fingerprint the Repository
- * identity carries. A checkout that records no usable origin has nowhere to
- * publish to, and one whose origin does not name this repository is not a
- * destination this invocation may use — both before a request exists and
- * before anything is contacted.
- */
-function* destination(registration: ReplPlacementRegistration): Operation<string> {
-  const origin = yield* registration.origin();
-  if (origin === undefined) {
-    throw new GitOperationAdmissionError(
-      PUSH,
-      "the checkout it selected records no usable origin, so there is nowhere for this branch " +
-        "to be published to. No credential was read and nothing was contacted",
-    );
-  }
-  if (locatorFingerprint(origin) !== registration.placement.identity.locatorFingerprint) {
-    throw new GitOperationAdmissionError(
-      PUSH,
-      "the origin this checkout records is not the one the Repository in scope was selected " +
-        "from, so a branch published to it would go somewhere this entry never authenticated",
-    );
-  }
-  return origin;
-}
-
-/**
  * Write this request down, and read it back before it is acknowledged.
  *
  * The request is one durable position and the reconciliation below is another:
@@ -458,22 +411,18 @@ function* publishRequest(
   resolved: ReplPushResolution,
   name: string,
 ): Operation<ReplPushRequestRecord> {
-  const stored: unknown = yield createDurableOperation<Json>(
+  return yield* savedRequest(
     { type: REPL_REPOSITORY_PUSH_REQUEST, name },
-    function* () {
-      const payload = replPushRequestJson({
+    () =>
+      replPushRequestJson({
         owner: invocation.owner,
         site: invocation.site,
         requested,
         received,
         resolved,
-      });
-      readback(entry, invocation, requested, payload);
-      return payload;
-    },
-    { coordinator: requestCoordinator },
+      }),
+    (stored) => readback(entry, invocation, requested, stored),
   );
-  return readback(entry, invocation, requested, stored);
 }
 
 /**
@@ -490,19 +439,17 @@ function* restored(
   requested: ReplPushPlace,
   name: string,
 ): Operation<ReplPushRequestRecord> {
-  const stored: unknown = yield createDurableOperation<Json>(
+  return yield* savedRequest(
     { type: REPL_REPOSITORY_PUSH_REQUEST, name },
-    // deno-lint-ignore require-yield
-    function* (): Operation<Json> {
+    () => {
       throw new GitOperationInfrastructureError(
         PUSH,
         "its retained history named a saved publication request at this position and then had " +
           "none, so what this entry asked to publish is unknown",
       );
     },
-    { coordinator: requestCoordinator },
+    (stored) => readback(entry, invocation, requested, stored),
   );
-  return readback(entry, invocation, requested, stored);
 }
 
 /**
@@ -558,15 +505,6 @@ function sameReplPushRequest(saved: ReplPushPlace, asking: ReplPushPlace): boole
     saved.workingDirectory === asking.workingDirectory &&
     sameRepositoryIdentity(saved.repository, asking.repository)
   );
-}
-
-/** The places this entry's reconstructed registry holds, as parsed facts. */
-function placements(entry: ReplPushEntry): readonly ReplPushPlacement[] {
-  return entry.checkouts().map((checkout) => ({
-    identity: checkout.registration.placement.identity,
-    checkoutRoot: checkout.registration.placement.checkoutRoot,
-    commonDirectory: checkout.registration.placement.commonDirectory,
-  }));
 }
 
 /**
@@ -690,70 +628,6 @@ function* publication(
   return pushProvider(source, resolved.origin, inputs, session);
 }
 
-/**
- * Which registered checkout this repository and working directory select.
- *
- * The ordinary selector over this entry's own registrations, restricted by the
- * whole authenticated Repository identity and resolving the received directory
- * first. The longest covering checkout wins, so a subdirectory, a linked
- * worktree and a captured path entered through `<Dir>` each select the checkout
- * their own paths belong to.
- */
-function* route(entry: ReplPushEntry, received: ReplPushPlace): Operation<ReplGitCheckout> {
-  const registered = entry.checkouts();
-  const selected = selectCheckout(
-    registered.map((checkout) => checkout.checkout),
-    received.repository,
-    yield* canonical(received.workingDirectory),
-    PUSH,
-  );
-  const found = registered.find((checkout) => checkout.checkout.root === selected.root);
-  if (found === undefined) {
-    throw new GitOperationAdmissionError(
-      PUSH,
-      "the checkout it selected is not one this entry holds a placement for",
-    );
-  }
-  return found;
-}
-
-/**
- * Take ownership of the checkout this publication reads from.
- *
- * The managed slot alone. It says which entry owns a managed checkout, which is
- * what a publication needs in order to read its objects; the mutation lease
- * says which entry is changing a repository, and a publication changes none of
- * it. An ambient target has no slot: it is the checkout the person was already
- * standing in.
- */
-function* own(entry: ReplPushEntry, target: ReplGitCheckout): Operation<void> {
-  const registration = target.registration;
-  const slot = registration.slot;
-  const root = registration.placement.managedRoot;
-  if (slot === undefined || root === undefined) {
-    return;
-  }
-  yield* holdManagedPlacement(() =>
-    entry.holdSlot(root, slot.kind, slot.path, placementSubject(registration.placement)),
-  );
-}
-
-/**
- * The canonical directory this path resolves to, or the path as written.
- *
- * Routing resolves the received directory exactly as recorded local Git does,
- * because a working directory reached through a link is the same place under
- * another name. Only live routing resolves anything: a saved request's roots
- * are authenticated against parsed placements instead.
- */
-function* canonical(path: string): Operation<string> {
-  try {
-    return yield* until(realpath(path));
-  } catch {
-    return path;
-  }
-}
-
 /** The public default's own refusal, for a member this descriptor never routes. */
 function refusing<T>(element: string): () => Operation<T> {
   // deno-lint-ignore require-yield
@@ -773,50 +647,3 @@ function held(access: ReplPushAccess): ReplPushEntry {
   }
   return entry;
 }
-
-/** What this selection names in this entry's registry, or an admission refusal. */
-function authenticated(
-  entry: ReplPushEntry,
-  selection: RepositorySelection,
-): ReplPlacementRegistration {
-  return entry.selections.authenticate(
-    selection,
-    () =>
-      new GitOperationAdmissionError(
-        PUSH,
-        "the Repository in scope is not one this entry selected, so it names no checkout",
-      ),
-  );
-}
-
-/**
- * The live boundary one published request is written through.
- *
- * The default coordinator would serialize whatever was thrown and publish it as
- * this operation's outcome, which is the one thing that must not happen here: a
- * request published for work nobody resolved would send a continuation to
- * reconcile a branch and a commit this entry never read.
- *
- * A throw therefore activates the run's existing fail-stop state and is
- * re-raised with its identity intact, publishing nothing. A valid request is
- * published once and returned only after the append is acknowledged, which is
- * what makes "no remote work before the request exists" a property of the
- * ordering rather than a promise.
- */
-const requestCoordinator: LiveDurableOperationCoordinator = {
-  *run<T extends Json>(
-    execute: () => Operation<T>,
-    publish: (result: ProtocolResult) => Operation<void>,
-    activateFailure: ActivateDurabilityFailure,
-  ): Operation<ProtocolResult> {
-    let value: T;
-    try {
-      value = yield* execute();
-    } catch (error) {
-      throw activateFailure(error);
-    }
-    const result: ProtocolResult = { status: "ok", value };
-    yield* publish(result);
-    return result;
-  },
-};

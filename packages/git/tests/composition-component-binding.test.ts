@@ -33,13 +33,22 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collect, Component, registerComponents } from "@executablemd/core";
-import type { ComponentRegistration, Json } from "@executablemd/core";
+import type { ComponentRegistration } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation, IdentityComponent } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { COMPOSITION_REGISTRATIONS } from "../src/composition/installation.ts";
 import { pushDeclaration } from "../src/composition/components/GitPush.ts";
 import { issueDeclaration } from "../src/composition/components/Issue.ts";
+import { pullRequestDeclaration } from "../src/composition/components/PullRequest.ts";
+import {
+  PULL_REQUEST_READ_KINDS,
+  pullRequestReadDeclaration,
+} from "../src/composition/components/PullRequestReads.ts";
+import { PullRequestOperations } from "../src/composition/pull-request-operations.ts";
+import { RepositoryContext } from "@executablemd/git/api";
+import type { RepositorySelection } from "@executablemd/git/api";
+import type { PullRequestResult, PullRequestReadResult } from "@executablemd/git/api";
 import type { BindOperations } from "../src/composition/invocation-binding.ts";
 // From the subpath that publishes them rather than from the source modules:
 // these are public types, and reaching them by relative path would bypass the
@@ -49,8 +58,15 @@ import type { IssueOperationsApi } from "../src/issue/operations.ts";
 import type { PullRequestOperationsApi } from "../src/composition/pull-request-operations.ts";
 import { COMPOSITION_ORIGIN } from "../src/composition/definitions.ts";
 
-/** The two operations A's retained entry owns, by the names a document writes. */
-const OWNED: readonly string[] = ["Git.Push", "Issue"];
+/** The invocation-owned operations, by the names a document writes. */
+const OWNED: readonly string[] = [
+  "Git.Push",
+  "Issue",
+  "PullRequest",
+  "PullRequest.Reviews",
+  "PullRequest.Comments",
+  "PullRequest.Checks",
+];
 
 /** The six operations no local transaction encloses, by the names a document writes. */
 const OPERATIONS: readonly string[] = [
@@ -174,7 +190,7 @@ function useRoot(): Operation<string> {
 }
 
 /**
- * One declaration of each operation A's retained entry owns.
+ * One declaration of each invocation-owned operation.
  *
  * Built with policy nothing reaches: these rows are about what a declaration
  * says, and a constructor that had to perform in order to describe would be
@@ -186,6 +202,14 @@ function ownedDeclarations(): readonly IdentityComponent[] {
       throw new Error("a described declaration performed");
     }),
     issueDeclaration(fakeIssuePolicy(watched())),
+    pullRequestDeclaration(() => () => {
+      throw new Error("a described declaration performed");
+    }),
+    ...PULL_REQUEST_READ_KINDS.map((kind) =>
+      pullRequestReadDeclaration(kind, () => () => {
+        throw new Error("a described declaration performed");
+      }),
+    ),
   ];
 }
 
@@ -333,6 +357,95 @@ describe("one registry for every repository operation, and the policy an executi
     expect(ran.refusal).toBe(undefined);
     expect(seen.sites).toHaveLength(2);
     expect(new Set(seen.sites).size).toBe(2);
+  });
+
+  it("B1: PR and read bodies ask the same semantic operations under ordinary and entry policies", function* () {
+    const root = yield* useRoot();
+    const selection: RepositorySelection = {
+      selection: "selected",
+      name: "project",
+      checkoutPath: root,
+      identity: {
+        name: "project",
+        locatorFingerprint: "a".repeat(64),
+        requestedBase: null,
+        creationCommit: "b".repeat(40),
+        primaryBranch: "main",
+        objectFormat: "sha1",
+      },
+    };
+    const answer: PullRequestResult = {
+      repository: selection.identity,
+      providerId: "PR_1",
+      number: 1,
+      url: `${TRACKER}/pull/1`,
+      state: "open",
+      headSha: "c".repeat(40),
+      baseSha: "d".repeat(40),
+    };
+    const source = [
+      '<PullRequest title="Prepare" draft={true} as="opened">',
+      `<PullRequest.Reviews url="${TRACKER}/pull/1" as="reviews" />`,
+      "Ready for review.",
+      "</PullRequest>",
+      `<PullRequest.Comments url="${TRACKER}/pull/1" as="comments" />`,
+      `<PullRequest.Checks url="${TRACKER}/pull/1" as="checks" />`,
+      "<Json value={opened} />",
+      "<Json value={reviews} />",
+      "<Json value={comments} />",
+      "<Json value={checks} />",
+    ].join("\n");
+    const runs: { output: string; calls: unknown[] }[] = [];
+    for (const owned of [false, true]) {
+      const sites: string[] = [];
+      const calls: unknown[] = [];
+      const operations: PullRequestOperationsApi = {
+        *upsert(invocation): Operation<PullRequestResult> {
+          calls.push(invocation);
+          return answer;
+        },
+        *read(invocation): Operation<PullRequestReadResult> {
+          calls.push(invocation);
+          if (invocation.kind === "checks") {
+            return { kind: "checks", headSha: answer.headSha, items: [] };
+          }
+          return { kind: invocation.kind, items: [] };
+        },
+      };
+      const installations: ExecutionInstallation[] = owned
+        ? [
+            {
+              components: [
+                pullRequestDeclaration((site) => {
+                  sites.push(site);
+                  return operations.upsert;
+                }),
+                ...PULL_REQUEST_READ_KINDS.map((kind) =>
+                  pullRequestReadDeclaration(kind, (site) => {
+                    sites.push(site);
+                    return operations.read;
+                  }),
+                ),
+              ],
+            },
+          ]
+        : [];
+      const ran = yield* run(root, source, installations, function* () {
+        yield* RepositoryContext.around({ current: () => selection }, { at: "min" });
+        if (!owned) {
+          yield* PullRequestOperations.around({
+            upsert: ([invocation]) => operations.upsert(invocation),
+            read: ([invocation]) => operations.read(invocation),
+          });
+        }
+      });
+      expect(ran.refusal).toBeUndefined();
+      expect(calls).toHaveLength(4);
+      expect(sites).toHaveLength(owned ? 4 : 0);
+      expect(new Set(sites).size).toBe(owned ? 4 : 0);
+      runs.push({ output: ran.output, calls });
+    }
+    expect(runs[0]).toEqual(runs[1]);
   });
 
   it("A5: cancelling an invocation stops the operation it was performing", function* (): Operation<void> {
