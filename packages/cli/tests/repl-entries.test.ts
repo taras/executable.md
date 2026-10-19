@@ -142,6 +142,33 @@ const INHERITING = [
   "",
 ].join("\n");
 
+/**
+ * One entry that selects out of data it computed, renders it both ways, and
+ * publishes the selected value for the next entry.
+ */
+const SELECTS_AND_RENDERS = [
+  "```js eval",
+  'const report = { service: "api", checks: [{ name: "boot", ok: true }, { name: "ping", ok: false }] };',
+  "```",
+  "",
+  `<Query value={report} yq='[.checks[] | select(.ok == false) | .name]' as="failing" />`,
+  "",
+  "<Json value={failing} />",
+  "",
+  "<Yaml value={failing} />",
+  "",
+  "```js eval",
+  "const selected = failing;",
+  "const picked = selected[0];",
+  "```",
+  "",
+  "One: {picked}",
+  "",
+].join("\n");
+
+/** One entry that queries what it inherited and prints the result unbound. */
+const QUERIES_INHERITED = ['<Query value={selected} yq=".[0]" />', ""].join("\n");
+
 /** One entry that publishes a nested value a later entry will edit. */
 const PUBLISHES_NESTED = [
   "```js eval",
@@ -775,6 +802,60 @@ describe("REPL entries: what each entry owns and what the next one inherits", ()
       counts: { runs: 2 },
     });
     expect(value(after.entries[1].bindings, "seen")).toBe("draft/build/2");
+  });
+
+  it("EP1: a selected value is retained, inherited and queried again", function* () {
+    const physical = new InMemoryStream();
+    const first = yield* runEntry(physical, SELECTS_AND_RENDERS);
+    expect(first.failure).toBe(undefined);
+
+    // Both renderers wrote the same selected value in their own spelling, and
+    // the entry's own output is what a person read.
+    expect(first.output).toContain('[\n  "ping"\n]');
+    expect(first.output).toContain("- ping\n");
+    expect(first.output).toContain("One: ping");
+
+    // What the entry retained is the structure, not either rendering of it —
+    // the selected binding itself is ordinary root data, beside the value it
+    // was selected from.
+    const before = projected(yield* physical.readAll());
+    expect(value(before.entries[0].bindings, "failing")).toEqual(["ping"]);
+    expect(value(before.entries[0].bindings, "selected")).toEqual(["ping"]);
+    const supplied = entryInitialBindings(before);
+    expect(supplied).toEqual({
+      report: {
+        service: "api",
+        checks: [
+          { name: "boot", ok: true },
+          { name: "ping", ok: false },
+        ],
+      },
+      failing: ["ping"],
+      selected: ["ping"],
+      picked: "ping",
+    });
+
+    // The next entry inherits that value and queries it without `as`, so what
+    // it prints is JSON — a selected string arrives quoted.
+    const second = yield* runEntry(physical, QUERIES_INHERITED, supplied);
+    expect(second.failure).toBe(undefined);
+    expect(second.output).toContain('"ping"');
+
+    // Entry 1 is where it was: its own retained value did not move, and the
+    // record handed over is unchanged.
+    const after = projected(yield* physical.readAll());
+    expect(after.entries).toHaveLength(2);
+    expect(value(after.entries[0].bindings, "selected")).toEqual(["ping"]);
+    expect(supplied.selected).toEqual(["ping"]);
+    // The second entry computed nothing of its own to publish, so what it
+    // retains is exactly the names it inherited: querying a value is not an
+    // effect with a record of its own.
+    expect(after.entries[1].bindings.map((binding) => binding.name).sort()).toEqual([
+      "failing",
+      "picked",
+      "report",
+      "selected",
+    ]);
   });
 
   it("EP1: a retained `props` is the entry's own and reaches no successor", function* () {

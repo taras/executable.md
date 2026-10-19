@@ -448,6 +448,33 @@ durable is written.
   `undefined`, and a replay reconstructs the same validated prop set through
   ordinary expansion.
 
+### The query engine a component loads
+
+`<Query>` and `<Yaml>` select and render through one published package rather
+than through an engine this project owns. Three properties make that an
+ordinary component concern rather than a new piece of architecture.
+
+- **It is loaded by the invocation that needs it.** A literal
+  `until(import("yq.rs"))` keeps the specifier in the module graph a compiled
+  binary and a published package are built from, and makes the load an ordinary
+  operation of the element that asked: cancellation stops that element's
+  continuation, its binding and its output. The package's root export is
+  already-ready — its own top-level await compiles the embedded WebAssembly —
+  so nothing here owns an instance, and loading twice is the module cache's
+  concern. Module compilation that finishes after cancellation authorizes no
+  result: the cancelled invocation publishes nothing.
+- **Capabilities arrive as arguments, so none is given.** The evaluator reaches
+  the environment, the filesystem and the clock only through its `env`, `files`
+  and `now` options. Both call sites pass empty maps and omit `now`, which is
+  what makes an environment read an empty string, a file load a refusal and a
+  clock a refusal — and no process is ever started. A document that wants data
+  in a query hands it over as the value.
+- **Acceptance is the engine's existing strict JSON.** The evaluation's whole
+  output is parsed as one JSON value and then crosses `parseJson`, so a
+  selection joins the same value domain as everything else a document holds.
+  Zero and several results are refusals rather than guesses, and a refusal
+  binds nothing.
+
 ### Expansion identity
 
 Core describes the executable element currently being expanded:

@@ -357,6 +357,48 @@ Writes the JSON where the element is written, or binds it with `as`. The
 counterpart of `<Parse>`: this turns a value into text, that turns text into a
 value.
 
+## Yaml
+
+Renders a value as YAML text.
+
+```mdx
+<Yaml value={config} />
+```
+
+Writes the YAML where the element is written, or binds it with `as`. `<Json>`'s
+sibling: the same value, the other spelling, for a document going somewhere that
+reads YAML.
+
+## Query
+
+Selects part of a value with a `yq` expression.
+
+```mdx
+<File path="package.json" as="packageText" />
+<Query value={packageText} yq="from_json | .scripts" as="scripts" />
+<Query value={scripts} yq=".test" />
+```
+
+The value is one a document already has — a file it read, a list of paths it
+globbed, data an eval block computed — and the expression says which part of it
+to keep. With `as` the selected value is bound as data, so `<Json>`, `<Yaml>`
+and another `<Query>` can go on working with it. Without `as` the selected value
+is written as JSON, whatever its type: an object as JSON, `false` as `false`,
+`[]` as `[]`, and a string quoted and escaped the way JSON writes one.
+
+Text stays text until the expression says otherwise. `from_json` and `from_yaml`
+decode it, which is how a document that meant to search a file's contents says
+so, and how one that meant to match the text itself still can.
+
+One value is the answer. `null`, `false` and an empty array are answers;
+selecting nothing and selecting several both refuse and say to collect results
+with `[ … ]` instead. A refused selection binds nothing, so a name it would have
+written keeps the value it already had.
+
+It queries the value it was given and nothing else. No file is read again for
+it, and a page of results is the page it was handed — if a producer reported
+more elsewhere, ask that producer for them.
+
 ## Parse
 
 Parses JSON text against a schema, and errors on invalid content.

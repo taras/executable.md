@@ -316,6 +316,9 @@ importers:
       unist-util-select:
         specifier: ^5
         version: 5.1.0
+      yq.rs:
+        specifier: 0.1.4
+        version: 0.1.4
 
   packages/durable-streams:
     dependencies:
@@ -3005,6 +3008,11 @@ packages:
     resolution: {integrity: sha512-D1mvvtDG0L5ft/jGWkLpG1+m0eQxOfaBvTNELraWj22wSVUMWxZUvYgJYcKh6jGGIkJFhH4IZPQhR4TKpc8mBw==}
     engines: {node: '>=10'}
 
+  yq.rs@0.1.4:
+    resolution: {integrity: sha512-GOGCtD020Nowq9djd7lKrgSz9a+sVHv11IRwEE4vt15yKmen9GOBTTdub/5w6jUmcDxN8q3+dAWcGGaq8dYy6Q==}
+    engines: {node: '>=22'}
+    hasBin: true
+
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
@@ -5266,6 +5274,8 @@ snapshots:
       string-width: 4.2.3
       y18n: 5.0.8
       yargs-parser: 20.2.9
+
+  yq.rs@0.1.4: {}
 
   zod@4.3.6: {}
 
