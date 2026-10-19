@@ -43,7 +43,7 @@
  * with the input it was handed.
  */
 
-import type { Operation } from "effection";
+import type { Operation, Result } from "effection";
 import { hasBinding, hasContent } from "../component-api.ts";
 import { printErrors } from "../component-failures.ts";
 import { parseJson } from "../json.ts";
@@ -53,7 +53,6 @@ import type { Json } from "../types.ts";
 export const props = {
   type: "object",
   properties: {
-    // Any JSON value: what can be queried is what a document can hold.
     value: {},
     yq: { type: "string", minLength: 1 },
   },
@@ -72,12 +71,6 @@ export class QueryError extends Error {
 const CONTENT =
   '<Query> selects from the value it is given, not from content: write <Query value={…} yq="…" />.';
 const FAILED = "<Query> could not evaluate this expression.";
-const NONE =
-  "<Query> expression selected nothing, and one JSON value is the answer: collect results with " +
-  "`[ … ]` to select an array, which may be empty.";
-const SEVERAL =
-  "<Query> expression selected more than one value, and one JSON value is the answer: collect " +
-  "results with `[ … ]` to select them as an array.";
 
 export default printErrors(function* Query(props: Record<string, Json>): Operation<Json> {
   if (yield* hasContent()) {
@@ -88,21 +81,18 @@ export default printErrors(function* Query(props: Record<string, Json>): Operati
   const bound = yield* hasBinding();
   const expression = String(props.yq);
 
-  let selection;
+  let selection: Result<string>;
   try {
     selection = yield* select(expression, JSON.stringify(props.value ?? null));
   } catch (error) {
-    // The package's own evaluation failure, kept as the cause: what was wrong
-    // with the expression is the thing the author needs, and restating it here
-    // in other words would be a second, poorer reading of it.
     throw new QueryError(FAILED, { cause: error });
   }
   if (!selection.ok) {
-    throw new QueryError(selection.refusal === "none" ? NONE : SEVERAL);
+    throw new QueryError(selection.error.message, { cause: selection.error });
   }
 
-  // Through the engine's own strict acceptance, so what a binding receives is
-  // the same domain every other value in a document belongs to.
-  const selected = parseJson(JSON.parse(selection.json));
+  // The whole answer, through the engine's own strict acceptance: a binding
+  // receives the domain every other value in a document belongs to.
+  const selected = parseJson(JSON.parse(selection.value));
   return bound ? selected : JSON.stringify(selected, null, 2);
 });
