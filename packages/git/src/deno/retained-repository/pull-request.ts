@@ -85,7 +85,7 @@ import {
   type PullRequestInputs,
   type PullRequestResult,
 } from "../../composition/pull-request-records.ts";
-import { sameRepositoryIdentity } from "../../composition/selection.ts";
+import { sameRepositoryIdentity, type RepositoryIdentity } from "../../composition/selection.ts";
 import type { RepositorySelection } from "../../composition/selection.ts";
 import { reconcileOwnedGitHostEffect } from "../../git-host/effect.ts";
 import type { GitHostProvider } from "../../git-host/api.ts";
@@ -509,22 +509,50 @@ function readback(
   return record;
 }
 
-/** Whether every place this saved request names is one this entry holds. */
+/**
+ * Whether every place this saved request names is one this entry holds.
+ *
+ * Each place carries the Repository identity that place is a place *of*, and is
+ * held to a placement under that one. The three can legitimately disagree: a
+ * handler may answer the authored question with another Repository this entry
+ * selected and published from, and the record then names the checkout the
+ * invocation authenticated under the authored Repository and the checkout the
+ * dispatch received and routing resolved under the delegated one. Asking for
+ * all three under a single identity refuses that composition, and asking for
+ * paths alone would accept a checkout some *other* Repository placed.
+ *
+ * `replPullRequestPlacesHeld()` in `../../retained-repository/push-admission.ts`
+ * is the same rule over saved history, and the two have to keep saying the same
+ * thing: one of them refusing a request the other admits is a history this
+ * entry can write and never continue.
+ */
 function placesHeld(
   record: ReplPullRequestRequestRecord,
   held: readonly ReplPushPlacement[],
 ): boolean {
-  const places: readonly (readonly [string, string])[] = [
-    [record.requested.place.selectionCheckout, record.requested.place.commonDirectory],
-    [record.received.place.selectionCheckout, record.received.place.commonDirectory],
-    [record.resolved.checkoutRoot, record.resolved.commonDirectory],
+  const places: readonly (readonly [RepositoryIdentity, string, string])[] = [
+    [
+      record.requested.place.repository,
+      record.requested.place.selectionCheckout,
+      record.requested.place.commonDirectory,
+    ],
+    [
+      record.received.place.repository,
+      record.received.place.selectionCheckout,
+      record.received.place.commonDirectory,
+    ],
+    [
+      record.received.place.repository,
+      record.resolved.checkoutRoot,
+      record.resolved.commonDirectory,
+    ],
   ];
-  return places.every(([checkoutRoot, commonDirectory]) =>
+  return places.every(([identity, checkoutRoot, commonDirectory]) =>
     held.some(
       (placement) =>
         placement.checkoutRoot === checkoutRoot &&
         placement.commonDirectory === commonDirectory &&
-        sameRepositoryIdentity(placement.identity, record.received.place.repository),
+        sameRepositoryIdentity(placement.identity, identity),
     ),
   );
 }

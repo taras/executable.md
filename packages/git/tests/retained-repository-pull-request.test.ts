@@ -63,6 +63,7 @@ import type {
   GitPushOutcome,
   PullRequestReadResult,
   PullRequestResult,
+  RepositorySelection,
 } from "@executablemd/git/api";
 import { PullRequestOperations } from "../src/composition/pull-request-operations.ts";
 import type { PullRequestUpsertInvocation } from "../src/composition/pull-request-operations.ts";
@@ -1353,6 +1354,104 @@ describe("one entry's pull request, composed", () => {
     const resumed = yield* run(fixture, opening(), replaying(events), forge);
     expect(resumed.refusal).toBeUndefined();
     expect(creations(forge)).toBe(1);
+  });
+
+  it("V5h: a delegated Repository saves each place under its own identity", function* () {
+    const fixture = yield* useFixture();
+    const forge = store(fixture);
+    const inner = new InMemoryStream();
+    const reached = withResolvers<void>();
+    let target: { repository: RepositorySelection; workingDirectory: string } | undefined;
+
+    // One entry, two Repositories. The branch is published from `target`; the
+    // pull request is authored under `project`, and trusted middleware answers
+    // the authored question with `target`'s own selection and working
+    // directory. That is ordinary input transformation: it fabricates no
+    // selection, no identity and no publication, and the typed Api permits it.
+    const source = [
+      `<Repository name="target" url="${LOCATOR}">`,
+      '  <Worktree name="redirect" branch="review/redirect" as="worktree" />',
+      "  <Dir path={worktree}>",
+      '    <File path="notes.md">Ready for review.</File>',
+      '    <Git.Add paths="notes.md" />',
+      '    <Git.Commit message="Prepare notes" as="commit" />',
+      "    <Git.Push />",
+      "  </Dir>",
+      "</Repository>",
+      `<Repository name="project" url="${LOCATOR}">`,
+      '  <PullRequest title="Prepare notes" as="pullRequest">Ready for review.</PullRequest>',
+      "  <Json value={pullRequest.number} />",
+      QUESTION,
+      "</Repository>",
+    ].join("\n");
+
+    const delegating = function* (): Operation<void> {
+      // Where `target` published from, taken from the Push invocation itself so
+      // the document stays the document a person would write: the selection and
+      // working directory below are the ones that operation observed, not ones
+      // this row composed.
+      yield* Git.around({
+        *push([invocation], next): Operation<GitPushOutcome> {
+          target = {
+            repository: invocation.repository,
+            workingDirectory: invocation.workingDirectory,
+          };
+          return yield* next(invocation);
+        },
+      });
+      yield* PullRequestAPI.around({
+        *upsert([pullRequest, options], next): Operation<PullRequestResult> {
+          if (target === undefined) {
+            throw new Error("the target Repository never published anything");
+          }
+          return yield* next(pullRequest, { ...options, ...target });
+        },
+      });
+    };
+
+    // A genuine unfinished history: the pull request is open and acknowledged,
+    // and the entry is standing at a question it has not answered.
+    const prefix = yield* cutAt(fixture, source, inner, forge, reached, {
+      atQuestion: reached,
+      between: delegating,
+    });
+    expect(requests(prefix).length).toBe(1);
+    expect(upserts(prefix).length).toBe(1);
+    expect(creations(forge)).toBe(1);
+
+    const record = savedRequest(requests(prefix)[0]);
+    expect(record).toBeDefined();
+    // Three places, and each is a place of something different: the invocation
+    // authenticated `project`, the dispatch received `target`'s own selection,
+    // and routing resolved the worktree that selection was working in. All
+    // three are placements this entry holds, and no single identity holds them
+    // all — which is the composition the old validation refused.
+    expect(record?.requested.place.repository.name).toBe("project");
+    expect(record?.received.place.repository.name).toBe("target");
+    expect(record?.received.place.selectionCheckout).toBe(target?.repository.checkoutPath);
+    expect(record?.resolved.checkoutRoot).toBe(target?.workingDirectory);
+    expect(record?.resolved.checkoutRoot).not.toBe(record?.requested.place.selectionCheckout);
+    // And the pull request that opened is the delegated Repository's own work.
+    expect(record?.resolved.inputs.headBranch).toBe("review/redirect");
+    expect(forge.pullRequests.at(-1)?.headRef).toBe("review/redirect");
+
+    // Continuing without the middleware that delegated: the saved request is
+    // consumed before anything is dispatched, so the restored pull request is
+    // still the one `target` published, and nothing is asked of the service
+    // a second time.
+    const resumed = yield* run(fixture, source, replaying(prefix), forge, {
+      answer: { choice: "continue" },
+    });
+
+    expect(resumed.refusal).toBeUndefined();
+    const restored = savedRequest(requests(resumed.events)[0]);
+    expect(requests(resumed.events).length).toBe(1);
+    expect(restored?.requested.place.repository.name).toBe("project");
+    expect(restored?.received.place.repository.name).toBe("target");
+    expect(upserts(resumed.events).length).toBe(1);
+    expect(creations(forge)).toBe(1);
+    expect(patches(forge)).toBe(0);
+    expect(mutations(forge)).toEqual(["create"]);
   });
 
   it("V5e: a body child effect precedes the request, and a failed body contacts nothing", function* () {
