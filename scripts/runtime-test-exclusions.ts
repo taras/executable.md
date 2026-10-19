@@ -72,6 +72,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "scripts/tests/query-distribution.test.ts",
+    reason:
+      "it is the harness that drives the query engine into every distribution, and the driving is Deno's own: it starts `Deno.execPath()` for the source arm, compiles the host binary through the canonical `compile()`, and builds the CLI's npm closure with dnt before packing and installing it. The Node and Bun consumers it exists to prove are launched by it — source Node through the repository's `tsx` loader, source Bun, and the packed closure under both — so excluding the harness from those runtimes drops none of that consumption. What the engine does inside a document is proven on every runtime by packages/core/tests/query-component.test.ts",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "scripts/tests/cloudflare-dofs-vendor.test.ts",
     reason:
       "runs the no-network vendored-source verifier under the Deno executable against altered temporary snapshots",
