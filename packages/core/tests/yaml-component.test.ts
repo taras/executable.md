@@ -146,7 +146,7 @@ describe("Tier YAML — what the text says", () => {
     const decoded = yield* select("from_yaml", JSON.stringify(yaml));
     expect(decoded.ok).toBe(true);
     if (decoded.ok) {
-      expect(JSON.parse(decoded.json)).toEqual(MIXED);
+      expect(JSON.parse(decoded.value)).toEqual(MIXED);
     }
     expect(JSON.parse(json.trim())).toEqual(MIXED);
   });

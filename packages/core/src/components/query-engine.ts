@@ -9,9 +9,9 @@
  *
  * The package's root export is a ready evaluator: its own top-level await
  * compiles the embedded WebAssembly once and hands back something already
- * usable. Loading it twice is the module cache's job, not this file's, so there
- * is no instance to own, revoke or tear down here, and nothing retains the
- * invocation that triggered the load.
+ * usable. Loading it twice is the module cache's job, so there is no instance
+ * to own, revoke or tear down here, and nothing retains the invocation that
+ * triggered the load.
  *
  * ## Capabilities arrive as options, so none is given
  *
@@ -35,30 +35,12 @@
  * lines.
  */
 
-import { until } from "effection";
-import type { Operation } from "effection";
-
-/** What this file uses of the package, stated where it is consumed. */
-interface Evaluator {
-  evaluateWithStatus(
-    expression: string,
-    input: string,
-    options: EvaluationOptions,
-  ): { readonly output: string };
-}
-
-interface EvaluationOptions {
-  readonly inputFormat: "json";
-  readonly outputFormat: "json" | "yaml";
-  readonly indent: number;
-  readonly unwrapScalar: false;
-  readonly printDocSeparators: false;
-  readonly env: Record<string, string>;
-  readonly files: Record<string, string>;
-}
+import { Err, Ok, until } from "effection";
+import type { Operation, Result } from "effection";
+import type { EvalOptions, Format, Yq } from "yq.rs";
 
 /** Everything both components fix about an evaluation, as the package takes it. */
-function options(outputFormat: "json" | "yaml"): EvaluationOptions {
+function options(outputFormat: Format): EvalOptions {
   return {
     inputFormat: "json",
     outputFormat,
@@ -72,18 +54,25 @@ function options(outputFormat: "json" | "yaml"): EvaluationOptions {
   };
 }
 
-function* evaluator(): Operation<Evaluator> {
-  const loaded = yield* until(import("yq.rs"));
-  return (loaded as { yq: Evaluator }).yq;
+function* evaluator(): Operation<Yq> {
+  const { yq } = yield* until(import("yq.rs"));
+  return yq;
 }
 
-/** How a selection can fail to be one JSON value. */
-export type SelectionRefusal = "none" | "several";
+/** A selection that is not one JSON value. */
+export class QuerySelectionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "QuerySelectionError";
+  }
+}
 
-/** What one evaluation produced: a JSON text, or why it is not one value. */
-export type Selection =
-  | { readonly ok: true; readonly json: string }
-  | { readonly ok: false; readonly refusal: SelectionRefusal };
+const NONE =
+  "<Query> expression selected nothing, and one JSON value is the answer: collect results with " +
+  "`[ … ]` to select an array, which may be empty.";
+const SEVERAL =
+  "<Query> expression selected more than one value, and one JSON value is the answer: collect " +
+  "results with `[ … ]` to select them as an array.";
 
 /**
  * Evaluate `expression` over `input` and answer with one JSON text.
@@ -92,18 +81,18 @@ export type Selection =
  * the package's and travels out of here unchanged, so the component can present
  * it as its own refusal with that cause.
  */
-export function* select(expression: string, input: string): Operation<Selection> {
+export function* select(expression: string, input: string): Operation<Result<string>> {
   const yq = yield* evaluator();
   const { output } = yq.evaluateWithStatus(expression, input, options("json"));
   if (output.trim() === "") {
-    return { ok: false, refusal: "none" };
+    return Err(new QuerySelectionError(NONE));
   }
   try {
     JSON.parse(output);
   } catch {
-    return { ok: false, refusal: "several" };
+    return Err(new QuerySelectionError(SEVERAL));
   }
-  return { ok: true, json: output };
+  return Ok(output);
 }
 
 /**

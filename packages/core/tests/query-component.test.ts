@@ -19,7 +19,7 @@ import type { Operation } from "effection";
 import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { API, Files, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { Component } from "../src/component-api.ts";
@@ -29,7 +29,13 @@ import { expandSegments } from "../src/expand.ts";
 import { renderSegments } from "../src/render.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { CORE_REGISTRY } from "../src/components/registry.ts";
-import type { ErrorSegment, EvalEnv, FunctionComponentDefinition, Json } from "../src/types.ts";
+import type {
+  ComponentFailure,
+  ErrorSegment,
+  EvalEnv,
+  FunctionComponentDefinition,
+  Json,
+} from "../src/types.ts";
 
 /** Core's own registered definition, so what runs is what a document resolves. */
 function core(name: string): FunctionComponentDefinition {
@@ -43,16 +49,23 @@ function core(name: string): FunctionComponentDefinition {
 interface Run {
   output: string;
   observed: ErrorSegment[];
+  /** Every failure offered to the `handleFailure` chain, from outside the run. */
+  offered: ComponentFailure[];
 }
 
 /** Expand `source` with core's own `<Query>`/`<Yaml>`/`<Json>` and `values` in scope. */
 function run(source: string, values: Record<string, unknown> = {}): Operation<Run> {
   return scoped(function* () {
     const observed: ErrorSegment[] = [];
+    const offered: ComponentFailure[] = [];
     yield* Component.around({
       *raise([segment], next) {
         observed.push(segment);
         return yield* next(segment);
+      },
+      *handleFailure([failure], next) {
+        offered.push(failure);
+        return yield* next(failure);
       },
     });
     const env: EvalEnv = { values };
@@ -71,8 +84,22 @@ function run(source: string, values: Record<string, unknown> = {}): Operation<Ru
     );
     const origin = { path: "doc.md", baseOffset: 0, baseLine: 1 };
     const segments = yield* expandSegments(scanSegments(source, origin), {}, {}, new Set());
-    return { output: renderSegments(segments), observed };
+    return { output: renderSegments(segments), observed, offered };
   });
+}
+
+/** Whether an error named `name` is reachable from `error` by its causes. */
+function reaches(error: unknown, name: string, seen = new Set<unknown>()): boolean {
+  if (error instanceof Error && error.name === name) {
+    return true;
+  }
+  if (typeof error !== "object" || error === null || seen.has(error)) {
+    return false;
+  }
+  seen.add(error);
+  return error instanceof Error && error.cause !== undefined
+    ? reaches(error.cause, name, seen)
+    : false;
 }
 
 /** Everything a run reported, as one string. */
@@ -90,13 +117,13 @@ function useFixture(): Operation<string> {
 }
 
 describe("Tier QRY — the two ordinary modes", () => {
-  const DATA = {
+  const DATA: Record<string, Json> = {
     name: "widget",
     count: 2,
     tags: ["a", "b"],
     nothing: null,
     off: false,
-    empty: [] as unknown[],
+    empty: [],
     nested: { inner: { deep: true } },
     quoted: '{"a":1}',
     lines: "first\nsecond {brace}",
@@ -290,26 +317,94 @@ describe("Tier QRY — what the expression may decode, and how many answers it m
 });
 
 describe("Tier QRY — what the engine can reach", () => {
-  it("Q3: the environment, the filesystem, the clock and a process are all absent", function* () {
-    const canaries = yield* run(
-      [
-        '<Query value={data} yq="strenv(QUERY_CANARY)" />',
-        `<Query value={data} yq='load("/query-canary.txt")' />`,
-        '<Query value={data} yq="now" />',
-        `<Query value={data} yq='"echo ran" | @sh' />`,
-        "",
-      ].join("\n\n"),
+  /**
+   * One host environment value, set for this case and removed with it.
+   *
+   * The canary has to be real: an environment read that answers nothing
+   * because nothing was there would discriminate nothing.
+   */
+  function useEnvironmentCanary(name: string, value: string): Operation<string> {
+    return resource(function* (provide) {
+      const before = Deno.env.get(name);
+      Deno.env.set(name, value);
+      yield* ensure(() => {
+        if (before === undefined) {
+          Deno.env.delete(name);
+        } else {
+          Deno.env.set(name, before);
+        }
+      });
+      yield* provide(value);
+    });
+  }
+
+  /** One actual readable file of this case's own, removed with its scope. */
+  function* useFileCanary(contents: string): Operation<string> {
+    const dir = yield* useFixture();
+    const file = join(dir, "query-canary.txt");
+    yield* writeTextFile(file, contents);
+    return file;
+  }
+
+  it("Q3: an environment read answers empty rather than the host's own value", function* () {
+    const canary = yield* useEnvironmentCanary("QUERY_CANARY", "host-visible-secret");
+    // The host really holds it, read the ordinary way.
+    expect(Deno.env.get("QUERY_CANARY")).toBe(canary);
+
+    const result = yield* run(
+      '<Query value={data} yq="strenv(QUERY_CANARY)" as="seen" />\n\n[{seen}]\n',
       { data: { a: 1 } },
     );
 
-    // An empty environment answers an environment read with an empty string
-    // rather than with the host's value.
-    expect(canaries.output).toContain('""');
-    expect(canaries.output).not.toContain("host-visible");
-    // The file and the clock are refusals, and neither binds anything.
-    const message = reported(canaries);
+    expect(reported(result)).toBe("");
+    // The empty environment answered, so what the binding holds is the empty
+    // string and not what this process has.
+    expect(result.output).toContain("[]");
+    expect(result.output).not.toContain("host-visible-secret");
+  });
+
+  it("Q3: loading an actual existing file refuses, and binds nothing", function* () {
+    const file = yield* useFileCanary("canary contents\n");
+
+    const result = yield* run(
+      `<Query value={data} yq='load("${file}")' as="loaded" />\n\n[{loaded}]\n`,
+      { data: { a: 1 } },
+    );
+
+    const message = reported(result);
     expect(message).toContain("could not evaluate");
-    expect(canaries.output).not.toContain("canary contents");
+    // The engine's own refusal is the cause, and the file's contents are
+    // nowhere in the document.
+    expect(reaches(result.offered[0]?.error, "YqError")).toBe(true);
+    expect(result.output).not.toContain("canary contents");
+    // Nothing was bound: the name is still unresolved text.
+    expect(result.output).toContain("[{loaded}]");
+  });
+
+  it("Q3: reading the clock refuses, and binds nothing", function* () {
+    const result = yield* run('<Query value={data} yq="now" as="when" />\n\n[{when}]\n', {
+      data: { a: 1 },
+    });
+
+    expect(reported(result)).toContain("could not evaluate");
+    expect(reaches(result.offered[0]?.error, "YqError")).toBe(true);
+    expect(result.output).toContain("[{when}]");
+  });
+
+  it("Q3: the disabled process operation refuses, runs nothing and binds nothing", function* () {
+    const dir = yield* useFixture();
+    const marker = join(dir, "system-ran.txt");
+
+    const result = yield* run(
+      `<Query value={data} yq='system("touch ${marker}")' as="ran" />\n\n[{ran}]\n`,
+      { data: { a: 1 } },
+    );
+
+    expect(reported(result)).toContain("could not evaluate");
+    expect(reaches(result.offered[0]?.error, "YqError")).toBe(true);
+    // No process ran: the marker the command would have created is absent.
+    expect(yield* exists(marker)).toBe(false);
+    expect(result.output).toContain("[{ran}]");
   });
 });
 
