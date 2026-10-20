@@ -61,6 +61,7 @@ import { Git } from "../src/composition/git-api.ts";
 import type { GitPushInvocation } from "../src/composition/git-api.ts";
 import type { GitPushOutcome } from "../src/composition/git-push-records.ts";
 import { PullRequestAPI } from "../src/composition/pull-request-api.ts";
+import { PullRequestOperations } from "../src/composition/pull-request-operations.ts";
 import { parseCompletePullRequestReadResult } from "../src/composition/pull-request-read-records.ts";
 import type { PullRequestReadResult } from "../src/composition/pull-request-read-records.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
@@ -1539,7 +1540,7 @@ const FIRST_URL = `${LOCATOR}/pull/1`;
 const SECOND_URL = `${LOCATOR}/pull/2`;
 
 describe("evidence reads inside one entry", () => {
-  it("Q14: outer handlers still compose over a restored snapshot", function* () {
+  it("Q14: a semantic and a transport handler both compose over a restored snapshot", function* () {
     const fixture = yield* useFixture();
     fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
     const counted = counters();
@@ -1558,18 +1559,20 @@ describe("evidence reads inside one entry", () => {
     const snapshot = JSON.stringify(retained[0]?.type === "yield" ? retained[0].result : undefined);
     const sent = fixture.store.requests.length;
 
-    // Two handlers above the entry's own transport, each transforming what it
-    // is answered with. Nothing below them is reached: the snapshot is history.
+    // One handler at each of the two ordinary layers an entry read composes
+    // through: the semantic lifecycle chain, and the transport chain beneath
+    // it. Each transforms what it is answered with. Nothing below either is
+    // reached on replay, because the snapshot is history.
     const order: string[] = [];
     const resumed = counters();
     const replayed = new InMemoryStream([...ran.events].filter(terminal));
     const again = yield* run(fixture, source, replayed, resumed, {
       root: undefined,
       *between(): Operation<void> {
-        yield* PullRequestAPI.around({
-          *read([url, options], next): Operation<PullRequestReadResult> {
-            order.push("outer");
-            const answered = yield* next(url, options);
+        yield* PullRequestOperations.around({
+          *read([invocation], next): Operation<PullRequestReadResult> {
+            order.push("semantic");
+            const answered = yield* next(invocation);
             return answered.kind === "reviews"
               ? { kind: "reviews", items: [...answered.items, reviewEvidence(91, "dismissed")] }
               : answered;
@@ -1577,7 +1580,7 @@ describe("evidence reads inside one entry", () => {
         });
         yield* PullRequestAPI.around({
           *read([url, options], next): Operation<PullRequestReadResult> {
-            order.push("inner");
+            order.push("transport");
             const answered = yield* next(url, options);
             return answered.kind === "reviews"
               ? { kind: "reviews", items: [...answered.items, reviewEvidence(92, "pending")] }
@@ -1587,10 +1590,12 @@ describe("evidence reads inside one entry", () => {
       },
     });
     expect(again.refusal).toBe(undefined);
-    // What the document bound is what the whole composition finished with.
+    // What the document bound is what the whole composition finished with, and
+    // both layers contributed to it.
     expect(again.output).toContain("reviews 3");
-    // In band order, and over a snapshot that was never asked for again.
-    expect(order).toEqual(["outer", "inner"]);
+    // The semantic layer is outside the transport layer, so it sees the read
+    // first and transforms the answer last.
+    expect(order).toEqual(["semantic", "transport"]);
     expect(fixture.store.requests.length).toBe(sent);
     const settled = reads(yield* replayed.readAll());
     expect(settled).toHaveLength(1);
@@ -1599,7 +1604,50 @@ describe("evidence reads inside one entry", () => {
     );
   });
 
-  it("Q15: a URL this deployment no longer allows refuses before the snapshot", function* () {
+  it("Q15: a semantic answer that never delegates admits and retains nothing", function* () {
+    const fixture = yield* useFixture();
+    fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
+    const counted = counters();
+    const source = [
+      `<PullRequest.Reviews url=${JSON.stringify(FIRST_URL)} as="reviews" />`,
+      "",
+      `reviews {reviews.length}`,
+      "",
+    ].join("\n");
+
+    // An ordinary lifecycle handler that answers the read itself. This is the
+    // supported surface, and what it answers with has answered the document.
+    let asked = 0;
+    const stream = new InMemoryStream();
+    const ran = yield* run(fixture, source, stream, counted, {
+      root: undefined,
+      *between(): Operation<void> {
+        yield* PullRequestOperations.around({
+          // deno-lint-ignore require-yield
+          *read(): Operation<PullRequestReadResult> {
+            asked += 1;
+            return {
+              kind: "reviews",
+              items: [reviewEvidence(81, "commented"), reviewEvidence(82, "approved")],
+            };
+          },
+        });
+      },
+    });
+    expect(ran.refusal).toBe(undefined);
+    expect(asked).toBe(1);
+    // The handler's own two items, validated by the shared body like any other
+    // final answer.
+    expect(ran.output).toContain("reviews 2");
+    // Nothing beneath it was reached: no transport was admitted, no
+    // configuration was read, no session opened, and this entry retained no
+    // read at all.
+    expect(reads(yield* stream.readAll())).toEqual([]);
+    expect(fixture.store.requests).toEqual([]);
+    expect(counted.env).toEqual([]);
+  });
+
+  it("Q16: a URL this deployment no longer allows refuses before the snapshot", function* () {
     const fixture = yield* useFixture();
     fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
     const counted = counters();
@@ -1629,7 +1677,7 @@ describe("evidence reads inside one entry", () => {
     expect(reads(yield* replayed.readAll())).toHaveLength(1);
   });
 
-  it("Q16: two concurrent reads completing in reverse order keep their own questions", function* () {
+  it("Q17: two concurrent reads completing in reverse order keep their own questions", function* () {
     const fixture = yield* useFixture();
     fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
     fixture.evidence.conversation = [comment(21, "one"), comment(22, "two")];
@@ -1695,7 +1743,7 @@ describe("evidence reads inside one entry", () => {
     expect(reads(yield* replayed.readAll())).toHaveLength(2);
   });
 
-  it("Q17: a read a handler starts for itself reaches no occurrence's callback", function* () {
+  it("Q18: a read a handler starts for itself reaches no occurrence's callback", function* () {
     const fixture = yield* useFixture();
     fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
     fixture.evidence.conversation = [comment(21, "one")];
@@ -1743,7 +1791,7 @@ describe("evidence reads inside one entry", () => {
 });
 
 describe("acknowledgement and failure", () => {
-  it("Q18: a request this journal refused asks the Git host nothing", function* () {
+  it("Q19: a request this journal refused asks the Git host nothing", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
     const backing = new InMemoryStream();
@@ -1763,7 +1811,7 @@ describe("acknowledgement and failure", () => {
     expect(closedRoot(held)).toBe(false);
   });
 
-  it("Q19: a created pull request whose outcome was refused is adopted, never made twice", function* () {
+  it("Q20: a created pull request whose outcome was refused is adopted, never made twice", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
     const source = entry({ lines: [...upsert(), QUESTION] });
@@ -1796,7 +1844,7 @@ describe("acknowledgement and failure", () => {
     expect(outcomes(settled)).toHaveLength(2);
   });
 
-  it("Q20: an entry cancelled with its call in flight retains the request alone", function* () {
+  it("Q21: an entry cancelled with its call in flight retains the request alone", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
     const prefix = yield* cut(
@@ -1817,7 +1865,7 @@ describe("acknowledgement and failure", () => {
 });
 
 describe("what an entry's assembly reaches", () => {
-  it("Q21: building the capability declares six names and acquires nothing", function* () {
+  it("Q22: building the capability declares six names and acquires nothing", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
     yield* scoped(function* (): Operation<void> {
@@ -1849,7 +1897,7 @@ describe("what an entry's assembly reaches", () => {
     expect(fixture.store.requests).toEqual([]);
   });
 
-  it("Q22: an entry with no managed root reads an allowed URL and opens nothing", function* () {
+  it("Q23: an entry with no managed root reads an allowed URL and opens nothing", function* () {
     const fixture = yield* useFixture();
     fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
     const counted = counters();
@@ -1887,7 +1935,7 @@ describe("what an entry's assembly reaches", () => {
 });
 
 describe("a retained read this entry cannot account for", () => {
-  it("Q23: every tampered read description refuses before anything replays", function* () {
+  it("Q24: every tampered read description refuses before anything replays", function* () {
     const fixture = yield* useFixture();
     fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
     const counted = counters();
@@ -1965,7 +2013,7 @@ describe("a retained read this entry cannot account for", () => {
     }
   });
 
-  it("Q24: an ordinary failed read is admitted, and replays as the failure it was", function* () {
+  it("Q25: an ordinary failed read is admitted, and replays as the failure it was", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
     // The service cannot answer, so this read is an ordinary failure rather
