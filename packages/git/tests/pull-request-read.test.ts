@@ -12,7 +12,17 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { call, race, resource, scoped, suspend, until, withResolvers } from "effection";
+import {
+  call,
+  ensure,
+  race,
+  resource,
+  scoped,
+  spawn,
+  suspend,
+  until,
+  withResolvers,
+} from "effection";
 import { exists } from "@effectionx/fs";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -33,12 +43,21 @@ import {
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { dropRootClose } from "./support/replay.ts";
-import { raised, runWorkflowDocument } from "./support/composition.ts";
+import { gitPluginAdmissions, raised, runWorkflowDocument } from "./support/composition.ts";
 import { gitHubSource } from "../src/deno/composition/github.ts";
 import { useGitHubPullRequestReads } from "../src/deno/composition/pull-request-reads.ts";
-import { PULL_REQUEST_READ } from "../src/deno/composition/pull-request-operations.ts";
+import {
+  PULL_REQUEST_READ,
+  useRetainedPullRequestOperations,
+  useRetainedPullRequestReads,
+} from "../src/deno/composition/pull-request-operations.ts";
+import { PullRequestReadExecution } from "../src/composition/pull-request-read-execution.ts";
+import type { AdmittedPullRequestRead } from "../src/composition/pull-request-read-execution.ts";
 import { collect, execute, inlineSource, isJsonObject } from "@executablemd/core";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { executeInstalled } from "@executablemd/core/host";
+import { DurablePersistenceError, InMemoryStream } from "@executablemd/durable-streams";
+import type { DurableStream } from "@executablemd/durable-streams";
+import { retainedWorkflowInstallation } from "../../workflow/src/run.ts";
 import { readPullRequestEvidence } from "../src/deno/composition/pull-request-evidence.ts";
 import type { EvidenceReading } from "../src/deno/composition/pull-request-evidence.ts";
 import type { GitHubSource } from "../src/deno/composition/github.ts";
@@ -238,6 +257,216 @@ function headOf(reading: EvidenceReading): string | undefined {
   return reading.state === "read" && reading.result.kind === "checks"
     ? reading.result.headSha
     : undefined;
+}
+
+/** The run the in-memory cases retain under. */
+const RUN = Object.freeze({ runId: "read-run", bundleHash: "e".repeat(64) });
+
+/**
+ * One workflow-profile read over an in-memory journal.
+ *
+ * The database cases above answer *what* a run retains. These answer *when* it
+ * does, which needs the append itself to be observable — and an in-memory
+ * stream publishes that moment while a `WorkflowRunDatabase` does not. A read
+ * needs no Workspace of its own, so there is nothing else to assemble: no
+ * checkout, no working directory, no filesystem.
+ *
+ * `front` installs middleware *ahead* of the GitHub adapter, where a handler
+ * sees a request before the adapter does and can transform what comes back.
+ */
+function retainedRead(
+  stream: DurableStream,
+  source: string,
+  access: GitHubSource,
+  front?: () => Operation<void>,
+): Operation<Json> {
+  return scoped(function* () {
+    const git = yield* gitPluginAdmissions();
+    if (front !== undefined) {
+      yield* front();
+    }
+    yield* useRetainedPullRequestOperations();
+    yield* useRetainedPullRequestReads();
+    yield* useGitHubPullRequestReads({ access, configuration: { allowed: [SUBJECT_REPO] } });
+    return yield* collect(
+      yield* executeInstalled({ ...inlineSource(source), stream }, [
+        retainedWorkflowInstallation(RUN),
+        git,
+      ]),
+    );
+  });
+}
+
+/** Every evidence read this journal holds, in append order. */
+function readYields(events: DurableEvent[]): DurableEvent[] {
+  return events.filter(
+    (event) => event.type === "yield" && event.description.type === PULL_REQUEST_READ,
+  );
+}
+
+/** Whether the root settled, which a durability failure leaves unwritten. */
+function closedRoot(events: DurableEvent[]): boolean {
+  return events.some((event) => event.type === "close" && event.coroutineId === "root");
+}
+
+/** Record the moment one evidence read becomes history. */
+function noteAppends(stream: InMemoryStream, order: string[]): void {
+  stream.onAppend = (event) => {
+    if (event.type === "yield" && event.description.type === PULL_REQUEST_READ) {
+      order.push("appended");
+    }
+  };
+}
+
+/** A journal whose backend refuses exactly the read's own append. */
+function refusingReadAppends(inner: InMemoryStream, failure: Error): DurableStream {
+  return {
+    readAll: () => inner.readAll(),
+    *append(event: DurableEvent): Operation<void> {
+      if (event.type === "yield" && event.description.type === PULL_REQUEST_READ) {
+        throw failure;
+      }
+      yield* inner.append(event);
+    },
+  };
+}
+
+/**
+ * An access session whose teardown waits to be let go.
+ *
+ * The gate is what makes the ordering observable: while cleanup is held the
+ * read has not been acknowledged and the element has not returned, which is a
+ * fact about this boundary rather than about how long anything took. `closing`
+ * resolves the moment teardown begins, so no case waits on elapsed time.
+ */
+interface GatedAccess {
+  readonly source: GitHubSource;
+  readonly closing: Operation<void>;
+  release(): void;
+}
+
+function gatedAccess(access: GitHubAccess, order: string[], cleanupFailure?: Error): GatedAccess {
+  const closing = withResolvers<void>();
+  const held = withResolvers<void>();
+  return {
+    closing: closing.operation,
+    release: () => held.resolve(),
+    source: {
+      endpoint: access.endpoint,
+      open(): Operation<GitHubAccess> {
+        return resource(function* (provide) {
+          // Registered before the session exists, and asynchronous, so the
+          // scope that owns it waits for the gate before it is considered
+          // closed.
+          yield* ensure(function* () {
+            order.push("closing");
+            closing.resolve();
+            yield* held.operation;
+            order.push("closed");
+            if (cleanupFailure !== undefined) {
+              throw cleanupFailure;
+            }
+          });
+          order.push("open");
+          yield* provide(access);
+        });
+      },
+    },
+  };
+}
+
+/** An access session whose teardown fails immediately. */
+function failingCleanup(access: GitHubAccess, order: string[], failure: Error): GitHubSource {
+  return {
+    endpoint: access.endpoint,
+    open(): Operation<GitHubAccess> {
+      return resource(function* (provide) {
+        yield* ensure(function* () {
+          order.push("closed");
+          throw failure;
+        });
+        order.push("open");
+        yield* provide(access);
+      });
+    },
+  };
+}
+
+/**
+ * Hand the retention a received envelope this case chose.
+ *
+ * Installed ahead of the retention, which is the implementation slot, and it
+ * delegates the admitted read untouched — only the operation that performs it
+ * is replaced. So what the retention validates is a provider answer, reached
+ * through the ordinary transport seam rather than by reaching into the effect.
+ */
+function answering(
+  change: (result: PullRequestReadResult) => PullRequestReadResult,
+): () => Operation<void> {
+  return function* (): Operation<void> {
+    yield* PullRequestReadExecution.around({
+      *perform(
+        [admitted, transport]: [AdmittedPullRequestRead, () => Operation<PullRequestReadResult>],
+        next,
+      ): Operation<PullRequestReadResult> {
+        return yield* next(admitted, function* (): Operation<PullRequestReadResult> {
+          return change(yield* transport());
+        });
+      },
+    });
+  };
+}
+
+/** The same evidence, carrying one member its contract does not name. */
+function withExtra(
+  result: PullRequestReadResult,
+  extra: Record<string, Json>,
+): PullRequestReadResult {
+  return Object.assign({}, result, extra);
+}
+
+/** The same checks envelope, with one item's head moved to another commit. */
+function withMovedHead(
+  result: PullRequestReadResult,
+  kind: "check-run" | "commit-status",
+  headSha: string,
+): PullRequestReadResult {
+  if (result.kind !== "checks") {
+    throw new Error("only a checks envelope has item heads to move");
+  }
+  return Object.assign({}, result, {
+    items: result.items.map((item) =>
+      item.kind === kind ? Object.assign({}, item, { headSha }) : item,
+    ),
+  });
+}
+
+/** One retained read's value, rewritten, with the root's own close removed. */
+function retainedAs(
+  events: DurableEvent[],
+  change: (value: Record<string, Json>) => Json,
+): DurableEvent[] {
+  return events
+    .filter((event) => !(event.type === "close" && event.coroutineId === "root"))
+    .map((event) => {
+      if (event.type !== "yield" || event.description.type !== PULL_REQUEST_READ) {
+        return event;
+      }
+      const result = event.result;
+      if (result.status !== "ok" || !isJsonObject(result.value)) {
+        return event;
+      }
+      return { ...event, result: { status: "ok" as const, value: change(result.value) } };
+    });
+}
+
+/** The items a retained read holds, as the journal holds them. */
+function retainedItems(events: DurableEvent[]): Json {
+  const read = readYields(events)[0];
+  if (read?.type !== "yield" || read.result.status !== "ok" || !isJsonObject(read.result.value)) {
+    return null;
+  }
+  return read.result.value.items ?? null;
 }
 
 describe("Tier PRR — pull-request evidence", () => {
@@ -1395,6 +1624,60 @@ describe("Tier PRR — pull-request evidence", () => {
     expect(events).toEqual(["open", "close"]);
   });
 
+  /**
+   * The same claim, in the order it has to hold in.
+   *
+   * "Opened and eventually closed" is satisfied by a read that is acknowledged
+   * while its session is still open, so the gate is what separates the two:
+   * while teardown is held, nothing has been appended and the element has not
+   * returned, and releasing it produces close → append → return. Both outcomes
+   * are measured, because a refusal is published through the same boundary a
+   * success is.
+   */
+  it("PRR24a: an admitted read is appended only after its session has closed", function* () {
+    for (const outcome of ["success", "refusal"] as const) {
+      const host =
+        outcome === "success"
+          ? server({ [REVIEWS]: { body: "[]" } })
+          : server({ [REVIEWS]: { status: 500, body: "{}" } });
+      const order: string[] = [];
+      const gate = gatedAccess(host.access, order);
+      const stream = new InMemoryStream();
+      noteAppends(stream, order);
+
+      let returned = false;
+      const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n\n{reviews.length} reviews\n`;
+
+      try {
+        const task = yield* spawn(function* () {
+          yield* raised(retainedRead(stream, document, gate.source));
+          returned = true;
+        });
+
+        yield* gate.closing;
+        // Held: the transport is over, and nothing has been acknowledged.
+        expect(order).toEqual(["open", "closing"]);
+        expect(returned).toBe(false);
+        expect(readYields(stream.snapshot())).toEqual([]);
+
+        gate.release();
+        yield* task;
+      } finally {
+        // Released whatever happened, so a failed assertion fails rather than
+        // leaving a suite waiting on a gate nobody will open.
+        gate.release();
+      }
+
+      expect(order).toEqual(["open", "closing", "closed", "appended"]);
+      expect(returned).toBe(true);
+
+      // One read either way, and the outcome the collection actually had.
+      const retained = readYields(stream.snapshot());
+      expect(retained).toHaveLength(1);
+      expect(retained[0]?.result?.status).toBe(outcome === "success" ? "ok" : "err");
+    }
+  });
+
   it("PRR26: an interruption in flight unwinds and retains no result", function* () {
     const entered = withResolvers<void>();
     const sessions: string[] = [];
@@ -1455,5 +1738,287 @@ describe("Tier PRR — pull-request evidence", () => {
       expect(String(output)).toContain("1 reviews");
       expect(working.requests).toHaveLength(1);
     });
+  });
+
+  /**
+   * And the caller stays unjoined until that unwinding is actually finished.
+   *
+   * Cancellation is the one outcome with nothing to publish, so what has to be
+   * proved is the absence of a fabricated one *and* that teardown was joined
+   * rather than merely started. The gate supplies both: the halt does not
+   * settle while cleanup is held, and no read reaches the journal at all.
+   */
+  it("PRR26a: a cancelled read joins its held cleanup and publishes nothing", function* () {
+    const entered = withResolvers<void>();
+    const order: string[] = [];
+    const access: GitHubAccess = {
+      endpoint: ENDPOINT,
+      // deno-lint-ignore require-yield
+      *token(): Operation<string | undefined> {
+        return "t";
+      },
+      *send(): Operation<GitHubHttpResponse> {
+        entered.resolve();
+        yield* suspend();
+        throw new Error("unreachable");
+      },
+    };
+    const gate = gatedAccess(access, order);
+    const stream = new InMemoryStream();
+    noteAppends(stream, order);
+    const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n`;
+
+    let halted = false;
+    try {
+      const task = yield* spawn(() => raised(retainedRead(stream, document, gate.source)));
+      yield* entered.operation;
+
+      const halting = yield* spawn(function* () {
+        yield* task.halt();
+        halted = true;
+      });
+
+      yield* gate.closing;
+      // The halt has reached this session's teardown and is waiting on it.
+      expect(halted).toBe(false);
+      expect(order).toEqual(["open", "closing"]);
+
+      gate.release();
+      yield* halting;
+    } finally {
+      gate.release();
+    }
+
+    expect(halted).toBe(true);
+    expect(order).toEqual(["open", "closing", "closed"]);
+    // Cancellation stays cancellation: no success, and no failed read either.
+    expect(readYields(stream.snapshot())).toEqual([]);
+  });
+
+  it("PRR32: a received envelope carrying one member more retains the failure", function* () {
+    const host = server({
+      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
+    });
+    const stream = new InMemoryStream();
+    const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n\n{reviews.length} reviews\n`;
+
+    const refused = yield* raised(
+      retainedRead(
+        stream,
+        document,
+        gitHubSource(host.access),
+        answering((result) => withExtra(result, { cursor: "page-2" })),
+      ),
+    );
+
+    // The whole received value is the subject. Serializing first would have
+    // written an envelope with the extra member dropped and called it a
+    // success — the one answer this boundary must never give.
+    expect(String(refused)).toContain("not the evidence that read produces");
+
+    const retained = readYields(stream.snapshot());
+    expect(retained).toHaveLength(1);
+    expect(retained[0]?.result?.status).toBe("err");
+    expect(JSON.stringify(retained)).not.toContain('"items"');
+    expect(JSON.stringify(retained)).not.toContain("cursor");
+  });
+
+  it("PRR33: every check item states the head the envelope names", function* () {
+    const checks = {
+      [PULL]: { body: JSON.stringify(pullRequestPayload()) },
+      [RUNS]: {
+        body: JSON.stringify({
+          check_runs: [
+            {
+              id: 4,
+              head_sha: HEAD,
+              name: "test-deno",
+              status: "completed",
+              conclusion: "success",
+              html_url: null,
+              started_at: null,
+              completed_at: null,
+              output: { title: null, summary: null, text: null },
+            },
+          ],
+        }),
+      },
+      [STATUS]: {
+        body: JSON.stringify({
+          sha: HEAD,
+          statuses: [
+            {
+              id: 5,
+              context: "deploy",
+              state: "success",
+              description: null,
+              target_url: null,
+              created_at: "2026-08-24T04:00:00Z",
+              updated_at: "2026-08-24T04:00:00Z",
+            },
+          ],
+        }),
+      },
+    };
+    const document = `<PullRequest.Checks url="${SUBJECT_URL}" as="checks" />\n\n{checks.length} checks\n`;
+    const elsewhere = "c".repeat(40);
+
+    // The control first: one envelope, two item kinds, every head the head the
+    // envelope names. If this did not pass, the two refusals below would prove
+    // nothing about heads.
+    const accepted = yield* retainedRead(
+      new InMemoryStream(),
+      document,
+      gitHubSource(server(checks).access),
+    );
+    expect(String(accepted)).toContain("2 checks");
+
+    // Then each item kind in turn, moved to another commit.
+    for (const kind of ["check-run", "commit-status"] as const) {
+      const stream = new InMemoryStream();
+      const refused = yield* raised(
+        retainedRead(
+          stream,
+          document,
+          gitHubSource(server(checks).access),
+          answering((result) => withMovedHead(result, kind, elsewhere)),
+        ),
+      );
+      expect(String(refused)).toContain("not the evidence that read produces");
+      expect(readYields(stream.snapshot())[0]?.result?.status).toBe("err");
+      expect(JSON.stringify(stream.snapshot())).not.toContain(elsewhere);
+    }
+  });
+
+  it("PRR34: a retained envelope that is not this evidence appends no replacement", function* () {
+    const host = server({
+      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
+    });
+    const first = new InMemoryStream();
+    const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n\n{reviews.length} reviews\n`;
+
+    const output = yield* retainedRead(first, document, gitHubSource(host.access));
+    expect(String(output)).toContain("1 reviews");
+
+    // The same history, with the retained envelope carrying one member more.
+    // Nothing supported produces this, which is the point: what a restoration
+    // reads back is parsed rather than believed.
+    const damaged = new InMemoryStream(
+      retainedAs(first.snapshot(), (value) => Object.assign({}, value, { cursor: "page-2" })),
+    );
+    const refused = yield* raised(retainedRead(damaged, document, gitHubSource(host.access)));
+
+    expect(String(refused)).toContain("not the evidence that read produces");
+    // One read in the history, still the damaged one: a restoration that
+    // refuses appends no replacement and asks the provider nothing.
+    expect(readYields(damaged.snapshot())).toHaveLength(1);
+    expect(host.requests).toHaveLength(1);
+  });
+
+  it("PRR35: an outer transformation of the final answer binds no array", function* () {
+    const host = server({
+      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
+    });
+    const stream = new InMemoryStream();
+    const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n\n{reviews.length} reviews\n`;
+
+    const refused = yield* raised(
+      retainedRead(stream, document, gitHubSource(host.access), function* (): Operation<void> {
+        // Ahead of the adapter, so it delegates the read and then transforms
+        // what the whole composition answers with — which is the value the
+        // element binds, and not the snapshot anything retained.
+        yield* PullRequestAPI.around({
+          *read([url, options], next): Operation<PullRequestReadResult> {
+            return withExtra(yield* next(url, options), { cursor: "page-2" });
+          },
+        });
+      }),
+    );
+
+    expect(String(refused)).toContain("what this element was finally answered with");
+
+    // The provider's own answer was acknowledged before that transformation
+    // happened, and it stays exactly as it was recorded.
+    const retained = readYields(stream.snapshot());
+    expect(retained).toHaveLength(1);
+    expect(retained[0]?.result?.status).toBe("ok");
+    expect(JSON.stringify(retainedItems(stream.snapshot()))).toContain("ship it");
+    expect(JSON.stringify(retained)).not.toContain("cursor");
+  });
+
+  it("PRR36: a cleanup failure publishes nothing and fences what follows", function* () {
+    const broken = new Error("the read's access session could not be closed");
+    const other = "https://github.com/octo/project/pull/8";
+
+    for (const outcome of ["success", "refusal"] as const) {
+      // A second read after the first is the sentinel: a fence that only
+      // withheld the first read's own outcome would let this one append.
+      for (const printing of [false, true]) {
+        const host =
+          outcome === "success"
+            ? server({
+                [REVIEWS]: { body: "[]" },
+                "/repos/octo/project/pulls/8/reviews": { body: "[]" },
+              })
+            : server({
+                [REVIEWS]: { status: 500, body: "{}" },
+                "/repos/octo/project/pulls/8/reviews": { body: "[]" },
+              });
+        const order: string[] = [];
+        const stream = new InMemoryStream();
+        noteAppends(stream, order);
+        const read = [
+          `<PullRequest.Reviews url="${SUBJECT_URL}" as="a" />`,
+          `<PullRequest.Reviews url="${other}" as="b" />`,
+          "",
+        ].join("\n");
+        const document = printing ? `<PrintErrors>\n${read}</PrintErrors>\n` : read;
+
+        const failure = yield* raised(
+          retainedRead(stream, document, failingCleanup(host.access, order, broken)),
+        );
+
+        // Teardown raised before anything held was acted on, so neither the
+        // success nor the refusal the attempt had already decided is published.
+        expect(failure).toBeDefined();
+        expect(order).toEqual(["open", "closed"]);
+        expect(readYields(stream.snapshot())).toEqual([]);
+        // The later read never began, and the root never settled: a printing
+        // region does not make a fatal failure the document's own outcome.
+        expect(host.requests.every((request) => !request.url.includes("/pulls/8/"))).toBe(true);
+        expect(closedRoot(stream.snapshot())).toBe(false);
+      }
+    }
+  });
+
+  it("PRR37: a refused read append is the first failure, and nothing follows it", function* () {
+    const backend = new Error("the journal backend refused this append");
+    const other = "https://github.com/octo/project/pull/8";
+    const host = server({
+      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
+      "/repos/octo/project/pulls/8/reviews": { body: "[]" },
+    });
+    const backing = new InMemoryStream();
+    const document = [
+      `<PullRequest.Reviews url="${SUBJECT_URL}" as="a" />`,
+      `<PullRequest.Reviews url="${other}" as="b" />`,
+      "",
+      "{a.length} and {b.length}",
+      "",
+    ].join("\n");
+
+    const failure = yield* raised(
+      retainedRead(refusingReadAppends(backing, backend), document, gitHubSource(host.access)),
+    );
+
+    // The read happened and the journal refused it. The persistence failure is
+    // what the run reports, carrying the backend's own error as its cause.
+    expect(failure).toBeInstanceOf(DurablePersistenceError);
+    expect(failure instanceof Error ? failure.cause : undefined).toBe(backend);
+    // No binding, nothing published, no compensating close, and the read after
+    // it never reached a provider.
+    expect(readYields(backing.snapshot())).toEqual([]);
+    expect(closedRoot(backing.snapshot())).toBe(false);
+    expect(host.requests.every((request) => !request.url.includes("/pulls/8/"))).toBe(true);
   });
 });

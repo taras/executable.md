@@ -27,7 +27,10 @@ import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { COMPOSITION_ORIGIN } from "../definitions.ts";
 import { PullRequestReadError } from "../errors.ts";
-import { pullRequestReadResultJson } from "../pull-request-read-records.ts";
+import {
+  parseCompletePullRequestReadResult,
+  pullRequestReadResultJson,
+} from "../pull-request-read-records.ts";
 import { canonicalPullRequestUrl, pullRequestProviderName } from "../pull-request-target.ts";
 import type { PullRequestReadKind } from "../pull-request-read-records.ts";
 import { PullRequestOperations } from "../pull-request-operations.ts";
@@ -193,7 +196,21 @@ function read(kind: PullRequestReadKind, element: string): FunctionComponent {
           "asked for.",
       );
     }
-    return pullRequestReadResultJson(result);
+    // The answer as the whole composition finished it, which is not necessarily
+    // the answer a provider gave: semantic and transport middleware unwind
+    // before this point and may transform or synthesize what arrives here. So
+    // the complete value is read once more at the boundary that binds it — an
+    // invalid one binds no array, and a provider snapshot this run already
+    // acknowledged stays exactly as it was recorded.
+    const evidence = parseCompletePullRequestReadResult(result, kind);
+    if (evidence === undefined) {
+      throw new PullRequestReadError(
+        "protocol",
+        element,
+        "what this element was finally answered with is not the evidence that read produces.",
+      );
+    }
+    return pullRequestReadResultJson(evidence);
   };
 }
 
