@@ -16,7 +16,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { scoped, until } from "effection";
 import { join } from "node:path";
 import { utimes } from "node:fs/promises";
-import { lstat } from "@effectionx/fs";
+import { lstat, readdir } from "@effectionx/fs";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import { canonicalJson } from "@executablemd/workflow";
 import { COMPOSITION_ORIGIN } from "../src/composition/definitions.ts";
@@ -832,6 +832,51 @@ describe("GO5 — pages are bounded, complete, and about one observation", () =>
     // whole patch rather than a prefix of it.
     expect([...(windows[0] ?? "")]).toHaveLength(70000);
     expect(whole).toBe(fixture.output("diff", "--no-ext-diff", "--no-textconv", "--no-color"));
+  });
+
+  it("keeps generated fixture commits free of automatic maintenance", function* () {
+    const fixture = yield* useGeneratedFixture(1002);
+    const directory = join(fixture.root, ".git", "objects", "pack");
+    const packs = function* (): Operation<string[]> {
+      return (yield* readdir(directory)).filter((name) => name.endsWith(".pack"));
+    };
+
+    expect(yield* packs()).toEqual([]);
+    const counted = /^count: (\d+)$/m.exec(fixture.run("count-objects", "-v"));
+    expect(counted).not.toBe(null);
+    expect(Number(counted?.[1])).toBeGreaterThanOrEqual(1002);
+
+    // The loose-object task alone, in the foreground, so what a commit starts
+    // automatically is this command's own work rather than a detached writer's.
+    const task = [
+      "-c",
+      "maintenance.strategy=gc",
+      "-c",
+      "maintenance.gc.enabled=false",
+      "-c",
+      "maintenance.loose-objects.enabled=true",
+      "-c",
+      "maintenance.autoDetach=false",
+      "-c",
+      "gc.autoDetach=false",
+    ];
+
+    fixture.run(...task, "commit", "--allow-empty", "-m", "maintenance-disabled");
+    expect(yield* packs()).toEqual([]);
+
+    // The same corpus and the same command with the policy overridden for this
+    // one command, which is what proves the empty set above was the policy.
+    fixture.run(
+      ...task,
+      "-c",
+      "maintenance.auto=true",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "maintenance-enabled-control",
+    );
+    const written = (yield* packs()).filter((name) => name.startsWith("loose-"));
+    expect(written.length).toBeGreaterThanOrEqual(1);
   });
 });
 
