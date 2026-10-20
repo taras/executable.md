@@ -19,7 +19,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Err, ensure, Ok, scoped } from "effection";
+import { Err, ensure, Ok, scoped, spawn, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
@@ -443,7 +443,7 @@ describe("Tier OW — owner-specified external Git-host reconciliation", () => {
     expect(second.constructions).toBe(0);
   });
 
-  it("OW6: attempt resources survive both phases and close before publication", function* () {
+  it("OW6: attempt resources survive both phases, and a held cleanup holds publication", function* () {
     const stream = new InMemoryStream();
     const order: string[] = [];
     stream.onAppend = (event) => {
@@ -464,26 +464,58 @@ describe("Tier OW — owner-specified external Git-host reconciliation", () => {
       },
     );
 
-    const seen = yield* runOwned({
-      stream,
-      provider: host.provider,
-      *resource(): Operation<void> {
-        order.push("opened");
-        yield* ensure(function* () {
-          order.push("closed");
-        });
-      },
-      validate: () => {
-        order.push(`validate:${order.includes("closed") ? "closed" : "open"}`);
-      },
+    // Two explicit signals and no elapsed time anywhere: the attempt says when
+    // its teardown has begun, and this row says when it may finish.
+    const began = withResolvers<void>();
+    const release = withResolvers<void>();
+    // Armed before anything waits on it, so an assertion that fails below
+    // cannot leave the attempt stranded in a cleanup nobody will release.
+    yield* ensure(() => release.resolve());
+
+    const seen = attempt();
+    let completed = false;
+    const caller = yield* spawn(function* (): Operation<void> {
+      yield* runOwned({
+        stream,
+        seen,
+        provider: host.provider,
+        *resource(): Operation<void> {
+          order.push("opened");
+          yield* ensure(function* (): Operation<void> {
+            began.resolve();
+            yield* release.operation;
+            order.push("closed");
+          });
+        },
+        validate: () => {
+          order.push(`validate:${order.includes("closed") ? "closed" : "open"}`);
+        },
+      });
+      completed = true;
     });
 
+    yield* began.operation;
+
+    // Held here, after the whole reconciliation and before its teardown has
+    // finished. Nothing has been published and the caller has not come back:
+    // acknowledgement is downstream of cleanup rather than racing it, so a
+    // reader of this journal can never see a completion whose resources were
+    // still closing.
+    expect(gitHostYields(stream.snapshot())).toEqual([]);
+    expect(order).toEqual(["opened", "observe:open", "perform:open", "validate:open"]);
+    expect(completed).toBe(false);
+    expect(seen.records).toEqual([]);
+
+    release.resolve();
+    yield* caller;
+
+    expect(completed).toBe(true);
     expect(seen.failures).toEqual([]);
+    expect(seen.records).toHaveLength(1);
     // One resource, opened once around a whole reconciliation: what observe
     // opened is still open when perform runs, and the validation that decides
     // whether anything may be published runs while it is too. Teardown is
-    // joined before the append, so publication acknowledges only work whose
-    // resources have finished.
+    // joined before the append, and the caller is answered only after it.
     expect(order).toEqual([
       "opened",
       "observe:open",
