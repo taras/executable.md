@@ -163,6 +163,7 @@ const DENO_ADAPTER: readonly string[] = [
   "src/deno/composition/checkout-paths.ts",
   "src/deno/composition/provider.ts",
   "src/deno/composition/pull-request-operations.ts",
+  "src/deno/composition/pull-request-read-retention.ts",
   "src/deno/composition/pull-request.ts",
   "src/deno/composition/push.ts",
   "src/deno/composition/refusals.ts",

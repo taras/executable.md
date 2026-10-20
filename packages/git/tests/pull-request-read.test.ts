@@ -1660,7 +1660,7 @@ describe("Tier PRR — pull-request evidence", () => {
   });
 
   /**
-   * The same claim, in the order it has to hold in.
+   * The same property, in the order it has to hold in.
    *
    * "Opened and eventually closed" is satisfied by a read that is acknowledged
    * while its session is still open, so the gate is what separates the two:
