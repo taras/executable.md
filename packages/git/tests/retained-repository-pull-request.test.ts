@@ -43,11 +43,11 @@ import {
 } from "effection";
 import type { Operation, WithResolvers } from "effection";
 import { fromReadable } from "@effectionx/node";
-import { rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, symlink } from "node:fs/promises";
 import process from "node:process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,6 +62,7 @@ import type { GitPushInvocation } from "../src/composition/git-api.ts";
 import type { GitPushOutcome } from "../src/composition/git-push-records.ts";
 import { PullRequestAPI } from "../src/composition/pull-request-api.ts";
 import { PullRequestOperations } from "../src/composition/pull-request-operations.ts";
+import type { PullRequestResult } from "../src/composition/pull-request-records.ts";
 import { parseCompletePullRequestReadResult } from "../src/composition/pull-request-read-records.ts";
 import type { PullRequestReadResult } from "../src/composition/pull-request-read-records.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
@@ -78,6 +79,8 @@ import { replRepositoryInstallation } from "../src/deno/retained-repository/prov
 import { admitReplRepositoryHistory } from "../src/retained-repository/admission.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect-type.ts";
+import { parseGitHostReconciliationRecord } from "../src/git-host/records.ts";
+import { parsePullRequestInputs } from "../src/composition/pull-request-records.ts";
 import { GITHUB_PULL_REQUESTS_ENV } from "../src/deno/composition/pull-request-configuration.ts";
 import {
   parseReplPullRequestRequestRecord,
@@ -188,7 +191,7 @@ function useFixture(): Operation<Fixture> {
     yield* until(mkdir(seed, { recursive: true }));
     yield* git.run(["init", "--bare", "-b", "main", origin], root);
     yield* git.run(["init", "-b", "main", seed], root);
-    yield* until(writeFile(join(seed, "seed.md"), "seed\n"));
+    yield* writeTextFile(join(seed, "seed.md"), "seed\n");
     yield* git.run(["add", "seed.md"], seed);
     yield* git.run(["commit", "-m", "seed"], seed);
     yield* git.run(["push", origin, "main:refs/heads/main"], seed);
@@ -291,10 +294,17 @@ function useGitHub(
       server.closeAllConnections();
       yield* until(new Promise<void>((resolve) => server.close(() => resolve())));
     });
-    const address = server.address() as AddressInfo;
-    base.endpoint = `http://127.0.0.1:${address.port}`;
+    base.endpoint = `http://127.0.0.1:${listeningPort(server.address())}`;
     yield* provide(base.endpoint);
   });
+}
+
+/** The port a listening server reports, or the failure that it reports none. */
+function listeningPort(address: string | AddressInfo | null): number {
+  if (address === null || typeof address === "string") {
+    throw new Error("this listener reported no address with a port");
+  }
+  return address.port;
 }
 
 /** This suite's answer for one of the five evidence routes, or nothing. */
@@ -439,6 +449,93 @@ function checkRun(id: number, name: string): Record<string, unknown> {
     completed_at: "2026-10-20T00:01:00Z",
     output: { title: name, summary: "ok", text: null },
   };
+}
+
+/** What a substituted credential broker reported about its own lifetime. */
+interface BlockingLogin {
+  /** Resolves once the broker is running and has answered nothing. */
+  readonly started: Operation<void>;
+  /** Whether the broker's process is still there. */
+  alive(): Operation<boolean>;
+}
+
+/**
+ * A Git-host login command that blocks, on this entry's own path.
+ *
+ * The leaf this host asks for a credential when neither explicit variable
+ * names one. Substituting the command rather than the source keeps the entry
+ * assembly exactly as production builds it: nothing here is an option the
+ * factory grew, and the operation under test still opens the shipped transport.
+ */
+function useBlockingLogin(fixture: Fixture): Operation<BlockingLogin> {
+  return resource<BlockingLogin>(function* (provide) {
+    const directory = join(fixture.root, "broker");
+    const marks = join(fixture.root, "broker-marks");
+    yield* ensureDir(directory);
+    yield* ensureDir(marks);
+    yield* writeTextFile(
+      join(directory, "gh"),
+      [
+        "#!/bin/sh",
+        `echo $$ > ${JSON.stringify(join(marks, "pid"))}`,
+        `: > ${JSON.stringify(join(marks, "started"))}`,
+        "while true; do sleep 0.05; done",
+        "",
+      ].join("\n"),
+    );
+    yield* until(chmod(join(directory, "gh"), 0o755));
+
+    // No explicit credential, so the broker is what this host asks. Both
+    // variables and the path are restored with this resource.
+    const held = {
+      path: process.env["PATH"],
+      token: process.env["GH_TOKEN"],
+      other: process.env["GITHUB_TOKEN"],
+    };
+    process.env["PATH"] = `${directory}:${held.path ?? ""}`;
+    delete process.env["GH_TOKEN"];
+    delete process.env["GITHUB_TOKEN"];
+    yield* ensure(function* (): Operation<void> {
+      restoreVariable("PATH", held.path);
+      restoreVariable("GH_TOKEN", held.token);
+      restoreVariable("GITHUB_TOKEN", held.other);
+    });
+
+    const reached = withResolvers<void>();
+    const watching = yield* spawn(function* (): Operation<void> {
+      while (!(yield* exists(join(marks, "started")))) {
+        yield* sleep(10);
+      }
+      reached.resolve();
+    });
+    yield* ensure(() => watching.halt());
+
+    yield* provide({
+      started: reached.operation,
+      *alive(): Operation<boolean> {
+        if (!(yield* exists(join(marks, "pid")))) {
+          return false;
+        }
+        const pid = Number((yield* readTextFile(join(marks, "pid"))).trim());
+        try {
+          // Signal 0 asks the operating system whether the process is there.
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    });
+  });
+}
+
+/** Put one environment variable back exactly as it was, absence included. */
+function restoreVariable(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
 }
 
 /** What the host beneath the recorder was asked to do. */
@@ -814,6 +911,17 @@ function collections(
   return held.toSorted((first, second) => first.kind.localeCompare(second.kind));
 }
 
+/** Where each durable position of one type stands in this history. */
+function positionsOf(events: readonly DurableEvent[], type: string): number[] {
+  const found: number[] = [];
+  events.forEach((event, index) => {
+    if (event.type === "yield" && event.description.type === type) {
+      found.push(index);
+    }
+  });
+  return found;
+}
+
 /** Every event but the root's own close, which is what an unfinished run has. */
 function terminal(event: DurableEvent): boolean {
   return !(event.type === "close" && event.coroutineId === "root");
@@ -907,6 +1015,74 @@ function* commitThere(checkout: string, name: string): Operation<string> {
   );
   const outcome = yield* git.run(["rev-parse", "HEAD"], checkout);
   return outcome.stdout.trim();
+}
+
+/** The commit a ref on the bare remote holds, or `undefined` for absence. */
+function* remoteCommit(fixture: Fixture, branch: string): Operation<string | undefined> {
+  const git = gitSession(denoRepositoryHost(), fixture.root);
+  const outcome = yield* git.run(["rev-parse", "--verify", `refs/heads/${branch}`], fixture.origin);
+  return outcome.code === 0 ? outcome.stdout.trim() : undefined;
+}
+
+/** Move a checkout back to an earlier commit, as a person at a shell would. */
+function* resetThere(checkout: string, commit: string): Operation<void> {
+  const git = gitSession(denoRepositoryHost(), checkout);
+  const outcome = yield* git.run(["reset", "--hard", commit], checkout);
+  if (outcome.code !== 0) {
+    throw new Error(`${commit} does not reset in ${checkout}`);
+  }
+}
+
+/** Leave the published branch behind for another one, as a person would. */
+function* switchThere(checkout: string, branch: string): Operation<void> {
+  const git = gitSession(denoRepositoryHost(), checkout);
+  const outcome = yield* git.run(["checkout", "-b", branch], checkout);
+  if (outcome.code !== 0) {
+    throw new Error(`${branch} does not open in ${checkout}`);
+  }
+}
+
+/** The pull-request inputs reconciliation was actually asked about. */
+function reconciledInputs(events: readonly DurableEvent[]): Record<string, unknown> | undefined {
+  for (const event of outcomes(events)) {
+    if (event.type !== "yield" || event.result.status !== "ok") {
+      continue;
+    }
+    const record = parseGitHostReconciliationRecord(event.result.value);
+    const inputs = record === undefined ? undefined : parsePullRequestInputs(record.request.inputs);
+    if (inputs !== undefined) {
+      return {
+        number: inputs.number,
+        title: inputs.title,
+        body: inputs.body,
+        draft: inputs.draft,
+        headBranch: inputs.headBranch,
+        headSha: inputs.headSha,
+        baseBranch: inputs.baseBranch,
+      };
+    }
+  }
+  return undefined;
+}
+
+/** What the shared engine decided at each reconciled position, in order. */
+function decisionsOf(events: readonly DurableEvent[]): string[] {
+  const found: string[] = [];
+  for (const event of outcomes(events)) {
+    if (event.type !== "yield" || event.result.status !== "ok") {
+      continue;
+    }
+    const record = parseGitHostReconciliationRecord(event.result.value);
+    if (record !== undefined) {
+      found.push(record.decision);
+    }
+  }
+  return found;
+}
+
+/** One named question, for a branch whose readiness a row gates on. */
+function question(name: string, text: string): string {
+  return `    <Elicit schema={{ type: "object" }} as=${JSON.stringify(name)}>${text}</Elicit>`;
 }
 
 /** A question with a file after it, so a continuation has a suffix to run. */
@@ -1172,42 +1348,64 @@ describe("one entry's pull request", () => {
     expect(mutations(fixture.store)).toEqual([]);
   });
 
-  it("Q7: two spawned publications restore in reverse order and still decide", function* () {
+  it("Q7: two real publishers of one destination, restored in reverse, still decide", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
-    // Two branches, two managed Repositories, two questions. Each publishes at
-    // its own position in its own coroutine, and each opens its own pull
-    // request after its own question is answered.
-    const branch = (name: string) =>
-      [
-        `<Spawn><Repository name=${JSON.stringify(name)} url=${JSON.stringify(LOCATOR)}>`,
-        `  <Git.Switch branch=${JSON.stringify(`review/${name}`)} />`,
-        `  <File path="${name}.md">${name}</File>`,
-        `  <Git.Add paths="${name}.md" />`,
-        `  <Git.Commit message="Prepare ${name}" as="commit" />`,
-        `  <Git.Push />`,
-        `  <Elicit schema={{ type: "object" }} as="answer">Question for ${name}</Elicit>`,
-        `  <PullRequest title=${JSON.stringify(`${TITLE} ${name}`)} as="pullRequest">`,
-        BODY,
-        `  </PullRequest>`,
-        "",
-        `${name} opened {pullRequest.number} head {pullRequest.headSha}`,
-        "",
-        `</Repository></Spawn>`,
-      ].join("\n");
-    const source = ["<All>", branch("alpha"), branch("beta"), "</All>", ""].join("\n");
+    // Two publishers of the *same* destination in one entry, each in its own
+    // coroutine. The second commits on top of the first and publishes the same
+    // branch, so both pairs are relevant to the pull request below and only the
+    // later one describes the branch the Git host now holds.
+    const source = [
+      `<Repository name="project" url=${JSON.stringify(LOCATOR)}>`,
+      `  <Git.Switch branch=${JSON.stringify(BRANCH)} />`,
+      `  <File path="base.md">base</File>`,
+      `  <Git.Add paths="base.md" />`,
+      `  <Git.Commit message="Base" as="base" />`,
+      `  <All>`,
+      `    <Spawn>`,
+      `      <File path="one.md">one</File>`,
+      `      <Git.Add paths="one.md" />`,
+      `      <Git.Commit message="One" as="one" />`,
+      `      <Git.Push />`,
+      question("afterFirst", "first published"),
+      `    </Spawn>`,
+      `    <Spawn>`,
+      question("beforeSecond", "second waiting"),
+      `      <File path="two.md">two</File>`,
+      `      <Git.Add paths="two.md" />`,
+      `      <Git.Commit message="Two" as="two" />`,
+      `      <Git.Push />`,
+      question("afterSecond", "second published"),
+      `    </Spawn>`,
+      `  </All>`,
+      ...upsert(),
+      `</Repository>`,
+      "",
+    ].join("\n");
 
+    // Readiness gates rather than elapsed time: the second publisher is
+    // released exactly when the first has published and reached its question,
+    // so the acknowledged order is arranged rather than hoped for.
+    const published = withResolvers<void>();
     const prefix = yield* scoped(function* (): Operation<readonly DurableEvent[]> {
       const stream = new InMemoryStream();
       const waiting = withResolvers<void>();
-      let asked = 0;
+      let held = 0;
       const task = yield* spawn(() =>
         run(fixture, source, stream, counted, {
           *between(): Operation<void> {
             yield* Elicitation.around({
-              *elicit(): Operation<unknown> {
-                asked += 1;
-                if (asked === 2) {
+              *elicit([request]: [{ readonly message: string }]): Operation<unknown> {
+                if (request.message.includes("second waiting")) {
+                  // Released only once the first publication is history.
+                  yield* published.operation;
+                  return {};
+                }
+                if (request.message.includes("first published")) {
+                  published.resolve();
+                }
+                held += 1;
+                if (held === 2) {
                   waiting.resolve();
                 }
                 return yield* suspend();
@@ -1220,47 +1418,248 @@ describe("one entry's pull request", () => {
         waiting.operation,
         (function* (): Operation<never> {
           yield* sleep(60_000);
-          throw new Error("both branches never reached their questions");
+          throw new Error("both publishers never reached their questions");
         })(),
       ]);
-      const held = [...(yield* stream.readAll())];
+      const events = [...(yield* stream.readAll())];
       yield* task.halt();
-      return held;
+      return events;
     });
 
-    // Two publications, in a known journal order, and no pull request yet.
-    const published = publications(prefix);
-    expect(published).toHaveLength(2);
-    expect(new Set(published.map((record) => record.site)).size).toBe(2);
+    // Two publications of one destination, at two commits, in a known
+    // acknowledged order — and no pull request yet.
+    const pairs = publications(prefix);
+    expect(pairs).toHaveLength(2);
+    expect(pairs.every((record) => record.resolved.inputs.branch === BRANCH)).toBe(true);
+    const earlier = pairs[0]?.resolved.inputs.sourceCommit;
+    const later = pairs[1]?.resolved.inputs.sourceCommit;
+    expect(earlier).not.toBe(later);
+    expect(outcomes(prefix)).toHaveLength(2);
     expect(requests(prefix)).toEqual([]);
+    expect(yield* remoteCommit(fixture, BRANCH)).toBe(later);
 
-    // Continued with the answers arriving in the other order, so the two
-    // branches reach their pull requests in the opposite scheduling order from
-    // the one their publications were acknowledged in. Each pull request is
-    // still decided by its own branch's own acknowledged pair.
+    // Continued with the two questions answered in the opposite order, so the
+    // publisher acknowledged second restores first. The decision is a reading
+    // of the acknowledged stream, not of a schedule.
+    const order: string[] = [];
     const resumed = counters();
     const stream = new InMemoryStream([...prefix]);
+    const first = withResolvers<void>();
     const again = yield* run(fixture, source, stream, resumed, {
       *between(): Operation<void> {
         yield* Elicitation.around({
           *elicit([request]: [{ readonly message: string }]): Operation<unknown> {
-            yield* sleep(request.message.includes("alpha") ? 40 : 0);
+            if (request.message.includes("first published")) {
+              yield* first.operation;
+              order.push("first");
+              return {};
+            }
+            order.push("second");
+            first.resolve();
             return {};
           },
         });
       },
     });
     expect(again.refusal).toBe(undefined);
+    expect(order).toEqual(["second", "first"]);
+
+    // The last acknowledged pair decides: the head is the second publisher's
+    // commit. An implementation matching any relevant pair would have named
+    // the first commit and been refused by its own checkout provenance.
     const asked = requests(yield* stream.readAll());
-    expect(asked).toHaveLength(2);
-    expect(new Set(asked.map((record) => record.site)).size).toBe(2);
-    for (const name of ["alpha", "beta"]) {
-      const own = asked.find((record) => record.requested.pullRequest.title.endsWith(name));
-      expect(own).not.toBe(undefined);
-      expect(own?.resolved.inputs.headBranch).toBe(`review/${name}`);
-      expect(own?.resolved.inputs.headSha).toBe(fixture.store.heads.get(`review/${name}`));
-    }
-    expect(mutations(fixture.store)).toEqual(["create", "create"]);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.resolved.inputs.headSha).toBe(later);
+    expect(mutations(fixture.store)).toEqual(["create"]);
+  });
+
+  it("Q7a: an exact earlier pair superseded by a later one refuses the earlier head", function* () {
+    const fixture = yield* useFixture();
+    const counted = counters();
+    const source = [
+      `<Repository name="project" url=${JSON.stringify(LOCATOR)}>`,
+      `  <Git.Switch branch=${JSON.stringify(BRANCH)} />`,
+      `  <File path="one.md">one</File>`,
+      `  <Git.Add paths="one.md" />`,
+      `  <Git.Commit message="One" as="one" />`,
+      `  <Git.Push />`,
+      `  <File path="two.md">two</File>`,
+      `  <Git.Add paths="two.md" />`,
+      `  <Git.Commit message="Two" as="two" />`,
+      `  <Git.Push />`,
+      QUESTION.split("\n").slice(0, 4).join("\n"),
+      ...upsert(),
+      `</Repository>`,
+      "",
+    ].join("\n");
+
+    // Both publications are this entry's own and both are exact for their own
+    // commit. The earlier one is a real acknowledged pair for this destination.
+    const prefix = yield* left(fixture, source, counted);
+    const pairs = publications(prefix);
+    expect(pairs).toHaveLength(2);
+    const earlier = pairs[0]?.resolved.inputs.sourceCommit ?? "";
+    const later = pairs[1]?.resolved.inputs.sourceCommit ?? "";
+    expect(earlier).not.toBe(later);
+
+    // The person moves the checkout back to the earlier commit while away, so
+    // the pull request would name the head the *earlier* pair published.
+    yield* resetThere(checkoutOf(prefix, BRANCH), earlier);
+
+    const resumed = counters();
+    const stream = new InMemoryStream([...prefix]);
+    const again = yield* run(fixture, source, stream, resumed, {
+      answer: { choice: "continue" },
+    });
+    expect(again.refusal).not.toBe(undefined);
+    // The last acknowledged publication of that destination names a different
+    // commit, so the two describe different work and this refuses before a
+    // request is written, a credential is read or anything is contacted.
+    expect(String(again.refusal)).toContain("different");
+    expect(requests(yield* stream.readAll())).toEqual([]);
+    expect(mutations(fixture.store)).toEqual([]);
+    expect(resumed.sessions).toEqual([]);
+  });
+});
+
+describe("what a bound pull-request body does first", () => {
+  it("Q26: a Push child and an admitted read both acknowledge before the parent's request", function* () {
+    const fixture = yield* useFixture();
+    fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
+    const counted = counters();
+    const stream = new InMemoryStream();
+    // The publication and the evidence read are children of the pull request
+    // itself. All of the content finishes before the parent resolves, which is
+    // what makes a `<Git.Push />` written inside the body the publication the
+    // parent is then admitted by.
+    const source = [
+      `<Repository name="project" url=${JSON.stringify(LOCATOR)}>`,
+      `  <Git.Switch branch=${JSON.stringify(BRANCH)} />`,
+      `  <File path="notes.md">ready</File>`,
+      `  <Git.Add paths="notes.md" />`,
+      `  <Git.Commit message="Prepare the release" as="commit" />`,
+      `  <PullRequest title=${JSON.stringify(TITLE)} as="pullRequest">`,
+      `<Git.Push />`,
+      `<PullRequest.Reviews url=${JSON.stringify(FIRST_URL)} as="inner" />`,
+      BODY,
+      `  </PullRequest>`,
+      "",
+      `opened {pullRequest.number} over {inner.length}`,
+      "",
+      `</Repository>`,
+      "",
+    ].join("\n");
+
+    const ran = yield* run(fixture, source, stream, counted);
+    expect(ran.refusal).toBe(undefined);
+    expect(ran.output).toContain("opened 1 over 1");
+
+    // One of each, and the children stand before the parent at every position
+    // the parent has: its request and its reconciled outcome alike.
+    const publication = positionsOf(ran.events, REPL_REPOSITORY_PUSH_REQUEST);
+    const snapshot = positionsOf(ran.events, PULL_REQUEST_READ);
+    const asked = positionsOf(ran.events, REPL_REPOSITORY_PULL_REQUEST_REQUEST);
+    const reconciled = positionsOf(ran.events, GIT_HOST_EFFECT);
+    expect(publication).toHaveLength(1);
+    expect(snapshot).toHaveLength(1);
+    expect(asked).toHaveLength(1);
+    expect(reconciled).toHaveLength(2);
+    const parent = asked[0] ?? -1;
+    expect(publication[0] ?? -1).toBeLessThan(parent);
+    expect(snapshot[0] ?? -1).toBeLessThan(parent);
+    // The publication's own outcome too: the parent is admitted by an
+    // acknowledged pair, not by a request still in flight.
+    expect(reconciled[0] ?? -1).toBeLessThan(parent);
+    expect(reconciled[1] ?? -1).toBeGreaterThan(parent);
+    expect(mutations(fixture.store)).toEqual(["create"]);
+  });
+
+  it("Q27: a child that refuses leaves the parent with no request and nothing contacted", function* () {
+    const fixture = yield* useFixture();
+    const counted = counters();
+    const stream = new InMemoryStream();
+    // The same body, with one child reading a container this deployment never
+    // allowed. The parent never resolves, so it asks for nothing.
+    const source = [
+      `<Repository name="project" url=${JSON.stringify(LOCATOR)}>`,
+      `  <Git.Switch branch=${JSON.stringify(BRANCH)} />`,
+      `  <File path="notes.md">ready</File>`,
+      `  <Git.Add paths="notes.md" />`,
+      `  <Git.Commit message="Prepare the release" as="commit" />`,
+      `  <PullRequest title=${JSON.stringify(TITLE)} as="pullRequest">`,
+      `<Git.Push />`,
+      `<PullRequest.Reviews url="https://github.com/owner/elsewhere/pull/4" as="inner" />`,
+      BODY,
+      `  </PullRequest>`,
+      "",
+      `opened {pullRequest.number}`,
+      "",
+      `</Repository>`,
+      "",
+    ].join("\n");
+
+    const ran = yield* run(fixture, source, stream, counted);
+    expect(ran.refusal).not.toBe(undefined);
+    expect(String(ran.refusal)).toContain("has not authorized");
+    const held = yield* stream.readAll();
+    // The publication child did run and is history; the parent's own request
+    // was never written and the Git host was never asked to open anything.
+    expect(publications(held)).toHaveLength(1);
+    expect(requests(held)).toEqual([]);
+    expect(reads(held)).toEqual([]);
+    expect(mutations(fixture.store)).toEqual([]);
+    expect(ran.output).not.toContain("opened 1");
+  });
+
+  it("Q28: a repository-local component of either name answers instead, and retains nothing", function* () {
+    const fixture = yield* useFixture();
+    const counted = counters();
+    const stream = new InMemoryStream();
+    // Repository-local Markdown of both names, which the resolver chooses
+    // ahead of any registered default — including the one an entry declares in
+    // its own scope. Declaring policy under a shared body reserves neither
+    // name against a document that ships its own component for it.
+    const local = ["---", "props:", "  type: object", "  additionalProperties: true", "---", ""];
+    yield* ensureDir(join(fixture.root, "PullRequest"));
+    yield* writeTextFile(
+      join(fixture.root, "PullRequest.md"),
+      [...local, "local pull request", ""].join("\n"),
+    );
+    yield* writeTextFile(
+      join(fixture.root, "PullRequest", "Reviews.md"),
+      [...local, "local reviews", ""].join("\n"),
+    );
+
+    const source = [
+      `<Repository name="project" url=${JSON.stringify(LOCATOR)}>`,
+      `  <Git.Switch branch=${JSON.stringify(BRANCH)} />`,
+      `  <File path="notes.md">ready</File>`,
+      `  <Git.Add paths="notes.md" />`,
+      `  <Git.Commit message="Prepare the release" as="commit" />`,
+      `  <Git.Push />`,
+      `  <PullRequest title=${JSON.stringify(TITLE)} as="pullRequest">`,
+      BODY,
+      `  </PullRequest>`,
+      `  <PullRequest.Reviews url=${JSON.stringify(FIRST_URL)} as="reviews" />`,
+      `</Repository>`,
+      "",
+    ].join("\n");
+
+    const ran = yield* run(fixture, source, stream, counted);
+    expect(ran.refusal).toBe(undefined);
+    // Both local components answered, so neither name reached this entry's
+    // policy — no `as` was required of either, because the metadata resolved
+    // is the local component's own.
+    // Both names resolved to the local components, which is what the absence
+    // below says: the entry's own bodies cannot run and leave no request, no
+    // snapshot and no call behind them.
+    const held = yield* stream.readAll();
+    expect(requests(held)).toEqual([]);
+    expect(reads(held)).toEqual([]);
+    expect(fixture.store.requests).toEqual([]);
+    // The publication beside them is untouched, which is what says this is
+    // ordinary resolution rather than a disabled entry.
+    expect(publications(held)).toHaveLength(1);
   });
 });
 
@@ -1299,17 +1698,24 @@ describe("resuming a pull request", () => {
     const again = yield* run(fixture, source, stream, resumed, {
       answer: { choice: "continue" },
       *between(): Operation<void> {
-        // Live middleware installed after the cut. A saved request is
-        // reconciled as it stands, so nothing here can retarget it.
-        yield* PullRequestAPI.around({
-          *read([url, options], next): Operation<PullRequestReadResult> {
+        // A supported upsert handler installed after the cut, which would
+        // demonstrably retarget fresh work: it rewrites the title every
+        // invocation it is given. A saved request is reconciled as it stands,
+        // so it never reaches the chain this handler is part of.
+        yield* PullRequestOperations.around({
+          *upsert([invocation], next): Operation<PullRequestResult> {
             retargeted += 1;
-            return yield* next(url, options);
+            return yield* next({
+              ...invocation,
+              pullRequest: { ...invocation.pullRequest, title: "Retargeted by middleware" },
+            });
           },
         });
       },
     });
     expect(again.refusal).toBe(undefined);
+    // Never called, so the saved request did not come back through fresh
+    // dispatch at all.
     expect(retargeted).toBe(0);
 
     // One request, one creation, and every member of it is the one that was
@@ -1351,6 +1757,17 @@ describe("resuming a pull request", () => {
     expect(mutations(fixture.store)).toEqual(["patch"]);
     expect(fixture.store.pullRequests[0]?.title).toBe(TITLE);
 
+    // The saved request, as it stands, is what a continuation reconciles.
+    const asked = requests(prefix)[0]?.resolved.inputs;
+    expect(asked?.number).toBe(1);
+
+    // The checkout moves on while the entry is away: a new commit, and the
+    // branch it was published from is left behind for another one.
+    const checkout = checkoutOf(prefix, BRANCH);
+    const moved = yield* commitThere(checkout, "later.md");
+    yield* switchThere(checkout, "someone/else");
+    expect(moved).not.toBe(asked?.headSha);
+
     // The continuation observes once, finds the pull request already saying
     // what this entry asked for, and adopts it. Nothing is patched twice.
     const resumed = counters();
@@ -1364,6 +1781,23 @@ describe("resuming a pull request", () => {
     const settled = yield* stream.readAll();
     expect(requests(settled)).toHaveLength(1);
     expect(outcomes(settled)).toHaveLength(2);
+
+    // Every member of the request reconciliation was asked about is the one
+    // written down before the cut — the original number, title, verbatim body,
+    // draft, base, head and destination — and none of it is today's checkout.
+    const presented = reconciledInputs(settled);
+    expect(presented).toEqual({
+      number: 1,
+      title: TITLE,
+      body: asked?.body,
+      draft: false,
+      headBranch: BRANCH,
+      headSha: asked?.headSha,
+      baseBranch: "main",
+    });
+    expect(presented?.headSha).not.toBe(moved);
+    // The adoption is what settled it, rather than a second update.
+    expect(decisionsOf(settled)).toEqual(["performed", "adopted"]);
   });
 
   it("Q10: a cut before the request is acknowledged leaves nothing to resume", function* () {
@@ -1700,32 +2134,49 @@ describe("evidence reads inside one entry", () => {
       "",
     ].join("\n");
 
-    // The reviews call is held long enough that the comments occurrence
-    // finishes first, so the two complete in the opposite order from the one
-    // they were written in.
-    fixture.gate.hold = function* (request: GitHubHttpRequest): Operation<void> {
-      if (new URL(request.url).pathname.endsWith("/reviews")) {
-        yield* sleep(60);
+    // A readiness gate rather than elapsed time: the reviews call is released
+    // exactly when the comments snapshot is already history, so the two
+    // occurrences complete in the opposite order from the one they were
+    // written in and the order is arranged rather than hoped for.
+    const appended: string[] = [];
+    const retained = withResolvers<void>();
+    const stream = new InMemoryStream();
+    stream.onAppend = (event: DurableEvent) => {
+      if (event.type !== "yield" || event.description.type !== PULL_REQUEST_READ) {
+        return;
+      }
+      const kind = Reflect.get(Object(event.description.input), "kind");
+      appended.push(String(kind));
+      if (kind === "comments") {
+        retained.resolve();
       }
     };
-    const ran = yield* run(fixture, source, new InMemoryStream(), counted, { root: undefined });
+    fixture.gate.hold = function* (request: GitHubHttpRequest): Operation<void> {
+      if (new URL(request.url).pathname.endsWith("/reviews")) {
+        yield* retained.operation;
+      }
+    };
+    const ran = yield* run(fixture, source, stream, counted, { root: undefined });
     expect(ran.refusal).toBe(undefined);
+    // The written order is reviews then comments; the acknowledged order is
+    // the reverse of it.
+    expect(appended).toEqual(["comments", "reviews"]);
     // Each occurrence bound its own collection, from its own URL.
     expect(ran.output).toContain("branch a 1");
     expect(ran.output).toContain("branch b 2");
 
     // Two retained reads, each holding the collection its own question asked
     // for, each named by that question, each standing in its own coroutine.
-    const retained = reads(ran.events);
-    expect(retained).toHaveLength(2);
-    expect(collections(retained)).toEqual([
+    const held = reads(ran.events);
+    expect(held).toHaveLength(2);
+    expect(collections(held)).toEqual([
       { kind: "comments", items: 2 },
       { kind: "reviews", items: 1 },
     ]);
-    const names = retained.map((event) => (event.type === "yield" ? event.description.name : ""));
+    const names = held.map((event) => (event.type === "yield" ? event.description.name : ""));
     expect(new Set(names).size).toBe(2);
     const coroutines = new Set(
-      retained.map((event) => (event.type === "yield" ? event.coroutineId : "")),
+      held.map((event) => (event.type === "yield" ? event.coroutineId : "")),
     );
     expect(coroutines.size).toBe(2);
     expect(coroutines.has("root")).toBe(false);
@@ -1864,6 +2315,59 @@ describe("acknowledgement and failure", () => {
   });
 });
 
+describe("the credential one pull-request attempt acquires", () => {
+  it("Q31: cancelling during acquisition joins the broker and retains the request alone", function* () {
+    const fixture = yield* useFixture();
+    const counted = counters();
+    // The credential leaf this host really asks when no variable names one:
+    // the Git-host login command. Substituted with a broker that reports its
+    // own process, blocks, and records its own exit, so what a cancellation
+    // does to it is observable rather than assumed.
+    const broker = yield* useBlockingLogin(fixture);
+
+    const stream = new InMemoryStream();
+    const prefix = yield* scoped(function* (): Operation<readonly DurableEvent[]> {
+      const task = yield* spawn(() =>
+        run(fixture, entry({ lines: [...upsert(), QUESTION] }), stream, counted, {
+          answer: { choice: "continue" },
+        }),
+      );
+      yield* race([
+        broker.started,
+        (function* (): Operation<never> {
+          yield* sleep(60_000);
+          throw new Error("the entry never reached its credential acquisition");
+        })(),
+      ]);
+      // Acquisition is genuinely pending here: the broker is running and has
+      // answered nothing.
+      expect(yield* broker.alive()).toBe(true);
+      const held = [...(yield* stream.readAll())];
+      yield* task.halt();
+      return held;
+    });
+
+    // The attempt's cleanup was joined rather than merely signalled. The
+    // broker's whole group is signalled and then *waited for*, so by the time
+    // the halt above has returned the process is gone rather than on its way
+    // out — which is what keeps a cancelled entry from leaving a credential
+    // broker running behind it.
+    expect(yield* broker.alive()).toBe(false);
+
+    // The request this entry had already acknowledged, and nothing else. No
+    // outcome was invented for work that never happened, the root never
+    // settled, and the Git host was never reached — a credential was still
+    // being asked for when this was cancelled.
+    expect(requests(prefix)).toHaveLength(1);
+    expect(outcomes(prefix)).toHaveLength(1);
+    expect(closedRoot(prefix)).toBe(false);
+    expect(fixture.store.requests).toEqual([]);
+    const settled = yield* stream.readAll();
+    expect(requests(settled)).toHaveLength(1);
+    expect(outcomes(settled)).toHaveLength(1);
+  });
+});
+
 describe("what an entry's assembly reaches", () => {
   it("Q22: building the capability declares six names and acquires nothing", function* () {
     const fixture = yield* useFixture();
@@ -1934,7 +2438,7 @@ describe("what an entry's assembly reaches", () => {
   });
 });
 
-describe("a retained read this entry cannot account for", () => {
+describe("a retained record this entry cannot account for", () => {
   it("Q24: every tampered read description refuses before anything replays", function* () {
     const fixture = yield* useFixture();
     fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
@@ -2011,6 +2515,109 @@ describe("a retained read this entry cannot account for", () => {
       expect([what, fixture.store.requests.length]).toEqual([what, sent]);
       expect([what, resumed.commands]).toEqual([what, []]);
     }
+  });
+
+  it("Q29: a retained checks envelope whose item names another head refuses", function* () {
+    const fixture = yield* useFixture();
+    fixture.evidence.runs = [checkRun(31, "build")];
+    // A checks read asks this pull request which commit its head is before it
+    // asks about that commit, so this GitHub has to hold one.
+    fixture.store.pullRequests.push(
+      stored({ number: 1, headRef: BRANCH, headSha: "d".repeat(40) }),
+    );
+    const counted = counters();
+    const source = [
+      `<PullRequest.Checks url=${JSON.stringify(FIRST_URL)} as="checks" />`,
+      "",
+      `checks {checks.length}`,
+      "",
+    ].join("\n");
+
+    const ran = yield* run(fixture, source, new InMemoryStream(), counted, { root: undefined });
+    expect(ran.refusal).toBe(undefined);
+    expect(ran.output).toContain("checks 1");
+    const history = [...ran.events].filter(terminal);
+    const at = history.findIndex(
+      (event) => event.type === "yield" && event.description.type === PULL_REQUEST_READ,
+    );
+    const original = history[at];
+    if (original === undefined || original.type !== "yield" || original.result.status !== "ok") {
+      throw new Error("that run retained no completed checks read");
+    }
+    const envelope = Object(original.result.value);
+    const items = Array.isArray(envelope.items) ? envelope.items : [];
+    expect(items).toHaveLength(1);
+    const sent = fixture.store.requests.length;
+
+    // One item moved onto another commit. A check that does not describe this
+    // envelope's own head is evidence about something else, so the history is
+    // not continued and no replacement snapshot is written.
+    const replacement = [...history];
+    replacement[at] = {
+      ...original,
+      result: {
+        status: "ok",
+        value: {
+          ...envelope,
+          items: [{ ...Object(items[0]), headSha: "e".repeat(40) }],
+        },
+      },
+    };
+    const resumed = counters();
+    const stream = new InMemoryStream(replacement);
+    const again = yield* run(fixture, source, stream, resumed, { root: undefined });
+    expect(again.refusal).not.toBe(undefined);
+    expect(again.output).not.toContain("checks 1");
+    expect(fixture.store.requests.length).toBe(sent);
+    expect(reads(yield* stream.readAll())).toHaveLength(1);
+  });
+
+  it("Q30: a saved request whose origin is not its Repository's refuses at readback", function* () {
+    const fixture = yield* useFixture();
+    const counted = counters();
+    const source = entry({ lines: [...upsert()] });
+
+    const ran = yield* run(fixture, source, new InMemoryStream(), counted);
+    expect(ran.refusal).toBe(undefined);
+    const history = [...ran.events].filter(terminal);
+    const at = history.findIndex(
+      (event) =>
+        event.type === "yield" && event.description.type === REPL_REPOSITORY_PULL_REQUEST_REQUEST,
+    );
+    const original = history[at];
+    if (original === undefined || original.type !== "yield" || original.result.status !== "ok") {
+      throw new Error("that run retained no saved pull-request request");
+    }
+    const saved = Object(original.result.value);
+    const sent = fixture.store.requests.length;
+
+    // A locator this host would hand to Git, and a well-formed record — but
+    // not the one the Repository in it was fingerprinted from. The question
+    // this position is named by is unchanged, so the record is found and
+    // restored, and what refuses it is the readback that holds a saved request
+    // to the origin it says it belongs to.
+    const replacement = [...history];
+    replacement[at] = {
+      ...original,
+      result: {
+        status: "ok",
+        value: {
+          ...saved,
+          resolved: { ...Object(saved.resolved), origin: "https://github.com/owner/elsewhere" },
+        },
+      },
+    };
+    const resumed = counters();
+    const stream = new InMemoryStream(replacement);
+    const again = yield* run(fixture, source, stream, resumed, { refuseNative: true });
+    expect(again.refusal).not.toBe(undefined);
+    expect(again.output).not.toContain("opened 1 at");
+    // Refused before reuse: nothing was contacted and no second request or
+    // outcome was written.
+    expect(fixture.store.requests.length).toBe(sent);
+    const settled = yield* stream.readAll();
+    expect(requests(settled)).toHaveLength(1);
+    expect(outcomes(settled)).toHaveLength(2);
   });
 
   it("Q25: an ordinary failed read is admitted, and replays as the failure it was", function* () {

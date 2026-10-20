@@ -40,6 +40,9 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { COMPOSITION_REGISTRATIONS } from "../src/composition/installation.ts";
 import { pushDeclaration } from "../src/composition/components/GitPush.ts";
 import { issueDeclaration } from "../src/composition/components/Issue.ts";
+import { pullRequestDeclaration } from "../src/composition/components/PullRequest.ts";
+import { pullRequestReadDeclaration } from "../src/composition/components/PullRequestReads.ts";
+import { PULL_REQUEST_READ_KINDS } from "../src/composition/pull-request-read-records.ts";
 import type { BindOperations } from "../src/composition/invocation-binding.ts";
 // From the subpath that publishes them rather than from the source modules:
 // these are public types, and reaching them by relative path would bypass the
@@ -49,8 +52,15 @@ import type { IssueOperationsApi } from "../src/issue/operations.ts";
 import type { PullRequestOperationsApi } from "../src/composition/pull-request-operations.ts";
 import { COMPOSITION_ORIGIN } from "../src/composition/definitions.ts";
 
-/** The two operations A's retained entry owns, by the names a document writes. */
-const OWNED: readonly string[] = ["Git.Push", "Issue"];
+/** Every operation a retained entry owns, by the names a document writes. */
+const OWNED: readonly string[] = [
+  "Git.Push",
+  "Issue",
+  "PullRequest",
+  "PullRequest.Checks",
+  "PullRequest.Comments",
+  "PullRequest.Reviews",
+];
 
 /** The six operations no local transaction encloses, by the names a document writes. */
 const OPERATIONS: readonly string[] = [
@@ -174,7 +184,7 @@ function useRoot(): Operation<string> {
 }
 
 /**
- * One declaration of each operation A's retained entry owns.
+ * One declaration of each operation a retained entry owns.
  *
  * Built with policy nothing reaches: these rows are about what a declaration
  * says, and a constructor that had to perform in order to describe would be
@@ -182,11 +192,18 @@ function useRoot(): Operation<string> {
  */
 function ownedDeclarations(): readonly IdentityComponent[] {
   return [
-    pushDeclaration(() => () => {
-      throw new Error("a described declaration performed");
-    }),
+    pushDeclaration(inert()),
     issueDeclaration(fakeIssuePolicy(watched())),
+    pullRequestDeclaration(inert()),
+    ...PULL_REQUEST_READ_KINDS.map((kind) => pullRequestReadDeclaration(kind, inert())),
   ];
+}
+
+/** A policy a described declaration never reaches. */
+function inert<T>(): BindOperations<T> {
+  return () => {
+    throw new Error("a described declaration performed");
+  };
 }
 
 /** The registration and the owned declaration of one name, for comparison. */
@@ -232,8 +249,10 @@ describe("one registry for every repository operation, and the policy an executi
     }
     // What an owning execution adds is policy for the operations it retains,
     // under names this registry already has. It establishes no name of its own.
+    // Sorted, because which names an owning execution declares is the claim
+    // here and the order it builds them in is its own business.
     const owned = ownedDeclarations().map((entry) => entry.name);
-    expect(owned).toEqual([...OWNED]);
+    expect(owned.toSorted()).toEqual([...OWNED]);
     for (const name of owned) {
       expect(registered).toContain(name);
     }
