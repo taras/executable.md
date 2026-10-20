@@ -238,16 +238,21 @@ const joinedReadCoordinator: LiveDurableOperationCoordinator = {
  * The durability failure this body error carries, or `undefined` for a read
  * outcome.
  *
- * The classes are durable-streams' own exported failure types, searched through
- * causes and aggregates the way that package searches them — a persistence
- * failure arrives wrapped in its own cause, and a wrapper must not hide it.
+ * The classes are durable-streams' own exported failure types, and the search
+ * reaches causes and aggregate members because a persistence failure arrives
+ * wrapped in its own cause: nothing a failure is wrapped in may keep one from
+ * being found.
  *
- * The read's own refusal vocabulary is excluded first and deliberately.
+ * **The read's own refusal is excluded from the selection, not from the walk.**
  * `PullRequestReadError` extends `StaleInputError` so that an ambient printing
- * boundary cannot render unread evidence as an empty review; that inheritance is
- * a statement about rendering, not about whether the journal still describes
- * this execution. Asking the class question first would make every ordinary
- * refusal fatal.
+ * boundary cannot render unread evidence as an empty review, and that
+ * inheritance is a statement about rendering rather than about whether the
+ * journal still describes this execution — so selecting it would make every
+ * ordinary refusal fatal. Treating it as a leaf is the opposite mistake: a
+ * refusal that carries a genuine durability failure as its cause would publish
+ * as an ordinary failed read and discard the cause before anything could find
+ * it. So the node is skipped for selection and its descendants are still
+ * enqueued, wherever in the graph it appears.
  */
 function durabilityFailure(error: Error): Error | undefined {
   const seen = new Set<unknown>();
@@ -258,15 +263,13 @@ function durabilityFailure(error: Error): Error | undefined {
       continue;
     }
     seen.add(current);
-    if (current instanceof PullRequestReadError) {
-      continue;
-    }
     if (
-      current instanceof DurablePersistenceError ||
-      current instanceof StaleInputError ||
-      current instanceof DivergenceError ||
-      current instanceof TerminalDivergenceError ||
-      current instanceof ContinuePastCloseDivergenceError
+      !(current instanceof PullRequestReadError) &&
+      (current instanceof DurablePersistenceError ||
+        current instanceof StaleInputError ||
+        current instanceof DivergenceError ||
+        current instanceof TerminalDivergenceError ||
+        current instanceof ContinuePastCloseDivergenceError)
     ) {
       return current;
     }
