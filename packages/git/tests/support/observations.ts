@@ -228,6 +228,9 @@ export function* useGeneratedFixture(count: number): Operation<GeneratedFixture>
   const root = join(parent, "checkout");
   yield* ensureDir(root);
   git(["init", "--initial-branch=main", "."], root, home);
+  // A commit returns before the maintenance it starts does, so a detached
+  // writer would outlive this fixture's own commands and race what reads it.
+  git(["config", "--local", "maintenance.auto", "false"], root, home);
   git(["config", "user.name", "Fixture"], root, home);
   git(["config", "user.email", "fixture@example.invalid"], root, home);
   const paths: string[] = [];
