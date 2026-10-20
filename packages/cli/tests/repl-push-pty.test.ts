@@ -18,14 +18,19 @@
  * that matters, which is that `<Git.Push />` there refuses before it contacts
  * anything. Neither branch silently skips its own behavior.
  *
- * The journey itself is `support/repl-push-journey.ts`, shared with the
- * compiled row so the two cannot drift.
+ * The journeys themselves are `support/repl-push-journey.ts` and
+ * `support/repl-pull-request-journey.ts`, each shared with its compiled row so
+ * the two cannot drift.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { cliRuntime, cliShellCommand } from "@executablemd/test-support/launch";
 import type { Operation } from "effection";
 import { replPushJourney, replUnsupportedPush } from "./support/repl-push-journey.ts";
+import {
+  replPullRequestJourney,
+  replUnsupportedPullRequest,
+} from "./support/repl-pull-request-journey.ts";
 
 const JOURNEY = cliRuntime() === "deno";
 
@@ -41,6 +46,17 @@ describe("a REPL entry's publication, across leaving and coming back", () => {
       : "E9: this runtime refuses <Git.Push /> before it contacts a remote",
     function* (): Operation<void> {
       yield* JOURNEY ? replPushJourney(sourceCommand) : replUnsupportedPush(sourceCommand);
+    },
+  );
+
+  it(
+    JOURNEY
+      ? "B9: opens a pull request, answers its evidence again on reopening, and reads afresh after"
+      : "B10: this runtime refuses <PullRequest> and its reads before it contacts anything",
+    function* (): Operation<void> {
+      yield* JOURNEY
+        ? replPullRequestJourney(sourceCommand)
+        : replUnsupportedPullRequest(sourceCommand);
     },
   );
 });

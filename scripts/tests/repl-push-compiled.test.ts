@@ -8,8 +8,8 @@
  * the publication, and the defect would appear at a person's first attempt to
  * publish rather than here.
  *
- * It runs the *same* journey as the source row, from one shared module, so the
- * two cannot drift into asserting different things.
+ * It runs the *same* journeys as the source rows, from the same shared modules,
+ * so the two cannot drift into asserting different things.
  *
  * It runs against `dist/xmd`, so `deno task build` has to have happened. A
  * missing binary is reported as the setup it is rather than as a failure of the
@@ -23,6 +23,7 @@ import type { Operation } from "effection";
 import { fileURLToPath as fromFileUrl } from "node:url";
 import { join } from "node:path";
 import { replPushJourney } from "../../packages/cli/tests/support/repl-push-journey.ts";
+import { replPullRequestJourney } from "../../packages/cli/tests/support/repl-pull-request-journey.ts";
 
 const ROOT = fromFileUrl(new URL("../..", import.meta.url));
 const BINARY = join(ROOT, "dist", "xmd");
@@ -46,5 +47,10 @@ describe("the compiled binary's REPL publications", () => {
   it("E1: carries the publication capability, so a branch is published once", function* (): Operation<void> {
     yield* requireBinary();
     yield* replPushJourney(compiled);
+  });
+
+  it("B9: carries the pull-request capability, so one is opened and read once", function* (): Operation<void> {
+    yield* requireBinary();
+    yield* replPullRequestJourney(compiled);
   });
 });

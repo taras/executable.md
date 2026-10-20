@@ -5397,15 +5397,17 @@ A host that retains nothing named after an invocation runs the same bodies over
 the public feature operations, with no identity authenticated, because there is
 nothing for one to name. Only an operation a host retains *above* the public
 chain, named after an invocation it authenticates, takes its operation as an
-argument, and that is `Git.Push` and `Issue`. A workflow run retains
-`PullRequest` and its three evidence reads too — the upsert through the Git-host
-reconciliation beneath it, each read as policy on `PullRequestReadExecution` —
-but it installs that retention under their feature Api instead of owning a
-boundary over it, and no REPL entry owns one either, so those four ask their Api
-directly as any other component does. A REPL entry retains the four Git reads
-the same way — `GitQuery` middleware at its own implementation slot — which is
-what lets those four stay ordinary registrations under a host that retains every
-page they answer with. That is what makes an ordinary run, a workflow run, a
+argument, and that is `Git.Push`, `Issue`, `PullRequest` and its three evidence
+reads. A workflow run retains `PullRequest` and those reads too — the upsert
+through the Git-host reconciliation beneath it, each read as policy on
+`PullRequestReadExecution` — but it installs that retention under their feature
+Api instead of owning a boundary over it, so under a workflow run those four ask
+their Api directly as any other component does. A REPL entry does own a boundary
+over all six, because each of its records is named after the occurrence that
+asked for it. A REPL entry retains the four Git reads
+differently — `GitQuery` middleware at its own implementation slot — which is
+what lets those four stay ordinary registrations under a host that retains
+every page they answer with. That is what makes an ordinary run, a workflow run, a
 provider-absent runtime and a REPL entry four policies rather than four
 components.
 
@@ -7298,13 +7300,15 @@ persistence failure with its first cause: no success binding is offered, no
 later sibling runs as though the commit succeeded, and no compensating Close is
 appended.
 
-A pull request is not here: `<PullRequest>` stays declared where it already is
-and refuses through its own unchanged missing-provider default, and a local
-result confers no publication evidence. Publication itself is the next
-subsection's subject, and `<Issue>` the section's after it — the first because
-it belongs to a checkout and to a remote at once, the second because it belongs
-to no checkout at all. Nothing inventories the managed root, snapshots a
-checkout's contents or restores one.
+A pull request is here too, with its own protocol: `<PullRequest>` is retained
+as a saved request and a Git-host outcome at two positions, and a local result
+confers no publication evidence for it. What admits one is this entry's own last
+acknowledged publication of the branch it names, which the subsection after next
+is about. Its three evidence reads retain the provider's snapshot and nothing
+above it. Publication itself is the next subsection's subject, and `<Issue>` the
+section's after it — the first because it belongs to a checkout and to a remote
+at once, the second because it belongs to no checkout at all. Nothing
+inventories the managed root, snapshots a checkout's contents or restores one.
 
 #### What one entry asked to publish, and what the Git host did about it
 

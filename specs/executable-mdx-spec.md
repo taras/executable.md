@@ -10527,12 +10527,35 @@ configuration or a credential. An interrupted upsert presents the key it used
 the first time, which is what lets the provider answer with the issue it
 already accepted rather than filing a second one; a read has no key.
 
-What the entry provider installs nothing of is pull requests, so
-`<PullRequest>` refuses there exactly as it does under a host that installs no
-provider for it, and neither a retained local result nor a retained publication
-authorizes one. Constructing it acquires nothing, including no managed root, no
-commit identity, no credential and no configuration read, and a passive reading
-of a settled history initializes nothing at all.
+It installs the pull-request capability beside those, under Deno and the
+compiled binary. `<PullRequest>` opens or updates one for the branch this entry
+published, retaining the request it asked for before anything is contacted and
+the Git host's reconciled outcome beside it, so an interrupted upsert opens the
+request it already named — the original number, title, verbatim body, draft
+state, base and head — rather than resolving today's checkout, and a completed
+one answers from its outcome with no provider constructed, no configuration read
+and nothing contacted. What admits a fresh one is this entry's own last
+acknowledged publication of that branch, from that checkout, at that commit: a
+local result, another entry's history, another checkout's publication, a
+synthetic handler answer and a failed or pending publication each authorize
+nothing, and each refuses before a request, a credential or contact exists. The
+upsert takes the selected placement's managed slot and no mutation lease.
+
+Its three evidence reads retain the provider's snapshot and nothing above it.
+Each needs no Repository and no working directory, so an entry with no managed
+root reads an allowed URL and still refuses an upsert for want of local
+capability. Restoration passes the host's current URL admission and the live
+composition around it, and a read authored after a question is a new occurrence
+that reaches the service. Each dispatches through both ordinary chains — the
+semantic one and the transport one beneath it — ending in a default private to
+that one invocation, so a handler that answers without delegating opens no
+session and retains nothing, and nested or concurrent reads cannot consume one
+another's.
+
+Node and Bun install none of this, so all six refuse there as they do under any
+host with no provider. Constructing the capability acquires nothing, including
+no managed root, no commit identity, no credential and no configuration read,
+and a passive reading of a settled history initializes nothing at all.
 
 The identity an entry's publication and issue work are named by is the entry's
 own: the execution and the entry's admission-order position, derived by the host
@@ -14573,6 +14596,7 @@ acknowledgement.
 | # | Test | Verify |
 |---|------|--------|
 | EPB1 | The public journey | A real-terminal source and compiled `xmd repl` each select a managed Repository and a Worktree, commit inside the captured path through `<Dir>`, publish the branch to a bare remote, leave at the question, have that branch advanced from a shell, reopen the printed location and reach the question with the remote still holding the commit that was published and no second push, then answer and run the suffix once; a private `git` on `PATH` forwarding unchanged to the real one records that the reopened prefix ran no command at all, the repository's primary branch is untouched throughout, and a new entry's `<Git.Push />` advances the destination to what the checkout holds now |
+| EPB1a | The public pull-request journey | The same two terminals each publish the branch, open one pull request over it and read its reviews, comments and checks, leave at the question, have the checkout advanced from a shell and the service's feedback changed, reopen the printed location and answer with the pull request's original number and URL and all three arrays restored — no second pull request opened, no collection asked for again and no `git` run at all — and the read authored after the question reaches the service and answers with the feedback that is there now; the service's own request log and the bare remote are what all of that is read from, and the shim maps the journey's logical locator to that remote on every delegation so the document still names the host its adapter is selected by |
 | EPB2 | Completed publication reaches nothing | A real unfinished prefix left at a question, holding an acknowledged request and outcome, reaches that question again after the managed checkout and the remote are removed, with zero `git` invocations, isolation-directory acquisitions, authentication sessions, object-source builds, provider constructions and live Git-host middleware calls, and appends no second publication; a genuinely new publication at another position takes the live path |
 | EPB3 | A pending request keeps what it asked for | A request acknowledged before any remote contact is reconciled after HEAD and the branch have moved, publishing the commit it named and not today's; a remote that accepted the branch before the outcome was recorded is adopted with zero second push; a cut taken before the request was acknowledged resolves live inputs instead, so a branch advanced while the entry was away is what the first saved request and publication then name |
 | EPB4 | The decisions, unchanged | Absent, equal, proven-ancestor and divergent destinations keep the shared engine's decisions; permanent ambiguity and temporary unavailability stay distinct definitive failures that replay as themselves without reaching a provider; a nonzero push earns exactly one further observation and an inconclusive completion is fatal; every assertion reads the remote's own refs and the full retained record |
@@ -14580,7 +14604,7 @@ acknowledgement.
 | EPB6 | Admission | Portable codec rows refuse an unknown version, a hostile or malformed value, an origin outside the closed locator grammar, inputs belonging to another Repository and an object id of the wrong width, and round-trip both object-id formats; the provider holds every record it reads back to the origin the Repository identity in it was fingerprinted from, on the resolved path and the restored one alike, because that digest is the runtime-named half's; history admission refuses a misnamed request, a foreign owner, a saved place no placement described, an orphan outcome, a request answered twice, a mismatched receipt and a refusal word outside the closed set, while accepting a trailing request with no outcome; a live validation refusal rejects a completion before its append |
 | EPB7 | Acknowledgement, not completion | A refused request append contacts nothing, publishes nothing and fences the work after it; a refused outcome append leaves the remote as it is with no false receipt and no compensating Close, and the next attempt adopts that completion; accepted definitive failures replay provider-free; an unauthored throw is withheld rather than published |
 | EPB8 | Resources and ownership | A fresh and a pending publication each take the selected placement's managed slot before any native read, and contention appends neither a request nor an outcome while preserving a previously saved pending one; a publication proceeds while another entry holds only the shared Git directory's mutation lease; the checkout's own `pushurl`, hooks and credential helpers reach nothing because the transport runs in a control repository with a read-only alternate; one attempt's scratch transport, object source and credential session survive both phases and are closed and joined before publication, and a cleanup that failed acknowledges neither a success nor a worker-authored refusal; a publication cancelled while its scratch space or its credential session is still pending delivers nothing it then leaves behind, releases what it did receive before the halt settles, publishes no outcome and preserves any acknowledged request, and a cancelled blocked native child closes before the entry settles |
-| EPB9 | Assembly and unsupported runtimes | The per-entry factory is inert — no directory, no `git`, no credential and no managed root — and declares exactly this entry's publication and issue components; exactly one core initialization happens per executing entry; a passive reading, a frozen position and a refused location initialize nothing; the file work, selections, local Git and issues of the same entry survive the combined assembly; an entry with no managed root and a runtime that installs no entry capability each report an absent provider for `<Git.Push />` before any remote contact or managed root |
+| EPB9 | Assembly and unsupported runtimes | The per-entry factory is inert — no directory, no `git`, no credential, no configuration read and no managed root — and declares exactly this entry's six external components: publication, issues, the pull request and its three evidence reads; exactly one core initialization happens per executing entry; a passive reading, a frozen position and a refused location initialize nothing; the file work, selections, local Git and issues of the same entry survive the combined assembly; an entry with no managed root reads an allowed pull-request URL and still reports an absent provider for `<Git.Push />` and for an upsert, and a runtime that installs no entry capability reports an absent provider for `<Git.Push />`, for `<PullRequest>` and for an evidence read before any remote contact, credential read or managed root |
 
 ---
 

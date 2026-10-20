@@ -39,8 +39,8 @@ import type { Pty } from "./pty.ts";
  * Reaching the screen compiles or loads an entrypoint, which is slow and
  * uninteresting. Everything after that is the subject.
  */
-const REACH_MS = 180_000;
-const ACT_MS = 60_000;
+export const REACH_MS = 180_000;
+export const ACT_MS = 60_000;
 
 /** How this row's `xmd` is invoked, as one shell command. */
 export type ReplCommand = (args: readonly string[]) => string;
@@ -250,7 +250,7 @@ export function replUnsupportedPush(repl: ReplCommand): Operation<void> {
 }
 
 /** A bare repository with one commit on its primary branch. */
-function* seedBareOrigin(home: string): Operation<string> {
+export function* seedBareOrigin(home: string): Operation<string> {
   const origin = join(home, "origin.git");
   const seed = join(home, "seed");
   yield* until(mkdir(seed, { recursive: true }));
@@ -264,7 +264,7 @@ function* seedBareOrigin(home: string): Operation<string> {
 }
 
 /** The commit a ref on the bare remote holds, or the empty string for absence. */
-function* remoteRef(origin: string, branch: string, home: string): Operation<string> {
+export function* remoteRef(origin: string, branch: string, home: string): Operation<string> {
   const shown = yield* gitSaid(origin, ["for-each-ref", "--format=%(refname)|%(objectname)"], home);
   for (const line of shown.split("\n")) {
     const [name, commit] = line.split("|");
@@ -276,7 +276,7 @@ function* remoteRef(origin: string, branch: string, home: string): Operation<str
 }
 
 /** Wait until the remote's branch holds this exact commit. */
-function* remoteHolding(
+export function* remoteHolding(
   origin: string,
   branch: string,
   commit: string,
@@ -299,8 +299,26 @@ function* remoteHolding(
 }
 
 /** Every `git push` the shim has seen since it was last forgotten. */
-function* pushes(log: string): Operation<string[]> {
+export function* pushes(log: string): Operation<string[]> {
   return (yield* logged(log)).filter((line) => line.split(" ").includes("push"));
+}
+
+/** Where a journey's logical locator actually is, for this run only. */
+export interface GitFixtureMapping {
+  /** The locator the document writes, which is also what the entry admits. */
+  readonly from: string;
+  /** The absolute bare repository on disk that stands in for it. */
+  readonly to: string;
+}
+
+export interface GitShimOptions {
+  /**
+   * One destination mapping, applied to every delegation.
+   *
+   * Absent — which is what the publication journey uses — forwards the argument
+   * vector unchanged.
+   */
+  readonly map?: GitFixtureMapping;
 }
 
 /**
@@ -311,8 +329,28 @@ function* pushes(log: string): Operation<string[]> {
  * suite can substitute. Only the `xmd` invocation gets it on `PATH`; this
  * journey's own fixture commands keep the host's own Git, so the log holds what
  * the document did and nothing this harness did.
+ *
+ * ## The optional destination mapping
+ *
+ * A journey whose document names a service by its real name — which is what
+ * selects a Git-host adapter — still has to reach a repository on this disk. A
+ * configuration *file* cannot say so: the host pins `GIT_CONFIG_GLOBAL`,
+ * `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM` precisely so a checkout or a
+ * person cannot name a program for Git to run. Git's invocation-local `-c`
+ * route is open, and it is the route the host itself uses, so a mapping belongs
+ * here at the executable leaf where the rest of the substitution already lives.
+ *
+ * With a mapping, every delegation carries the rewrite and a file-only protocol
+ * restriction. The restriction is what makes a missed mapping a refusal rather
+ * than a real request to the real service. Nothing about it reaches a product
+ * module, an operator's configuration or a journal: real Git still makes the
+ * checkout, the objects, the commits and the remote refs, and what is retained
+ * is still the locator the document wrote.
  */
-function* gitShim(home: string): Operation<{ readonly prefix: string; readonly log: string }> {
+export function* gitShim(
+  home: string,
+  options: GitShimOptions = {},
+): Operation<{ readonly prefix: string; readonly log: string }> {
   const real = yield* until(
     new Promise<string>((resolve, reject) => {
       execFile("sh", ["-c", "command -v git"], (error, stdout) =>
@@ -327,9 +365,27 @@ function* gitShim(home: string): Operation<{ readonly prefix: string; readonly l
   yield* until(mkdir(directory, { recursive: true }));
   const log = join(home, "git-commands.log");
   const shim = join(directory, "git");
+  // Separately quoted words, before the original vector: Git reads every `-c`
+  // ahead of the subcommand, and the vector itself is passed through untouched
+  // so the delegation's own exit status is the one this shim exits with.
+  const mapped =
+    options.map === undefined
+      ? ""
+      : ` ${[
+          "-c",
+          `url.${options.map.to}.insteadOf=${options.map.from}`,
+          "-c",
+          "protocol.allow=never",
+          "-c",
+          "protocol.file.allow=always",
+        ]
+          .map((word) => shellQuote(word))
+          .join(" ")}`;
   yield* writeTextFile(
     shim,
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${shellQuote(log)}\nexec ${shellQuote(real)} "$@"\n`,
+    // Logged before the delegation, so a reopening that ran a command which
+    // then failed is still observed as having run one.
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${shellQuote(log)}\nexec ${shellQuote(real)}${mapped} "$@"\n`,
   );
   yield* until(chmod(shim, 0o755));
   yield* writeTextFile(log, "");
@@ -337,7 +393,7 @@ function* gitShim(home: string): Operation<{ readonly prefix: string; readonly l
 }
 
 /** Every `git` the shim has seen since it was last forgotten. */
-function* logged(log: string): Operation<string[]> {
+export function* logged(log: string): Operation<string[]> {
   const held = (yield* exists(log)) ? yield* readTextFile(log) : "";
   return held.split("\n").filter((line) => line !== "");
 }
@@ -351,7 +407,7 @@ function* seedIdentity(home: string): Operation<void> {
 }
 
 /** One `git` command, in this journey's own isolated home. */
-function git(cwd: string, args: readonly string[], home = cwd): Operation<void> {
+export function git(cwd: string, args: readonly string[], home = cwd): Operation<void> {
   return until(
     new Promise<void>((resolve, reject) => {
       execFile("git", [...args], { cwd, env: environment(home) }, (error) =>
@@ -362,7 +418,7 @@ function git(cwd: string, args: readonly string[], home = cwd): Operation<void> 
 }
 
 /** What one `git` command printed, for a fixture that reads a repository. */
-function gitSaid(cwd: string, args: readonly string[], home: string): Operation<string> {
+export function gitSaid(cwd: string, args: readonly string[], home: string): Operation<string> {
   return until(
     new Promise<string>((resolve, reject) => {
       execFile("git", [...args], { cwd, env: environment(home) }, (error, stdout) =>
@@ -372,7 +428,7 @@ function gitSaid(cwd: string, args: readonly string[], home: string): Operation<
   );
 }
 
-function environment(home: string): Record<string, string | undefined> {
+export function environment(home: string): Record<string, string | undefined> {
   return {
     ...process.env,
     HOME: home,
@@ -392,7 +448,7 @@ function environment(home: string): Record<string, string | undefined> {
  * `~/.xmd/repositories` is from the home it was given — so looking for the one
  * checkout beneath that layout is what asks the question the person asks.
  */
-function* managedCheckout(home: string, kind: "repositories" | "worktrees"): Operation<string> {
+export function* managedCheckout(home: string, kind: "repositories" | "worktrees"): Operation<string> {
   const base = join(home, ".xmd", "repositories", kind);
   const depth = kind === "repositories" ? 1 : 2;
   const deadline = Date.now() + ACT_MS;
@@ -429,7 +485,7 @@ function* slotsBeneath(base: string, depth: number): Operation<string[]> {
 }
 
 /** Walk the focus ring until this control is the marked one. */
-function* reach(pty: Pty, label: string): Operation<void> {
+export function* reach(pty: Pty, label: string): Operation<void> {
   const deadline = Date.now() + ACT_MS;
   while (!(yield* pty.shows()).some((line) => line.includes(`> ${label}`))) {
     if (Date.now() > deadline) {
@@ -444,7 +500,7 @@ function* reach(pty: Pty, label: string): Operation<void> {
 }
 
 /** Activate the control holding this text with a pointer. */
-function* click(pty: Pty, text: string): Operation<void> {
+export function* click(pty: Pty, text: string): Operation<void> {
   const screen = yield* pty.shows();
   const row = screen.findIndex((line) => line.includes(text));
   if (row < 0) {
@@ -460,7 +516,7 @@ function* click(pty: Pty, text: string): Operation<void> {
 }
 
 /** Wait until this file holds this exact text. */
-function* holding(path: string, content: string): Operation<void> {
+export function* holding(path: string, content: string): Operation<void> {
   const deadline = Date.now() + ACT_MS;
   while (true) {
     if ((yield* exists(path)) && (yield* readTextFile(path)) === content) {
@@ -477,7 +533,7 @@ function* holding(path: string, content: string): Operation<void> {
 }
 
 /** Wait until this command finished, and answer with its exit status. */
-function* ended(pty: Pty): Operation<number> {
+export function* ended(pty: Pty): Operation<number> {
   const deadline = Date.now() + ACT_MS;
   while (true) {
     const status = yield* pty.status();
@@ -495,7 +551,7 @@ function* ended(pty: Pty): Operation<number> {
 }
 
 /** The one location this command printed for a caller to come back with. */
-function printedLocation(screen: string): string {
+export function printedLocation(screen: string): string {
   const found = screen.match(/xmd repl '(xmd:\/\/repl\/[^']+)'/);
   if (found === null || found[1] === undefined) {
     throw new Error(

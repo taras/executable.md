@@ -214,10 +214,17 @@ ordinary run and a REPL entry is the policy beneath that operation — which
 journal it writes to, what it reconciles and what it replays — and nothing a
 document can see.
 
-`<PullRequest>` is not available to a REPL entry and refuses there as it does
-under any host that installs no provider for it; neither a retained local result
-nor a retained publication authorizes one. `<Issue>` is available on the same
-terms as publication, and lives at a service rather than in a Workspace.
+`<PullRequest>` and its three evidence reads are available to a REPL entry too,
+on publication's own terms: a saved request written down before anything is
+contacted, the Git host's own reconciled outcome beside it, and for each read
+the provider's snapshot and nothing above it. A retained local result authorizes
+none of it — what admits an upsert is this entry's own last acknowledged
+publication of that branch, from that checkout, at that commit. An evidence read
+needs no Repository and no working directory, and its restoration still passes
+the host's current URL admission and the live composition around it, so a target
+the operator has since withdrawn refuses rather than binding what was kept.
+`<Issue>` is available on the same terms as publication, and lives at a service
+rather than in a Workspace.
 
 ## 3. Workflow lifecycle
 
@@ -1889,9 +1896,11 @@ response or the pagination state is retained: what the journal holds is the
 complete normalized request and the normalized evidence, across the ordinary
 secret gate. The retained request is the whole normalized question: the operation, the
 canonical URL, the provider discriminator, the collection, the run and the
-expansion. The effect's name covers the question rather than the run — a fork is
-a different run reaching the same position with the same question, and a name
-carrying the run would make every inherited read a different effect. A retained
+expansion. A REPL entry writes its own owner and the site it authenticated in
+those same two members, and binds them only inside its private policy. The
+effect's name covers the question rather than the run — a fork is a different
+run reaching the same position with the same question, and a name carrying the
+run would make every inherited read a different effect. A retained
 read *is* inheritable: it changed nothing at the host, so a fork consumes the
 record and asks the provider nothing.
 

@@ -1582,6 +1582,53 @@ no hold on the repository itself: it changes no file, index, branch or
 configuration there. Another entry committing in that repository does not stop
 it; another entry holding the checkout does, before a request exists.
 
+### The pull request an entry opened, and the feedback it read
+
+Write the rest of the common path beside that publication:
+
+```xmd
+<Git.Push />
+<PullRequest title="Prepare the release" as="pullRequest">Ready for review.</PullRequest>
+<PullRequest.Reviews url={pullRequest.url} as="reviews" />
+<PullRequest.Comments url={pullRequest.url} as="comments" />
+<PullRequest.Checks url={pullRequest.url} as="checks" />
+```
+
+`<PullRequest>` opens a pull request for the branch this entry published, or
+brings the one you numbered up to date, and binds its number, URL, state and
+head and base commits. It publishes nothing itself: what admits it is this
+entry's own last acknowledged `<Git.Push />` of that branch, from this checkout,
+at this commit. A publication by another entry, by another checkout, or one a
+handler answered without reaching the Git host authorizes nothing, and neither
+does a failed or still-pending one. A refusal happens before a request is
+written down, before a credential is read and before anything is contacted.
+
+The three reads name a pull request by URL and need no Repository and no working
+directory at all. Each binds its own array, and each is its own retained
+snapshot: reviews are not comments, and a partial answer binds nothing.
+
+Leave at a question after all four and come back to the printed location. The
+pull request answers with the number and URL it was opened under, and each read
+answers with the array it saw — no second pull request is opened, no collection
+is asked for again, and no `git` runs. What you get back is what this entry
+acknowledged, even if somebody has reviewed it since.
+
+An entry interrupted between asking for a pull request and hearing back opens
+*that* request when you continue it: the title, the verbatim body, the draft
+state, the base and the original head commit it named, however far the checkout
+has moved. One pull request is opened, not two, and one whose creation the
+service accepted but whose result was never written down is adopted rather than
+repeated.
+
+A read written *after* the question is new work, so it reaches the service and
+answers with the feedback that is there now. That is the difference between
+reopening an entry and writing a fresh read in it.
+
+Which pull requests you may read is the operator's to state, beside the
+credential, rather than the document's. A URL outside what this host authorized
+refuses — including on reopening, so permission withdrawn while you were away is
+withdrawn for the continuation too.
+
 ### The issue an entry filed, and the one it read
 
 An entry files and reads issues wherever you started the REPL, inside a checkout
