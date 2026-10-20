@@ -50,10 +50,14 @@ import type {
   PullRequestUpsertOptions,
 } from "../../composition/pull-request-api.ts";
 import { NoPullRequestProvider } from "../../composition/pull-request-api.ts";
+import { PULL_REQUEST_OPERATIONS } from "../../composition/pull-request-operations.ts";
 import type {
   PullRequestOperationsApi,
   PullRequestReadInvocation,
+  PullRequestUpsertInvocation,
 } from "../../composition/pull-request-operations.ts";
+import { GitCompositionProviderError } from "../../composition/errors.ts";
+import { PULL_REQUEST_ELEMENT } from "../../composition/components/PullRequest.ts";
 import {
   parseCompletePullRequestReadResult,
   PULL_REQUEST_READ_KINDS,
@@ -266,17 +270,60 @@ export function replPullRequestReadPolicy(
 }
 
 /**
- * One read, through the ordinary chain and this invocation's own transport.
+ * One read, through both ordinary chains and this invocation's own transport.
  *
- * The descriptor is installed in a scope of this read's own, so what it
- * establishes does not outlive the invocation that made it, and the handler it
- * terminates in is the adapter's own — matching, the host ceiling and target
- * parsing unchanged. What that handler is handed is a callback closed over this
- * entry's owner and this invocation's site, so the question a read is named by
- * is this entry's while the adapter stays as free of owner and site as it is of
- * a run and an expansion.
+ * Two layers, because the public vocabulary has two and an entry read composes
+ * through the same ones every other profile composes through. The semantic
+ * `PullRequestOperations` chain decides *whether* this host answers at all and
+ * owns lifecycle and admission; the `PullRequestAPI` chain beneath it is
+ * transport. A document or a plugin may compose a handler at either, and both
+ * see this read exactly as they would see an ordinary run's.
+ *
+ * Each layer's terminal is this invocation's own and is installed in a scope of
+ * this read's own, so what either establishes does not outlive the invocation
+ * that made it. The transport terminal is the adapter's own handler — matching,
+ * the host ceiling and target parsing unchanged — and what it is handed is a
+ * callback closed over this entry's owner and this invocation's site, so the
+ * question a read is named by is this entry's while the adapter stays as free
+ * of owner and site as it is of a run and an expansion.
+ *
+ * Nothing is reached below the semantic layer until the semantic layer
+ * delegates. A handler there that answers without delegating has answered the
+ * document; it opens no session, admits no read and retains nothing — which is
+ * what makes a synthetic semantic answer ordinary composition rather than a
+ * second way to write history.
  */
 function* read(
+  owner: string,
+  site: string,
+  transport: () => ReplPullRequestReadTransport | undefined,
+  invocation: PullRequestReadInvocation,
+): Operation<PullRequestReadResult> {
+  return yield* scoped(function* (): Operation<PullRequestReadResult> {
+    // One invocation-local default under the stable semantic name: the
+    // document's own lifecycle handlers still compose around this read, and the
+    // chain ends in this invocation's own admitted dispatch rather than in the
+    // public no-profile default.
+    const local = createApi<PullRequestOperationsApi>(PULL_REQUEST_OPERATIONS, {
+      read: (request: PullRequestReadInvocation) => admitted(owner, site, transport, request),
+      // The upsert keeps a refusal. It is unreachable through this descriptor —
+      // the only call made on it is the read below — and declaring it any other
+      // way would make this read's private terminal answer for an operation it
+      // owns nothing about.
+      upsert: refusingUpsertOperation(),
+    });
+    return yield* local.operations.read(invocation);
+  });
+}
+
+/**
+ * The read the semantic chain delegated, through this invocation's transport.
+ *
+ * Reached only once the layer above has decided this host answers. The
+ * configuration and the position are read here rather than above, so a read the
+ * semantic chain answered itself asks this entry's transport nothing.
+ */
+function* admitted(
   owner: string,
   site: string,
   transport: () => ReplPullRequestReadTransport | undefined,
@@ -289,9 +336,9 @@ function* read(
     throw new NoPullRequestProvider("read", invocation.url, invocation.provider);
   }
   const expansion = yield* getExpansion();
-  const handler = gitHubPullRequestReadHandler(resolved, (admitted, perform) =>
+  const handler = gitHubPullRequestReadHandler(resolved, (admittedRead, perform) =>
     retainPullRequestRead(
-      readRequest(admitted.url, admitted.kind, admitted.provider, owner, site),
+      readRequest(admittedRead.url, admittedRead.kind, admittedRead.provider, owner, site),
       expansion.position,
       perform,
     ),
@@ -299,17 +346,14 @@ function* read(
 
   return yield* scoped(function* (): Operation<PullRequestReadResult> {
     // One invocation-local descriptor under the stable transport name: the
-    // document's own handlers still compose around this read, and the chain
-    // ends in this invocation's own admitted callback rather than a shared one.
+    // document's own transport handlers still compose around this read, and the
+    // chain ends in this invocation's own admitted callback rather than a
+    // shared one.
     const local = createApi<PullRequestApi>(PULL_REQUEST_API, {
       read: (url: string, options: PullRequestReadOptions) =>
         handler([url, options], (nextUrl, nextOptions) =>
           PullRequestAPI.operations.read(nextUrl, nextOptions),
         ),
-      // The upsert keeps the public refusal. It is unreachable through this
-      // descriptor — the only call made on it is the read below — and declaring
-      // it any other way would make this read's private terminal answer for an
-      // operation it owns nothing about.
       upsert: refusingUpsert(),
     });
     return yield* local.operations.read(invocation.url, {
@@ -317,6 +361,16 @@ function* read(
       ...(invocation.provider === undefined ? {} : { provider: invocation.provider }),
     });
   });
+}
+
+/** The same refusal the upsert's own descriptor gives the member it never routes. */
+function refusingUpsertOperation(): (
+  invocation: PullRequestUpsertInvocation,
+) => Operation<PullRequestResult> {
+  // deno-lint-ignore require-yield
+  return function* (): Operation<PullRequestResult> {
+    throw new GitCompositionProviderError(PULL_REQUEST_ELEMENT);
+  };
 }
 
 /** The public default's own refusal, for the member this descriptor never routes. */
