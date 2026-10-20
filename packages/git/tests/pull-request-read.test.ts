@@ -2169,4 +2169,57 @@ describe("Tier PRR — pull-request evidence", () => {
     expect(failure).toBe(fatal);
     expect(closedRoot(stream.snapshot())).toBe(false);
   });
+
+  /**
+   * And a refusal may not hide one underneath it.
+   *
+   * The read's own vocabulary is ordinary for the classification, which is what
+   * keeps an admitted refusal recordable — but it is a node in the cause graph
+   * like any other, not a leaf. A refusal carrying a genuine durability failure
+   * as its ordinary `cause` would otherwise publish as a failed read and
+   * discard that cause on the way: `serializeError` keeps a message, a name and
+   * a stack, so nothing downstream could recover the class the run settles on.
+   */
+  it("PRR39a: a refusal carrying a fatal cause does not hide it", function* () {
+    const fatal = new DurablePersistenceError("yield", new Error("backing store"));
+    const refusal = new PullRequestReadError(
+      "unavailable",
+      "<PullRequest.Reviews>",
+      "the credential operation could not answer",
+    );
+    refusal.cause = fatal;
+
+    const other = "https://github.com/octo/project/pull/8";
+    const order: string[] = [];
+    const gate = gatedAccess(raisingAccess(refusal), order);
+    const stream = new InMemoryStream();
+    noteAppends(stream, order);
+    const document = [
+      `<PullRequest.Reviews url="${SUBJECT_URL}" as="a" />`,
+      `<PullRequest.Reviews url="${other}" as="b" />`,
+      "",
+    ].join("\n");
+
+    let failure: unknown;
+    try {
+      const task = yield* spawn(function* () {
+        failure = yield* raised(retainedRead(stream, document, gate.source));
+      });
+      yield* gate.closing;
+      gate.release();
+      yield* task;
+    } finally {
+      gate.release();
+    }
+
+    // Cleanup joined first, and then nothing was published for the read the
+    // refusal was wrapping a fatal cause for.
+    expect(order).toEqual(["open", "closing", "closed"]);
+    expect(readYields(stream.snapshot())).toEqual([]);
+
+    // The underlying failure itself, by identity — not the refusal that carried
+    // it and not a rebuilt copy.
+    expect(failure).toBe(fatal);
+    expect(closedRoot(stream.snapshot())).toBe(false);
+  });
 });
