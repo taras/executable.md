@@ -28,19 +28,37 @@
  * The transport opens an authentication session for the collection it reads,
  * and acknowledging the read before that session has closed would record work
  * whose resources were still open. The attempt therefore runs in a child scope
- * and its outcome is *held* across that scope's teardown: a success and an
- * ordinary refusal are published once the child has finished unwinding, so the
+ * and its outcome is *held* across that scope's teardown: a success and a
+ * failure alike are published once the child has finished unwinding, so the
  * journal describes work that is actually over.
  *
- * Teardown that fails raises from the child instead, before anything held is
- * acted on. That failure is nobody's authored outcome, so it activates the
- * run's existing fail-stop state and publishes neither the success nor the
- * refusal the attempt had already decided. Cancellation stays cancellation: a
- * halted child unwinds without raising, so nothing is held and nothing is
- * published.
+ * **What the body raised is the read's answer, whatever kind of error it is.**
+ * Once the ceiling has admitted the read, a failure from here is this read's
+ * own: the vocabulary's refusal, and equally an ordinary `Error` from the
+ * credential operation or from opening the session. Each is retained as a
+ * failed read, because the journal is where a continuation restores that answer
+ * from — withholding it would let a resumed execution open the session and ask
+ * the host again. The retained outcome is not restricted to one error class.
+ *
+ * Two failures are not answers. Teardown that fails raises from the child
+ * instead, before anything held is acted on, so it activates the run's existing
+ * fail-stop state and publishes neither the success nor the failure the attempt
+ * had already decided. And a durability failure — recognized by class against
+ * the failure types durable-streams exports — says the journal no longer
+ * describes this execution, so it keeps that state and its first cause rather
+ * than becoming a read outcome. Cancellation stays cancellation: a halted child
+ * unwinds without raising, so nothing is held and nothing is published.
  */
 
-import { createDurableOperation, serializeError } from "@executablemd/durable-streams";
+import {
+  ContinuePastCloseDivergenceError,
+  createDurableOperation,
+  DivergenceError,
+  DurablePersistenceError,
+  serializeError,
+  StaleInputError,
+  TerminalDivergenceError,
+} from "@executablemd/durable-streams";
 import type {
   ActivateDurabilityFailure,
   EffectDescription,
@@ -169,11 +187,19 @@ function validated(
  * scope's teardown, so an acknowledged read describes work whose resources have
  * finished.
  *
- * Only the read vocabulary is an outcome this effect may retain. A failure from
- * anywhere else — a persistence failure a nested append activated, a condition
- * this host has no word for — is not something the read answered, so it
- * activates the existing fail-stop state and publishes nothing rather than
- * being serialized as a refusal the provider never gave.
+ * **A failure the body raised is this read's own outcome.** Whatever an admitted
+ * transport raises after the ceiling has let it through — the read vocabulary's
+ * own refusal, and equally an ordinary `Error` from the credential operation or
+ * from opening the session — is a failed read, held across cleanup and then
+ * published as one. The journal is what a continuation restores that answer
+ * from, so withholding it would let a resumed execution reacquire the session
+ * and ask again.
+ *
+ * Only a durability failure is treated otherwise, and it is recognized the way
+ * every durability failure is: by class, against the failure types
+ * durable-streams exports. Such a failure says the journal no longer describes
+ * this execution, so it keeps the existing fail-stop state and its first cause
+ * rather than being serialized as a refusal the provider never gave.
  */
 const joinedReadCoordinator: LiveDurableOperationCoordinator = {
   *run<T extends DurableJson>(
@@ -187,15 +213,17 @@ const joinedReadCoordinator: LiveDurableOperationCoordinator = {
         return yield* trapped(execute);
       });
     } catch (error) {
+      // The child raised rather than returning, so this is its teardown and not
+      // an answer: every cleanup failure is fatal and publishes nothing.
       throw activateFailure(error);
     }
 
     if (!held.ok) {
-      const refusal = held.error;
-      if (!(refusal instanceof PullRequestReadError)) {
-        throw activateFailure(refusal);
+      const fatal = durabilityFailure(held.error);
+      if (fatal !== undefined) {
+        throw activateFailure(fatal);
       }
-      const refused: DurableResult = { status: "err", error: serializeError(refusal) };
+      const refused: DurableResult = { status: "err", error: serializeError(held.error) };
       yield* publish(refused);
       return refused;
     }
@@ -205,6 +233,52 @@ const joinedReadCoordinator: LiveDurableOperationCoordinator = {
     return answered;
   },
 };
+
+/**
+ * The durability failure this body error carries, or `undefined` for a read
+ * outcome.
+ *
+ * The classes are durable-streams' own exported failure types, searched through
+ * causes and aggregates the way that package searches them — a persistence
+ * failure arrives wrapped in its own cause, and a wrapper must not hide it.
+ *
+ * The read's own refusal vocabulary is excluded first and deliberately.
+ * `PullRequestReadError` extends `StaleInputError` so that an ambient printing
+ * boundary cannot render unread evidence as an empty review; that inheritance is
+ * a statement about rendering, not about whether the journal still describes
+ * this execution. Asking the class question first would make every ordinary
+ * refusal fatal.
+ */
+function durabilityFailure(error: Error): Error | undefined {
+  const seen = new Set<unknown>();
+  const pending: unknown[] = [error];
+  while (pending.length > 0) {
+    const current = pending.shift();
+    if (seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    if (current instanceof PullRequestReadError) {
+      continue;
+    }
+    if (
+      current instanceof DurablePersistenceError ||
+      current instanceof StaleInputError ||
+      current instanceof DivergenceError ||
+      current instanceof TerminalDivergenceError ||
+      current instanceof ContinuePastCloseDivergenceError
+    ) {
+      return current;
+    }
+    if (current instanceof AggregateError) {
+      pending.push(...current.errors);
+    }
+    if (current instanceof Error && current.cause !== undefined) {
+      pending.push(current.cause);
+    }
+  }
+  return undefined;
+}
 
 /**
  * The attempt's own outcome as a value, so teardown happens before it is acted
