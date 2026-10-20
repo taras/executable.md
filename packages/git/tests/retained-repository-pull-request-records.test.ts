@@ -13,11 +13,13 @@
  * neither boundary may: a continuation whose managed worktree was deleted while
  * the person was away reconciles what it already wrote down.
  *
- * These cases carry the checkpoint-1 portion of B6. The runtime origin
- * readback, the complete saved-read question and envelope admission, and actual
- * registration before replay belong to checkpoint 2, so nothing here stands in
- * for them — and nothing here substitutes synthetic ordering for B2's native
- * two-publisher evidence.
+ * These cases carry B6's provider-neutral half: the saved request, a history
+ * holding both protocols, and the question one retained read states together
+ * with the name and configuration that question produces. The runtime origin
+ * readback, recomputing that name against a real retained description, and
+ * actual registration before replay are the native entry's, so nothing here
+ * stands in for them — and nothing here substitutes synthetic ordering for
+ * B2's native two-publisher evidence.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -36,6 +38,13 @@ import {
   type GitPushInputs,
 } from "../src/composition/git-push-records.ts";
 import { locatorFingerprint } from "../src/deno/composition/locator.ts";
+import { gitOperationFingerprint } from "../src/deno/composition/operations.ts";
+import {
+  parseCompletePullRequestReadResult,
+  pullRequestReadRequestJson,
+  PULL_REQUEST_READ_KINDS,
+  readRequest,
+} from "../src/composition/pull-request-read-records.ts";
 import type { RepositoryIdentity } from "../src/composition/selection.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect-type.ts";
 import {
@@ -90,6 +99,9 @@ import {
 const OWNER = '["executablemd.repl.issue-owner",1,"execution-4","entry-1"]';
 const SITE = "expansion-5a7";
 const OTHER_SITE = "expansion-9b2";
+
+/** The pull request one entry's evidence reads name. */
+const READ_URL = "https://github.com/octo/project/pull/7";
 
 const ORIGIN = "/srv/remotes/project.git";
 const CHECKOUT = "/home/dev/.xmd/repositories/project/checkout";
@@ -507,7 +519,10 @@ describe("Tier RPR — a REPL entry's saved pull-request request", () => {
       yield* replPullRequestRequestName({
         owner: OWNER,
         site: SITE,
-        requested: { place: { ...PLACE, workingDirectory: `${CHECKOUT}/docs` }, pullRequest: CONTENT },
+        requested: {
+          place: { ...PLACE, workingDirectory: `${CHECKOUT}/docs` },
+          pullRequest: CONTENT,
+        },
       }),
     ).not.toBe(base);
 
@@ -869,7 +884,9 @@ describe("Tier RPR — a REPL entry's saved pull-request request", () => {
         },
         result: {
           status: "err",
-          error: serializeError(Object.assign(new Error("refused"), { name: "GitHostConflictError" })),
+          error: serializeError(
+            Object.assign(new Error("refused"), { name: "GitHostConflictError" }),
+          ),
         },
       },
       yield* requestEvent(prPayload),
@@ -961,5 +978,98 @@ describe("Tier RPR — a REPL entry's saved pull-request request", () => {
       },
     ];
     expect((yield* refusalOf(damaged))?.reason).toBe("malformed-receipt");
+  });
+});
+
+/**
+ * The question one entry's evidence read is named by.
+ *
+ * The record half of the same boundary, and provider-neutral for the same
+ * reason the request codec is: what a read asked, and what naming it by that
+ * question commits the host to, is decided without a transport. Which host
+ * recomputes it and refuses a history it cannot account for is the native
+ * entry's, in `retained-repository-pull-request.test.ts`.
+ */
+describe("the question a retained read states", () => {
+  it("RPR16: the name carries the site and the configuration carries neither", function* () {
+    for (const kind of PULL_REQUEST_READ_KINDS) {
+      const asked = readRequest(READ_URL, kind, undefined, OWNER, SITE);
+      // Exactly the six members, in the delivered spellings: the owner and the
+      // site travel as `runId` and `expansionId` because that is what the
+      // shipped encoding calls them.
+      expect(pullRequestReadRequestJson(asked)).toEqual({
+        operation: "read",
+        url: READ_URL,
+        provider: null,
+        kind,
+        runId: OWNER,
+        expansionId: SITE,
+      });
+
+      // The configuration is the operation, the URL, the discriminator or its
+      // absence, and the collection. The owner and the site are outside it,
+      // which is what keeps a Workflow fork's inherited read the same effect —
+      // and the name is what makes it this occurrence's.
+      const configuration = gitOperationFingerprint(["read", READ_URL, null, kind]);
+      const elsewhere = readRequest(READ_URL, kind, undefined, '["another",1,"x","y"]', OTHER_SITE);
+      expect(gitOperationFingerprint(["read", elsewhere.url, elsewhere.provider, kind])).toBe(
+        configuration,
+      );
+      expect(`${asked.expansionId}:${configuration}`).not.toBe(
+        `${elsewhere.expansionId}:${configuration}`,
+      );
+
+      // A named discriminator is part of the question, so it is part of the
+      // configuration: the same URL read through a stated provider is a
+      // different effect from the same URL matched by shape.
+      const named = readRequest(READ_URL, kind, "github", OWNER, SITE);
+      expect(named.provider).toBe("github");
+      expect(gitOperationFingerprint(["read", READ_URL, "github", kind])).not.toBe(configuration);
+    }
+  });
+
+  it("RPR17: a success is held to the collection it asked for, item by item", function* () {
+    const head = "d".repeat(40);
+    const checks = {
+      kind: "checks",
+      headSha: head,
+      items: [
+        {
+          kind: "check-run",
+          id: "1",
+          headSha: head,
+          name: "build",
+          status: "completed",
+          conclusion: "success",
+          url: null,
+          startedAt: null,
+          completedAt: null,
+          title: null,
+          summary: null,
+          text: null,
+        },
+      ],
+    };
+    expect(parseCompletePullRequestReadResult(checks, "checks")).not.toBeUndefined();
+    // The collection it asked for, and no other: a well-formed envelope of the
+    // wrong kind is not this question's answer.
+    expect(parseCompletePullRequestReadResult(checks, "reviews")).toBeUndefined();
+    expect(
+      parseCompletePullRequestReadResult({ kind: "reviews", items: [] }, "checks"),
+    ).toBeUndefined();
+
+    // Every check item names the envelope's own head. One naming another
+    // commit is evidence about something else, and it binds no array.
+    const moved = {
+      ...checks,
+      items: [{ ...checks.items[0], headSha: "e".repeat(40) }],
+    };
+    expect(parseCompletePullRequestReadResult(moved, "checks")).toBeUndefined();
+
+    // One extra member is a provider detail reaching a binding, so the whole
+    // envelope is refused rather than narrowed to what parsed.
+    expect(
+      parseCompletePullRequestReadResult({ ...checks, extra: true }, "checks"),
+    ).toBeUndefined();
   });
 });

@@ -26,19 +26,19 @@
  * `<Git.File>`, and, for an entry whose capability was built per entry below,
  * the publication an authored `<Git.Push />` asks for.
  *
- * A pull request is not here: it has its own protocol and its own evidence, and
- * a local result and a publication authorize neither. `<PullRequest>` and its
- * three evidence reads are declared with the ordinary policy beneath them, so
- * they refuse through their own unchanged missing-provider default — and what
- * is installed here is not the ordinary all-feature provider, which would
- * enable them.
+ * It also records what that entry asked a Git host for: the pull request an
+ * authored `<PullRequest>` opens or brings up to date, and the snapshot each of
+ * its three evidence reads was answered with. Those have their own protocol and
+ * their own admission — a local result and a publication authorize neither, and
+ * a pull request is admitted by this entry's own acknowledged publication of
+ * the branch it names.
  *
  * ## Installing it reaches nothing
  *
  * No directory, no lease, no `git`, no filesystem read, no commit identity, no
- * managed root, no credential and no remote. The ambient checkout is discovered by the first mutation that
- * needs to know whether it is inside one, and an entry that mutates nothing
- * never looks. The managed root is created by the first selection, and an entry
+ * managed root, no configuration, no credential and no remote. The ambient
+ * checkout is discovered by the first mutation that needs to know whether it is
+ * inside one, and an entry that mutates nothing never looks. The managed root is created by the first selection, and an entry
  * that selects nothing never makes one. The invoking person's author and
  * committer are read by the first live `<Git.Commit>`, and an entry that
  * commits nothing — or replays a completed commit — asks the host nothing about
@@ -84,8 +84,19 @@ import { GitQuery } from "../../git.ts";
 import { replPushAdmission, replPushPolicy } from "./push.ts";
 import type { ReplPushEntry } from "./push.ts";
 import { replIssueAdmission, replIssuePolicy, useEntryIssueTransport } from "./issues.ts";
+import { replPullRequestPolicy } from "./pull-request.ts";
+import {
+  entryPullRequestReadTransport,
+  replPullRequestReadAdmission,
+  replPullRequestReadPolicy,
+  type ReplPullRequestReadTransport,
+} from "./pull-request-reads.ts";
 import { pushDeclaration } from "../../composition/components/GitPush.ts";
 import { issueDeclaration } from "../../composition/components/Issue.ts";
+import { pullRequestDeclaration } from "../../composition/components/PullRequest.ts";
+import { pullRequestReadDeclaration } from "../../composition/components/PullRequestReads.ts";
+import { PULL_REQUEST_READ_KINDS } from "../../composition/pull-request-read-records.ts";
+import type { GitHubSource } from "../composition/github.ts";
 import { Execution } from "@executablemd/core/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type { IdentityComponent, JournalAdmission } from "@executablemd/core/host";
@@ -201,22 +212,48 @@ export function* replRepositoryInstallation(
     },
   });
 
-  // The two names this entry declares, and only those. Every name this
+  // This entry's own pull-request transport state, built once and inert: naming
+  // it reads no configuration, opens no session and acquires nothing. Its
+  // configuration is the existing one this deployment already states, which is
+  // why no recording option carries it.
+  const reads: ReplPullRequestReadTransport = entryPullRequestReadTransport({});
+  const openSource = function* (): Operation<GitHubSource> {
+    return reads.transport((yield* reads.authorized()) ?? {});
+  };
+  const access = () => (usable ? held.entry : undefined);
+
+  // The six names this entry declares, and only those. Every name this
   // vocabulary has is already registered in the command's scope; what an entry
-  // adds here is the policy it owns, attached to those same two bodies from
+  // adds here is the policy it owns, attached to those same shared bodies from
   // inside its own execution.
   //
   // Retaining an operation is not by itself a reason to declare its name. This
   // entry retains the pages its four Git reads answer with and the file work
   // beneath them too, and both are middleware under the component rather than a
   // policy named after an invocation — so they keep the registered default and
-  // appear nowhere here. These two need the invocation: a durable boundary that
-  // has to enclose the public chain cannot be installed inside it.
+  // appear nowhere here. These six need the invocation: a durable boundary that
+  // has to enclose the public chain cannot be installed inside it, and each
+  // evidence read is named after the occurrence that asked for it.
   const components: readonly IdentityComponent[] = [
-    pushDeclaration(replPushPolicy(owner, () => (usable ? held.entry : undefined))),
+    pushDeclaration(replPushPolicy(owner, access)),
     issueDeclaration(replIssuePolicy(owner)),
+    pullRequestDeclaration(replPullRequestPolicy(owner, access, openSource)),
+    ...PULL_REQUEST_READ_KINDS.map((kind) =>
+      pullRequestReadDeclaration(
+        kind,
+        replPullRequestReadPolicy(owner, () => reads),
+      ),
+    ),
   ];
-  const admissions: JournalAdmission[] = [replIssueAdmission(owner), replPushAdmission(owner)];
+  // The publication walk admits this entry's saved pull-request requests and
+  // their outcomes beside its Push ones, so it is not asked twice. The read
+  // admission is its own question: a retained read is named by a question
+  // rather than paired with an outcome.
+  const admissions: JournalAdmission[] = [
+    replIssueAdmission(owner),
+    replPushAdmission(owner),
+    replPullRequestReadAdmission(owner),
+  ];
   return {
     components,
     admissions,

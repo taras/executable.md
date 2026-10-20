@@ -755,6 +755,12 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "packages/git/tests/retained-repository-pull-request.test.ts",
+    reason:
+      "the subject is a REPL entry's native pull request: it clones a managed checkout and publishes to a real bare remote with real `git` children, holds that checkout's managed slot under a kernel-released exclusive advisory lock taken through the Deno runtime, and reaches a GitHub model over a loopback listener, so its module graph reaches @executablemd/git/deno and with it Workflow's storage adapter and node:sqlite. The saved request, the mixed Push and pull-request admission and the owner-specified worker are provider-neutral and are proven on every runtime by packages/git/tests/retained-repository-pull-request-records.test.ts and packages/git/tests/git-host-owned.test.ts; that a runtime without the provider refuses <PullRequest> and its evidence reads before any native or remote operation is proven by packages/cli/tests/repl-push-pty.test.ts, which runs everywhere",
+    issue: "https://github.com/taras/executable.md/issues/967",
+  },
+  {
     path: "packages/git/tests/retained-repository-history.test.ts",
     reason:
       "continues seven histories the merged implementation wrote through the production per-entry capability, so its module graph reaches @executablemd/git/deno — the native repository host, the GitHub issue adapter and Workflow's storage adapter with node:sqlite. The construction those histories are continued through is provider-neutral and is proven on every runtime by packages/git/tests/composition-component-binding.test.ts; the records themselves are proven everywhere by packages/git/tests/retained-repository-push-records.test.ts and packages/git/tests/issue-owned.test.ts",

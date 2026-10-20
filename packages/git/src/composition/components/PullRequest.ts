@@ -34,17 +34,20 @@ import { content, documented, hasContent } from "@executablemd/core";
 import type {
   ComponentRegistration,
   FirstPartyDocumentation,
-  FunctionComponent,
   PropsSchema,
   ReturnsSchema,
 } from "@executablemd/core";
+import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/host";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { PullRequestOperations } from "../pull-request-operations.ts";
+import type { PullRequestOperationsApi } from "../pull-request-operations.ts";
 import { COMPOSITION_ORIGIN } from "../definitions.ts";
 import { selectedRepository } from "../context.ts";
 import { PullRequestAdmissionError } from "../errors.ts";
 import { pullRequestResultJson } from "../pull-request-records.ts";
+import { boundComponent } from "../invocation-binding.ts";
+import type { BindOperations, ComponentBody } from "../invocation-binding.ts";
 
 export const PULL_REQUEST_ELEMENT = "<PullRequest>";
 
@@ -111,8 +114,9 @@ export const documentation: FirstPartyDocumentation = {
   context: "The pull request's body.",
 };
 
-const body: FunctionComponent = function* PullRequest(
+export const body: ComponentBody<PullRequestOperationsApi["upsert"]> = function* PullRequest(
   props: Record<string, Json>,
+  upsert: PullRequestOperationsApi["upsert"],
 ): Operation<Json> {
   // Before a Repository is observed, a checkout selected or retained Push
   // evidence read: a body that never finished rendering must not become one
@@ -129,7 +133,7 @@ const body: FunctionComponent = function* PullRequest(
     );
   }
 
-  const result = yield* PullRequestOperations.operations.upsert({
+  const result = yield* upsert({
     pullRequest: {
       // Absence is `null` from here on: the durable request is JSON, and a
       // member that is sometimes missing would be a second shape.
@@ -161,4 +165,24 @@ const METADATA = {
 };
 
 /** An ordinary registered default, over whichever provider the host installed. */
-export const pullRequestRegistration: ComponentRegistration = { ...METADATA, fn: body };
+export const pullRequestRegistration: ComponentRegistration = {
+  ...METADATA,
+  fn: (props) => body(props, PullRequestOperations.operations.upsert),
+};
+
+/**
+ * A declaration, for an execution that owns this operation's policy.
+ *
+ * The site is authenticated in the frame the engine entered, before the body
+ * reaches any content of its own — so a projecting ancestor is ineligible for
+ * one, and the children this element encloses still finish at their own journal
+ * positions before the upsert is asked for.
+ */
+export function pullRequestDeclaration(
+  bind: BindOperations<PullRequestOperationsApi["upsert"]>,
+): IdentityComponent {
+  return {
+    ...METADATA,
+    factory: (claim: IdentityClaimant) => boundComponent(claim, bind, body),
+  };
+}

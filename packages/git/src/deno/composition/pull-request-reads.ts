@@ -43,7 +43,9 @@ import type {
   PullRequestReadResult,
 } from "../../composition/pull-request-read-records.ts";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
+import type { PullRequestReadOptions } from "../../composition/pull-request-api.ts";
 import { PullRequestReadExecution } from "../../composition/pull-request-read-execution.ts";
+import type { AdmittedPullRequestRead } from "../../composition/pull-request-read-execution.ts";
 import type { RepositoryRecord } from "../../composition/records.ts";
 import type { SelectionRegistry } from "../selections.ts";
 import type { GitHubRepositoryName, GitHubSource } from "./github.ts";
@@ -271,90 +273,139 @@ function resolver(
 export function* useGitHubPullRequestReads(
   options: GitHubPullRequestsOptions = {},
 ): Operation<void> {
-  const authorized = resolver(options);
-  const transport = transports(options);
-
   yield* PullRequestAPI.around({
-    *read([url, read], next): Operation<PullRequestReadResult> {
-      // Matched by discriminator, or — with no discriminator — by URL. The
-      // match is decided from the request alone, so a URL that is not this
-      // adapter's reads no configuration on its way past.
-      const mine =
-        read.provider === undefined
-          ? recognizesGitHubPullRequestUrl(url)
-          : read.provider === GITHUB;
-      if (!mine) {
-        return yield* next(url, read);
-      }
-
-      // The URL is this adapter's, so now — and only now — what this deployment
-      // authorized is read. With nothing allowed there is no URL read this host
-      // performs, so the request passes to whatever else is installed and,
-      // finding nothing, reaches the surface's own base error. Upsert is
-      // untouched by this: it is handled below whether or not any URL is
-      // allowed.
-      const configuration = yield* authorized();
-      if (configuration?.allowed === undefined || configuration.allowed.length === 0) {
-        return yield* next(url, read);
-      }
-
-      const element = ELEMENT[read.kind];
-      // From here this middleware owns the answer, and what is allowed is asked
-      // before anything is built: a URL a document wrote is not a place this
-      // host authorized until the configuration says so.
-      if (!pullRequestAllowed(configuration.allowed, url)) {
-        throw new PullRequestReadError(
-          "unavailable",
-          element,
-          "this host has not authorized the pull request that URL names.",
-        );
-      }
-      const name = parseGitHubPullRequestUrl(url);
-      if (name === undefined) {
-        throw new PullRequestReadError(
-          "invalid-url",
-          element,
-          "that URL does not name a pull request this adapter can read.",
-        );
-      }
-
-      // Admitted. Everything above decided whether this host may answer at all,
-      // and none of it is retained: a target outside the ceiling, or one this
-      // adapter cannot name, leaves no record of a question that was never
-      // permitted.
-      //
-      // What happens from here is the profile's, not this adapter's. Both
-      // profiles install this same middleware, so it asks rather than decides:
-      // an ordinary run performs the transport afresh, and a workflow run wraps
-      // it in one durable effect. Neither a WorkflowRun nor an expansion is
-      // reachable from here, which is what keeps that true.
-      return yield* PullRequestReadExecution.operations.perform(
-        { url, kind: read.kind, provider: read.provider },
-        function* (): Operation<PullRequestReadResult> {
-          // After the ceiling, never before: a session opened first would be an
-          // identity established for a target this host had not authorized.
-          const access = yield* transport(configuration).open();
-          const reading = yield* readEvidence(access, name, name.number, read.kind);
-          if (reading.state === "unavailable") {
-            throw new PullRequestReadError(
-              "unavailable",
-              element,
-              "the Git host did not answer with the complete collection. None of what it did " +
-                "answer is evidence that there is nothing there.",
-            );
-          }
-          if (reading.state === "protocol-invalid") {
-            throw new PullRequestReadError(
-              "protocol",
-              element,
-              "the Git host answered about a different subject, or with an item outside the " +
-                "evidence contract. A well-formed answer to another question is still the wrong " +
-                "answer.",
-            );
-          }
-          return reading.result;
-        },
-      );
-    },
+    read: gitHubPullRequestReadHandler(
+      gitHubPullRequestReadResolver(options),
+      (admitted, perform) => PullRequestReadExecution.operations.perform(admitted, perform),
+    ),
   });
+}
+
+/**
+ * What an admitted read is handed to, once this adapter owns the answer.
+ *
+ * The ordinary and workflow installer hands it the profile-neutral execution
+ * seam, whose default performs afresh and whose workflow middleware retains.
+ * A REPL entry hands it a callback closed over that invocation's own owner and
+ * site, because an entry's retention is named after the invocation and there is
+ * nothing on this surface for it to be read from.
+ */
+export type AdmittedReadExecution = (
+  admitted: AdmittedPullRequestRead,
+  perform: () => Operation<PullRequestReadResult>,
+) => Operation<PullRequestReadResult>;
+
+/**
+ * This adapter's lazily memoized configuration and transport, resolved once.
+ *
+ * Built once per installation — or, for an entry, once per entry — and inert
+ * until something actually needs a session. Naming it reads no configuration
+ * and opens nothing.
+ */
+export function gitHubPullRequestReadResolver(options: GitHubPullRequestsOptions = {}): {
+  readonly authorized: () => Operation<GitHubPullRequestsConfiguration | undefined>;
+  readonly transport: (configuration: GitHubPullRequestsConfiguration) => GitHubSource;
+} {
+  return { authorized: resolver(options), transport: transports(options) };
+}
+
+/**
+ * The one admitted-read handler, over whichever execution the host supplies.
+ *
+ * Matching, the host ceiling and target parsing are this adapter's own and stay
+ * exactly where they were — before a session, a credential or a request exists,
+ * so a refusal leaves no trace. What happens to an admitted read is the
+ * profile's, and that is the only thing this is parameterized by.
+ */
+export function gitHubPullRequestReadHandler(
+  resolved: {
+    readonly authorized: () => Operation<GitHubPullRequestsConfiguration | undefined>;
+    readonly transport: (configuration: GitHubPullRequestsConfiguration) => GitHubSource;
+  },
+  execute: AdmittedReadExecution,
+) {
+  const authorized = resolved.authorized;
+  const transport = resolved.transport;
+  return function* (
+    [url, read]: [string, PullRequestReadOptions],
+    next: (url: string, read: PullRequestReadOptions) => Operation<PullRequestReadResult>,
+  ): Operation<PullRequestReadResult> {
+    // Matched by discriminator, or — with no discriminator — by URL. The
+    // match is decided from the request alone, so a URL that is not this
+    // adapter's reads no configuration on its way past.
+    const mine =
+      read.provider === undefined ? recognizesGitHubPullRequestUrl(url) : read.provider === GITHUB;
+    if (!mine) {
+      return yield* next(url, read);
+    }
+
+    // The URL is this adapter's, so now — and only now — what this deployment
+    // authorized is read. With nothing allowed there is no URL read this host
+    // performs, so the request passes to whatever else is installed and,
+    // finding nothing, reaches the surface's own base error. Upsert is
+    // untouched by this: it is handled below whether or not any URL is
+    // allowed.
+    const configuration = yield* authorized();
+    if (configuration?.allowed === undefined || configuration.allowed.length === 0) {
+      return yield* next(url, read);
+    }
+
+    const element = ELEMENT[read.kind];
+    // From here this middleware owns the answer, and what is allowed is asked
+    // before anything is built: a URL a document wrote is not a place this
+    // host authorized until the configuration says so.
+    if (!pullRequestAllowed(configuration.allowed, url)) {
+      throw new PullRequestReadError(
+        "unavailable",
+        element,
+        "this host has not authorized the pull request that URL names.",
+      );
+    }
+    const name = parseGitHubPullRequestUrl(url);
+    if (name === undefined) {
+      throw new PullRequestReadError(
+        "invalid-url",
+        element,
+        "that URL does not name a pull request this adapter can read.",
+      );
+    }
+
+    // Admitted. Everything above decided whether this host may answer at all,
+    // and none of it is retained: a target outside the ceiling, or one this
+    // adapter cannot name, leaves no record of a question that was never
+    // permitted.
+    //
+    // What happens from here is the profile's, not this adapter's. Both
+    // profiles install this same middleware, so it asks rather than decides:
+    // an ordinary run performs the transport afresh, and a workflow run wraps
+    // it in one durable effect. Neither a WorkflowRun nor an expansion is
+    // reachable from here, which is what keeps that true.
+    return yield* execute(
+      { url, kind: read.kind, provider: read.provider },
+      function* (): Operation<PullRequestReadResult> {
+        // After the ceiling, never before: a session opened first would be an
+        // identity established for a target this host had not authorized.
+        const access = yield* transport(configuration).open();
+        const reading = yield* readEvidence(access, name, name.number, read.kind);
+        if (reading.state === "unavailable") {
+          throw new PullRequestReadError(
+            "unavailable",
+            element,
+            "the Git host did not answer with the complete collection. None of what it did " +
+              "answer is evidence that there is nothing there.",
+          );
+        }
+        if (reading.state === "protocol-invalid") {
+          throw new PullRequestReadError(
+            "protocol",
+            element,
+            "the Git host answered about a different subject, or with an item outside the " +
+              "evidence contract. A well-formed answer to another question is still the wrong " +
+              "answer.",
+          );
+        }
+        return reading.result;
+      },
+    );
+  };
 }
