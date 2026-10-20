@@ -740,8 +740,8 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
   /** Every retained turn, in append order, before the chronology is ordered. */
   const turns: ReplAgentTurn[] = [];
   let terminal: ReplTerminal | undefined;
-  /** Every scope by the source path it was admitted from, for owner lookup. */
-  const byPath = new Map<string, ScopeDraft[]>();
+  /** Every admission by the source path it was admitted from, for owner lookup. */
+  const byPath = new Map<string, Admission[]>();
   /** Every generated fragment this prefix admitted, by the identity it carries. */
   const fragments: GeneratedOwner[] = [];
   /**
@@ -780,7 +780,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
     generated: [],
     scopes: [],
   };
-  register(byPath, entry);
+  register(byPath, { ...site(segment.admission, 0), scope: entry });
   transcript.push({
     kind: "entry",
     marker: markers[0],
@@ -888,7 +888,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
         scopes: [],
       };
       owner.value.scope.scopes.push(scope);
-      register(byPath, scope);
+      register(byPath, { ...site(event, index), scope });
       transcript.push({
         kind: "scope",
         marker,
@@ -1330,13 +1330,27 @@ function bind(scope: ScopeDraft, name: string, value: Json): void {
   scope.bindings[at] = binding;
 }
 
-function register(index: Map<string, ScopeDraft[]>, scope: ScopeDraft): void {
-  const held = index.get(scope.path);
+function register(index: Map<string, Admission[]>, admission: Admission): void {
+  const held = index.get(admission.scope.path);
   if (held === undefined) {
-    index.set(scope.path, [scope]);
+    index.set(admission.scope.path, [admission]);
     return;
   }
-  held.push(scope);
+  held.push(admission);
+}
+
+/**
+ * One scope this prefix admitted, with the two facts that say whether a
+ * candidate effect could have come from it: which coroutine admitted it, and
+ * how far into the history that was. An admission record is written before the
+ * work inside it runs, so everything that work records sits after the
+ * admission, on its coroutine or on one spawned beneath it.
+ */
+interface Admission {
+  readonly coroutine: string;
+  /** Where the admission sits in this prefix, so only later work can be its. */
+  readonly order: number;
+  readonly scope: ScopeDraft;
 }
 
 /**
@@ -1344,18 +1358,13 @@ function register(index: Map<string, ScopeDraft[]>, scope: ScopeDraft): void {
  *
  * Generated source is not a file, so the engine records the work inside it at a
  * position carrying the fragment's identity instead of a path — the id the
- * admission was decided under. This is that identity, with the two facts that
- * say whether a candidate effect could have come from it: which coroutine
- * admitted it, and how far into the history that was.
+ * admission was decided under. This is that identity, with the admission it
+ * was decided by.
  */
-interface GeneratedOwner {
+interface GeneratedOwner extends Admission {
   readonly id: string;
   /** The entry that admitted it. One execution holds one, and this states it. */
   readonly entry: string;
-  readonly coroutine: string;
-  /** Where the admission sits in this prefix, so only earlier work can be its. */
-  readonly order: number;
-  readonly scope: ScopeDraft;
 }
 
 /** Where one recorded effect sits: on which coroutine, and how far in. */
@@ -1421,18 +1430,21 @@ function descendsFrom(ancestor: string, coroutine: string): boolean {
  * The one scope an effect's source position belongs to.
  *
  * Two attributions, and a position states which one it is. A position naming a
- * path belongs to the scope admitted from that path. A position naming a
- * generated fragment belongs to the scope that fragment's admission created —
- * chosen by the identity the effect itself carries, with journal order and
- * coroutine ancestry deciding only whether that candidate could be its owner: an
- * admission that happened afterwards, or on work this effect is not part of, is
- * not an owner however recently it ran. Nothing is chosen by the latest
+ * path belongs to the scope admitted from that path; a position naming a
+ * generated fragment belongs to the scope that fragment's admission created. In
+ * both, the position chooses the candidates — a path, or the identity the effect
+ * itself carries — and journal order and coroutine ancestry decide only whether
+ * a candidate could be its owner: an admission that happened afterwards, or on
+ * work this effect is not part of, is not an owner however recently it ran. A
+ * component called once in each of two spawned branches is therefore two owners
+ * that no effect can confuse, while the same call repeated on one coroutine is
+ * two that nothing recorded tells apart. Nothing is chosen by the latest
  * admission, the current scope, an effect's name or its line and column: a
  * binding attached to a guessed owner is a value shown in the wrong place, and
  * there is no spelling of "probably this one" that a reader could check.
  */
 function ownerOf(
-  index: Map<string, ScopeDraft[]>,
+  index: Map<string, Admission[]>,
   fragments: readonly GeneratedOwner[],
   announced: ReadonlySet<string>,
   position: ReplPosition | undefined,
@@ -1450,7 +1462,22 @@ function ownerOf(
   if (position.path === undefined) {
     return generatedOwnerOf(fragments, announced, position, where, subject);
   }
-  const held = index.get(position.path) ?? [];
+  return pathOwnerOf(index.get(position.path) ?? [], position, where, subject);
+}
+
+/**
+ * The admitted source one path-positioned effect belongs to.
+ *
+ * Each way that fails is its own refusal, because "nothing owns this" and "two
+ * things might" are different damage and a reader acting on either needs to
+ * know which they have.
+ */
+function pathOwnerOf(
+  held: readonly Admission[],
+  position: ReplPosition,
+  where: EffectSite,
+  subject: string,
+): Result<{ scope: ScopeDraft; position: ReplPosition }> {
   if (held.length === 0) {
     return Err(
       new ReplProjectionError(
@@ -1458,7 +1485,16 @@ function ownerOf(
       ),
     );
   }
-  if (held.length > 1) {
+  const owning = couldOwn(held, where);
+  if (owning.length === 0) {
+    return Err(
+      new ReplProjectionError(
+        `${subject} names a source this entry admitted on work it is not part of, so nothing ` +
+          "owns it.",
+      ),
+    );
+  }
+  if (owning.length > 1) {
     return Err(
       new ReplProjectionError(
         `${subject} names a source this entry admitted more than once, so which occurrence owns ` +
@@ -1469,7 +1505,18 @@ function ownerOf(
   // The position travels back with the scope: an effect that has an owner has a
   // readable position by construction, and saying so here is what lets a caller
   // retain it without asking again whether it was there.
-  return Ok({ scope: held[0], position });
+  return Ok({ scope: owning[0]!.scope, position });
+}
+
+/**
+ * Which of the named admissions one effect could have come from: only one that
+ * had already happened, on this coroutine or on an ancestor of it.
+ */
+function couldOwn<T extends Admission>(named: readonly T[], where: EffectSite): T[] {
+  return named.filter(
+    (admission) =>
+      admission.order < where.order && descendsFrom(admission.coroutine, where.coroutine),
+  );
 }
 
 /**
@@ -1507,10 +1554,7 @@ function generatedOwnerOf(
       ),
     );
   }
-  // Only an admission this effect could have come from: one that had already
-  // happened, on this coroutine or on an ancestor of it.
-  const earlier = named.filter((fragment) => fragment.order < where.order);
-  const owning = earlier.filter((fragment) => descendsFrom(fragment.coroutine, where.coroutine));
+  const owning = couldOwn(named, where);
   if (owning.length === 0) {
     return Err(
       new ReplProjectionError(

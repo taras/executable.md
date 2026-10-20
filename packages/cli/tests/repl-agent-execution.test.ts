@@ -64,7 +64,7 @@ import type { ReplSession } from "../src/repl/session.ts";
 import { useReplAgent } from "../src/repl/agent.ts";
 import type { ReplAgentKernel, ReplAgentReading } from "../src/repl/agent.ts";
 import { projectRepl } from "../src/repl/model.ts";
-import type { ReplAgentPermission } from "../src/repl/model.ts";
+import type { ReplAgentPermission, ReplModel } from "../src/repl/model.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
 
 /**
@@ -2345,6 +2345,99 @@ describe("EL2 — an entry's live Agent state is retired with its execution", ()
       expect(session.model.turns.find((turn) => turn.input === "quiet")?.permissions).toEqual([]);
       expect(stub.outcomes.get("entry-two")).toEqual({ outcome: "selected", optionId: option });
       expect(stub.outcomes.has("entry-one")).toBe(false);
+    });
+  });
+});
+
+/** One Markdown component, called once in each of two branches (#941). */
+const TWO_ADVISORS = [
+  "<All>",
+  '<Spawn><Advisor session="architect" question="same" /></Spawn>',
+  '<Spawn><Advisor session="planner" question="same" /></Spawn>',
+  "</All>",
+].join("\n");
+
+/** The coroutine a marker was recorded on: `yield:root.1:0` was recorded on `root.1`. */
+function coroutineOf(marker: string): string {
+  return marker.split(":")[1] ?? "";
+}
+
+/**
+ * Two calls of `<Advisor />`, each owning the one turn its own branch asked.
+ *
+ * Which call is `Advisor-1` is the order the two admissions were journaled in,
+ * which two concurrent branches do not fix. What is fixed is that each turn
+ * sits under the call recorded on its own branch, so the check reads the branch
+ * off each record's marker rather than assuming an order.
+ */
+function eachCallOwnsItsTurn(model: ReplModel): void {
+  const entry = model.entries[0]!;
+  const calls = entry.scope.scopes;
+  expect(calls.map((scope) => [scope.name, scope.key])).toEqual([
+    ["Advisor", "Advisor-1"],
+    ["Advisor", "Advisor-2"],
+  ]);
+  expect(new Set(calls.map((scope) => coroutineOf(scope.marker))).size).toBe(2);
+  expect(entry.turns.map((turn) => turn.scope).sort()).toEqual(["Advisor-1", "Advisor-2"]);
+  expect(entry.turns.map((turn) => turn.sessionKey).sort()).toEqual([
+    "stub:architect",
+    "stub:planner",
+  ]);
+  for (const turn of entry.turns) {
+    expect(turn.status).toBe("completed");
+    expect(turn.text).toBe("reply");
+    const call = calls.find((scope) => scope.key === turn.scope)!;
+    const branch = coroutineOf(call.marker);
+    const asked = coroutineOf(turn.marker);
+    expect(asked === branch || asked.startsWith(`${branch}.`)).toBe(true);
+  }
+}
+
+describe("R1 — one component called in two branches", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("R1: each call keeps its own turn, the next entry is admitted, and a cold read repeats nothing", function* () {
+    const holder = execution();
+    let written: string[] = [];
+    yield* scoped(function* () {
+      const stub = createStub({ same: { deltas: ["reply"] } });
+      yield* useStub(stub);
+      const session = opened(yield* start(holder, TWO_ADVISORS, "deny-all", [REFERENCE_DIRECTORY]));
+      const outcome = yield* session.join();
+      expect(outcome.ok).toBe(true);
+      expect(stub.asked).toEqual(["same", "same"]);
+
+      eachCallOwnsItsTurn(session.model);
+
+      // The completed entry stays readable, and does not stand in the way of
+      // the next one.
+      const submitted = yield* session.submit('<Json value={{ after: 1 }} as="after" />\n');
+      expect(submitted.ok).toBe(true);
+      const second = yield* session.join();
+      expect(second.ok).toBe(true);
+      expect(session.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2"]);
+      expect(stub.asked).toEqual(["same", "same"]);
+      written = serialized(yield* holder.stream.readAll());
+    });
+
+    yield* scoped(function* () {
+      const stub = createStub();
+      yield* useStub(stub);
+      const cold = execution(yield* holder.stream.readAll());
+      const reopened = opened(
+        yield* openReplSession({
+          execution: cold,
+          includes: [REFERENCE_DIRECTORY],
+          installations: installations(),
+          generated: ordinaryGeneratedSelection(),
+        }),
+      );
+      yield* reopened.join();
+      // The saved work is read, and nothing is asked or written again.
+      expect(stub.asked).toEqual([]);
+      expect(reopened.model.entries.map((one) => one.key)).toEqual(["entry-1", "entry-2"]);
+      eachCallOwnsItsTurn(reopened.model);
+      expect(serialized(yield* cold.stream.readAll())).toEqual(written);
     });
   });
 });
