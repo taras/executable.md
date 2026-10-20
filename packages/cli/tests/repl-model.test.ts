@@ -1299,3 +1299,110 @@ describe("REPL model: which generated fragment owns pathless work", () => {
     yield* useTempFileCompiler();
   });
 });
+
+/** `<Plan />` called on one coroutine, where the record of that call lands. */
+function calledPlan(coroutine: string): DurableEvent {
+  return yielded(
+    { type: "import_component", name: "Plan" },
+    declared(),
+    { path: "<eval>", offset: 0, line: 1, column: 1 },
+    coroutine,
+  );
+}
+
+/** One question asked inside the packaged Plan's source, on one coroutine. */
+function askedInPlan(coroutine: string): DurableEvent {
+  return yielded(
+    { type: "elicit", name: `elicit:${PLAN_ORIGIN}:4:1`, [SCHEMA_FIELD]: { type: "object" } },
+    { decision: "Approve" },
+    insidePlan(),
+    coroutine,
+  );
+}
+
+/** The entry's own admission, before it has called anything. */
+function entryAdmitted(): DurableEvent[] {
+  return planJournal().slice(0, 1);
+}
+
+describe("REPL model: which call of a repeated source owns its work", () => {
+  it("RS1: a component called once in each of two branches keeps each call's own work", function* () {
+    // Two spawned branches each call `<Plan />`, and the second branch's
+    // question settles before the first's. The third question is asked on work
+    // the second branch spawned beneath itself.
+    const events = [
+      ...entryAdmitted(),
+      calledPlan("root.0"),
+      calledPlan("root.1"),
+      askedInPlan("root.1"),
+      askedInPlan("root.0"),
+      askedInPlan("root.1.0"),
+    ];
+    const model = projected(events);
+    const entry = only(model);
+    if (entry === undefined) {
+      throw new Error("the journal admits one entry");
+    }
+
+    expect(entry.scopes.map((scope) => scope.key)).toEqual(["Plan-1", "Plan-2"]);
+    expect(child(entry, "Plan-1").elicitations).toHaveLength(1);
+    expect(child(entry, "Plan-2").elicitations).toHaveLength(2);
+    expect(entry.elicitations).toEqual([]);
+    expect(model.transcript.flatMap((row) => (row.kind === "elicit" ? [row.scope] : []))).toEqual([
+      "Plan-2",
+      "Plan-1",
+      "Plan-2",
+    ]);
+
+    // The same attribution from the protocol's own text form, so a cold reading
+    // of the saved work reaches it without anything live.
+    const cold = only(projected(copied(events)));
+    expect(cold?.scopes.map((scope) => [scope.key, scope.elicitations.length])).toEqual([
+      ["Plan-1", 1],
+      ["Plan-2", 2],
+    ]);
+    yield* useTempFileCompiler();
+  });
+
+  it("RS2: a call this work is not part of owns none of it, and two it could be refuse", function* () {
+    // A sibling branch's work: the one call is not above it.
+    expect(refusal([...entryAdmitted(), calledPlan("root.0"), askedInPlan("root.1")])).toContain(
+      "is not part of",
+    );
+    // The parent's own work, after both branches called: neither call is above it.
+    expect(
+      refusal([
+        ...entryAdmitted(),
+        calledPlan("root.0"),
+        calledPlan("root.1"),
+        askedInPlan("root"),
+      ]),
+    ).toContain("is not part of");
+    // Work recorded before the call that would own it: when it ran, nothing had
+    // admitted that source.
+    expect(refusal([...entryAdmitted(), askedInPlan("root.0"), calledPlan("root.0")])).toContain(
+      "never admitted",
+    );
+    // The same call repeated on one branch: nothing recorded tells them apart,
+    // and the later one is not chosen for being later.
+    expect(
+      refusal([
+        ...entryAdmitted(),
+        calledPlan("root.0"),
+        calledPlan("root.0"),
+        askedInPlan("root.0"),
+      ]),
+    ).toContain("more than once");
+    // A call above another call: both are above the work, and the inner one is
+    // not chosen for being nearer.
+    expect(
+      refusal([
+        ...entryAdmitted(),
+        calledPlan("root"),
+        calledPlan("root.0"),
+        askedInPlan("root.0"),
+      ]),
+    ).toContain("more than once");
+    yield* useTempFileCompiler();
+  });
+});
