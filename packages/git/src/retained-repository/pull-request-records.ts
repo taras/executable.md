@@ -60,10 +60,8 @@ import {
 } from "../composition/selection.ts";
 import { digest, REPL_REPOSITORY_VERSION } from "./records.ts";
 
-/** The durable type one entry pull-request request is published under. */
 export const REPL_REPOSITORY_PULL_REQUEST_REQUEST = "repl_repository_pull_request_request";
 
-/** The prefix the request's own name is built from. */
 const PULL_REQUEST_REQUEST_PREFIX = "executablemd.repl.pull-request-request";
 
 /**
@@ -181,7 +179,6 @@ export function replPullRequestRequestName(
   ]);
 }
 
-/** The payload one published pull-request request carries. */
 export function replPullRequestRequestJson(record: {
   readonly owner: string;
   readonly site: string;
@@ -264,7 +261,6 @@ function readRequestRecord(value: unknown): ReplPullRequestRequestRecord | undef
   });
 }
 
-/** One reading of a pull-request request, or `undefined`. */
 function parseAsked(value: unknown): ReplPullRequestAsked | undefined {
   const read = members(value, ASKED_MEMBERS);
   if (read === undefined) {
@@ -278,7 +274,6 @@ function parseAsked(value: unknown): ReplPullRequestAsked | undefined {
   return Object.freeze({ place, pullRequest });
 }
 
-/** One reading of where a pull request was asked for, or `undefined`. */
 function parsePlace(value: unknown): ReplPullRequestPlace | undefined {
   const read = members(value, PLACE_MEMBERS);
   if (read === undefined) {
@@ -379,7 +374,6 @@ function parseResolution(
   return Object.freeze({ checkoutRoot, commonDirectory, origin, inputs });
 }
 
-/** Whether the content a reading asked for is the content that was resolved. */
 function sameRequestedContent(
   content: ReplPullRequestContent,
   inputs: PullRequestInputs,
@@ -419,7 +413,6 @@ function askedJson(asked: ReplPullRequestAsked): Json {
   };
 }
 
-/** Whether two readings of one pull request's request describe the same ask. */
 export function sameReplPullRequestAsked(
   left: ReplPullRequestAsked,
   right: ReplPullRequestAsked,
