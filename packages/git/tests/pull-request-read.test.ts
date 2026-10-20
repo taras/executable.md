@@ -375,6 +375,41 @@ function gatedAccess(access: GitHubAccess, order: string[], cleanupFailure?: Err
   };
 }
 
+/**
+ * An admitted session whose credential operation raises.
+ *
+ * `token()` is reached by `authorizedHeaders` before the transport's own
+ * send-failure catch, so what it raises leaves the admitted body unchanged —
+ * which is the one seam where a body error that is not this read's vocabulary
+ * reaches the held outcome.
+ */
+function raisingAccess(failure: Error): GitHubAccess {
+  return {
+    endpoint: ENDPOINT,
+    // deno-lint-ignore require-yield
+    *token(): Operation<string | undefined> {
+      throw failure;
+    },
+    // deno-lint-ignore require-yield
+    *send(): Operation<GitHubHttpResponse> {
+      throw new Error("unreachable: the credential operation refused first");
+    },
+  };
+}
+
+/** A source that fails the case if it is opened at all. */
+function forbiddenSource(opens: string[]): GitHubSource {
+  return {
+    endpoint: ENDPOINT,
+    open(): Operation<GitHubAccess> {
+      return resource(function* (provide) {
+        opens.push("open");
+        yield* provide(raisingAccess(new Error("no session may be opened here")));
+      });
+    },
+  };
+}
+
 /** An access session whose teardown fails immediately. */
 function failingCleanup(access: GitHubAccess, order: string[], failure: Error): GitHubSource {
   return {
@@ -2020,5 +2055,118 @@ describe("Tier PRR — pull-request evidence", () => {
     expect(readYields(backing.snapshot())).toEqual([]);
     expect(closedRoot(backing.snapshot())).toBe(false);
     expect(host.requests.every((request) => !request.url.includes("/pulls/8/"))).toBe(true);
+  });
+
+  /**
+   * An admitted body failure is this read's answer, whatever kind of error it
+   * is.
+   *
+   * Once the ceiling has let the read through, a credential operation that
+   * raises an ordinary `Error` has failed the read — so the failure is retained
+   * and a continuation restores it. Withholding it and activating the run's
+   * fence instead would lose the outcome and let a resumed execution open the
+   * session and ask the host again, which is what the replay half measures.
+   */
+  it("PRR38: an ordinary credential failure is retained as this read's own", function* () {
+    const ordinary = new Error("the credential helper could not answer");
+    const order: string[] = [];
+    const gate = gatedAccess(raisingAccess(ordinary), order);
+    const stream = new InMemoryStream();
+    noteAppends(stream, order);
+    const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n\n{reviews.length} reviews\n`;
+
+    let returned = false;
+    let failure: unknown;
+    try {
+      const task = yield* spawn(function* () {
+        failure = yield* raised(retainedRead(stream, document, gate.source));
+        returned = true;
+      });
+
+      yield* gate.closing;
+      // Held: the session has failed the read and nothing has been acknowledged.
+      expect(order).toEqual(["open", "closing"]);
+      expect(returned).toBe(false);
+      expect(readYields(stream.snapshot())).toEqual([]);
+
+      gate.release();
+      yield* task;
+    } finally {
+      gate.release();
+    }
+
+    expect(order).toEqual(["open", "closing", "closed", "appended"]);
+    expect(returned).toBe(true);
+    expect(failure).toBeDefined();
+
+    // Exactly one failed read, no array, and nothing of the error's own
+    // vocabulary required for it to be an outcome.
+    const retained = readYields(stream.snapshot());
+    expect(retained).toHaveLength(1);
+    expect(retained[0]?.result?.status).toBe("err");
+    expect(JSON.stringify(retained)).not.toContain('"items"');
+
+    // Ordinary terminal handling: the root settled. A durability fence refuses
+    // the terminal close, which is what PRR36 and PRR37 observe instead — so
+    // this is the assertion that tells the two apart.
+    expect(closedRoot(stream.snapshot())).toBe(true);
+
+    // And the retained failure restores. No session is opened, so no credential
+    // is read and nothing is sent.
+    const opens: string[] = [];
+    const replayed = new InMemoryStream(
+      stream
+        .snapshot()
+        .filter((event) => !(event.type === "close" && event.coroutineId === "root")),
+    );
+    const again = yield* raised(retainedRead(replayed, document, forbiddenSource(opens)));
+    expect(again).toBeDefined();
+    expect(opens).toEqual([]);
+    expect(readYields(replayed.snapshot())).toHaveLength(1);
+  });
+
+  /**
+   * The contrast, so the correction above is a distinction and not a removal.
+   *
+   * A durability failure reaching the held outcome says the journal no longer
+   * describes this execution, so it is not an answer the read may retain: it
+   * keeps the run's fail-stop state and its own identity as the first cause,
+   * publishes nothing, and leaves no terminal close for a continuation to
+   * reuse.
+   */
+  it("PRR39: a durability failure from the body stays fatal, not an outcome", function* () {
+    const fatal = new DurablePersistenceError("yield", new Error("backing store"));
+    const other = "https://github.com/octo/project/pull/8";
+    const order: string[] = [];
+    const gate = gatedAccess(raisingAccess(fatal), order);
+    const stream = new InMemoryStream();
+    noteAppends(stream, order);
+    const document = [
+      `<PullRequest.Reviews url="${SUBJECT_URL}" as="a" />`,
+      `<PullRequest.Reviews url="${other}" as="b" />`,
+      "",
+    ].join("\n");
+
+    let failure: unknown;
+    try {
+      const task = yield* spawn(function* () {
+        failure = yield* raised(retainedRead(stream, document, gate.source));
+      });
+      yield* gate.closing;
+      gate.release();
+      yield* task;
+    } finally {
+      gate.release();
+    }
+
+    // Cleanup still joined before anything was decided, and then nothing was
+    // published: no read of either status.
+    expect(order).toEqual(["open", "closing", "closed"]);
+    expect(readYields(stream.snapshot())).toEqual([]);
+
+    // The first cause travels by identity rather than being rebuilt as a read
+    // refusal, and the fence leaves no terminal close and no later read.
+    expect(failure).toBe(fatal);
+    expect(closedRoot(stream.snapshot())).toBe(false);
   });
 });
