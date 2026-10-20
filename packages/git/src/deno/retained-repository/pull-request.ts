@@ -322,7 +322,6 @@ function* resolve(
   });
 }
 
-/** The full ref a branch of this name is published to. */
 function destinationRefFor(branch: string): string {
   return `refs/heads/${branch}`;
 }
@@ -585,7 +584,6 @@ function* own(entry: ReplPushEntry, target: ReplGitCheckout): Operation<void> {
   );
 }
 
-/** One reading of where this pull request was asked for. */
 function placeOf(
   registration: ReplPlacementRegistration,
   workingDirectory: string,
@@ -600,7 +598,6 @@ function placeOf(
   });
 }
 
-/** What one reading of this invocation asked for, normalized. */
 function contentOf(request: PullRequestUpsertInvocation): ReplPullRequestContent {
   const pullRequest = request.pullRequest;
   return Object.freeze({

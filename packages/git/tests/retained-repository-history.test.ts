@@ -550,6 +550,22 @@ describe("histories the merged implementation wrote, held to their bytes and con
       // The owner every record in it was written under is the one the receipt
       // names, which is what a continuation presents again.
       expect(scenario.owner).toContain("executablemd.repl.issue-owner");
+
+      // And the admission a `repl` entry performs *today* accepts it, byte for
+      // byte, under that recorded owner: the Plugin's own contribution plus
+      // every admission the final per-entry capability installs — the issue
+      // walk, the one walk that now admits publications and pull requests
+      // together, and the retained evidence reads. A dispatch that had learned
+      // to refuse an older envelope, or a new record type that changed how an
+      // old name is read, is caught here rather than by the person who reopens
+      // the entry.
+      yield* scoped(function* (): Operation<void> {
+        const contributed = yield* replContribution();
+        const installation = yield* replRepositoryInstallation(scenario.owner, {});
+        for (const admit of [...contributed.admissions, ...(installation.admissions ?? [])]) {
+          yield* admit(events);
+        }
+      });
     }
   });
 
