@@ -1350,11 +1350,17 @@ describe("one entry's pull request", () => {
 
   it("Q7: two real publishers of one destination, restored in reverse, still decide", function* () {
     const fixture = yield* useFixture();
+    fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
     const counted = counters();
     // Two publishers of the *same* destination in one entry, each in its own
     // coroutine. The second commits on top of the first and publishes the same
     // branch, so both pairs are relevant to the pull request below and only the
     // later one describes the branch the Git host now holds.
+    //
+    // The first publisher reads evidence *before* it publishes. That read is an
+    // ordinary admitted occurrence, and on continuation it restores through the
+    // live semantic chain — which is what gives this row somewhere to hold that
+    // branch before its publication restores rather than after.
     const source = [
       `<Repository name="project" url=${JSON.stringify(LOCATOR)}>`,
       `  <Git.Switch branch=${JSON.stringify(BRANCH)} />`,
@@ -1366,6 +1372,7 @@ describe("one entry's pull request", () => {
       `      <File path="one.md">one</File>`,
       `      <Git.Add paths="one.md" />`,
       `      <Git.Commit message="One" as="one" />`,
+      `      <PullRequest.Reviews url=${JSON.stringify(FIRST_URL)} as="watched" />`,
       `      <Git.Push />`,
       question("afterFirst", "first published"),
       `    </Spawn>`,
@@ -1435,38 +1442,71 @@ describe("one entry's pull request", () => {
     const later = pairs[1]?.resolved.inputs.sourceCommit;
     expect(earlier).not.toBe(later);
     expect(outcomes(prefix)).toHaveLength(2);
+    expect(reads(prefix)).toHaveLength(1);
     expect(requests(prefix)).toEqual([]);
     expect(yield* remoteCommit(fixture, BRANCH)).toBe(later);
 
-    // Continued with the two questions answered in the opposite order, so the
-    // publisher acknowledged second restores first. The decision is a reading
-    // of the acknowledged stream, not of a schedule.
-    const order: string[] = [];
+    // Continued with the earlier publisher held at its own read, before its
+    // publication can restore, until the later publisher has passed its own
+    // post-publication checkpoint. So the two publications restore in the
+    // opposite order from the one they were acknowledged in.
+    const checkpoints: string[] = [];
     const resumed = counters();
     const stream = new InMemoryStream([...prefix]);
-    const first = withResolvers<void>();
+    const parked = withResolvers<void>();
+    const release = withResolvers<void>();
+    let holding = false;
+    let heldWhenSecondRestored = false;
+    // Both armed before anything waits on either, so a failure below cannot
+    // leave a branch held at a gate nobody releases.
+    yield* ensure(() => release.resolve());
+    yield* ensure(() => parked.resolve());
     const again = yield* run(fixture, source, stream, resumed, {
       *between(): Operation<void> {
+        yield* PullRequestOperations.around({
+          *read([invocation], next): Operation<PullRequestReadResult> {
+            // The first publisher's own pre-publication read, restoring
+            // through the live chain. Its branch is parked here, so its
+            // `<Git.Push />` has not been reached at all — a coroutine runs in
+            // document order, and the read is written above the publication.
+            holding = true;
+            parked.resolve();
+            yield* release.operation;
+            holding = false;
+            return yield* next(invocation);
+          },
+        });
         yield* Elicitation.around({
           *elicit([request]: [{ readonly message: string }]): Operation<unknown> {
-            if (request.message.includes("first published")) {
-              yield* first.operation;
-              order.push("first");
+            if (request.message.includes("second published")) {
+              // Waited for, rather than assumed: this checkpoint is not
+              // recorded until the earlier branch is demonstrably parked
+              // before its own publication.
+              yield* parked.operation;
+              heldWhenSecondRestored = holding;
+              checkpoints.push("second");
+              release.resolve();
               return {};
             }
-            order.push("second");
-            first.resolve();
+            checkpoints.push("first");
             return {};
           },
         });
       },
     });
     expect(again.refusal).toBe(undefined);
-    expect(order).toEqual(["second", "first"]);
+    // The later publisher's publication had restored while the earlier branch
+    // was still parked above its own, and the post-publication checkpoints
+    // then arrived second-publisher first — opposite the acknowledged order
+    // the journal holds.
+    expect(heldWhenSecondRestored).toBe(true);
+    expect(checkpoints).toEqual(["second", "first"]);
+    expect(reads(yield* stream.readAll())).toHaveLength(1);
 
     // The last acknowledged pair decides: the head is the second publisher's
-    // commit. An implementation matching any relevant pair would have named
-    // the first commit and been refused by its own checkout provenance.
+    // commit. An evidence list accumulated in restoration order would have
+    // offered the first publisher's pair here, and its commit is refused by
+    // this head's own provenance.
     const asked = requests(yield* stream.readAll());
     expect(asked).toHaveLength(1);
     expect(asked[0]?.resolved.inputs.headSha).toBe(later);
