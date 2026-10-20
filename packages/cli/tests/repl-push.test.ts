@@ -403,7 +403,7 @@ describe("how a REPL entry gets its publication capability", () => {
     expect(types(ran.events)).not.toContain(REPL_REPOSITORY_PUSH_REQUEST);
   });
 
-  it("C6: the production selector carries one factory for both capabilities", function* () {
+  it("C6: the production selector carries one factory for every retained capability", function* () {
     const fixture = yield* useFixture();
     const flags = {
       agentProvider: "acpx",
@@ -430,17 +430,28 @@ describe("how a REPL entry gets its publication capability", () => {
       throw new Error("the production selector selected no entry capability");
     }
 
-    // Building one reaches nothing — no directory, no `git`, no credential and
-    // no managed root — and what it declares is the two operations this entry
-    // retains, under names the command's scope has already registered.
+    // Building one reaches nothing — no directory, no `git`, no credential, no
+    // managed root and no pull-request session — and what it declares is the six
+    // operations this entry retains, under names the command's scope has
+    // already registered. The three evidence reads are named after their own
+    // occurrences, which is why each is declared rather than left to the
+    // registered default.
     const built = yield* scoped(function* (): Operation<ExecutionInstallation> {
       return yield* factory('["executablemd.repl.issue-owner",1,"execution-cli-6","1"]');
     });
     expect([...(built.components ?? [])].map((component) => component.name).sort()).toEqual([
       "Git.Push",
       "Issue",
+      "PullRequest",
+      "PullRequest.Checks",
+      "PullRequest.Comments",
+      "PullRequest.Reviews",
     ]);
-    expect((built.admissions ?? []).length).toBe(2);
+    // Three admissions: the Issue history, the one walk that admits this
+    // entry's saved Push and pull-request requests beside their outcomes, and
+    // the retained reads, which are named by a question rather than paired with
+    // an outcome.
+    expect((built.admissions ?? []).length).toBe(3);
     expect(yield* nothingUnder(fixture.managed)).toBe(true);
   });
 });
