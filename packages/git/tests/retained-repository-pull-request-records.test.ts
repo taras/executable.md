@@ -549,7 +549,7 @@ describe("Tier RPR — a REPL entry's saved pull-request request", () => {
 
     // Absence is `null`, and a number is a positive integer or nothing.
     for (const number of [0, -1, 1.5, "7", undefined]) {
-      const content = { ...CONTENT, number } as unknown as ReplPullRequestContent;
+      const content = { ...CONTENT, number };
       expect(
         parseReplPullRequestRequestRecord({
           ...payload,

@@ -110,7 +110,6 @@ export function* proveReplPullRequestPublication(
   }
 }
 
-/** Whether one acknowledged publication is about the destination being asked for. */
 function addresses(
   pair: ReplAcknowledgedPush,
   question: ReplPullRequestPublicationQuestion,
