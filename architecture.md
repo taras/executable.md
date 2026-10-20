@@ -2748,6 +2748,33 @@ and its refusal are final. A refusal ends the request rather than starting a
 search for another provider, because a search is how a document that named one
 service quietly reaches a different one.
 
+**Every value a read binds is read whole, at each of the three places one
+arrives.** The provider's answer is validated before anything serializes it,
+because serializing first projects an envelope out of the received object and a
+member the contract does not name would be dropped on the way rather than
+refused. A restored snapshot is validated again before it is reused, and the
+answer the whole composition finished with is validated once more before the
+element binds an array — middleware outside the retained effect unwinds after
+the provider's snapshot is acknowledged, and what it hands back may be a
+transformation of that snapshot or an answer of its own. An invalid value at any
+of the three binds no array; a provider snapshot this run already acknowledged
+stays recorded exactly as it was, and a restoration that refuses appends no
+replacement. Checks are evidence about one revision, so every item states the
+commit its envelope names: an item naming another one is refused rather than
+reported as this head's.
+
+**An admitted read is acknowledged only after its own attempt has closed.** The
+transport opens an authentication session for the collection it reads, so the
+read runs in a child scope whose outcome is held across that scope's teardown,
+and the success or the ordinary refusal is published once the session has
+actually finished. Teardown that fails raises from the child instead, before
+anything held is acted on: that failure is nobody's authored outcome, so it
+activates the run's first-failure fence and publishes neither the success nor
+the refusal the attempt had already decided. Cancellation stays cancellation and
+publishes nothing, and a refused append is the existing persistence failure
+carrying the adapter's error as its cause — no success binding, no later durable
+work, no compensating `Close`.
+
 The bound here is the operator's `allowed` list, checked before a session is
 opened, a credential is read or anything is sent. It bounds reads alone: an
 upsert names a branch this run published rather than a URL a document wrote, and

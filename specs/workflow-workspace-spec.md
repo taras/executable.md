@@ -1851,7 +1851,31 @@ collection and found none — which is why the two are distinguishable at all.
 another pull request or another head is a protocol failure rather than data.
 Checks observe the pull request's head first and read every result at that exact
 SHA, and each record carries it, so evidence always says which revision it
-describes.
+describes. Every check item is held to the head its own envelope names: an item
+describing another commit is refused rather than reported as this head's, which
+is a rule about the record and not only about what one adapter collected.
+
+**Every value is read whole, wherever it arrives.** A read is answered at three
+places, and each is validated completely. The provider's answer is read before
+anything serializes it — serializing first projects an envelope out of the
+received object, so a member the contract does not name would be dropped on the
+way rather than refused. A retained snapshot is read again before it is reused.
+And the answer the whole composition finished with is read once more before the
+element binds an array, because semantic and transport middleware unwind after
+the provider's snapshot is acknowledged and what they hand back may be a
+transformation of it or an answer of their own. An invalid value binds no array
+at any of the three: a received one retains the failure rather than a sanitized
+success, a restored one appends no replacement, and a final one leaves the
+acknowledged snapshot exactly as it was recorded.
+
+**An admitted read is acknowledged only after its own attempt has closed.** The
+read runs in a child attempt whose outcome is held across that attempt's
+teardown, so the authentication session the transport opened has actually closed
+before the success or the ordinary refusal reaches the journal. Teardown that
+fails raises instead and publishes neither: that failure is nobody's authored
+outcome, so it activates the run's first failure and no later durable work and
+no `Close` follow it. Cancellation publishes nothing, and a refused append is
+the existing persistence failure carrying the adapter's error as its cause.
 
 **Authentication and reach are the host's.** The credential is the host's own,
 acquired for the request and disposed with the invocation. Which pull requests

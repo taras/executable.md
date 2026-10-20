@@ -18,7 +18,7 @@
  * wrong.
  */
 
-import { isJsonObject } from "@executablemd/core";
+import { isJsonObject, JsonParseError, parseJson } from "@executablemd/core";
 import type { Json, JsonObject } from "@executablemd/core";
 
 /** Which collection one read covers. */
@@ -314,8 +314,39 @@ export function parsePullRequestReadResult(value: Json): PullRequestReadResult |
   if (typeof headSha !== "string" || headSha === "") {
     return undefined;
   }
-  const items = collectItems(listed, parseCheckItem);
+  const items = collectItems(listed, (entry) => parseCheckItem(entry, headSha));
   return items === undefined ? undefined : { kind, headSha, items };
+}
+
+/**
+ * The complete evidence a value describes, for the collection that was asked
+ * for.
+ *
+ * Total over values this boundary did not create: a provider's answer, a value
+ * the journal held, and whatever outer composition handed back are all read the
+ * same way. The JSON boundary comes first so the *whole* value is the subject —
+ * a member the record contract does not name is refused here rather than
+ * projected away by a serializer that only writes the members it knows.
+ *
+ * The collection is part of the question, so an answer about another one is
+ * refused even when it is well formed: a read that asked for checks and bound
+ * comments would be the wrong answer rather than a short one.
+ */
+export function parseCompletePullRequestReadResult(
+  value: unknown,
+  kind: PullRequestReadKind,
+): PullRequestReadResult | undefined {
+  let complete: Json;
+  try {
+    complete = parseJson(value);
+  } catch (error) {
+    if (error instanceof JsonParseError) {
+      return undefined;
+    }
+    throw error;
+  }
+  const result = parsePullRequestReadResult(complete);
+  return result === undefined || result.kind !== kind ? undefined : result;
 }
 
 function collectItems<T>(
@@ -501,12 +532,23 @@ function parseCommentItem(value: JsonObject): CommentEvidence | undefined {
   };
 }
 
-function parseCheckItem(value: JsonObject): CheckEvidence | undefined {
+/**
+ * One check item, held to the commit the envelope says it describes.
+ *
+ * A check result is evidence about a revision, so an item naming another commit
+ * is evidence about another revision — and a collection that mixed the two
+ * would report that this head's checks had passed on the strength of an older
+ * one's. The envelope's head is the subject, and every item states it.
+ */
+function parseCheckItem(value: JsonObject, subject: string): CheckEvidence | undefined {
   const id = text(value.id);
   const headSha = text(value.headSha);
   const name = text(value.name);
   const url = nullableText(value.url);
   if (id === undefined || headSha === undefined || name === undefined || url === undefined) {
+    return undefined;
+  }
+  if (headSha !== subject) {
     return undefined;
   }
   if (value.kind === "check-run") {

@@ -35,14 +35,15 @@
  * It is not a reconciled Git-host effect. There is no natural key, no pre-state
  * and nothing to adopt: repeating a read is safe in the way repeating a write
  * is not.
+ *
+ * What this module supplies is the *pair* a workflow read is named by, from
+ * context it has and the adapter does not. The recipe itself — the description,
+ * the joined attempt and the validation around it — belongs to
+ * `pull-request-read-retention.ts`, which obtains neither.
  */
 
-import { getExpansion, sourceDescription } from "@executablemd/core";
-import { createDurableOperation } from "@executablemd/durable-streams";
-import type { EffectDescription, Json as DurableJson } from "@executablemd/durable-streams";
+import { getExpansion } from "@executablemd/core";
 import type { Operation } from "effection";
-import { scoped } from "effection";
-import { PullRequestReadError } from "../../composition/errors.ts";
 import { PullRequestAPI } from "../../composition/pull-request-api.ts";
 import { PullRequestReadExecution } from "../../composition/pull-request-read-execution.ts";
 import {
@@ -50,112 +51,19 @@ import {
   type PullRequestReadInvocation,
   type PullRequestUpsertInvocation,
 } from "../../composition/pull-request-operations.ts";
-import {
-  parsePullRequestReadResult,
-  pullRequestReadEnvelopeJson,
-  pullRequestReadRequestJson,
-  readRequest,
-} from "../../composition/pull-request-read-records.ts";
-import type {
-  PullRequestReadKind,
-  PullRequestReadRequest,
-  PullRequestReadResult,
-} from "../../composition/pull-request-read-records.ts";
+import { readRequest } from "../../composition/pull-request-read-records.ts";
+import type { PullRequestReadResult } from "../../composition/pull-request-read-records.ts";
 import type { PullRequestResult } from "../../composition/pull-request-records.ts";
-import { parseJsonValue } from "@executablemd/workflow";
 import { getWorkflowRun } from "@executablemd/workflow";
-import { gitOperationFingerprint } from "./operations.ts";
-
-/** The durable effect type one evidence read is retained under. */
-export const PULL_REQUEST_READ = "pull_request_read";
-
-/** Which element a refusal names, by the collection it was reading. */
-const ELEMENT: Readonly<Record<PullRequestReadKind, string>> = Object.freeze({
-  reviews: "<PullRequest.Reviews>",
-  comments: "<PullRequest.Comments>",
-  checks: "<PullRequest.Checks>",
-});
-
-function* describeRead(request: PullRequestReadRequest): Operation<EffectDescription> {
-  const expansion = yield* getExpansion();
-  // The run is in the retained request, and deliberately not in this
-  // fingerprint. A fork is a different run reaching the same position with the
-  // same question, and a name that carried the run would make every inherited
-  // read a different effect — which is to say, unforkable. What the name has to
-  // separate is different *questions*, and the four members below are what a
-  // question is made of.
-  const configuration = gitOperationFingerprint([
-    request.operation,
-    request.url,
-    request.provider,
-    request.kind,
-  ]);
-  return {
-    type: PULL_REQUEST_READ,
-    name: `${request.expansionId}:${configuration}`,
-    input: pullRequestReadRequestJson(request),
-    configuration,
-    ...sourceDescription(expansion.position),
-  };
-}
+import { retainPullRequestRead } from "./pull-request-read-retention.ts";
 
 /**
- * Retain one admitted read, or restore what is already retained.
+ * The durable effect type one evidence read is retained under.
  *
- * Reached only through `PullRequestReadExecution`, after a transport has
- * matched the request, admitted it against the host ceiling and validated the
- * target — so the effect this creates always describes a question this run was
- * permitted to ask. Everything from here is durable: a transport or evidence
- * failure retains the failed read, and a completed one restores its snapshot
- * without opening a session or reaching the network.
+ * Re-exported from the module that owns the recipe, so a consumer that already
+ * names it here keeps naming one value.
  */
-function retainDurableRead(
-  request: PullRequestReadRequest,
-  perform: () => Operation<PullRequestReadResult>,
-): Operation<PullRequestReadResult> {
-  const element = ELEMENT[request.kind];
-
-  return scoped(function* () {
-    const description = yield* describeRead(request);
-
-    const stored = yield createDurableOperation<DurableJson>(
-      description,
-      function* (): Operation<DurableJson> {
-        const answered = yield* perform();
-        if (answered.kind !== request.kind) {
-          throw new PullRequestReadError(
-            "protocol",
-            element,
-            "the selected provider answered with a different collection than the one this " +
-              "element asked for.",
-          );
-        }
-        return pullRequestReadEnvelopeJson(answered);
-      },
-    );
-
-    const result = parsePullRequestReadResult(
-      parseJsonValue(
-        stored,
-        "$",
-        (reason, path) =>
-          new PullRequestReadError(
-            "protocol",
-            element,
-            `what this run retained for it is not a value it can carry: ${reason} at ${path}.`,
-          ),
-      ),
-    );
-    if (result === undefined || result.kind !== request.kind) {
-      throw new PullRequestReadError(
-        "protocol",
-        element,
-        "what this run retained for it is not the evidence that read produces.",
-      );
-    }
-    return result;
-  });
-}
+export { PULL_REQUEST_READ } from "./pull-request-read-retention.ts";
 
 /**
  * Make an admitted read durable, for this scope and below.
@@ -170,8 +78,9 @@ export function useRetainedPullRequestReads(): Operation<void> {
       *perform([admitted, transport]): Operation<PullRequestReadResult> {
         const run = yield* getWorkflowRun();
         const expansion = yield* getExpansion();
-        return yield* retainDurableRead(
+        return yield* retainPullRequestRead(
           readRequest(admitted.url, admitted.kind, admitted.provider, run.runId, expansion.id),
+          expansion.position,
           transport,
         );
       },
