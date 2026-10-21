@@ -20,7 +20,7 @@ import {
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { useTempFileCompiler } from "@executablemd/core";
+import { Component, useTempFileCompiler } from "@executablemd/core";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 
@@ -1495,6 +1495,61 @@ describe("REPL source ownership by import coordinate (#976)", () => {
       if (event.type === "yield") {
         expect(event.description[OWNER_FIELD]).toEqual({ coroutineId: "root", index: 0 });
       }
+    }
+  });
+
+  it("SO7: ordinary middleware copies preserve evaluated blocks' source ownership", function* () {
+    const source = [
+      '<OwnerEval input="first" as="first" />',
+      '<OwnerEval input="second" as="second" />',
+      "<OwnerContent>",
+      "```js eval",
+      'const callerValue = "caller";',
+      "```",
+      "</OwnerContent>",
+      "{first}/{second}",
+    ].join("\n");
+    for (const copy of [false, true]) {
+      yield* scoped(function* () {
+        let forwarded = 0;
+        if (copy) {
+          yield* Component.around({
+            *applyModifiers([modifiers, block], next) {
+              forwarded += 1;
+              return yield* next(modifiers, { ...block });
+            },
+          });
+        }
+        const run = yield* ownerRun(source);
+        expect(run.output.trim()).toBe("first/second");
+        expect(forwarded).toBe(copy ? 3 : 0);
+        const evaluations = run.events.filter(
+          (event) => event.type === "yield" && event.description.type === "eval",
+        );
+        expect(
+          evaluations.map((event) =>
+            event.type === "yield" ? event.description[OWNER_FIELD] : undefined,
+          ),
+        ).toEqual([
+          { coroutineId: "root", index: 1 },
+          { coroutineId: "root", index: 3 },
+          { coroutineId: "root", index: 0 },
+        ]);
+        for (let end = 1; end <= run.events.length; end++) {
+          const prefix = run.events.slice(0, end);
+          expect(projected(copied(prefix))).toEqual(projected(prefix));
+        }
+        const entry = only(projected(copied(run.events)));
+        if (entry === undefined) {
+          throw new Error("the journal admits one entry");
+        }
+        expect(entry.scopes.map((scope) => scope.bindings)).toEqual([
+          [{ name: "value", value: "first" }],
+          [{ name: "value", value: "second" }],
+          [],
+        ]);
+        expect(binding(entry, "callerValue")).toBe("caller");
+      });
     }
   });
 

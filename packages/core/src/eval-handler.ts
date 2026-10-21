@@ -26,7 +26,7 @@ import {
   validateLiveOverlay,
 } from "./live-env.ts";
 import { EphemeralEval, EphemeralEvalOutputError } from "./modifiers/ephemeral.ts";
-import { codeBlockSourceOwner, sourceOwnerDescription } from "./source-owner.ts";
+import { SourceOwner, sourceOwnerDescription } from "./source-owner.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
 
 function* runEphemeralEval(
@@ -117,6 +117,7 @@ function runBlock<T>(blockId: string, block: () => Operation<T>): Operation<T> {
 export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
   (function* () {
     const ctx = yield* useCodeBlock();
+    const sourceOwner = yield* ephemeral(SourceOwner.get());
     const evalEnv = yield* ephemeral(env);
     if (!evalEnv) {
       throw new Error(
@@ -155,7 +156,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         type: "eval",
         name: `eval:${ctx.blockId}`,
         ...(ctx.language ? { language: ctx.language } : {}),
-        ...sourceOwnerDescription(ctx.position, codeBlockSourceOwner(ctx)),
+        ...sourceOwnerDescription(ctx.position, sourceOwner),
       },
       function* (): Operation<Json> {
         Object.assign(evalEnv.values, bindings);

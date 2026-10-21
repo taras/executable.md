@@ -6369,9 +6369,11 @@ the REPL attributes: the coroutine ID and zero-based yield index of the prior
 successful source import. Canonical import admission captures this coordinate,
 and private expansion arguments carry it through component bodies, branches,
 iterations and projection. A component body uses its own import; caller content
-uses its captured caller import. Existing private invocation state and block
-inputs deliver the reference to the operation recording it. It grants no
-permission and creates no effect, coroutine or identity allocator.
+uses its captured caller import. Existing private invocation state delivers the
+reference to component operations. Modifier execution binds the reference in the
+scoped `SourceOwner` Context, so copying a public code-block context preserves
+attribution. It grants no permission and creates no effect, coroutine or identity
+allocator.
 
 Projection resolves the exact import and checks its source, prior order and
 coroutine ancestry. An invalid explicit reference refuses; it never falls back

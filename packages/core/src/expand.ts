@@ -141,7 +141,7 @@ import {
   StaleInputError,
 } from "@executablemd/durable-streams";
 import type { DurablePosition, Workflow } from "@executablemd/durable-streams";
-import { sourceOwnedCodeBlock } from "./source-owner.ts";
+import { SourceOwner } from "./source-owner.ts";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
 import { isJsonObject, parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
@@ -1417,17 +1417,14 @@ function* expandListSegments(
         // Compose modifier chain from info string and run it.
         // blockId uses counter.next() for deterministic IDs that
         // survive per-segment expansion (see spec §6.1 Block ID counter).
-        const context = sourceOwnedCodeBlock(
-          {
-            language: segment.language,
-            content: interpolatedContent,
-            blockId: `eval:${parentMeta["componentName"] ?? "root"}:${counter.next()}`,
-            componentName: parentMeta["componentName"] as string | undefined,
-            routing: yield* declaredRouting(),
-            ...(segment.position === undefined ? {} : { position: segment.position }),
-          },
-          sourceOwner,
-        );
+        const context = {
+          language: segment.language,
+          content: interpolatedContent,
+          blockId: `eval:${parentMeta["componentName"] ?? "root"}:${counter.next()}`,
+          componentName: parentMeta["componentName"] as string | undefined,
+          routing: yield* declaredRouting(),
+          ...(segment.position === undefined ? {} : { position: segment.position }),
+        };
 
         if (bindingName !== undefined) {
           if (!evalEnv) {
@@ -1491,7 +1488,9 @@ function* expandListSegments(
         }
 
         try {
-          const codeResult = yield* applyModifiers(segment.modifiers, context);
+          const codeResult = yield* SourceOwner.with(sourceOwner, () =>
+            applyModifiers(segment.modifiers, context),
+          );
 
           // What the command printed and whether it failed are two separate
           // questions, and the exit code alone answers the second one (#307).
