@@ -352,10 +352,6 @@ export {
   parseCompletePullRequestReadResult,
   readRequest,
 } from "./src/composition/pull-request-read-records.ts";
-export type {
-  PullRequestReadKind,
-  PullRequestReadResult,
-} from "./src/composition/pull-request-read-records.ts";
 export { gitHostRequestFingerprint } from "./src/git-host/records.ts";
 export {
   liveIssueRead,
