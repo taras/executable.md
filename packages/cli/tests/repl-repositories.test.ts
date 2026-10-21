@@ -35,18 +35,19 @@ import {
   parseReplLocalRecord,
   REPL_REPOSITORY_LOCAL,
   REPL_REPOSITORY_SELECTION,
-} from "../../git/src/retained-repository/records.ts";
+} from "../src/repl/repositories/records.ts";
 import {
   parseReplPlacementRecord,
   REPL_REPOSITORY_PLACEMENT,
-} from "../../git/src/retained-repository/placement-records.ts";
+} from "../src/repl/repositories/placement-records.ts";
 import { Execution } from "@executablemd/core/api";
 import type { Json } from "@executablemd/core";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
-import { useReplRepositoryRecording } from "../../git/src/deno/retained-repository/provider.ts";
+import { useReplRepositoryRecording } from "../src/repl/repositories/deno/provider.ts";
 import type { HelperAssembly } from "../../git/src/deno/composition/credential-helper.ts";
 import { gitPlugin } from "../../git/src/plugin.ts";
+import { replRepositoryPlugin } from "../src/repl/repositories/plugin.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import { entryInitialBindings, projectRepl } from "../src/repl/model.ts";
@@ -56,7 +57,8 @@ import {
   openExecutionFile,
   readRecords,
 } from "../src/repl/journal.ts";
-import type { RepositoryHost } from "../../git/src/deno/composition/host.ts";
+import { useDenoRepositoryOperations } from "@executablemd/git/deno";
+import type { DenoRepositoryOperations } from "@executablemd/git/deno";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
 import type { ReplModel } from "../src/repl/model.ts";
@@ -75,13 +77,18 @@ function* replInstallations(): Operation<readonly ExecutionInstallation[]> {
   // scope, which is what an entry needs to resolve `<Dir>`: the Plugin is one
   // contribution, and taking half of it would be assembling something no
   // command assembles.
-  const install = gitPlugin.install;
+  // The command's own assembly of the bundled Plugin, which is what a profile
+  // carries: the vocabulary and the domain admissions come from Git, and the
+  // admission that reads an entry's own repository history back belongs to this
+  // command, so asking the bundled Plugin alone would declare nothing here.
+  const bundled = replRepositoryPlugin(gitPlugin);
+  const install = bundled.install;
   if (install === undefined) {
-    throw new Error("the Git Plugin installs nothing");
+    throw new Error("the bundled Plugin installs nothing");
   }
-  const installed = yield* install.call(gitPlugin, { command: "repl", args: [] });
+  const installed = yield* install.call(bundled, { command: "repl", args: [] });
   if (installed === undefined) {
-    throw new Error("the Git Plugin declared nothing for the repl command");
+    throw new Error("the bundled Plugin declared nothing for the repl command");
   }
   return [{ admissions: [...(installed.admissions ?? [])] }];
 }
@@ -708,23 +715,34 @@ interface Committed {
 }
 
 /**
- * The real repository host, with each `git commit` it is asked to run counted.
+ * The real repository handle, with each `commit` it is asked to perform counted.
  *
- * Counted at the host rather than at the `Git` Api: the provider's own
- * implementation of `commit` consults the journal, so it is entered on a
- * replay and answers from the record. What a replay must not do is reach the
- * repository, and this is where reaching it happens.
+ * Counted below the `Git` Api rather than at it: the provider's own
+ * implementation of `commit` consults the journal, so it is entered on a replay
+ * and answers from the record. What a replay must not do is reach the
+ * repository, and this method is where reaching it happens. The real one is
+ * delegated to unchanged, so the commit and the refs it writes are real.
  */
-function countingHost(committed: Committed): RepositoryHost {
-  const host = denoRepositoryHost();
-  return {
-    ...host,
-    git(invocation) {
-      if (invocation.args.includes("commit")) {
+function countingCommits(
+  committed: Committed,
+  helper: HelperAssembly,
+): () => Operation<DenoRepositoryOperations> {
+  return function* (): Operation<DenoRepositoryOperations> {
+    const operations = yield* useDenoRepositoryOperations(helper);
+    const wrapped: DenoRepositoryOperations = {
+      ...operations,
+      *commit(checkout, workingDirectory, message, messageSource, identity) {
         committed.commits += 1;
-      }
-      return host.git(invocation);
-    },
+        return yield* operations.commit(
+          checkout,
+          workingDirectory,
+          message,
+          messageSource,
+          identity,
+        );
+      },
+    };
+    return wrapped;
   };
 }
 
@@ -733,10 +751,9 @@ function* useCountedCommits(committed: Committed, fixture: Fixture): Operation<v
   yield* Execution.around({
     *init(_args, next): Operation<void> {
       yield* useReplRepositoryRecording({
-        helper: SUITE_HELPER,
         root: managedRoot(fixture),
         identity: statedIdentity,
-        host: countingHost(committed),
+        operations: countingCommits(committed, SUITE_HELPER),
       });
       yield* next();
     },

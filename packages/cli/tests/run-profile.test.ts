@@ -32,6 +32,7 @@ import {
 } from "../src/run-profile.ts";
 import { installPlugins } from "../src/plugin-host.ts";
 import { Plugin } from "@executablemd/core/api";
+import type { CommandPlugins } from "../src/plugin-host.ts";
 import { scoped } from "effection";
 import { selectPlugins } from "../src/plugin-selection.ts";
 
@@ -79,6 +80,30 @@ describe("the bundled run profile", () => {
         `${args.join(" ")}: ${GIT}`,
       );
     }
+  });
+
+  it("carries it for the REPL, with this command's own entry-history admission", function* () {
+    // The REPL runs a document a person typed, so the Git vocabulary is
+    // available there exactly as it is to `run` — and it arrives through this
+    // command's own assembly of the bundled value rather than from the bundled
+    // Plugin's own predicate, which declines `repl`. The names are registered
+    // by the contribution, as they are for every other command; what is this
+    // command's own is the admission that reads back what an entry wrote down
+    // about the checkout it was standing in.
+    expect(`repl: ${(yield* profile(["repl"])).join(",")}`).toBe(`repl: ${GIT}`);
+
+    const admissions = function* (command: string): Operation<number> {
+      const installed = yield* scoped(function* (): Operation<CommandPlugins> {
+        return yield* installPlugins([BUNDLED_PLUGIN], { command, args: [command] });
+      });
+      return installed.installations.flatMap((one) => [...(one.admissions ?? [])]).length;
+    };
+    // Both sides, so the third admission is specifically this command's rather
+    // than something every command happens to carry: `run` gets Git's two
+    // domain admissions, and `repl` gets those two with the entry-history one
+    // beside them, from inside the same contribution.
+    expect(`run: ${yield* admissions("run")}`).toBe("run: 2");
+    expect(`repl: ${yield* admissions("repl")}`).toBe("repl: 3");
   });
 
   it("carries it for the workflow actions that execute a document", function* () {

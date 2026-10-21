@@ -10,3 +10,5 @@
  */
 
 export * from "./src/deno/composition/credential-helper.ts";
+
+export type { HelperAssembly } from "./src/deno/composition/credential-helper.ts";

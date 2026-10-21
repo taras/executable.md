@@ -57,8 +57,13 @@ const ROOT_PUBLISHED: readonly string[] = ["gitPlugin", "gitPluginDeclaresFor"];
  *
  * Listed so that losing one is a failure rather than a silent narrowing: a
  * host configuring a ceiling needs the recognizer, a document naming a
- * provider needs the discriminator, and the REPL host needs the one operation
- * an executing entry initializes its recording with.
+ * provider needs the discriminator, and a host that retains entry work needs
+ * the three domain handles — native repository work, pull requests, and the
+ * issue transport default — without being handed a session or a credential.
+ *
+ * The REPL entry's own recording is no longer here. What an entry retains is
+ * the command's record rather than this package's, so the policy that writes it
+ * lives with the command and asks for these handles instead.
  */
 const PUBLISHED: readonly string[] = [
   "GITHUB",
@@ -70,7 +75,9 @@ const PUBLISHED: readonly string[] = [
   "recognizesGitHubUrl",
   "useGitHubIssues",
   "useGitHubPullRequests",
-  "useReplRepositoryRecording",
+  "denoPullRequestOperations",
+  "useDenoGitHubIssues",
+  "useDenoRepositoryOperations",
 ];
 
 /**

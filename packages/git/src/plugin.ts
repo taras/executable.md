@@ -34,7 +34,6 @@ import type {
   PluginInstallation,
 } from "@executablemd/core/api";
 import { useCompositionComponents } from "./composition/installation.ts";
-import { admitReplRepositoryHistory } from "./retained-repository/admission.ts";
 import { gitHostIdentityAdmission, issueIdentityAdmission } from "./identities.ts";
 
 /**
@@ -50,7 +49,7 @@ import { gitHostIdentityAdmission, issueIdentityAdmission } from "./identities.t
  * ordinary profile `run` uses, so a document opened there can write the same
  * Git vocabulary a document run anywhere else can.
  */
-const DOCUMENT_COMMANDS: ReadonlySet<string> = new Set(["run", "plan", "syntax", "repl"]);
+const DOCUMENT_COMMANDS: ReadonlySet<string> = new Set(["run", "plan", "syntax"]);
 
 /** The workflow actions that execute a document. */
 const EXECUTING_ACTIONS: ReadonlySet<string> = new Set(["start", "resume", "fork"]);
@@ -187,47 +186,35 @@ export function declaresFor(request: PluginInstallRequest): boolean {
   return request.command === "workflow" && executesDocument(request.args);
 }
 
+/**
+ * This package's own vocabulary contribution, without a command in it.
+ *
+ * The registration and the two domain admissions, which is everything a host
+ * needs from Git to carry this vocabulary. It takes no command and no entry
+ * identity: a host that retains entry work adds its own admission beside these,
+ * and deciding *that* is the host's question rather than this package's.
+ *
+ * Declarations only. Every name here is a name and a description; the provider
+ * that performs what they name is attached by the host, lazily, when a run
+ * actually has a Workspace to perform it in.
+ */
+export function* gitCompositionInstallation(): Operation<PluginInstallation> {
+  yield* useCompositionComponents();
+  return { admissions: [gitHostIdentityAdmission(), issueIdentityAdmission()] };
+}
+
 export const gitPlugin: Plugin = Plugin({
   name: "@executablemd/git",
   *install(request: PluginInstallRequest): Operation<PluginInstallation | undefined> {
     if (!declaresFor(request)) {
       return undefined;
     }
-    // Declarations only. Every one of these is a name and a description; the
-    // provider that performs what they name is attached by the host, lazily,
-    // when a run actually has a Workspace to perform it in.
-    //
-    // Every command that carries this vocabulary carries all of it, `repl`
-    // included: what a name means is the same wherever it is typed, and an
-    // execution that retains one of these operations attaches its policy to
-    // this same body from inside its own scope.
-    yield* useCompositionComponents();
-    return {
-      admissions: [
-        gitHostIdentityAdmission(),
-        issueIdentityAdmission(),
-        // The REPL's own: what an entry retained about the checkout it was
-        // standing in has to be readable before any of it is replayed. It
-        // belongs to this contribution because an admission is applied inside
-        // each execution's journal read, and this is the trusted path that
-        // already declares for the command. It holds no native state and names
-        // no runtime: a Node session that retained nothing has nothing here to
-        // refuse.
-        ...(request.command === "repl" ? [replHistoryAdmission()] : []),
-      ],
-    };
+    // Every command that carries this vocabulary carries all of it: what a name
+    // means is the same wherever it is typed, and an execution that retains one
+    // of these operations attaches its policy to this same body from inside its
+    // own scope.
+    return yield* gitCompositionInstallation();
   },
 });
-
-/**
- * What a REPL entry requires of the history it is about to continue.
- *
- * Provider-neutral, and about integrity alone: every record of this feature's
- * own types parses and is named by the request it carries. Which entry a record
- * belongs to is the stream segment's question, not this one's.
- */
-function replHistoryAdmission(): JournalAdmission {
-  return (retained) => admitReplRepositoryHistory(retained);
-}
 
 export default gitPlugin;

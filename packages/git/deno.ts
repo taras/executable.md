@@ -48,26 +48,51 @@ export { gitWorkspaceAttachment } from "./src/deno/attachment.ts";
 export type { GitWorkspaceOptions } from "./src/deno/attachment.ts";
 export { useRunComposition } from "./src/deno/run-composition/provider.ts";
 export type { RunCompositionOptions } from "./src/deno/run-composition/provider.ts";
-export { useReplRepositoryRecording } from "./src/deno/retained-repository/provider.ts";
-export type { ReplRecordingOptions } from "./src/deno/retained-repository/provider.ts";
-/**
- * One REPL entry's repository capability, as the per-entry factory the CLI
- * calls inside that entry's own task.
- *
- * The factory alone. What it establishes — the recorder, the selection
- * registry, the registered checkouts, the managed slots, the native turn and
- * the publication's own request records — stays inside the closure it delivers
- * to: a package that could reach one of those could publish a branch under an
- * entry it does not own, or read back the receipt of one.
- */
-export { replRepositoryInstallation } from "./src/deno/retained-repository/provider.ts";
-/**
- * One REPL entry's issue capability, as the inert value the CLI selects.
- *
- * The installation alone. What it builds — the common `<Issue>` declaration,
- * the policy behind it, the admission over its history and the
- * transport-facing default inside a live attempt — stays inside it: a package
- * that could reach one of those could file an issue under an entry it does not
- * own.
- */
-export { replIssueInstallation } from "./src/deno/retained-repository/issues.ts";
+
+export { admitLocator } from "./src/composition/locator.ts";
+export { gitCommitMessageEvidence } from "./src/deno/composition/commit.ts";
+export { GitRefusal } from "./src/deno/composition/git.ts";
+export type { GitSession } from "./src/deno/composition/git.ts";
+export type { GitCommitIdentity, RepositoryHost } from "./src/deno/composition/host.ts";
+export { locatorFingerprint } from "./src/deno/composition/locator.ts";
+export type { ObservationPlace } from "./src/deno/composition/observations.ts";
+export { gitOperationFingerprint } from "./src/deno/composition/operations.ts";
+export { denoPullRequestOperations } from "./src/deno/composition/pull-request-host.ts";
+export type { DenoPullRequestOperations } from "./src/deno/composition/pull-request-host.ts";
+export {
+  PULL_REQUEST_READ,
+  retainPullRequestRead,
+} from "./src/deno/composition/pull-request-read-retention.ts";
+export {
+  CompositionRefusal,
+  gitRefusal,
+  refusalReason,
+  repositoryRefusal,
+  restoredGitRefusal,
+  worktreeRefusal,
+} from "./src/deno/composition/refusals.ts";
+export { useDenoGitHubIssues } from "./src/deno/issue/github-host.ts";
+export { useDenoRepositoryOperations } from "./src/deno/repository-operations.ts";
+export type { DenoRepositoryOperations } from "./src/deno/repository-operations.ts";
+export type { AmbientRepository } from "./src/deno/run-composition/ambient.ts";
+export {
+  checkoutOf,
+  commonDirectoryLock,
+  repositorySlot,
+  worktreeSlot,
+} from "./src/deno/run-composition/checkout-layout.ts";
+export {
+  ManagedCheckoutError,
+  NoAmbientRepositoryError,
+  UnresolvedGitIdentityError,
+} from "./src/deno/run-composition/errors.ts";
+export type { ManagedCheckoutReason } from "./src/deno/run-composition/errors.ts";
+export { captureCommitIdentity, denoIdentityReader } from "./src/deno/run-composition/identity.ts";
+export type { IdentityReader } from "./src/deno/run-composition/identity.ts";
+export { lazily } from "./src/deno/run-composition/lazy.ts";
+export { useLeases } from "./src/deno/run-composition/leases.ts";
+export type { Leases, SlotKind } from "./src/deno/run-composition/leases.ts";
+export { selectCheckout } from "./src/deno/run-composition/operations.ts";
+export type { RegisteredCheckout } from "./src/deno/run-composition/operations.ts";
+export { selectionRegistry } from "./src/deno/selections.ts";
+export type { SelectionRegistry } from "./src/deno/selections.ts";

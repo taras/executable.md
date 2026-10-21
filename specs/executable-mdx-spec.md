@@ -3064,7 +3064,10 @@ available without the Git Plugin.
 
 They are one declaration source, read wherever the bundled Git Plugin's profile
 is assembled: an ordinary document execution, `xmd syntax`, `xmd plan`'s
-validation and generation, and a workflow action that executes a document.
+validation and generation, a workflow action that executes a document, and
+`xmd repl` — which assembles that same bundled value with its own entry-history
+admission rather than installing it directly, and so declares these names
+through it.
 
 Six of them reach something no local transaction encloses — `Git.Push`,
 `PullRequest`, its three evidence reads and `Issue` — and each has exactly one

@@ -48,8 +48,8 @@ import type { BindOperations } from "../src/composition/invocation-binding.ts";
 // these are public types, and reaching them by relative path would bypass the
 // export map the partition test holds every consumer to.
 import type { IssueDetails, IssueReference } from "@executablemd/git/api";
-import type { IssueOperationsApi } from "../src/issue/operations.ts";
-import type { PullRequestOperationsApi } from "../src/composition/pull-request-operations.ts";
+import type { IssueOperationsApi } from "@executablemd/git/api";
+import type { PullRequestOperationsApi } from "@executablemd/git/api";
 import { COMPOSITION_ORIGIN } from "../src/composition/definitions.ts";
 
 /** Every operation a retained entry owns, by the names a document writes. */

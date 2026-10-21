@@ -21,6 +21,12 @@ import { expect } from "@executablemd/test-support/expect";
 import { all, scoped, spawn } from "effection";
 import type { Operation } from "effection";
 import { useTempDirectory } from "@executablemd/test-support/temp";
+import { useBareRemote } from "./support/git-remotes.ts";
+import { REMOTE } from "./support/run-composition-tier.ts";
+import { join } from "node:path";
+import { useDenoRepositoryOperations } from "../deno.ts";
+import type { DenoRepositoryOperations } from "../deno.ts";
+import type { HelperAssembly } from "../credential-helper.ts";
 import { collect, execute, inlineSource } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useHostFiles } from "@executablemd/runtime";
@@ -156,3 +162,124 @@ function* ambient(): Operation<boolean> {
     return false;
   }
 }
+
+/** The twelve credential-free methods this package publishes, and only these. */
+const PUBLISHED_METHODS: readonly string[] = [
+  "add",
+  "ambientCheckout",
+  "ambientRepository",
+  "commit",
+  "commitPresent",
+  "currentBranch",
+  "observe",
+  "pushProvider",
+  "resolveCommit",
+  "selectRepository",
+  "selectWorktree",
+  "switch",
+];
+
+/**
+ * What the published repository handle is, before anybody asks it anything.
+ *
+ * The constructor is what a retaining host calls once per execution, so what it
+ * costs and what it hands back are both part of the contract. Counted at the
+ * leaves for the cost, read off the value for the shape, and read out of the
+ * source for the return graph — because a value that happens to carry no
+ * session today proves nothing about what a later edit could return.
+ */
+describe("what the published repository handle is, and what constructing it costs", () => {
+  it("acquires nothing, and no caller supplies a leaf for it to acquire from", function* () {
+    const seen = counters();
+    yield* scoped(function* () {
+      const directory = yield* useTempDirectory("xmd-handle");
+      const root = yield* useTempDirectory("xmd-handle-root");
+      // The provider is installed over a counting leaf, and the public handle
+      // is constructed beside it. Constructing is not asking.
+      yield* useRunComposition({ root, cwd: directory, host: counting(seen, directory) });
+      const operations = yield* useDenoRepositoryOperations();
+      expect(typeof operations.ambientCheckout).toBe("function");
+    });
+    // The handle builds its own platform leaf rather than taking one, so the
+    // counters beside it stay at zero: no temporary directory, no `git`, no
+    // identity read.
+    expect(seen.directories).toBe(0);
+    expect(seen.commands).toEqual([]);
+    expect(seen.identities).toBe(0);
+  });
+
+  it("hands back exactly the twelve credential-free methods", function* () {
+    yield* scoped(function* () {
+      const operations: DenoRepositoryOperations = yield* useDenoRepositoryOperations();
+      // Every own name, so a member added beside the twelve is a failure here
+      // rather than a surprise at a caller.
+      expect(Object.keys(operations).sort()).toEqual([...PUBLISHED_METHODS]);
+      for (const name of PUBLISHED_METHODS) {
+        expect(`${name}: ${typeof Reflect.get(operations, name)}`).toBe(`${name}: function`);
+      }
+    });
+  });
+
+  it("hands back functions and nothing else, so no session comes with it", function* () {
+    yield* scoped(function* () {
+      const operations = yield* useDenoRepositoryOperations();
+      // Every own member is a function. A handle that carried a session, a
+      // host or an open attachment would have to hand it over as a value, and
+      // there is nowhere here for one to be.
+      const values = Object.entries(operations).map(([name, held]) => `${name}: ${typeof held}`);
+      expect(values.sort()).toEqual(PUBLISHED_METHODS.map((name) => `${name}: function`));
+      // And the three private surfaces are not published at all, which
+      // `packages/git/tests/public-entrypoint.test.ts` holds this package to.
+    });
+  });
+
+  it("returns a push provider holding exactly observe and perform", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    yield* scoped(function* () {
+      const operations = yield* useDenoRepositoryOperations();
+      const provider = yield* operations.pushProvider(join(remote.locator, "objects"), remote.locator, {
+        repository: {
+          name: "project",
+          locatorFingerprint: "a".repeat(64),
+          requestedBase: null,
+          creationCommit: "b".repeat(40),
+          primaryBranch: "main",
+          objectFormat: "sha1",
+        },
+        remote: "origin",
+        branch: "review/control",
+        destinationRef: "refs/heads/review/control",
+        sourceCommit: "c".repeat(40),
+      });
+      // Two operations and nothing else: the scratch repository and the
+      // credential session this acquired belong to the attempt that asked, and
+      // neither is a member a caller could reach.
+      expect(Object.keys(provider).sort()).toEqual(["observe", "perform"]);
+    });
+  });
+
+  it("copies the helper it was given, and neither freezes nor mutates it", function* () {
+    const launcher: Record<string, string> = { TOKEN: "first" };
+    const helper: { -readonly [K in keyof HelperAssembly]: HelperAssembly[K] } = {
+      runtime: "source",
+      platform: "unix",
+      execPath: "/usr/bin/xmd",
+      launcherEnvironment: launcher,
+    };
+    yield* scoped(function* () {
+      yield* useDenoRepositoryOperations(helper);
+      // Changed after the handle was built, which a handle holding the
+      // caller's own object would be configured by.
+      launcher["TOKEN"] = "second";
+      helper.platform = "windows";
+    });
+    // The caller's object is left exactly as it was handed over: not frozen,
+    // and not written through. What a later edit must not do is reach the
+    // handle, and the handle read its configuration once, at construction.
+    expect(launcher["TOKEN"]).toBe("second");
+    expect(helper.platform).toBe("windows");
+    expect(Object.isFrozen(helper)).toBe(false);
+    expect(Object.isFrozen(launcher)).toBe(false);
+  });
+
+});

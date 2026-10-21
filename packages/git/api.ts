@@ -182,3 +182,30 @@ export type {
   GitHostCompletion,
   GitHostObservation,
 } from "./src/git-host/records.ts";
+
+export { GIT_API } from "./src/composition/git-api.ts";
+export {
+  admitChangesInvocation,
+  admitDiffInvocation,
+  admitFileInvocation,
+  admitFilesInvocation,
+} from "./src/composition/observation-api.ts";
+export { PULL_REQUEST_OPERATIONS } from "./src/composition/pull-request-operations.ts";
+export type {
+  PullRequestOperationsApi,
+  PullRequestReadInvocation,
+  PullRequestUpsertInvocation,
+} from "./src/composition/pull-request-operations.ts";
+export {
+  parseRepositoryIdentity,
+  repositoryIdentityJson,
+  sameRepositoryIdentity,
+} from "./src/composition/selection.ts";
+export type {} from "./src/composition/selection.ts";
+export { reconcileOwnedGitHostEffect } from "./src/git-host/effect.ts";
+export { IssueOperations } from "./src/issue/operations.ts";
+export type {
+  IssueOperationsApi,
+  IssueReadInvocation,
+  IssueUpsertInvocation,
+} from "./src/issue/operations.ts";

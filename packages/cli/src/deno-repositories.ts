@@ -29,7 +29,9 @@ import type { Plugin, PluginInstallRequest, PluginInstallation } from "@executab
 import type { Operation } from "effection";
 import { cwd } from "@executablemd/runtime";
 import { gitPlugin } from "@executablemd/git";
-import { replRepositoryInstallation, useRunComposition } from "@executablemd/git/deno";
+import { useRunComposition } from "@executablemd/git/deno";
+import { replRepositoryInstallation } from "./repl/repositories/deno/provider.ts";
+import { replRepositoryPlugin } from "./repl/repositories/plugin.ts";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { DEFAULT_REPOSITORY_ROOT } from "./run-repositories.ts";
 import { ReplEntryHost } from "./repl-entry-installation.ts";
@@ -62,6 +64,10 @@ export function denoRunRepositories(
   // selection the command already made. The caller's own object is neither
   // mutated nor frozen — this is a copy, and the copy is what is used.
   const configured = snapshot(helper);
+  // The same CLI assembly the default selection uses, constructed once here, so
+  // a `repl` request reaches this command's entry-history admission through
+  // this configured variant as well.
+  const bundled = replRepositoryPlugin(gitPlugin);
   return {
     // The bundled name, because this *is* the bundled Plugin: an operator
     // selecting `--plugin git` is naming this value, and two values under one
@@ -72,8 +78,8 @@ export function denoRunRepositories(
       // bundled Plugin rather than reimplementing it, so the vocabulary, the
       // commands it declares for and the admissions it contributes are the ones
       // that package decides.
-      const install = gitPlugin.install;
-      const declared = install === undefined ? undefined : yield* install(request);
+      const install = bundled.install;
+      const declared = install === undefined ? undefined : yield* install.call(bundled, request);
       if (declared === undefined) {
         return undefined;
       }

@@ -62,13 +62,14 @@ import { useCompositionComponents } from "../packages/git/src/composition/instal
 import { useRunComposition } from "../packages/git/src/deno/run-composition/provider.ts";
 import type { HelperAssembly } from "../packages/git/src/deno/composition/credential-helper.ts";
 import { Execution } from "@executablemd/core/api";
-import { useReplRepositoryRecording } from "../packages/git/src/deno/retained-repository/provider.ts";
-import { admitReplRepositoryHistory } from "../packages/git/src/retained-repository/admission.ts";
-import { denoRepositoryHost } from "../packages/git/src/deno/composition/host.ts";
+import { useReplRepositoryRecording } from "../packages/cli/src/repl/repositories/deno/provider.ts";
+import { admitReplRepositoryHistory } from "../packages/cli/src/repl/repositories/admission.ts";
+import { useDenoRepositoryOperations } from "@executablemd/git/deno";
+import type { DenoRepositoryOperations } from "@executablemd/git/deno";
 import {
   REPL_REPOSITORY_LOCAL,
   REPL_REPOSITORY_SELECTION,
-} from "../packages/git/src/retained-repository/records.ts";
+} from "../packages/cli/src/repl/repositories/records.ts";
 
 /** What one invocation was asked to measure. */
 interface Settings {
@@ -198,14 +199,24 @@ function countingFiles(counted: Counters): FilesHandler {
   };
 }
 
-function countingHost(counted: Counters) {
-  const host = denoRepositoryHost();
-  return {
-    git(invocation: Parameters<typeof host.git>[0]) {
-      counted.commands += 1;
-      return host.git(invocation);
-    },
-    useDirectory: () => host.useDirectory(),
+/**
+ * The platform's own repository work, with the one call this benchmark counts.
+ *
+ * `ambientCheckout` is what a live file operation asks before it knows whether
+ * it is inside a checkout, and counting it is the measurement: a replayed
+ * operation asks nothing. Every other method delegates untouched, and no
+ * session, attachment or credential crosses this wrapper.
+ */
+function countingOperations(counted: Counters): () => Operation<DenoRepositoryOperations> {
+  return function* (): Operation<DenoRepositoryOperations> {
+    const operations = yield* useDenoRepositoryOperations();
+    return {
+      ...operations,
+      *ambientCheckout(from: string) {
+        counted.commands += 1;
+        return yield* operations.ambientCheckout(from);
+      },
+    };
   };
 }
 
@@ -401,7 +412,7 @@ function measure(
       // the timed region along with the first lazy acquisitions it leads to.
       yield* Execution.around({
         *init(_args, next): Operation<void> {
-          yield* useReplRepositoryRecording({ host: countingHost(counted) });
+          yield* useReplRepositoryRecording({ operations: countingOperations(counted) });
           yield* next();
         },
       });
