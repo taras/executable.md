@@ -4,7 +4,7 @@ import type { Json, SourcePosition } from "./types.ts";
 import { sourceDescription } from "./source-position.ts";
 
 /** Attribution follows modifier execution even when middleware copies block inputs. */
-export const SourceOwner = createContext<DurablePosition | undefined>("executablemd.sourceOwner");
+export const SourceOwner = createContext<DurablePosition | undefined>("executablemd.source-owner");
 
 export function sourceOwnerDescription(
   position: Readonly<SourcePosition> | undefined,

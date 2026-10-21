@@ -26,6 +26,7 @@
 
 import {
   createDurableOperation,
+  ephemeral,
   ReplayGuard,
   StaleInputError,
 } from "@executablemd/durable-streams";
@@ -38,8 +39,7 @@ import type { Operation } from "effection";
 
 import { canonicalFingerprint } from "./canonical.ts";
 import { isJsonObject, parseJson } from "./json.ts";
-import { sourceOwnerDescription } from "./source-owner.ts";
-import type { DurablePosition } from "@executablemd/durable-streams";
+import { SourceOwner, sourceOwnerDescription } from "./source-owner.ts";
 import type { Json, JsonObject, SourcePosition } from "./types.ts";
 
 const ELICIT = "elicit";
@@ -63,7 +63,6 @@ export interface ElicitationQuestion {
 
 /** Where the answer was recorded and what question it answered. */
 export interface ElicitationIdentity {
-  sourceOwner?: DurablePosition;
   /** `path:line:column` — the durable name. */
   location: string;
   fingerprint: string;
@@ -150,13 +149,14 @@ export function* persistElicitation(
   identity: ElicitationIdentity,
   live: () => Operation<Json>,
 ): Workflow<Json> {
+  const sourceOwner = yield* ephemeral(SourceOwner.get());
   const stored = yield createDurableOperation<DurableJson>(
     {
       type: ELICIT,
       name: recordName(identity.location),
       input: identity.fingerprint,
       [ELICITATION_SCHEMA_FIELD]: identity.schema,
-      ...sourceOwnerDescription(identity.position, identity.sourceOwner),
+      ...sourceOwnerDescription(identity.position, sourceOwner),
     },
     function* (): Operation<DurableJson> {
       return parseJson(yield* live());

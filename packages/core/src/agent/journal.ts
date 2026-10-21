@@ -46,7 +46,7 @@
  * associates nothing.
  */
 
-import { createDurableOperation, serializeError } from "@executablemd/durable-streams";
+import { createDurableOperation, ephemeral, serializeError } from "@executablemd/durable-streams";
 import type {
   ActivateDurabilityFailure,
   DurableStream,
@@ -73,8 +73,7 @@ import type { SerializedPromptFailure } from "./errors.ts";
 import { AgentInternal } from "./internal.ts";
 import { HostObservationFailure } from "./publication.ts";
 import type { AgentPromptAssociation, AgentPromptHandle } from "./publication.ts";
-import { sourceOwnerDescription } from "../source-owner.ts";
-import type { DurablePosition } from "@executablemd/durable-streams";
+import { SourceOwner, sourceOwnerDescription } from "../source-owner.ts";
 import type { SourcePosition } from "../types.ts";
 
 /** The durable effect type every journaled Agent Prompt is recorded under. */
@@ -424,18 +423,18 @@ export function* persistPrompt(
     name: string;
     input: string;
     position?: Readonly<SourcePosition>;
-    sourceOwner?: DurablePosition;
   },
   live: () => Operation<PromptRecord>,
   association: () => AgentPromptAssociation | undefined = () => undefined,
   begun: () => AgentPromptHandle = () => undefined,
 ): Workflow<PromptRecord> {
+  const sourceOwner = yield* ephemeral(SourceOwner.get());
   const stored = yield createDurableOperation<Json>(
     {
       type: AGENT_PROMPT,
       name: identity.name,
       input: identity.input,
-      ...sourceOwnerDescription(identity.position, identity.sourceOwner),
+      ...sourceOwnerDescription(identity.position, sourceOwner),
     },
     function* (): Operation<Json> {
       return serializePromptRecord(yield* live());

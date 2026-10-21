@@ -1,4 +1,3 @@
-import { invocationSourceOwner } from "../invocation-identity.ts";
 /**
  * The agent components (specs/acp-client-spec.md §Components).
  *
@@ -303,10 +302,7 @@ export function sessionComponent(claim: IdentityClaimant): FunctionComponent {
   };
 }
 
-export function* Prompt(
-  props: Record<string, Json>,
-  invocation?: ComponentInvocation,
-): Operation<Json> {
+export function* Prompt(props: Record<string, Json>): Operation<Json> {
   // Content first, and before anything else happens: a prompt whose text failed
   // to render was never asked, so nothing may be resolved, sequenced, journaled
   // or sent on its behalf. An empty wrapper still beats the text prop.
@@ -351,12 +347,7 @@ export function* Prompt(
   // is unchanged, and this is what a host may retain beside it.
   const carried: Carried = {};
   const record = yield* persistPrompt(
-    {
-      name: `prompt:${location}#${ordinal}`,
-      input: text,
-      position: expansion.position,
-      sourceOwner: invocationSourceOwner(invocation),
-    },
+    { name: `prompt:${location}#${ordinal}`, input: text, position: expansion.position },
     () => runPrompt(text, options, sequence, throwOnError, carried),
     () => carried.association,
     () => carried.begun,

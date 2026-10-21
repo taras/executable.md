@@ -6367,13 +6367,13 @@ A source position identifies authored bytes, not which invocation used them.
 Repeated calls therefore retain `executablemd.source-owner` on the operations
 the REPL attributes: the coroutine ID and zero-based yield index of the prior
 successful source import. Canonical import admission captures this coordinate,
-and private expansion arguments carry it through component bodies, branches,
-iterations and projection. A component body uses its own import; caller content
-uses its captured caller import. Existing private invocation state delivers the
-reference to component operations. Modifier execution binds the reference in the
-scoped `SourceOwner` Context, so copying a public code-block context preserves
-attribution. It grants no permission and creates no effect, coroutine or identity
-allocator.
+and Core binds the internal `SourceOwner` Context, named
+`executablemd.source-owner`, around the source body. Branches and iterations
+inherit the binding. A component body uses its own import; projected caller
+content restores its captured caller binding. Attribution writers read it before
+handing work to a separately owned task, so copying a public code-block context
+preserves attribution. It grants no permission and creates no effect, coroutine
+or identity allocator.
 
 Projection resolves the exact import and checks its source, prior order and
 coroutine ancestry. An invalid explicit reference refuses; it never falls back

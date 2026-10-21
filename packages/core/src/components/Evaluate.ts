@@ -90,11 +90,7 @@ import type {
   GeneratedObservation,
   GeneratedFragmentRequest,
 } from "../generated-xmd.ts";
-import {
-  ComponentInvocationError,
-  invocationForm,
-  invocationSourceOwner,
-} from "../invocation-identity.ts";
+import { ComponentInvocationError, invocationForm } from "../invocation-identity.ts";
 import type {
   ComponentInvocation,
   IdentityClaimant,
@@ -250,12 +246,7 @@ function evaluate(claim: IdentityClaimant): ProtectedBody {
       entries.admitted.map((entry) => entry.definition.fn),
     );
     try {
-      return yield* evaluateProtectedGeneratedXmd(
-        request,
-        narrowedBodies,
-        narrowedSyntax,
-        invocationSourceOwner(invocation),
-      );
+      return yield* evaluateProtectedGeneratedXmd(request, narrowedBodies, narrowedSyntax);
     } finally {
       narrowedBodies?.close();
     }

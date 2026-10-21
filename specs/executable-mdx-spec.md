@@ -11665,11 +11665,11 @@ successful import of the source containing the operation. Its value is
 coroutine within the entry. The reference is descriptive metadata, not effect
 identity or execution permission; it adds no operation or coroutine.
 
-Canonical import admission captures its coordinate. Core passes it through
-private expansion arguments: a component body uses its own import, structural
-regions inherit their source, and projected `<Content />` uses the caller's
-source import. Modifier execution carries attribution independently of the public
-code-block object, so middleware forwarding a shallow copy preserves it.
+Canonical import admission captures its coordinate. Core binds it in a scoped
+Context around the source body: a component body uses its own import, structural
+regions inherit their source, and projected `<Content />` restores the caller's
+source binding. Attribution is independent of the public code-block object, so
+middleware forwarding a shallow copy preserves it.
 Generated-fragment positions keep their existing admission ID.
 
 The REPL follows an explicit reference to exactly one prior successful source

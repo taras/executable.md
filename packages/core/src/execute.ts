@@ -103,7 +103,7 @@ import {
   raise,
 } from "./component-api.ts";
 import { sourceDescription } from "./source-position.ts";
-import { sourceOwnerDescription } from "./source-owner.ts";
+import { SourceOwner, sourceOwnerDescription } from "./source-owner.ts";
 import { durablePosition } from "@executablemd/durable-streams";
 import type { DurablePosition } from "@executablemd/durable-streams";
 import { emissions, exactly, renderSegment } from "./render.ts";
@@ -914,13 +914,13 @@ function* durableImportComponent(
   root: RootDocumentSource | undefined,
   position: Readonly<SourcePosition> | undefined,
   inputs: ImportInputs,
-  sourceOwner: DurablePosition | undefined,
   admitted: ((owner: DurablePosition) => void) | undefined,
 ): Workflow<ComponentDefinition | FunctionComponentDefinition> {
   // Taken before the durable operation and outside it, because the offer is
   // canonical core's own and a replay has to reach this the same way the live
   // run did: the element asking is inside the declaration's body, or it is not.
   const claimed = name === "__root__" ? undefined : inputs.declared?.claim(name);
+  const sourceOwner = yield* ephemeral(SourceOwner.get());
   const coordinate = yield* ephemeral(durablePosition());
   const recorded = yield createDurableOperation<DurableSelection>(
     // The root import is the run's own entry rather than an authored element,
@@ -2099,7 +2099,6 @@ function* runValueRoot(
   environment: ExecutionEnvironment,
   /** This execution's own import resolution, for the expansions below. */
   importTerminal: ComponentImportTerminal,
-  sourceOwner: DurablePosition | undefined,
   /** This execution's own binding owner, for the byproduct its body computes. */
   computed: ComputedBindings,
 ): Operation<DocumentResult> {
@@ -2132,7 +2131,6 @@ function* runValueRoot(
         checkedFailures,
         environment,
         importTerminal,
-        sourceOwner,
         ownBody,
       );
       const exactRecord = environment.sourceSegments;
@@ -2210,7 +2208,7 @@ function* documentWorkflow(
   const imported = yield* ephemeral(
     (function* (): Operation<ComponentDefinition | FunctionComponentDefinition> {
       const imported = yield* importThroughTerminal("__root__", undefined, (name, position) =>
-        importTerminal(name, position, undefined, undefined, (owner) => {
+        importTerminal(name, position, undefined, (owner) => {
           rootAdmissions += 1;
           sourceOwner = rootAdmissions === 1 ? owner : undefined;
         }),
@@ -2296,6 +2294,7 @@ function* documentWorkflow(
   const rootPath = "";
 
   const scopedExpansion: Operation<DocumentResult> = scoped(function* () {
+    yield* SourceOwner.set(sourceOwner);
     // Before any authored work, and in this scope rather than outside
     // `durableRun`: this is the scope `Execution.document` has already
     // installed the document's runtime services in — its Agent provider, its
@@ -2346,7 +2345,6 @@ function* documentWorkflow(
         checkedFailures,
         environment,
         importTerminal,
-        sourceOwner,
         computed,
       );
     }
@@ -2372,7 +2370,6 @@ function* documentWorkflow(
         checkedFailures,
         environment,
         importTerminal,
-        sourceOwner,
         undefined,
       );
       // An empty buffered root emits no output event.
@@ -2402,7 +2399,6 @@ function* documentWorkflow(
         checkedFailures,
         environment,
         importTerminal,
-        sourceOwner,
         undefined,
       );
 
@@ -2979,7 +2975,6 @@ function* executeDocument(
         name: string,
         position: Readonly<SourcePosition> | undefined,
         selection: ImportSelection | undefined,
-        sourceOwner?: DurablePosition,
         admitted?: (owner: DurablePosition) => void,
       ): Operation<ComponentDefinition | FunctionComponentDefinition> {
         // Read per import, in the invoking scope, so a component registered
@@ -2997,7 +2992,6 @@ function* executeDocument(
             catalog,
             guarded: identity.protected,
           },
-          sourceOwner,
           admitted,
         );
         // Canonical selection, recorded into the frame of the import that asked

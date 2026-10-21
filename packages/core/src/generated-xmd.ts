@@ -139,8 +139,7 @@ import { GeneratedDataExpressions, validateDataExpression } from "./generated-ex
 import { capturedBinding } from "./invocation-rules.ts";
 import { renderSegments } from "./render.ts";
 import { scanSegments } from "./scanner.ts";
-import { sourceOwnerDescription } from "./source-owner.ts";
-import type { DurablePosition } from "@executablemd/durable-streams";
+import { SourceOwner, sourceOwnerDescription } from "./source-owner.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
 // The ordinary source rules, read rather than reimplemented: a construct means
 // one thing whether a person wrote it or an Agent did.
@@ -2232,8 +2231,8 @@ function* persistAdmission(
   position: Readonly<SourcePosition> | undefined,
   marker: RecordMarker,
   language: AdmissionLanguage,
-  sourceOwner: DurablePosition | undefined,
 ): Operation<Json> {
+  const sourceOwner = yield* SourceOwner.get();
   const stored = yield createDurableOperation<DurableJson>(
     {
       type: GENERATED_XMD,
@@ -2327,6 +2326,7 @@ function expand(
   owner: Segment[] | undefined,
 ): Operation<string> {
   return scoped(function* () {
+    yield* SourceOwner.set(undefined);
     // A root selects what it renders, so a failure inside it renders as the
     // document's own partial output rather than throwing the whole evaluation
     // away. A fragment is admitted *into* a document and keeps throwing.
@@ -2415,7 +2415,6 @@ function expand(
         environment,
         undefined,
         undefined,
-        undefined,
       );
       return renderSegments(owner ?? []);
     }
@@ -2433,7 +2432,6 @@ function expand(
       // No execution terminal: this fragment's imports are answered by the
       // narrowed provider installed above, and it inherits nothing of the
       // document execution that admitted it.
-      undefined,
       undefined,
       // A generated fragment is the engine's own text, so it owns no value body
       // and a <Return> written into it satisfies no declaration.
@@ -2465,7 +2463,6 @@ export function* evaluateProtectedGeneratedXmd(
   request: GeneratedFragmentRequest,
   componentRouting: ComponentRouting | undefined,
   syntax: SyntaxReference | undefined,
-  sourceOwner?: DurablePosition,
 ): Operation<string> {
   return yield* evaluateGenerated(
     request,
@@ -2474,8 +2471,6 @@ export function* evaluateProtectedGeneratedXmd(
     componentRouting,
     syntax,
     undefined,
-    undefined,
-    sourceOwner,
   );
 }
 
@@ -2497,7 +2492,6 @@ function* evaluateGenerated(
   rendering: RootRendering | undefined,
   /** What this root was resolved to, for a root evaluation. */
   resolved?: ResolvedRoot,
-  sourceOwner?: DurablePosition,
 ): Operation<string> {
   const allow = selection(request.allow);
   const entries = selectedEntries(request, allow);
@@ -2541,7 +2535,6 @@ function* evaluateGenerated(
     request.position,
     marker,
     language,
-    sourceOwner,
   );
   const decided = readAdmission(stored, marker);
   if (decided === undefined) {
