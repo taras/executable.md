@@ -65,7 +65,7 @@ export interface ServerOptions {
    * supplies the same reading of that repository, so a creation names the
    * commit that was actually published rather than one a caller asserted.
    */
-  readonly resolveHead?: (branch: string) => string | undefined;
+  readonly resolveHead?: (branch: string) => Operation<string | undefined>;
 }
 
 function review(store: Store, pull: number, index: number, body: string) {
@@ -116,7 +116,7 @@ export function usePullRequestServer(options: ServerOptions = {}): Operation<Pul
         const method = incoming.method ?? "GET";
         requests.push({ method, path: url.pathname, authorization });
 
-        const answer = respond(
+        const answer = yield* respond(
           {
             owner,
             repository,
@@ -162,7 +162,7 @@ interface Store {
   readonly served: ServedPullRequest[];
   readonly origin: string;
   readonly heads: Map<string, string>;
-  readonly resolveHead?: (branch: string) => string | undefined;
+  readonly resolveHead?: (branch: string) => Operation<string | undefined>;
 }
 
 /** One call this GitHub was asked to answer. */
@@ -219,11 +219,11 @@ function checkRun(headSha: string, index: number, name: string) {
   };
 }
 
-function respond(
+function* respond(
   store: Store,
   asked: Asked,
   authorization: string | undefined,
-): { status: number; body: string } {
+): Operation<{ status: number; body: string }> {
   if (authorization !== `Bearer ${store.token}`) {
     return { status: 401, body: JSON.stringify({ message: "Bad credentials" }) };
   }
@@ -233,7 +233,7 @@ function respond(
   // The collection itself: the observation a fresh upsert makes, and the
   // creation it performs when that observation proved absence.
   if (asked.url.pathname === pulls) {
-    return asked.method === "POST" ? created(store, asked) : listed(store, asked.url);
+    return asked.method === "POST" ? yield* created(store, asked) : listed(store, asked.url);
   }
   // The conversation half of a comments read, which GitHub answers on the
   // issue rather than on the pull request.
@@ -316,7 +316,7 @@ function listed(store: Store, url: URL): { status: number; body: string } {
  * there by the publication that preceded the upsert — because a pull request
  * reports the commit the host holds rather than one the request asserted.
  */
-function created(store: Store, asked: Asked): { status: number; body: string } {
+function* created(store: Store, asked: Asked): Operation<{ status: number; body: string }> {
   const body: unknown = JSON.parse(asked.body === "" ? "{}" : asked.body);
   const read = (name: string): string | undefined => {
     const held = Reflect.get(Object(body), name);
@@ -324,7 +324,12 @@ function created(store: Store, asked: Asked): { status: number; body: string } {
   };
   const headRef = read("head") ?? "";
   const baseRef = read("base") ?? "main";
-  const headSha = store.heads.get(headRef) ?? store.resolveHead?.(headRef);
+  // The model's own heads first, then the fixture's reader. That reader suspends
+  // now, which is why this and `respond` are operations: the per-request task
+  // below is an Effection task, so a read that waits is ordinary work there.
+  const known = store.heads.get(headRef);
+  const headSha =
+    known ?? (store.resolveHead === undefined ? undefined : yield* store.resolveHead(headRef));
   if (headSha === undefined) {
     return { status: 422, body: JSON.stringify({ message: "no such branch" }) };
   }
