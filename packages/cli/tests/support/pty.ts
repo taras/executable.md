@@ -225,6 +225,19 @@ interface Pty {
   status(): Operation<number | undefined>;
 }
 
+/**
+ * The data root every allocated terminal runs with.
+ *
+ * Stated here because `allocate()` is what exports it into the shell below, and
+ * a caller that needs to find what the command wrote has to look where the
+ * command was told to write. On a platform that reads `XDG_DATA_HOME` this is
+ * that directory; on one that does not, the product's own resolver ignores it
+ * and answers with the platform's place under this same isolated home.
+ */
+export function terminalDataHome(home: string): string {
+  return join(home, "share");
+}
+
 /** Whichever allocator this host can drive. */
 function* allocate(line: string, home: string): Operation<Pty> {
   // One shell line, run by whichever allocator's own `sh -c`: the data root is
@@ -234,7 +247,7 @@ function* allocate(line: string, home: string): Operation<Pty> {
   // be read off the screen.
   const inside = [
     `export HOME=${shellQuote(home)}`,
-    `export XDG_DATA_HOME=${shellQuote(join(home, "share"))}`,
+    `export XDG_DATA_HOME=${shellQuote(terminalDataHome(home))}`,
     `stty rows ${WINDOW.rows} cols ${WINDOW.columns}`,
     line,
     `printf '${SENTINEL}%s\\n' "$?"`,

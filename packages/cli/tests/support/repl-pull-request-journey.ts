@@ -49,14 +49,16 @@ import {
   parseReplPullRequestRequestRecord,
   REPL_REPOSITORY_PULL_REQUEST_REQUEST,
 } from "../../src/repl/repositories/pull-request-records.ts";
+import type { ReplPullRequestRequestRecord } from "../../src/repl/repositories/pull-request-records.ts";
 import {
   GIT_HOST_EFFECT,
   parseCompletePullRequestReadResult,
   parseGitHostReconciliationRecord,
   PULL_REQUEST,
 } from "@executablemd/git";
+import type { GitHostReconciliationRecord } from "@executablemd/git";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { allocate, showing, showingAcross } from "./pty.ts";
+import { allocate, showing, showingAcross, terminalDataHome } from "./pty.ts";
 import type { Pty } from "./pty.ts";
 import {
   ACT_MS,
@@ -164,7 +166,16 @@ function* history(home: string, location: string): Operation<DurableEvent[]> {
   if (!route.ok) {
     throw route.error;
   }
-  const root = join(platformDataRoot(process.platform, home, process.env, sep), ...REPL_DIRECTORY);
+  // The environment the terminal was given, not this process's own. A platform
+  // that reads `XDG_DATA_HOME` resolves the command's root from it, and the
+  // harness exports it into every allocated shell; passing the parent's
+  // environment instead would look under the default place while the command
+  // wrote under the isolated one. A platform that ignores it answers the same
+  // either way.
+  const root = join(
+    platformDataRoot(process.platform, home, { XDG_DATA_HOME: terminalDataHome(home) }, sep),
+    ...REPL_DIRECTORY,
+  );
   return yield* readRecords(pairedLocation(root, route.value.execution).entries);
 }
 
@@ -204,8 +215,8 @@ function snapshots(
  * the pull request over it are both `git_host_effect` records: counting the
  * type alone would mix the two.
  */
-function reconciled(events: readonly DurableEvent[], kind: string) {
-  const found = [];
+function reconciled(events: readonly DurableEvent[], kind: string): GitHostReconciliationRecord[] {
+  const found: GitHostReconciliationRecord[] = [];
   for (const event of held(events, GIT_HOST_EFFECT)) {
     if (event.type !== "yield" || event.result.status !== "ok") {
       continue;
@@ -218,8 +229,8 @@ function reconciled(events: readonly DurableEvent[], kind: string) {
   return found;
 }
 
-function asked(events: readonly DurableEvent[]) {
-  const found = [];
+function asked(events: readonly DurableEvent[]): ReplPullRequestRequestRecord[] {
+  const found: ReplPullRequestRequestRecord[] = [];
   for (const event of held(events, REPL_REPOSITORY_PULL_REQUEST_REQUEST)) {
     if (event.type === "yield" && event.result.status === "ok") {
       const record = parseReplPullRequestRequestRecord(event.result.value);
@@ -333,7 +344,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     const leftOutcomes = reconciled(left, PULL_REQUEST);
     expect(leftOutcomes).toHaveLength(1);
     expect(leftOutcomes[0]?.decision).toBe("performed");
-    expect(snapshots(left, read).toSorted((a, b) => a.kind.localeCompare(b.kind))).toEqual([
+    expect([...snapshots(left, read)].sort((a, b) => a.kind.localeCompare(b.kind))).toEqual([
       { kind: "checks", items: 0 },
       { kind: "comments", items: 0 },
       { kind: "reviews", items: 0 },
@@ -375,7 +386,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     const reopened = yield* history(home, location);
     expect(asked(reopened)).toEqual(leftAsked);
     expect(reconciled(reopened, PULL_REQUEST)).toEqual(leftOutcomes);
-    expect(snapshots(reopened, read).toSorted((a, b) => a.kind.localeCompare(b.kind))).toEqual([
+    expect([...snapshots(reopened, read)].sort((a, b) => a.kind.localeCompare(b.kind))).toEqual([
       { kind: "checks", items: 0 },
       { kind: "comments", items: 0 },
       { kind: "reviews", items: 0 },
@@ -425,7 +436,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     const answered = yield* history(home, location);
     expect(asked(answered)).toEqual(leftAsked);
     expect(reconciled(answered, PULL_REQUEST)).toEqual(leftOutcomes);
-    expect(snapshots(answered, read).toSorted((a, b) => a.kind.localeCompare(b.kind))).toEqual([
+    expect([...snapshots(answered, read)].sort((a, b) => a.kind.localeCompare(b.kind))).toEqual([
       { kind: "checks", items: 0 },
       { kind: "comments", items: 0 },
       { kind: "reviews", items: 0 },

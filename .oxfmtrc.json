@@ -11,7 +11,7 @@
   "ignorePatterns": [
     "**/*.md",
     "scripts/tests/fixtures/**",
-    "packages/git/tests/fixtures/retained-repository-history/**",
+    "packages/cli/tests/fixtures/retained-repository-history/**",
     "**/npm/**",
     "packages/workflow/vendor/cloudflare-computer-dofs/**",
     "packages/acp/vendor/acpx/**",

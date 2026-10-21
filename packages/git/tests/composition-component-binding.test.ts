@@ -252,7 +252,7 @@ describe("one registry for every repository operation, and the policy an executi
     // Sorted, because which names an owning execution declares is the claim
     // here and the order it builds them in is its own business.
     const owned = ownedDeclarations().map((entry) => entry.name);
-    expect(owned.toSorted()).toEqual([...OWNED]);
+    expect([...owned].sort()).toEqual([...OWNED]);
     for (const name of owned) {
       expect(registered).toContain(name);
     }

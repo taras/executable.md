@@ -114,6 +114,12 @@ const CONTEXTUAL_APIS: readonly string[] = [
   "GitHost",
   "GitQuery",
   "IssueApi",
+  // The semantic issue chain, published for the host that composes onto it.
+  // Its minted name is not published beside it, unlike `ISSUE_API` and
+  // `PULL_REQUEST_API` below: a caller composes this one through the descriptor
+  // it is handed, and nothing outside this package mints a second Api under
+  // that name.
+  "IssueOperations",
   "IssueTrackerContext",
   "PullRequestAPI",
   "Repository",
@@ -132,6 +138,7 @@ const OPERATIONS: readonly (readonly [string, readonly string[]])[] = [
   ["GitHost", ["route"]],
   ["GitQuery", ["changes", "diff", "file", "files", "format", "read", "resolve", "root"]],
   ["IssueApi", ["read", "upsert"]],
+  ["IssueOperations", ["read", "upsert"]],
   ["IssueTrackerContext", ["current"]],
   ["PullRequestAPI", ["read", "upsert"]],
   ["Repository", ["ambient", "select", "worktree"]],
