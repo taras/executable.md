@@ -20,13 +20,14 @@ import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-str
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { createContext, ensure, race, scoped, sleep, spawn, until } from "effection";
 import type { Operation, Result } from "effection";
-import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
 import { randomUUID } from "node:crypto";
 import { appendFile, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { selecting } from "../../core/tests/support/generated-selection.ts";
 import {
@@ -48,7 +49,13 @@ import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ExpansionController } from "../src/repl/expansion.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { ReplQuestion } from "../src/repl/elicitation.ts";
-import { Component, DocumentOutput, Elicitation, Execution } from "@executablemd/core";
+import {
+  Component,
+  DocumentOutput,
+  Elicitation,
+  Execution,
+  installAgentComponents,
+} from "@executablemd/core";
 import {
   REFERENCE_DIRECTORY,
   referenceEvents,
@@ -490,12 +497,43 @@ describe("REPL execution: reopening one history", () => {
   });
 
   it("X2: a settled history reconstructs the same terminal model and runs nothing", function* () {
-    const settled = yield* referenceEvents();
-    const holder = execution(settled);
-    const session = opened(yield* openReplSession(options(holder)));
+    const root = yield* useTempDirectory("xmd-settled-include-");
+    const component = join(root, "Checklist.md");
+    yield* writeTextFile(component, yield* readTextFile(join(REFERENCE_DIRECTORY, "Checklist.md")));
+    const holder = execution();
+    const selected = { execution: holder, includes: [root], generated: GENERATED };
+    const live = yield* scoped(function* () {
+      const performed = yield* countPerformed();
+      const session = opened(
+        yield* submitReplEntry({ ...selected, source: yield* referenceSource() }),
+      );
+      (yield* nextQuestion(session)).submit({ decision: "approve" });
+      yield* session.join();
+      expect(performed.reads).toContain(component);
+      expect(performed.compiles).toBeGreaterThan(0);
+      return session.model;
+    });
+    const settled = yield* readAll(holder);
+    yield* rm(component);
+    const performed = yield* countPerformed();
+    let providerCalls = 0;
+    yield* installAgentComponents({
+      rootProvider: {
+        factory: function* () {
+          providerCalls += 1;
+          throw new Error("settled inspection reached an Agent provider");
+        },
+        options: { defaultAgent: "planner", permissionMode: "deny-all" },
+      },
+    });
+    const session = opened(yield* openReplSession(selected));
     yield* session.join();
 
     expect(yield* readAll(holder)).toEqual(settled);
+    expect(performed.reads.filter((path) => path.startsWith(root))).toEqual([]);
+    expect(performed.compiles).toBe(0);
+    expect(providerCalls).toBe(0);
+    expect(session.model).toEqual(live);
     expect(session.elicitation.asked).toBe(0);
     expect(session.model.settled).toBe(true);
     expect(session.model.entries[0]?.scope.elicitations[0].answer).toEqual({ decision: "approve" });

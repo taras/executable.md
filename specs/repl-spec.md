@@ -10,6 +10,8 @@ xmd repl                                  # a fresh execution with an empty draf
 xmd repl 'xmd://repl/<execution>/entries' # reopen exactly that retained history
 xmd repl --deny-all                       # the same, answering every agent request with no
 xmd repl --sidekick-agent claude           # the same, with a Sidekick that talks to claude
+xmd repl --include ../shared --include=/absolute/other
+xmd repl 'xmd://repl/<execution>/entries' --include ../shared
 ```
 
 ## The command line, and the order it is read in
@@ -34,21 +36,29 @@ runs under grants the Sidekick a tool of its own — its conversations install
 that same selected provider with constraints of their own rather than
 inheriting what an entry runs under: no tools, no MCP servers, every native
 request denied without asking, and no customization of the agent's own system
-prompt. There is nothing further: no include, no data directory and no second
-provider to select.
+prompt. There is no data directory or second provider to select.
+
+Use `--include` to select existing component directories, as with `xmd run` and
+`xmd test`. Both `--include <directory>` and `--include=<directory>` accept a
+value. Repetition preserves occurrence order, and the first directory defining
+an ordinary component wins. Explicit values replace the default search list
+`["components", "."]`; omitting the option keeps both defaults. Relative paths
+resolve from the invocation's contextual working directory, and absolute paths
+stay absolute. These directories select ordinary components and grant no
+permission; canonical protected components keep their implementations.
 
 Everything that can be refused is refused in this order, and each step happens
 before anything the next one would touch:
 
-1. **The line.** A token that is not the location or one of those six options,
+1. **The line.** A token that is not the location or one of those seven options,
    a switch given a value, a value option given none or an empty one, and a
    second location are each refused here — before a per-user directory is
    formed, a history file is created or the terminal's modes are touched.
 2. **The Agent configuration.** Two permission switches together and an unknown
    `--agent-provider` are refused next, before any adapter exists.
 3. **The profile.** What this command's REPL runs under is assembled once, in the
-   command's own scope: the selected Plugins, the Agent identity vocabulary, the
-   packaged `<Plan>` Component, the ordinary evaluation ceiling and the settled
+   command's own scope: a copied, frozen selection of component directories, the
+   selected Plugins, the Agent identity vocabulary, the packaged `<Plan>` Component, the ordinary evaluation ceiling and the settled
    permission mode. It is read from then on and never rebuilt, so two entries of
    one session cannot run under different rules.
 4. **The terminal.** Only then is a terminal asked for. Over a pipe the command
@@ -345,6 +355,12 @@ projected and never performed again; only a final entry the file shows as
 unfinished is given back to the engine to continue. A location naming a history
 this version cannot read, or naming an entry its selected prefix never admitted,
 refuses whole — with nothing appended and no execution started.
+
+You may supply the include options again when reopening a location. Completed
+entries show their retained output and submitted entry source even after included
+files change or disappear; inspecting them reads no live component source,
+compiles no eval and asks no Agent. Imported component bytes remain retained for
+replay. New entries use this command's selected directories.
 
 ## The packaged Plan, in the REPL's own drawer
 
@@ -1193,6 +1209,10 @@ recovers on resize. It is never a clip: shortening somebody's source would be
 this screen editing the content it exists to show.
 
 ## What is retained, and what is not
+
+Include directories configure the current command. They add no location member,
+manifest or profile record; pass them again when reopening if new work needs
+them. The location remains route state, and existing events retain past work.
 
 Each execution is one file of serialized ordinary `DurableEvent`s — the same
 records any other XMD run writes. There is no manifest, no cache, no materialized
