@@ -65,7 +65,7 @@ import {
   type GitCommitResult,
   type GitSwitchResult,
 } from "@executablemd/git";
-import { parseRepositoryIdentity, repositoryIdentityJson } from "@executablemd/git/api";
+import { parseRepositoryIdentity, repositoryIdentityJson } from "@executablemd/git";
 import { type RepositoryIdentity } from "@executablemd/git";
 import { digest, RECORD_PREFIX, REPL_REPOSITORY_VERSION } from "./records.ts";
 

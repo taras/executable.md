@@ -36,7 +36,7 @@ import type { Operation, Result } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { execFile } from "node:child_process";
+import { runGit } from "./support/fixture-git.ts";
 import { join } from "node:path";
 import {
   API,
@@ -75,7 +75,7 @@ function useFixture(): Operation<Fixture> {
     const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "repl-local-")))));
     yield* ensure(() => rm(root, { recursive: true, force: true }));
     const checkout = join(root, "checkout");
-    yield* seedCheckout(root, checkout);
+    yield* runGit(root, ["init", "-b", "main", checkout]);
     yield* until(writeFile(join(checkout, "seed.md"), "seed\n"));
     yield* provide({ root, checkout });
   });
@@ -151,17 +151,6 @@ function countingOperations(counted: Counters): () => Operation<DenoRepositoryOp
       },
     };
   };
-}
-
-/** One seeded checkout, through the ordinary executable rather than a session. */
-function seedCheckout(root: string, checkout: string): Operation<void> {
-  return until(
-    new Promise<void>((resolve, reject) => {
-      execFile("git", ["init", "-b", "main", checkout], { cwd: root }, (error) =>
-        error === null ? resolve() : reject(error),
-      );
-    }),
-  );
 }
 
 interface Run {

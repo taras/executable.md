@@ -35,7 +35,7 @@ import { useDenoRepositoryOperations } from "@executablemd/git/deno";
 import type { DenoRepositoryOperations } from "@executablemd/git/deno";
 import { mkdir, mkdtemp, realpath, symlink, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { execFile } from "node:child_process";
+import { runGit } from "./support/fixture-git.ts";
 import { join } from "node:path";
 import { API, hostFilesHandler } from "@executablemd/runtime";
 import type { FilePathInput, FilesHandler, FileWriteInput } from "@executablemd/runtime";
@@ -81,7 +81,7 @@ function useFixture(): Operation<Fixture> {
     for (const name of ["checkout", "elsewhere"]) {
       const directory = join(root, name);
       yield* until(mkdir(directory, { recursive: true }));
-      yield* seedGit(root, ["init", "-b", "main", directory]);
+      yield* runGit(root, ["init", "-b", "main", directory]);
       yield* writeTextFile(join(directory, "seed.md"), "seed\n");
       made.push(directory);
     }
@@ -1225,20 +1225,11 @@ describe("an entry's hold on the checkout it is working in", () => {
 function* useOrigin(root: string, name: string): Operation<string> {
   const origin = join(root, name);
   yield* until(mkdir(origin, { recursive: true }));
-  yield* seedGit(root, ["init", "-b", "main", origin]);
+  yield* runGit(root, ["init", "-b", "main", origin]);
   yield* writeTextFile(join(origin, "README.md"), "origin\n");
-  yield* seedGit(origin, ["add", "README.md"]);
-  yield* seedGit(origin, ["commit", "-m", "first"]);
+  yield* runGit(origin, ["add", "README.md"]);
+  yield* runGit(origin, ["commit", "-m", "first"]);
   return origin;
-}
-
-/** One fixture `git`, through the ordinary executable rather than a session. */
-function seedGit(cwd: string, args: readonly string[]): Operation<void> {
-  return until(
-    new Promise<void>((resolve, reject) => {
-      execFile("git", [...args], { cwd }, (error) => (error === null ? resolve() : reject(error)));
-    }),
-  );
 }
 
 /**

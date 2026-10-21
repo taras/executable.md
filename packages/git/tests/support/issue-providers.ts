@@ -21,6 +21,10 @@ import type { GitHubAccess, GitHubHttpResponse } from "../../src/deno/compositio
 import { credentialFor } from "./issue-tracker-server.ts";
 import type { CredentialCondition } from "./issue-tracker-server.ts";
 import { gitHubSource } from "../../src/deno/composition/github.ts";
+import { issueIdempotencyKey } from "../../src/issue/records.ts";
+import type { IssueEffectIdentity } from "../../src/issue/records.ts";
+import type { IssueOperation } from "../../src/issue/api.ts";
+import { issueOriginMarker } from "../../src/deno/issue/github.ts";
 
 /** What a scenario can watch a provider do. */
 export interface ProviderLog {
@@ -344,4 +348,38 @@ export function* useKeyRecorder(log: ProviderLog): Operation<void> {
       return yield* next(issue, upsert);
     },
   });
+}
+
+/**
+ * One fixture transport, as a host supplies one to the issue installer.
+ *
+ * Here rather than at the caller: `gitHubSource` is this package's private
+ * implementation, and a consumer that reached it to build a fixture would make
+ * the package boundary untrue in a test. A caller states the endpoint and the
+ * credential condition; what wraps them stays on this side.
+ */
+export function gitHubFixtureSource(
+  endpoint: string,
+  conditions: {
+    credential: CredentialCondition;
+    failsTransport?: boolean;
+    interruptsAfterCreate?: boolean;
+  },
+): ReturnType<typeof gitHubSource> {
+  return gitHubSource(gitHubAccessFor(endpoint, conditions));
+}
+
+/**
+ * The mark one request's own identity and target produce.
+ *
+ * A caller asserting that the provider carried *its* mark rather than one the
+ * middleware supplied needs the value, not the two private functions that
+ * compute it.
+ */
+export function expectedOriginMarker(
+  identity: IssueEffectIdentity,
+  operation: IssueOperation,
+  target: string,
+): string {
+  return issueOriginMarker(issueIdempotencyKey(identity, operation, target));
 }

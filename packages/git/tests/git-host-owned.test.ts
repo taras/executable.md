@@ -19,7 +19,38 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Err, ensure, Ok, scoped, spawn, withResolvers } from "effection";
+import {
+  Err,
+  ensure,
+  Ok,
+  race,
+  resource,
+  scoped,
+  sleep,
+  spawn,
+  suspend,
+  until,
+  withResolvers,
+} from "effection";
+import { exists, writeTextFile } from "@effectionx/fs";
+import { chmod, mkdtemp } from "node:fs/promises";
+import { join } from "node:path";
+import process from "node:process";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { denoRepositoryHost } from "../src/deno/composition/host.ts";
+import type { GitInvocation, GitOutcome, RepositoryHost } from "../src/deno/composition/host.ts";
+import { UNAUTHENTICATED } from "../src/deno/composition/authentication.ts";
+import type { GitAuthenticationSession } from "../src/deno/composition/authentication.ts";
+import { repositoryOperationsOver } from "../src/deno/repository-operations.ts";
+import {
+  GIT_PUSH,
+  gitPushInputsJson,
+  gitPushNaturalKeyJson,
+} from "../src/composition/git-push-records.ts";
+import type { GitPushInputs } from "../src/composition/git-push-records.ts";
+import { useBareRemote } from "./support/git-remotes.ts";
+import { useHostCheckout } from "./support/run-composition.ts";
+import { REMOTE } from "./support/run-composition-tier.ts";
 import type { Operation, Result } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
@@ -146,6 +177,14 @@ interface OwnedOptions {
   readonly validate?: (record: GitHostReconciliationRecord) => void;
   /** Acquired inside the attempt's own scope, around the whole reconciliation. */
   readonly resource?: () => Operation<void>;
+  /**
+   * The provider this attempt constructs, when a case builds a real one.
+   *
+   * Reached in the same place and the same scope as `provider` above, so a case
+   * that constructs the actual native provider is exercising the construction
+   * the engine joins rather than a copy of it.
+   */
+  readonly construct?: () => Operation<GitHostProvider>;
   readonly seen?: Attempt;
   /** Invocations the one `<Effect />` makes, which is one by default. */
   readonly calls?: number;
@@ -215,6 +254,9 @@ function live(options: OwnedOptions, seen: Attempt): OwnedGitHostLive {
       seen.constructions += 1;
       if (options.resource !== undefined) {
         yield* options.resource();
+      }
+      if (options.construct !== undefined) {
+        return yield* options.construct();
       }
       const provider = options.provider;
       if (provider === undefined) {
@@ -663,5 +705,433 @@ describe("Tier OW — owner-specified external Git-host reconciliation", () => {
     expect(seen.records).toEqual([]);
     expect(seen.failures).toHaveLength(1);
     expect(gitHostYields(stream.snapshot())).toEqual([]);
+  });
+});
+
+/** Let every ready task run, so "reached its wait" is about turns. */
+function* settled(turns = 8): Operation<void> {
+  for (let turn = 0; turn < turns; turn += 1) {
+    yield* sleep(0);
+  }
+}
+
+/**
+ * A promise a case releases by hand.
+ *
+ * What makes these cuts deterministic rather than a race: an acquisition is
+ * started, the halt is delivered while it is demonstrably still pending, and
+ * only then is it allowed to deliver.
+ */
+function gate(): { readonly released: Promise<void>; release(): void } {
+  let open = (): void => {};
+  const released = new Promise<void>((resolve) => {
+    open = () => resolve();
+  });
+  return { released, release: () => open() };
+}
+
+/** A script that reports it ran and then waits, holding its pipes open. */
+function* waitingScript(path: string, marker: string): Operation<void> {
+  yield* writeTextFile(path, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nsleep 120\n`);
+  yield* until(chmod(path, 0o755));
+}
+
+/** Wait until this path is there, or say what never appeared. */
+function* appears(path: string): Operation<void> {
+  const deadline = Date.now() + 30_000;
+  while (!(yield* exists(path))) {
+    if (Date.now() > deadline) {
+      throw new Error(`${path} never appeared`);
+    }
+    yield* sleep(25);
+  }
+}
+
+/** What a watched `git` child reported about its own lifetime. */
+interface WatchedChildren {
+  readonly spawned: Operation<void>;
+  readonly observe: NonNullable<GitInvocation["observe"]>;
+  observed(): number;
+  closed(): boolean;
+  alive(): boolean;
+}
+
+/** Watch the real children one invocation spawns. */
+function watchChildren(): WatchedChildren {
+  const pids: number[] = [];
+  let count = 0;
+  let closes = 0;
+  const first = withResolvers<void>();
+  return {
+    spawned: first.operation,
+    observe(child): void {
+      count += 1;
+      if (child.pid !== undefined) {
+        pids.push(child.pid);
+      }
+      child.on("close", () => {
+        closes += 1;
+      });
+      first.resolve();
+    },
+    observed: () => count,
+    closed: () => count > 0 && closes === count,
+    alive: () =>
+      pids.some((pid) => {
+        try {
+          // Signal 0 asks the operating system whether the process is there.
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      }),
+  };
+}
+
+/**
+ * The request the real Push provider admits, from one publication's inputs.
+ *
+ * The suite's own `PUSH` constant is a generic effect request: the real
+ * provider re-admits what it is handed and refuses anything that is not its
+ * own, so a case driving the actual provider has to state the real thing.
+ */
+function pushRequest(branch: string, commit: string): GitHostEffectRequest {
+  const inputs = pushInputs(branch, commit);
+  return Object.freeze({
+    kind: GIT_PUSH,
+    inputs: gitPushInputsJson(inputs),
+    naturalKey: gitPushNaturalKeyJson({
+      repository: inputs.repository,
+      remote: inputs.remote,
+      destinationRef: inputs.destinationRef,
+    }),
+  });
+}
+
+/** One publication's inputs against a real bare remote. */
+function pushInputs(branch: string, commit: string): GitPushInputs {
+  return Object.freeze({
+    repository: {
+      name: "project",
+      locatorFingerprint: "a".repeat(64),
+      requestedBase: null,
+      creationCommit: commit,
+      primaryBranch: "main",
+      objectFormat: "sha1" as const,
+    },
+    remote: "origin",
+    branch,
+    destinationRef: `refs/heads/${branch}`,
+    sourceCommit: commit,
+  });
+}
+
+/**
+ * What a cancelled attempt does to the resources its own provider acquired.
+ *
+ * These four windows live inside `pushProvider`: the scratch repository it
+ * opens over the checkout's object database, and the credential session it
+ * opens for the destination. Neither is reachable from above — the published
+ * handle answers with two phases and nothing else, which is the whole point of
+ * that boundary — so each case builds the *same* handle this package's public
+ * factory builds, over a host whose leaves it can hold, and reconciles through
+ * the real engine so the teardown it watches is the one publication waits for.
+ *
+ * The generic attempt-resource controls above (OW6, OW7) prove that a held
+ * cleanup holds publication and that a failing cleanup publishes nothing. They
+ * say nothing about which resource, when it was asked for, or whether a
+ * delivery that arrived after cancellation began was released — which is what
+ * these four are.
+ */
+describe("Tier OW — what a cancelled owned attempt's own native resources do", () => {
+  it("OW12: waits for a pending scratch delivery, then removes what arrived", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const checkout = yield* useHostCheckout(remote.locator);
+    const head = checkout.run("rev-parse", "HEAD").trim();
+    const common = checkout.run("rev-parse", "--path-format=absolute", "--git-common-dir").trim();
+
+    const made: string[] = [];
+    const asked = withResolvers<void>();
+    const held = gate();
+    // Armed before anything waits on it, so an assertion that fails below
+    // cannot leave the attempt stranded in a delivery nobody releases.
+    yield* ensure(() => held.release());
+    const create = (prefix: string): Promise<string> => {
+      asked.resolve();
+      return held.released
+        .then(() => mkdtemp(prefix))
+        .then((directory) => {
+          made.push(directory);
+          return directory;
+        });
+    };
+    const host = denoRepositoryHost({ directories: { create } });
+
+    const stream = new InMemoryStream();
+    const seen = attempt();
+    let returned = false;
+    yield* scoped(function* (): Operation<void> {
+      const running = yield* spawn(() =>
+        runOwned({
+          stream,
+          seen,
+          request: pushRequest("ow12", head),
+          *construct(): Operation<GitHostProvider> {
+            const operations = yield* repositoryOperationsOver(host);
+            return yield* operations.pushProvider(common, remote.locator, pushInputs("ow12", head));
+          },
+        }),
+      );
+      yield* asked.operation;
+      // The window: the provider asked for its scratch space and has not been
+      // handed one, so nothing has been observed and nothing published.
+      expect(made).toEqual([]);
+      expect(gitHostYields(stream.snapshot())).toEqual([]);
+
+      const halting = yield* spawn(function* (): Operation<void> {
+        yield* running.halt();
+        returned = true;
+      });
+      yield* settled();
+      // Teardown is waiting for the acquisition it armed its release before:
+      // nothing delivered, and the halt has not come back.
+      expect(returned).toBe(false);
+      expect(made).toEqual([]);
+
+      held.release();
+      yield* halting;
+    });
+
+    // It waited for the delivery and removed exactly what arrived.
+    expect(returned).toBe(true);
+    expect(made).toHaveLength(1);
+    expect(yield* exists(made[0] ?? "")).toBe(false);
+    // And nothing was published for the publication it never finished.
+    expect(gitHostYields(stream.snapshot())).toEqual([]);
+    expect(seen.records).toEqual([]);
+  });
+
+  it("OW13: removes a scratch space the attempt had already received", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const checkout = yield* useHostCheckout(remote.locator);
+    const head = checkout.run("rev-parse", "HEAD").trim();
+    const common = checkout.run("rev-parse", "--path-format=absolute", "--git-common-dir").trim();
+
+    const delivered: string[] = [];
+    const built = withResolvers<void>();
+    const create = (prefix: string): Promise<string> =>
+      mkdtemp(prefix).then((directory) => {
+        delivered.push(directory);
+        return directory;
+      });
+    const host = denoRepositoryHost({ directories: { create } });
+
+    const stream = new InMemoryStream();
+    const seen = attempt();
+    yield* scoped(function* (): Operation<void> {
+      const running = yield* spawn(() =>
+        runOwned({
+          stream,
+          seen,
+          request: pushRequest("ow13", head),
+          *construct(): Operation<GitHostProvider> {
+            const operations = yield* repositoryOperationsOver(host);
+            const provider = yield* operations.pushProvider(
+              common,
+              remote.locator,
+              pushInputs("ow13", head),
+            );
+            // The other half of OW12's distinction: the scratch space has been
+            // delivered and the provider exists, and the cut lands here —
+            // before anything is observed, so what the halt releases is a
+            // resource the attempt already held rather than one it was owed.
+            built.resolve();
+            yield* suspend();
+            return provider;
+          },
+        }),
+      );
+      yield* built.operation;
+      // The positive control: a scratch space really was delivered, and it is
+      // on disk at the moment of the cut.
+      expect(delivered).toHaveLength(1);
+      expect(yield* exists(delivered[0] ?? "")).toBe(true);
+      yield* running.halt();
+    });
+
+    // Gone with the attempt, and nothing invented for the publication.
+    expect(yield* exists(delivered[0] ?? "")).toBe(false);
+    expect(gitHostYields(stream.snapshot())).toEqual([]);
+    expect(seen.records).toEqual([]);
+  });
+
+  it("OW14: releases a credential session delivered after cancellation began", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const checkout = yield* useHostCheckout(remote.locator);
+    const head = checkout.run("rev-parse", "HEAD").trim();
+    const common = checkout.run("rev-parse", "--path-format=absolute", "--git-common-dir").trim();
+
+    const opened: string[] = [];
+    const held = withResolvers<GitAuthenticationSession>();
+    const reached = withResolvers<void>();
+    const cleaning = withResolvers<void>();
+    const session = { delivered: false, released: false };
+    yield* ensure(() => held.resolve(UNAUTHENTICATED));
+
+    const inner = denoRepositoryHost();
+    const host: RepositoryHost = {
+      ...inner,
+      useAuthentication(locator: string): Operation<GitAuthenticationSession> {
+        opened.push(locator);
+        return resource<GitAuthenticationSession>(function* (provide) {
+          // Registered before the pending acquisition is announced, because the
+          // halt below is started off that announcement: an `ensure` yielded
+          // afterwards registers nothing on a scope already unwinding, and the
+          // cancellation would reach an acquisition with no cleanup on it. It
+          // suspends, so it is an `ensure` and not a `finally` — a `finally`
+          // that yields takes the frame out of return-mode mid-teardown.
+          yield* ensure(function* (): Operation<void> {
+            cleaning.resolve();
+            // The same delivery the cancelled acquisition was owed. A settled
+            // resolver answers every later read, so what this attempt was owed
+            // arrives here instead of at the initializer the halt unwound.
+            yield* held.operation;
+            session.released = true;
+          });
+          reached.resolve();
+          yield* provide(yield* held.operation);
+        });
+      },
+    };
+
+    const stream = new InMemoryStream();
+    const seen = attempt();
+    let returned = false;
+    yield* scoped(function* (): Operation<void> {
+      const running = yield* spawn(() =>
+        runOwned({
+          stream,
+          seen,
+          request: pushRequest("ow14", head),
+          *construct(): Operation<GitHostProvider> {
+            const operations = yield* repositoryOperationsOver(host);
+            return yield* operations.pushProvider(common, remote.locator, pushInputs("ow14", head));
+          },
+        }),
+      );
+      // Raced against the attempt finishing, so an attempt that never asked
+      // for a credential is a diagnosis here rather than a hang.
+      yield* race([
+        reached.operation,
+        (function* (): Operation<never> {
+          yield* running;
+          throw new Error(
+            `the attempt settled without opening a session: ${seen.failures
+              .map((one) => String(one))
+              .join(" | ")}`,
+          );
+        })(),
+      ]);
+      const halting = yield* spawn(function* (): Operation<void> {
+        yield* running.halt();
+        returned = true;
+      });
+      try {
+        // Ordered by acknowledgement and nothing else: until the cleanup says
+        // it started, nothing proves the cancellation reached the acquisition
+        // this delivery is owed to.
+        yield* cleaning.operation;
+        expect(session.delivered).toBe(false);
+        expect(session.released).toBe(false);
+        expect(returned).toBe(false);
+      } finally {
+        // External arrival, from this case rather than from the acquisition the
+        // halt unwound. In a `finally` with no yield in it, so an assertion
+        // that failed above leaves the joined cleanup nothing to wait for.
+        session.delivered = true;
+        held.resolve(UNAUTHENTICATED);
+      }
+      yield* halting;
+    });
+
+    // The session was opened for the exact destination this publication names,
+    // the delivery it was still owed arrived after its own cleanup had started,
+    // that cleanup released it, and only then did the halt return.
+    expect(new Set(opened)).toEqual(new Set([remote.locator]));
+    expect(session.delivered).toBe(true);
+    expect(session.released).toBe(true);
+    expect(returned).toBe(true);
+    expect(gitHostYields(stream.snapshot())).toEqual([]);
+    expect(seen.records).toEqual([]);
+  });
+
+  it("OW15: joins the running child its own observation spawned", function* () {
+    const remote = yield* useBareRemote(REMOTE);
+    const checkout = yield* useHostCheckout(remote.locator);
+    const head = checkout.run("rev-parse", "HEAD").trim();
+    const common = checkout.run("rev-parse", "--path-format=absolute", "--git-common-dir").trim();
+
+    const home = yield* useTempDirectory("xmd-owned-child-");
+    const marker = join(home, "upload-pack-ran");
+    const script = join(home, "slow-upload-pack");
+    yield* waitingScript(script, marker);
+    const watched = watchChildren();
+
+    // The first remote contact a publication makes is an exact observation of
+    // the destination. Against a local remote that spawns an upload-pack, and a
+    // program that reports it ran and then waits is a child holding the pipes
+    // this process inherited.
+    const inner = denoRepositoryHost();
+    const host: RepositoryHost = {
+      ...inner,
+      *git(invocation: GitInvocation): Operation<GitOutcome> {
+        if (invocation.args.includes("ls-remote")) {
+          return yield* inner.git({
+            ...invocation,
+            args: [
+              "ls-remote",
+              `--upload-pack=${script}`,
+              ...invocation.args.slice(invocation.args.indexOf("ls-remote") + 1),
+            ],
+            observe: watched.observe,
+          });
+        }
+        return yield* inner.git(invocation);
+      },
+    };
+
+    const stream = new InMemoryStream();
+    const seen = attempt();
+    yield* scoped(function* (): Operation<void> {
+      const running = yield* spawn(() =>
+        runOwned({
+          stream,
+          seen,
+          request: pushRequest("ow15", head),
+          *construct(): Operation<GitHostProvider> {
+            const operations = yield* repositoryOperationsOver(host);
+            return yield* operations.pushProvider(common, remote.locator, pushInputs("ow15", head));
+          },
+        }),
+      );
+      yield* watched.spawned;
+      // Not merely spawned: inside its own transport, with a descendant of its
+      // own waiting. Halting before that would interrupt a command which had
+      // done nothing, which is the hole this row closes.
+      yield* appears(marker);
+      // The guard against a vacuous row: a child that had already ended would
+      // make everything below true without anything being interrupted.
+      expect(watched.closed()).toBe(false);
+      yield* running.halt();
+    });
+
+    // The child this attempt's own observation started closed before the
+    // attempt settled, and no outcome was invented for it.
+    expect(watched.observed() > 0).toBe(true);
+    expect(watched.closed()).toBe(true);
+    expect(watched.alive()).toBe(false);
+    expect(gitHostYields(stream.snapshot())).toEqual([]);
+    expect(seen.records).toEqual([]);
   });
 });

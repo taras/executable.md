@@ -34,13 +34,11 @@ import {
 } from "effection";
 import type { Operation, Result } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { chmod, mkdir, mkdtemp, open, readdir, realpath, writeFile } from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
-import process from "node:process";
-import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readdir, realpath, writeFile } from "node:fs/promises";
+import { runGit } from "./support/fixture-git.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { API, cwd, hostFilesHandler } from "@executablemd/runtime";
+import { API, hostFilesHandler } from "@executablemd/runtime";
 import type {
   FilePathInput,
   FilesHandler,
@@ -66,9 +64,6 @@ import {
 import type { ReplPlacementRecord } from "../src/repl/repositories/placement-records.ts";
 import { REPL_REPOSITORY_LOCAL } from "../src/repl/repositories/records.ts";
 import { repositorySlot, worktreeSlot } from "@executablemd/git/deno";
-import { metadataOf } from "../../git/src/deno/run-composition/checkout-layout.ts";
-import { METADATA_VERSION } from "../../git/src/deno/run-composition/metadata.ts";
-import type { ManagedRepositoryMetadata } from "../../git/src/deno/run-composition/metadata.ts";
 
 interface Fixture {
   /** The scenario's own directory: source repository, managed root and HOME. */
@@ -81,94 +76,41 @@ interface Fixture {
   readonly ambient: string;
 }
 
-/**
- * One fixture `git`, through the ordinary executable rather than a session.
- *
- * Isolated the way the entry's own Git is — no global or system configuration
- * and a home of this scenario's own — and with a stated identity, so a runner
- * with no `user.name` cannot turn a fixture commit into a refusal.
- */
-function seedGit(cwd: string, args: readonly string[]): Operation<void> {
-  return until(
-    new Promise<void>((resolve, reject) => {
-      execFile(
-        "git",
-        [...args],
-        {
-          cwd,
-          env: {
-            ...process.env,
-            GIT_CONFIG_GLOBAL: "/dev/null",
-            GIT_CONFIG_SYSTEM: "/dev/null",
-            GIT_CONFIG_NOSYSTEM: "1",
-            GIT_AUTHOR_NAME: "Fixture",
-            GIT_AUTHOR_EMAIL: "fixture@example.invalid",
-            GIT_COMMITTER_NAME: "Fixture",
-            GIT_COMMITTER_EMAIL: "fixture@example.invalid",
-          },
-        },
-        (error) => (error === null ? resolve() : reject(error)),
-      );
-    }),
-  );
-}
-
 function useFixture(): Operation<Fixture> {
   return resource<Fixture>(function* (provide) {
     const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "repl-select-")))));
     yield* ensure(() => rm(root, { recursive: true, force: true }));
     const origin = join(root, "origin");
     yield* until(mkdir(origin, { recursive: true }));
-    yield* seedGit(root, ["init", "-b", "main", origin]);
+    yield* runGit(root, ["init", "-b", "main", origin]);
     yield* until(writeFile(join(origin, "README.md"), "origin\n"));
-    yield* seedGit(origin, ["add", "README.md"]);
-    yield* seedGit(origin, ["commit", "-m", "first"]);
+    yield* runGit(origin, ["add", "README.md"]);
+    yield* runGit(origin, ["commit", "-m", "first"]);
 
     const ambient = join(root, "ambient");
     yield* until(mkdir(ambient, { recursive: true }));
-    yield* seedGit(root, ["init", "-b", "main", ambient]);
+    yield* runGit(root, ["init", "-b", "main", ambient]);
     yield* until(writeFile(join(ambient, "seed.md"), "seed\n"));
     // Committed, because a Repository identity is pinned at the commit HEAD
     // named when the entry opened: a checkout with no commit is one this
     // provider cannot say the shape of, and discovery answers with nothing.
-    yield* seedGit(ambient, ["add", "seed.md"]);
-    yield* seedGit(ambient, ["commit", "-m", "seed"]);
+    yield* runGit(ambient, ["add", "seed.md"]);
+    yield* runGit(ambient, ["commit", "-m", "seed"]);
 
     const managed = join(root, "repositories");
     yield* provide({ root, origin, managed, ambient });
   });
 }
 
-/** Let every ready task run, so "reached its wait" is about turns. */
-function* settled(turns = 8): Operation<void> {
-  for (let turn = 0; turn < turns; turn += 1) {
-    yield* sleep(0);
-  }
-}
-
-/** The sidecar the metadata cut below writes, which is ordinary record data. */
-const REPOSITORY_SIDECAR: ManagedRepositoryMetadata = Object.freeze({
-  kind: "repository" as const,
-  version: METADATA_VERSION,
-  name: "project",
-  locator: "/origin",
-  locatorFingerprint: "a".repeat(64),
-  requestedBase: null,
-  creationCommit: "b".repeat(40),
-  primaryBranch: "main",
-  objectFormat: "sha1" as const,
-  commonDirectory: "/origin/.git",
-});
-
-/** Wait until this path is there, or say what never appeared. */
-function* appears(path: string): Operation<void> {
-  const deadline = Date.now() + 30_000;
-  while (!(yield* exists(path))) {
-    if (Date.now() > deadline) {
-      throw new Error(`${path} never appeared`);
-    }
-    yield* sleep(25);
-  }
+/**
+ * Where a slot keeps the sidecar that describes it.
+ *
+ * Spelled here rather than read from the writer's own layout module: the file
+ * name is released on-disk shape, and a row that asked the implementation
+ * where it writes could not catch the implementation moving it.
+ */
+function sidecarOf(slot: string): string {
+  return join(slot, "metadata.json");
 }
 
 /** What the composition and the host beneath the recorder were asked to do. */
@@ -667,14 +609,14 @@ describe("one entry's managed Repository and Worktree selections", () => {
     // ordinary `incompatible-reuse` refusal and changes nothing on disk.
     const slot = repositorySlot(fixture.managed, fixture.origin, "project");
     yield* until(mkdir(slot, { recursive: true }));
-    yield* writeTextFile(metadataOf(slot), "{}\n");
+    yield* writeTextFile(sidecarOf(slot), "{}\n");
 
     const prefix = yield* left(fixture, source, live);
     // Asked once and refused: the selector is entered, decides from the
     // sidecar it cannot read, and changes nothing. The unreadable sidecar is
     // still the one this row wrote, so nothing was recreated over it.
     expect(methodsCalled(live)).toEqual(["selectRepository"]);
-    expect(yield* readTextFile(metadataOf(slot))).toBe("{}\n");
+    expect(yield* readTextFile(sidecarOf(slot))).toBe("{}\n");
 
     // Recorded as the refusal it was, and replayed as the same one without the
     // selector being asked again.
@@ -1197,8 +1139,3 @@ function* commonOf(fixture: Fixture, name: string): Operation<string> {
   return yield* until(realpath(join(slot, "checkout", ".git")));
 }
 
-/** The isolation directories this host's sessions have left in the temporary root. */
-function* isolationDirectories(): Operation<string[]> {
-  const entries = yield* until(readdir(tmpdir()));
-  return entries.filter((entry) => entry.startsWith("xmd-workflow-git-")).sort();
-}

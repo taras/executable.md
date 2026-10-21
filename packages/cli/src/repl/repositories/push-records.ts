@@ -46,13 +46,13 @@ import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { canonicalJson } from "@executablemd/workflow";
 import { members, text } from "@executablemd/git";
-import { admitLocator } from "@executablemd/git/deno";
+import { admitLocator } from "@executablemd/git";
 import { gitPushInputsJson, parseGitPushInputs, type GitPushInputs } from "@executablemd/git";
 import {
   parseRepositoryIdentity,
   repositoryIdentityJson,
   sameRepositoryIdentity,
-} from "@executablemd/git/api";
+} from "@executablemd/git";
 import { type RepositoryIdentity } from "@executablemd/git";
 import { digest, REPL_REPOSITORY_VERSION } from "./records.ts";
 

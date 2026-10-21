@@ -73,7 +73,7 @@ import type { GitAddResult, GitCommitResult, GitSwitchResult } from "@executable
 import { ADD, admitPathspecs } from "@executablemd/git";
 import { admitCommitMessage, admitMessageSource, COMMIT } from "@executablemd/git";
 import { SWITCH } from "@executablemd/git";
-import { sameRepositoryIdentity } from "@executablemd/git/api";
+import { sameRepositoryIdentity } from "@executablemd/git";
 import type { RepositorySelection } from "@executablemd/git/api";
 import {
   parseReplGitRecord,

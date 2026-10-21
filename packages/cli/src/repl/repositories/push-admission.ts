@@ -52,7 +52,7 @@ import {
   pushExpectation,
   type GitPushInputs,
 } from "@executablemd/git";
-import { sameRepositoryIdentity } from "@executablemd/git/api";
+import { sameRepositoryIdentity } from "@executablemd/git";
 import { type RepositoryIdentity } from "@executablemd/git";
 import { GIT_HOST_EFFECT } from "@executablemd/git";
 import { gitHostRequestFingerprint, parseGitHostReconciliationRecord } from "@executablemd/git";

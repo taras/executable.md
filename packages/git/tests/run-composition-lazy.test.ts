@@ -20,11 +20,13 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { all, scoped, spawn } from "effection";
 import type { Operation } from "effection";
+import { readTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { useBareRemote } from "./support/git-remotes.ts";
 import { REMOTE } from "./support/run-composition-tier.ts";
 import { join } from "node:path";
 import { useDenoRepositoryOperations } from "../deno.ts";
+import { repositoryOperationsOver } from "../src/deno/repository-operations.ts";
 import type { DenoRepositoryOperations } from "../deno.ts";
 import type { HelperAssembly } from "../credential-helper.ts";
 import { collect, execute, inlineSource } from "@executablemd/core";
@@ -189,23 +191,67 @@ const PUBLISHED_METHODS: readonly string[] = [
  * session today proves nothing about what a later edit could return.
  */
 describe("what the published repository handle is, and what constructing it costs", () => {
-  it("acquires nothing, and no caller supplies a leaf for it to acquire from", function* () {
+  it("acquires nothing when it is built, over the leaves it would acquire from", function* () {
     const seen = counters();
     yield* scoped(function* () {
       const directory = yield* useTempDirectory("xmd-handle");
-      const root = yield* useTempDirectory("xmd-handle-root");
-      // The provider is installed over a counting leaf, and the public handle
-      // is constructed beside it. Constructing is not asking.
-      yield* useRunComposition({ root, cwd: directory, host: counting(seen, directory) });
-      const operations = yield* useDenoRepositoryOperations();
+      // The builder the public factory delegates to, over a counting leaf. The
+      // host is the one this construction would acquire *through*, so a
+      // constructor that took a directory, ran a command or read an identity
+      // would show up here. A control that counted some other host could not
+      // observe this at all.
+      const operations = yield* repositoryOperationsOver(counting(seen, directory));
       expect(typeof operations.ambientCheckout).toBe("function");
+      // Still nothing, with the handle built and in hand.
+      expect(seen.directories).toBe(0);
+      expect(seen.commands).toEqual([]);
+      expect(seen.identities).toBe(0);
     });
-    // The handle builds its own platform leaf rather than taking one, so the
-    // counters beside it stay at zero: no temporary directory, no `git`, no
-    // identity read.
+    // And nothing on the way out either: there was no resource to release.
     expect(seen.directories).toBe(0);
     expect(seen.commands).toEqual([]);
     expect(seen.identities).toBe(0);
+  });
+
+  it("acquires its session from that same host, once, when something first asks", function* () {
+    const seen = counters();
+    yield* scoped(function* () {
+      const directory = yield* useTempDirectory("xmd-handle-lazy");
+      const operations = yield* repositoryOperationsOver(counting(seen, directory));
+      // Two asks through two different methods. The session behind them is
+      // acquired from this host, and acquired once — which is also what makes
+      // the zero above a statement about *when* rather than about whether.
+      expect(yield* operations.ambientCheckout(directory)).toBe(undefined);
+      expect(yield* operations.ambientRepository(directory)).toBe(undefined);
+      expect(seen.directories).toBe(1);
+      expect(seen.commands.length > 0).toBe(true);
+      // Every command went to this host: the handle delegates to the leaf it
+      // was built over and to nothing else.
+      expect(seen.commands.every((args) => args.length > 0)).toBe(true);
+    });
+  });
+
+  it("builds that same implementation when a caller states no leaf at all", function* () {
+    // The public default path and the builder above are one implementation, so
+    // what the two controls above establish is true of the published factory.
+    const source = yield* readTextFile(
+      join(import.meta.dirname ?? "", "../src/deno/repository-operations.ts"),
+    );
+    const published = source.slice(
+      source.indexOf("export function useDenoRepositoryOperations"),
+      source.indexOf("export function* repositoryOperationsOver"),
+    );
+    expect(published.length > 0).toBe(true);
+    // Its whole body is that delegation, over the one shipped host it builds.
+    expect(published).toContain("return repositoryOperationsOver(denoRepositoryHost(");
+    // And the handles agree member for member, which a second implementation
+    // would have to keep in step by hand.
+    yield* scoped(function* () {
+      const directory = yield* useTempDirectory("xmd-handle-default");
+      const byDefault = yield* useDenoRepositoryOperations();
+      const built = yield* repositoryOperationsOver(counting(counters(), directory));
+      expect(Object.keys(byDefault).sort()).toEqual(Object.keys(built).sort());
+    });
   });
 
   it("hands back exactly the twelve credential-free methods", function* () {
@@ -237,20 +283,24 @@ describe("what the published repository handle is, and what constructing it cost
     const remote = yield* useBareRemote(REMOTE);
     yield* scoped(function* () {
       const operations = yield* useDenoRepositoryOperations();
-      const provider = yield* operations.pushProvider(join(remote.locator, "objects"), remote.locator, {
-        repository: {
-          name: "project",
-          locatorFingerprint: "a".repeat(64),
-          requestedBase: null,
-          creationCommit: "b".repeat(40),
-          primaryBranch: "main",
-          objectFormat: "sha1",
+      const provider = yield* operations.pushProvider(
+        join(remote.locator, "objects"),
+        remote.locator,
+        {
+          repository: {
+            name: "project",
+            locatorFingerprint: "a".repeat(64),
+            requestedBase: null,
+            creationCommit: "b".repeat(40),
+            primaryBranch: "main",
+            objectFormat: "sha1",
+          },
+          remote: "origin",
+          branch: "review/control",
+          destinationRef: "refs/heads/review/control",
+          sourceCommit: "c".repeat(40),
         },
-        remote: "origin",
-        branch: "review/control",
-        destinationRef: "refs/heads/review/control",
-        sourceCommit: "c".repeat(40),
-      });
+      );
       // Two operations and nothing else: the scratch repository and the
       // credential session this acquired belong to the attempt that asked, and
       // neither is a member a caller could reach.
@@ -281,5 +331,4 @@ describe("what the published repository handle is, and what constructing it cost
     expect(Object.isFrozen(helper)).toBe(false);
     expect(Object.isFrozen(launcher)).toBe(false);
   });
-
 });

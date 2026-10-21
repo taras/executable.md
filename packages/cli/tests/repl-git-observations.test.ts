@@ -30,13 +30,12 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { Execution } from "@executablemd/core/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import { denoRepositoryHost } from "../../git/src/deno/composition/host.ts";
-import { gitSession } from "../../git/src/deno/composition/git.ts";
 import { useDenoRepositoryOperations } from "@executablemd/git/deno";
+import { runGit } from "./support/fixture-git.ts";
 import type { DenoRepositoryOperations } from "@executablemd/git/deno";
 import type { GitObservationRequest } from "@executablemd/git/api";
 import { useReplRepositoryRecording } from "../src/repl/repositories/deno/provider.ts";
-import { gitPlugin } from "../../git/src/plugin.ts";
+import { gitPlugin } from "@executablemd/git";
 import { replRepositoryPlugin } from "../src/repl/repositories/plugin.ts";
 import { REPL_REPOSITORY_OBSERVATION } from "../src/repl/repositories/observation-records.ts";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
@@ -77,26 +76,19 @@ function useFixture(): Operation<Fixture> {
     const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "repl-git-reads-")))));
     yield* ensure(() => rm(root, { recursive: true, force: true }));
     const checkout = join(root, "checkout");
-    const git = gitSession(denoRepositoryHost(), root);
-    yield* git.run(["init", "-b", "main", checkout], root);
-    yield* git.run(["config", "user.name", "Fixture"], checkout);
-    yield* git.run(["config", "user.email", "fixture@example.invalid"], checkout);
+    yield* runGit(root, ["init", "-b", "main", checkout], { home: root });
     yield* until(writeFile(join(checkout, "seed.md"), "seed\n"));
     yield* until(writeFile(join(checkout, "notes.md"), "first notes\n"));
-    yield* git.run(["add", "--", "seed.md", "notes.md"], checkout);
-    yield* git.run(["commit", "-m", "first"], checkout);
-    const head = yield* git.read(["rev-parse", "HEAD"], checkout);
+    yield* runGit(checkout, ["add", "--", "seed.md", "notes.md"], { home: root });
+    yield* runGit(checkout, ["commit", "-m", "first"], { home: root });
+    const head = yield* runGit(checkout, ["rev-parse", "HEAD"], { home: root });
     yield* provide({
       root,
       checkout,
       journals: join(root, "journals"),
-      first: head ?? "",
-      *run(...args: string[]): Operation<string> {
-        const outcome = yield* git.run([...args], checkout);
-        if (outcome.code !== 0) {
-          throw new Error(`git ${args.join(" ")} exited ${outcome.code}: ${outcome.stderr}`);
-        }
-        return outcome.stdout.trim();
+      first: head,
+      run(...args: string[]): Operation<string> {
+        return runGit(checkout, args, { home: root });
       },
     });
   });

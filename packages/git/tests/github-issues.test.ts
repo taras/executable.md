@@ -13,6 +13,11 @@ import { expect } from "@executablemd/test-support/expect";
 import { Ok, scoped, type Operation } from "effection";
 import { API } from "@executablemd/runtime";
 import { useDenoGitHubIssues } from "../src/deno/issue/github-host.ts";
+import { IssueApi } from "@executablemd/git/api";
+import type { IssueDetails } from "@executablemd/git/api";
+import { gitHubFixtureSource } from "./support/issue-providers.ts";
+import { useIssueTrackerServer } from "./support/issue-tracker-server.ts";
+import type { GitHubAccess } from "../src/deno/composition/github.ts";
 import type { GitHubIssuesOptions } from "../src/deno/issue/github.ts";
 import {
   issueBodyFor,
@@ -231,9 +236,9 @@ describe("what the published issue transport installs", () => {
     expect(asked).toEqual([]);
   });
 
-  it("leaves a caller's own options untouched, and lets a named source outrank it", function* () {
+  it("leaves a caller's own options untouched", function* () {
     const supplied: { -readonly [K in keyof GitHubIssuesOptions]: GitHubIssuesOptions[K] } = {
-      configuration: { ceiling: ["https://github.com/owner"] },
+      configuration: { ceiling: [TARGET] },
     };
     yield* scoped(function* (): Operation<void> {
       yield* useDenoGitHubIssues(supplied);
@@ -244,6 +249,59 @@ describe("what the published issue transport installs", () => {
     expect("host" in supplied).toBe(false);
     expect(Object.keys(supplied)).toEqual(["configuration"]);
     expect(Object.isFrozen(supplied)).toBe(false);
+  });
+
+  it("sends an invoked read to the source a caller named, not the shipped one", function* () {
+    const served = yield* useIssueTrackerServer({
+      issues: [{ number: 4, title: "Named", body: "", state: "open", labels: [], assignee: null }],
+    });
+    // A source this case names, against a tracker it can answer from. The
+    // configuration points the *shipped* source somewhere nothing answers, so
+    // a wrapper whose default outranked the caller would fail this read rather
+    // than pass it: the two paths are told apart by which one can succeed.
+    const named = gitHubFixtureSource(served.url, { credential: "valid" });
+
+    const read = yield* scoped(function* (): Operation<IssueDetails> {
+      yield* useDenoGitHubIssues({
+        access: named,
+        configuration: { ceiling: [TARGET], endpoint: "https://issues.invalid/api/v3" },
+      });
+      // An invoked operation, which is the only thing that reaches a source at
+      // all: installing resolves nothing, and a control that installed and
+      // stopped would observe neither source.
+      return yield* IssueApi.operations.read(`${TARGET}/issues/4`, {});
+    });
+
+    expect(read.title).toBe("Named");
+    // And the caller's tracker is the one that was asked.
+    expect(served.requests.length > 0).toBe(true);
+    expect(served.requests.every((asked) => asked.method === "GET")).toBe(true);
+  });
+
+  it("refuses a destination outside the ceiling before any source is opened", function* () {
+    const asked: string[] = [];
+    const named = {
+      endpoint: "https://issues.invalid/api/v3",
+      *open(): Operation<GitHubAccess> {
+        asked.push("named");
+        throw new Error("a refused destination must not reach a source");
+      },
+    };
+
+    const refusal = yield* scoped(function* (): Operation<string> {
+      yield* useDenoGitHubIssues({ access: named, configuration: { ceiling: [TARGET] } });
+      try {
+        yield* IssueApi.operations.read("https://github.com/other/project/issues/1", {});
+        return "";
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    });
+
+    // Both halves: the read was refused, and the refusal happened before the
+    // source this case supplied was opened at all.
+    expect(refusal).not.toBe("");
+    expect(asked).toEqual([]);
   });
 });
 
