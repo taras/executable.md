@@ -84,24 +84,19 @@ function modelOf(bytes: string) {
 }
 
 function* completed(pty: Pty, history: string, count: number): Operation<string> {
-  const deadline = Date.now() + ACT_MS;
-  while (true) {
-    const bytes = yield* readTextFile(history);
-    const model = modelOf(bytes);
-    if (
-      model.entries.length === count &&
-      model.entries.every((entry) => entry.terminal?.status === "ok")
-    ) {
-      yield* showing(pty, `Ready for Entry ${count + 1}`, ACT_MS);
-      return bytes;
-    }
-    if (Date.now() > deadline) {
-      throw new Error(
-        `entries never closed. history=${bytes} screen=${JSON.stringify(yield* pty.shows())}`,
-      );
-    }
-    yield* sleep(150);
+  // Ready requires the journal close and the entry's joined teardown.
+  yield* showing(pty, `Ready for Entry ${count + 1}`, ACT_MS);
+  const bytes = yield* readTextFile(history);
+  const model = modelOf(bytes);
+  if (
+    model.entries.length !== count ||
+    model.entries.some((entry) => entry.terminal?.status !== "ok")
+  ) {
+    throw new Error(
+      `entries never closed. history=${bytes} screen=${JSON.stringify(yield* pty.shows())}`,
+    );
   }
+  return bytes;
 }
 
 function* leave(pty: Pty): Operation<string> {
