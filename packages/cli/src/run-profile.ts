@@ -31,7 +31,10 @@ import { createContext } from "effection";
 import type { Context, Operation } from "effection";
 import { cwd } from "@executablemd/runtime";
 import { gitPlugin, gitPluginDeclaresFor } from "@executablemd/git";
-import { replRepositoryPlugin } from "./repl/repositories/plugin.ts";
+import {
+  replRepositoryPlugin,
+  replRepositoryPluginDeclaresFor,
+} from "./repl/repositories/plugin.ts";
 import type { Plugin } from "@executablemd/core/api";
 import { loadPlugins, type PluginModuleLoader } from "./plugin-loader.ts";
 import type { PluginSelection } from "./plugin-selection.ts";
@@ -92,7 +95,7 @@ export function carriesBundledPlugin(selection: PluginSelection): boolean {
   // `repl` is this command's own: Git no longer declares for it, because what a
   // REPL entry retains is this package's record rather than that package's.
   return (
-    selection.command === "repl" ||
+    replRepositoryPluginDeclaresFor(selection.command) ||
     gitPluginDeclaresFor({ command: selection.command, args: selection.args })
   );
 }

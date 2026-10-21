@@ -73,8 +73,9 @@ export function denoPullRequestOperations(): DenoPullRequestOperations {
     },
 
     *provider(origin: string, inputs: PullRequestInputs): Operation<GitHostProvider> {
-      // Opened inside the attempt that asked, so the session ends with it.
-      const access = yield* resolved.transport((yield* resolved.authorized()) ?? {}).open();
+      // Opened inside the attempt that asked, so the session ends with it. The
+      // recipe is the adapter's own — one memoization, shared with the read.
+      const access = yield* (yield* resolved.access()).open();
       return pullRequestProvider(access, origin, inputs);
     },
   };

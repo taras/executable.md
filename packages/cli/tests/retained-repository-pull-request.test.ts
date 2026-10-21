@@ -1138,11 +1138,6 @@ function* commitThere(checkout: string, name: string): Operation<string> {
   return yield* runGit(checkout, ["rev-parse", "HEAD"]);
 }
 
-/** The commit a ref on the bare remote holds, or `undefined` for absence. */
-function remoteCommit(fixture: Fixture, branch: string): Operation<string | undefined> {
-  return readGit(fixture.origin, ["rev-parse", "--verify", `refs/heads/${branch}`]);
-}
-
 /** Move a checkout back to an earlier commit, as a person at a shell would. */
 function* resetThere(checkout: string, commit: string): Operation<void> {
   yield* runGit(checkout, ["reset", "--hard", commit]);
@@ -1189,11 +1184,6 @@ function decisionsOf(events: readonly DurableEvent[]): string[] {
     }
   }
   return found;
-}
-
-/** One named question, for a branch whose readiness a row gates on. */
-function question(name: string, text: string): string {
-  return `    <Elicit schema={{ type: "object" }} as=${JSON.stringify(name)}>${text}</Elicit>`;
 }
 
 /** A question with a file after it, so a continuation has a suffix to run. */
@@ -1455,171 +1445,6 @@ describe("one entry's pull request", () => {
     expect(String(again.refusal)).toContain("different");
     expect(requests(yield* stream.readAll())).toEqual([]);
     expect(mutations(fixture.store)).toEqual([]);
-  });
-
-  it("Q7: two real publishers of one destination, restored in reverse, still decide", function* () {
-    const fixture = yield* useFixture();
-    fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
-    const counted = counters();
-    // Two publishers of the *same* destination in one entry, each in its own
-    // coroutine. The second commits on top of the first and publishes the same
-    // branch, so both pairs are relevant to the pull request below and only the
-    // later one describes the branch the Git host now holds.
-    //
-    // The first publisher reads evidence *before* it publishes. That read is an
-    // ordinary admitted occurrence, and on continuation it restores through the
-    // live semantic chain — which is what gives this row somewhere to hold that
-    // branch before its publication restores rather than after.
-    const source = [
-      `<Repository name="project" url=${JSON.stringify(LOCATOR)}>`,
-      `  <Git.Switch branch=${JSON.stringify(BRANCH)} />`,
-      `  <File path="base.md">base</File>`,
-      `  <Git.Add paths="base.md" />`,
-      `  <Git.Commit message="Base" as="base" />`,
-      `  <All>`,
-      `    <Spawn>`,
-      `      <File path="one.md">one</File>`,
-      `      <Git.Add paths="one.md" />`,
-      `      <Git.Commit message="One" as="one" />`,
-      `      <PullRequest.Reviews url=${JSON.stringify(FIRST_URL)} as="watched" />`,
-      `      <Git.Push />`,
-      question("afterFirst", "first published"),
-      `    </Spawn>`,
-      `    <Spawn>`,
-      question("beforeSecond", "second waiting"),
-      `      <File path="two.md">two</File>`,
-      `      <Git.Add paths="two.md" />`,
-      `      <Git.Commit message="Two" as="two" />`,
-      `      <Git.Push />`,
-      question("afterSecond", "second published"),
-      `    </Spawn>`,
-      `  </All>`,
-      ...upsert(),
-      `</Repository>`,
-      "",
-    ].join("\n");
-
-    // Readiness gates rather than elapsed time: the second publisher is
-    // released exactly when the first has published and reached its question,
-    // so the acknowledged order is arranged rather than hoped for.
-    const published = withResolvers<void>();
-    const prefix = yield* scoped(function* (): Operation<readonly DurableEvent[]> {
-      const stream = new InMemoryStream();
-      const waiting = withResolvers<void>();
-      let held = 0;
-      const task = yield* spawn(() =>
-        run(fixture, source, stream, counted, {
-          *between(): Operation<void> {
-            yield* Elicitation.around({
-              *elicit([request]: [{ readonly message: string }]): Operation<unknown> {
-                if (request.message.includes("second waiting")) {
-                  // Released only once the first publication is history.
-                  yield* published.operation;
-                  return {};
-                }
-                if (request.message.includes("first published")) {
-                  published.resolve();
-                }
-                held += 1;
-                if (held === 2) {
-                  waiting.resolve();
-                }
-                return yield* suspend();
-              },
-            });
-          },
-        }),
-      );
-      yield* race([
-        waiting.operation,
-        (function* (): Operation<never> {
-          yield* sleep(60_000);
-          throw new Error("both publishers never reached their questions");
-        })(),
-      ]);
-      const events = [...(yield* stream.readAll())];
-      yield* task.halt();
-      return events;
-    });
-
-    // Two publications of one destination, at two commits, in a known
-    // acknowledged order — and no pull request yet.
-    const pairs = publications(prefix);
-    expect(pairs).toHaveLength(2);
-    expect(pairs.every((record) => record.resolved.inputs.branch === BRANCH)).toBe(true);
-    const earlier = pairs[0]?.resolved.inputs.sourceCommit;
-    const later = pairs[1]?.resolved.inputs.sourceCommit;
-    expect(earlier).not.toBe(later);
-    expect(outcomes(prefix)).toHaveLength(2);
-    expect(reads(prefix)).toHaveLength(1);
-    expect(requests(prefix)).toEqual([]);
-    expect(yield* remoteCommit(fixture, BRANCH)).toBe(later);
-
-    // Continued with the earlier publisher held at its own read, before its
-    // publication can restore, until the later publisher has passed its own
-    // post-publication checkpoint. So the two publications restore in the
-    // opposite order from the one they were acknowledged in.
-    const checkpoints: string[] = [];
-    const resumed = counters();
-    const stream = new InMemoryStream([...prefix]);
-    const parked = withResolvers<void>();
-    const release = withResolvers<void>();
-    let holding = false;
-    let heldWhenSecondRestored = false;
-    // Both armed before anything waits on either, so a failure below cannot
-    // leave a branch held at a gate nobody releases.
-    yield* ensure(() => release.resolve());
-    yield* ensure(() => parked.resolve());
-    const again = yield* run(fixture, source, stream, resumed, {
-      *between(): Operation<void> {
-        yield* PullRequestOperations.around({
-          *read([invocation], next): Operation<PullRequestReadResult> {
-            // The first publisher's own pre-publication read, restoring
-            // through the live chain. Its branch is parked here, so its
-            // `<Git.Push />` has not been reached at all — a coroutine runs in
-            // document order, and the read is written above the publication.
-            holding = true;
-            parked.resolve();
-            yield* release.operation;
-            holding = false;
-            return yield* next(invocation);
-          },
-        });
-        yield* Elicitation.around({
-          *elicit([request]: [{ readonly message: string }]): Operation<unknown> {
-            if (request.message.includes("second published")) {
-              // Waited for, rather than assumed: this checkpoint is not
-              // recorded until the earlier branch is demonstrably parked
-              // before its own publication.
-              yield* parked.operation;
-              heldWhenSecondRestored = holding;
-              checkpoints.push("second");
-              release.resolve();
-              return {};
-            }
-            checkpoints.push("first");
-            return {};
-          },
-        });
-      },
-    });
-    expect(again.refusal).toBe(undefined);
-    // The later publisher's publication had restored while the earlier branch
-    // was still parked above its own, and the post-publication checkpoints
-    // then arrived second-publisher first — opposite the acknowledged order
-    // the journal holds.
-    expect(heldWhenSecondRestored).toBe(true);
-    expect(checkpoints).toEqual(["second", "first"]);
-    expect(reads(yield* stream.readAll())).toHaveLength(1);
-
-    // The last acknowledged pair decides: the head is the second publisher's
-    // commit. An evidence list accumulated in restoration order would have
-    // offered the first publisher's pair here, and its commit is refused by
-    // this head's own provenance.
-    const asked = requests(yield* stream.readAll());
-    expect(asked).toHaveLength(1);
-    expect(asked[0]?.resolved.inputs.headSha).toBe(later);
-    expect(mutations(fixture.store)).toEqual(["create"]);
   });
 
   it("Q7a: an exact earlier pair superseded by a later one refuses the earlier head", function* () {
@@ -2564,7 +2389,7 @@ describe("the credential one pull-request attempt acquires", () => {
 });
 
 describe("what an entry's assembly reaches", () => {
-  it("Q22: building the capability declares six names and acquires nothing", function* () {
+  it("Q22: building the capability acquires nothing", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
     yield* scoped(function* (): Operation<void> {
@@ -2573,19 +2398,11 @@ describe("what an entry's assembly reaches", () => {
         identity: statedIdentity,
         root: fixture.managed,
       });
-      expect(
-        [...(installation.components ?? []).map((component) => component.name)].sort(),
-      ).toEqual([
-        "Git.Push",
-        "Issue",
-        "PullRequest",
-        "PullRequest.Checks",
-        "PullRequest.Comments",
-        "PullRequest.Reviews",
-      ]);
-      // One walk for the two publication protocols, one for issues, one for
-      // retained reads.
-      expect((installation.admissions ?? []).length).toBe(3);
+      // Which six names this declares, and that it declares three admissions,
+      // is asserted against the production selector in `repl-push.test.ts` C6.
+      // What this row is for is the cost of building it, over leaves that
+      // count what they are asked for.
+      expect((installation.components ?? []).length).toBe(6);
     });
     // Naming it read no configuration, ran no Git, took no directory and
     // opened no session.

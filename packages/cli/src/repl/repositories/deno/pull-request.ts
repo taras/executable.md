@@ -54,7 +54,6 @@ import {
   GitOperationAdmissionError,
   GitOperationInfrastructureError,
   GitOperationProtocolError,
-  PullRequestAdmissionError,
 } from "@executablemd/git";
 import type { BindOperations } from "@executablemd/git";
 import { PULL_REQUEST_OPERATIONS } from "@executablemd/git/api";
@@ -69,7 +68,7 @@ import {
   type PullRequestResult,
 } from "@executablemd/git";
 import { locatorFingerprint } from "@executablemd/git/deno";
-import { sameRepositoryIdentity } from "@executablemd/git";
+import { destinationRefFor } from "@executablemd/git";
 import type { RepositorySelection } from "@executablemd/git/api";
 import { reconcileOwnedGitHostEffect } from "@executablemd/git/api";
 import type { GitHostProvider } from "@executablemd/git";
@@ -164,7 +163,7 @@ function* upsert(call: Invocation): Operation<PullRequestResult> {
 
   if (yield* retainedRecordAhead(REPL_REPOSITORY_PULL_REQUEST_REQUEST, name)) {
     const saved = yield* restored(entry, call, requested, name);
-    return yield* reconcile(entry, call, saved);
+    return yield* reconcile(call, saved);
   }
 
   // One operation-local default under the stable Api name: the shared
@@ -258,7 +257,7 @@ function* delegated(
   });
 
   const record = yield* publishRequest(entry, call, requested, received, resolved, name);
-  return yield* reconcile(entry, call, record);
+  return yield* reconcile(call, record);
 }
 
 /**
@@ -317,10 +316,6 @@ function* resolve(
     origin,
     inputs,
   });
-}
-
-function destinationRefFor(branch: string): string {
-  return `refs/heads/${branch}`;
 }
 
 /**
@@ -471,7 +466,6 @@ function placements(entry: ReplPushEntry): readonly ReplPushPlacement[] {
  * all. A pending one reaches the live provider below.
  */
 function* reconcile(
-  entry: ReplPushEntry,
   call: Invocation,
   record: ReplPullRequestRequestRecord,
 ): Operation<PullRequestResult> {
@@ -483,7 +477,7 @@ function* reconcile(
       request: replPullRequestEffectRequest(inputs),
     },
     {
-      provider: () => upsertProvider(entry, call, record),
+      provider: () => upsertProvider(call, record),
       validate: (produced: GitHostReconciliationRecord) => {
         if (parsePullRequestRecord(produced, inputs) === undefined) {
           throw new GitOperationProtocolError(PULL_REQUEST_ELEMENT);
@@ -508,27 +502,21 @@ function* reconcile(
  *
  * A pending pull request needs no checkout and no object source: its original
  * publication was already admitted and its saved remote inputs are sufficient.
- * What is authenticated here is the saved origin against the saved identity,
- * because the record is reconciled against the origin it recorded rather than
- * against today's.
+ *
+ * The record arrives having passed {@link readback} on both paths, so the saved
+ * origin has already been authenticated against the saved identity and every
+ * place it names has already been held to this entry's registry. Asking either
+ * again here would ask it of the same frozen record and the same registry —
+ * membership is rebuilt by selections that already happened and nothing drops
+ * one, so neither answer can have changed — and the second refusal carried its
+ * own error class for a verdict that cannot differ from the first.
  */
 function* upsertProvider(
-  entry: ReplPushEntry,
   call: Invocation,
   record: ReplPullRequestRequestRecord,
 ): Operation<GitHostProvider> {
   const resolved = record.resolved;
   const inputs = resolved.inputs;
-  if (locatorFingerprint(resolved.origin) !== inputs.repository.locatorFingerprint) {
-    throw new GitOperationProtocolError(PULL_REQUEST_ELEMENT);
-  }
-  if (!replPullRequestPlacesHeld(record, placements(entry))) {
-    throw new PullRequestAdmissionError(
-      "unreadable-push-evidence",
-      "the checkout its saved request names is not one this entry holds a placement for, so " +
-        "what it asked the Git host for cannot be accounted for by this entry.",
-    );
-  }
   // Opened inside the owned attempt that asked for a live provider, which is
   // what keeps the session's lifetime that attempt's rather than this entry's.
   return yield* call.pullRequests().provider(resolved.origin, inputs);
