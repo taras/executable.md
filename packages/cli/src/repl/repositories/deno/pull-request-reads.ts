@@ -62,9 +62,8 @@ import {
   parseCompletePullRequestReadResult,
   PULL_REQUEST_READ_KINDS,
   readRequest,
-  type PullRequestReadKind,
-  type PullRequestReadResult,
 } from "@executablemd/git";
+import type { PullRequestReadKind, PullRequestReadResult } from "@executablemd/git/api";
 import type { PullRequestResult } from "@executablemd/git";
 import { canonicalPullRequestUrl, pullRequestProviderName } from "@executablemd/git";
 import type { DenoPullRequestOperations } from "@executablemd/git/deno";
