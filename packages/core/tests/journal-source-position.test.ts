@@ -107,6 +107,18 @@ describe("Tier JSP — authored source in the journal", () => {
     yield* collect(yield* execute({ path, stream }));
 
     const events = yield* stream.readAll();
+    for (const event of events) {
+      if (
+        event.type === "yield" &&
+        ["eval", "import_component"].includes(event.description.type) &&
+        event.description.name !== "__root__"
+      ) {
+        expect(event.description["executablemd.source-owner"]).toEqual({
+          coroutineId: "root",
+          index: 0,
+        });
+      }
+    }
 
     expect(sourceOf(events, "import_component", "Mark")).toEqual({
       path,

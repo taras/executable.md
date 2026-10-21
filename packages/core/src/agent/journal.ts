@@ -73,7 +73,8 @@ import type { SerializedPromptFailure } from "./errors.ts";
 import { AgentInternal } from "./internal.ts";
 import { HostObservationFailure } from "./publication.ts";
 import type { AgentPromptAssociation, AgentPromptHandle } from "./publication.ts";
-import { sourceDescription } from "../source-position.ts";
+import { sourceOwnerDescription } from "../source-owner.ts";
+import type { DurablePosition } from "@executablemd/durable-streams";
 import type { SourcePosition } from "../types.ts";
 
 /** The durable effect type every journaled Agent Prompt is recorded under. */
@@ -419,7 +420,12 @@ function permissionDecision(outcome: PermissionOutcome): PermissionOutcome | und
 }
 
 export function* persistPrompt(
-  identity: { name: string; input: string; position?: Readonly<SourcePosition> },
+  identity: {
+    name: string;
+    input: string;
+    position?: Readonly<SourcePosition>;
+    sourceOwner?: DurablePosition;
+  },
   live: () => Operation<PromptRecord>,
   association: () => AgentPromptAssociation | undefined = () => undefined,
   begun: () => AgentPromptHandle = () => undefined,
@@ -429,7 +435,7 @@ export function* persistPrompt(
       type: AGENT_PROMPT,
       name: identity.name,
       input: identity.input,
-      ...sourceDescription(identity.position),
+      ...sourceOwnerDescription(identity.position, identity.sourceOwner),
     },
     function* (): Operation<Json> {
       return serializePromptRecord(yield* live());

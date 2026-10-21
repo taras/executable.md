@@ -1,3 +1,5 @@
+import { invocationSourceOwner } from "../invocation-identity.ts";
+import type { ComponentInvocation } from "../invocation-identity.ts";
 /**
  * `<Elicit>` — ask a person a structured question, without choosing how
  * (specs/executable-mdx-spec.md §6.16).
@@ -87,7 +89,10 @@ export const returns = {
   $schema: "http://json-schema.org/draft-07/schema#",
 } satisfies ReturnsSchema;
 
-export default function* Elicit(props: Record<string, Json>): Operation<Json> {
+export default function* Elicit(
+  props: Record<string, Json>,
+  invocation?: ComponentInvocation,
+): Operation<Json> {
   const prepared = yield* prepareElicitation(props.schema);
 
   const message = yield* content();
@@ -98,6 +103,7 @@ export default function* Elicit(props: Record<string, Json>): Operation<Json> {
     fingerprint: questionFingerprint({ schema: prepared.schema, message }),
     schema: prepared.schema,
     position: expansion.position,
+    sourceOwner: invocationSourceOwner(invocation),
   };
 
   // Before the record is read, so a resumed document cannot bind an answer that

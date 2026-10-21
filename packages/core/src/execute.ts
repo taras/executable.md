@@ -95,8 +95,17 @@ import {
   filesFatalFailure,
   useSegmentCauses,
 } from "./errors.ts";
-import { Component, importComponent, isMissingImportProvider, raise } from "./component-api.ts";
+import {
+  Component,
+  importComponent,
+  importThroughTerminal,
+  isMissingImportProvider,
+  raise,
+} from "./component-api.ts";
 import { sourceDescription } from "./source-position.ts";
+import { sourceOwnerDescription } from "./source-owner.ts";
+import { durablePosition } from "@executablemd/durable-streams";
+import type { DurablePosition } from "@executablemd/durable-streams";
 import { emissions, exactly, renderSegment } from "./render.ts";
 import { createExactSource } from "./output/exact-source.ts";
 import type { ExactSource as ExactSourceRecord } from "./output/exact-source.ts";
@@ -905,15 +914,22 @@ function* durableImportComponent(
   root: RootDocumentSource | undefined,
   position: Readonly<SourcePosition> | undefined,
   inputs: ImportInputs,
+  sourceOwner: DurablePosition | undefined,
+  admitted: ((owner: DurablePosition) => void) | undefined,
 ): Workflow<ComponentDefinition | FunctionComponentDefinition> {
   // Taken before the durable operation and outside it, because the offer is
   // canonical core's own and a replay has to reach this the same way the live
   // run did: the element asking is inside the declaration's body, or it is not.
   const claimed = name === "__root__" ? undefined : inputs.declared?.claim(name);
+  const coordinate = yield* ephemeral(durablePosition());
   const recorded = yield createDurableOperation<DurableSelection>(
     // The root import is the run's own entry rather than an authored element,
     // so it carries no source however it was reached.
-    { type: "import_component", name, ...(root ? {} : sourceDescription(position)) },
+    {
+      type: "import_component",
+      name,
+      ...(root ? {} : sourceOwnerDescription(position, sourceOwner)),
+    },
     () => selectImport(name, root, inputs, claimed),
   );
 
@@ -925,7 +941,9 @@ function* durableImportComponent(
     throw new Error(name === "__root__" ? UNREADABLE_ROOT_RECORD : UNREADABLE_IMPORT_RECORD);
   }
 
-  return yield* ephemeral(materializeImport(name, selection, inputs, claimed));
+  const definition = yield* ephemeral(materializeImport(name, selection, inputs, claimed));
+  admitted?.(coordinate);
+  return definition;
 }
 
 function isFunctionComponent(value: unknown): value is FunctionComponent {
@@ -2081,6 +2099,7 @@ function* runValueRoot(
   environment: ExecutionEnvironment,
   /** This execution's own import resolution, for the expansions below. */
   importTerminal: ComponentImportTerminal,
+  sourceOwner: DurablePosition | undefined,
   /** This execution's own binding owner, for the byproduct its body computes. */
   computed: ComputedBindings,
 ): Operation<DocumentResult> {
@@ -2113,6 +2132,7 @@ function* runValueRoot(
         checkedFailures,
         environment,
         importTerminal,
+        sourceOwner,
         ownBody,
       );
       const exactRecord = environment.sourceSegments;
@@ -2185,9 +2205,16 @@ function* documentWorkflow(
   // installed by execute maps "__root__" to the run's root document source.
   // The ephemeral() wrapper bridges typing only — the import inside remains a
   // durable, journaled operation.
+  let sourceOwner: DurablePosition | undefined;
+  let rootAdmissions = 0;
   const imported = yield* ephemeral(
     (function* (): Operation<ComponentDefinition | FunctionComponentDefinition> {
-      const imported = yield* importComponent("__root__");
+      const imported = yield* importThroughTerminal("__root__", undefined, (name, position) =>
+        importTerminal(name, position, undefined, undefined, (owner) => {
+          rootAdmissions += 1;
+          sourceOwner = rootAdmissions === 1 ? owner : undefined;
+        }),
+      );
       const imports = environment.componentResolution;
       // Asked only when a tier actually closes this name, exactly as an
       // ordinary import is. The environment used to be absent altogether for a
@@ -2319,6 +2346,7 @@ function* documentWorkflow(
         checkedFailures,
         environment,
         importTerminal,
+        sourceOwner,
         computed,
       );
     }
@@ -2344,6 +2372,7 @@ function* documentWorkflow(
         checkedFailures,
         environment,
         importTerminal,
+        sourceOwner,
         undefined,
       );
       // An empty buffered root emits no output event.
@@ -2373,6 +2402,7 @@ function* documentWorkflow(
         checkedFailures,
         environment,
         importTerminal,
+        sourceOwner,
         undefined,
       );
 
@@ -2949,6 +2979,8 @@ function* executeDocument(
         name: string,
         position: Readonly<SourcePosition> | undefined,
         selection: ImportSelection | undefined,
+        sourceOwner?: DurablePosition,
+        admitted?: (owner: DurablePosition) => void,
       ): Operation<ComponentDefinition | FunctionComponentDefinition> {
         // Read per import, in the invoking scope, so a component registered
         // by a nested scope is visible to what that scope expands.
@@ -2965,6 +2997,8 @@ function* executeDocument(
             catalog,
             guarded: identity.protected,
           },
+          sourceOwner,
+          admitted,
         );
         // Canonical selection, recorded into the frame of the import that asked
         // for it. This is the only thing that puts an invocation in one of this

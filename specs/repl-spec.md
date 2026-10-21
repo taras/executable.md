@@ -362,6 +362,13 @@ files change or disappear; inspecting them reads no live component source,
 compiles no eval and asks no Agent. Imported component bytes remain retained for
 replay. New entries use this command's selected directories.
 
+A component called twice keeps two source readings. Each nested source and
+recorded answer belongs to the call that produced it, while caller content
+projected through `<Content />` keeps its caller's source. Current records name
+the owning source import directly. Older records remain readable when their
+ownership is unambiguous; an older ambiguous history still refuses without
+repairing its bytes or repeating completed work.
+
 ## The packaged Plan, in the REPL's own drawer
 
 `<Plan>` is the same packaged Component `xmd plan` runs, declared by this command

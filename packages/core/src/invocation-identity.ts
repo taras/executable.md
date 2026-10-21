@@ -1,3 +1,4 @@
+import type { DurablePosition } from "@executablemd/durable-streams";
 /**
  * The identity a trusted host's component names its durable work after
  * (architecture.md, *Capability-backed invocation identity*).
@@ -257,6 +258,7 @@ export interface ComponentRouting {
     frame: Scope,
     content: boolean,
     selection?: FunctionComponent,
+    sourceOwner?: DurablePosition,
   ): IssuedInvocation | undefined;
   /** Close this route and its descendants. */
   close(): void;
@@ -339,11 +341,19 @@ function createComponentRouting(): ComponentRoutingInstallation {
         }
         return route(narrowed, active);
       },
-      issue(fn, id, component, frame, content, selection): IssuedInvocation | undefined {
+      issue(
+        fn,
+        id,
+        component,
+        frame,
+        content,
+        selection,
+        sourceOwner,
+      ): IssuedInvocation | undefined {
         const entry = active() && typeof fn === "function" ? bodies.get(fn) : undefined;
         return entry === undefined || entry.domain.component !== component
           ? undefined
-          : issueInvocation(id, component, entry.domain, frame, content, selection);
+          : issueInvocation(id, component, entry.domain, frame, content, selection, sourceOwner);
       },
       close(): void {
         open = false;
@@ -454,6 +464,7 @@ export interface IssuedInvocation {
 }
 
 interface Issuance {
+  readonly sourceOwner: DurablePosition | undefined;
   readonly id: string;
   /** The component this is an invocation of, as the engine resolved it. */
   readonly component: string;
@@ -795,8 +806,10 @@ export function issueInvocation(
   frame: Scope,
   content: boolean,
   selection?: FunctionComponent,
+  sourceOwner?: DurablePosition,
 ): IssuedInvocation {
   const issuance: Issuance = {
+    sourceOwner,
     id,
     component,
     content,
@@ -1241,4 +1254,10 @@ export function installIdentities(
       }
     },
   };
+}
+
+export function invocationSourceOwner(
+  invocation: ComponentInvocation | undefined,
+): DurablePosition | undefined {
+  return stateOf(invocation)?.sourceOwner;
 }

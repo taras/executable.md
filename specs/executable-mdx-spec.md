@@ -11658,6 +11658,26 @@ Workflow history parses the optional field as a `SourcePosition` and never
 reconstructs it from an expansion ID or current source. Root, Close and
 trusted-host events may have no authored source.
 
+For file-positioned imports, evaluated blocks, elicitations, Agent prompts and
+generated-source admissions, `"executablemd.source-owner"` identifies the
+successful import of the source containing the operation. Its value is
+`{ coroutineId, index }`, with `index` the zero-based yield index on that
+coroutine within the entry. The reference is descriptive metadata, not effect
+identity or execution permission; it adds no operation or coroutine.
+
+Canonical import admission captures its coordinate. Core passes it through
+private expansion arguments: a component body uses its own import, structural
+regions inherit their source, and projected `<Content />` uses the caller's
+source import. Generated-fragment positions keep their existing admission ID.
+
+The REPL follows an explicit reference to exactly one prior successful source
+import and requires matching source and coroutine ancestry. A malformed,
+missing, forward, wrong-source or unrelated-branch reference refuses without
+inference. Without this field, existing unambiguous histories remain readable
+and ambiguous histories remain refused. Reading changes no retained bytes and
+performs no completed effect. Continuation counts replayed yields, so a new
+suffix can reference an import in a legacy prefix at its original coordinate.
+
 A position names **one** source. A file states `path`. An operation inside
 admitted generated source states `generatedSource`: the id that fragment was
 admitted under, which is the `generated_xmd` record's own `generated:{id}` name.

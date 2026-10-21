@@ -38,7 +38,8 @@ import type { Operation } from "effection";
 
 import { canonicalFingerprint } from "./canonical.ts";
 import { isJsonObject, parseJson } from "./json.ts";
-import { sourceDescription } from "./source-position.ts";
+import { sourceOwnerDescription } from "./source-owner.ts";
+import type { DurablePosition } from "@executablemd/durable-streams";
 import type { Json, JsonObject, SourcePosition } from "./types.ts";
 
 const ELICIT = "elicit";
@@ -62,6 +63,7 @@ export interface ElicitationQuestion {
 
 /** Where the answer was recorded and what question it answered. */
 export interface ElicitationIdentity {
+  sourceOwner?: DurablePosition;
   /** `path:line:column` — the durable name. */
   location: string;
   fingerprint: string;
@@ -154,7 +156,7 @@ export function* persistElicitation(
       name: recordName(identity.location),
       input: identity.fingerprint,
       [ELICITATION_SCHEMA_FIELD]: identity.schema,
-      ...sourceDescription(identity.position),
+      ...sourceOwnerDescription(identity.position, identity.sourceOwner),
     },
     function* (): Operation<DurableJson> {
       return parseJson(yield* live());

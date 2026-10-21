@@ -61,6 +61,7 @@ export const ENTRY_SCOPE = entryKey(1);
 const ROOT_PROPS_BINDING = "props";
 
 const SOURCE_POSITION_FIELD = "executablemd.source-position";
+const SOURCE_OWNER_FIELD = "executablemd.source-owner";
 
 /** What the REPL could not read, and what it was reading when it stopped. */
 export class ReplProjectionError extends Error {
@@ -741,7 +742,16 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
   const turns: ReplAgentTurn[] = [];
   let terminal: ReplTerminal | undefined;
   /** Every admission by the source path it was admitted from, for owner lookup. */
-  const byPath = new Map<string, Admission[]>();
+  const sources = { paths: new Map<string, Admission[]>(), imports: new Map<string, Admission>() };
+  const yields = new Map<string, number>();
+  const coordinates = events.map((event) => {
+    if (event.type !== "yield") {
+      return undefined;
+    }
+    const index = yields.get(event.coroutineId) ?? 0;
+    yields.set(event.coroutineId, index + 1);
+    return `${event.coroutineId}:${index}`;
+  });
   /** Every generated fragment this prefix admitted, by the identity it carries. */
   const fragments: GeneratedOwner[] = [];
   /**
@@ -780,7 +790,9 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
     generated: [],
     scopes: [],
   };
-  register(byPath, { ...site(segment.admission, 0), scope: entry });
+  const rootAdmission = { ...site(segment.admission, 0), scope: entry };
+  register(sources.paths, rootAdmission);
+  sources.imports.set(coordinates[0]!, rootAdmission);
   transcript.push({
     kind: "entry",
     marker: markers[0],
@@ -861,7 +873,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
         continue;
       }
       const owner = ownerOf(
-        byPath,
+        sources,
         fragments,
         announced,
         position,
@@ -888,7 +900,9 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
         scopes: [],
       };
       owner.value.scope.scopes.push(scope);
-      register(byPath, { ...site(event, index), scope });
+      const admission = { ...site(event, index), scope };
+      register(sources.paths, admission);
+      sources.imports.set(coordinates[index]!, admission);
       transcript.push({
         kind: "scope",
         marker,
@@ -911,7 +925,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
       }
       const published = read.value;
       const owner = ownerOf(
-        byPath,
+        sources,
         fragments,
         announced,
         position,
@@ -967,7 +981,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
         );
       }
       const owner = ownerOf(
-        byPath,
+        sources,
         fragments,
         announced,
         position,
@@ -1047,7 +1061,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
         return Err(new ReplProjectionError("a recorded question records no answer at all."));
       }
       const owner = ownerOf(
-        byPath,
+        sources,
         fragments,
         announced,
         position,
@@ -1109,7 +1123,7 @@ function buildEntry(segment: EntrySegment, markers: readonly string[]): Result<E
         );
       }
       const owner = ownerOf(
-        byPath,
+        sources,
         fragments,
         announced,
         position,
@@ -1369,12 +1383,17 @@ interface GeneratedOwner extends Admission {
 
 /** Where one recorded effect sits: on which coroutine, and how far in. */
 interface EffectSite {
+  readonly sourceOwner: Json | undefined;
   readonly coroutine: string;
   readonly order: number;
 }
 
 function site(event: Yield, order: number): EffectSite {
-  return { coroutine: event.coroutineId, order };
+  return {
+    coroutine: event.coroutineId,
+    order,
+    sourceOwner: event.description[SOURCE_OWNER_FIELD],
+  };
 }
 
 /**
@@ -1427,24 +1446,12 @@ function descendsFrom(ancestor: string, coroutine: string): boolean {
 }
 
 /**
- * The one scope an effect's source position belongs to.
- *
- * Two attributions, and a position states which one it is. A position naming a
- * path belongs to the scope admitted from that path; a position naming a
- * generated fragment belongs to the scope that fragment's admission created. In
- * both, the position chooses the candidates — a path, or the identity the effect
- * itself carries — and journal order and coroutine ancestry decide only whether
- * a candidate could be its owner: an admission that happened afterwards, or on
- * work this effect is not part of, is not an owner however recently it ran. A
- * component called once in each of two spawned branches is therefore two owners
- * that no effect can confuse, while the same call repeated on one coroutine is
- * two that nothing recorded tells apart. Nothing is chosen by the latest
- * admission, the current scope, an effect's name or its line and column: a
- * binding attached to a guessed owner is a value shown in the wrong place, and
- * there is no spelling of "probably this one" that a reader could check.
+ * Explicit source ownership follows one prior import coordinate. A legacy
+ * position has no such reference, so only an unambiguous path or generated
+ * admission can own it; a malformed explicit reference never reaches inference.
  */
 function ownerOf(
-  index: Map<string, Admission[]>,
+  index: { paths: Map<string, Admission[]>; imports: Map<string, Admission> },
   fragments: readonly GeneratedOwner[],
   announced: ReadonlySet<string>,
   position: ReplPosition | undefined,
@@ -1459,10 +1466,47 @@ function ownerOf(
       ),
     );
   }
+  if (where.sourceOwner !== undefined) {
+    return explicitOwnerOf(index.imports, where.sourceOwner, position, where, subject);
+  }
   if (position.path === undefined) {
     return generatedOwnerOf(fragments, announced, position, where, subject);
   }
-  return pathOwnerOf(index.get(position.path) ?? [], position, where, subject);
+  return pathOwnerOf(index.paths.get(position.path) ?? [], position, where, subject);
+}
+
+function explicitOwnerOf(
+  imports: ReadonlyMap<string, Admission>,
+  reference: Json,
+  position: ReplPosition,
+  where: EffectSite,
+  subject: string,
+): Result<{ scope: ScopeDraft; position: ReplPosition }> {
+  if (
+    !isJsonObject(reference) ||
+    Object.keys(reference).length !== 2 ||
+    typeof reference.coroutineId !== "string" ||
+    typeof reference.index !== "number" ||
+    !Number.isSafeInteger(reference.index) ||
+    reference.index < 0
+  ) {
+    return Err(new ReplProjectionError(`${subject} carries an unreadable source owner.`));
+  }
+  const admission = imports.get(`${reference.coroutineId}:${reference.index}`);
+  if (admission === undefined || admission.order >= where.order) {
+    return Err(new ReplProjectionError(`${subject} names no earlier admitted source owner.`));
+  }
+  if (position.path === undefined || admission.scope.path !== position.path) {
+    return Err(
+      new ReplProjectionError(`${subject} names an owner admitted from a different source.`),
+    );
+  }
+  if (!descendsFrom(admission.coroutine, where.coroutine)) {
+    return Err(
+      new ReplProjectionError(`${subject} names a source owner on work it is not part of.`),
+    );
+  }
+  return Ok({ scope: admission.scope, position });
 }
 
 /**

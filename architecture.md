@@ -6361,6 +6361,26 @@ projection detaches every value it retains and freezes it, so nothing below
 holds a `DurableEvent` and nothing above can change one. Route resolution is
 pure and answers with the exact objects that model holds.
 
+### Source ownership in retained entries
+
+A source position identifies authored bytes, not which invocation used them.
+Repeated calls therefore retain `executablemd.source-owner` on the operations
+the REPL attributes: the coroutine ID and zero-based yield index of the prior
+successful source import. Canonical import admission captures this coordinate,
+and private expansion arguments carry it through component bodies, branches,
+iterations and projection. A component body uses its own import; caller content
+uses its captured caller import. Existing private invocation state and block
+inputs deliver the reference to the operation recording it. It grants no
+permission and creates no effect, coroutine or identity allocator.
+
+Projection resolves the exact import and checks its source, prior order and
+coroutine ancestry. An invalid explicit reference refuses; it never falls back
+to a path guess. Legacy histories use the existing unique-owner inference and
+retain their ambiguity refusals. Continuation can reference a legacy import
+because both live and replayed yields advance the existing durable position.
+Neither reading nor continuation rewrites earlier records to add ownership.
+Generated-fragment attribution keeps its existing admission identity.
+
 ### Sequential entries over one physical journal
 
 One execution is one append-only stream, and entries are ranges of it. A segment
