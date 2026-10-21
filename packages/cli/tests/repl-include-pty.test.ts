@@ -12,8 +12,9 @@ import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import { scoped, sleep, until } from "effection";
 import type { Operation } from "effection";
-import { readdir } from "node:fs/promises";
+import { readdir, symlink } from "node:fs/promises";
 import { join, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { platform } from "node:os";
 import { platformDataRoot } from "../src/repl-assembly.ts";
 import { projectRepl } from "../src/repl/model.ts";
@@ -272,6 +273,14 @@ describe("REPL sequential source owners through a real terminal (#976)", () => {
     for (const directory of [workspace, includes, home]) {
       yield* ensureDir(directory);
     }
+    yield* writeTextFile(join(root, "package.json"), JSON.stringify({ type: "module" }));
+    yield* until(
+      symlink(
+        fileURLToPath(new URL("../../../node_modules", import.meta.url)),
+        join(root, "node_modules"),
+        "dir",
+      ),
+    );
     for (const file of ["OwnerWrapper.md", "OwnerLeaf.md", "OwnerAnswer.ts"]) {
       yield* writeTextFile(join(includes, file), yield* readTextFile(join(OWNER_DIRECTORY, file)));
     }
