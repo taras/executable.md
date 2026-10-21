@@ -38,7 +38,7 @@ import type { Operation, WithResolvers } from "effection";
 import { exists, rm, writeTextFile } from "@effectionx/fs";
 import { chmod, mkdir, mkdtemp, realpath, symlink, unlink, writeFile } from "node:fs/promises";
 import process from "node:process";
-import { execFile } from "node:child_process";
+import { readGit, runGit } from "./support/fixture-git.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { API, hostFilesHandler } from "@executablemd/runtime";
@@ -74,12 +74,12 @@ import { useCommonDirectoryLease } from "../src/repl/repositories/deno/leases.ts
 import type { SlotKind } from "@executablemd/git/deno";
 import { repositorySlot } from "@executablemd/git/deno";
 import type { GitPushInputs } from "@executablemd/git";
-import { selectedRepository } from "../../git/src/composition/context.ts";
 // From the subpath that publishes it rather than from the source module: this
 // result type is public, and reaching it by relative path would bypass the
 // export map the partition test holds every consumer to.
 import type { GitPushOutcome } from "@executablemd/git";
 import type { GitPushInvocation } from "@executablemd/git/api";
+import { currentRepository } from "@executablemd/git/api";
 
 /** The owner the CLI derives for an entry, as this suite states one. */
 const OWNER = '["executablemd.repl.issue-owner",1,"execution-push","1"]';
@@ -442,53 +442,6 @@ function interrupted(
   });
 }
 
-/**
- * One fixture `git` read, through the ordinary executable rather than a session.
- *
- * Isolated the way the entry's own Git is, and with a stated identity, so a
- * runner holding no `user.name` cannot turn a fixture commit into a refusal.
- */
-function readGit(cwd: string, args: readonly string[]): Operation<string | undefined> {
-  return until(
-    new Promise<string | undefined>((resolve) => {
-      execFile(
-        "git",
-        [...args],
-        { cwd, env: { ...process.env, ...FIXTURE_ENVIRONMENT } },
-        // Any non-zero exit is "no answer": a ref that is not there is what
-        // most of these reads are asking about, and Git spells its absence
-        // differently depending on the question.
-        (error, stdout) => resolve(error === null ? stdout.trim() : undefined),
-      );
-    }),
-  );
-}
-
-/** One fixture `git` that must succeed, so a broken fixture is loud. */
-function runGit(cwd: string, args: readonly string[]): Operation<string> {
-  return until(
-    new Promise<string>((resolve, reject) => {
-      execFile(
-        "git",
-        [...args],
-        { cwd, env: { ...process.env, ...FIXTURE_ENVIRONMENT } },
-        (error, stdout) => (error === null ? resolve(stdout.trim()) : reject(error)),
-      );
-    }),
-  );
-}
-
-/** The environment every fixture command runs with. */
-const FIXTURE_ENVIRONMENT: Record<string, string> = Object.freeze({
-  GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_CONFIG_SYSTEM: "/dev/null",
-  GIT_CONFIG_NOSYSTEM: "1",
-  GIT_AUTHOR_NAME: "Fixture",
-  GIT_AUTHOR_EMAIL: "fixture@example.invalid",
-  GIT_COMMITTER_NAME: "Fixture",
-  GIT_COMMITTER_EMAIL: "fixture@example.invalid",
-});
-
 /** The commit a ref on the bare remote holds, or `undefined` for absence. */
 function* remoteCommit(fixture: Fixture, branch: string): Operation<string | undefined> {
   return yield* readGit(fixture.origin, ["rev-parse", "--verify", `refs/heads/${branch}`]);
@@ -745,8 +698,9 @@ describe("one entry's publication", () => {
     // adopts it. "Nothing is published a second time" is the decision it
     // recorded and the ref it left: a provider is built either way, because
     // adopting is something it has to look to decide. That an adoption runs no
-    // `git push` is proved where the invocation is, in
-    // `packages/git/tests/git-host-owned.test.ts`.
+    // `git push` is proved where the invocation is, by `git-push.test.ts`'s
+    // "adopts a destination that already holds the commit, and pushes nothing
+    // more".
     const second = counters();
     const stream = new InMemoryStream([...prefix]);
     const again = yield* run(
@@ -1677,7 +1631,9 @@ describe("one entry's publication", () => {
               origin: "tier-push",
               props: { type: "object", properties: {}, additionalProperties: false },
               *fn() {
-                const repository = yield* selectedRepository();
+                // The lexical selection this row writes, read through the published
+                // contextual descriptor rather than Git's private convenience over it.
+                const repository = yield* currentRepository();
                 if (repository === undefined) {
                   throw new Error("this row needs a Repository in scope");
                 }
@@ -1749,10 +1705,9 @@ describe("one entry's publication", () => {
     // is being torn down.
     //
     // Which resource it stands for is not this suite's business. That the
-    // pending and the delivered scratch space are each waited for, and each
-    // removed, is proved where the acquisition is, in
-    // `packages/git/tests/repository-replay.test.ts` and
-    // `packages/git/tests/git-host-owned.test.ts`.
+    // publication's own scratch space is waited for while still pending and
+    // removed once delivered is proved where the acquisition is, by
+    // `git-host-owned.test.ts`'s OW12 and OW13.
     const barrier: MethodBarrier = function* (method): Operation<void> {
       if (method !== "pushProvider") {
         return;
@@ -1859,9 +1814,10 @@ describe("one entry's publication", () => {
 
     // Cut before the provider exists, so nothing was contacted for the request
     // this attempt had already written down. That the credential session a live
-    // attempt opens is for the exact admitted locator, and is released when the
-    // acquisition is cancelled, is proved where the session is, in
-    // `packages/git/tests/git-host-owned.test.ts`.
+    // attempt opens is for the exact admitted locator, and that a delivery
+    // arriving after cancellation began is released by its own cleanup before
+    // the halt returns, is proved where the session is, by
+    // `git-host-owned.test.ts`'s OW14.
     const prefix = yield* interrupted(
       fixture,
       publishing(fixture, "review/credential", "notes.md"),
@@ -1897,9 +1853,9 @@ describe("one entry's publication", () => {
     // `perform` has finished and before its result reaches the caller, which is
     // the one moment those two are both true.
     //
-    // That the native child this contact spawns is joined before the entry
-    // settles is proved where the invocation is, in
-    // `packages/git/tests/git-host-owned.test.ts`.
+    // That the native child this contact spawns is genuinely running and is
+    // joined before the attempt settles is proved where the invocation is, by
+    // `git-host-owned.test.ts`'s OW15.
     const stream = new InMemoryStream();
     yield* scoped(function* (): Operation<void> {
       const task = yield* spawn(() =>

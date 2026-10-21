@@ -45,10 +45,9 @@ import {
   withResolvers,
 } from "effection";
 import type { Operation } from "effection";
-import { execFile } from "node:child_process";
+import { runGit } from "./support/fixture-git.ts";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { mkdir, mkdtemp, realpath, symlink, unlink, writeFile } from "node:fs/promises";
-import process from "node:process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { API, hostFilesHandler } from "@executablemd/runtime";
@@ -104,13 +103,13 @@ function useFixture(): Operation<Fixture> {
     for (const name of ["checkout", "elsewhere", "origin"]) {
       const directory = join(root, name);
       yield* until(mkdir(directory, { recursive: true }));
-      yield* runGit(root, ["init", "-b", "main", directory], root);
+      yield* runGit(root, ["init", "-b", "main", directory], { home: root });
       yield* until(writeFile(join(directory, "seed.md"), "seed\n"));
       // Committed, because a Repository identity is pinned at the commit HEAD
       // named when the entry opened, and a Commit needs a parent to be a commit
       // of the index rather than a root commit.
-      yield* runGit(root, ["add", "seed.md"], directory);
-      yield* runGit(root, ["commit", "-m", "seed"], directory);
+      yield* runGit(directory, ["add", "seed.md"], { home: root });
+      yield* runGit(directory, ["commit", "-m", "seed"], { home: root });
       made.push(directory);
     }
     const link = join(root, "entered");
@@ -136,17 +135,6 @@ function* repoint(fixture: Fixture, target: string): Operation<void> {
 function* settled(turns = 8): Operation<void> {
   for (let turn = 0; turn < turns; turn += 1) {
     yield* sleep(0);
-  }
-}
-
-/** Wait until this path is there, or say what never appeared. */
-function* appears(path: string): Operation<void> {
-  const deadline = Date.now() + 30_000;
-  while (!(yield* exists(path))) {
-    if (Date.now() > deadline) {
-      throw new Error(`${path} never appeared`);
-    }
-    yield* sleep(25);
   }
 }
 
@@ -524,45 +512,9 @@ function* observed(
   };
 }
 
-/**
- * The environment a fixture command runs with.
- *
- * The isolation the entry's own Git has, stated here too: no global or system
- * configuration and a home of this scenario's own, so what a case stages or
- * commits does not depend on whose machine ran the suite. The identity is fixed
- * for the same reason — a runner with no `user.name` must not change a fixture
- * commit into a refusal.
- */
-function fixtureEnvironment(home: string): Record<string, string> {
-  return {
-    HOME: home,
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_SYSTEM: "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_AUTHOR_NAME: "Fixture",
-    GIT_AUTHOR_EMAIL: "fixture@example.invalid",
-    GIT_COMMITTER_NAME: "Fixture",
-    GIT_COMMITTER_EMAIL: "fixture@example.invalid",
-  };
-}
-
-/** One fixture `git`, through the ordinary executable rather than a session. */
-function runGit(home: string, args: readonly string[], cwd: string): Operation<string> {
-  return until(
-    new Promise<string>((resolve, reject) => {
-      execFile(
-        "git",
-        [...args],
-        { cwd, env: { ...process.env, ...fixtureEnvironment(home) } },
-        (error, stdout) => (error === null ? resolve(stdout.trim()) : reject(error)),
-      );
-    }),
-  );
-}
-
 /** Run one fixture command outside the entry, in this scenario's own home. */
 function fixtureGit(fixture: Fixture, args: string[], cwd: string): Operation<string> {
-  return runGit(fixture.root, args, cwd);
+  return runGit(cwd, args, { home: fixture.root });
 }
 
 /** The canonical common Git directory the repository owning this checkout has. */

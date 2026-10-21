@@ -32,15 +32,13 @@ import type { Json } from "@executablemd/core";
 import { Component, Execution } from "@executablemd/core/api";
 import type { ComponentDefinition, FunctionComponentDefinition } from "@executablemd/core";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import { denoRepositoryHost } from "../../git/src/deno/composition/host.ts";
-import { gitSession } from "../../git/src/deno/composition/git.ts";
 import { useReplRepositoryRecording } from "../src/repl/repositories/deno/provider.ts";
 import type { DenoRepositoryOperations } from "@executablemd/git/deno";
-import { gitPlugin } from "../../git/src/plugin.ts";
+import { runGit } from "./support/fixture-git.ts";
+import { gitPlugin } from "@executablemd/git";
 import { replRepositoryPlugin } from "../src/repl/repositories/plugin.ts";
-import { ISSUE_EFFECT } from "../../git/src/issue/effect-type.ts";
-import { issueIdempotencyKey, parseIssueRequest } from "../../git/src/issue/records.ts";
-import { issueOriginMarker } from "../../git/src/deno/issue/github.ts";
+import { ISSUE_EFFECT } from "@executablemd/git";
+import { parseIssueRequest } from "@executablemd/git";
 import { IssueOperations } from "@executablemd/git/api";
 import type {
   IssueOperationsApi,
@@ -50,13 +48,15 @@ import type {
 import { IssueApi } from "@executablemd/git/api";
 import type { IssueDetails, IssueReference } from "@executablemd/git/api";
 import { replIssueInstallation } from "../src/repl/repositories/deno/issues.ts";
-import { gitHubSource } from "../../git/src/deno/composition/github.ts";
 import { useIssueTrackerServer } from "../../git/tests/support/issue-tracker-server.ts";
 import type {
   IssueTrackerServer,
   ServedIssue,
 } from "../../git/tests/support/issue-tracker-server.ts";
-import { gitHubAccessFor } from "../../git/tests/support/issue-providers.ts";
+import {
+  expectedOriginMarker,
+  gitHubFixtureSource,
+} from "../../git/tests/support/issue-providers.ts";
 import type { GitHubIssuesOptions } from "@executablemd/git/deno";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { assembleReplProfile } from "../src/repl-profile.ts";
@@ -64,7 +64,7 @@ import type { ReplExecutionProfile } from "../src/repl-profile.ts";
 import { resolveAgentStack } from "../src/agent-stack.ts";
 import { NO_PLUGINS } from "../src/plugin-host.ts";
 import { selectReplEntryHost } from "../src/deno-repositories.ts";
-import type { HelperAssembly } from "../../git/src/deno/composition/credential-helper.ts";
+import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { ReplHost } from "../src/repl/host.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
@@ -137,8 +137,7 @@ function useFixture(
     const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "repl-issues-")))));
     yield* ensure(() => rm(root, { recursive: true, force: true }));
     const checkout = join(root, "checkout");
-    const git = gitSession(denoRepositoryHost(), root);
-    yield* git.run(["init", "-b", "main", checkout], root);
+    yield* runGit(root, ["init", "-b", "main", checkout], { home: root });
     yield* until(writeFile(join(checkout, "seed.md"), "seed\n"));
     const server = yield* useIssueTrackerServer({
       issues,
@@ -208,7 +207,7 @@ function entryHost(
   return function* (owner: string): Operation<ExecutionInstallation> {
     seen.owners.push(owner);
     return replIssueInstallation(owner, {
-      access: gitHubSource(gitHubAccessFor(fixture.server.url, { credential: "valid" })),
+      access: gitHubFixtureSource(fixture.server.url, { credential: "valid" }),
       configuration: { ceiling: [TRACKER] },
       ...options,
     });
@@ -780,12 +779,10 @@ describe("how a REPL entry gets its issues", () => {
     // And the mark the provider carried is the one this record's own identity
     // and the authored target produce — not anything the middleware supplied.
     expect(bodies(fixture.server)[0]).toContain(
-      issueOriginMarker(
-        issueIdempotencyKey(
-          asked === undefined ? { runId: "", expansionId: "" } : asked.identity,
-          "upsert",
-          TRACKER,
-        ),
+      expectedOriginMarker(
+        asked === undefined ? { runId: "", expansionId: "" } : asked.identity,
+        "upsert",
+        TRACKER,
       ),
     );
   });

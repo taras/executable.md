@@ -58,7 +58,7 @@ import {
   admitDiffInvocation,
   admitFileInvocation,
   admitFilesInvocation,
-} from "@executablemd/git/api";
+} from "@executablemd/git";
 import type {
   GitChangesInvocation,
   GitChangesResult,
@@ -72,7 +72,7 @@ import type {
   GitObservationValue,
 } from "@executablemd/git/api";
 import { CHANGES_ELEMENT, DIFF_ELEMENT, FILE_ELEMENT, FILES_ELEMENT } from "@executablemd/git";
-import { sameRepositoryIdentity } from "@executablemd/git/api";
+import { sameRepositoryIdentity } from "@executablemd/git";
 import type { RepositorySelection } from "@executablemd/git/api";
 import {
   elementOf,

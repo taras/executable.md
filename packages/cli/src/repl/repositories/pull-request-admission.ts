@@ -37,7 +37,7 @@
 import type { Operation } from "effection";
 import { DurableContext } from "@executablemd/durable-streams";
 import { PullRequestAdmissionError } from "@executablemd/git";
-import { sameRepositoryIdentity } from "@executablemd/git/api";
+import { sameRepositoryIdentity } from "@executablemd/git";
 import { type RepositoryIdentity } from "@executablemd/git";
 import { walkReplRetainedPublications, type ReplAcknowledgedPush } from "./push-admission.ts";
 

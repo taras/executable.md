@@ -49,7 +49,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { chmod, mkdir, mkdtemp, realpath, symlink } from "node:fs/promises";
 import process from "node:process";
-import { execFile } from "node:child_process";
+import { readGit, runGit } from "./support/fixture-git.ts";
 import { gitShim } from "./support/repl-push-journey.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -63,7 +63,9 @@ import { Git } from "@executablemd/git/api";
 import type { GitPushInvocation } from "@executablemd/git/api";
 import type { GitPushOutcome } from "@executablemd/git";
 import { PullRequestAPI } from "@executablemd/git/api";
-import { PullRequestOperations } from "../../git/src/composition/pull-request-operations.ts";
+import { createApi } from "@effectionx/context-api";
+import { PULL_REQUEST_OPERATIONS } from "@executablemd/git/api";
+import type { PullRequestOperationsApi } from "@executablemd/git/api";
 import type { PullRequestResult } from "@executablemd/git";
 import { parseCompletePullRequestReadResult } from "@executablemd/git";
 import type { PullRequestReadResult } from "@executablemd/git/api";
@@ -76,7 +78,6 @@ import { useCompositionComponents } from "@executablemd/git";
 import { GIT_HOST_EFFECT } from "@executablemd/git";
 import { parseGitHostReconciliationRecord } from "@executablemd/git";
 import { parsePullRequestInputs } from "@executablemd/git";
-import { GITHUB_PULL_REQUESTS_ENV } from "../../git/src/deno/composition/pull-request-configuration.ts";
 import {
   parseReplPullRequestRequestRecord,
   REPL_REPOSITORY_PULL_REQUEST_REQUEST,
@@ -90,11 +91,53 @@ import type { ReplPushRequestRecord } from "../src/repl/repositories/push-record
 import { PULL_REQUEST_READ } from "@executablemd/git/deno";
 import { gitHubStore, mutations, respond } from "../../git/tests/support/github.ts";
 import { stored } from "../../git/tests/support/pull-requests.ts";
-import type {
-  GitHubHttpRequest,
-  GitHubHttpResponse,
-} from "../../git/src/deno/composition/github.ts";
 import type { GitHubStore } from "../../git/tests/support/github.ts";
+
+/**
+ * The variable a deployment writes its pull-request configuration into.
+ *
+ * Stated as data rather than imported: the name is part of the released
+ * configuration contract, and a fixture that reached the adapter's own private
+ * constant to spell it would be asserting the adapter against itself.
+ */
+const PULL_REQUEST_CONFIGURATION = "XMD_WORKFLOW_GITHUB_PULL_REQUESTS";
+
+/** One request this suite's modeled GitHub receives, as its transport sees it. */
+interface GitHubHttpRequest {
+  readonly method: "GET" | "POST" | "PATCH";
+  readonly url: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body?: string;
+}
+
+/** One answer it gives back. */
+interface GitHubHttpResponse {
+  readonly status: number;
+  readonly body: string;
+  /** The `Link` header, when there is one. Pagination is read from it. */
+  readonly link?: string;
+}
+
+/**
+ * The semantic pull-request chain, as a composing caller reaches it.
+ *
+ * Built from the published name and interface, which is what makes a
+ * contextual Api composable: a descriptor created under the same stable name
+ * joins the same chain the entry's own invocation-local terminal sits at the
+ * end of. The value Git builds internally is private and is not what a caller
+ * composes onto — this suite is a caller.
+ *
+ * Its defaults refuse, because a row installing middleware here always
+ * delegates to the live chain below and never wants this object to answer.
+ */
+const PullRequestOperations = createApi<PullRequestOperationsApi>(PULL_REQUEST_OPERATIONS, {
+  *read(): Operation<never> {
+    throw new Error("this suite composes onto the read chain and never terminates it");
+  },
+  *upsert(): Operation<never> {
+    throw new Error("this suite composes onto the upsert chain and never terminates it");
+  },
+});
 
 /** The owner the CLI derives for an entry, as this suite states one. */
 const OWNER = '["executablemd.repl.issue-owner",1,"execution-pull-request","1"]';
@@ -773,7 +816,7 @@ function run(
         // deno-lint-ignore require-yield
         *env([name]: [string]): Operation<string | undefined> {
           counted.env.push(name);
-          return name === GITHUB_PULL_REQUESTS_ENV ? stated : undefined;
+          return name === PULL_REQUEST_CONFIGURATION ? stated : undefined;
         },
       },
       { at: "min" },
@@ -1077,51 +1120,6 @@ function checkoutOf(events: readonly DurableEvent[], branch: string): string {
     throw new Error("this history holds no publication of that branch");
   }
   return saved.resolved.checkoutRoot;
-}
-
-/** The environment every fixture command runs with. */
-const FIXTURE_ENVIRONMENT: Record<string, string> = Object.freeze({
-  GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_CONFIG_SYSTEM: "/dev/null",
-  GIT_CONFIG_NOSYSTEM: "1",
-  GIT_AUTHOR_NAME: "Fixture",
-  GIT_AUTHOR_EMAIL: "fixture@example.invalid",
-  GIT_COMMITTER_NAME: "Fixture",
-  GIT_COMMITTER_EMAIL: "fixture@example.invalid",
-});
-
-/**
- * One fixture `git` read, through the ordinary executable rather than a session.
- *
- * Any non-zero exit is "no answer": a ref that is not there is what most of
- * these reads ask about, and Git spells its absence differently depending on
- * the question.
- */
-function readGit(cwd: string, args: readonly string[]): Operation<string | undefined> {
-  return until(
-    new Promise<string | undefined>((resolve) => {
-      execFile(
-        "git",
-        [...args],
-        { cwd, env: { ...process.env, ...FIXTURE_ENVIRONMENT } },
-        (error, stdout) => resolve(error === null ? stdout.trim() : undefined),
-      );
-    }),
-  );
-}
-
-/** One fixture `git` that must succeed, so a broken fixture is loud. */
-function runGit(cwd: string, args: readonly string[]): Operation<string> {
-  return until(
-    new Promise<string>((resolve, reject) => {
-      execFile(
-        "git",
-        [...args],
-        { cwd, env: { ...process.env, ...FIXTURE_ENVIRONMENT } },
-        (error, stdout) => (error === null ? resolve(stdout.trim()) : reject(error)),
-      );
-    }),
-  );
 }
 
 /** Commit one more file in a managed checkout, as a person at a shell would. */

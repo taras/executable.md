@@ -65,16 +65,6 @@ import {
 } from "./support/repl-observations.ts";
 import { commonDirectoryOf } from "../../git/tests/support/run-composition.ts";
 
-/** One journal event standing for a saved observation record. */
-function recordEvent(name: string, payload: Json): DurableEvent {
-  return {
-    type: "yield",
-    coroutineId: "root",
-    description: { type: REPL_REPOSITORY_OBSERVATION, name },
-    result: { status: "ok", value: payload },
-  };
-}
-
 /** This payload as an object a case can change one member of. */
 function objectOf(payload: Json): Record<string, Json> {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {

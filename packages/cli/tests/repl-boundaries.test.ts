@@ -826,3 +826,107 @@ describe("REPL command: what runs before the host is reached", () => {
     expect(ran.selected).toBe(1);
   });
 });
+
+/**
+ * Where this command's own repository policy may reach Git.
+ *
+ * The relocation put the entry's grammar, owner policy and record codecs on
+ * this side of a package boundary. What makes that boundary real is that the
+ * code here — production *and* the fixtures that drive it — reaches Git only
+ * through its published entrypoints. A relative path into `packages/git/src`
+ * resolves and typechecks, which is precisely why it has to be checked: it
+ * would quietly restore the dependency the move exists to remove, and would
+ * hand a fixture the private host, session and credential surfaces the
+ * amendment withheld.
+ *
+ * Test *support* on Git's own side is a different thing and is allowed: a
+ * module under `packages/git/tests/` is that package's own fixture code, free
+ * to reach its own implementation, and a caller consuming it is consuming a
+ * fixture rather than an implementation.
+ */
+const PUBLISHED_ROUTES: readonly string[] = [
+  "@executablemd/git",
+  "@executablemd/git/api",
+  "@executablemd/git/deno",
+  "@executablemd/git/credential-helper",
+];
+
+/** Every module of this command's repository policy, production and fixture. */
+function* repositoryModules(): Operation<string[]> {
+  const found: string[] = [];
+  const walk = function* (directory: string): Operation<void> {
+    for (const entry of yield* until(readdir(directory, { withFileTypes: true }))) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        yield* walk(path);
+        continue;
+      }
+      if (entry.name.endsWith(".ts")) {
+        found.push(path);
+      }
+    }
+  };
+  yield* walk(join(REPL, "repositories"));
+  for (const name of yield* until(readdir(join(CLI, "tests")))) {
+    // This checker itself is excluded: it holds a deliberate counterexample of
+    // the import it forbids, which is what keeps the rule from going vacuous.
+    if (name === "repl-boundaries.test.ts") {
+      continue;
+    }
+    if (name.startsWith("retained-repository-") && name.endsWith(".ts")) {
+      found.push(join(CLI, "tests", name));
+    }
+    if (name.startsWith("repl-") && name.endsWith(".test.ts")) {
+      found.push(join(CLI, "tests", name));
+    }
+  }
+  found.push(join(CLI, "tests", "support", "repl-observations.ts"));
+  return found.sort();
+}
+
+/** Every Git specifier one module imports from. */
+function gitSpecifiers(source: string): string[] {
+  const found: string[] = [];
+  for (const statement of source.matchAll(/from\s*"([^"]+)"/g)) {
+    const specifier = statement[1] ?? "";
+    if (specifier.includes("@executablemd/git") || /(^|\/)git\/src\//.test(specifier)) {
+      found.push(specifier);
+    }
+  }
+  return found;
+}
+
+describe("REPL boundaries: how this command's repository policy reaches Git", () => {
+  it("S6: reaches Git only through its published entrypoints", function* () {
+    const modules = yield* repositoryModules();
+    // Non-vacuity: an empty walk would make every module below innocent, and a
+    // corpus that reached Git nowhere at all would too.
+    expect(modules.length > 20).toBe(true);
+    let reached = 0;
+    const violations: string[] = [];
+    for (const path of modules) {
+      for (const specifier of gitSpecifiers(yield* code(path))) {
+        reached += 1;
+        if (!PUBLISHED_ROUTES.includes(specifier)) {
+          violations.push(`${path.replace(CLI, "")} imports ${specifier}`);
+        }
+      }
+    }
+    expect(reached > 20).toBe(true);
+    expect(violations).toEqual([]);
+  });
+
+  it("S6: the checker rejects a relative reach into the package's source", function* () {
+    // The same walk over a module that does what this rule forbids, so a rule
+    // that stopped catching anything is a failure here rather than a silent
+    // pass above.
+    const planted = 'import { gitSession } from "../../git/src/deno/composition/git.ts";';
+    expect(gitSpecifiers(planted)).toEqual(["../../git/src/deno/composition/git.ts"]);
+    expect(gitSpecifiers(planted).every((one) => PUBLISHED_ROUTES.includes(one))).toBe(false);
+    // And it still admits the four published routes and Git's own fixtures.
+    for (const route of PUBLISHED_ROUTES) {
+      expect(gitSpecifiers(`import { thing } from "${route}";`)).toEqual([route]);
+    }
+    expect(gitSpecifiers('import { probe } from "../../git/tests/support/github.ts";')).toEqual([]);
+  });
+});

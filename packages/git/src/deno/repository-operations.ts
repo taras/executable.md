@@ -130,10 +130,28 @@ export interface DenoRepositoryOperations {
  * a clone of an authenticated locator needs; it is not a credential and not a
  * callback over one.
  */
-export function* useDenoRepositoryOperations(
+export function useDenoRepositoryOperations(
   helper?: HelperAssembly,
 ): Operation<DenoRepositoryOperations> {
-  const host: RepositoryHost = denoRepositoryHost(helper === undefined ? {} : { helper });
+  // The one shipped host this package builds, and the only place it is built
+  // for this handle. Everything below is the builder, so what the public path
+  // does and what a package-local caller can observe are the same code.
+  return repositoryOperationsOver(denoRepositoryHost(helper === undefined ? {} : { helper }));
+}
+
+/**
+ * The same handle, over a host the caller already has.
+ *
+ * Package-private, and deliberately absent from every entrypoint: handing a
+ * `RepositoryHost` across the package boundary is the surface the amendment
+ * withheld. What it exists for is this package's own tests — the acquisition
+ * windows inside `pushProvider`, and the inertness of construction itself, are
+ * only observable at the leaves a host owns, and a control that substituted a
+ * *different* host would be watching something the public factory never calls.
+ */
+export function* repositoryOperationsOver(
+  host: RepositoryHost,
+): Operation<DenoRepositoryOperations> {
   // The scope that asked for the handle, which is the execution that owns it.
   const owner = yield* useScope();
   const useGit = lazily(owner, function* (): Operation<GitSession> {

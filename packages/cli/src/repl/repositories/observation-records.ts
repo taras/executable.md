@@ -48,7 +48,7 @@ import {
   parseRepositoryIdentity,
   repositoryIdentityJson,
   sameRepositoryIdentity,
-} from "@executablemd/git/api";
+} from "@executablemd/git";
 import { type RepositoryIdentity } from "@executablemd/git";
 import type { ReplPlacement } from "./placement-records.ts";
 import {

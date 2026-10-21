@@ -69,7 +69,7 @@ import {
   type PullRequestResult,
 } from "@executablemd/git";
 import { locatorFingerprint } from "@executablemd/git/deno";
-import { sameRepositoryIdentity } from "@executablemd/git/api";
+import { sameRepositoryIdentity } from "@executablemd/git";
 import type { RepositorySelection } from "@executablemd/git/api";
 import { reconcileOwnedGitHostEffect } from "@executablemd/git/api";
 import type { GitHostProvider } from "@executablemd/git";

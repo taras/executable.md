@@ -29,8 +29,6 @@ import { join } from "node:path";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { denoRepositoryHost } from "../../git/src/deno/composition/host.ts";
-import { gitSession } from "../../git/src/deno/composition/git.ts";
 import {
   parseReplLocalRecord,
   REPL_REPOSITORY_LOCAL,
@@ -45,8 +43,9 @@ import type { Json } from "@executablemd/core";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { useReplRepositoryRecording } from "../src/repl/repositories/deno/provider.ts";
-import type { HelperAssembly } from "../../git/src/deno/composition/credential-helper.ts";
-import { gitPlugin } from "../../git/src/plugin.ts";
+import type { HelperAssembly } from "@executablemd/git/credential-helper";
+import { runGit } from "./support/fixture-git.ts";
+import { gitPlugin } from "@executablemd/git";
 import { replRepositoryPlugin } from "../src/repl/repositories/plugin.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
@@ -106,8 +105,7 @@ function useFixture(): Operation<Fixture> {
     const root = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "repl-cli-")))));
     yield* ensure(() => rm(root, { recursive: true, force: true }));
     const checkout = join(root, "checkout");
-    const git = gitSession(denoRepositoryHost(), root);
-    yield* git.run(["init", "-b", "main", checkout], root);
+    yield* runGit(root, ["init", "-b", "main", checkout], { home: root });
     yield* until(writeFile(join(checkout, "seed.md"), "seed\n"));
     yield* provide({ root, checkout });
   });
@@ -201,11 +199,10 @@ function managedRoot(fixture: Fixture): string {
  */
 function* useOrigin(fixture: Fixture): Operation<string> {
   const origin = join(fixture.root, "origin");
-  const git = gitSession(denoRepositoryHost(), fixture.root);
-  yield* git.run(["init", "-b", "main", origin], fixture.root);
+  yield* runGit(fixture.root, ["init", "-b", "main", origin], { home: fixture.root });
   yield* until(writeFile(join(origin, "README.md"), "origin\n"));
-  yield* git.run(["add", "README.md"], origin);
-  yield* git.run(["commit", "-m", "first"], origin);
+  yield* runGit(origin, ["add", "README.md"], { home: fixture.root });
+  yield* runGit(origin, ["commit", "-m", "first"], { home: fixture.root });
   return origin;
 }
 
@@ -769,17 +766,10 @@ function* useCountedCommits(committed: Committed, fixture: Fixture): Operation<v
  */
 function* useCommittedCheckout(fixture: Fixture): Operation<string> {
   const checkout = join(fixture.root, "committed");
-  const git = gitSession(denoRepositoryHost(), fixture.root);
-  yield* git.run(["init", "-b", "main", checkout], fixture.root);
+  yield* runGit(fixture.root, ["init", "-b", "main", checkout], { home: fixture.root });
   yield* until(writeFile(join(checkout, "seed.md"), "seed\n"));
-  yield* git.run(
-    ["-c", "user.name=Suite", "-c", "user.email=suite@example.test", "add", "seed.md"],
-    checkout,
-  );
-  yield* git.run(
-    ["-c", "user.name=Suite", "-c", "user.email=suite@example.test", "commit", "-m", "first"],
-    checkout,
-  );
+  yield* runGit(checkout, ["add", "seed.md"], { home: fixture.root });
+  yield* runGit(checkout, ["commit", "-m", "first"], { home: fixture.root });
   yield* until(writeFile(join(checkout, "note.md"), "note\n"));
   return checkout;
 }

@@ -548,3 +548,118 @@ describe("the three halves of @executablemd/git", () => {
     expect(violations).toEqual([]);
   });
 });
+
+/**
+ * The 27 names the credential-encapsulated amendment removed, and the one it
+ * added.
+ *
+ * Fenced by source text rather than by importing the entrypoint, because a
+ * `export type { … }` row disappears at runtime: `Object.keys()` on a loaded
+ * module cannot see it, which is exactly how two of these rows survived an
+ * entrypoint control that only read values. The amendment removed the public
+ * host, session, authentication, source, access and raw-operation surface; a
+ * row reappearing here is a credential-bearing seam becoming reachable from a
+ * bare package specifier again.
+ */
+const WITHHELD: readonly string[] = [
+  "GitAuthentication",
+  "GitAuthenticationSession",
+  "GitCheckout",
+  "GitHubSource",
+  "GitSession",
+  "RepositoryHost",
+  "commitPresent",
+  "currentBranch",
+  "denoGitHubSource",
+  "denoRepositoryHost",
+  "discoverAmbientCheckout",
+  "discoverAmbientRepository",
+  "gitHubPullRequestReadHandler",
+  "gitHubPullRequestReadResolver",
+  "gitSession",
+  "liveAdd",
+  "liveCheckout",
+  "liveCommit",
+  "liveSwitch",
+  "objectSourceAt",
+  "performGitObservation",
+  "pullRequestProvider",
+  "pushProvider",
+  "resolveCommit",
+  "selectManagedRepository",
+  "selectManagedWorktree",
+  "useGitAuthentication",
+];
+
+/** Where each name the amendment publishes has to be reachable from. */
+const AMENDED_ROUTES: readonly { readonly name: string; readonly route: string }[] = [
+  { name: "useDenoRepositoryOperations", route: "deno.ts" },
+  { name: "DenoRepositoryOperations", route: "deno.ts" },
+  { name: "denoPullRequestOperations", route: "deno.ts" },
+  { name: "DenoPullRequestOperations", route: "deno.ts" },
+  { name: "AdmittedReadExecution", route: "deno.ts" },
+  { name: "useDenoGitHubIssues", route: "deno.ts" },
+  // The neutral locator grammar has one route, and it is the portable one: the
+  // provider-neutral record codecs in the REPL command read it, and the Deno
+  // entrypoint reaches native adapters and Workflow storage.
+  { name: "admitLocator", route: "mod.ts" },
+];
+
+describe("the amended credential boundary", () => {
+  it("publishes none of the withheld host, session or raw-operation names", function* () {
+    const violations: string[] = [];
+    for (const route of ["mod.ts", "api.ts", "deno.ts", "credential-helper.ts"]) {
+      const names = exportedNames(yield* readTextFile(join(REPOSITORY, PACKAGE, route)));
+      // Non-vacuity: an unreadable entrypoint would publish "nothing" and make
+      // every row below innocent.
+      expect(`${route}: ${names.length > 0}`).toBe(`${route}: true`);
+      for (const name of WITHHELD) {
+        if (names.includes(name)) {
+          violations.push(`${route} publishes ${name}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it("publishes each amended member from exactly its own route", function* () {
+    const published = new Map<string, string[]>();
+    for (const route of ["mod.ts", "api.ts", "deno.ts", "credential-helper.ts"]) {
+      published.set(route, exportedNames(yield* readTextFile(join(REPOSITORY, PACKAGE, route))));
+    }
+    const wrong: string[] = [];
+    for (const { name, route } of AMENDED_ROUTES) {
+      for (const [where, names] of published) {
+        const carries = names.includes(name);
+        if (where === route && !carries) {
+          wrong.push(`${route} is missing ${name}`);
+        }
+        if (where !== route && carries) {
+          wrong.push(`${where} also publishes ${name}`);
+        }
+      }
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it("keeps the provider-neutral record codecs out of the Deno graph", function* () {
+    // These two read the neutral locator grammar and nothing native. Reaching
+    // it through the Deno entrypoint would pull native adapters and Workflow
+    // storage into a module whose whole point is that it runs anywhere.
+    const neutral = [
+      "packages/cli/src/repl/repositories/push-records.ts",
+      "packages/cli/src/repl/repositories/pull-request-records.ts",
+    ];
+    const violations: string[] = [];
+    for (const consumer of neutral) {
+      const source = yield* readTextFile(join(REPOSITORY, consumer));
+      expect(`${consumer}: ${source.length > 0}`).toBe(`${consumer}: true`);
+      for (const { specifier } of importedNames(source)) {
+        if (specifier === "@executablemd/git/deno") {
+          violations.push(`${consumer} imports from ${specifier}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+});

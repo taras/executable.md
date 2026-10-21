@@ -71,7 +71,8 @@ import {
   RepositorySelectionError,
   WorktreeCompositionError,
 } from "@executablemd/git";
-import { sameRepositoryIdentity, type RepositorySelection } from "@executablemd/git/api";
+import { type RepositorySelection } from "@executablemd/git/api";
+import { sameRepositoryIdentity } from "@executablemd/git";
 import { type RepositoryIdentity } from "@executablemd/git";
 import {
   parseReplPlacementRecord,
@@ -85,7 +86,8 @@ import {
   type ReplPlacementRefusalData,
   type ReplPlacementRequest,
 } from "../placement-records.ts";
-import { admitLocator, locatorFingerprint } from "@executablemd/git/deno";
+import { admitLocator } from "@executablemd/git";
+import { locatorFingerprint } from "@executablemd/git/deno";
 import type { DenoRepositoryOperations } from "@executablemd/git/deno";
 import { GitRefusal } from "@executablemd/git/deno";
 import {

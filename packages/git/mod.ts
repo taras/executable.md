@@ -233,6 +233,13 @@ export type {
   PullRequestSnapshot,
   PullRequestUpdateKey,
 } from "./src/composition/pull-request-records.ts";
+export { admitLocator } from "./src/composition/locator.ts";
+export {
+  admitChangesInvocation,
+  admitDiffInvocation,
+  admitFileInvocation,
+  admitFilesInvocation,
+} from "./src/composition/observation-api.ts";
 export { admitPushEvidence } from "./src/composition/push-evidence.ts";
 export {
   COMPOSITION_REGISTRATIONS,

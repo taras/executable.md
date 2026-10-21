@@ -49,14 +49,13 @@ export type { GitWorkspaceOptions } from "./src/deno/attachment.ts";
 export { useRunComposition } from "./src/deno/run-composition/provider.ts";
 export type { RunCompositionOptions } from "./src/deno/run-composition/provider.ts";
 
-export { admitLocator } from "./src/composition/locator.ts";
 export { gitCommitMessageEvidence } from "./src/deno/composition/commit.ts";
 export { GitRefusal } from "./src/deno/composition/git.ts";
-export type { GitSession } from "./src/deno/composition/git.ts";
-export type { GitCommitIdentity, RepositoryHost } from "./src/deno/composition/host.ts";
+export type { GitCommitIdentity } from "./src/deno/composition/host.ts";
 export { locatorFingerprint } from "./src/deno/composition/locator.ts";
 export type { ObservationPlace } from "./src/deno/composition/observations.ts";
 export { gitOperationFingerprint } from "./src/deno/composition/operations.ts";
+export type { AdmittedReadExecution } from "./src/deno/composition/pull-request-reads.ts";
 export { denoPullRequestOperations } from "./src/deno/composition/pull-request-host.ts";
 export type { DenoPullRequestOperations } from "./src/deno/composition/pull-request-host.ts";
 export {

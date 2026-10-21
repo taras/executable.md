@@ -69,7 +69,6 @@ import { replIssueInstallation } from "../src/repl/repositories/deno/issues.ts";
 import type { DenoRepositoryOperations } from "@executablemd/git/deno";
 import { GIT_HOST_EFFECT } from "@executablemd/git";
 import { ISSUE_EFFECT } from "@executablemd/git";
-import { gitHubSource } from "../../git/src/deno/composition/github.ts";
 // From the subpath that publishes them rather than from the source module:
 // these are public, and reaching them by relative path would bypass the export
 // map the partition test holds every consumer to.
@@ -79,7 +78,7 @@ import { IssueOperations } from "@executablemd/git/api";
 import { parseIssueDetails, parseIssueRecord } from "@executablemd/git";
 import { useIssueTrackerServer } from "../../git/tests/support/issue-tracker-server.ts";
 import type { ServedIssue } from "../../git/tests/support/issue-tracker-server.ts";
-import { gitHubAccessFor } from "../../git/tests/support/issue-providers.ts";
+import { gitHubFixtureSource } from "../../git/tests/support/issue-providers.ts";
 
 /** Where the immutable fixtures live, relative to this file. */
 const FIXTURES = new URL("./fixtures/retained-repository-history/", import.meta.url);
@@ -406,7 +405,7 @@ function continueHistory(
         ? replIssueInstallation(scenario.owner, {
             ...(endpoint === undefined
               ? {}
-              : { access: gitHubSource(gitHubAccessFor(endpoint, { credential: "valid" })) }),
+              : { access: gitHubFixtureSource(endpoint, { credential: "valid" }) }),
             configuration: { ceiling: [TRACKER] },
           })
         : yield* replRepositoryInstallation(scenario.owner, {
