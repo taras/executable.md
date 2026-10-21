@@ -35,10 +35,28 @@ import { shellQuote } from "@executablemd/test-support/launch";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { scoped, sleep, until } from "effection";
 import type { Operation } from "effection";
-import { exists, writeTextFile } from "@effectionx/fs";
+import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { mkdir } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import process from "node:process";
+import { sep } from "node:path";
+import { decodeLocation } from "../../src/repl/route.ts";
+import { readRecords } from "../../src/repl/journal.ts";
+import { pairedLocation } from "../../src/repl/sidekick/history.ts";
+import { platformDataRoot } from "../../src/repl-assembly.ts";
+import { REPL_DIRECTORY } from "../../src/repl/storage.ts";
+import {
+  parseReplPullRequestRequestRecord,
+  REPL_REPOSITORY_PULL_REQUEST_REQUEST,
+} from "../../src/repl/repositories/pull-request-records.ts";
+import {
+  GIT_HOST_EFFECT,
+  parseCompletePullRequestReadResult,
+  parseGitHostReconciliationRecord,
+  PULL_REQUEST,
+} from "@executablemd/git";
+import { PULL_REQUEST_READ } from "@executablemd/git/deno";
+import type { DurableEvent } from "@executablemd/durable-streams";
 import { allocate, showing, showingAcross } from "./pty.ts";
 import type { Pty } from "./pty.ts";
 import {
@@ -76,10 +94,25 @@ const BODY = "Ready for review.";
 /** The credential this journey's operator configured. A journal may never hold it. */
 const TOKEN = "pull-request-server-credential";
 
+/**
+ * The question, which renders everything this entry has learned so far.
+ *
+ * Every value in it is a binding: the pull request's own three facts and the
+ * length of each evidence array. That is what makes the reopened dialog
+ * evidence of *restoration* — the text is evaluated again when the entry is
+ * projected, so a reopening that had lost a binding could not print it, and one
+ * that resolved it afresh would print what the service holds now instead of
+ * what this entry recorded.
+ */
 const QUESTION =
   '<Elicit schema={{ type: "object", properties: { decision: { type: "string", ' +
   'enum: ["continue"] } }, required: ["decision"], additionalProperties: false }} ' +
-  'as="answer">Opened {pullRequest.number}. Continue this experiment?</Elicit>';
+  'as="answer">Opened {pullRequest.number} at {pullRequest.url} is ' +
+  "{pullRequest.state} with {reviews.length}/{comments.length}/{checks.length} " +
+  "feedback. Continue this experiment?</Elicit>";
+
+/** The dialog that question renders from the values this entry recorded. */
+const ASKED = `Opened 1 at ${LOCATOR}/pull/1 is open with 0/0/0 feedback.`;
 
 /**
  * The entry this journey types, as the specification shows it.
@@ -117,6 +150,86 @@ function entry(): string {
     "</Dir>",
     "</Repository>",
   ].join("\n");
+}
+
+/**
+ * The entry history the printed location addresses, as the command stores it.
+ *
+ * Read through the command's own recipes rather than by guessing at a path:
+ * `decodeLocation` says which execution the location names, the per-user data
+ * root and `pairedLocation` say where that execution's two files live, and
+ * `readRecords` is the same reader the command opens a retained history with.
+ * Nothing here adds a storage interface or a second parser.
+ */
+function* history(home: string, location: string): Operation<DurableEvent[]> {
+  const route = decodeLocation(location);
+  if (!route.ok) {
+    throw route.error;
+  }
+  const root = join(platformDataRoot(process.platform, home, process.env, sep), ...REPL_DIRECTORY);
+  return yield* readRecords(pairedLocation(root, route.value.execution).entries);
+}
+
+/** Every record of one durable type this history holds, in append order. */
+function held(events: readonly DurableEvent[], type: string): DurableEvent[] {
+  return events.filter((event) => event.type === "yield" && event.description.type === type);
+}
+
+/**
+ * What each retained evidence read holds, by collection.
+ *
+ * Read back through the delivered parser, so a snapshot that is not complete
+ * contributes nothing rather than being counted as one.
+ */
+function snapshots(events: readonly DurableEvent[]): { kind: string; items: number }[] {
+  const found: { kind: string; items: number }[] = [];
+  for (const event of held(events, PULL_REQUEST_READ)) {
+    if (event.type !== "yield" || event.result.status !== "ok") {
+      continue;
+    }
+    for (const kind of ["reviews", "comments", "checks"] as const) {
+      const parsed = parseCompletePullRequestReadResult(event.result.value, kind);
+      if (parsed !== undefined) {
+        found.push({ kind, items: parsed.items.length });
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * The Git-host outcomes of one kind this history holds, parsed.
+ *
+ * Selected by the kind the reconciled request names, because publication and
+ * the pull request over it are both `git_host_effect` records: counting the
+ * type alone would mix the two.
+ */
+function reconciled(events: readonly DurableEvent[], kind: string) {
+  const found = [];
+  for (const event of held(events, GIT_HOST_EFFECT)) {
+    if (event.type !== "yield" || event.result.status !== "ok") {
+      continue;
+    }
+    const record = parseGitHostReconciliationRecord(event.result.value);
+    if (record?.request.kind === kind) {
+      found.push(record);
+    }
+  }
+  return found;
+}
+
+/** The saved pull-request requests this history holds, parsed. */
+function asked(events: readonly DurableEvent[]) {
+  const found = [];
+  for (const event of held(events, REPL_REPOSITORY_PULL_REQUEST_REQUEST)) {
+    if (event.type === "yield" && event.result.status === "ok") {
+      const record = parseReplPullRequestRequestRecord(event.result.value);
+      if (record !== undefined) {
+        found.push(record);
+      }
+    }
+  }
+  return found;
 }
 
 /**
@@ -167,7 +280,10 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     yield* remoteHolding(origin, BRANCH, published, home);
 
     // The pull request opened once, over the branch this entry published, and
-    // its three collections each bound their own array.
+    // its three collections each bound their own array. These two files are
+    // *first-run* evidence: they were written here, and their surviving bytes
+    // afterwards prove only that nothing rewrote them. What a reopening
+    // restored is read off the re-evaluated dialog instead.
     yield* holding(join(working, "opened.md"), `1 ${LOCATOR}/pull/1 open`);
     yield* holding(join(working, "evidence.md"), "0 0 0");
     expect(creations(service)).toBe(1);
@@ -191,6 +307,34 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     // The screen never showed the credential.
     expect((yield* first.shows()).join("\n")).not.toContain(TOKEN);
 
+    // And this is what it wrote down. One saved pull-request request, naming
+    // the branch and head this entry published; one successful Git-host
+    // outcome for it; and one complete snapshot for each of the three
+    // collections. Read out of the file the printed location addresses.
+    const left = yield* history(home, location);
+    const leftAsked = asked(left);
+    expect(leftAsked).toHaveLength(1);
+    expect(leftAsked[0]?.resolved.inputs.headBranch).toBe(BRANCH);
+    expect(leftAsked[0]?.resolved.inputs.headSha).toBe(published);
+    expect(leftAsked[0]?.resolved.inputs.title).toBe(TITLE);
+    // The body is the verbatim child content, which is what a resumed update
+    // has to present again rather than re-derive.
+    expect(leftAsked[0]?.resolved.inputs.body).toContain(BODY);
+    // Asking for one to exist, not for a number.
+    expect(leftAsked[0]?.resolved.inputs.number).toBe(null);
+    // One pull-request outcome, and it performed. The publication beside it is
+    // its own reconciliation and is not counted here.
+    const leftOutcomes = reconciled(left, PULL_REQUEST);
+    expect(leftOutcomes).toHaveLength(1);
+    expect(leftOutcomes[0]?.decision).toBe("performed");
+    expect(snapshots(left).toSorted((a, b) => a.kind.localeCompare(b.kind))).toEqual([
+      { kind: "checks", items: 0 },
+      { kind: "comments", items: 0 },
+      { kind: "reviews", items: 0 },
+    ]);
+    // The credential is in none of it.
+    expect(JSON.stringify(left)).not.toContain(TOKEN);
+
     // Both sides move on while the person is away. The checkout advances, and
     // the service gains feedback this entry has never seen.
     yield* writeTextFile(join(working, "later.md"), "later\n");
@@ -213,11 +357,23 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     yield* showing(second, "[exit]", REACH_MS);
     yield* showing(second, "waiting for an answer", ACT_MS);
 
-    // Everything acknowledged answers historically. The pull request is the one
-    // that was opened, the three arrays are the ones that were read, and the
-    // service was not asked about any of it — nor was `git` run at all.
+    // And the two first-run files are still exactly as that run left them:
+    // these bytes say nothing was rewritten, which is a different claim from
+    // the restored bindings above.
     yield* holding(join(working, "opened.md"), `1 ${LOCATOR}/pull/1 open`);
     yield* holding(join(working, "evidence.md"), "0 0 0");
+
+    // The selected records are the same ones, neither changed nor written
+    // again. Compared by selection rather than by whole-file bytes, because a
+    // reopening legitimately appends to the history as it projects.
+    const reopened = yield* history(home, location);
+    expect(asked(reopened)).toEqual(leftAsked);
+    expect(reconciled(reopened, PULL_REQUEST)).toEqual(leftOutcomes);
+    expect(snapshots(reopened).toSorted((a, b) => a.kind.localeCompare(b.kind))).toEqual([
+      { kind: "checks", items: 0 },
+      { kind: "comments", items: 0 },
+      { kind: "reviews", items: 0 },
+    ]);
     expect(service.requests).toEqual([]);
     expect(yield* logged(shim.log)).toEqual([]);
     expect(creations(service)).toBe(0);
@@ -227,9 +383,18 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
 
     yield* reach(second, "[answer]");
     yield* second.type("\r");
-    // The saved number, which describes what was opened rather than anything
-    // resolved again now.
-    yield* showing(second, "Opened 1.", ACT_MS);
+    // Everything acknowledged answers historically, and the proof is the
+    // question itself: its text is evaluated again as this entry is projected,
+    // so the number, the URL, the state and all three counts on this screen are
+    // restored bindings. The service now holds two reviews, one comment and one
+    // check, so a reopening that resolved any of it again would print `2/1/1`
+    // here instead. Read before the answer is given.
+    //
+    // Only here, and not on the first run: opening this drawer changes which
+    // controls the footer offers, and the first run has to walk to `[exit]`
+    // afterwards. What the first run resolved is already established by
+    // opened.md and evidence.md, written from the same bindings.
+    yield* showingAcross(second, ASKED, ACT_MS);
     yield* click(second, "( ) continue");
     yield* showing(second, "[ok] entry-1", ACT_MS);
 
@@ -246,6 +411,21 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     expect(yield* remoteRef(origin, BRANCH, home)).toBe(published);
     // And the historical arrays are still the historical ones.
     yield* holding(join(working, "evidence.md"), "0 0 0");
+
+    // The history now holds one more reviews snapshot — the fresh occurrence,
+    // which saw the two reviews the service gained — beside the three the first
+    // run retained. Nothing opened a second pull request, and the saved request
+    // is still the one request.
+    const answered = yield* history(home, location);
+    expect(asked(answered)).toEqual(leftAsked);
+    expect(reconciled(answered, PULL_REQUEST)).toEqual(leftOutcomes);
+    expect(snapshots(answered).toSorted((a, b) => a.kind.localeCompare(b.kind))).toEqual([
+      { kind: "checks", items: 0 },
+      { kind: "comments", items: 0 },
+      { kind: "reviews", items: 0 },
+      { kind: "reviews", items: 2 },
+    ]);
+    expect(JSON.stringify(answered)).not.toContain(TOKEN);
 
     yield* reach(second, "[exit]");
     yield* second.type("\r");
@@ -346,29 +526,32 @@ function* described(error: unknown, log: string, service: PullRequestServer): Op
 }
 
 /**
- * The commit a branch holds in a bare repository, read synchronously.
+ * The commit a branch holds in a bare repository, as Git wrote it.
  *
- * The service answers one request at a time and has to name a commit while it
- * is answering, so this is the one place in this journey that reads a file
- * without suspending. It reads what Git wrote: the loose ref first, then the
- * packed table.
+ * The loose ref first, then the packed table. Both reads suspend: the service
+ * answers each request inside an Effection task of its own, so there is no
+ * synchronous correctness requirement here — only a value the response needs
+ * before it is written.
+ *
+ * A branch that is in neither place answers `undefined`, which is how the
+ * service reports a head it has never seen.
  */
-function bareHead(origin: string, branch: string): string | undefined {
+function* bareHead(origin: string, branch: string): Operation<string | undefined> {
   const ref = `refs/heads/${branch}`;
-  try {
-    return readFileSync(join(origin, ref), "utf8").trim();
-  } catch {
-    // Not loose, so it may be packed.
+  const loose = join(origin, ref);
+  if (yield* exists(loose)) {
+    return (yield* readTextFile(loose)).trim();
   }
-  try {
-    for (const line of readFileSync(join(origin, "packed-refs"), "utf8").split("\n")) {
-      const [commit, named] = line.split(" ");
-      if (named === ref && commit !== undefined) {
-        return commit;
-      }
-    }
-  } catch {
+  const packed = join(origin, "packed-refs");
+  if (!(yield* exists(packed))) {
     // No packed table either, so this branch is not there.
+    return undefined;
+  }
+  for (const line of (yield* readTextFile(packed)).split("\n")) {
+    const [commit, named] = line.split(" ");
+    if (named === ref && commit !== undefined) {
+      return commit;
+    }
   }
   return undefined;
 }

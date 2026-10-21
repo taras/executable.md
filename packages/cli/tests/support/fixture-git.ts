@@ -9,11 +9,16 @@
  * place that is supposed to prove it.
  *
  * The child belongs to the scope that asked for it. `exec()` is the process
- * owner this repository already has: it registers the child's release before
- * the spawn, puts it in its own process group, and kills and joins that group
- * when the asking scope unwinds. A hand-built promise around `execFile` would
- * stop *waiting* on cancellation while leaving the command running and still
- * writing into a fixture whose scope had already gone.
+ * owner this repository already has, and this helper delegates the child's
+ * whole lifetime to it rather than managing one. What that delegation buys is
+ * the ordinary guarantee a resource owner gives: the child is released with the
+ * scope that asked for it instead of outliving it. A hand-built promise around
+ * `execFile` would stop *waiting* on cancellation while leaving the command
+ * running and still writing into a fixture whose scope had already gone.
+ *
+ * No control here measures that ordering; it is the owner's contract, proved
+ * where that owner is, and these suites rely on it the way the rest of the
+ * repository's fixtures do.
  *
  * The environment is the isolation the entry's own Git has — no global or
  * system configuration, and a home of the scenario's own — with a stated

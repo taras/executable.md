@@ -1,17 +1,19 @@
 /**
  * How a declaring execution attaches its own policy to a shared component body.
  *
- * `<Git.Push />` and `<Issue>` are the two operations a REPL entry retains, so
- * their bodies take the operation they ask as an argument: an ordinary
- * registration passes the feature Api's own operations, and the entry's
- * declaration passes an envelope that encloses that Api. A body that reached
- * the Api itself could not be enclosed by a durable boundary above it, which is
- * what retention here means. The other four — `<PullRequest>` and its three
- * evidence reads — are retained as well, but underneath their Api rather than
- * above it: a workflow run makes the upsert durable in the Git-host
- * reconciliation beneath it, and each read durable as policy on
- * `PullRequestReadExecution`. No host owns a boundary over the chain for them,
- * so they need no binding of their own here and ask their Api directly.
+ * The six operations that reach something no local transaction encloses —
+ * `<Git.Push />`, `<Issue>`, `<PullRequest>` and its three evidence reads —
+ * take the operation they ask as an argument. An ordinary registration passes
+ * the feature Api's own operations, and a retaining host's declaration passes
+ * an envelope that encloses that Api. A body that reached the Api itself could
+ * not be enclosed by a durable boundary above it, which is what retention here
+ * means.
+ *
+ * A host may retain beneath the Api instead, and a workflow run does: it makes
+ * the upsert durable in the Git-host reconciliation below, and each read
+ * durable as policy on `PullRequestReadExecution`. That needs no binding. What
+ * needs one is a boundary *over* the chain, which is why all six are bound
+ * rather than only the two whose hosts happened to want one first.
  *
  * Either way the body receives semantic operations and nothing else: no
  * authenticator, no owner, no site, no native access and no record codec. The
