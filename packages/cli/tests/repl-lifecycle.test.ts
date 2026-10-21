@@ -10,14 +10,15 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { useTempFileCompiler } from "@executablemd/core";
+import { Component, useTempFileCompiler } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { each, ensure, scoped, sleep, spawn } from "effection";
+import { each, ensure, scoped, sleep, spawn, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 
 import { openReplSession } from "../src/repl/session.ts";
 import type { ReplSession } from "../src/repl/session.ts";
 import type { ReplExecution } from "../src/repl/journal.ts";
+import type { ReplQuestion } from "../src/repl/elicitation.ts";
 import type { ReplLifecycleReading, ReplOccurrence } from "../src/repl/lifecycle.ts";
 
 function execution(): ReplExecution {
@@ -35,6 +36,25 @@ function accepted(result: Result<unknown>): void {
   if (!result.ok) {
     throw result.error;
   }
+}
+
+function nextQuestion(session: ReplSession): Operation<ReplQuestion> {
+  return scoped(function* () {
+    // Checking before subscribing could lose a question published in between.
+    const changes = yield* session.elicitation.changes;
+    const pending = session.elicitation.pending;
+    if (pending !== undefined) {
+      return pending;
+    }
+    let next = yield* changes.next();
+    while (!next.done) {
+      if (next.value !== undefined) {
+        return next.value;
+      }
+      next = yield* changes.next();
+    }
+    throw new Error("this execution asked nothing");
+  });
 }
 
 /** Every reading one session published, in order. */
@@ -116,24 +136,7 @@ describe("Tier L — the reading one entry leaves behind", () => {
           'required: ["note"], additionalProperties: false }} as="answer">Answer this.</Elicit>\n',
       ),
     );
-    // Waited for rather than sampled after a fixed number of turns. The phases
-    // a consumer is told travel through its own queue and the question is
-    // published from inside the element, so how many turns that takes depends
-    // on what else the runner has queued — and a fixed count samples whichever
-    // phase had arrived by then, which is `Elicit:enter:` whenever another
-    // suite is running beside this one.
-    //
-    // The signal is deliberately narrower than the claim below: this waits only
-    // for *some* element to report that it is waiting on something, and what it
-    // reports — which element, which phase, what it waits on, and that it is
-    // the only one — is then asserted whole. A wait for the expected value
-    // would assert nothing.
-    for (let turn = 0; turn < 1000; turn += 1) {
-      if (session.lifecycle.occurrences.some((one) => one.waiting.length > 0)) {
-        break;
-      }
-      yield* sleep(0);
-    }
+    const question = yield* nextQuestion(session);
 
     const waiting = session.lifecycle.occurrences.filter((one) => one.waiting.length > 0);
     // The element that is waiting, what it is waiting on, and that it is
@@ -143,14 +146,60 @@ describe("Tier L — the reading one entry leaves behind", () => {
     ).toEqual(["Elicit:active:question"]);
     expect(waiting.map((one) => one.name)).toEqual(["Elicit"]);
 
-    const question = session.elicitation.pending;
-    if (question === undefined) {
-      throw new Error("this session is waiting on no question");
-    }
     question.submit({ note: "answered" });
     yield* session.join();
     yield* sleep(0);
     // The entry closed, so its reading went with it.
+    expect(session.lifecycle.occurrences).toEqual([]);
+    expect(session.live).toBe(false);
+  });
+
+  it("L2: an entered import has no question wait until it asks", function* () {
+    const arrived = withResolvers<void>();
+    const release = withResolvers<void>();
+    const session = opened(
+      yield* openReplSession({
+        execution: execution(),
+        installations: [
+          {
+            *install(): Operation<void> {
+              yield* Component.around({
+                *importComponent([name], next) {
+                  if (name === "Elicit") {
+                    arrived.resolve();
+                    yield* release.operation;
+                  }
+                  return yield* next(name);
+                },
+              });
+            },
+          },
+        ],
+      }),
+    );
+    accepted(
+      yield* session.submit(
+        '<Elicit schema={{ type: "object", properties: { note: { type: "string" } }, ' +
+          'required: ["note"], additionalProperties: false }} as="answer">Answer this.</Elicit>\n',
+      ),
+    );
+    yield* arrived.operation;
+    expect(session.elicitation.pending).toBe(undefined);
+    expect(
+      session.lifecycle.occurrences.map((one) => `${one.name}:${one.phase}:${one.waiting.join()}`),
+    ).toEqual(["Elicit:enter:"]);
+
+    const asking = yield* spawn(() => nextQuestion(session));
+    release.resolve();
+    const question = yield* asking;
+    const waiting = session.lifecycle.occurrences.filter((one) => one.waiting.length > 0);
+    expect(
+      session.lifecycle.occurrences.map((one) => `${one.name}:${one.phase}:${one.waiting.join()}`),
+    ).toEqual(["Elicit:active:question"]);
+    expect(waiting.map((one) => one.name)).toEqual(["Elicit"]);
+
+    question.submit({ note: "answered" });
+    yield* session.join();
     expect(session.lifecycle.occurrences).toEqual([]);
     expect(session.live).toBe(false);
   });
