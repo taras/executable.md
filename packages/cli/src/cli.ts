@@ -308,10 +308,9 @@ const REPL_DESCRIPTION = "Run and reconstruct one XMD entry in an interactive te
  *
  * The entry a person types may run Agent work, so this command configures the
  * Agent the same way `xmd run` does: the five shared fields, with the same
- * descriptions, defaults and environment precedence. Everything else a run
- * configures is absent — this command renders no file, takes no document
- * reference and writes no journal of its own, so an exec deadline, a props file
- * and a trace each configure work it never performs.
+ * descriptions, defaults and environment precedence. Component directories use
+ * the same ordered include option. The command takes no document reference or
+ * props file and exposes no trace or execution deadline.
  *
  * The one option of its own is `--sidekick-agent`, because this command has a
  * Sidekick and a run has none. It is a separate selection from
@@ -326,6 +325,7 @@ const replConfig = object({
       "that retained history and the exact view it names",
     ...field(z.string().optional(), cli.argument()),
   },
+  include: executionFields.include,
   ...agentFields,
   sidekickAgent: {
     description: "agent name for the Sidekick's own conversations",
@@ -597,6 +597,10 @@ const REPL_HELP = [
   "  Each one starts from the bindings the entries before it published, so a",
   "  later entry can read and revise what an earlier one left behind.",
   "",
+  "  --include <directory> and --include=<directory> select component directories.",
+  "  Repeat them in search order; explicit values replace the default list [components, .].",
+  "  Relative directories resolve from the invocation working directory.",
+  "",
   "  The screen always shows a location of the form",
   "  xmd://repl/<execution>/<surface>..., and when the command ends it prints the",
   "  whole xmd repl <location> that reopens the one it ended at. Running it",
@@ -652,7 +656,7 @@ export interface ReplHostAssembly {
  * silence would let them believe they got it.
  */
 /**
- * The three REPL options that carry a value, by the spelling a caller writes.
+ * The four REPL options that carry a value, by the spelling a caller writes.
  *
  * Exported because the documentation check reads this command's own examples,
  * and a token after one of these is that option's value rather than a location.
@@ -660,6 +664,7 @@ export interface ReplHostAssembly {
  * command about what it had been handed.
  */
 export const REPL_VALUES: readonly string[] = [
+  "--include",
   "--agent-provider",
   "--default-agent",
   "--sidekick-agent",
@@ -716,7 +721,7 @@ export function replGrammarError(
     return (
       `unrecognized option for xmd repl: ${name} — xmd repl takes one optional location, ` +
       "the agent options --agent-provider, --default-agent, --approve-all, --approve-reads " +
-      "and --deny-all, and --sidekick-agent for the Sidekick's own conversations"
+      "and --deny-all, --include for component directories, and --sidekick-agent for the Sidekick's own conversations"
     );
   }
   if (positional.length > 1) {
@@ -2978,6 +2983,7 @@ function* dispatch(
       // whether anybody answers to that name is the first explicit message's
       // question rather than this command's.
       const profile = yield* assembleReplProfile(replStack, plugins, {
+        includes: command.config.include,
         ...(command.config.sidekickAgent === undefined
           ? {}
           : { sidekickAgent: command.config.sidekickAgent }),

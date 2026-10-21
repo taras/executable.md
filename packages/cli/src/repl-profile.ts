@@ -33,13 +33,6 @@ import { ReplEntryHost } from "./repl-entry-installation.ts";
 import type { ReplEntryInstallation } from "./repl-entry-installation.ts";
 import { renderSyntaxDocumentation, renderSyntaxMarkdown, syntaxSymbols } from "./syntax.ts";
 
-/**
- * Where a REPL entry looks for components.
- *
- * Fixed, because this command takes no include option: an entry is typed rather
- * than named, so there is no document beside which a caller could have meant
- * something else.
- */
 const REPL_INCLUDES: readonly string[] = Object.freeze(["components", "."]);
 
 /**
@@ -65,6 +58,7 @@ export interface ReplProfileSeams {
  * parameter: a caller states what it knows and leaves out the rest.
  */
 export interface ReplProfileFacts extends ReplProfileSeams {
+  readonly includes?: readonly string[];
   /**
    * The name `--sidekick-agent` carried, or none when the line named none.
    *
@@ -201,6 +195,7 @@ export function* assembleReplProfile(
   plugins: CommandPlugins,
   facts: ReplProfileFacts = {},
 ): Operation<ReplExecutionProfile> {
+  const includes = Object.freeze([...(facts.includes ?? REPL_INCLUDES)]);
   yield* installAgentProviderStack(stack, facts.acp);
   // Settled here, with the stack and the Plugins, because it is a fact about
   // the command a person invoked rather than about any conversation they later
@@ -212,7 +207,7 @@ export function* assembleReplProfile(
   const plan = yield* planComponentDeclaration({
     surface: "component",
     ...(facts.planWriterRoot === undefined ? {} : { planWriterRoot: facts.planWriterRoot }),
-    includes: REPL_INCLUDES,
+    includes,
     // The command's own Plugin assembly, not a second installation of it: two
     // would be two catalogs claiming the same names.
     plugins,
@@ -234,8 +229,8 @@ export function* assembleReplProfile(
   const entryInstallation = yield* ReplEntryHost.get();
 
   return Object.freeze({
-    includes: REPL_INCLUDES,
-    vocabulary: entryVocabulary(REPL_INCLUDES, plugins),
+    includes,
+    vocabulary: entryVocabulary(includes, plugins),
     // Read off the admitted assembly here, once, while it is in hand. Copied
     // rather than referenced so nothing downstream can reach a Plugin value
     // through the profile, and frozen because a profile is read and never

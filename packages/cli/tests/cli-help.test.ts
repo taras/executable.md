@@ -9,13 +9,15 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { runCli } from "@executablemd/test-support/launch";
+import { cliRuntime, runCli, runShell, shellQuote } from "@executablemd/test-support/launch";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 
 function* useFixture<T>(
   files: Record<string, string>,
@@ -248,6 +250,8 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     // claim this row makes is unchanged — the command's own help describes what
     // an execution does with the entries it is given — and it is now the
     // behavior the mounted journeys actually prove.
+    expect(own.stdout).toContain("--include");
+    expect(own.stdout).toContain("explicit values replace the default list [components, .]");
     expect(own.stdout).toContain("ENTRIES");
     expect(own.stdout).toContain("An execution admits one entry at a time");
     expect(own.stdout).toContain("the bindings the entries before it published");
@@ -293,7 +297,7 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(options).toEqual(described(run.stdout));
     // Approve-reads is what an unstated line means, and the help says so.
     expect(repl.stdout).toContain("ask for the rest (default)");
-    // The five are all of what it shares: this command adds no data directory,
+    // The Agent fields are shared alongside the include field: this command adds no data directory,
     // and the one option it adds of its own is covered by C2 below.
     expect(repl.stdout).not.toContain("--data-dir");
   });
@@ -308,6 +312,11 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
       ["repl", "--deny-all"],
       ["repl", "--agent-provider", "acpx"],
       ["repl", "--default-agent", "claude"],
+      ["repl", "--include", "../first"],
+      ["repl", "--include=../first"],
+      ["repl", "--include", "../first", "--include=/absolute/second"],
+      ["repl", "xmd://repl/kf39sla2/entries", "--include", "../first"],
+      ["repl", "--include=../first", "xmd://repl/kf39sla2/entries"],
     ]) {
       const ran = yield* runCli(accepted).join();
       expect([accepted, ran.code]).toEqual([accepted, 1]);
@@ -340,6 +349,61 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(withLocation.code).toBe(1);
     expect(withLocation.stderr).toContain("at most one location");
   });
+
+  it("CH13: missing include values refuse before terminal acquisition", function* () {
+    for (const args of [
+      ["repl", "--include"],
+      ["repl", "--include="],
+      ["repl", "--include", ""],
+      ["repl", "--include", "--deny-all"],
+    ]) {
+      const ran = yield* runCli(args).join();
+      expect([args, ran.code, ran.stderr]).toEqual([
+        args,
+        1,
+        "xmd repl: --include requires a value\n",
+      ]);
+    }
+  });
+
+  if (cliRuntime() === "deno") {
+    it("A7: the repository task accepts selected directories through the source CLI", function* () {
+      const root = yield* useTempDirectory("xmd-include-task-");
+      const first = path.join(root, "first");
+      yield* ensureDir(first);
+      const cacheInfo: unknown = JSON.parse((yield* runShell("deno info --json").expect()).stdout);
+      if (
+        typeof cacheInfo !== "object" ||
+        cacheInfo === null ||
+        !("denoDir" in cacheInfo) ||
+        typeof cacheInfo.denoDir !== "string"
+      ) {
+        throw new Error("deno info supplied no prepared cache path");
+      }
+      const repository = fileURLToPath(new URL("../../../", import.meta.url));
+      for (const args of [
+        ["--include", first],
+        [`--include=${first}`, "--include", first],
+      ]) {
+        const ran = yield* runShell(
+          ["deno", "task", "xmd", "repl", ...args].map(shellQuote).join(" "),
+          {
+            cwd: repository,
+            env: {
+              HOME: root,
+              XDG_DATA_HOME: path.join(root, "share"),
+              DENO_DIR: cacheInfo.denoDir,
+            },
+          },
+        ).join();
+        expect(ran.code).toBe(1);
+        expect(ran.stderr).toContain(
+          "xmd repl: the REPL runs where a terminal is: it is not available over a pipe.",
+        );
+        expect(ran.stderr).not.toContain("unrecognized option");
+      }
+    });
+  }
 
   it("C2: repl states its own Sidekick agent option, and names a value or refuses", function* () {
     const repl = yield* runCli(["repl", "--help"]).expect();

@@ -480,7 +480,7 @@ describe("REPL documentation: what it says is what the code does", () => {
     }
   });
 
-  it("D1: the six options the spec names are the six the parser accepts", function* () {
+  it("D1: the seven options the spec names are the seven the parser accepts", function* () {
     const spec = yield* read(join(CLI, "..", "..", "specs", "repl-spec.md"));
     // Every option the specification names, from its own prose.
     const named = [...spec.matchAll(/`(--[a-z-]+)`/g)].map((match) => match[1]);
@@ -490,6 +490,7 @@ describe("REPL documentation: what it says is what the code does", () => {
       "--approve-reads",
       "--default-agent",
       "--deny-all",
+      "--include",
       "--sidekick-agent",
     ]);
 
@@ -498,7 +499,7 @@ describe("REPL documentation: what it says is what the code does", () => {
       expect([option, replGrammarError(["repl", option], undefined)]).toEqual([option, undefined]);
       expect(replGrammarError(["repl", `${option}=yes`], undefined)).toContain("takes no value");
     }
-    for (const option of ["--agent-provider", "--default-agent", "--sidekick-agent"]) {
+    for (const option of ["--agent-provider", "--default-agent", "--sidekick-agent", "--include"]) {
       expect([option, replGrammarError(["repl", option, "acpx"], undefined)]).toEqual([
         option,
         undefined,
@@ -510,10 +511,10 @@ describe("REPL documentation: what it says is what the code does", () => {
       expect(replGrammarError(["repl", option], undefined)).toContain("requires a value");
     }
 
-    // And there is no seventh: an option the specification does not name is
+    // And there is no eighth: an option the specification does not name is
     // refused by the name it was written as.
-    expect(replGrammarError(["repl", "--include", "x"], undefined)).toContain(
-      "unrecognized option for xmd repl: --include",
+    expect(replGrammarError(["repl", "--json"], undefined)).toContain(
+      "unrecognized option for xmd repl: --json",
     );
   });
 
@@ -764,7 +765,11 @@ const UPGRADE: UpgradeAssembly = {
 
 describe("REPL command: what runs before the host is reached", () => {
   it("S1: help describes the command without assembling a REPL", function* () {
-    for (const args of [["--help"], ["repl", "--help"]]) {
+    for (const args of [
+      ["--help"],
+      ["repl", "--help"],
+      ["repl", "--include", "../first", "--help"],
+    ]) {
       const ran = yield* invoke(args);
       expect(ran.status).toBe(0);
       // Describing a command is not running one.
@@ -796,6 +801,10 @@ describe("REPL command: what runs before the host is reached", () => {
     for (const args of [
       ["repl", "one", "two"],
       ["repl", "--json"],
+      ["repl", "--include"],
+      ["repl", "--include="],
+      ["repl", "--include", ""],
+      ["repl", "--include", "--deny-all"],
       ["repl", "xmd://nope"],
     ]) {
       const ran = yield* invoke(args);
@@ -803,6 +812,7 @@ describe("REPL command: what runs before the host is reached", () => {
       // No data directory, no history file, no terminal: the command line was
       // answered before any of them could be reached for.
       expect(ran.installed).toBe(0);
+      expect(ran.selected).toBe(0);
     }
   });
 
@@ -811,7 +821,8 @@ describe("REPL command: what runs before the host is reached", () => {
     // that could never increment cannot pass the two rows above. This host
     // assembles nothing, so the command fails once it asks for a data directory —
     // which is the point: it got that far.
-    const ran = yield* invoke(["repl"]);
+    const ran = yield* invoke(["repl", "--include", "../first", "--include=/absolute/second"]);
     expect(ran.installed).toBe(1);
+    expect(ran.selected).toBe(1);
   });
 });
