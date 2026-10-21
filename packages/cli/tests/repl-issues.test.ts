@@ -1530,10 +1530,15 @@ describe("how a REPL entry gets its issues", () => {
     expect(absent.entryInstallation).toBe(undefined);
 
     // Selecting reaches nothing, and what it selected declares exactly the
-    // operations an entry retains — publication and filing, and neither
-    // `<PullRequest>` nor its reads, which stay the defaults the command's
-    // scope registered. An installation is built per entry, and this command
-    // has run none.
+    // operations an entry retains: publication, filing, opening a pull request
+    // and its three evidence reads. Each of those six needs the invocation —
+    // a durable boundary enclosing the public chain cannot be installed inside
+    // it, and each evidence read is named after the occurrence that asked for
+    // it. The pages an entry's four Git reads answer with, and the file work
+    // beneath them, are middleware under the component rather than a policy
+    // named after an invocation, so they keep the registered default and appear
+    // nowhere here. An installation is built per entry, and this command has
+    // run none.
     const built = yield* scoped(function* (): Operation<ExecutionInstallation> {
       if (factory === undefined) {
         throw new Error("the production selector selected no entry capability");
@@ -1543,6 +1548,10 @@ describe("how a REPL entry gets its issues", () => {
     expect([...(built.components ?? [])].map((component) => component.name).sort()).toEqual([
       "Git.Push",
       "Issue",
+      "PullRequest",
+      "PullRequest.Checks",
+      "PullRequest.Comments",
+      "PullRequest.Reviews",
     ]);
   });
 
