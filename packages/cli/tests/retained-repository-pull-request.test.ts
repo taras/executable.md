@@ -1034,7 +1034,7 @@ function collections(
       }
     }
   }
-  return held.toSorted((first, second) => first.kind.localeCompare(second.kind));
+  return [...held].sort((first, second) => first.kind.localeCompare(second.kind));
 }
 
 /** Where each durable position of one type stands in this history. */
@@ -2524,16 +2524,16 @@ describe("what an entry's assembly reaches", () => {
         identity: statedIdentity,
         root: fixture.managed,
       });
-      expect((installation.components ?? []).map((component) => component.name).toSorted()).toEqual(
-        [
-          "Git.Push",
-          "Issue",
-          "PullRequest",
-          "PullRequest.Checks",
-          "PullRequest.Comments",
-          "PullRequest.Reviews",
-        ],
-      );
+      expect(
+        [...(installation.components ?? []).map((component) => component.name)].sort(),
+      ).toEqual([
+        "Git.Push",
+        "Issue",
+        "PullRequest",
+        "PullRequest.Checks",
+        "PullRequest.Comments",
+        "PullRequest.Reviews",
+      ]);
       // One walk for the two publication protocols, one for issues, one for
       // retained reads.
       expect((installation.admissions ?? []).length).toBe(3);

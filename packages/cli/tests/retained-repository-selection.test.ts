@@ -1138,4 +1138,3 @@ function* commonOf(fixture: Fixture, name: string): Operation<string> {
   const slot = repositorySlot(fixture.managed, fixture.origin, name);
   return yield* until(realpath(join(slot, "checkout", ".git")));
 }
-

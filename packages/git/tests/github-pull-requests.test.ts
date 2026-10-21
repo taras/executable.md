@@ -791,45 +791,43 @@ describe("what the published pull-request facade is, and what it keeps", () => {
   });
 
   it("gives each read its own retention callback rather than keeping one", function* () {
-    yield* scoped(function* (): Operation<void> {
-      const operations = denoPullRequestOperations();
-      const reached: string[] = [];
-      // Admitted, so the read is this adapter's own and reaches a callback at
-      // all. Stated through the configuration seam rather than written into the
-      // process this case is running in.
-      const stated = JSON.stringify({ allowed: ["https://github.com/owner/repository"] });
-      // Two reads through one facade, each with a callback of its own. A facade
-      // that stored the first would hand the second read the first caller's
-      // retention, which is how an entry would retain another entry's evidence.
-      const refusing = function* (): Operation<never> {
-        throw new Error("this control reaches no transport");
-      };
-      yield* API.Env.around(
-        {
-          // deno-lint-ignore require-yield
-          *env([name]: [string]): Operation<string | undefined> {
-            return name === GITHUB_PULL_REQUESTS_ENV ? stated : undefined;
-          },
+    const operations = denoPullRequestOperations();
+    const reached: string[] = [];
+    // Admitted, so the read is this adapter's own and reaches a callback at
+    // all. Stated through the configuration seam rather than written into the
+    // process this case is running in.
+    const stated = JSON.stringify({ allowed: ["https://github.com/owner/repository"] });
+    // Two reads through one facade, each with a callback of its own. A facade
+    // that stored the first would hand the second read the first caller's
+    // retention, which is how an entry would retain another entry's evidence.
+    const refusing = function* (): Operation<never> {
+      throw new Error("this control reaches no transport");
+    };
+    yield* API.Env.around(
+      {
+        // deno-lint-ignore require-yield
+        *env([name]: [string]): Operation<string | undefined> {
+          return name === GITHUB_PULL_REQUESTS_ENV ? stated : undefined;
         },
-        { at: "min" },
-      );
-      for (const name of ["first", "second"]) {
-        try {
-          yield* operations.read(
-            "https://github.com/owner/repository/pull/1",
-            { kind: "reviews" },
-            // deno-lint-ignore require-yield
-            function* (): Operation<never> {
-              reached.push(name);
-              throw new Error(`${name} reached its own callback`);
-            },
-            refusing,
-          );
-        } catch (error) {
-          expect(String(error)).toContain(name);
-        }
+      },
+      { at: "min" },
+    );
+    for (const name of ["first", "second"]) {
+      try {
+        yield* operations.read(
+          "https://github.com/owner/repository/pull/1",
+          { kind: "reviews" },
+          // deno-lint-ignore require-yield
+          function* (): Operation<never> {
+            reached.push(name);
+            throw new Error(`${name} reached its own callback`);
+          },
+          refusing,
+        );
+      } catch (error) {
+        expect(String(error)).toContain(name);
       }
-      expect(reached).toEqual(["first", "second"]);
-    });
+    }
+    expect(reached).toEqual(["first", "second"]);
   });
 });

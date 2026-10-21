@@ -255,28 +255,23 @@ describe("what the published repository handle is, and what constructing it cost
   });
 
   it("hands back exactly the twelve credential-free methods", function* () {
-    yield* scoped(function* () {
-      const operations: DenoRepositoryOperations = yield* useDenoRepositoryOperations();
-      // Every own name, so a member added beside the twelve is a failure here
-      // rather than a surprise at a caller.
-      expect(Object.keys(operations).sort()).toEqual([...PUBLISHED_METHODS]);
-      for (const name of PUBLISHED_METHODS) {
-        expect(`${name}: ${typeof Reflect.get(operations, name)}`).toBe(`${name}: function`);
-      }
-    });
+    const operations: DenoRepositoryOperations = yield* useDenoRepositoryOperations();
+    // Every own name, so a member added beside the twelve is a failure here
+    // rather than a surprise at a caller.
+    expect([...Object.keys(operations)].sort()).toEqual([...PUBLISHED_METHODS]);
+    for (const name of PUBLISHED_METHODS) {
+      expect(`${name}: ${typeof Reflect.get(operations, name)}`).toBe(`${name}: function`);
+    }
   });
 
   it("hands back functions and nothing else, so no session comes with it", function* () {
-    yield* scoped(function* () {
-      const operations = yield* useDenoRepositoryOperations();
-      // Every own member is a function. A handle that carried a session, a
-      // host or an open attachment would have to hand it over as a value, and
-      // there is nowhere here for one to be.
-      const values = Object.entries(operations).map(([name, held]) => `${name}: ${typeof held}`);
-      expect(values.sort()).toEqual(PUBLISHED_METHODS.map((name) => `${name}: function`));
-      // And the three private surfaces are not published at all, which
-      // `packages/git/tests/public-entrypoint.test.ts` holds this package to.
-    });
+    const operations = yield* useDenoRepositoryOperations();
+    // Every own member is a function. A handle that carried a session, a host
+    // or an open attachment would have to hand it over as a value, and there is
+    // nowhere here for one to be. That the three private surfaces are not
+    // published at all is held by `public-entrypoint.test.ts`.
+    const values = Object.entries(operations).map(([name, held]) => `${name}: ${typeof held}`);
+    expect([...values].sort()).toEqual(PUBLISHED_METHODS.map((name) => `${name}: function`));
   });
 
   it("returns a push provider holding exactly observe and perform", function* () {
