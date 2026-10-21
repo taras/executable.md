@@ -131,6 +131,36 @@ export interface ReplPushPlacement {
 }
 
 /**
+ * One place a saved request names: a Repository, and the checkout it sits in.
+ *
+ * Three of these are read off every saved request, and each record kind reads
+ * them out of its own shape. What is done with them is {@link placesHeld}.
+ */
+type ReplRequestPlace = readonly [RepositoryIdentity, string, string];
+
+/**
+ * Whether every place a request named is one these placements hold.
+ *
+ * One placement rule, over whichever readings a record supplied: a place is
+ * held when some placement sits at that exact checkout root and common
+ * directory *and* is a placement of the Repository the record names. Neither
+ * reading resolves a path nor opens anything.
+ */
+function placesHeld(
+  places: readonly ReplRequestPlace[],
+  placements: readonly ReplPushPlacement[],
+): boolean {
+  return places.every(([identity, checkoutRoot, commonDirectory]) =>
+    placements.some(
+      (placement) =>
+        placement.checkoutRoot === checkoutRoot &&
+        placement.commonDirectory === commonDirectory &&
+        sameRepositoryIdentity(placement.identity, identity),
+    ),
+  );
+}
+
+/**
  * Whether every place a saved request names is one these placements hold.
  *
  * Three readings and three questions. The selection the invocation
@@ -143,7 +173,7 @@ export function replPushPlacesHeld(
   record: ReplPushRequestRecord,
   placements: readonly ReplPushPlacement[],
 ): boolean {
-  const places: readonly (readonly [RepositoryIdentity, string, string])[] = [
+  const places: readonly ReplRequestPlace[] = [
     [
       record.requested.repository,
       record.requested.selectionCheckout,
@@ -156,14 +186,7 @@ export function replPushPlacesHeld(
     ],
     [record.received.repository, record.resolved.checkoutRoot, record.resolved.commonDirectory],
   ];
-  return places.every(([identity, checkoutRoot, commonDirectory]) =>
-    placements.some(
-      (placement) =>
-        placement.checkoutRoot === checkoutRoot &&
-        placement.commonDirectory === commonDirectory &&
-        sameRepositoryIdentity(placement.identity, identity),
-    ),
-  );
+  return placesHeld(places, placements);
 }
 
 /** The Git-host request one saved Push request asks the worker to reconcile. */
@@ -493,7 +516,7 @@ export function replPullRequestPlacesHeld(
   record: ReplPullRequestRequestRecord,
   placements: readonly ReplPushPlacement[],
 ): boolean {
-  const places: readonly (readonly [RepositoryIdentity, string, string])[] = [
+  const places: readonly ReplRequestPlace[] = [
     [
       record.requested.place.repository,
       record.requested.place.selectionCheckout,
@@ -510,14 +533,7 @@ export function replPullRequestPlacesHeld(
       record.resolved.commonDirectory,
     ],
   ];
-  return places.every(([identity, checkoutRoot, commonDirectory]) =>
-    placements.some(
-      (placement) =>
-        placement.checkoutRoot === checkoutRoot &&
-        placement.commonDirectory === commonDirectory &&
-        sameRepositoryIdentity(placement.identity, identity),
-    ),
-  );
+  return placesHeld(places, placements);
 }
 
 /**

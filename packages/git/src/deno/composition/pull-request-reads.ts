@@ -239,11 +239,7 @@ function transports(
 export function gitHubPullRequestAccess(
   options: GitHubPullRequestsOptions = {},
 ): () => Operation<GitHubSource> {
-  const authorized = resolver(options);
-  const transport = transports(options);
-  return function* (): Operation<GitHubSource> {
-    return transport((yield* authorized()) ?? {});
-  };
+  return gitHubPullRequestReadResolver(options).access;
 }
 
 function resolver(
@@ -305,8 +301,18 @@ export type AdmittedReadExecution = (
 export function gitHubPullRequestReadResolver(options: GitHubPullRequestsOptions = {}): {
   readonly authorized: () => Operation<GitHubPullRequestsConfiguration | undefined>;
   readonly transport: (configuration: GitHubPullRequestsConfiguration) => GitHubSource;
+  /** The two above in the order a caller that just wants a session needs them. */
+  readonly access: () => Operation<GitHubSource>;
 } {
-  return { authorized: resolver(options), transport: transports(options) };
+  const authorized = resolver(options);
+  const transport = transports(options);
+  return {
+    authorized,
+    transport,
+    *access(): Operation<GitHubSource> {
+      return transport((yield* authorized()) ?? {});
+    },
+  };
 }
 
 /**

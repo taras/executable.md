@@ -76,15 +76,22 @@ export function* proveReplPullRequestPublication(
   try {
     const retained = yield* context.stream.readAll();
     publications = (yield* walkReplRetainedPublications(owner, retained)).pushes;
-  } catch {
+  } catch (error) {
     // The walk refuses a history it cannot account for, and a history that
     // cannot be read is not one a publication can be proven from. Nothing of
     // what it held travels into this sentence.
-    throw new PullRequestAdmissionError(
+    //
+    // Which question the history failed does travel, as the cause. The walk's
+    // own refusals name conditions — `duplicate-outcome`, `foreign-owner` —
+    // and never the records they were decided from, so a reader learns what
+    // went wrong without the sentence carrying any of the history's content.
+    const refused = new PullRequestAdmissionError(
       "unreadable-push-evidence",
       "this entry's retained publication history could not be read, so whether the branch this " +
         "pull request names was published by this entry is unknown.",
     );
+    refused.cause = error;
+    throw refused;
   }
 
   // The last one wins. A supervised entry publishes one destination repeatedly,

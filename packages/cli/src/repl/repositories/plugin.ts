@@ -22,12 +22,24 @@ import type { Plugin, PluginInstallRequest, PluginInstallation } from "@executab
 import { gitCompositionInstallation } from "@executablemd/git";
 import { admitReplRepositoryHistory } from "./admission.ts";
 
+/**
+ * Whether this wrapper, rather than the value it wraps, answers for a command.
+ *
+ * The one place the `repl` special case is written down. `run-profile.ts` asks
+ * it too, because a command this wrapper declares for carries the bundled
+ * value whether or not Git's own profile declares for it — and two spellings of
+ * that question would be two answers the moment either moved.
+ */
+export function replRepositoryPluginDeclaresFor(command: string): boolean {
+  return command === "repl";
+}
+
 /** This command's assembly of one bundled Git Plugin. */
 export function replRepositoryPlugin(bundled: Plugin): Plugin {
   return {
     ...bundled,
     *install(request: PluginInstallRequest): Operation<PluginInstallation | undefined> {
-      if (request.command !== "repl") {
+      if (!replRepositoryPluginDeclaresFor(request.command)) {
         const install = bundled.install;
         return install === undefined ? undefined : yield* install.call(bundled, request);
       }

@@ -756,18 +756,7 @@ describe("workflow GitHub creation", () => {
  * is the asking caller's own rather than one the shared value kept.
  */
 describe("what the published pull-request facade is, and what it keeps", () => {
-  it("hands back exactly read and provider, as functions", function* () {
-    const operations = denoPullRequestOperations();
-    expect(Object.keys(operations).sort()).toEqual(["provider", "read"]);
-    expect(typeof operations.read).toBe("function");
-    expect(typeof operations.provider).toBe("function");
-    // Nothing else is handed over, so there is nowhere for a session, a
-    // transport or a credential to be reached through this value.
-    const values = Object.values(operations).map((held) => typeof held);
-    expect(new Set(values)).toEqual(new Set(["function"]));
-  });
-
-  it("reads no configuration and opens no session when it is built", function* () {
+  it("hands back exactly read and provider, and reads nothing to do it", function* () {
     const asked: string[] = [];
     yield* scoped(function* (): Operation<void> {
       // The seam the adapter reads its configuration through, answered here so
@@ -783,7 +772,10 @@ describe("what the published pull-request facade is, and what it keeps", () => {
         { at: "min" },
       );
       const operations = denoPullRequestOperations();
-      expect(typeof operations.read).toBe("function");
+      // Two members and nothing else is handed over, so there is nowhere for a
+      // session, a transport or a credential to be reached through this value.
+      const values = Object.entries(operations).map(([name, held]) => `${name}: ${typeof held}`);
+      expect([...values].sort()).toEqual(["provider: function", "read: function"]);
     });
     // Construction names a transport rather than building one: the resolver
     // behind it is lazy, so nothing is read and nothing is opened.

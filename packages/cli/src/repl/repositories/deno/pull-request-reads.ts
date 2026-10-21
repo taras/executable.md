@@ -42,7 +42,7 @@ import type { JournalAdmission } from "@executablemd/core/host";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { StaleInputError } from "@executablemd/durable-streams";
 import type { BindOperations } from "@executablemd/git";
-import { PULL_REQUEST_API, PullRequestAPI } from "@executablemd/git/api";
+import { PULL_REQUEST_API } from "@executablemd/git/api";
 import type {
   PullRequestApi,
   PullRequestInput,
@@ -233,7 +233,7 @@ function parseRetainedQuestion(value: unknown): RetainedReadQuestion | undefined
  */
 export function replPullRequestReadPolicy(
   owner: string,
-  pullRequests: () => DenoPullRequestOperations | undefined,
+  pullRequests: () => DenoPullRequestOperations,
 ): BindOperations<PullRequestOperationsApi["read"]> {
   return (site: string) => (invocation: PullRequestReadInvocation) =>
     read(owner, site, pullRequests, invocation);
@@ -266,7 +266,7 @@ export function replPullRequestReadPolicy(
 function* read(
   owner: string,
   site: string,
-  pullRequests: () => DenoPullRequestOperations | undefined,
+  pullRequests: () => DenoPullRequestOperations,
   invocation: PullRequestReadInvocation,
 ): Operation<PullRequestReadResult> {
   return yield* scoped(function* (): Operation<PullRequestReadResult> {
@@ -296,15 +296,13 @@ function* read(
 function* admitted(
   owner: string,
   site: string,
-  pullRequests: () => DenoPullRequestOperations | undefined,
+  pullRequests: () => DenoPullRequestOperations,
   invocation: PullRequestReadInvocation,
 ): Operation<PullRequestReadResult> {
+  // Built once per entry and inert until something needs a session, so there is
+  // always one here: an entry with no managed root still reads an allowed URL,
+  // because a read needs no Repository and no checkout.
   const domain = pullRequests();
-  if (domain === undefined) {
-    // No read capability was established for this execution, so nothing
-    // performed anything — which is the public surface's own answer.
-    throw new NoPullRequestProvider("read", invocation.url, invocation.provider);
-  }
   const expansion = yield* getExpansion();
 
   return yield* scoped(function* (): Operation<PullRequestReadResult> {

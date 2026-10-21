@@ -254,22 +254,15 @@ describe("what the published repository handle is, and what constructing it cost
     });
   });
 
-  it("hands back exactly the twelve credential-free methods", function* () {
+  it("hands back exactly the twelve credential-free methods, and nothing else", function* () {
     const operations: DenoRepositoryOperations = yield* useDenoRepositoryOperations();
     // Every own name, so a member added beside the twelve is a failure here
-    // rather than a surprise at a caller.
-    expect([...Object.keys(operations)].sort()).toEqual([...PUBLISHED_METHODS]);
-    for (const name of PUBLISHED_METHODS) {
-      expect(`${name}: ${typeof Reflect.get(operations, name)}`).toBe(`${name}: function`);
-    }
-  });
-
-  it("hands back functions and nothing else, so no session comes with it", function* () {
-    const operations = yield* useDenoRepositoryOperations();
-    // Every own member is a function. A handle that carried a session, a host
-    // or an open attachment would have to hand it over as a value, and there is
-    // nowhere here for one to be. That the three private surfaces are not
-    // published at all is held by `public-entrypoint.test.ts`.
+    // rather than a surprise at a caller — and every own member is a function.
+    // A handle that carried a session, a host or an open attachment would have
+    // to hand it over as a value, and naming the members and their types
+    // together is what says there is nowhere here for one to be. That the
+    // three private surfaces are not published at all is held by
+    // `public-entrypoint.test.ts`.
     const values = Object.entries(operations).map(([name, held]) => `${name}: ${typeof held}`);
     expect([...values].sort()).toEqual(PUBLISHED_METHODS.map((name) => `${name}: function`));
   });
