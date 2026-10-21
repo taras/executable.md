@@ -31,8 +31,9 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
 import { denoRepositoryHost } from "../../git/src/deno/composition/host.ts";
 import { gitSession } from "../../git/src/deno/composition/git.ts";
 import { gitPlugin } from "../../git/src/plugin.ts";
-import { replRepositoryInstallation } from "../../git/src/deno/retained-repository/provider.ts";
-import { REPL_REPOSITORY_PUSH_REQUEST } from "../../git/src/retained-repository/push-records.ts";
+import { replRepositoryPlugin } from "../src/repl/repositories/plugin.ts";
+import { replRepositoryInstallation } from "../src/repl/repositories/deno/provider.ts";
+import { REPL_REPOSITORY_PUSH_REQUEST } from "../src/repl/repositories/push-records.ts";
 import { GIT_HOST_EFFECT } from "../../git/src/git-host/effect-type.ts";
 import type { HelperAssembly } from "../../git/src/deno/composition/credential-helper.ts";
 import { selectReplEntryHost } from "../src/deno-repositories.ts";
@@ -142,13 +143,18 @@ function useWorkingDirectory(directory: string): Operation<void> {
  * this harness supplies no component catalog of its own.
  */
 function* replInstallations(): Operation<readonly ExecutionInstallation[]> {
-  const install = gitPlugin.install;
+  // The command's own assembly of the bundled Plugin, which is what a profile
+  // carries: the vocabulary and the domain admissions come from Git, and the
+  // admission that reads an entry's own repository history back belongs to this
+  // command, so asking the bundled Plugin alone would declare nothing here.
+  const bundled = replRepositoryPlugin(gitPlugin);
+  const install = bundled.install;
   if (install === undefined) {
-    throw new Error("the Git Plugin installs nothing");
+    throw new Error("the bundled Plugin installs nothing");
   }
-  const installed = yield* install.call(gitPlugin, { command: "repl", args: [] });
+  const installed = yield* install.call(bundled, { command: "repl", args: [] });
   if (installed === undefined) {
-    throw new Error("the Git Plugin declared nothing for the repl command");
+    throw new Error("the bundled Plugin declared nothing for the repl command");
   }
   return [{ admissions: [...(installed.admissions ?? [])] }];
 }
@@ -227,7 +233,6 @@ function submit(
               entryInstallation: (owner: string) => {
                 seen.owners.push(owner);
                 return replRepositoryInstallation(owner, {
-                  host: denoRepositoryHost(),
                   identity: statedIdentity,
                   ...(managed === undefined ? {} : { root: managed }),
                 });
@@ -266,7 +271,6 @@ function reopen(
         entryInstallation: (owner: string) => {
           seen.owners.push(owner);
           return replRepositoryInstallation(owner, {
-            host: denoRepositoryHost(),
             identity: statedIdentity,
             ...(managed === undefined ? {} : { root: managed }),
           });

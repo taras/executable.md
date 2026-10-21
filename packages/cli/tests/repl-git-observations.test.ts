@@ -31,18 +31,14 @@ import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { Execution } from "@executablemd/core/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { denoRepositoryHost } from "../../git/src/deno/composition/host.ts";
-import type {
-  GitBytes,
-  GitInvocation,
-  GitOutcome,
-  RepositoryHost,
-} from "../../git/src/deno/composition/host.ts";
-import { UNAUTHENTICATED } from "../../git/src/deno/composition/authentication.ts";
-import type { GitAuthenticationSession } from "../../git/src/deno/composition/authentication.ts";
 import { gitSession } from "../../git/src/deno/composition/git.ts";
-import { useReplRepositoryRecording } from "../../git/src/deno/retained-repository/provider.ts";
+import { useDenoRepositoryOperations } from "@executablemd/git/deno";
+import type { DenoRepositoryOperations } from "@executablemd/git/deno";
+import type { GitObservationRequest } from "@executablemd/git/api";
+import { useReplRepositoryRecording } from "../src/repl/repositories/deno/provider.ts";
 import { gitPlugin } from "../../git/src/plugin.ts";
-import { REPL_REPOSITORY_OBSERVATION } from "../../git/src/retained-repository/observation-records.ts";
+import { replRepositoryPlugin } from "../src/repl/repositories/plugin.ts";
+import { REPL_REPOSITORY_OBSERVATION } from "../src/repl/repositories/observation-records.ts";
 import { ordinaryGeneratedSelection } from "../src/evaluation-profile.ts";
 import { ReplHost } from "../src/repl/host.ts";
 import { openReplSession, submitReplEntry } from "../src/repl/session.ts";
@@ -107,52 +103,42 @@ function useFixture(): Operation<Fixture> {
 }
 
 interface Counted {
-  /** Every `git` invocation, as its argument list. */
-  readonly commands: string[][];
-  /** How many scratch directories the reads acquired. */
-  directories: number;
-  /** Every authentication locator a session was opened for. */
-  readonly sessions: string[];
+  /** What each observation this entry performed asked for, in order. */
+  readonly reads: GitObservationRequest[];
 }
 
 function counters(): Counted {
-  return { commands: [], directories: 0, sessions: [] };
+  return { reads: [] };
 }
 
-/** The native reads these entries performed, by exact subcommand. */
-const READS: readonly string[] = ["ls-files", "diff", "cat-file", "ls-tree"];
-
+/**
+ * The reads these entries performed, by the kind each one asked for.
+ *
+ * The kind the element named, not the Git subcommand underneath it: two
+ * different reads share `git diff`, so a subcommand could not tell which of
+ * them ran.
+ */
 function reads(counted: Counted): string[] {
-  return counted.commands
-    .map((args) => args.find((arg) => READS.includes(arg)))
-    .filter((name): name is string => name !== undefined);
+  return counted.reads.map((request) => request.kind);
 }
 
-/** The production host, counted at each leaf a read could reach. */
-function countingHost(counted: Counted): RepositoryHost {
-  const host = denoRepositoryHost();
-  return {
-    *git(invocation: GitInvocation): Operation<GitOutcome> {
-      counted.commands.push([...invocation.args]);
-      return yield* host.git(invocation);
-    },
-    *gitBytes(invocation: GitInvocation): Operation<GitBytes> {
-      counted.commands.push([...invocation.args]);
-      if (host.gitBytes === undefined) {
-        throw new Error("the production host lends no byte capture");
-      }
-      return yield* host.gitBytes(invocation);
-    },
-    *useDirectory(): Operation<string> {
-      counted.directories += 1;
-      return yield* host.useDirectory();
-    },
-    *useAuthentication(locator: string): Operation<GitAuthenticationSession> {
-      counted.sessions.push(locator);
-      return host.useAuthentication === undefined
-        ? UNAUTHENTICATED
-        : yield* host.useAuthentication(locator);
-    },
+/**
+ * The production handle, with every observation it is asked to perform counted.
+ *
+ * The real method is delegated to unchanged, so what a row watches is a read
+ * that really happened rather than one a substitute agreed to.
+ */
+function countingOperations(counted: Counted): () => Operation<DenoRepositoryOperations> {
+  return function* (): Operation<DenoRepositoryOperations> {
+    const operations = yield* useDenoRepositoryOperations();
+    const wrapped: DenoRepositoryOperations = {
+      ...operations,
+      *observe(element, request, place) {
+        counted.reads.push(request);
+        return yield* operations.observe(element, request, place);
+      },
+    };
+    return wrapped;
   };
 }
 
@@ -164,13 +150,18 @@ function countingHost(counted: Counted): RepositoryHost {
  * admission that reads this feature's records travels with the vocabulary.
  */
 function* replInstallations(): Operation<readonly ExecutionInstallation[]> {
-  const install = gitPlugin.install;
+  // The command's own assembly of the bundled Plugin, which is what a profile
+  // carries: the vocabulary and the domain admissions come from Git, and the
+  // admission that reads an entry's own repository history back belongs to this
+  // command, so asking the bundled Plugin alone would declare nothing here.
+  const bundled = replRepositoryPlugin(gitPlugin);
+  const install = bundled.install;
   if (install === undefined) {
-    throw new Error("the Git Plugin installs nothing");
+    throw new Error("the bundled Plugin installs nothing");
   }
-  const installed = yield* install.call(gitPlugin, { command: "repl", args: [] });
+  const installed = yield* install.call(bundled, { command: "repl", args: [] });
   if (installed === undefined) {
-    throw new Error("the Git Plugin declared nothing for the repl command");
+    throw new Error("the bundled Plugin declared nothing for the repl command");
   }
   return [{ admissions: [...(installed.admissions ?? [])] }];
 }
@@ -206,13 +197,12 @@ function useWorkingDirectory(directory: string): Operation<void> {
     { at: "min" },
   );
 }
-
 function useCountedRecording(counted: Counted, root: string): Operation<void> {
   // The same seam the per-entry factory registers on, because what this suite
   // is about is what an entry records rather than which host assembled it.
   return Execution.around({
     *init(_args, next): Operation<void> {
-      yield* useReplRepositoryRecording({ host: countingHost(counted), root });
+      yield* useReplRepositoryRecording({ operations: countingOperations(counted), root });
       yield* next();
     },
   });
@@ -297,7 +287,7 @@ describe("RGO1 — a reopened entry answers from what it recorded", () => {
     });
 
     expect(first.output).toContain("Read 2 paths.");
-    expect(reads(live)).toContain("ls-files");
+    expect(reads(live)).toContain("files");
     const recorded = yield* readRecords(first.path);
     expect(observationCount(recorded)).toBe(4);
 
@@ -357,10 +347,11 @@ describe("RGO1 — a reopened entry answers from what it recorded", () => {
     expect(reopened.output).toContain("Paths: 2");
     expect(reopened.output).toContain(`"${fixture.first}"`);
     expect(reopened.output).toContain('"compare": "unstaged"');
-    // And nothing live happened for any of it, with the checkout unavailable.
+    // And nothing live happened for any of it, with the checkout unavailable:
+    // not one observation was performed, so nothing beneath one was acquired
+    // either. That public construction acquires nothing is proved in
+    // `packages/git/tests/run-composition-lazy.test.ts`.
     expect(reads(cold)).toEqual([]);
-    expect(cold.directories).toBe(0);
-    expect(cold.sessions).toEqual([]);
   });
 });
 
@@ -428,7 +419,7 @@ describe("RGO2 — an unfinished entry restores its prefix and reads today", () 
     expect(settled).toContain("Before: 1");
     expect(settled).toContain("After: 2, answered go.");
     // Exactly one fresh read for the suffix.
-    expect(reads(resumed)).toEqual(["ls-files"]);
+    expect(reads(resumed)).toEqual(["files"]);
     const after = yield* readRecords(executionPath(fixture.journals, "execution-1"));
     expect(observationCount(after)).toBe(2);
   });
@@ -534,7 +525,7 @@ describe("RGO4 — two identical entries are two questions", () => {
     // against its own segment, so the second one read rather than replayed.
     expect(outputs[0]).toContain("Paths: 1");
     expect(outputs[1]).toContain("Paths: 2");
-    expect(reads(counted).filter((name) => name === "ls-files")).toHaveLength(2);
+    expect(reads(counted).filter((kind) => kind === "files")).toHaveLength(2);
     const records = yield* readRecords(executionPath(fixture.journals, "execution-1"));
     expect(observationCount(records)).toBe(2);
   });
@@ -575,7 +566,7 @@ describe("RGO5 — the secret gate still decides what reaches the journal", () =
     });
 
     // The read really happened, so the gate had something to refuse.
-    expect(reads(counted)).toContain("cat-file");
+    expect(reads(counted)).toContain("file");
     // And nothing it carried reached the file on disk.
     const journal = yield* readTextFile(executionPath(fixture.journals, "execution-1"));
     expect(journal).not.toContain(CANARY);

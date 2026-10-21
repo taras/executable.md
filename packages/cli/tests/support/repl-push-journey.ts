@@ -448,7 +448,10 @@ export function environment(home: string): Record<string, string | undefined> {
  * `~/.xmd/repositories` is from the home it was given — so looking for the one
  * checkout beneath that layout is what asks the question the person asks.
  */
-export function* managedCheckout(home: string, kind: "repositories" | "worktrees"): Operation<string> {
+export function* managedCheckout(
+  home: string,
+  kind: "repositories" | "worktrees",
+): Operation<string> {
   const base = join(home, ".xmd", "repositories", kind);
   const depth = kind === "repositories" ? 1 : 2;
   const deadline = Date.now() + ACT_MS;

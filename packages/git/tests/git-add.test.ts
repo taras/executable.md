@@ -16,10 +16,13 @@ import { collect, execute, inlineSource } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
-import { scoped } from "effection";
+import { scoped, sleep, spawn, until, withResolvers } from "effection";
 import { tmpdir } from "node:os";
 import type { Operation } from "effection";
-import { readTextFile, writeTextFile } from "@effectionx/fs";
+import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
+import { chmod } from "node:fs/promises";
+import { join } from "node:path";
+import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { cwd } from "@executablemd/runtime";
 import { useTempDirectory } from "@executablemd/test-support/temp";
@@ -27,6 +30,7 @@ import {
   GitCompositionProviderError,
   GitOperationAdmissionError,
   GitOperationError,
+  GitOperationInfrastructureError,
 } from "../src/composition/errors.ts";
 import { currentRepository, RepositoryContext } from "@executablemd/git/api";
 import { Git } from "@executablemd/git/api";
@@ -1038,6 +1042,176 @@ describe("workflow Git.Add request ownership", () => {
           "original.txt",
         ]),
       );
+    });
+  });
+});
+
+/** What a watched `git` child reported about its own lifetime. */
+interface WatchedChildren {
+  /** Resolves once a watched child has been spawned. */
+  readonly spawned: Operation<void>;
+  /** Handed to the host, which forwards it to the one place a child exists. */
+  readonly observe: NonNullable<GitInvocation["observe"]>;
+  observed(): number;
+  /** Whether every observed child has closed both of its pipes. */
+  closed(): boolean;
+  /** Whether any observed process is still running. */
+  alive(): boolean;
+}
+
+/**
+ * Watch the real children one invocation spawns.
+ *
+ * The production host forwards this to `runProcess`, which calls it with the
+ * child as it is spawned — the only point at which a case can see the process a
+ * command really started. A wrapper around the host sees the call and its
+ * answer and never the child between them, so residue observed afterwards
+ * cannot tell an interrupted command from one that never began.
+ */
+function watchChildren(): WatchedChildren {
+  const pids: number[] = [];
+  let count = 0;
+  let closes = 0;
+  const first = withResolvers<void>();
+  return {
+    spawned: first.operation,
+    observe(child): void {
+      count += 1;
+      if (child.pid !== undefined) {
+        pids.push(child.pid);
+      }
+      child.on("close", () => {
+        closes += 1;
+      });
+      first.resolve();
+    },
+    observed: () => count,
+    closed: () => count > 0 && closes === count,
+    alive: () =>
+      pids.some((pid) => {
+        try {
+          // Signal 0 asks the operating system whether the process is there.
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      }),
+  };
+}
+
+/**
+ * A script that reports it ran and then waits.
+ *
+ * What makes a child cut deterministic: the marker says the command really
+ * reached this point, and the wait keeps it there until the halt arrives. The
+ * process group teardown is what ends it.
+ */
+function* waitingScript(path: string, marker: string): Operation<void> {
+  yield* writeTextFile(path, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nsleep 120\n`);
+  yield* until(chmod(path, 0o755));
+}
+
+/** Wait until this path is there, or say what never appeared. */
+function* appears(path: string): Operation<void> {
+  const deadline = Date.now() + 30_000;
+  while (!(yield* exists(path))) {
+    if (Date.now() > deadline) {
+      throw new Error(`${path} never appeared`);
+    }
+    yield* sleep(25);
+  }
+}
+
+/**
+ * What a native `add` costs, and what happens when it is cut.
+ *
+ * Both subjects need the invocation itself: one asks which condition an exit
+ * this provider has no word for is classified as, and the other asks what
+ * became of the process that exit would have come from. Neither is visible to a
+ * caller holding the published repository handle, which sees a method and its
+ * answer and never the child between them.
+ */
+describe("what a native Add classifies to, and what an interrupted one leaves", () => {
+  it("classifies an exit it has no word for as an infrastructure condition", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const source = document(remote.locator, `<Git.Add paths="which.txt" />`);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const inner = denoRepositoryHost();
+      // An exit with none of the diagnostics this provider reads, which is
+      // exactly the case a classification must not invent a refusal for.
+      const unclassified = {
+        *git(invocation: GitInvocation): Operation<GitOutcome> {
+          if (invocation.args[0] === "add") {
+            return { code: 128, stdout: "", stderr: "fatal: something else entirely\n" };
+          }
+          return yield* inner.git(invocation);
+        },
+        useDirectory: inner.useDirectory,
+      };
+
+      const error = yield* raised(
+        runDocument(database, source, { composition: { host: unclassified } }),
+      );
+      // Named by what this provider was doing, and nothing Git printed travels
+      // with it — so a reader is told the run is untouched rather than given a
+      // refusal the condition does not support.
+      expect(error instanceof GitOperationInfrastructureError).toBe(true);
+      expect(String(error)).toContain("no word for");
+      expect(String(error)).not.toContain("something else entirely");
+      expect(yield* gitEvents(database)).toHaveLength(0);
+    });
+  });
+
+  it("joins an interrupted Add child's close before the operation settles", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const home = yield* useTempDirectory("xmd-add-interrupt-");
+    const marker = join(home, "add-ran");
+    const script = join(home, "waiting-hook");
+    yield* waitingScript(script, marker);
+    const watched = watchChildren();
+    const source = document(remote.locator, `<Git.Add paths="which.txt" />`);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const inner = denoRepositoryHost();
+      // `git add` runs no hook, so the child that waits is made to wait by a
+      // `core.fsmonitor` program: it is consulted before the index is written,
+      // and it holds the pipes the parent inherited.
+      const held = {
+        *git(invocation: GitInvocation): Operation<GitOutcome> {
+          if (invocation.args[0] === "add") {
+            return yield* inner.git({
+              ...invocation,
+              args: ["-c", `core.fsmonitor=${script}`, ...invocation.args],
+              observe: watched.observe,
+            });
+          }
+          return yield* inner.git(invocation);
+        },
+        useDirectory: inner.useDirectory,
+      };
+
+      yield* scoped(function* () {
+        const task = yield* spawn(() =>
+          runDocument(database, source, { composition: { host: held } }),
+        );
+        // The marker says the descendant really ran and is holding the pipes.
+        yield* appears(marker);
+        yield* watched.spawned;
+        yield* task.halt();
+      });
+
+      // The child this operation started closed before it settled, and no
+      // outcome was retained for work it never finished.
+      expect(watched.observed() > 0).toBe(true);
+      expect(watched.closed()).toBe(true);
+      expect(watched.alive()).toBe(false);
+      expect(yield* gitEvents(database)).toHaveLength(0);
     });
   });
 });

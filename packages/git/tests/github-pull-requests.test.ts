@@ -11,6 +11,10 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import process from "node:process";
+import { scoped } from "effection";
+import { API } from "@executablemd/runtime";
+import { denoPullRequestOperations } from "../src/deno/composition/pull-request-host.ts";
+import { GITHUB_PULL_REQUESTS_ENV } from "../src/deno/composition/pull-request-configuration.ts";
 import type { Operation } from "effection";
 import type { RepositoryIdentity } from "../src/composition/selection.ts";
 import {
@@ -740,5 +744,92 @@ describe("workflow GitHub creation", () => {
     expect(
       respond(state, state.requests[0] ?? { method: "GET", url: ENDPOINT, headers: {} }).status,
     ).toBe(422);
+  });
+});
+
+/**
+ * What the published pull-request facade is, before anybody reads through it.
+ *
+ * Two operations and nothing else. The host that holds one is a REPL entry, so
+ * what matters is that holding it costs nothing, that it carries no session
+ * between the attempts that borrow it, and that each read's retention callback
+ * is the asking caller's own rather than one the shared value kept.
+ */
+describe("what the published pull-request facade is, and what it keeps", () => {
+  it("hands back exactly read and provider, as functions", function* () {
+    const operations = denoPullRequestOperations();
+    expect(Object.keys(operations).sort()).toEqual(["provider", "read"]);
+    expect(typeof operations.read).toBe("function");
+    expect(typeof operations.provider).toBe("function");
+    // Nothing else is handed over, so there is nowhere for a session, a
+    // transport or a credential to be reached through this value.
+    const values = Object.values(operations).map((held) => typeof held);
+    expect(new Set(values)).toEqual(new Set(["function"]));
+  });
+
+  it("reads no configuration and opens no session when it is built", function* () {
+    const asked: string[] = [];
+    yield* scoped(function* (): Operation<void> {
+      // The seam the adapter reads its configuration through, answered here so
+      // a read is observable and the process environment is left alone.
+      yield* API.Env.around(
+        {
+          // deno-lint-ignore require-yield
+          *env([name]: [string]): Operation<string | undefined> {
+            asked.push(name);
+            return undefined;
+          },
+        },
+        { at: "min" },
+      );
+      const operations = denoPullRequestOperations();
+      expect(typeof operations.read).toBe("function");
+    });
+    // Construction names a transport rather than building one: the resolver
+    // behind it is lazy, so nothing is read and nothing is opened.
+    expect(asked).toEqual([]);
+  });
+
+  it("gives each read its own retention callback rather than keeping one", function* () {
+    yield* scoped(function* (): Operation<void> {
+      const operations = denoPullRequestOperations();
+      const reached: string[] = [];
+      // Admitted, so the read is this adapter's own and reaches a callback at
+      // all. Stated through the configuration seam rather than written into the
+      // process this case is running in.
+      const stated = JSON.stringify({ allowed: ["https://github.com/owner/repository"] });
+      // Two reads through one facade, each with a callback of its own. A facade
+      // that stored the first would hand the second read the first caller's
+      // retention, which is how an entry would retain another entry's evidence.
+      const refusing = function* (): Operation<never> {
+        throw new Error("this control reaches no transport");
+      };
+      yield* API.Env.around(
+        {
+          // deno-lint-ignore require-yield
+          *env([name]: [string]): Operation<string | undefined> {
+            return name === GITHUB_PULL_REQUESTS_ENV ? stated : undefined;
+          },
+        },
+        { at: "min" },
+      );
+      for (const name of ["first", "second"]) {
+        try {
+          yield* operations.read(
+            "https://github.com/owner/repository/pull/1",
+            { kind: "reviews" },
+            // deno-lint-ignore require-yield
+            function* (): Operation<never> {
+              reached.push(name);
+              throw new Error(`${name} reached its own callback`);
+            },
+            refusing,
+          );
+        } catch (error) {
+          expect(String(error)).toContain(name);
+        }
+      }
+      expect(reached).toEqual(["first", "second"]);
+    });
   });
 });

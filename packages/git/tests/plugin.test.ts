@@ -218,18 +218,28 @@ function* record(
 
 describe("the Git Plugin's command profile", () => {
   it("declares for the commands that execute or describe a document", function* () {
-    for (const command of ["run", "plan", "syntax", "repl"]) {
+    for (const command of ["run", "plan", "syntax"]) {
       expect(declaresFor({ command, args: [command] })).toBe(true);
     }
   });
 
-  it("declares for the REPL, which runs an entry under the ordinary profile", function* () {
-    // Explicit rather than incidental: the REPL runs a document a person typed,
-    // so the Git vocabulary is available there exactly as it is to `run`. A
-    // Plugin that only meant `run` is a different question, and `repl` arriving
-    // under its own name is what lets one answer it.
-    expect(declaresFor({ command: "repl", args: ["repl"] })).toBe(true);
-    expect(declaresFor({ command: "repl", args: ["repl", "xmd://repl/one/repl"] })).toBe(true);
+  it("declares nothing for the REPL, whose entry history is another package's", function* () {
+    // The REPL runs a document a person typed, so the Git vocabulary is
+    // available there exactly as it is to `run` — but not from here. What an
+    // entry wrote down about the checkout it was standing in is `xmd repl`'s
+    // own record, and the admission that reads it back has to be inside the
+    // same contribution as the vocabulary, because core applies an admission
+    // within each execution's own journal read. So that command assembles this
+    // Plugin itself and contributes both together, and this predicate declines
+    // `repl` rather than declaring a vocabulary with no admission beside it.
+    //
+    // What the assembled value declares for `repl` is held where the assembly
+    // is, in `packages/cli/tests/plugin-cli.test.ts` and
+    // `packages/cli/tests/run-profile.test.ts`.
+    expect(declaresFor({ command: "repl", args: ["repl"] })).toBe(false);
+    expect(declaresFor({ command: "repl", args: ["repl", "xmd://repl/one/repl"] })).toBe(false);
+    // And declining is specific to `repl`: the predicate still answers for a
+    // command that arrives under its own name.
     const runOnly = (request: PluginInstallRequest): boolean => request.command === "run";
     expect(runOnly({ command: "repl", args: ["repl"] })).toBe(false);
     expect(runOnly({ command: "run", args: ["run", "doc.md"] })).toBe(true);

@@ -25,7 +25,8 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { collect, getExpansion, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import { GIT_HOST_EFFECT, reconcileOwnedGitHostEffect } from "../src/git-host/effect.ts";
+import { GIT_HOST_EFFECT } from "../src/git-host/effect.ts";
+import { reconcileOwnedGitHostEffect } from "@executablemd/git/api";
 import type { OwnedGitHostLive } from "../src/git-host/effect.ts";
 import {
   GitHostConflictError,

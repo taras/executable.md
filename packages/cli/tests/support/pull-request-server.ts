@@ -117,7 +117,15 @@ export function usePullRequestServer(options: ServerOptions = {}): Operation<Pul
         requests.push({ method, path: url.pathname, authorization });
 
         const answer = respond(
-          { owner, repository, token, served, origin, heads, ...(resolveHead === undefined ? {} : { resolveHead }) },
+          {
+            owner,
+            repository,
+            token,
+            served,
+            origin,
+            heads,
+            ...(resolveHead === undefined ? {} : { resolveHead }),
+          },
           { method, url, body: Buffer.concat(chunks).toString("utf8") },
           authorization,
         );
@@ -234,7 +242,9 @@ function respond(
     const pull = store.served.find((entry) => String(entry.number) === issue[2]);
     return pull === undefined
       ? missing()
-      : answered((pull.comments ?? []).map((body, index) => comment(store, pull.number, index, body)));
+      : answered(
+          (pull.comments ?? []).map((body, index) => comment(store, pull.number, index, body)),
+        );
   }
   // The two halves of a checks read, both keyed by the head rather than by the
   // pull request.
@@ -321,7 +331,10 @@ function created(store: Store, asked: Asked): { status: number; body: string } {
   if (store.served.some((entry) => entry.headRef === headRef && entry.baseRef === baseRef)) {
     return {
       status: 422,
-      body: JSON.stringify({ message: "Validation Failed", errors: [{ message: "already exists" }] }),
+      body: JSON.stringify({
+        message: "Validation Failed",
+        errors: [{ message: "already exists" }],
+      }),
     };
   }
   const written = read("body");

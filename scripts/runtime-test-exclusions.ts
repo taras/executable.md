@@ -701,31 +701,31 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
-    path: "packages/git/tests/retained-repository-observations-deno.test.ts",
+    path: "packages/cli/tests/retained-repository-observations-deno.test.ts",
     reason:
-      "the subject is the native side of a REPL entry's repository host: cancelling a finished read's append unwinds a Deno-backed Files provider, a held read excludes the same entry's mutation only once that mutation reaches a real `git` child, and another holder's mutation lease is the same kernel-released advisory lock. The record format, its admission, every refusal and the rest of cancellation and persistence run on every runtime in packages/git/tests/retained-repository-observations.test.ts",
+      "the subject is the native side of a REPL entry's repository host: cancelling a finished read's append unwinds a Deno-backed Files provider, a held read excludes the same entry's mutation only once that mutation reaches a real `git` child, and another holder's mutation lease is the same kernel-released advisory lock. The record format, its admission, every refusal and the rest of cancellation and persistence run on every runtime in packages/cli/tests/retained-repository-observations.test.ts",
     issue: DERIVED_SCOPE,
   },
   {
-    path: "packages/git/tests/retained-repository-local.test.ts",
+    path: "packages/cli/tests/retained-repository-local.test.ts",
     reason:
-      "the subject is a REPL entry's native repository host: it discovers a real checkout with a `git` subprocess and records what a real filesystem answered. The record format and the admission are provider-neutral and are proven on every runtime by packages/git/tests/retained-repository-records.test.ts",
+      "the subject is a REPL entry's native repository host: it discovers a real checkout with a `git` subprocess and records what a real filesystem answered. The record format and the admission are provider-neutral and are proven on every runtime by packages/cli/tests/retained-repository-records.test.ts",
     issue: DERIVED_SCOPE,
   },
   {
-    path: "packages/git/tests/retained-repository-selection.test.ts",
+    path: "packages/cli/tests/retained-repository-selection.test.ts",
     reason:
-      "the subject is a REPL entry's managed selection: it clones and adds worktrees with real `git` children, holds their slots under a kernel-released exclusive advisory lock taken through the Deno runtime, and interrupts those children to observe their close. The placement record and its admission are provider-neutral and are proven on every runtime by packages/git/tests/retained-repository-records.test.ts; that a runtime without the provider refuses a managed selector before it reaches a clone is proven by packages/cli/tests/repl-repositories-pty.test.ts, which runs everywhere",
+      "the subject is a REPL entry's managed selection: it clones and adds worktrees with real `git` children, holds their slots under a kernel-released exclusive advisory lock taken through the Deno runtime, and interrupts those children to observe their close. The placement record and its admission are provider-neutral and are proven on every runtime by packages/cli/tests/retained-repository-records.test.ts; that a runtime without the provider refuses a managed selector before it reaches a clone is proven by packages/cli/tests/repl-repositories-pty.test.ts, which runs everywhere",
     issue: DERIVED_SCOPE,
   },
   {
-    path: "packages/git/tests/retained-repository-git.test.ts",
+    path: "packages/cli/tests/retained-repository-git.test.ts",
     reason:
-      "the subject is a REPL entry's native local Git: it switches branches, stages pathspecs and commits the index with real `git` children in a real checkout, holds that checkout's mutation lease under a kernel-released exclusive advisory lock taken through the Deno runtime, and interrupts a command whose descendant is holding the inherited pipes. The record format and its admission are provider-neutral and are proven on every runtime by packages/git/tests/retained-repository-records.test.ts; that a runtime without the provider refuses <Git.Add>, <Git.Switch> and <Git.Commit> before any native operation is proven by packages/cli/tests/repl-repositories-pty.test.ts, which runs everywhere",
+      "the subject is a REPL entry's native local Git: it switches branches, stages pathspecs and commits the index with real `git` children in a real checkout, holds that checkout's mutation lease under a kernel-released exclusive advisory lock taken through the Deno runtime, and interrupts a command whose descendant is holding the inherited pipes. The record format and its admission are provider-neutral and are proven on every runtime by packages/cli/tests/retained-repository-records.test.ts; that a runtime without the provider refuses <Git.Add>, <Git.Switch> and <Git.Commit> before any native operation is proven by packages/cli/tests/repl-repositories-pty.test.ts, which runs everywhere",
     issue: DERIVED_SCOPE,
   },
   {
-    path: "packages/git/tests/retained-repository-lifecycle.test.ts",
+    path: "packages/cli/tests/retained-repository-lifecycle.test.ts",
     reason:
       "holds a shared Git directory under a kernel-released exclusive advisory lock taken through the Deno runtime, and spawns a second Deno process to prove the cross-process half; Node and Bun expose no equivalent",
     issue: DERIVED_SCOPE,
@@ -749,21 +749,21 @@ const DENO_ONLY_REPOSITORY_PROVIDER: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
-    path: "packages/git/tests/retained-repository-push.test.ts",
+    path: "packages/cli/tests/retained-repository-push.test.ts",
     reason:
-      "the subject is a REPL entry's native publication: it clones a managed checkout, reads and pushes to a real bare remote with real `git` children, holds that checkout's managed slot under a kernel-released exclusive advisory lock taken through the Deno runtime, and cuts an entry mid-command. The saved request, its admission and the owner-specified worker are provider-neutral and are proven on every runtime by packages/git/tests/retained-repository-push-records.test.ts and packages/git/tests/git-host-owned.test.ts; that a runtime without the provider refuses <Git.Push /> before any native operation is proven by packages/cli/tests/repl-push-pty.test.ts, which runs everywhere",
+      "the subject is a REPL entry's native publication: it clones a managed checkout, reads and pushes to a real bare remote with real `git` children, holds that checkout's managed slot under a kernel-released exclusive advisory lock taken through the Deno runtime, and cuts an entry mid-command. The saved request, its admission and the owner-specified worker are provider-neutral and are proven on every runtime by packages/cli/tests/retained-repository-push-records.test.ts and packages/git/tests/git-host-owned.test.ts; that a runtime without the provider refuses <Git.Push /> before any native operation is proven by packages/cli/tests/repl-push-pty.test.ts, which runs everywhere",
     issue: DERIVED_SCOPE,
   },
   {
-    path: "packages/git/tests/retained-repository-pull-request.test.ts",
+    path: "packages/cli/tests/retained-repository-pull-request.test.ts",
     reason:
-      "the subject is a REPL entry's native pull request: it clones a managed checkout and publishes to a real bare remote with real `git` children, holds that checkout's managed slot under a kernel-released exclusive advisory lock taken through the Deno runtime, and reaches a GitHub model over a loopback listener, so its module graph reaches @executablemd/git/deno and with it Workflow's storage adapter and node:sqlite. The saved request, the mixed Push and pull-request admission and the owner-specified worker are provider-neutral and are proven on every runtime by packages/git/tests/retained-repository-pull-request-records.test.ts and packages/git/tests/git-host-owned.test.ts; that a runtime without the provider refuses <PullRequest> and its evidence reads before any native or remote operation is proven by packages/cli/tests/repl-push-pty.test.ts, which runs everywhere",
+      "the subject is a REPL entry's native pull request: it clones a managed checkout and publishes to a real bare remote with real `git` children, holds that checkout's managed slot under a kernel-released exclusive advisory lock taken through the Deno runtime, and reaches a GitHub model over a loopback listener, so its module graph reaches @executablemd/git/deno and with it Workflow's storage adapter and node:sqlite. The saved request, the mixed Push and pull-request admission and the owner-specified worker are provider-neutral and are proven on every runtime by packages/cli/tests/retained-repository-pull-request-records.test.ts and packages/git/tests/git-host-owned.test.ts; that a runtime without the provider refuses <PullRequest> and its evidence reads before any native or remote operation is proven by packages/cli/tests/repl-push-pty.test.ts, which runs everywhere",
     issue: "https://github.com/taras/executable.md/issues/967",
   },
   {
-    path: "packages/git/tests/retained-repository-history.test.ts",
+    path: "packages/cli/tests/retained-repository-history.test.ts",
     reason:
-      "continues seven histories the merged implementation wrote through the production per-entry capability, so its module graph reaches @executablemd/git/deno — the native repository host, the GitHub issue adapter and Workflow's storage adapter with node:sqlite. The construction those histories are continued through is provider-neutral and is proven on every runtime by packages/git/tests/composition-component-binding.test.ts; the records themselves are proven everywhere by packages/git/tests/retained-repository-push-records.test.ts and packages/git/tests/issue-owned.test.ts",
+      "continues seven histories the merged implementation wrote through the production per-entry capability, so its module graph reaches @executablemd/git/deno — the native repository host, the GitHub issue adapter and Workflow's storage adapter with node:sqlite. The construction those histories are continued through is provider-neutral and is proven on every runtime by packages/git/tests/composition-component-binding.test.ts; the records themselves are proven everywhere by packages/cli/tests/retained-repository-push-records.test.ts and packages/git/tests/issue-owned.test.ts",
     issue: "https://github.com/taras/executable.md/issues/181",
   },
   {

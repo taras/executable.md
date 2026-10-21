@@ -336,11 +336,7 @@ function* reached(
 }
 
 /** What was asked of Git and of the service, beside whatever went wrong. */
-function* described(
-  error: unknown,
-  log: string,
-  service: PullRequestServer,
-): Operation<Error> {
+function* described(error: unknown, log: string, service: PullRequestServer): Operation<Error> {
   const asked = yield* logged(log);
   return new Error(
     `${error instanceof Error ? error.message : String(error)}\ngit=${JSON.stringify(

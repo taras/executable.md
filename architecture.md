@@ -5248,10 +5248,20 @@ A **Plugin** is trusted code installed before an execution imports a root
 document. XMD bundles exactly one, `@executablemd/git`, and an operator adds more with a
 repeatable `--plugin <specifier>`. The bundled value is statically imported
 rather than resolved, so a distribution carries it whole and nothing can
-substitute it; it is activated for `run`, `plan`, `syntax` and the workflow
-actions that execute a document — `start`, `resume` and `fork` — and for nothing
-else. `xmd test`, `upgrade` and a workflow management action carry no Plugin
-they did not ask for.
+substitute it; it is activated for `run`, `plan`, `syntax`, `repl` and the
+workflow actions that execute a document — `start`, `resume` and `fork` — and
+for nothing else. `xmd test`, `upgrade` and a workflow management action carry
+no Plugin they did not ask for.
+
+`repl` is the one command that assembles the bundled value rather than installing
+it directly. Git contributes the vocabulary and its two domain admissions; what
+an entry wrote down about the checkout it was standing in is that command's own
+record, so the admission that reads it back is contributed by the command, from
+inside the same contribution — because an admission is applied within each
+execution's own journal read and cannot be attached from outside one. The
+assembly keeps the bundled Plugin's name, its identity-based deduplication and
+its place in an operator's own Plugin order, and every other command is
+delegated untouched.
 
 `git` is a reserved *host selector*, not a package name: writing `--plugin git`
 names the value the profile already holds, resolves without loading a module,

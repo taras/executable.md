@@ -31,6 +31,7 @@ import { createContext } from "effection";
 import type { Context, Operation } from "effection";
 import { cwd } from "@executablemd/runtime";
 import { gitPlugin, gitPluginDeclaresFor } from "@executablemd/git";
+import { replRepositoryPlugin } from "./repl/repositories/plugin.ts";
 import type { Plugin } from "@executablemd/core/api";
 import { loadPlugins, type PluginModuleLoader } from "./plugin-loader.ts";
 import type { PluginSelection } from "./plugin-selection.ts";
@@ -45,7 +46,7 @@ import type { PluginSelection } from "./plugin-selection.ts";
 export const BUNDLED_SELECTOR = "git";
 
 /** The Plugin every run-profile command begins with, where the host states none. */
-export const BUNDLED_PLUGIN: Plugin = gitPlugin;
+export const BUNDLED_PLUGIN: Plugin = replRepositoryPlugin(gitPlugin);
 
 /**
  * The bundled Plugin this host runs with.
@@ -88,7 +89,12 @@ export const BundledRunPlugin: Context<Plugin> = createContext<Plugin>(
  * itself rather than inheriting it.
  */
 export function carriesBundledPlugin(selection: PluginSelection): boolean {
-  return gitPluginDeclaresFor({ command: selection.command, args: selection.args });
+  // `repl` is this command's own: Git no longer declares for it, because what a
+  // REPL entry retains is this package's record rather than that package's.
+  return (
+    selection.command === "repl" ||
+    gitPluginDeclaresFor({ command: selection.command, args: selection.args })
+  );
 }
 
 /**

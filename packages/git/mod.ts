@@ -66,7 +66,7 @@
  */
 
 export { default } from "./src/plugin.ts";
-export { gitPlugin } from "./src/plugin.ts";
+export { gitCompositionInstallation, gitPlugin } from "./src/plugin.ts";
 /**
  * `<Dir>`'s entry in a workflow run's generated-XMD write table.
  *
@@ -305,3 +305,65 @@ export {
   sameRepositoryIdentity,
 } from "./src/composition/selection.ts";
 export type { RepositoryIdentity } from "./src/composition/selection.ts";
+
+export { ADD, admitPathspecs } from "./src/composition/components/GitAdd.ts";
+export {
+  COMMIT,
+  admitCommitMessage,
+  admitMessageSource,
+} from "./src/composition/components/GitCommit.ts";
+export { PUSH, pushDeclaration } from "./src/composition/components/GitPush.ts";
+export {
+  CHANGES_ELEMENT,
+  DIFF_ELEMENT,
+  FILES_ELEMENT,
+  FILE_ELEMENT,
+} from "./src/composition/components/GitReads.ts";
+export { SWITCH } from "./src/composition/components/GitSwitch.ts";
+export { issueDeclaration } from "./src/composition/components/Issue.ts";
+export {
+  PULL_REQUEST_ELEMENT,
+  pullRequestDeclaration,
+} from "./src/composition/components/PullRequest.ts";
+export { pullRequestReadDeclaration } from "./src/composition/components/PullRequestReads.ts";
+export {
+  GitObservationError,
+  GitOperationAdmissionError,
+  GitOperationInfrastructureError,
+  RepositorySelectionError,
+} from "./src/composition/errors.ts";
+export type { GitObservationReason } from "./src/composition/errors.ts";
+export { parseGitObjectId } from "./src/composition/git-records.ts";
+export type { BindOperations } from "./src/composition/invocation-binding.ts";
+export {
+  gitObservationValueJson,
+  parseGitObservationValue,
+} from "./src/composition/observation-records.ts";
+export { members, optionalText, text } from "./src/composition/parse.ts";
+export {
+  PULL_REQUEST_READ_KINDS,
+  parseCompletePullRequestReadResult,
+  readRequest,
+} from "./src/composition/pull-request-read-records.ts";
+export type {
+  PullRequestReadKind,
+  PullRequestReadResult,
+} from "./src/composition/pull-request-read-records.ts";
+export { gitHostRequestFingerprint } from "./src/git-host/records.ts";
+export {
+  liveIssueRead,
+  liveIssueUpsert,
+  ownedUpsertKey,
+  readOwnedIssue,
+  upsertOwnedIssue,
+} from "./src/issue/owned.ts";
+
+export {
+  issueRequestFingerprint,
+  parseIssueDetails,
+  parseIssueRecord,
+  parseIssueRequest,
+} from "./src/issue/records.ts";
+export type { IssueRequest } from "./src/issue/records.ts";
+
+export { GIT_COMPARE_MODES } from "./src/composition/observation-api.ts";

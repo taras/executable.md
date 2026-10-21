@@ -10,11 +10,13 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
+import { ensure, resource, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { exists, lstat, readTextFile } from "@effectionx/fs";
+import { chmod, mkdtemp, mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import { exists, lstat, readTextFile, writeTextFile } from "@effectionx/fs";
 import { tmpdir } from "node:os";
+import process from "node:process";
 import { join } from "node:path";
 import { StaleInputError } from "@executablemd/durable-streams";
 import {
@@ -24,6 +26,10 @@ import {
 import type { WorkflowRunDatabase } from "../../workflow/src/storage/api.ts";
 import { exportTree, importTree } from "../src/deno/composition/materialize.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
+import { writeMetadata } from "../src/deno/run-composition/checkouts.ts";
+import { metadataOf } from "../src/deno/run-composition/checkout-layout.ts";
+import { METADATA_VERSION } from "../src/deno/run-composition/metadata.ts";
+import type { ManagedRepositoryMetadata } from "../src/deno/run-composition/metadata.ts";
 import type { GitInvocation, GitOutcome } from "../src/deno/composition/host.ts";
 import { transactWorkspaceRoots } from "../../workflow/src/deno/workspace/private.ts";
 import type { DenoWorkspaceFilesystem } from "../../workflow/src/deno/workspace/filesystem.ts";
@@ -773,5 +779,376 @@ describe("workflow Repository substituted checkouts", () => {
       expect(causedBy(rendered, isStale)).toBe(undefined);
       expect(subcommands(counting.counters)).not.toContain("clone");
     });
+  });
+});
+
+/** What a watched `git` child reported about its own lifetime. */
+interface WatchedChildren {
+  /** Resolves once a watched child has been spawned. */
+  readonly spawned: Operation<void>;
+  /** Handed to the host, which forwards it to the one place a child exists. */
+  readonly observe: NonNullable<GitInvocation["observe"]>;
+  observed(): number;
+  /** Whether every observed child has closed both of its pipes. */
+  closed(): boolean;
+  /** Whether any observed process is still running. */
+  alive(): boolean;
+}
+
+/**
+ * Watch the real children one invocation spawns.
+ *
+ * The production host forwards this to the one place a child exists, which is
+ * the only point at which a case can see the process a command really started.
+ * The row above this one halts a clone that had not been delegated to yet; what
+ * these two need is the other case, where the process is running.
+ */
+function watchChildren(): WatchedChildren {
+  const pids: number[] = [];
+  let count = 0;
+  let closes = 0;
+  const first = withResolvers<void>();
+  return {
+    spawned: first.operation,
+    observe(child): void {
+      count += 1;
+      if (child.pid !== undefined) {
+        pids.push(child.pid);
+      }
+      child.on("close", () => {
+        closes += 1;
+      });
+      first.resolve();
+    },
+    observed: () => count,
+    closed: () => count > 0 && closes === count,
+    alive: () =>
+      pids.some((pid) => {
+        try {
+          // Signal 0 asks the operating system whether the process is there.
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      }),
+  };
+}
+
+/** A script that reports it ran and then waits, holding its pipes open. */
+function* waitingScript(path: string, marker: string): Operation<void> {
+  yield* writeTextFile(path, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nsleep 120\n`);
+  yield* until(chmod(path, 0o755));
+}
+
+/** Wait until this path is there, or say what never appeared. */
+function* appears(path: string): Operation<void> {
+  const deadline = Date.now() + 30_000;
+  while (!(yield* exists(path))) {
+    if (Date.now() > deadline) {
+      throw new Error(`${path} never appeared`);
+    }
+    yield* sleep(25);
+  }
+}
+
+/** The production host, observing one named subcommand's child. */
+function observingHost(
+  watched: WatchedChildren,
+  subcommand: string,
+  settings: readonly string[],
+  roots: string[],
+) {
+  const inner = denoRepositoryHost();
+  return {
+    *git(invocation: GitInvocation): Operation<GitOutcome> {
+      if (invocation.args.includes(subcommand)) {
+        return yield* inner.git({
+          ...invocation,
+          args: [...settings, ...invocation.args],
+          observe: watched.observe,
+        });
+      }
+      return yield* inner.git(invocation);
+    },
+    *useDirectory(): Operation<string> {
+      const directory = yield* inner.useDirectory();
+      roots.push(directory);
+      return directory;
+    },
+  };
+}
+
+/**
+ * What a selector's own child is, and when it is joined.
+ *
+ * The halted-clone row above cuts *before* the command is delegated to, so it
+ * says nothing about a process. These two cut while one is running: the clone
+ * inside its own transport, and the `worktree add` inside the hook it runs
+ * after the checkout is already on disk. Neither is observable above the
+ * invocation — a wrapper around a repository operation sees the call and its
+ * answer and never the child between them, so residue inspected afterwards
+ * cannot tell an interrupted command from one that never began.
+ */
+describe("workflow Repository selector child teardown", () => {
+  it("joins a running clone's own descendant before the selector finishes", function* () {
+    const root = yield* useStorageRoot();
+    const home = yield* until(mkdtemp(join(tmpdir(), "xmd-clone-child-")));
+    yield* ensure(() => until(rm(home, { recursive: true, force: true })));
+    const reached = join(home, "transport-ran");
+    const transport = join(home, "transport");
+    yield* waitingScript(transport, reached);
+    const watched = watchChildren();
+    const roots: string[] = [];
+    // A locator nothing can answer, reached through a transport that reports it
+    // was entered and then waits. Git creates the destination only once the
+    // connection succeeds, so this cut leaves no checkout behind — what it
+    // discriminates is the teardown.
+    const locator = "ssh://example.invalid/repo.git";
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* scoped(function* () {
+        const task = yield* spawn(() =>
+          runDocument(database, `<Repository name="project" url="${locator}" as="repository" />`, {
+            composition: {
+              host: observingHost(watched, "clone", ["-c", `core.sshCommand=${transport}`], roots),
+            },
+          }),
+        );
+        yield* watched.spawned;
+        // Not merely spawned: inside its own transport, with a descendant of
+        // its own waiting. Halting before that would interrupt a command which
+        // had done nothing, which is the hole this row closes.
+        yield* appears(reached);
+        // The guard against a vacuous row: a clone that had already ended would
+        // make everything below true without anything being interrupted.
+        expect(watched.closed()).toBe(false);
+        // Teardown kills the process group and waits for `close`, so this does
+        // not return until the child and its descendant are gone.
+        yield* task.halt();
+      });
+
+      expect(watched.observed()).toBe(1);
+      expect(watched.closed()).toBe(true);
+      expect(watched.alive()).toBe(false);
+      expect(yield* retainedRepositories(database)).toHaveLength(0);
+      const surviving: string[] = [];
+      for (const directory of roots) {
+        if (yield* exists(directory)) {
+          surviving.push(directory);
+        }
+      }
+      expect(surviving).toEqual([]);
+    });
+  });
+
+  it("joins a running worktree add's own hook before the selector finishes", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const home = yield* until(mkdtemp(join(tmpdir(), "xmd-worktree-child-")));
+    yield* ensure(() => until(rm(home, { recursive: true, force: true })));
+    // `worktree add` runs `post-checkout` in the checkout it has just made, so
+    // the marker also says the partial state this row is about is on disk.
+    const hooks = join(home, "hooks");
+    yield* until(mkdir(hooks, { recursive: true }));
+    const checkedOut = join(home, "post-checkout-ran");
+    yield* waitingScript(join(hooks, "post-checkout"), checkedOut);
+    const watched = watchChildren();
+    const roots: string[] = [];
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* scoped(function* () {
+        const task = yield* spawn(() =>
+          runDocument(
+            database,
+            [
+              `<Repository name="project" url="${remote.locator}">`,
+              '<Worktree name="experiment" branch="experiment" as="worktree" />',
+              "</Repository>",
+            ].join("\n"),
+            {
+              composition: {
+                host: observingHost(watched, "worktree", ["-c", `core.hooksPath=${hooks}`], roots),
+              },
+            },
+          ),
+        );
+        yield* watched.spawned;
+        yield* appears(checkedOut);
+        expect(watched.closed()).toBe(false);
+        yield* task.halt();
+      });
+
+      expect(watched.observed()).toBe(1);
+      expect(watched.closed()).toBe(true);
+      expect(watched.alive()).toBe(false);
+      // The repository was selected; the worktree never became a record.
+      expect(yield* retainedRepositories(database)).toHaveLength(1);
+      expect(yield* retainedWorktrees(database, "project")).toHaveLength(0);
+
+      // And the checkout the cut left does not block the next attempt. The
+      // hook is what makes this window reachable: `worktree add` runs
+      // `post-checkout` after the checkout exists, so the next attempt meets a
+      // real checkout that no sidecar describes — and still ends with the slot
+      // described rather than refusing over it. Whether that attempt proves the
+      // bytes or writes them again is the selector's own business and is not
+      // asserted here.
+      yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          '<Worktree name="experiment" branch="experiment" as="worktree" />',
+          "</Repository>",
+        ].join("\n"),
+      );
+      expect(yield* retainedWorktrees(database, "project")).toHaveLength(1);
+    });
+  });
+});
+
+/** Let every ready task run, so "reached its wait" is about turns. */
+function* settled(turns = 8): Operation<void> {
+  for (let turn = 0; turn < turns; turn += 1) {
+    yield* sleep(0);
+  }
+}
+
+/**
+ * A promise a case releases by hand.
+ *
+ * What makes the two filesystem cuts below deterministic rather than a race: an
+ * acquisition is started, the halt is delivered while it is demonstrably still
+ * pending, and only then is it allowed to deliver.
+ */
+function gate(): { readonly released: Promise<void>; release(): void } {
+  let open = (): void => {};
+  const released = new Promise<void>((resolve) => {
+    open = () => resolve();
+  });
+  return { released, release: () => open() };
+}
+
+/** The sidecar the metadata cut below writes, which is ordinary record data. */
+const REPOSITORY_SIDECAR: ManagedRepositoryMetadata = Object.freeze({
+  kind: "repository" as const,
+  version: METADATA_VERSION,
+  name: "project",
+  locator: "/origin",
+  locatorFingerprint: "a".repeat(64),
+  requestedBase: null,
+  creationCommit: "b".repeat(40),
+  primaryBranch: "main",
+  objectFormat: "sha1" as const,
+  commonDirectory: "/origin/.git",
+});
+
+/**
+ * What a halt does to an acquisition that has not delivered yet.
+ *
+ * Both of these are about the leaves this host owns rather than about any
+ * entry: a descriptor and a temporary directory are each created by a call that
+ * can be interrupted between starting and returning, and a teardown that did
+ * not wait would leak exactly what it could not see. Neither window is
+ * reachable from above the host — a caller holding a repository operation sees
+ * the operation and its answer, and the acquisition happens inside.
+ */
+describe("what the repository host's own acquisitions do when halted", () => {
+  it("waits for a pending metadata open and closes what it delivers", function* () {
+    const parent = yield* until(mkdtemp(join(tmpdir(), "xmd-metadata-slot-")));
+    yield* ensure(() => until(rm(parent, { recursive: true, force: true })));
+    const slot = join(parent, "metadata-slot");
+    yield* until(mkdir(slot, { recursive: true }));
+
+    const asked = withResolvers<string>();
+    const held = gate();
+    let closed = false;
+    let opened = false;
+    // The open is started and then held, so the halt below lands in exactly the
+    // window this ownership discipline exists for: after the acquisition began
+    // and before its descriptor arrived.
+    const openExclusive = (path: string): Promise<FileHandle> => {
+      asked.resolve(path);
+      return held.released
+        .then(() => open(path, "wx"))
+        .then((handle) => {
+          opened = true;
+          const close = handle.close.bind(handle);
+          return Object.assign(handle, {
+            close: (): Promise<void> => {
+              closed = true;
+              return close();
+            },
+          });
+        });
+    };
+
+    let returned = false;
+    yield* scoped(function* (): Operation<void> {
+      const writing = yield* spawn(() => writeMetadata(slot, REPOSITORY_SIDECAR, openExclusive));
+      const temporary = yield* asked.operation;
+      const halting = yield* spawn(function* (): Operation<void> {
+        yield* writing.halt();
+        returned = true;
+      });
+      yield* settled();
+      // Teardown is waiting for the acquisition it armed its release before.
+      expect(returned).toBe(false);
+      expect(opened).toBe(false);
+
+      held.release();
+      yield* halting;
+      expect(temporary.startsWith(`${metadataOf(slot)}.`)).toBe(true);
+    });
+
+    // It waited for delivery, and closed what was delivered.
+    expect(returned).toBe(true);
+    expect(opened).toBe(true);
+    expect(closed).toBe(true);
+    // And published nothing: a sidecar is renamed into place only by a write
+    // that finished.
+    expect(yield* exists(metadataOf(slot))).toBe(false);
+  });
+
+  it("waits for a pending isolation directory and removes what it delivers", function* () {
+    const made: string[] = [];
+    const asked = withResolvers<void>();
+    const held = gate();
+    const create = (prefix: string): Promise<string> => {
+      asked.resolve();
+      return held.released
+        .then(() => mkdtemp(prefix))
+        .then((directory) => {
+          made.push(directory);
+          return directory;
+        });
+    };
+    const host = denoRepositoryHost({ directories: { create } });
+
+    let returned = false;
+    yield* scoped(function* (): Operation<void> {
+      const taking = yield* spawn(function* (): Operation<void> {
+        yield* host.useDirectory();
+        yield* suspend();
+      });
+      yield* asked.operation;
+      const halting = yield* spawn(function* (): Operation<void> {
+        yield* taking.halt();
+        returned = true;
+      });
+      yield* settled();
+      // The creation is still pending, and teardown has not finished over it.
+      expect(returned).toBe(false);
+      expect(made).toEqual([]);
+
+      held.release();
+      yield* halting;
+    });
+
+    expect(returned).toBe(true);
+    // It waited for the directory to arrive, and removed it.
+    expect(made.length).toBe(1);
+    expect(yield* exists(made[0] ?? "")).toBe(false);
   });
 });

@@ -10,7 +10,10 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Ok, type Operation } from "effection";
+import { Ok, scoped, type Operation } from "effection";
+import { API } from "@executablemd/runtime";
+import { useDenoGitHubIssues } from "../src/deno/issue/github-host.ts";
+import type { GitHubIssuesOptions } from "../src/deno/issue/github.ts";
 import {
   issueBodyFor,
   issueOriginMarker,
@@ -193,6 +196,54 @@ describe("workflow GitHub issue payloads", () => {
     const edited = readGitHubIssue({ ...PAYLOAD, body: "somebody rewrote this" });
     const moved = edited === undefined ? undefined : openSnapshot(edited, MARKER);
     expect(moved?.description).toBe("somebody rewrote this");
+  });
+});
+
+/**
+ * What installing the published issue transport does, and what it keeps.
+ *
+ * A REPL entry installs this and names no source. What the wrapper adds is the
+ * shipped platform source, merged into a private object so it is never written
+ * into the caller's own options and never reachable from one — and a caller
+ * that does supply a source still outranks it.
+ */
+describe("what the published issue transport installs", () => {
+  it("installs the platform source when a caller names none, and nothing else", function* () {
+    const asked: string[] = [];
+    yield* scoped(function* (): Operation<void> {
+      yield* API.Env.around(
+        {
+          // deno-lint-ignore require-yield
+          *env([name]: [string]): Operation<string | undefined> {
+            asked.push(name);
+            return undefined;
+          },
+        },
+        { at: "min" },
+      );
+      // Installing returns nothing at all, so there is no value for a caller
+      // to reach a session, a transport or a credential through.
+      const installed = yield* useDenoGitHubIssues();
+      expect(installed).toBe(undefined);
+    });
+    // And installing reads no configuration: the adapter resolves it when an
+    // invoked operation turns out to be its own.
+    expect(asked).toEqual([]);
+  });
+
+  it("leaves a caller's own options untouched, and lets a named source outrank it", function* () {
+    const supplied: { -readonly [K in keyof GitHubIssuesOptions]: GitHubIssuesOptions[K] } = {
+      configuration: { ceiling: ["https://github.com/owner"] },
+    };
+    yield* scoped(function* (): Operation<void> {
+      yield* useDenoGitHubIssues(supplied);
+    });
+    // The shipped source is merged into a private object rather than assigned
+    // into the caller's: an options object that came back carrying a `host`
+    // would have handed the caller this platform's transport factory.
+    expect("host" in supplied).toBe(false);
+    expect(Object.keys(supplied)).toEqual(["configuration"]);
+    expect(Object.isFrozen(supplied)).toBe(false);
   });
 });
 

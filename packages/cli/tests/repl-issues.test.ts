@@ -34,21 +34,22 @@ import type { ComponentDefinition, FunctionComponentDefinition } from "@executab
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { denoRepositoryHost } from "../../git/src/deno/composition/host.ts";
 import { gitSession } from "../../git/src/deno/composition/git.ts";
-import { useReplRepositoryRecording } from "../../git/src/deno/retained-repository/provider.ts";
-import type { GitOutcome, RepositoryHost } from "../../git/src/deno/composition/host.ts";
+import { useReplRepositoryRecording } from "../src/repl/repositories/deno/provider.ts";
+import type { DenoRepositoryOperations } from "@executablemd/git/deno";
 import { gitPlugin } from "../../git/src/plugin.ts";
+import { replRepositoryPlugin } from "../src/repl/repositories/plugin.ts";
 import { ISSUE_EFFECT } from "../../git/src/issue/effect-type.ts";
 import { issueIdempotencyKey, parseIssueRequest } from "../../git/src/issue/records.ts";
 import { issueOriginMarker } from "../../git/src/deno/issue/github.ts";
-import { IssueOperations } from "../../git/src/issue/operations.ts";
+import { IssueOperations } from "@executablemd/git/api";
 import type {
   IssueOperationsApi,
   IssueReadInvocation,
   IssueUpsertInvocation,
-} from "../../git/src/issue/operations.ts";
+} from "@executablemd/git/api";
 import { IssueApi } from "@executablemd/git/api";
 import type { IssueDetails, IssueReference } from "@executablemd/git/api";
-import { replIssueInstallation } from "../../git/src/deno/retained-repository/issues.ts";
+import { replIssueInstallation } from "../src/repl/repositories/deno/issues.ts";
 import { gitHubSource } from "../../git/src/deno/composition/github.ts";
 import { useIssueTrackerServer } from "../../git/tests/support/issue-tracker-server.ts";
 import type {
@@ -106,13 +107,18 @@ function useReplRepositories(root: string): Operation<void> {
  * through that registry, with no component catalog supplied beside it.
  */
 function* replInstallations(): Operation<readonly ExecutionInstallation[]> {
-  const install = gitPlugin.install;
+  // The command's own assembly of the bundled Plugin, which is what a profile
+  // carries: the vocabulary and the domain admissions come from Git, and the
+  // admission that reads an entry's own repository history back belongs to this
+  // command, so asking the bundled Plugin alone would declare nothing here.
+  const bundled = replRepositoryPlugin(gitPlugin);
+  const install = bundled.install;
   if (install === undefined) {
-    throw new Error("the Git Plugin installs nothing");
+    throw new Error("the bundled Plugin installs nothing");
   }
-  const installed = yield* install.call(gitPlugin, { command: "repl", args: [] });
+  const installed = yield* install.call(bundled, { command: "repl", args: [] });
   if (installed === undefined) {
-    throw new Error("the Git Plugin declared nothing for the repl command");
+    throw new Error("the bundled Plugin declared nothing for the repl command");
   }
   return [{ admissions: [...(installed.admissions ?? [])] }];
 }
@@ -563,32 +569,67 @@ interface Acquisitions {
 }
 
 /**
- * A repository host that fails the moment anything is acquired through it.
+ * A repository handle that fails the moment anything is asked of it.
  *
  * Issue work reaches no checkout, so every one of these is a failure rather
  * than a cost: a row installing this and still filing an issue has shown that
- * nothing about an entry's issues goes looking for a repository.
+ * nothing about an entry's issues goes looking for a repository. Constructing
+ * the handle is not asking it anything — that public construction acquires
+ * nothing is proved in `packages/git/tests/run-composition-lazy.test.ts`.
  */
-function failingHost(acquired: Acquisitions): RepositoryHost {
-  return {
-    // deno-lint-ignore require-yield
-    *git(): Operation<GitOutcome> {
-      acquired.count += 1;
-      throw new Error("this row's host runs no git");
-    },
-    // deno-lint-ignore require-yield
-    *useDirectory(): Operation<string> {
-      acquired.count += 1;
-      throw new Error("this row's host owns no isolation directory");
-    },
+function failingOperations(acquired: Acquisitions): () => Operation<DenoRepositoryOperations> {
+  function* refuse(method: string): Operation<never> {
+    acquired.count += 1;
+    throw new Error(`an entry's issue work reached the repository through ${method}`);
+  }
+  // deno-lint-ignore require-yield
+  return function* (): Operation<DenoRepositoryOperations> {
+    return {
+      *ambientCheckout() {
+        return yield* refuse("ambientCheckout");
+      },
+      *ambientRepository() {
+        return yield* refuse("ambientRepository");
+      },
+      *selectRepository() {
+        return yield* refuse("selectRepository");
+      },
+      *selectWorktree() {
+        return yield* refuse("selectWorktree");
+      },
+      *switch() {
+        return yield* refuse("switch");
+      },
+      *add() {
+        return yield* refuse("add");
+      },
+      *commit() {
+        return yield* refuse("commit");
+      },
+      *currentBranch() {
+        return yield* refuse("currentBranch");
+      },
+      *resolveCommit() {
+        return yield* refuse("resolveCommit");
+      },
+      *commitPresent() {
+        return yield* refuse("commitPresent");
+      },
+      *observe() {
+        return yield* refuse("observe");
+      },
+      *pushProvider() {
+        return yield* refuse("pushProvider");
+      },
+    };
   };
 }
 
-/** The production entry recording, over a host that refuses to be acquired. */
+/** The production entry recording, over a handle that refuses every method. */
 function failingRecording(acquired: Acquisitions, root: string): Operation<void> {
   return Execution.around({
     *init(_args, next): Operation<void> {
-      yield* useReplRepositoryRecording({ host: failingHost(acquired), root });
+      yield* useReplRepositoryRecording({ operations: failingOperations(acquired), root });
       yield* next();
     },
   });
