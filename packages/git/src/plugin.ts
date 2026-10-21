@@ -45,9 +45,15 @@ import { gitHostIdentityAdmission, issueIdentityAdmission } from "./identities.t
  * Which workflow *action* was asked for decides it, and
  * {@link executesDocument} is what reads that off the argv.
  *
- * `repl` is one of them: it runs an entry a person typed, under the same
- * ordinary profile `run` uses, so a document opened there can write the same
- * Git vocabulary a document run anywhere else can.
+ * `repl` is not one of them, although it does run a document a person typed.
+ * What an entry wrote down about the checkout it was standing in is that
+ * command's own record, and the admission that reads it back has to be inside
+ * the same contribution as the vocabulary, because canonical core applies an
+ * admission within each execution's own journal read. So a host that retains
+ * entry work assembles the contribution itself and adds its admission beside
+ * this package's — {@link gitCompositionInstallation} is what it assembles from
+ * — and this predicate declines `repl` rather than declaring a vocabulary with
+ * no admission next to it.
  */
 const DOCUMENT_COMMANDS: ReadonlySet<string> = new Set(["run", "plan", "syntax"]);
 

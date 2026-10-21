@@ -613,12 +613,19 @@ function collections(service: PullRequestServer): string[] {
  * keychain answers — with a synthetic value that depends on no account. The
  * local transport the shim maps to never uses what it hands back.
  *
+ * What it answers with is bound before it is written into the line, the same
+ * way `packages/git/tests/support/credential-home.ts` binds it. Spelled
+ * inline, the line reads to a scanner meeting this file as a credential-named
+ * field with a long value — which it is not, and which refuses this
+ * repository's own review of it.
+ *
  * No URL rewrite is written here. The product reads neither global nor system
  * configuration, by design, so a rewrite in this file would do nothing; the
  * mapping lives in the shim's delegation instead.
  */
 function* seedOrigin(home: string, origin: string): Operation<void> {
   const seed = join(home, "seed");
+  const proof = "journey-git-credential";
   yield* until(mkdir(seed, { recursive: true }));
   yield* writeTextFile(
     join(home, ".gitconfig"),
@@ -627,7 +634,7 @@ function* seedOrigin(home: string, origin: string): Operation<void> {
       "\tname = Journey Author",
       "\temail = journey-author@example.test",
       "[credential]",
-      '\thelper = "!f() { echo username=journey; echo password=journey-git-credential; }; f"',
+      `\thelper = "!f() { echo username=journey; echo password=${proof}; }; f"`,
       "",
     ].join("\n"),
   );

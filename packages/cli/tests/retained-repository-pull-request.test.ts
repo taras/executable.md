@@ -2184,6 +2184,55 @@ describe("evidence reads inside one entry", () => {
     );
   });
 
+  it("Q14a: a read this host declines runs each outer transport handler once", function* () {
+    const fixture = yield* useFixture();
+    fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];
+    const counted = counters();
+    // A discriminator no installed adapter answers under. The GitHub adapter
+    // declines on the request alone, before it reads what this deployment
+    // authorized and before a session, a credential or a request exists.
+    const source = [
+      `<PullRequest.Reviews`,
+      `  url=${JSON.stringify(FIRST_URL)}`,
+      `  provider="elsewhere"`,
+      `  as="reviews" />`,
+      "",
+      `reviews {reviews.length}`,
+      "",
+    ].join("\n");
+
+    // One outer handler, counting what reaches it.
+    let seen = 0;
+    const stream = new InMemoryStream();
+    const ran = yield* run(fixture, source, stream, counted, {
+      root: undefined,
+      *between(): Operation<void> {
+        yield* PullRequestAPI.around({
+          *read([url, options], next): Operation<PullRequestReadResult> {
+            seen += 1;
+            return yield* next(url, options);
+          },
+        });
+      },
+    });
+
+    // The document is refused by the public surface's own answer: nothing is
+    // installed under the provider it named.
+    expect(ran.refusal).not.toBe(undefined);
+    expect(String(ran.refusal)).toContain("no pull-request provider is installed under elsewhere");
+    expect(ran.output).not.toContain("reviews 1");
+
+    // Once. An entry read that re-entered the chain from the top on the way to
+    // that refusal would run this handler a second time, and a handler that
+    // counted or rewrote the URL would see one read twice.
+    expect(seen).toBe(1);
+
+    // And declining costs nothing: no request was sent, and a question this
+    // host never answered retained no read.
+    expect(fixture.store.requests).toEqual([]);
+    expect(reads(yield* stream.readAll())).toEqual([]);
+  });
+
   it("Q15: a semantic answer that never delegates admits and retains nothing", function* () {
     const fixture = yield* useFixture();
     fixture.evidence.reviews = [review(11, "APPROVED", "ship it")];

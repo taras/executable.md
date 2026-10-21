@@ -313,6 +313,14 @@ function* admitted(
     // chain ends in this invocation's own admitted callback rather than a
     // shared one. What the domain is handed is that callback; what it keeps is
     // the configuration, the endpoint and the credential.
+    //
+    // This descriptor is the end of the chain, so a read this host declines has
+    // nothing below it to continue into and the public surface's own answer is
+    // what it gets. That answer is raised from here rather than by asking
+    // `PullRequestAPI.operations.read` again: re-entering the chain from the
+    // top would run every outer handler a second time before the refusal, and
+    // an outer handler that counts or rewrites the URL would see one read
+    // twice.
     const local = createApi<PullRequestApi>(PULL_REQUEST_API, {
       read: (url: string, options: PullRequestReadOptions) =>
         domain.read(
@@ -324,7 +332,7 @@ function* admitted(
               expansion.position,
               perform,
             ),
-          (nextUrl, nextOptions) => PullRequestAPI.operations.read(nextUrl, nextOptions),
+          declinedRead,
         ),
       upsert: refusingUpsert(),
     });
@@ -343,6 +351,23 @@ function refusingUpsertOperation(): (
   return function* (): Operation<PullRequestResult> {
     throw new GitCompositionProviderError(PULL_REQUEST_ELEMENT);
   };
+}
+
+/**
+ * The public surface's own answer, for a read this host does not handle.
+ *
+ * The same error `PullRequestAPI`'s no-profile default raises, raised where the
+ * chain actually ends. Nothing is retained and nothing was contacted: a URL
+ * this adapter declined was refused before a session or a request existed.
+ */
+function declinedRead(
+  url: string,
+  options: PullRequestReadOptions,
+): Operation<PullRequestReadResult> {
+  // deno-lint-ignore require-yield
+  return (function* (): Operation<PullRequestReadResult> {
+    throw new NoPullRequestProvider("read", url, options.provider);
+  })();
 }
 
 /** The public default's own refusal, for the member this descriptor never routes. */
