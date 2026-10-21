@@ -55,7 +55,6 @@ import {
   parseGitHostReconciliationRecord,
   PULL_REQUEST,
 } from "@executablemd/git";
-import { PULL_REQUEST_READ } from "@executablemd/git/deno";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { allocate, showing, showingAcross } from "./pty.ts";
 import type { Pty } from "./pty.ts";
@@ -111,7 +110,6 @@ const QUESTION =
   "{pullRequest.state} with {reviews.length}/{comments.length}/{checks.length} " +
   "feedback. Continue this experiment?</Elicit>";
 
-/** The dialog that question renders from the values this entry recorded. */
 const ASKED = `Opened 1 at ${LOCATOR}/pull/1 is open with 0/0/0 feedback.`;
 
 /**
@@ -170,7 +168,6 @@ function* history(home: string, location: string): Operation<DurableEvent[]> {
   return yield* readRecords(pairedLocation(root, route.value.execution).entries);
 }
 
-/** Every record of one durable type this history holds, in append order. */
 function held(events: readonly DurableEvent[], type: string): DurableEvent[] {
   return events.filter((event) => event.type === "yield" && event.description.type === type);
 }
@@ -181,9 +178,12 @@ function held(events: readonly DurableEvent[], type: string): DurableEvent[] {
  * Read back through the delivered parser, so a snapshot that is not complete
  * contributes nothing rather than being counted as one.
  */
-function snapshots(events: readonly DurableEvent[]): { kind: string; items: number }[] {
+function snapshots(
+  events: readonly DurableEvent[],
+  read: string,
+): { kind: string; items: number }[] {
   const found: { kind: string; items: number }[] = [];
-  for (const event of held(events, PULL_REQUEST_READ)) {
+  for (const event of held(events, read)) {
     if (event.type !== "yield" || event.result.status !== "ok") {
       continue;
     }
@@ -218,7 +218,6 @@ function reconciled(events: readonly DurableEvent[], kind: string) {
   return found;
 }
 
-/** The saved pull-request requests this history holds, parsed. */
 function asked(events: readonly DurableEvent[]) {
   const found = [];
   for (const event of held(events, REPL_REPOSITORY_PULL_REQUEST_REQUEST)) {
@@ -240,6 +239,13 @@ function asked(events: readonly DurableEvent[]) {
  */
 export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
   return scoped(function* (): Operation<void> {
+    // Loaded here rather than at the top of this module, because this file is
+    // also on the import graph of `replUnsupportedPullRequest` below. The Deno
+    // entrypoint reaches Workflow's storage adapter and so `node:sqlite`, which
+    // Bun does not have; a static import is evaluated before either journey is
+    // chosen, so it would turn "this runtime installs no entry provider" from
+    // something that suite observes into a module it cannot even load.
+    const { PULL_REQUEST_READ: read } = yield* until(import("@executablemd/git/deno"));
     const home = yield* useTempDirectory("xmd-repl-pull-request-pty-");
     // Named before it exists, because the shim's mapping is what makes the
     // document's locator reach it.
@@ -327,7 +333,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     const leftOutcomes = reconciled(left, PULL_REQUEST);
     expect(leftOutcomes).toHaveLength(1);
     expect(leftOutcomes[0]?.decision).toBe("performed");
-    expect(snapshots(left).toSorted((a, b) => a.kind.localeCompare(b.kind))).toEqual([
+    expect(snapshots(left, read).toSorted((a, b) => a.kind.localeCompare(b.kind))).toEqual([
       { kind: "checks", items: 0 },
       { kind: "comments", items: 0 },
       { kind: "reviews", items: 0 },
@@ -369,7 +375,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     const reopened = yield* history(home, location);
     expect(asked(reopened)).toEqual(leftAsked);
     expect(reconciled(reopened, PULL_REQUEST)).toEqual(leftOutcomes);
-    expect(snapshots(reopened).toSorted((a, b) => a.kind.localeCompare(b.kind))).toEqual([
+    expect(snapshots(reopened, read).toSorted((a, b) => a.kind.localeCompare(b.kind))).toEqual([
       { kind: "checks", items: 0 },
       { kind: "comments", items: 0 },
       { kind: "reviews", items: 0 },
@@ -419,7 +425,7 @@ export function replPullRequestJourney(repl: ReplCommand): Operation<void> {
     const answered = yield* history(home, location);
     expect(asked(answered)).toEqual(leftAsked);
     expect(reconciled(answered, PULL_REQUEST)).toEqual(leftOutcomes);
-    expect(snapshots(answered).toSorted((a, b) => a.kind.localeCompare(b.kind))).toEqual([
+    expect(snapshots(answered, read).toSorted((a, b) => a.kind.localeCompare(b.kind))).toEqual([
       { kind: "checks", items: 0 },
       { kind: "comments", items: 0 },
       { kind: "reviews", items: 0 },
