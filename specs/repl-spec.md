@@ -44,7 +44,12 @@ value. Repetition preserves occurrence order, and the first directory defining
 an ordinary component wins. Explicit values replace the default search list
 `["components", "."]`; omitting the option keeps both defaults. Relative paths
 resolve from the invocation's contextual working directory, and absolute paths
-stay absolute. These directories select ordinary components and grant no
+stay absolute. The command captures them before workspace placement changes.
+After the execution id is known, its session/components directory is appended
+once. This effective list serves execution, validation, entry Syntax and the
+packaged Plan's draft check. Configured definitions win over session definitions;
+only genuine absence falls through, and a selected malformed or unreadable
+component fails. These directories select ordinary components and grant no
 permission; canonical protected components keep their implementations.
 
 Everything that can be refused is refused in this order, and each step happens
@@ -56,17 +61,52 @@ before anything the next one would touch:
    formed, a history file is created or the terminal's modes are touched.
 2. **The Agent configuration.** Two permission switches together and an unknown
    `--agent-provider` are refused next, before any adapter exists.
-3. **The profile.** What this command's REPL runs under is assembled once, in the
-   command's own scope: a copied, frozen selection of component directories, the
-   selected Plugins, the Agent identity vocabulary, the packaged `<Plan>` Component, the ordinary evaluation ceiling and the settled
-   permission mode. It is read from then on and never rebuilt, so two entries of
-   one session cannot run under different rules.
+3. **The command assembly.** Invocation cwd, configured absolute directories,
+   selected Plugins, Agent stack, provider dependencies and permission mode are
+   captured once in the command scope. After storage supplies the execution id,
+   one immutable execution profile adds session/components and constructs the
+   includes-dependent Plan declaration and vocabulary. No Plugin or Agent stack
+   is installed again, and every entry uses the same finalized search list.
 4. **The terminal.** Only then is a terminal asked for. Over a pipe the command
    refuses, having left nothing behind.
 
 Nothing here starts an agent. An entry that asks for none materializes no
 adapter at all; the provider validates availability the first time a turn wants
 one.
+
+## The session workspace
+
+Sidekick responses and entries submitted through `<REPL.Submit />` start in the
+existing paired session directory, beside `entries.jsonl` and `sidekick.jsonl`.
+A manually submitted entry starts in the invocation's project directory. Writing
+`notes.md` through a Sidekick entry puts it beside the journals; writing
+`components/Greeting.md` makes that component discoverable by a later entry
+without a new include option or restart. Writing a definition invokes none of it.
+
+Fresh publication and legacy first-message publication ensure components before
+the pair is ready. An existing directory and its files survive; a non-directory
+refuses without replacement. Cold reading ensures nothing: an older pair missing
+components remains unchanged, and a later authorized File write creates its
+parents. Exit preserves the workspace; a second session has a different one.
+Journal layout and legacy publication remain unchanged.
+
+The host binds cwd on the actual response, validation and entry owners through
+ordinary Env middleware at min. Nested Dir content uses its selected directory;
+later siblings return to the workspace. Success, failure and cancellation leave
+caller and sibling scopes at their own cwd. This grants no permission or native
+tool, changes no source bytes and selects no Repository.
+
+The original project cwd remains the basis for ambient repository discovery,
+ordinary commit identity and invocation-relative options. To read project input,
+enter its explicitly known path with Dir, capture the read, then write
+`inputs/request.md` after Dir restores workspace cwd. Native Git likewise needs
+a valid selected checkout at its authored cwd; it has no hidden project fallback.
+The Sidekick's native conversation keeps project placement, or an explicitly
+supplied agentCwd dependency, and its recorded native identity and configuration.
+
+Read `<Guide.Environment />` and `<Guide.Entries />` for the component-writing,
+discovery, later submission and output-reading journey. Current
+`<REPL.Environment />` reports the response's actual cwd.
 
 ## One live journey
 
@@ -1302,10 +1342,13 @@ is there now. What is retained is each operation, not a value the session
 remembers for a path.
 
 Any of the four anywhere else — beside the document, in a temporary directory,
-in any directory that is not inside the checkout the entry started in — is
-ordinary file work, is retained by nothing here, and happens again if the entry
-is continued. That includes a read: what is retained is a read *inside* the
-checkout. Searches and temporary directories are ordinary throughout, wherever
+in any directory outside the selected checkouts and the marked entry's owned
+workspace — is ordinary file work, is retained by nothing here, and happens again
+if the entry is continued. A marked workspace entry retains the same four
+operations in its workspace, including an ensure of the root, through existing
+local-operation records and without a Git lease. Checkout routing and holds take
+precedence where they apply. Completed workspace operations restore before live
+resolution or I/O, just as checkout operations do. Searches and temporary directories are ordinary throughout, wherever
 they point. The lexical path rules and the permission a `<File>` already answers
 to are unchanged, and they are not checkout validation: a path this run may not
 read or write is refused the same way it is anywhere else.
@@ -1324,7 +1367,7 @@ checkout another entry is holding, and reading takes nothing that would stop
 that entry carrying on. Only a new write, deletion or directory waits on the
 hold, and a completed operation of any kind takes nothing at all.
 
-Starting outside a checkout retains none of this and changes nothing else: the
+Starting outside a checkout without an owned workspace retains none of this: the
 entry performs ordinary file work, exactly as it would anywhere else, and never
 looks for a repository twice. Selecting a Repository is a separate matter and
 works from anywhere, which is the next section.
@@ -1740,7 +1783,9 @@ text. No second name for the entry appears in a record: which history an entry
 may continue is the range it was given. Reading is not owning: a settled
 history, a frozen position and a refused location prepare nothing, look for no
 checkout and hold nothing. A host that registers no recording runs the same
-file work with nothing retained, which is what Node and Bun do; `<Issue>` and
+file work with nothing retained, which is what Node and Bun do even in a marked
+workspace. Deno and compiled hosts retain workspace file work through their
+existing recorder; `<Issue>` and
 `<Git.Push />` there report that no provider is installed, exactly as they do
 under any other host that installs none.
 
@@ -1796,7 +1841,12 @@ Submit intent therefore binds what it took: the entry id it claimed, the exact
 source, the draft revision that source came from, how many entries preceded the
 slot, and — separately from that count — the entry journal the slot was counted
 in, as a record count with the byte count and digest of exactly those records.
-Its outcome is written once the entry has one.
+New Sidekick intents additionally carry only optional `workspace: true` inside
+that existing submit object. Its outcome is written once the entry has one.
+A present marker other than true refuses. Absent markers retain project cwd,
+including older Sidekick entries; a manual entry has no Submit marker. An older
+binary that rejects unknown members refuses new marked histories rather than
+silently downgrading them.
 
 The count and the journal binding are different facts. A count of earlier
 entries names a slot; it cannot say which records preceded that slot, so a
@@ -1837,6 +1887,11 @@ process that stopped before the entry existed, and one that stopped before the
 receipt — and anything else is the two files disagreeing, which refuses rather
 than picking. Records after the bound prefix are ordinary; the entry the
 reservation reserved is one of them.
+
+Placement matching happens before session opening can initialize or resume the
+unfinished final entry. It reads the original relevant Submit even after its
+control is settled, so another reopen preserves placement. A completed entry is
+projected without execution, and old records are never rewritten.
 
 The finding is projected cold, with nothing appended and no conversation opened,
 and is retained at the next explicit mutating action. Nothing is acted on: an

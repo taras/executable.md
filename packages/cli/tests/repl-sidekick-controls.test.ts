@@ -2001,7 +2001,7 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     // what it is: a command that installed none has said something about what
     // an entry may write, and an omitted line would be indistinguishable from a
     // host that could not tell.
-    expect(answer.value).toContain("- component includes: components, .");
+    expect(answer.value).toContain(`- component includes: ${PROFILE.includes.join(", ")}`);
     expect(answer.value).toContain("- active plugins: none");
     expect(answer.value).toContain("- agent permission requests: deny-all");
     // The rule is in the snapshot, because the snapshot is what comes back as
@@ -2016,10 +2016,10 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
       command: "repl",
       args: [],
     });
-    const profile = yield* assembleReplProfile(
+    const profile = yield* (yield* assembleReplProfile(
       { provider: "acpx", defaultAgent: AGENT, adapters: ADAPTERS, permissionMode: "deny-all" },
       plugins,
-    );
+    )).finalize();
     // Names only. What the Plugin contributes travels on `installations` and
     // `declarations`, and neither is reachable through the read surface.
     expect(profile.plugins).toEqual(["ReadingPlugin"]);
@@ -2050,7 +2050,7 @@ describe("Tier R3 — a reply reads the history, not the screen", () => {
     expect(answer.value).toContain("- active plugins: ReadingPlugin");
     // The control the selection sits beside, so a row that passed by reporting
     // something else entirely would still be caught.
-    expect(answer.value).toContain("- component includes: components, .");
+    expect(answer.value).toContain(`- component includes: ${profile.includes.join(", ")}`);
     expect(answer.value).toContain("- agent permission requests: deny-all");
     expect(answer.value).toContain("- runtime: a controlled host");
   });

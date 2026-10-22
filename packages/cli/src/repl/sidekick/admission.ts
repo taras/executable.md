@@ -295,6 +295,7 @@ export function* submitForSidekick(
       entry: reservation.entry,
       source: reservation.source,
       revision: reservation.revision,
+      workspace: true,
       retained,
     },
   );
@@ -438,6 +439,54 @@ export function* coldReservation(
     return finding;
   }
   return Ok({ intent, finding: finding.value });
+}
+
+export function* coldWorkspaceEntry(
+  records: readonly SidekickRecord[],
+  entries: readonly AdmittedEntry[],
+  entriesPath: string,
+): Operation<Result<string | undefined>> {
+  const reading = projectSidekick(records);
+  if (!reading.ok) {
+    return reading;
+  }
+  const final = entries.at(-1);
+  if (final === undefined) {
+    return Ok(undefined);
+  }
+  let workspace: boolean | undefined;
+  for (const intent of reading.value.submits) {
+    if (
+      intent.settled &&
+      !records.some(
+        (record) =>
+          record.kind === "control-outcome" &&
+          record.conversation === intent.conversation &&
+          record.response === intent.response &&
+          record.order === intent.order &&
+          typeof record.observed === "string",
+      )
+    ) {
+      continue;
+    }
+    if (intent.entry !== final.key && intent.ordinal !== entries.length - 1) {
+      continue;
+    }
+    const measured = yield* measureRetainedPrefix(entriesPath, intent.retained.records);
+    const finding = resolved(reserved(intent), { entries, ...measured });
+    if (!finding.ok) {
+      return finding;
+    }
+    if (finding.value.kind !== "admitted") {
+      continue;
+    }
+    const selected = intent.workspace === true;
+    if (workspace !== undefined && workspace !== selected) {
+      return Err(new AdmissionRefused("this entry has conflicting workspace reservations."));
+    }
+    workspace = selected;
+  }
+  return Ok(workspace === true ? final.key : undefined);
 }
 
 /** What the gate compares, from the intent that retained it. */

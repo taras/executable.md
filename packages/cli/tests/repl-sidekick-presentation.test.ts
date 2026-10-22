@@ -842,14 +842,11 @@ function* submittedUnderEdit(edit: boolean): Operation<{
     },
   });
 
-  const host = yield* useMountedHost();
+  const host = yield* useMountedHost({ includes: [directory] });
   host.fake.script({ reply: GATED_ENTRY_REPLY });
   host.fake.script({ reply: "<Output>Done.</Output>\n" });
   const repl = yield* useMountedRepl({
-    host: {
-      ...host,
-      profile: { ...host.profile, includes: [directory, ...host.profile.includes] },
-    },
+    host,
   });
 
   yield* sendMessage(repl, "run this");

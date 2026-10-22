@@ -92,6 +92,7 @@ import type { AgentOptions, AgentOptionsRequest, SessionConfiguration } from "@e
 import { parseDurableEvent } from "@executablemd/durable-streams";
 
 import { ReplHost } from "../host.ts";
+import { API } from "@executablemd/runtime";
 import { conversationStream, failedOutcome } from "./history.ts";
 import type { SidekickRecord, SidekickWriter } from "./history.ts";
 import { projectSidekick, requestsFromHistory } from "./model.ts";
@@ -340,6 +341,7 @@ export interface SidekickLiveTurn {
 
 /** What the owner needs, and nothing it could reach the rest of the root with. */
 export interface SidekickOwnerInput {
+  readonly workspace?: string;
   readonly assembly: SidekickAssembly;
   /** This execution's chat storage as it stands, which may hold nothing yet. */
   readonly chat: { readonly form: "legacy" } | PairedChatStorage;
@@ -924,6 +926,17 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
     ): Operation<Result<AgentConversation>> {
       const ready = withResolvers<Result<AgentConversation>>();
       const task = mine.run(function* (): Operation<void> {
+        const directory = input.workspace;
+        if (directory !== undefined) {
+          yield* API.Env.around(
+            {
+              *cwd() {
+                return directory;
+              },
+            },
+            { at: "min" },
+          );
+        }
         const opened = yield* useAgentConversation({
           history: conversationStream(writer, conversation, records),
           id: conversation,
@@ -1914,6 +1927,7 @@ function partialOf(error: Error): GeneratedXmdRootResult | undefined {
 
 /** A history nobody has written to, which is what a legacy execution reads as. */
 const EMPTY: SidekickReading = Object.freeze({
+  submits: Object.freeze([]),
   conversations: Object.freeze([]),
   active: undefined,
   chat: Object.freeze([]),

@@ -29,7 +29,7 @@ import { ReplClock } from "../../../../src/repl/frame.ts";
 import { runReplProgram } from "../../../../src/repl/program.ts";
 import type { ReplOutcome } from "../../../../src/repl/program.ts";
 import { assembleReplProfile } from "../../../../src/repl-profile.ts";
-import type { ReplExecutionProfile } from "../../../../src/repl-profile.ts";
+import type { ReplProfileAssembly } from "../../../../src/repl-profile.ts";
 import { resolveAgentStack } from "../../../../src/agent-stack.ts";
 import { NO_PLUGINS } from "../../../../src/plugin-host.ts";
 import { pairedReplRepository } from "../../../../src/repl/sidekick/repository.ts";
@@ -40,7 +40,11 @@ import type { ReplModel } from "../../../../src/repl/model.ts";
 import { REPL_DIRECTORY } from "../../../../src/repl/storage.ts";
 import { FOOTER_ROWS } from "../../../../src/repl/layout.ts";
 import type { PairedReplRepository } from "../../../../src/repl/sidekick/repository.ts";
-import { useTempFileCompiler } from "@executablemd/core";
+import { API, useHostFiles } from "@executablemd/runtime";
+import { ReplEntryHost } from "../../../../src/repl-entry-installation.ts";
+import type { ReplEntryInstallation } from "../../../../src/repl-entry-installation.ts";
+import type { AcpxProviderDependencies } from "@executablemd/acp";
+import { useTempFileCompiler, useNormalizedOutput } from "@executablemd/core";
 import { createFakeAcp, makeRegistry, makeStore } from "../../../support/fake-acp.ts";
 import type { FakeAcp } from "../../../support/fake-acp.ts";
 import { useTemporary } from "./sidekick-harness.ts";
@@ -1016,7 +1020,7 @@ export interface MountedRepl {
   /** The repository root, for a case that lists what is on disk. */
   readonly root: string;
   /** The profile this command runs under. */
-  readonly profile: ReplExecutionProfile;
+  readonly profile: ReplProfileAssembly;
   /** The append gate, where this command's host was installed with one. */
   readonly gate: AppendGate | undefined;
   /** The operation-level append gate, where this host was installed with one. */
@@ -1032,7 +1036,7 @@ export interface MountedHost {
   /** The scripted agent behind the Sidekick's own provider. */
   readonly fake: FakeAcp;
   /** The profile the command runs under. */
-  readonly profile: ReplExecutionProfile;
+  readonly profile: ReplProfileAssembly;
   /** The executions on disk, for a case that opens one itself. */
   readonly repository: PairedReplRepository;
   /** The append gate, where this host was installed with one. */
@@ -1092,9 +1096,32 @@ export function* useMountedHost(
      */
     readonly defaultAgent?: string;
     readonly sidekickAgent?: string;
+    readonly projectCwd?: string;
+    readonly includes?: readonly string[];
+    readonly entryInstallation?: ReplEntryInstallation;
+    readonly hostFiles?: boolean;
+    readonly agentCwd?: AcpxProviderDependencies["agentCwd"];
   } = {},
 ): Operation<MountedHost> {
+  yield* useNormalizedOutput();
   const gate = options.gate;
+  const directory = options.projectCwd;
+  if (directory !== undefined) {
+    yield* API.Env.around(
+      {
+        *cwd() {
+          return directory;
+        },
+      },
+      { at: "min" },
+    );
+  }
+  if (options.hostFiles === true) {
+    yield* useHostFiles();
+  }
+  if (options.entryInstallation !== undefined) {
+    yield* ReplEntryHost.set(options.entryInstallation);
+  }
   // An entry's eval block compiles through a module the host supplies, so a
   // harness without it would run entries that fail for a reason no row is about.
   yield* useTempFileCompiler();
@@ -1138,7 +1165,9 @@ export function* useMountedHost(
     throw stack.error;
   }
   const profile = yield* assembleReplProfile(stack.value, NO_PLUGINS, {
+    ...(options.includes === undefined ? {} : { includes: options.includes }),
     acp: {
+      ...(options.agentCwd === undefined ? {} : { agentCwd: options.agentCwd }),
       createRuntime: fake.create,
       sessionStore: makeStore(),
       agentRegistry: makeRegistry({
@@ -1189,6 +1218,11 @@ export function* useMountedRepl(
     readonly defaultAgent?: string;
     /** The Sidekick's own agent, when this call installs the host. */
     readonly sidekickAgent?: string;
+    readonly projectCwd?: string;
+    readonly includes?: readonly string[];
+    readonly entryInstallation?: ReplEntryInstallation;
+    readonly hostFiles?: boolean;
+    readonly agentCwd?: AcpxProviderDependencies["agentCwd"];
   } = {},
 ): Operation<MountedRepl> {
   const host =
@@ -1199,6 +1233,13 @@ export function* useMountedRepl(
       ...(options.dataRoot === undefined ? {} : { dataRoot: options.dataRoot }),
       ...(options.defaultAgent === undefined ? {} : { defaultAgent: options.defaultAgent }),
       ...(options.sidekickAgent === undefined ? {} : { sidekickAgent: options.sidekickAgent }),
+      ...(options.projectCwd === undefined ? {} : { projectCwd: options.projectCwd }),
+      ...(options.includes === undefined ? {} : { includes: options.includes }),
+      ...(options.entryInstallation === undefined
+        ? {}
+        : { entryInstallation: options.entryInstallation }),
+      ...(options.hostFiles === undefined ? {} : { hostFiles: options.hostFiles }),
+      ...(options.agentCwd === undefined ? {} : { agentCwd: options.agentCwd }),
     }));
   const recording = recordingTerminal(options.size ?? { columns: 160, rows: 36 });
   yield* recording.install();

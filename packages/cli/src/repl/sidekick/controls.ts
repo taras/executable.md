@@ -196,6 +196,7 @@ export interface ControlJournal {
 
 /** The entry slot a Submit intent binds, so a dead process can be reconciled. */
 export interface ReservedSlot {
+  readonly workspace?: true;
   /** How many entries preceded the reservation, which names the slot. */
   readonly ordinal: number;
   readonly entry: string;

@@ -421,9 +421,9 @@ describe("how a REPL entry gets its publication capability", () => {
         throw stack.error;
       }
       yield* selectReplEntryHost(SUITE_HELPER, fixture.managed);
-      return yield* assembleReplProfile(stack.value, NO_PLUGINS, {
+      return yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
         planWriterRoot: fixture.root,
-      });
+      })).finalize();
     });
 
     const factory = selected.entryInstallation;

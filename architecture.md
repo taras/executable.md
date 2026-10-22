@@ -194,7 +194,9 @@ Determinism is two properties:
 
 All state is scoped to the operation that owns it, so it is torn down when
 the operation is torn down: created inside the operation it describes,
-provided via context. No module-scoped registries — not as collections, not
+provided via context. A cwd binding belongs on the task that performs the work,
+including a held conversation or session-owned entry rather than its caller.
+No module-scoped registries — not as collections, not
 hidden inside library objects that accumulate. One exception: metadata an
 author declares at module evaluation, about a value the author owns, may live
 on that value.
@@ -3019,7 +3021,9 @@ before its content begins. A refusal therefore runs no content. Once the ensure
 succeeds, content expands with the target as cwd and the component's scope
 restores the enclosing cwd on success, failure and cancellation; restoration
 never deletes the directory. The Repository selection in scope is unchanged —
-Dir places content in a directory and selects no Repository.
+Dir places content in a directory and selects no Repository. The REPL host uses
+this same scoped Env mechanism for Sidekick workspace placement; its captured
+project repository remains separate.
 
 The mandatory `API.Files.deleteFile` operation owns removal.
 
@@ -6373,6 +6377,36 @@ projection detaches every value it retains and freezes it, so nothing below
 holds a `DurableEvent` and nothing above can change one. Route resolution is
 pure and answers with the exact objects that model holds.
 
+### Session workspace placement
+
+A Sidekick response and an entry submitted through its controls start in the
+paired session directory. A manual entry starts in the command's captured
+project directory. The host installs ordinary `API.Env` cwd middleware at `min`
+on the held response task, the isolated preflight scope and the executing entry
+task. Nested Dir content shadows it; caller and sibling scopes keep their own
+cwd on success, failure and cancellation. Placement changes no submitted source,
+import coordinate, permission or Repository selection, and never changes the
+process cwd.
+
+New Sidekick Submit intents retain optional `workspace: true` in their existing
+submit object. Absence preserves project placement for old histories. A present
+value other than true refuses. Before session opening can resume work, the host
+matches the original intent against the whole acknowledged entry history using
+ordinal, entry key, exact source and original prefix bytes. A conflicting binding
+refuses before initialization or append; absent admission submits nothing. Only
+the exact unfinished final entry uses that placement. Settling its control does
+not discard the original intent, so a later continuation derives the same cwd.
+Completed entries remain projections. Old bytes are never rewritten, and an
+older reader that rejects unknown members refuses a marked history.
+
+The workspace root is passed directly from the entry owner into the CLI-private
+recorder, only for marked entries. The captured project cwd is a separate direct
+input for lazy ambient discovery and ordinary commit identity. Native Git still
+requires an operation to name a valid selected checkout; a workspace cwd supplies
+no project fallback. The Sidekick's native provider keeps the captured project
+`agentCwd`, or the caller's explicit dependency, and its existing identity and
+configuration.
+
 ### Source ownership in retained entries
 
 A source position identifies authored bytes, not which invocation used them.
@@ -6554,16 +6588,20 @@ restrictions: navigation is the exception for the band, not for capabilities.
 
 ### What one REPL command settles before it draws
 
-The command line is read, the Agent configuration is settled, and then one
-immutable profile is assembled in the command's own scope: the selected Plugins,
-the Agent identity components, the packaged `<Plan>` declaration and the ordinary
-evaluation ceiling, with the settled permission mode beside them. The program
-takes that one profile and nothing else, so what an entry may resolve, what
-ceiling a generated fragment runs under and how a permission request is answered
-are facts about the command a person invoked rather than about the entry they
-typed. The profile carries data and installations, never authority: no stack,
-provider, Plan writer, live request or scope reaches the application model, the
-route or the Journal through it.
+The command captures the invocation cwd, configured include directories, selected
+Plugins, Agent stack, provider dependencies, host scope and permission mode once.
+Relative includes become lexical absolute paths against that cwd, preserving
+occurrence order; explicit includes replace project defaults. Once storage
+supplies the execution id, the profile finalizes one immutable list: configured
+directories, then that execution's session/components. Execution, validation,
+entry Syntax and the packaged Plan's validator use that same list. Finalization
+constructs the includes-dependent declaration and vocabulary once without
+reinstalling Agent or Plugin stacks. Protected names and the ordinary resolution
+tiers retain their existing precedence. Only genuine absence falls through;
+a selected unreadable or malformed definition fails.
+
+The profile carries data and installations. No provider, writer or live request
+reaches the application model, route or Journal through it.
 
 The `<Plan>` the REPL declares is the packaged Component `xmd plan` runs, and the
 ceiling around a returned program is the shared ordinary profile — whose write
@@ -7066,8 +7104,8 @@ the question happens for the first time.
 
 Four file operations are retained and no others: a `<File>` text read, a
 `<File>` write, a `<File.Delete />`, and the directory a `<Dir>` ensures, each in
-a checkout this entry is working in — the ambient one it was started in, or a
-managed one it selected. A read is retained because a document binds its text
+a checkout this entry is working in — the captured project ambient checkout, or
+a managed one it selected — or the owned session workspace of a marked entry. A read is retained because a document binds its text
 and a continuation has to offer the same binding; a glob, a path check and a
 temporary directory bind nothing a continuation must answer again, and are left
 alone. Three local Git operations are retained beside them — `<Git.Add>`,
@@ -7075,12 +7113,18 @@ alone. Three local Git operations are retained beside them — `<Git.Add>`,
 request and whose external outcome are two records of their own. Those counts
 are separate: the file rules below are about the four, the local Git rules
 further down are about the three, and the publication rules after them are about
-the one. A call outside every such checkout is ordinary filesystem behavior,
-recorded by nothing — a record would place the call in a checkout it is not in —
-so it runs again during a partial continuation. A managed placement is looked
+the one. A call outside every such checkout and the marked entry's owned workspace is
+ordinary filesystem behavior, recorded by nothing, so it runs again during a
+partial continuation. A managed placement is looked
 for first and the most specific one wins; the ambient route answers everything no
 placement covers, so an entry that selects nothing works exactly as it did
-before.
+before. If neither checkout covers the live target, the owned workspace adds
+coverage through the same local-operation records, including an ensure of the
+workspace root itself. Workspace-only work takes no Git lease. Root and target
+use the same canonical path basis for live routing; restored operations reach
+no canonicalization. Glob and path checks remain unrecorded. These records are
+historical observations, not file snapshots or an atomic host-filesystem/journal
+transaction.
 
 Selection is retained on the same terms. `<Repository>` and `<Worktree>` call
 the *ordinary* managed selector — the same creation, compatible-reuse, conflict
@@ -7890,6 +7934,13 @@ profile resolves no agent command, inspects no options and opens no session, so
 whether anybody answers to that name is the first explicit message's question,
 asked where there is somebody to answer it. No permission option an entry runs
 under grants the Sidekick a tool of its own.
+
+Fresh paired publication and the first explicit message that publishes a legacy
+pair ensure session/components before ready is exposed. Existing directories and
+contents survive; a non-directory refuses without replacement. Passive cold open
+creates or repairs nothing. An old pair with no components directory sees ordinary
+include absence; a later authorized File write creates its parents. The two
+journals keep their existing layout and publication failure policy.
 
 **The Sidekick installs a provider of its own, with its constraints stated.**
 Its conversations do not inherit the entry stack's: an entry runs a document a
@@ -8778,7 +8829,7 @@ Status is measured against main.
 | `GitQuery.resolve()` | verifies and resolves one Git revision expression contextually [Interface and evidence](specs/workflow-spec.md#7-the-git-capability--moved). | built on main |
 | workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry [Invariant](#workflow-run-storage); [Interface and evidence](specs/workflow-spec.md#9-retained-run-storage). | built on the #365 stack; the CLI lifecycle reaches it on the #366 stack |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in [Invariant](#one-database-at-a-time-and-a-transaction-a-caller-can-hold). | built on main |
-| REPL entry retained file work | one executing REPL entry's own recording, established by core initialization in the scope the invocation owns and ending with it: it retains the `<File>` reads, `<File>` writes, `<File.Delete />` deletions and `<Dir>` ensures that land inside a checkout the entry is working in — the ambient one it was started in, or a managed one it selected — authored and admitted-generated alike, because both cross the one document filesystem. A completed operation answers from its saved result without live path canonicalization, ambient discovery, a lease, a permission lookup or a filesystem call — so only *new* work needs the environment, a continuation still binds the text its read answered with while the file says something else, and a new entry reading that path sees what is there now. A record's name is the digest of the record version, the operation kind and the complete received request, so two equal requests in one entry are one name at two ordered positions and the durable engine's positional matching tells them apart; equal work in two entries is the same name, and each entry executing against its own stream segment is what keeps those apart. Recording is ordinary ancestor-max `Files` middleware, so a provider beneath that answers directly or transforms and delegates is kept as provider behavior while the received request stays the operation's identity. A shared Git directory admits one live *mutating* entry at a time, held lazily for as long as the execution lasts and refused rather than queued; no read acquires it, so a new read proceeds while another entry holds it. The local Git and issue work an entry retains have rows of their own beside this one; work outside every checkout the entry is working in stays ordinary and unrecorded, and a passive reading initializes nothing [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
+| REPL entry retained file work | one executing REPL entry's own recording, established by core initialization in the scope the invocation owns and ending with it: it retains the `<File>` reads, `<File>` writes, `<File.Delete />` deletions and `<Dir>` ensures that land inside the captured project ambient checkout, a selected managed checkout, or the marked entry's owned session workspace — authored and admitted-generated alike, because both cross the one document filesystem. A completed operation answers from its saved result without live path canonicalization, ambient discovery, a lease, a permission lookup or a filesystem call — so only *new* work needs the environment, a continuation still binds the text its read answered with while the file says something else, and a new entry reading that path sees what is there now. A record's name is the digest of the record version, the operation kind and the complete received request, so two equal requests in one entry are one name at two ordered positions and the durable engine's positional matching tells them apart; equal work in two entries is the same name, and each entry executing against its own stream segment is what keeps those apart. Recording is ordinary ancestor-max `Files` middleware, so a provider beneath that answers directly or transforms and delegates is kept as provider behavior while the received request stays the operation's identity. A shared Git directory admits one live *mutating* entry at a time, held lazily for as long as the execution lasts and refused rather than queued; no read acquires it, so a new read proceeds while another entry holds it. The local Git and issue work an entry retains have rows of their own beside this one; work outside every selected checkout and the marked entry's owned workspace stays ordinary and unrecorded, and a passive reading initializes nothing [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
 | REPL entry retained selection | one executing REPL entry's own `<Repository>` and `<Worktree>` selections, recorded beside its file work as small routing records: the canonical managed root, the checkout root, the common Git directory, the credential-free repository identity, the display name and the owner checkout, with a root-level `<Worktree>`'s ambient owner recorded as its own answer. The selector is the ordinary managed one, with its own creation, compatible-reuse, conflict and interrupted-adoption policy; what this adds is that a completed selection answers from its record, calling no selector and reaching no clone, `worktree add`, sidecar, credential or lock — so a continuation works in a checkout somebody has since changed or removed, while only new work meets today's filesystem. Parsed facts are held to the call they stand at with pure slot arithmetic against the root the record itself carries, registered in entry-private state and minted as a fresh selection, so a copied or edited Repository value can misname a target and never reach one. One entry at a time *owns* a managed slot, held until teardown and reacquired lazily by the first new operation inside a restored placement; that is a different hold from the shared Git directory's mutation lease, which only a new `<Worktree>` selector and a new mutation take. A selection is acknowledged before its path is bound, and native work that was never acknowledged runs live again under the ordinary partial-creation policy [Reference](#what-one-entry-retains-about-the-checkout-it-is-standing-in). | built on the #181 stack |
 | REPL entry retained issue work | one executing REPL entry's own `<Issue>` work, retained under the ordinary `issue_effect` records beside its file work and needing no checkout at all: no repository is discovered for it, no managed root is made and no hold is taken. A completed read answers with the snapshot it saw and a completed upsert with the URL it was filed under, neither resolving a provider, reading configuration nor opening a credential. What names it is the entry's own owner — derived by the session from the execution and the entry's admission-order position — with the identity canonical execution minted where it selected this implementation for this invocation; the `runId` and `expansionId` spellings are a compatibility encoding of those two, and a REPL entry installs no synthetic WorkflowRun. Neither member is reachable from a prop, a tracker, a Context, a middleware request or a record field a document can write, and the entry's `<Issue>` is the one shared component with this entry's policy declared over the command's registered default, which a repository component still outranks. One durable boundary encloses the operation and the live attempt inside it composes `IssueOperations` over a transport-facing default of the entry's own, bound in the attempt's own scope under the attempt's own idempotency key and gone before the envelope publishes; canonical form dispatch selects which of the two effects an invocation asks for. An upsert the service accepted and this end never acknowledged retains nothing and presents the same key next time, which is what the provider adopts under; a read has no key and may be made again. The entry's retained issue records are held to its own owner before any of them are replayed [Reference](#what-one-entry-retains-about-the-issue-it-filed). | built on the #181 stack |
 | REPL entry retained local Git | one executing REPL entry's own `<Git.Add>`, `<Git.Switch>` and `<Git.Commit>`, recorded beside its file work and its selections. The performers are the ordinary ones — exactly the pathspecs a document wrote, the ordinary branch rules, the current index and nothing else — installed as ordinary Git dispatch at the implementation slot, so middleware above may answer, refuse, or transform and delegate, and a call answered wholly by a replacement acquires no retention. One durable operation per call and no outer envelope, so a staging child inside a Commit is an earlier journal operation of its own. A completed operation answers from its saved result and runs no `git` at all, writing no tree and reading no identity; a saved commit object id names the commit that was made then and is never re-resolved against today's HEAD. A result is fixed-size evidence — the checkout, the branch, commit, HEAD tree and index tree on both sides, and the operation's own arguments and products — never a file list, a checkout snapshot or Git output, and a commit message appears as a digest and a byte length rather than a second copy of the text. Routing is private and live-only: the received working directory is canonicalized and the ordinary selector chooses the longest covering checkout among this entry's registrations under the whole authenticated Repository identity, and a saved result's checkout is held to those registrations with parsed facts alone. The invoking person's author and committer are read once per entry, lazily, and only by a genuinely live Commit; a host that cannot say becomes the existing Commit-only refusal. A live operation takes the selected placement's managed slot and then the shared Git directory's mutation lease, keeps both until teardown and takes neither on replay, with this entry's own native attempts serialized per shared Git directory. An ordinary refusal is retained under the route that reported it, so a native ignored-path Add says what `git` reported and promises no rollback; contention, admission and infrastructure failures are fatal and unrecorded. Native completion and acknowledgement are separate: an unacknowledged Commit runs live again and may instead refuse empty-index, and a failed append fences later work with no success binding and no compensating Close. A local result confers no publication evidence, and publication is the row below rather than part of these three [Reference](#the-three-local-git-operations-and-what-a-saved-object-id-means). | built on the #181 stack |

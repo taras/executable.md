@@ -1,16 +1,8 @@
 /**
- * The one immutable profile a REPL execution runs under.
+ * Capture command selections once, then finalize one execution's component paths.
  *
- * Assembled once, in the command's own scope, before a terminal is opened or a
- * history file exists — and then read and never changed. What a REPL execution
- * may resolve, what ceiling a generated fragment runs under and how permission
- * requests are answered are facts about the command a person invoked, not about
- * the entry they later type: a profile assembled per entry could differ between
- * two entries of one session, and there is only ever one.
- *
- * It carries data and installations, never authority. No Agent stack, provider,
- * Plan writer, live request or scope reaches the application model, the route or
- * the Journal through it.
+ * The command owns Agent and Plugin installation. Storage supplies the execution
+ * id before the includes-dependent Plan declaration and entry vocabulary exist.
  */
 
 import type { AcpxProviderDependencies } from "@executablemd/acp";
@@ -19,6 +11,8 @@ import type { PermissionMode } from "@executablemd/core";
 import type { GeneratedSelection } from "@executablemd/core/api";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { useScope } from "effection";
+import { cwd } from "@executablemd/runtime";
+import { resolve, join } from "node:path";
 import type { Operation } from "effection";
 
 import { contextualAgent, hostAcpDependencies, installAgentProviderStack } from "./agent-stack.ts";
@@ -91,8 +85,15 @@ export interface EntryVocabulary {
   documentation(names: readonly string[]): Operation<string>;
 }
 
-/** What one REPL execution runs under, decided once and read from then on. */
+/** The captured command basis, before its execution directory is known. */
+export interface ReplProfileAssembly {
+  readonly projectCwd: string;
+  finalize(workspace?: string): Operation<ReplExecutionProfile>;
+}
+
+/** One finalized execution profile, shared by validation, descriptions and entries. */
 export interface ReplExecutionProfile {
+  readonly projectCwd?: string;
   /** Where a declared name is looked for, outermost first. */
   readonly includes: readonly string[];
   /**
@@ -194,8 +195,11 @@ export function* assembleReplProfile(
   stack: AgentStack,
   plugins: CommandPlugins,
   facts: ReplProfileFacts = {},
-): Operation<ReplExecutionProfile> {
-  const includes = Object.freeze([...(facts.includes ?? REPL_INCLUDES)]);
+): Operation<ReplProfileAssembly> {
+  const projectCwd = yield* cwd();
+  const configuredIncludes = Object.freeze(
+    (facts.includes ?? REPL_INCLUDES).map((path) => resolve(projectCwd, path)),
+  );
   yield* installAgentProviderStack(stack, facts.acp);
   // Settled here, with the stack and the Plugins, because it is a fact about
   // the command a person invoked rather than about any conversation they later
@@ -204,58 +208,81 @@ export function* assembleReplProfile(
   // and the one place that applies it is the one place it is right.
   const agent = facts.sidekickAgent ?? (yield* contextualAgent());
 
-  const plan = yield* planComponentDeclaration({
-    surface: "component",
-    ...(facts.planWriterRoot === undefined ? {} : { planWriterRoot: facts.planWriterRoot }),
-    includes,
-    // The command's own Plugin assembly, not a second installation of it: two
-    // would be two catalogs claiming the same names.
-    plugins,
-    // The same seam `planAgentContext` already takes: production states none and
-    // gets the real ACPX runtime, and a proof states a scriptable one so a
-    // journey can drive this exact assembler rather than a copy of it.
-    context: planAgentContext(stack, facts.acp),
-    ...(stack.sessions === undefined ? {} : { sessions: stack.sessions }),
-    host: yield* useScope(),
-    // Plan review is answered by the REPL's own Elicit provider, which the
-    // session installs around the execution. A Component that installed one of
-    // its own here would answer the question in front of the person with
-    // something else.
-    installElicitation: noElicitationOfItsOwn,
-  });
-
-  // The host's selection, read once in the command scope. A value read per
-  // entry would be a value a later installation could have changed.
   const entryInstallation = yield* ReplEntryHost.get();
-
+  const host = yield* useScope();
+  const dependencies = facts.acp ?? hostAcpDependencies(stack);
+  const sidekick = sidekickAssembly(agent, {
+    ...dependencies,
+    agentCwd:
+      dependencies.agentCwd ??
+      function* () {
+        return projectCwd;
+      },
+  });
+  const context = planAgentContext(stack, facts.acp);
+  const planWriterRoot = facts.planWriterRoot;
+  const sessions = stack.sessions;
+  const permissionMode = stack.permissionMode;
+  const names = Object.freeze(plugins.plugins.map((plugin) => plugin.name));
+  const installations = Object.freeze([...plugins.installations]);
   return Object.freeze({
-    includes,
-    vocabulary: entryVocabulary(includes, plugins),
-    // Read off the admitted assembly here, once, while it is in hand. Copied
-    // rather than referenced so nothing downstream can reach a Plugin value
-    // through the profile, and frozen because a profile is read and never
-    // changed.
-    plugins: Object.freeze(plugins.plugins.map((plugin) => plugin.name)),
-    installations: Object.freeze([
-      ...plugins.installations,
-      Object.freeze({
-        components: agentIdentityComponents(),
-        declarations: Object.freeze([plan]),
-      }),
-    ]),
-    generated: ordinaryGeneratedSelection(),
-    permissionMode: stack.permissionMode,
-    ...(entryInstallation === undefined ? {} : { entryInstallation }),
-    // Settled here, with the stack and the Plugins, because it is a fact about
-    // the command a person invoked rather than about any conversation they
-    // later have. Resolved rather than retained as "unstated": a profile that
-    // carried the absence would leave every reader of it to apply the fallback
-    // again, and the one place that applies it is the one place it is right.
-    sidekickAgent: agent,
-    // Built from the same resolved dependencies the provider stack above was
-    // installed with, so a journey that scripts the runtime drives this exact
-    // assembly rather than a second one standing in for it.
-    sidekickAssembly: sidekickAssembly(agent, facts.acp ?? hostAcpDependencies(stack)),
+    projectCwd,
+    *finalize(workspace?: string): Operation<ReplExecutionProfile> {
+      const includes = Object.freeze([
+        ...configuredIncludes,
+        ...(workspace === undefined ? [] : [join(workspace, "components")]),
+      ]);
+      const plan = yield* planComponentDeclaration({
+        surface: "component",
+        ...(planWriterRoot === undefined ? {} : { planWriterRoot }),
+        includes,
+        // The command's own Plugin assembly, not a second installation of it: two
+        // would be two catalogs claiming the same names.
+        plugins,
+        // The same seam `planAgentContext` already takes: production states none and
+        // gets the real ACPX runtime, and a proof states a scriptable one so a
+        // journey can drive this exact assembler rather than a copy of it.
+        context,
+        ...(sessions === undefined ? {} : { sessions }),
+        host,
+        // Plan review is answered by the REPL's own Elicit provider, which the
+        // session installs around the execution. A Component that installed one of
+        // its own here would answer the question in front of the person with
+        // something else.
+        installElicitation: noElicitationOfItsOwn,
+      });
+
+      return Object.freeze({
+        includes,
+        projectCwd,
+        vocabulary: entryVocabulary(includes, plugins),
+        // Read off the admitted assembly here, once, while it is in hand. Copied
+        // rather than referenced so nothing downstream can reach a Plugin value
+        // through the profile, and frozen because a profile is read and never
+        // changed.
+        plugins: names,
+        installations: Object.freeze([
+          ...installations,
+          Object.freeze({
+            components: agentIdentityComponents(),
+            declarations: Object.freeze([plan]),
+          }),
+        ]),
+        generated: ordinaryGeneratedSelection(),
+        permissionMode,
+        ...(entryInstallation === undefined ? {} : { entryInstallation }),
+        // Settled here, with the stack and the Plugins, because it is a fact about
+        // the command a person invoked rather than about any conversation they
+        // later have. Resolved rather than retained as "unstated": a profile that
+        // carried the absence would leave every reader of it to apply the fallback
+        // again, and the one place that applies it is the one place it is right.
+        sidekickAgent: agent,
+        // Built from the same resolved dependencies the provider stack above was
+        // installed with, so a journey that scripts the runtime drives this exact
+        // assembly rather than a second one standing in for it.
+        sidekickAssembly: sidekick,
+      });
+    },
   });
 }
 

@@ -33,7 +33,7 @@ import {
   withResolvers,
 } from "effection";
 import type { Operation, Result } from "effection";
-import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { runGit } from "./support/fixture-git.ts";
@@ -51,9 +51,19 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
 import { Execution } from "@executablemd/core/api";
 import { executeInstalled } from "@executablemd/core/host";
-import { collect, Elicitation } from "@executablemd/core";
+import { collect, Elicitation, useNormalizedOutput } from "@executablemd/core";
 import { useDenoRepositoryOperations } from "@executablemd/git/deno";
 import type { DenoRepositoryOperations } from "@executablemd/git/deno";
+import { denoReplEntry } from "../src/deno-repositories.ts";
+import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
+import {
+  useMountedRepl,
+  awaiting,
+  shows,
+  sendMessage,
+  mountedReading,
+} from "./fixtures/repl/issue-883/mounted-program.ts";
+import { createRepositoryRoot, runPhase } from "./fixtures/repl/issue-883/host.ts";
 import { useReplRepositoryRecording } from "../src/repl/repositories/deno/provider.ts";
 import { admitReplRepositoryHistory } from "../src/repl/repositories/admission.ts";
 import { useCompositionComponents } from "@executablemd/git";
@@ -168,10 +178,13 @@ function run(
   counted: Counters,
   options: {
     readonly cwd?: string;
+    readonly projectCwd?: string;
+    readonly workspace?: string;
     readonly between?: () => Operation<void>;
   } = {},
 ): Operation<Run> {
   return scoped(function* () {
+    yield* useNormalizedOutput();
     const path = join(fixture.root, "entry.md");
     yield* writeTextFile(path, source);
     const working = options.cwd ?? fixture.checkout;
@@ -207,7 +220,11 @@ function run(
     // what establishes the recording, inside the scope the invocation owns.
     yield* Execution.around({
       *init(_args, next): Operation<void> {
-        yield* useReplRepositoryRecording({ operations: countingOperations(counted) });
+        yield* useReplRepositoryRecording({
+          operations: countingOperations(counted),
+          ...(options.projectCwd === undefined ? {} : { projectCwd: options.projectCwd }),
+          ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
+        });
         yield* next();
       },
     });
@@ -314,6 +331,126 @@ function localRecords(events: readonly DurableEvent[]) {
 }
 
 describe("one entry's local file work", () => {
+  it("975: workspace acknowledgements restore before live I/O and only the suffix runs", function* () {
+    const fixture = yield* useFixture();
+    const workspace = join(fixture.root, "workspace");
+    yield* ensureDir(workspace);
+    yield* writeTextFile(join(workspace, "obsolete.md"), "remove");
+    const source = [
+      '<File path="note.md">A</File>',
+      '<File path="note.md" as="historical" />',
+      `<Dir path=${JSON.stringify(workspace)}><Dir path="nested">ensured</Dir></Dir>`,
+      '<File.Delete path="obsolete.md" />',
+      '<Elicit schema={{ type: "object" }} as="answer">Continue?</Elicit>',
+      "{historical}",
+      '<File path="suffix.md">suffix</File>',
+      '<File path="note.md" />',
+    ].join("\n");
+    const stream = new InMemoryStream();
+    const counted = counters();
+    const waiting = withResolvers<void>();
+    const placement = { cwd: workspace, workspace, projectCwd: fixture.checkout };
+    const live = yield* spawn(() =>
+      run(fixture, source, stream, counted, {
+        ...placement,
+        *between() {
+          yield* Elicitation.around({
+            *elicit() {
+              waiting.resolve();
+              return yield* suspend();
+            },
+          });
+        },
+      }),
+    );
+    yield* race([
+      waiting.operation,
+      (function* () {
+        yield* sleep(10_000);
+        throw new Error("workspace never waited");
+      })(),
+    ]);
+    const concurrent = yield* run(
+      fixture,
+      '<File path="concurrent.md">checkout remains available</File>',
+      new InMemoryStream(),
+      counters(),
+    );
+    expect(concurrent.refusal).toBe(undefined);
+    expect(yield* readTextFile(join(fixture.checkout, "concurrent.md"))).toBe(
+      "checkout remains available",
+    );
+    const prefix = [...(yield* stream.readAll())];
+    yield* live.halt();
+    expect(localRecords(prefix).map((record) => record.operation)).toEqual([
+      "file-write",
+      "file-read",
+      "dir-ensure",
+      "dir-ensure",
+      "file-delete",
+    ]);
+    expect(counted.discoveries).toEqual([fixture.checkout]);
+    yield* writeTextFile(join(workspace, "note.md"), "external");
+    yield* writeTextFile(join(workspace, "obsolete.md"), "recreated");
+    const restored = counters();
+    const again = yield* run(fixture, source, new InMemoryStream(prefix), restored, {
+      ...placement,
+      *between() {
+        yield* API.Files.around(
+          {
+            *writeTextFile([input], next) {
+              if (input.path === "note.md") {
+                throw new Error("repeated acknowledged write");
+              }
+              return yield* next(input);
+            },
+            *readTextFile([input], next) {
+              if (input.path === "note.md" && restored.writes.length === 0) {
+                throw new Error("refreshed historical read");
+              }
+              return yield* next(input);
+            },
+            *deleteFile() {
+              throw new Error("repeated acknowledged delete");
+            },
+            *ensureDirectory() {
+              throw new Error("repeated acknowledged ensure");
+            },
+          },
+          { at: "min" },
+        );
+        yield* Elicitation.around({
+          *elicit() {
+            return {};
+          },
+        });
+      },
+    });
+    expect(again.refusal).toBe(undefined);
+    expect(again.output).toContain("A");
+    expect(again.output).toContain("external");
+    expect(restored.writes).toEqual(["suffix.md"]);
+    expect(restored.reads).toEqual(["note.md"]);
+    expect(restored.ensures).toEqual([]);
+    expect(restored.deletes).toEqual([]);
+    expect(yield* readTextFile(join(workspace, "obsolete.md"))).toBe("recreated");
+    expect(yield* readTextFile(join(workspace, "note.md"))).toBe("external");
+  });
+
+  it("975: a workspace write without acknowledgement repeats", function* () {
+    const fixture = yield* useFixture();
+    const workspace = join(fixture.root, "workspace");
+    yield* ensureDir(workspace);
+    const placement = { cwd: workspace, workspace, projectCwd: fixture.checkout };
+    const source = '<File path="kept.md">kept</File>\n<File path="lost.md">lost</File>';
+    const first = yield* run(fixture, source, new InMemoryStream(), counters(), placement);
+    expect(first.refusal).toBe(undefined);
+    const counted = counters();
+    const again = yield* run(fixture, source, interrupted(first.events), counted, placement);
+    expect(again.refusal).toBe(undefined);
+    expect(counted.writes).toEqual(["lost.md"]);
+  });
+
   it("records an authored write, a delete and a Dir ensure once", function* () {
     const fixture = yield* useFixture();
     const counted = counters();
@@ -1036,5 +1173,78 @@ describe("one entry's local file work", () => {
     expect(again.output).toContain("the filesystem operation failed");
     expect(asked).toBe(0);
     expect(replayed.deletes).toEqual([]);
+  });
+});
+
+describe("975 — native Git keeps project selection and requires an authored checkout", () => {
+  it("refuses an operation left in workspace cwd without falling back to the project", function* () {
+    const project = yield* useTemporary("xmd-git-project-");
+    yield* useCompositionComponents();
+    yield* runGit(project, ["init", "-b", "main"]);
+    yield* until(writeFile(join(project, "request.md"), "project file"));
+    yield* runGit(project, ["add", "request.md"]);
+    yield* runGit(project, ["commit", "-m", "seed"]);
+    const repl = yield* useMountedRepl({
+      projectCwd: project,
+      hostFiles: true,
+      entryInstallation: denoReplEntry(
+        { runtime: "source", platform: "unix", execPath: "/nonexistent/xmd" },
+        join(project, "managed"),
+      ),
+    });
+    repl.fake.script({
+      reply:
+        '<Let as="code" select="code">\n```xmd\n<Dir path=' +
+        JSON.stringify(project) +
+        '><Git.Files as="files" /><Json value={files} /></Dir>\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />',
+    });
+    repl.fake.script({ reply: "<Output>Read the project checkout.</Output>" });
+    yield* sendMessage(repl, "read the known project checkout");
+    yield* awaiting(repl.terminal, "the project read", (one) =>
+      shows(one, "Read the project checkout."),
+    );
+    expect((yield* mountedReading(repl)).model.entries[0]?.terminal?.output).toContain(
+      "request.md",
+    );
+    repl.fake.script({
+      reply:
+        '<Let as="code" select="code">\n```xmd\n<Git.Files as="files" />\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />',
+    });
+    repl.fake.script({ reply: "<Output>Read the checkout refusal.</Output>" });
+    yield* sendMessage(repl, "read Git without entering the project");
+    yield* awaiting(repl.terminal, "the checkout refusal", (one) =>
+      shows(one, "Read the checkout refusal."),
+    );
+    expect(repl.fake.prompts[3]).toContain("inside none of the checkouts");
+    expect(repl.fake.prompts[3]).not.toContain("project file");
+  });
+});
+
+describe("975 — workspace recording crosses the process boundary", () => {
+  it("restores all acknowledged workspace operations and executes the suffix in the same directory", function* () {
+    const root = yield* createRepositoryRoot();
+    const stopped = yield* runPhase("workspace-start", root, "pending");
+    const execution = stopped.execution;
+    const workspace = stopped.workspace;
+    if (typeof execution !== "string" || typeof workspace !== "string") {
+      throw new Error("the stopped command reported no workspace identity");
+    }
+    expect(stopped.settled).toBe(false);
+    expect(String(stopped.records)).toContain(REPL_REPOSITORY_LOCAL);
+    yield* writeTextFile(join(workspace, "note.md"), "external");
+    yield* writeTextFile(join(workspace, "obsolete.md"), "recreated");
+    const continued = yield* runPhase("workspace-continue", root, execution);
+    expect(continued.execution).toBe(execution);
+    expect(continued.settled).toBe(true);
+    expect(continued.source).toBe(stopped.source);
+    expect(continued.live).toEqual({ reads: 1, writes: 1, deletes: 0, ensures: 0 });
+    expect(continued.output).toContain("A");
+    expect(continued.output).toContain("external");
+    expect(continued.note).toBe("external");
+    expect(continued.obsolete).toBe("recreated");
+    expect(continued.suffix).toBe("once");
+    expect(continued.sessions).toBe(0);
+    expect(continued.prompts).toBe(0);
+    yield* root.discard();
   });
 });

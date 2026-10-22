@@ -40,7 +40,7 @@ import {
   type Task,
   withResolvers,
 } from "effection";
-import type { ReplExecutionProfile } from "../repl-profile.ts";
+import type { ReplExecutionProfile, ReplProfileAssembly } from "../repl-profile.ts";
 
 import {
   admissionFor,
@@ -111,6 +111,7 @@ import {
   admitting as newAdmitting,
   blocking,
   coldReservation,
+  coldWorkspaceEntry,
   retainResolution,
   submitForSidekick,
   take,
@@ -123,6 +124,8 @@ import type { RootReading } from "./sidekick/requests.ts";
 import type { SubmitReceipt } from "./sidekick/controls.ts";
 import { pairedReplRepository } from "./sidekick/repository.ts";
 import type { SidekickWriter } from "./sidekick/history.ts";
+import { pairedLocation } from "./sidekick/history.ts";
+import { cwd } from "@executablemd/runtime";
 import type {
   PairedChatStorage,
   PairedReplExecution,
@@ -181,7 +184,7 @@ export interface ReplProgramOptions {
   /** The repository root. Defaults to this host's per-user data directory. */
   readonly root?: string;
   /** Everything this command settled before it opened a terminal. */
-  readonly profile: ReplExecutionProfile;
+  readonly profile: ReplExecutionProfile | ReplProfileAssembly;
 }
 
 /** What the command reports when it ends. */
@@ -267,15 +270,49 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
     }
   }
 
+  const workspace = pairedLocation(root, execution.id).directory;
+  const profile =
+    "finalize" in options.profile ? yield* options.profile.finalize(workspace) : options.profile;
+  const projectCwd = profile.projectCwd ?? (yield* cwd());
+  let unresolved: ColdReservation | undefined;
+  let resumedWorkspaceEntry: string | undefined;
+  if (execution.chat.form === "paired") {
+    const projected = projectRepl(yield* execution.stream.readAll());
+    if (!projected.ok) {
+      return yield* refuse(state, projected.error.message);
+    }
+    const cold = yield* coldReservation(
+      execution.chat.records,
+      projected.value.entries,
+      execution.chat.location.entries,
+    );
+    if (!cold.ok) {
+      return yield* refuse(state, blocking(cold.error));
+    }
+    const placement = yield* coldWorkspaceEntry(
+      execution.chat.records,
+      projected.value.entries,
+      execution.chat.location.entries,
+    );
+    if (!placement.ok) {
+      return yield* refuse(state, blocking(placement.error));
+    }
+    unresolved = cold.value;
+    resumedWorkspaceEntry = placement.value;
+  }
+
   const opened = yield* openReplSession({
     execution,
-    includes: options.profile.includes,
-    installations: options.profile.installations,
-    generated: options.profile.generated,
-    permissionMode: options.profile.permissionMode,
-    ...(options.profile.entryInstallation === undefined
+    projectCwd,
+    workspace,
+    ...(resumedWorkspaceEntry === undefined ? {} : { resumedWorkspaceEntry }),
+    includes: profile.includes,
+    installations: profile.installations,
+    generated: profile.generated,
+    permissionMode: profile.permissionMode,
+    ...(profile.entryInstallation === undefined
       ? {}
-      : { entryInstallation: options.profile.entryInstallation }),
+      : { entryInstallation: profile.entryInstallation }),
     ...(state.route.at === undefined ? {} : { selection: state.route.at }),
   });
 
@@ -289,7 +326,15 @@ export function* runReplProgram(options: ReplProgramOptions): Operation<Result<R
   // held in the older single file replaces the execution this command owns, so
   // the thing that can do it is the thing that owns it — and it is passed
   // privately rather than reached from anywhere a view or a reply could.
-  return yield* drive(opened.value, state, execution, options, repository);
+  return yield* drive(
+    opened.value,
+    state,
+    execution,
+    { ...options, profile },
+    repository,
+    unresolved,
+    workspace,
+  );
 }
 
 /**
@@ -569,9 +614,11 @@ function* drive(
   // previous process left a reservation unanswered. A legacy execution has no
   // chat history to have left one in.
   opened: PairedReplExecution,
-  options: ReplProgramOptions,
+  options: ReplProgramOptions & { readonly profile: ReplExecutionProfile },
   /** Where this execution lives, for the one write that replaces it. */
   repository: PairedReplRepository,
+  cold: ColdReservation | undefined,
+  workspace: string,
 ): Operation<Result<ReplOutcome>> {
   let state = start;
   /**
@@ -724,35 +771,7 @@ function* drive(
      * reopening a history writes nothing. It is retained at the first explicit
      * mutating action, which is where a person has asked for something.
      */
-    let unresolved: ColdReservation | undefined;
-    /** Why nothing may be admitted, when the two files disagree about one. */
-    let disagreement: string | undefined;
-    if (execution.chat.form === "paired") {
-      // The whole acknowledged history, not the prefix this screen opened at.
-      // Reopening at an earlier position asks the same question about the same
-      // reservation, and the entries that answer it are every entry the file
-      // holds — a reading of a shorter prefix would find a disagreement that
-      // only the opening position created.
-      const acknowledged = current.reading(undefined);
-      const cold = acknowledged.ok
-        ? yield* coldReservation(
-            execution.chat.records,
-            acknowledged.value.model.entries,
-            // The entry journal itself: what the reservation bound is its bytes,
-            // and a reading of parsed records cannot establish those.
-            execution.chat.location.entries,
-          )
-        : acknowledged;
-      if (cold.ok) {
-        unresolved = cold.value;
-      } else {
-        // Refused, and refused standing: the chat says one thing about the next
-        // entry slot and the entry history says another, and no reading of
-        // either establishes which. Admitting on top of that would be choosing.
-        disagreement = blocking(cold.error);
-        state = Object.freeze({ ...state, refusal: disagreement });
-      }
-    }
+    let unresolved = cold;
 
     /**
      * Write down any unanswered reservation, before this action takes effect.
@@ -807,7 +826,7 @@ function* drive(
     /** What reopening still requires, and what the screen is now true of. */
     const reopening: Reopening = {
       get blocked(): string | undefined {
-        return disagreement ?? upgrading;
+        return upgrading;
       },
       settle: settleReservation,
       facts: draftFacts,
@@ -1016,6 +1035,7 @@ function* drive(
      */
     const sidekick: SidekickOwner = yield* useSidekickOwner({
       assembly: options.profile.sidekickAssembly,
+      workspace,
       chat: execution.chat,
       *establish(): Operation<Result<PairedChatStorage>> {
         const held = execution.chat;
@@ -1074,7 +1094,7 @@ function* drive(
             // thing that knows when this entry actually starts: it asks after
             // the preflight, and a reply's submission is held to the same terms
             // there as a person's Run.
-            submit: (source, starting) => current.submit(source, undefined, starting),
+            submit: (source, starting) => current.submit(source, undefined, starting, true),
           },
           // Asked rather than carried: a reply's submission is reserved against
           // the draft as it stands when it asks — the same moment a person's

@@ -16,13 +16,25 @@
  * is what somebody actually does and reads.
  */
 
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile, readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { scoped } from "effection";
+import { ensureDir } from "@effectionx/fs";
+import { API, cwd, useHostFiles, Permissions } from "@executablemd/runtime";
+import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
+import { readGuideChapter } from "../src/repl/sidekick/guide.ts";
+import { pairedLocation } from "../src/repl/sidekick/history.ts";
+import { encodeLocation } from "../src/repl/route.ts";
+import { initialState } from "../src/repl/application.ts";
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { Ok, spawn, suspend, until, useScope, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 
+import { InMemoryStream } from "@executablemd/durable-streams";
+import { Elicitation } from "@executablemd/core";
+import { openReplSession } from "../src/repl/session.ts";
 import { previewGeneratedXmdRoot } from "@executablemd/core/host";
 import { projectSidekick } from "../src/repl/sidekick/model.ts";
 import type { SidekickReading } from "../src/repl/sidekick/model.ts";
@@ -61,6 +73,8 @@ import {
   shows,
   typing,
   useMountedRepl,
+  useMountedHost,
+  mountedExecution,
 } from "./fixtures/repl/issue-883/mounted-program.ts";
 import type { MountedRepl } from "./fixtures/repl/issue-883/mounted-program.ts";
 
@@ -2919,5 +2933,324 @@ describe("Tier EI — four reads make a saved failure diagnosable", () => {
       status: "failed",
     });
     expect(held.fake.prompts[base + 3] ?? "").toContain('stop reason \\"refusal\\"');
+  });
+});
+
+describe("975 — the shipped session component journey", () => {
+  it("creates, discovers and invokes a component, then reopens without work", function* () {
+    const project = yield* useTemporary("xmd-workspace-project-");
+    const host = yield* useMountedHost({
+      projectCwd: project,
+      hostFiles: true,
+    });
+    let execution = "";
+    let workspace = "";
+    let beforeEntries = "";
+    let beforeChat = "";
+    yield* until(writeFile(join(project, "request.md"), "project input"));
+    yield* scoped(function* () {
+      const repl = yield* useMountedRepl({ host });
+      execution = yield* mountedExecution(repl);
+      const location = pairedLocation(host.root, execution);
+      workspace = location.directory;
+      expect((yield* until(stat(join(workspace, "components")))).isDirectory()).toBe(true);
+      const chapter = yield* readGuideChapter("Entries");
+      if (!chapter.ok) {
+        throw chapter.error;
+      }
+      const journey =
+        chapter.value
+          .split("### Create and use a session component across responses")[1]
+          ?.split("### Read the repository")[0] ?? "";
+      const examples = [...journey.matchAll(/````xmd\n([\s\S]*?)\n````/g)].map((match) => match[1]);
+      expect(examples).toHaveLength(2);
+      const create = examples[0]!;
+      const invoke = examples[1]!;
+      expect(create).not.toContain("/known/project");
+      repl.fake.script({
+        reply:
+          '<Guide.Environment />\n<Guide.Entries />\n<REPL.Environment />\n<REPL.Syntax names={["File"]} />',
+      });
+      repl.fake.script({ reply: create });
+      repl.fake.script({ reply: "<REPL.Entry.Output entry={1} />" });
+      repl.fake.script({ reply: '<REPL.Syntax names={["Greeting"]} />' });
+      repl.fake.script({ reply: invoke });
+      repl.fake.script({ reply: "<REPL.Entry.Output entry={2} />" });
+      repl.fake.script({ reply: "<Output>Read the session greeting.</Output>" });
+      yield* sendMessage(repl, "create and use the session greeting");
+      yield* awaiting(repl.terminal, "the taught journey to finish", (one) =>
+        shows(one, "Read the session greeting."),
+      );
+      const read = yield* mountedReading(repl);
+      expect(read.model.entries.map((entry) => entry.source)).toEqual([
+        '<File path="components/Greeting.md">Hello from this session.</File>',
+        "<Greeting />",
+      ]);
+      expect(read.model.entries[0]?.terminal?.output).toBe("");
+      expect(read.model.entries[1]?.terminal?.output).toBe("Hello from this session.");
+      expect(yield* until(readFile(join(workspace, "components", "Greeting.md"), "utf8"))).toBe(
+        "Hello from this session.",
+      );
+      expect(repl.fake.prompts[1]).toContain(`- working directory: ${workspace}`);
+      expect(repl.fake.prompts[1]).toContain("# Environment");
+      expect(repl.fake.prompts[1]).toContain(chapter.value);
+      expect(repl.fake.prompts[2]).toContain("Entry entry-1 completed.");
+      expect(repl.fake.prompts[4]).toContain(join(workspace, "components", "Greeting.md"));
+      expect(repl.fake.prompts[6]).toContain("Hello from this session.");
+      expect(repl.fake.ensured[0]?.cwd).toBe(project);
+      const copy = `<Dir path=${JSON.stringify(project)}><File path="request.md" as="request" /></Dir>\n<File path="inputs/request.md">{request}</File>\n<Dir path="nested"><File path="inside.md">nested</File></Dir>\n<File path="notes.md">workspace sibling</File>`;
+      const source =
+        '<Let as="code" select="code">\n```xmd\n' +
+        copy +
+        "\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />";
+      repl.fake.script({ reply: source });
+      repl.fake.script({ reply: "<Output>Copied and wrote.</Output>" });
+      yield* sendMessage(repl, "copy the known project input and write notes");
+      yield* awaiting(repl.terminal, "the workspace copy", (one) =>
+        shows(one, "Copied and wrote."),
+      );
+      expect(yield* until(readFile(join(workspace, "inputs", "request.md"), "utf8"))).toBe(
+        "project input",
+      );
+      expect(yield* until(readFile(join(workspace, "nested", "inside.md"), "utf8"))).toBe("nested");
+      expect(yield* until(readFile(join(workspace, "notes.md"), "utf8"))).toBe("workspace sibling");
+      expect(yield* cwd()).toBe(project);
+      const sibling = yield* spawn(() => cwd());
+      expect(yield* sibling).toBe(project);
+      yield* focusDraft(repl.terminal);
+      yield* typing(repl.terminal, '<File path="manual.md">project manual</File>');
+      repl.terminal.feed("\r");
+      yield* awaiting(repl.terminal, "the manual successor", () => {
+        const output = screenOf(repl.terminal).join("\n");
+        return output.includes("entry-4") && output.includes("[ok]");
+      });
+      expect(yield* until(readFile(join(project, "manual.md"), "utf8"))).toBe("project manual");
+      beforeEntries = yield* until(readFile(location.entries, "utf8"));
+      beforeChat = yield* until(readFile(location.sidekick, "utf8"));
+      repl.terminal.end();
+      yield* awaiting(
+        repl.terminal,
+        "the first command to exit",
+        () => repl.outcome() !== undefined,
+      );
+    });
+    const calls = host.fake.prompts.length;
+    yield* until(writeFile(join(workspace, "notes.md"), "external edit"));
+    yield* scoped(function* () {
+      const repl = yield* useMountedRepl({
+        host,
+        location: encodeLocation(initialState(execution).route),
+      });
+      expect(host.fake.prompts).toHaveLength(calls);
+      expect(yield* until(readFile(pairedLocation(host.root, execution).entries, "utf8"))).toBe(
+        beforeEntries,
+      );
+      expect(yield* until(readFile(pairedLocation(host.root, execution).sidekick, "utf8"))).toBe(
+        beforeChat,
+      );
+      expect(yield* until(readFile(join(workspace, "notes.md"), "utf8"))).toBe("external edit");
+      expect(yield* until(readFile(join(workspace, "components", "Greeting.md"), "utf8"))).toBe(
+        "Hello from this session.",
+      );
+      repl.terminal.end();
+      yield* awaiting(
+        repl.terminal,
+        "the cold command to exit",
+        () => repl.outcome() !== undefined,
+      );
+    });
+    yield* scoped(function* () {
+      const repl = yield* useMountedRepl({ host });
+      const ids = yield* until(readdir(join(host.root, "v1")));
+      const other = ids.find((id) => id !== execution);
+      expect(other).toBeDefined();
+      const location = pairedLocation(host.root, other!);
+      expect(location.directory).not.toBe(workspace);
+      expect(yield* until(readdir(join(location.directory, "components")))).toEqual([]);
+      repl.terminal.end();
+      yield* awaiting(
+        repl.terminal,
+        "the second session to exit",
+        () => repl.outcome() !== undefined,
+      );
+    });
+  });
+});
+
+describe("975 — entry cwd ends with its actual owner", () => {
+  it("restores after body failure and cancellation, then admits a manual successor", function* () {
+    const project = yield* useTemporary("xmd-cwd-project-");
+    const workspace = yield* useTemporary("xmd-cwd-workspace-");
+    yield* useHostFiles();
+    yield* API.Env.around(
+      {
+        *cwd() {
+          return project;
+        },
+      },
+      { at: "min" },
+    );
+    const seen: string[] = [];
+    let mode = "fail";
+    yield* Elicitation.around({
+      *elicit([request], next) {
+        seen.push(yield* cwd());
+        if (mode === "fail") {
+          throw new Error("deliberate body failure");
+        }
+        if (mode === "cancel") {
+          return yield* next(request);
+        }
+        return { go: "yes" };
+      },
+    });
+    const source =
+      '<Dir path="inner"><Elicit schema={{ type: "object", properties: { go: { type: "string" } }, required: ["go"], additionalProperties: false }} as="answer">wait</Elicit></Dir>\n<File path="settled.md">settled</File>';
+    const failed = yield* openReplSession({
+      execution: { id: "failed", stream: new InMemoryStream() },
+      projectCwd: project,
+      workspace,
+    });
+    if (!failed.ok) {
+      throw failed.error;
+    }
+    const submission = yield* failed.value.submit(source, undefined, undefined, true);
+    if (!submission.ok) {
+      throw submission.error;
+    }
+    expect((yield* submission.value.join()).ok).toBe(false);
+    expect(seen[0]).toBe(join(workspace, "inner"));
+    expect(yield* cwd()).toBe(project);
+    expect(yield* yield* spawn(() => cwd())).toBe(project);
+    mode = "cancel";
+    const stream = new InMemoryStream();
+    yield* scoped(function* () {
+      const opened = yield* openReplSession({
+        execution: { id: "cancelled", stream },
+        projectCwd: project,
+        workspace,
+      });
+      if (!opened.ok) {
+        throw opened.error;
+      }
+      const submitted = yield* opened.value.submit(source, undefined, undefined, true);
+      if (!submitted.ok) {
+        throw submitted.error;
+      }
+      yield* awaited("the cancellable body", () => seen.length === 2);
+      expect((yield* opened.value.submit("manual too early")).ok).toBe(false);
+      expect(yield* cwd()).toBe(project);
+    });
+    expect(seen[1]).toBe(join(workspace, "inner"));
+    expect(yield* cwd()).toBe(project);
+    expect(yield* yield* spawn(() => cwd())).toBe(project);
+    mode = "answer";
+    const reopened = yield* openReplSession({
+      execution: { id: "cancelled", stream },
+      projectCwd: project,
+      workspace,
+      resumedWorkspaceEntry: "entry-1",
+    });
+    if (!reopened.ok) {
+      throw reopened.error;
+    }
+    expect((yield* reopened.value.join()).ok).toBe(true);
+    const manual = yield* reopened.value.submit(
+      '<File path="manual.md">manual after resume</File>',
+    );
+    if (!manual.ok) {
+      throw manual.error;
+    }
+    expect((yield* manual.value.join()).ok).toBe(true);
+    expect(yield* until(readFile(join(project, "manual.md"), "utf8"))).toBe("manual after resume");
+    expect(yield* until(readFile(join(workspace, "settled.md"), "utf8"))).toBe("settled");
+    expect(yield* cwd()).toBe(project);
+  });
+});
+
+describe("975 — configured-first lookup and unchanged permissions", () => {
+  function submitSource(source: string): string {
+    return (
+      '<Let as="code" select="code">\n```xmd\n' +
+      source +
+      "\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />"
+    );
+  }
+
+  it("one invocation-relative include wins in execution, validation and both Syntax forms", function* () {
+    const project = yield* useTemporary("xmd-configured-project-");
+    const configured = join(project, "configured");
+    yield* ensureDir(configured);
+    yield* ensureDir(join(project, "components"));
+    yield* until(writeFile(join(project, "components", "ProjectDefault.md"), "excluded default"));
+    yield* until(
+      writeFile(
+        join(configured, "Greeting.md"),
+        "---\ndescription: Configured greeting contract.\nprops:\n  type: object\n  properties:\n    selected: { type: string }\n  required: [selected]\n  additionalProperties: false\n---\nConfigured greeting.",
+      ),
+    );
+    const repl = yield* useMountedRepl({
+      projectCwd: project,
+      includes: ["configured"],
+      hostFiles: true,
+    });
+    const workspace = pairedLocation(repl.root, yield* mountedExecution(repl)).directory;
+    yield* until(writeFile(join(workspace, "components", "Greeting.md"), "Session collision."));
+    repl.fake.script({ reply: '<REPL.Syntax />\n<REPL.Syntax names={["Greeting"]} />' });
+    repl.fake.script({ reply: submitSource('<Greeting selected="configured" />') });
+    repl.fake.script({ reply: "<Output>Configured greeting completed.</Output>" });
+    yield* sendMessage(repl, "inspect and invoke the selected greeting");
+    yield* awaiting(repl.terminal, "the selected greeting", (one) =>
+      shows(one, "Configured greeting completed."),
+    );
+    const selected = yield* mountedReading(repl);
+    expect(selected.model.entries[0]?.terminal?.output).toBe("Configured greeting.");
+    expect(repl.fake.prompts[1]).toContain(join(configured, "Greeting.md"));
+    expect(repl.fake.prompts[1]).not.toContain("Session collision.");
+    expect(repl.fake.prompts[1]).not.toContain("ProjectDefault");
+    expect(repl.fake.prompts[1]?.match(/Configured greeting contract\./g)?.length).toBe(2);
+    yield* until(
+      writeFile(join(workspace, "components", "Broken.md"), "Later fallback must not execute."),
+    );
+    yield* until(writeFile(join(configured, "Broken.md"), "---\nprops: [\n---\nbroken"));
+    repl.fake.script({ reply: submitSource("<Broken />") });
+    repl.fake.script({ reply: "<Output>Inspected the malformed definition.</Output>" });
+    yield* sendMessage(repl, "inspect the broken selection");
+    yield* awaiting(repl.terminal, "the selected-definition refusal", (one) =>
+      shows(one, "Inspected the malformed definition."),
+    );
+    const refused = yield* mountedReading(repl);
+    expect(refused.model.entries).toHaveLength(1);
+    expect(repl.fake.prompts[4]).toContain("REPL.Submit");
+    expect(repl.fake.prompts[4]).not.toContain("Later fallback must not execute.");
+  });
+
+  it("a terminal Files denial leaves the component untouched and preserves explicit native cwd", function* () {
+    const project = yield* useTemporary("xmd-denied-project-");
+    const native = yield* useTemporary("xmd-native-project-");
+    yield* Permissions.around({ files: ([operation]) => operation !== "write" });
+    const repl = yield* useMountedRepl({
+      projectCwd: project,
+      hostFiles: true,
+      agentCwd: function* () {
+        return native;
+      },
+    });
+    const workspace = pairedLocation(repl.root, yield* mountedExecution(repl)).directory;
+    repl.fake.script({
+      reply: submitSource('<File path="components/Greeting.md">must not write</File>'),
+    });
+    repl.fake.script({ reply: "<REPL.Entry.Output entry={1} />" });
+    repl.fake.script({ reply: "<Output>Inspected the denied write.</Output>" });
+    yield* sendMessage(repl, "write a component");
+    yield* awaiting(repl.terminal, "the denied-write feedback", (one) =>
+      shows(one, "Inspected the denied write."),
+    );
+    expect(yield* until(readdir(join(workspace, "components")))).toEqual([]);
+    const read = yield* mountedReading(repl);
+    expect(read.model.entries).toHaveLength(1);
+    expect(read.model.entries[0]?.terminal?.output).toContain("permission");
+    expect(repl.fake.prompts[2]).toContain("permission");
+    expect(repl.fake.ensured[0]?.cwd).toBe(native);
   });
 });
