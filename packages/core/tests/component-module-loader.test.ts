@@ -9,6 +9,7 @@ import { createContext, ensure, scoped, spawn, suspend, until, withResolvers } f
 import type { Operation } from "effection";
 import * as moduleApi from "node:module";
 import { join } from "node:path";
+import { execPath } from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { collect, Component, execute, registerComponents, useNormalizedOutput } from "../mod.ts";
@@ -231,44 +232,46 @@ describe("ComponentModuleLoader", () => {
     });
   });
 
-  it("P1: loads under the preserved read-only envelope and retains authored write denial", function* () {
-    const directory = yield* useTempDirectory("component-loader-readonly-");
-    const direct = join(directory, "ReadOnly.ts");
-    yield* writeTextFile(
-      direct,
-      'export default function*() { const value: string = "ordinary-read-only-component"; return value; }',
-    );
-    const before = yield* readTextFile(direct);
-    const fixture = join(ROOT, "packages/core/tests/fixtures/component-module-readonly.ts");
-    for (const mode of ["read", "write"]) {
-      const result = yield* exec("deno", {
-        arguments: [
-          "run",
-          "--config",
-          join(ROOT, "deno.json"),
-          "--node-modules-dir=manual",
-          "--allow-read",
-          "--allow-env",
-          "--allow-import",
-          "--deny-write",
-          "--no-prompt",
-          "--cached-only",
-          "--frozen",
-          fixture,
-          directory,
-          mode,
-        ],
-      }).join();
-      expect({ mode, code: result.code, stderr: result.stderr }).toEqual({
-        mode,
-        code: 0,
-        stderr: "",
-      });
-      expect(result.stdout.trim()).toBe(
-        mode === "read" ? "ordinary-read-only-component" : "authored-write-denied",
+  if (cliRuntime() === "deno") {
+    it("P1: Deno loads under the preserved read-only envelope and retains authored write denial", function* () {
+      const directory = yield* useTempDirectory("component-loader-readonly-");
+      const direct = join(directory, "ReadOnly.ts");
+      yield* writeTextFile(
+        direct,
+        'export default function*() { const value: string = "ordinary-read-only-component"; return value; }',
       );
-    }
-    expect(yield* readTextFile(direct)).toBe(before);
-    expect((yield* readdir(directory)).sort()).toEqual(["ReadOnly.ts"]);
-  });
+      const before = yield* readTextFile(direct);
+      const fixture = join(ROOT, "packages/core/tests/fixtures/component-module-readonly.ts");
+      for (const mode of ["read", "write"]) {
+        const result = yield* exec(execPath, {
+          arguments: [
+            "run",
+            "--config",
+            join(ROOT, "deno.json"),
+            "--node-modules-dir=manual",
+            "--allow-read",
+            "--allow-env",
+            "--allow-import",
+            "--deny-write",
+            "--no-prompt",
+            "--cached-only",
+            "--frozen",
+            fixture,
+            directory,
+            mode,
+          ],
+        }).join();
+        expect({ mode, code: result.code, stderr: result.stderr }).toEqual({
+          mode,
+          code: 0,
+          stderr: "",
+        });
+        expect(result.stdout.trim()).toBe(
+          mode === "read" ? "ordinary-read-only-component" : "authored-write-denied",
+        );
+      }
+      expect(yield* readTextFile(direct)).toBe(before);
+      expect((yield* readdir(directory)).sort()).toEqual(["ReadOnly.ts"]);
+    });
+  }
 });

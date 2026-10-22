@@ -12,6 +12,7 @@
     "./component-modules/bun": "./component-modules/bun.ts"
   },
   "dependencies": {
+    "@babel/standalone": "8.0.7",
     "@effectionx/context-api": "0.6.0",
     "@effectionx/converge": "0.1.4",
     "@effectionx/fetch": "0.2.1",
@@ -38,7 +39,6 @@
     "remark": "15",
     "remend": "^1.2.2",
     "unist-util-select": "^5",
-    "yq.rs": "0.1.4",
-    "@babel/standalone": "8.0.7"
+    "yq.rs": "0.1.4"
   }
 }

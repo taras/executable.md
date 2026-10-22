@@ -17,9 +17,9 @@
     "@effectionx/process": "0.8.1",
     "@effectionx/test-adapter": "0.7.4",
     "@effectionx/timebox": "0.4.3",
+    "@executablemd/core": "workspace:*",
     "@executablemd/durable-streams": "workspace:*",
     "effection": "4.1.0",
-    "expect": "^30.0.0",
-    "@executablemd/core": "workspace:*"
+    "expect": "^30.0.0"
   }
 }
