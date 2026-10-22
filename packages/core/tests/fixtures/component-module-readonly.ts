@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { writeTextFile } from "@effectionx/fs";
 import { collect, execute, useNormalizedOutput } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { useDenoComponentModuleLoader } from "@executablemd/core/component-modules/deno";
+import { useDenoComponentModuleLoader } from "@executablemd/core/host/deno";
 
 main(function* () {
   const directory = argv[2];

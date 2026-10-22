@@ -1,4 +1,4 @@
-import { useComponentModuleLoader } from "@executablemd/test-support/component-modules";
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";

@@ -8,7 +8,7 @@ import {
 import { collect, execute, registerComponents, useNormalizedOutput } from "@executablemd/core";
 import { join } from "node:path";
 import { argv } from "node:process";
-import { useComponentModuleLoader } from "@executablemd/test-support/component-modules";
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
 
 main(function* () {
   yield* useComponentModuleLoader();

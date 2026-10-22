@@ -1,4 +1,4 @@
-import { useComponentModuleLoader } from "@executablemd/test-support/component-modules";
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
 /**
  * Tier CW — contextual working directory (spec §1.2).
  *

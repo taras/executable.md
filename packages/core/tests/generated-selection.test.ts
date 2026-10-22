@@ -1,4 +1,4 @@
-import { useComponentModuleLoader } from "@executablemd/test-support/component-modules";
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
 /**
  * Tier GS — the component forms a host offers generated XMD (spec §5.3.2).
  *

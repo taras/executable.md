@@ -1,4 +1,4 @@
-import { useComponentModuleLoader } from "@executablemd/test-support/component-modules";
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
 /**
  * Tier CIV — the identity a trusted host's component names its work after
  * (specs/executable-mdx-spec.md §5.6).

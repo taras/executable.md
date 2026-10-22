@@ -30,9 +30,9 @@
         ],
         "@executablemd/core": ["packages/core/mod.ts"],
         "@executablemd/core/api": ["packages/core/api.ts"],
-        "@executablemd/core/component-modules/deno": ["packages/core/component-modules/deno.ts"],
-        "@executablemd/core/component-modules/node": ["packages/core/component-modules/node.ts"],
-        "@executablemd/core/component-modules/bun": ["packages/core/component-modules/bun.ts"],
+        "@executablemd/core/host/deno": ["packages/core/component-modules/deno.ts"],
+        "@executablemd/core/host/node": ["packages/core/component-modules/node.ts"],
+        "@executablemd/core/host/bun": ["packages/core/component-modules/bun.ts"],
         "@executablemd/core/host": ["packages/core/host.ts"],
         "@executablemd/durable-streams": ["packages/durable-streams/mod.ts"],
         "@executablemd/git": ["packages/git/mod.ts"],
@@ -74,15 +74,9 @@
         ],
         "@executablemd/core": ["../../packages/core/mod.ts"],
         "@executablemd/core/api": ["../../packages/core/api.ts"],
-        "@executablemd/core/component-modules/deno": [
-          "../../packages/core/component-modules/deno.ts"
-        ],
-        "@executablemd/core/component-modules/node": [
-          "../../packages/core/component-modules/node.ts"
-        ],
-        "@executablemd/core/component-modules/bun": [
-          "../../packages/core/component-modules/bun.ts"
-        ],
+        "@executablemd/core/host/deno": ["../../packages/core/component-modules/deno.ts"],
+        "@executablemd/core/host/node": ["../../packages/core/component-modules/node.ts"],
+        "@executablemd/core/host/bun": ["../../packages/core/component-modules/bun.ts"],
         "@executablemd/core/host": ["../../packages/core/host.ts"],
         "@executablemd/durable-streams": ["../../packages/durable-streams/mod.ts"],
         "@executablemd/git": ["../../packages/git/mod.ts"],

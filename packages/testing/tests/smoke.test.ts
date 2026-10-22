@@ -1,3 +1,4 @@
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
@@ -100,6 +101,7 @@ interface SmokeSession {
 
 function* runSmokeSession(options: ExecuteOptions): Operation<SmokeSession> {
   return yield* scoped(function* () {
+    yield* useComponentModuleLoader();
     yield* useStubService(Object.freeze({ hostname: SERVICE_HOSTNAME, port: 45_678 }));
     const tests = yield* useTesting();
     const execution = yield* execute(options);

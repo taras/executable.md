@@ -10,7 +10,7 @@
     "./journal": "./journal.ts",
     "./launch": "./launch.ts",
     "./temp": "./temp.ts",
-    "./component-modules": "./component-modules.ts"
+    "./host": "./host.ts"
   },
   "dependencies": {
     "@effectionx/fs": "0.3.0",
