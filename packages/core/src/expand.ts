@@ -141,7 +141,8 @@ import {
   ephemeral,
   StaleInputError,
 } from "@executablemd/durable-streams";
-import type { Workflow } from "@executablemd/durable-streams";
+import type { DurablePosition, Workflow } from "@executablemd/durable-streams";
+import { SourceOwner } from "./source-owner.ts";
 import { SchemaValidationError, validateProps, validateReturnValue } from "./validate.ts";
 import { isJsonObject, parseJson } from "./json.ts";
 import { healSegment } from "./heal.ts";
@@ -201,6 +202,7 @@ export type ComponentImportTerminal = (
   name: string,
   position: Readonly<SourcePosition> | undefined,
   selection: ImportSelection | undefined,
+  admitted?: (owner: DurablePosition) => void,
 ) => Operation<ComponentDefinition | FunctionComponentDefinition>;
 
 export function createBlockCounter(): BlockCounter {
@@ -385,6 +387,7 @@ interface ProjectionState {
 }
 
 interface ProjectionFrame {
+  sourceOwner: DurablePosition | undefined;
   env: EvalEnv | undefined;
   meta: Record<string, unknown>;
   props: Record<string, Json>;
@@ -468,6 +471,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     inner: ProjectionHandle | undefined;
     loop: LoopFrame | undefined;
     returnFrame: ReturnBody | undefined;
+    sourceOwner: DurablePosition | undefined;
     errors: Segment[];
     /**
      * The caller's region, when this projection renders into one. Structural
@@ -505,6 +509,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       const task = contentScope.scope.run(function* () {
         try {
           yield* ErrorMode.set(options.mode);
+          yield* SourceOwner.set(options.sourceOwner);
           if (state.narrowedSyntax !== undefined) {
             yield* useNarrowedSyntax(state.narrowedSyntax);
           }
@@ -607,6 +612,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         const task = contentScope.scope.run(function* () {
           try {
             yield* ErrorMode.set(mode);
+            yield* SourceOwner.set(frame.sourceOwner);
             if (state.narrowedSyntax !== undefined) {
               yield* useNarrowedSyntax(state.narrowedSyntax);
             }
@@ -684,6 +690,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         inner: state.enclosing,
         loop: state.callerLoop,
         returnFrame: state.callerReturn,
+        sourceOwner: state.caller.sourceOwner,
         errors: [],
         owner,
         path: extendPath(elementPath, { f: "proj" }),
@@ -2806,6 +2813,12 @@ function* expandComponent(
     }
 
     let imported: ComponentDefinition | FunctionComponentDefinition;
+    let importedOwner: DurablePosition | undefined;
+    let admissions = 0;
+    const admitted = (coordinate: DurablePosition): void => {
+      admissions += 1;
+      importedOwner = admissions === 1 ? coordinate : undefined;
+    };
     // Opened before the ask and settled the moment it answers, however it
     // answered: what canonical resolution selected here is what decides whether
     // this invocation is in one of this execution's identity domains, and nothing
@@ -2852,7 +2865,7 @@ function* expandComponent(
           imports === undefined
             ? yield* importComponent(name, position)
             : yield* importThroughTerminal(name, position, (asked, at) =>
-                imports(asked, at, selection),
+                imports(asked, at, selection, admitted),
               );
       } finally {
         offered?.close();
@@ -3064,6 +3077,7 @@ function* expandComponent(
     // Use the caller's eval env for the same reason: expression props (e.g.
     // {pr}) resolve against the scope where the JSX was written.
     const capturedCallerEnv = callerEvalEnv ?? componentEnv;
+    const callerSourceOwner = yield* SourceOwner.get();
     // A body eval block can render errors away through a string projection
     // (renderChildren, render, useContent); the buffer records them so an
     // `as=` capture can be refused (§6.5).
@@ -3094,12 +3108,14 @@ function* expandComponent(
         children,
         narrowedSyntax: undefined,
         caller: {
+          sourceOwner: callerSourceOwner,
           env: capturedCallerEnv,
           meta: callerMeta,
           props: callerProps,
           hideSet,
         },
         authored: {
+          sourceOwner: importedOwner,
           env: componentEnv,
           meta: definition.meta,
           props: validatedProps,
@@ -3171,26 +3187,28 @@ function* expandComponent(
     if (returns !== undefined) {
       let value: Json;
       try {
-        value = yield* withInvocation(function* (invocation) {
-          yield* installInvocation(invocation);
-          return yield* expandValueBody(
-            name,
-            returns,
-            definition.bodySegments,
-            children,
-            definition.meta,
-            validatedProps,
-            newHideSet,
-            counter,
-            callerEvalEnv ?? undefined,
-            claimProjection,
-            path,
-            checkedFailures,
-            bodyEnvironment,
-            imports,
-            returnBody,
-          );
-        }, observed.settled);
+        value = yield* SourceOwner.with(importedOwner, () =>
+          withInvocation(function* (invocation) {
+            yield* installInvocation(invocation);
+            return yield* expandValueBody(
+              name,
+              returns,
+              definition.bodySegments,
+              children,
+              definition.meta,
+              validatedProps,
+              newHideSet,
+              counter,
+              callerEvalEnv ?? undefined,
+              claimProjection,
+              path,
+              checkedFailures,
+              bodyEnvironment,
+              imports,
+              returnBody,
+            );
+          }, observed.settled),
+        );
       } catch (error) {
         // Body fail-fast propagates unchanged; a return-value failure is the
         // component's own printed error and follows the caller's error mode.
@@ -3221,25 +3239,27 @@ function* expandComponent(
     // Where this body's own segments start, so what it renders can be told apart
     // from what the caller had already produced into the same array.
     const renderedFrom = bodyOwner?.length ?? 0;
-    const expanded = yield* withInvocation(function* (invocation) {
-      yield* installInvocation(invocation);
-      return yield* expandBody(
-        definition.bodySegments,
-        children,
-        definition.meta,
-        validatedProps,
-        newHideSet,
-        counter,
-        callerEvalEnv ?? undefined,
-        claimProjection,
-        bodyOwner,
-        path,
-        checkedFailures,
-        bodyEnvironment,
-        imports,
-        returnBody,
-      );
-    }, observed.settled);
+    const expanded = yield* SourceOwner.with(importedOwner, () =>
+      withInvocation(function* (invocation) {
+        yield* installInvocation(invocation);
+        return yield* expandBody(
+          definition.bodySegments,
+          children,
+          definition.meta,
+          validatedProps,
+          newHideSet,
+          counter,
+          callerEvalEnv ?? undefined,
+          claimProjection,
+          bodyOwner,
+          path,
+          checkedFailures,
+          bodyEnvironment,
+          imports,
+          returnBody,
+        );
+      }, observed.settled),
+    );
 
     // Exact source is a provenance, and both halves of it are read here from
     // things no answer can write: that canonical execution authorized this import
@@ -3534,6 +3554,7 @@ function* expandFunctionComponent(
   // the mode inside an invocation differ from the mode at its site — governs
   // the component and not the text somebody else put inside it (§6.9).
   const siteErrorMode = (yield* ErrorMode.get()) ?? "print";
+  const sourceOwner = yield* SourceOwner.get();
 
   const expansion = snapshot(path, name, position);
 
@@ -3608,12 +3629,14 @@ function* expandFunctionComponent(
           children,
           narrowedSyntax: undefined,
           caller: {
+            sourceOwner,
             env: undefined,
             meta: callerMeta,
             props: callerProps,
             hideSet,
           },
           authored: {
+            sourceOwner,
             env: undefined,
             meta: callerMeta,
             props: callerProps,

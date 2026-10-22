@@ -139,7 +139,7 @@ import { GeneratedDataExpressions, validateDataExpression } from "./generated-ex
 import { capturedBinding } from "./invocation-rules.ts";
 import { renderSegments } from "./render.ts";
 import { scanSegments } from "./scanner.ts";
-import { sourceDescription } from "./source-position.ts";
+import { SourceOwner, sourceOwnerDescription } from "./source-owner.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
 // The ordinary source rules, read rather than reimplemented: a construct means
 // one thing whether a person wrote it or an Agent did.
@@ -2232,12 +2232,13 @@ function* persistAdmission(
   marker: RecordMarker,
   language: AdmissionLanguage,
 ): Operation<Json> {
+  const sourceOwner = yield* SourceOwner.get();
   const stored = yield createDurableOperation<DurableJson>(
     {
       type: GENERATED_XMD,
       name: `generated:${id}`,
       input: policyRecord(policy, marker),
-      ...sourceDescription(position),
+      ...sourceOwnerDescription(position, sourceOwner),
     },
     () => admitSource(id, source, table, policy, marker, language),
   );
@@ -2325,6 +2326,7 @@ function expand(
   owner: Segment[] | undefined,
 ): Operation<string> {
   return scoped(function* () {
+    yield* SourceOwner.set(undefined);
     // A root selects what it renders, so a failure inside it renders as the
     // document's own partial output rather than throwing the whole evaluation
     // away. A fragment is admitted *into* a document and keeps throwing.

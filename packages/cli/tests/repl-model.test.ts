@@ -1,3 +1,11 @@
+import { scoped, spawn, suspend, withResolvers } from "effection";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import {
+  legacyOwners,
+  OWNER_ENTRY,
+  OWNER_FIELD,
+  ownerRun,
+} from "./fixtures/repl/source-ownership.ts";
 /**
  * What the REPL knows, and where it learned it (#848 M1, M2).
  *
@@ -12,7 +20,7 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { useTempFileCompiler } from "@executablemd/core";
+import { Component, useTempFileCompiler } from "@executablemd/core";
 import { parseDurableEvent, serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 
@@ -414,7 +422,7 @@ describe("REPL model: the histories it refuses", () => {
           column: 1,
         },
       }));
-      expect(refusal(elsewhere)).toContain("never admitted");
+      expect(refusal(elsewhere)).toContain("different source");
     }
   });
 
@@ -851,7 +859,7 @@ describe("REPL model: the Agent histories it refuses", () => {
       ...description,
       "executablemd.source-position": { path: "somewhere-else.md", offset: 0, line: 1, column: 1 },
     }));
-    expect(refusal(elsewhere)).toContain("never admitted");
+    expect(refusal(elsewhere)).toContain("different source");
 
     const corrupted = withDescription(events, at, (description) => ({
       ...description,
@@ -1404,5 +1412,239 @@ describe("REPL model: which call of a repeated source owns its work", () => {
       ]),
     ).toContain("more than once");
     yield* useTempFileCompiler();
+  });
+});
+
+describe("REPL source ownership by import coordinate (#976)", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("SO1: sequential nested calls keep their own answers at every prefix and after serialization", function* () {
+    const run = yield* ownerRun();
+    expect(run.output.trim()).toBe("first/second");
+    for (let end = 1; end <= run.events.length; end++) {
+      const events = run.events.slice(0, end);
+      const model = projected(events);
+      expect(projected(copied(events))).toEqual(model);
+      const wrappers = only(model)?.scopes ?? [];
+      for (const [index, wrapper] of wrappers.entries()) {
+        const leaf = wrapper.scopes[0];
+        expect(leaf?.name ?? "OwnerLeaf").toBe("OwnerLeaf");
+        for (const question of leaf?.elicitations ?? []) {
+          expect(question).toMatchObject({ answer: index === 0 ? "first" : "second" });
+        }
+      }
+    }
+    const leafImports = run.events.filter(
+      (event) => event.type === "yield" && event.description.name === "OwnerLeaf",
+    );
+    expect(
+      leafImports.map((event) =>
+        event.type === "yield" ? event.description[OWNER_FIELD] : undefined,
+      ),
+    ).toEqual([
+      { coroutineId: "root", index: 1 },
+      { coroutineId: "root", index: 5 },
+    ]);
+    const entry = only(projected(run.events));
+    expect(entry?.scopes.map((wrapper) => wrapper.scopes.map((leaf) => leaf.name))).toEqual([
+      ["OwnerLeaf"],
+      ["OwnerLeaf"],
+    ]);
+    expect(entry?.bindings).toEqual([
+      { name: "first", value: "first" },
+      { name: "second", value: "second" },
+    ]);
+  });
+
+  it("SO2: repeated loop sites and caller Content keep their lexical source owner", function* () {
+    const source =
+      '<Loop max={2}><OwnerWrapper input="same" as="item" /></Loop>\n<OwnerContent><OwnerWrapper input="caller" as="answer" /></OwnerContent>';
+    const run = yield* ownerRun(source);
+    const entry = only(projected(run.events));
+    expect(entry?.scopes.map((scope) => scope.name)).toEqual([
+      "OwnerWrapper",
+      "OwnerWrapper",
+      "OwnerContent",
+      "OwnerWrapper",
+    ]);
+    expect(entry?.scopes[2].scopes).toEqual([]);
+    expect(
+      entry?.scopes
+        .filter((scope) => scope.name === "OwnerWrapper")
+        .map((scope) => scope.scopes[0]?.elicitations[0]),
+    ).toMatchObject([{ answer: "same" }, { answer: "same" }, { answer: "caller" }]);
+    const wrappers = run.events.filter(
+      (event) => event.type === "yield" && event.description.name === "OwnerWrapper",
+    );
+    expect(wrappers).toHaveLength(3);
+    const yields = run.events.filter((event) => event.type === "yield");
+    const wrapperCoordinates = yields.flatMap((event, index) =>
+      event.description.name === "OwnerWrapper" ? [{ coroutineId: event.coroutineId, index }] : [],
+    );
+    const leafOwners = yields
+      .filter((event) => event.description.name === "OwnerLeaf")
+      .map((event) => event.description[OWNER_FIELD]);
+    expect(leafOwners).toEqual(wrapperCoordinates);
+    expect(
+      wrappers[0].type === "yield" && wrappers[0].description["executablemd.source-position"],
+    ).toEqual(
+      wrappers[1].type === "yield" && wrappers[1].description["executablemd.source-position"],
+    );
+
+    for (const event of wrappers) {
+      if (event.type === "yield") {
+        expect(event.description[OWNER_FIELD]).toEqual({ coroutineId: "root", index: 0 });
+      }
+    }
+  });
+
+  it("SO7: ordinary middleware copies preserve evaluated blocks' source ownership", function* () {
+    const source = [
+      '<OwnerEval input="first" as="first" />',
+      '<OwnerEval input="second" as="second" />',
+      "<OwnerContent>",
+      "```js eval",
+      'const callerValue = "caller";',
+      "```",
+      "</OwnerContent>",
+      "{first}/{second}",
+    ].join("\n");
+    for (const copy of [false, true]) {
+      yield* scoped(function* () {
+        let forwarded = 0;
+        if (copy) {
+          yield* Component.around({
+            *applyModifiers([modifiers, block], next) {
+              forwarded += 1;
+              return yield* next(modifiers, { ...block });
+            },
+          });
+        }
+        const run = yield* ownerRun(source);
+        expect(run.output.trim()).toBe("first/second");
+        expect(forwarded).toBe(copy ? 3 : 0);
+        const evaluations = run.events.filter(
+          (event) => event.type === "yield" && event.description.type === "eval",
+        );
+        expect(
+          evaluations.map((event) =>
+            event.type === "yield" ? event.description[OWNER_FIELD] : undefined,
+          ),
+        ).toEqual([
+          { coroutineId: "root", index: 1 },
+          { coroutineId: "root", index: 3 },
+          { coroutineId: "root", index: 0 },
+        ]);
+        for (let end = 1; end <= run.events.length; end++) {
+          const prefix = run.events.slice(0, end);
+          expect(projected(copied(prefix))).toEqual(projected(prefix));
+        }
+        const entry = only(projected(copied(run.events)));
+        if (entry === undefined) {
+          throw new Error("the journal admits one entry");
+        }
+        expect(entry.scopes.map((scope) => scope.bindings)).toEqual([
+          [{ name: "value", value: "first" }],
+          [{ name: "value", value: "second" }],
+          [],
+        ]);
+        expect(binding(entry, "callerValue")).toBe("caller");
+      });
+    }
+  });
+
+  it("SO5: an interrupted legacy prefix continues with links to its existing import coordinates", function* () {
+    const reached = withResolvers<void>();
+    const source = '<Elicit schema={{type: "string"}} as="ack">ack</Elicit>\n' + OWNER_ENTRY;
+    const stream = new InMemoryStream();
+    let performed = 0;
+    let prefix: DurableEvent[] = [];
+    yield* scoped(function* () {
+      const running = yield* spawn(() =>
+        ownerRun(source, stream, function* (message) {
+          if (message.trim() === "first") {
+            reached.resolve();
+            yield* suspend();
+          }
+          performed += 1;
+          return message.trim();
+        }),
+      );
+      yield* reached.operation;
+      prefix = yield* stream.readAll();
+      yield* running.halt();
+    });
+    expect(performed).toBe(1);
+    expect(prefix.every((event) => event.type !== "close")).toBe(true);
+    for (const old of [false, true]) {
+      const initial = old ? legacyOwners(prefix) : copied(prefix);
+      const continuing = new InMemoryStream(initial);
+      const continued = yield* ownerRun(source, continuing, function* (message) {
+        performed += 1;
+        return message.trim();
+      });
+      expect(continued.output.trim()).toBe("first/second");
+      expect(continued.events.slice(0, initial.length)).toEqual(initial);
+      const model = projected(continued.events);
+      expect(
+        only(model)?.scopes.map((wrapper) => wrapper.scopes[0]?.elicitations[0]),
+      ).toMatchObject([{ answer: "first" }, { answer: "second" }]);
+      const suffix = continued.events.slice(initial.length);
+      const question = suffix.find(
+        (event) => event.type === "yield" && event.description.type === "elicit",
+      );
+      if (question?.type !== "yield") {
+        throw new Error("the suffix records its second answer");
+      }
+      const owner = question.description[OWNER_FIELD];
+      expect(owner).toEqual({ coroutineId: "root", index: initial.length - 2 });
+    }
+    expect(performed).toBe(5);
+  });
+
+  it("SO6: legacy uniqueness, legacy ambiguity and invalid explicit links retain their distinct refusals", function* () {
+    const reference = yield* referenceEvents();
+    expect(projected(legacyOwners(reference))).toEqual(projected(reference));
+    const run = yield* ownerRun();
+    expect(refusal(legacyOwners(run.events))).toContain("more than once");
+    const at = run.events.findIndex(
+      (event) => event.type === "yield" && event.description.name === "OwnerLeaf",
+    );
+    const invalid: Json[] = [
+      null,
+      {},
+      { coroutineId: "root", index: -1 },
+      { coroutineId: "root", index: 999 },
+      { coroutineId: "root", index: 5 },
+      { coroutineId: "missing", index: 0 },
+      { coroutineId: "root", index: 0 },
+    ];
+    for (const reference of invalid) {
+      expect(
+        refusal(
+          withDescription(run.events, at, (description) => ({
+            ...description,
+            [OWNER_FIELD]: reference,
+          })),
+        ),
+      ).toMatch(/owner/);
+    }
+    const legacy = [...entryAdmitted(), calledPlan("root.0"), askedInPlan("root.1")];
+    expect(
+      refusal(
+        withDescription(legacy, 2, (description) => ({
+          ...description,
+          [OWNER_FIELD]: { coroutineId: "root.0", index: 0 },
+        })),
+      ),
+    ).toContain("not part of");
+    expect(
+      refusal([
+        ...entryAdmitted(),
+        calledPlan("root.0"),
+        calledPlan("root.0"),
+        askedInPlan("root.0"),
+      ]),
+    ).toContain("more than once");
   });
 });

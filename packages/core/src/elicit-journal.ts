@@ -26,6 +26,7 @@
 
 import {
   createDurableOperation,
+  ephemeral,
   ReplayGuard,
   StaleInputError,
 } from "@executablemd/durable-streams";
@@ -38,7 +39,7 @@ import type { Operation } from "effection";
 
 import { canonicalFingerprint } from "./canonical.ts";
 import { isJsonObject, parseJson } from "./json.ts";
-import { sourceDescription } from "./source-position.ts";
+import { SourceOwner, sourceOwnerDescription } from "./source-owner.ts";
 import type { Json, JsonObject, SourcePosition } from "./types.ts";
 
 const ELICIT = "elicit";
@@ -148,13 +149,14 @@ export function* persistElicitation(
   identity: ElicitationIdentity,
   live: () => Operation<Json>,
 ): Workflow<Json> {
+  const sourceOwner = yield* ephemeral(SourceOwner.get());
   const stored = yield createDurableOperation<DurableJson>(
     {
       type: ELICIT,
       name: recordName(identity.location),
       input: identity.fingerprint,
       [ELICITATION_SCHEMA_FIELD]: identity.schema,
-      ...sourceDescription(identity.position),
+      ...sourceOwnerDescription(identity.position, sourceOwner),
     },
     function* (): Operation<DurableJson> {
       return parseJson(yield* live());

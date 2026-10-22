@@ -1,3 +1,4 @@
+import { OWNER_DIRECTORY, OWNER_ENTRY } from "./fixtures/repl/source-ownership.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import {
@@ -11,8 +12,9 @@ import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import { scoped, sleep, until } from "effection";
 import type { Operation } from "effection";
-import { readdir } from "node:fs/promises";
+import { readdir, symlink } from "node:fs/promises";
 import { join, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { platform } from "node:os";
 import { platformDataRoot } from "../src/repl-assembly.ts";
 import { projectRepl } from "../src/repl/model.ts";
@@ -82,24 +84,19 @@ function modelOf(bytes: string) {
 }
 
 function* completed(pty: Pty, history: string, count: number): Operation<string> {
-  const deadline = Date.now() + ACT_MS;
-  while (true) {
-    const bytes = yield* readTextFile(history);
-    const model = modelOf(bytes);
-    if (
-      model.entries.length === count &&
-      model.entries.every((entry) => entry.terminal?.status === "ok")
-    ) {
-      yield* showing(pty, `Ready for Entry ${count + 1}`, ACT_MS);
-      return bytes;
-    }
-    if (Date.now() > deadline) {
-      throw new Error(
-        `entries never closed. history=${bytes} screen=${JSON.stringify(yield* pty.shows())}`,
-      );
-    }
-    yield* sleep(150);
+  // Ready requires the journal close and the entry's joined teardown.
+  yield* showing(pty, `Ready for Entry ${count + 1}`, ACT_MS);
+  const bytes = yield* readTextFile(history);
+  const model = modelOf(bytes);
+  if (
+    model.entries.length !== count ||
+    model.entries.some((entry) => entry.terminal?.status !== "ok")
+  ) {
+    throw new Error(
+      `entries never closed. history=${bytes} screen=${JSON.stringify(yield* pty.shows())}`,
+    );
   }
+  return bytes;
 }
 
 function* leave(pty: Pty): Operation<string> {
@@ -259,5 +256,143 @@ describe("REPL includes through the production source terminal", () => {
         yield* leave(pty);
       });
     }
+  });
+});
+
+describe("REPL sequential source owners through a real terminal (#976)", () => {
+  it("SO3–SO4: inspect both nested calls, then reopen completed work in another process without repeating its provider", function* () {
+    const root = yield* useTempDirectory("xmd-o-");
+    const workspace = join(root, "workspace");
+    const includes = join(root, "components");
+    const home = join(root, "home");
+    for (const directory of [workspace, includes, home]) {
+      yield* ensureDir(directory);
+    }
+    yield* writeTextFile(join(root, "package.json"), JSON.stringify({ type: "module" }));
+    yield* until(
+      symlink(
+        fileURLToPath(new URL("../../../node_modules", import.meta.url)),
+        join(root, "node_modules"),
+        "dir",
+      ),
+    );
+    for (const file of ["OwnerWrapper.md", "OwnerLeaf.md", "OwnerAnswer.ts"]) {
+      yield* writeTextFile(join(includes, file), yield* readTextFile(join(OWNER_DIRECTORY, file)));
+    }
+    let cache = "";
+    if (cliRuntime() === "deno") {
+      const info: unknown = JSON.parse((yield* runShell("deno info --json").expect()).stdout);
+      if (
+        typeof info !== "object" ||
+        info === null ||
+        !("denoDir" in info) ||
+        typeof info.denoDir !== "string"
+      ) {
+        throw new Error("deno info supplied no prepared cache path");
+      }
+      cache = `DENO_DIR=${shellQuote(info.denoDir)} `;
+    }
+    const line = (args: string[]): string =>
+      `cd ${shellQuote(workspace)} && ${cache}${cliShellCommand(["repl", ...args, "--include", includes, "--deny-all"])}`;
+    const source = `<OwnerAnswer path="provider-calls.txt">\n${OWNER_ENTRY}\n</OwnerAnswer>`;
+    let location = "";
+    let history = "";
+    let retained = "";
+    function* activateKey(pty: Pty, label: string, occurrence = 0): Operation<void> {
+      for (let step = 0; step < 160; step++) {
+        const screen = yield* pty.shows();
+        const matching = screen.filter((line) => {
+          const at = line.indexOf(label);
+          return at >= 0 && (!label.startsWith("component ") || at < 36);
+        });
+        const row = matching[occurrence];
+        const focused = label.startsWith("component ")
+          ? row !== undefined && row.slice(0, row.indexOf(label)).includes(">")
+          : screen.some((line) => {
+              for (let at = line.indexOf(">"); at !== -1; at = line.indexOf(">", at + 1)) {
+                if (
+                  line
+                    .slice(at + 1)
+                    .trimStart()
+                    .replace(/^\* /, "")
+                    .startsWith(label)
+                ) {
+                  return true;
+                }
+              }
+              return false;
+            });
+        if (focused) {
+          yield* pty.type("\r");
+          yield* sleep(150);
+          return;
+        }
+        yield* pty.type("\t");
+        yield* sleep(40);
+      }
+      throw new Error(
+        `focus never reached ${label} (${occurrence}): ${JSON.stringify(yield* pty.shows())}`,
+      );
+    }
+    function* inspect(pty: Pty): Operation<void> {
+      for (const [index, expected] of ["first", "second"].entries()) {
+        yield* activateKey(pty, "component OwnerLeaf", index);
+        yield* showingAcross(pty, '<OwnerWrapper input="first"', ACT_MS);
+        yield* showingAcross(pty, '<OwnerWrapper input="second"', ACT_MS);
+        yield* activateKey(pty, "Bindings");
+        yield* activateKey(pty, "answered");
+        yield* showing(pty, "[close]", ACT_MS);
+        yield* showing(pty, JSON.stringify(expected), ACT_MS);
+        yield* pty.type("\x1b");
+        yield* sleep(150);
+      }
+      yield* activateKey(pty, "1. [ok]");
+      yield* showing(pty, "first/second", ACT_MS);
+      for (const name of ["first", "second"]) {
+        yield* activateKey(pty, name);
+        yield* showing(pty, "[close]", ACT_MS);
+        yield* showing(pty, JSON.stringify(name), ACT_MS);
+        yield* pty.type("\x1b");
+        yield* sleep(150);
+      }
+    }
+    function* finish(pty: Pty): Operation<string> {
+      yield* activateKey(pty, "[exit]");
+      const deadline = Date.now() + ACT_MS;
+      while ((yield* pty.status()) === undefined) {
+        if (Date.now() > deadline) {
+          throw new Error("the terminal journey did not exit");
+        }
+        yield* sleep(150);
+      }
+      expect(yield* pty.status()).toBe(0);
+      const screen = (yield* pty.shows()).join("\n");
+      const found = screen.match(/xmd repl '(xmd:\/\/repl\/[^']+)'/);
+      if (found?.[1] === undefined) {
+        throw new Error(`no printed location: ${screen}`);
+      }
+      return found[1];
+    }
+    yield* scoped(function* () {
+      const pty = yield* allocate(line([]), home);
+      yield* showing(pty, "Ready for Entry 1", REACH_MS);
+      history = yield* historyPath(home);
+      yield* submit(pty, source);
+      retained = yield* completed(pty, history, 1);
+      expect(modelOf(retained).terminal?.output?.trim()).toBe("first/second");
+      expect(yield* readTextFile(join(workspace, "provider-calls.txt"))).toBe("first\nsecond\n");
+      yield* inspect(pty);
+      location = yield* finish(pty);
+    });
+    yield* rm(includes, { recursive: true });
+    yield* scoped(function* () {
+      const pty = yield* allocate(line([location]), home);
+      yield* showing(pty, "Ready for Entry 2", REACH_MS);
+      yield* inspect(pty);
+      yield* finish(pty);
+    });
+    expect(yield* readTextFile(history)).toBe(retained);
+    expect(yield* readTextFile(join(workspace, "provider-calls.txt"))).toBe("first\nsecond\n");
+    expect(modelOf(yield* readTextFile(history))).toEqual(modelOf(retained));
   });
 });
