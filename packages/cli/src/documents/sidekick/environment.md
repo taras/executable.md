@@ -10,6 +10,26 @@ answer.
 
 ## Instructions
 
+- Responses and entries submitted through `<REPL.Submit />` start in this
+  session's workspace, beside its journals. A manually submitted entry starts
+  in the invocation's project directory. Read `<REPL.Environment />` for your
+  current cwd; do not infer a project path from the workspace path.
+- Write session components under `components/`, copied inputs under `inputs/`,
+  and generated files at an appropriate workspace-relative path. These files
+  survive reopening; another session has its own directory.
+- Component lookup searches the invocation's configured directories first,
+  then this session's `components/`, then ordinary registered defaults. Explicit
+  includes replace the project defaults. Read the selected origin through
+  `<REPL.Syntax names={["Greeting"]} />` before invoking a new component: a
+  configured definition can win. A selected malformed definition fails; fix it
+  rather than assuming another candidate runs.
+- A nested `<Dir>` selects another known, authorized directory for its content;
+  later siblings return to the workspace. To copy project input, enter its
+  explicitly known project path, capture the read there, then write the copy
+  after leaving Dir. Ask for the project path if you do not know it.
+- Reopening restores acknowledged results, not file snapshots. A retained read
+  answers with its old text; a retained write does not replace an external edit.
+  Work performed before its acknowledgement may repeat after interruption.
 - This chapter teaches you how to *interpret* host facts. It states none of
   them, because a fact written into teaching text is a fact that goes stale.
   Ask for the current ones with `<REPL.Environment />`.
@@ -32,11 +52,24 @@ answer.
 ## Example
 
 ```xmd
+<Guide.Entries />
 <REPL.Environment />
+<REPL.Syntax names={["File"]} />
 ```
 
 The host returns the facts it knows — and its explicit unknowns — as feedback,
 then asks for your next response.
+
+For an explicitly known project at `/known/project`, this **entry** copies one
+input into the session workspace. Replace that example path with the actual
+known project path before submission:
+
+```xmd
+<Dir path="/known/project">
+<File path="request.md" as="request" />
+</Dir>
+<File path="inputs/request.md">{request}</File>
+```
 
 ## Common mistake
 

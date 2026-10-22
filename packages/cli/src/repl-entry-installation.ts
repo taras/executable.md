@@ -43,7 +43,10 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
  * no initialization of its own happens here, and the registration belongs to
  * the entry task rather than to a scope that closes when this returns.
  */
-export type ReplEntryInstallation = (owner: string) => Operation<ExecutionInstallation>;
+export type ReplEntryInstallation = (
+  owner: string,
+  placement?: { readonly projectCwd?: string; readonly workspace?: string },
+) => Operation<ExecutionInstallation>;
 
 /** The factory this host runs REPL entries with, or absence. */
 export const ReplEntryHost: Context<ReplEntryInstallation | undefined> = createContext<

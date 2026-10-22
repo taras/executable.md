@@ -101,6 +101,8 @@ import type { ReplPlacementRegistration, ReplSelectionEntry } from "./selections
 
 /** What a caller may state about one entry's recording. */
 export interface ReplRecordingOptions {
+  readonly projectCwd?: string;
+  readonly workspace?: string;
   /**
    * How this entry performs native repository work.
    *
@@ -270,7 +272,7 @@ function* initializeReplRepository(
   options: ReplRecordingOptions,
   deliver?: (entry: ReplPushEntry) => void,
 ): Operation<void> {
-  const directory = yield* cwd();
+  const directory = options.projectCwd ?? (yield* cwd());
   const configuredRoot = options.root;
 
   // The entry task. Every capability below is acquired into it, so the session,
@@ -356,7 +358,7 @@ function* initializeReplRepository(
 
   // The outermost band, so what is recorded is the result the whole composition
   // answered with rather than one layer's own.
-  yield* Files.around(replFileMiddleware(recorder), { at: "max" });
+  yield* Files.around(replFileMiddleware(recorder, options.workspace), { at: "max" });
 
   // A recorder with no managed root records file work and installs no selector,
   // so `<Repository>` and `<Worktree>` reach their ordinary missing-provider

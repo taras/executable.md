@@ -154,7 +154,7 @@ export function* useHarness(
   if (!stack.ok) {
     throw stack.error;
   }
-  const profile = yield* assembleReplProfile(stack.value, NO_PLUGINS, {
+  const profile = yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
     acp: {
       createRuntime: fake.create,
       sessionStore: makeStore(),
@@ -166,7 +166,7 @@ export function* useHarness(
     // availability refusal rather than reaching the fake.
     sidekickAgent: AGENT,
     planWriterRoot: yield* useTemporary("xmd-sidekick-plan-"),
-  });
+  })).finalize();
 
   const opened = yield* openReplSession({
     execution,

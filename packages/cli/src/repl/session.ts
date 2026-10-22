@@ -75,6 +75,7 @@ import type { Operation, Result, Stream, Task } from "effection";
 import { INLINE_SOURCE_PATH, inlineSource, validateDocument } from "@executablemd/core";
 import type { DocumentValidationDiagnostic, Json, PermissionMode } from "@executablemd/core";
 import type { GeneratedSelection } from "@executablemd/core/api";
+import { API } from "@executablemd/runtime";
 import { executeInstalled } from "@executablemd/core/host";
 import { useGeneratedFallback } from "../evaluation-profile.ts";
 import type {
@@ -452,6 +453,7 @@ export interface ReplSession {
     source: string,
     pausing?: PendingPause,
     starting?: StartingCheck,
+    workspace?: true,
   ): Operation<Result<ReplSubmission>>;
 }
 
@@ -503,6 +505,9 @@ export interface ReplSubmission {
 
 /** What starting or reopening a session needs. */
 export interface ReplSessionOptions {
+  readonly projectCwd?: string;
+  readonly workspace?: string;
+  readonly resumedWorkspaceEntry?: string;
   readonly execution: ReplExecution;
   /** Where components are looked for. */
   readonly includes?: readonly string[];
@@ -942,8 +947,9 @@ function* start(
         source: string,
         pausing?: PendingPause,
         starting?: StartingCheck,
+        workspace?: true,
       ): Operation<Result<ReplSubmission>> {
-        return submitting(source, pausing, starting);
+        return submitting(source, pausing, starting, workspace);
       },
     };
 
@@ -1097,12 +1103,14 @@ function* start(
       source: string,
       pausing?: PendingPause,
       starting?: StartingCheck,
+      workspace?: true,
     ): Operation<Result<ReplSubmission>> {
       const before = admissible();
       if (!before.ok) {
         return before;
       }
-      const validated = yield* preflight(source, includes, installations);
+      const directory = workspace === true ? options.workspace : options.projectCwd;
+      const validated = yield* preflight(source, includes, installations, directory);
       if (!validated.ok) {
         return validated;
       }
@@ -1131,6 +1139,7 @@ function* start(
         // prefix somebody happens to be inspecting.
         entryInitialBindings(after.value),
         pausing,
+        workspace,
       );
       return yield* scoped(function* (): Operation<Result<ReplSubmission>> {
         // Registered before the wait below, so it covers the whole interval in
@@ -1180,6 +1189,7 @@ function* start(
        * already crossed its first gate.
        */
       pausing?: PendingPause,
+      workspace?: true,
     ): ReplEntryTask {
       const admission = withResolvers<Result<void>>();
       const completion = withResolvers<Result<unknown>>();
@@ -1314,7 +1324,7 @@ function* start(
         // scheduled to notice the admission instead would be ordered by the
         // scheduler rather than by the record, and the continuation it was
         // racing has no reason to lose.
-        const outcome = yield* runEntry(key, source, view, initialBindings);
+        const outcome = yield* runEntry(key, source, view, initialBindings, workspace);
         settle(outcome);
         // A settled entry is past whatever its segment retained, whichever way
         // it settled — including a failure that appended nothing at all, which
@@ -1393,8 +1403,20 @@ function* start(
       source: string,
       view: EntrySegmentStream,
       initialBindings: Readonly<Record<string, Json>>,
+      workspace?: true,
     ): Operation<Result<unknown>> {
       try {
+        const directory = workspace === true ? options.workspace : options.projectCwd;
+        if (directory !== undefined) {
+          yield* API.Env.around(
+            {
+              *cwd() {
+                return directory;
+              },
+            },
+            { at: "min" },
+          );
+        }
         // This entry's Agent attachment, acquired here and nowhere else. It is a
         // resource, so everything it holds — live turns, pending requests, the
         // places they took, the handles that correlate them — has this task's
@@ -1417,7 +1439,14 @@ function* start(
         const owned =
           entryInstallation === undefined
             ? []
-            : [yield* entryInstallation(entryOwner(execution.id, key))];
+            : [
+                yield* entryInstallation(entryOwner(execution.id, key), {
+                  ...(options.projectCwd === undefined ? {} : { projectCwd: options.projectCwd }),
+                  ...(workspace === true && options.workspace !== undefined
+                    ? { workspace: options.workspace }
+                    : {}),
+                }),
+              ];
         // This entry's own selection, offered in the scope this execution runs
         // in. Every entry installs it again: core reads the final contextual
         // answer once per execution, and a chain assembled in a scope that has
@@ -1585,6 +1614,8 @@ function* start(
         resumed.entry.source,
         new EntrySegmentStream(stream, { retained: resumed.segment.events, final: true }),
         entryInitialBindings(head, resumed.entry),
+        undefined,
+        options.resumedWorkspaceEntry === resumed.entry.key ? true : undefined,
       );
     } else if (submitted !== undefined) {
       begin(
@@ -1646,8 +1677,19 @@ function* preflight(
   source: string,
   includes: readonly string[] | undefined,
   installations: readonly ExecutionInstallation[],
+  directory?: string,
 ): Operation<Result<void>> {
   const validation = yield* scoped(function* () {
+    if (directory !== undefined) {
+      yield* API.Env.around(
+        {
+          *cwd() {
+            return directory;
+          },
+        },
+        { at: "min" },
+      );
+    }
     return yield* validateDocument({
       ...inlineSource(source),
       includes,

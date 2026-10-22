@@ -320,6 +320,7 @@ export interface SidekickOperation {
 
 /** A Submit whose reservation the entry journal still has to be asked about. */
 export interface SidekickSubmitIntent {
+  readonly workspace?: true;
   readonly conversation: string;
   readonly response: string;
   readonly order: number;
@@ -348,6 +349,7 @@ export interface SidekickPreferences {
 
 /** Everything a reopened Sidekick knows before anybody says anything. */
 export interface SidekickReading {
+  readonly submits: readonly SidekickSubmitIntent[];
   readonly conversations: readonly SidekickConversation[];
   /**
    * The conversation an explicit continuation would use.
@@ -1396,9 +1398,27 @@ export function projectSidekick(records: readonly SidekickRecord[]): Result<Side
               entry: reserved.record.submit!.entry,
               source: reserved.record.submit!.source,
               revision: reserved.record.submit!.revision,
-              retained: reserved.record.submit!.retained,
+              retained: Object.freeze({ ...reserved.record.submit!.retained }),
+              ...(reserved.record.submit!.workspace === true ? { workspace: true } : {}),
               settled: false,
             }),
+      submits: Object.freeze(
+        [...intents.entries()].flatMap(([key, held]) => {
+          const submit = held.record.submit;
+          return submit === undefined
+            ? []
+            : [
+                Object.freeze({
+                  conversation: held.record.conversation,
+                  response: held.record.response,
+                  order: held.record.order,
+                  ...submit,
+                  retained: Object.freeze({ ...submit.retained }),
+                  settled: settled.has(key),
+                }),
+              ];
+        }),
+      ),
       delivered: Object.freeze(
         [...delivered].map(([conversation, turn]) => Object.freeze({ conversation, turn })),
       ),

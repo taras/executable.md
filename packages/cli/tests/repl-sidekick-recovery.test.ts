@@ -26,14 +26,18 @@
  * are here now.
  */
 
+import { cwd } from "@executablemd/runtime";
+import { pairedLocation } from "../src/repl/sidekick/history.ts";
+import { useTemporary } from "./fixtures/repl/issue-883/sidekick-harness.ts";
+
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensure, Ok, scoped, spawn, until, withResolvers } from "effection";
+import { ensure, Ok, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { useTempFileCompiler } from "@executablemd/core";
+import { useTempFileCompiler, Elicitation } from "@executablemd/core";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -66,6 +70,11 @@ import {
 import type { RepositoryRoot } from "./fixtures/repl/issue-883/host.ts";
 import {
   awaiting,
+  awaited,
+  mountedExecution,
+  mountedReading,
+  sendMessage,
+  useMountedHost,
   click,
   focusDraft,
   operationGate,
@@ -2390,4 +2399,97 @@ describe("Tier IN5 — a saved EntryOutput result keeps its own renderer", () =>
     // rewrote the file to make it readable.
     expect(yield* until(readFile(path))).toEqual(before);
   });
+});
+
+describe("975 — placement survives cold Submit reconciliation", () => {
+  for (const marked of [true, false]) {
+    it(`975: ${marked ? "marked" : "legacy unmarked"} entry resumes in its owned directory`, function* () {
+      const project = yield* useTemporary("xmd-placement-project-");
+      const host = yield* useMountedHost({
+        projectCwd: project,
+        hostFiles: true,
+      });
+      const observed: string[] = [];
+      let waiting = withResolvers<void>();
+      let answer = false;
+      yield* Elicitation.around({
+        *elicit([request], next) {
+          observed.push(yield* cwd());
+          waiting.resolve();
+          return answer ? { go: "yes" } : yield* next(request);
+        },
+      });
+      let execution = "";
+      const source =
+        '<Elicit schema={{ type: "object", properties: { go: { type: "string" } }, required: ["go"], additionalProperties: false }} as="answer">Continue?</Elicit>\n<File path="suffix.md">continued</File>';
+      yield* scoped(function* () {
+        const repl = yield* useMountedRepl({ host });
+        execution = yield* mountedExecution(repl);
+        repl.fake.script({
+          reply:
+            '<Let as="code" select="code">\n```xmd\n' +
+            source +
+            "\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />",
+        });
+        yield* sendMessage(repl, "start and wait");
+        yield* awaited("the admitted entry to wait", () => observed.length === 1);
+        const read = yield* mountedReading(repl);
+        expect(read.model.entries[0]?.source).toBe(source);
+        expect(read.model.entries[0]?.settled).toBe(false);
+      });
+      const location = pairedLocation(host.root, execution);
+      if (!marked) {
+        const records = yield* readSidekickRecords(location.sidekick);
+        const legacy = records.map((record): SidekickRecord => {
+          if (record.kind !== "control" || record.submit === undefined) {
+            return record;
+          }
+          const { workspace: _workspace, ...submit } = record.submit;
+          return { ...record, submit };
+        });
+        yield* until(writeFile(location.sidekick, legacy.map(serializeSidekickRecord).join("")));
+      }
+      const where = marked ? location.directory : project;
+      const coldLocation = encodeLocation(initialState(execution).route);
+      const prefix = yield* until(readFile(location.entries, "utf8"));
+      waiting = withResolvers<void>();
+      yield* scoped(function* () {
+        const repl = yield* useMountedRepl({ host, location: coldLocation });
+        yield* awaited("the first cold continuation", () => observed.length === 2);
+        expect(observed.at(-1)).toBe(where);
+        expect(yield* until(readFile(location.entries, "utf8"))).toBe(prefix);
+        yield* focusDraft(repl.terminal);
+        yield* typing(repl.terminal, "manual successor waits");
+        repl.terminal.feed("\r");
+        yield* awaiting(repl.terminal, "the refused successor after reconciliation", (one) =>
+          shows(one, "has not finished"),
+        );
+        const reading = projectSidekick(yield* readSidekickRecords(location.sidekick));
+        if (!reading.ok) {
+          throw reading.error;
+        }
+        expect(reading.value.submit).toBe(undefined);
+        expect(
+          reading.value.submits.some(
+            (intent) =>
+              intent.entry === "entry-1" && intent.workspace === (marked ? true : undefined),
+          ),
+        ).toBe(true);
+      });
+      answer = true;
+      waiting = withResolvers<void>();
+      yield* scoped(function* () {
+        const repl = yield* useMountedRepl({ host, location: coldLocation });
+        yield* awaited("the second cold continuation", () => observed.length === 3);
+        yield* awaiting(repl.terminal, "the continued suffix", (one) =>
+          shows(one, "1. [ok] entry-1"),
+        );
+        expect(observed.at(-1)).toBe(where);
+        expect(yield* until(readFile(join(where, "suffix.md"), "utf8"))).toBe("continued");
+        expect(yield* cwd()).toBe(project);
+        const read = yield* mountedReading(repl);
+        expect(read.model.entries[0]?.source).toBe(source);
+      });
+    });
+  }
 });

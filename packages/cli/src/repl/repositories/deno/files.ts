@@ -1,12 +1,9 @@
 /**
  * The file work one REPL entry records, and the work it simply performs.
  *
- * A document reads and writes files in three places: inside a managed checkout
- * this entry selected, inside the checkout the entry was started in, and
- * everywhere else. Only the first two are repository work. A write beside the
- * document, in a temporary directory or anywhere outside both is ordinary
- * filesystem behavior and is journaled by nothing here — giving it a record
- * would place it in a checkout it is not in.
+ * Checkout routing takes precedence over the marked entry's owned workspace.
+ * Outside both, file work remains ordinary and unrecorded. Workspace-only work
+ * uses the existing local-operation records without a Git lease.
  *
  * A managed placement is looked for first, and the most specific one wins. The
  * entry's ambient checkout answers for everything no placement covers, which is
@@ -122,7 +119,10 @@ export interface ReplLocalRecorder {
 }
 
 /** The middleware that records this entry's authored mutations. */
-export function replFileMiddleware(recorder: ReplLocalRecorder): Partial<Around<FilesHandler>> {
+export function replFileMiddleware(
+  recorder: ReplLocalRecorder,
+  workspace?: string,
+): Partial<Around<FilesHandler>> {
   return {
     *readTextFile([input], next): Operation<Result<string>> {
       const produced = yield* routed(
@@ -132,6 +132,7 @@ export function replFileMiddleware(recorder: ReplLocalRecorder): Partial<Around<
         function* () {
           return yield* textOutcome(next(input));
         },
+        workspace,
       );
       return produced.ok ? Ok(expectText(produced.value)) : produced;
     },
@@ -143,6 +144,7 @@ export function replFileMiddleware(recorder: ReplLocalRecorder): Partial<Around<
         function* () {
           return yield* writeOutcome(next(input));
         },
+        workspace,
       );
       return produced.ok ? Ok(expectWritten(produced.value)) : produced;
     },
@@ -154,6 +156,7 @@ export function replFileMiddleware(recorder: ReplLocalRecorder): Partial<Around<
         function* () {
           return yield* unitOutcome(next(input), { operation: "delete", phase: "access" });
         },
+        workspace,
       );
       return produced.ok ? Ok(undefined) : produced;
     },
@@ -168,6 +171,7 @@ export function replFileMiddleware(recorder: ReplLocalRecorder): Partial<Around<
             phase: "access",
           });
         },
+        workspace,
       );
       return produced.ok ? Ok(undefined) : produced;
     },
@@ -188,6 +192,7 @@ function* routed(
   operation: ReplLocalOperation,
   request: ReplLocalRequest,
   perform: () => Operation<Result<ReplLocalValue>>,
+  workspace: string | undefined,
 ): Operation<Result<ReplLocalValue>> {
   const name = yield* localRecordName({ operation, request });
   if (yield* retainedSelectionAhead()) {
@@ -208,6 +213,17 @@ function* routed(
   }
   const checkout = yield* recorder.selection();
   if (checkout === undefined || !inside(checkout.checkoutRoot, target)) {
+    if (workspace !== undefined) {
+      const root = yield* canonical(workspace);
+      const lexical = resolve(workspace);
+      const resolvedTarget =
+        target === lexical || inside(lexical, target)
+          ? resolve(root, relative(lexical, target))
+          : target;
+      if (root === resolvedTarget || inside(root, resolvedTarget)) {
+        return yield* recordedLocalOperation({ operation, request, perform });
+      }
+    }
     return yield* perform();
   }
   return yield* held(recorder, checkout.commonDirectory, { operation, request, perform });

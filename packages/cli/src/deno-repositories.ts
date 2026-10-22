@@ -132,7 +132,12 @@ export function denoReplEntry(helper: HelperAssembly, root: string): ReplEntryIn
   // kept a reference and changed a field afterwards would be configuring every
   // later entry from outside the selection the command already made.
   const configured = snapshot(helper);
-  return (owner: string) => replRepositoryInstallation(owner, { helper: configured, root });
+  return (owner, placement) =>
+    replRepositoryInstallation(owner, {
+      helper: configured,
+      root,
+      ...placement,
+    });
 }
 
 /**

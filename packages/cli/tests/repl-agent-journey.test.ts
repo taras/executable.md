@@ -440,10 +440,10 @@ describe("C1 — the command line this REPL runs under", () => {
       }
       // Assembling a profile reaches no provider: the adapter behind an option
       // is materialized when a turn asks for one, not when the line is read.
-      return yield* assembleReplProfile(stack.value, NO_PLUGINS, {
+      return yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
         acp: { createRuntime: tripwireAcp((what) => reached.push(what)) },
         planWriterRoot: yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-c1-"))),
-      });
+      })).finalize();
     });
 
     expect(reached).toEqual([]);
@@ -451,7 +451,7 @@ describe("C1 — the command line this REPL runs under", () => {
     // profile carries.
     expect(settled.permissionMode).toBe("approve-reads");
     // Omission preserves both default directories.
-    expect(settled.includes).toEqual(["components", "."]);
+    expect(settled.includes).toEqual([join(settled.projectCwd!, "components"), settled.projectCwd]);
     // One installation of this command's own, holding the packaged `<Plan>`.
     expect(settled.installations).toHaveLength(1);
     const own = settled.installations[0]!;
@@ -517,10 +517,10 @@ describe("C1 — the command line this REPL runs under", () => {
         if (!stack.ok) {
           throw stack.error;
         }
-        const profile = yield* assembleReplProfile(stack.value, NO_PLUGINS, {
+        const profile = yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
           acp: { createRuntime: tripwireAcp((what) => reached.push(what)) },
           planWriterRoot: yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-c1-"))),
-        });
+        })).finalize();
         const ran = yield* runReplProgram({ profile });
         if (!ran.ok) {
           throw ran.error;
@@ -601,12 +601,14 @@ function greetingSource(which: "First" | "Second"): string {
 
 function* includeWorkspace(): Operation<{
   workspace: string;
+  session: string;
   first: string;
   second: string;
   root: string;
 }> {
   const root = yield* useTempDirectory("xmd-includes-");
   const workspace = join(root, "workspace");
+  const session = join(root, "session");
   const first = join(root, "first");
   const second = join(root, "second");
   for (const directory of [join(workspace, "components"), join(first, "File"), second]) {
@@ -619,16 +621,20 @@ function* includeWorkspace(): Operation<{
   for (const candidate of ["Syntax", "Evaluate", "File", "File/Delete", "Dir"]) {
     yield* writeTextFile(join(first, `${candidate}.md`), "POISON protected candidate\n");
   }
+  yield* ensureDir(join(session, "components"));
+  yield* writeTextFile(join(session, "components", "Greeting.md"), "Session collision.");
+  yield* writeTextFile(join(session, "components", "SessionOnly.md"), "Session only.");
   yield* useHostFiles();
-  return { root, workspace, first, second };
+  return { root, workspace, session, first, second };
 }
 
-function selectedProfile(
+function* selectedProfile(
   includes: readonly string[],
   root: string,
   fake: FakeAcp,
+  workspace?: string,
 ): Operation<ReplExecutionProfile> {
-  return assembleReplProfile(
+  return yield* (yield* assembleReplProfile(
     { provider: "acpx", defaultAgent: AGENT, adapters: ADAPTERS, permissionMode: "deny-all" },
     NO_PLUGINS,
     {
@@ -640,7 +646,7 @@ function selectedProfile(
         agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
       },
     },
-  );
+  )).finalize(workspace);
 }
 
 describe("A2–A5 — the selected REPL component environment", () => {
@@ -656,21 +662,26 @@ describe("A2–A5 — the selected REPL component environment", () => {
       planWriterRoot: join(fixture.root, "plans"),
       acp: { createRuntime: tripwireAcp((what) => reached.push(what)) },
     };
-    const profile = yield* assembleReplProfile(
+    const profile = yield* (yield* assembleReplProfile(
       { provider: "acpx", defaultAgent: AGENT, adapters: ADAPTERS, permissionMode: "deny-all" },
       NO_PLUGINS,
       facts,
-    );
+    )).finalize(fixture.session);
     input.reverse();
     input.splice(0, input.length, "components", ".");
     facts.includes = ["elsewhere"];
-    expect(profile.includes).toEqual([relativeFirst, fixture.second, relativeFirst]);
+    expect(profile.includes).toEqual([
+      fixture.first,
+      fixture.second,
+      fixture.first,
+      join(fixture.session, "components"),
+    ]);
     expect(Object.isFrozen(profile)).toBe(true);
     expect(Object.isFrozen(profile.includes)).toBe(true);
     const symbols = yield* profile.vocabulary.symbols();
     const documentation = yield* profile.vocabulary.documentation(["Greeting"]);
     for (const text of [symbols, documentation]) {
-      expect(text).toContain(`${relativeFirst}/Greeting.md`);
+      expect(text).toContain(`${fixture.first}/Greeting.md`);
       expect(text).toContain("First greeting contract.");
       expect(text).not.toContain("Second greeting contract.");
       expect(text).not.toContain("<Local>");
@@ -715,7 +726,7 @@ describe("A2–A5 — the selected REPL component environment", () => {
       throw environment.error;
     }
     expect(environment.value).toContain(
-      `- component includes: ${relativeFirst}, ${fixture.second}, ${relativeFirst}`,
+      `- component includes: ${fixture.first}, ${fixture.second}, ${fixture.first}, ${join(fixture.session, "components")}`,
     );
     expect(reached).toEqual([]);
   });
@@ -769,7 +780,7 @@ describe("A2–A5 — the selected REPL component environment", () => {
     const fixture = yield* includeWorkspace();
     const fake = createFakeAcp();
     fake.script({ reply: "# Unavailable draft\n\n<Local />\n" });
-    const approved = '# Included draft\n\n<Greeting fromFirst="ok" />\n';
+    const approved = '# Included draft\n\n<Greeting fromFirst="ok" />\n<SessionOnly />\n';
     fake.script({ reply: approved });
     const { terminal, install } = recordingTerminal({ columns: 200, rows: 140 });
     yield* install();
@@ -777,10 +788,18 @@ describe("A2–A5 — the selected REPL component environment", () => {
     const hostRoot = yield* useTempDirectory("xmd-include-history-");
     yield* useTemporaryHost(hostRoot);
     const running = yield* spawn(function* () {
-      const profile = yield* selectedProfile(
-        [relative(yield* cwd(), fixture.first), fixture.second],
-        fixture.root,
-        fake,
+      const profile = yield* assembleReplProfile(
+        { provider: "acpx", defaultAgent: AGENT, adapters: ADAPTERS, permissionMode: "deny-all" },
+        NO_PLUGINS,
+        {
+          includes: [relative(yield* cwd(), fixture.first), fixture.second],
+          planWriterRoot: join(fixture.root, "plans"),
+          acp: {
+            createRuntime: fake.create,
+            sessionStore: makeStore(),
+            agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
+          },
+        },
       );
       const ran = yield* runReplProgram({ profile });
       if (!ran.ok) {
@@ -788,12 +807,18 @@ describe("A2–A5 — the selected REPL component environment", () => {
       }
     });
     yield* untilDrawn(terminal);
+    const sessions = join(hostRoot, "xmd", "repl", PAIRED_DIRECTORY);
+    const execution = (yield* untilResolved(readdir(sessions)))[0]!;
+    const sessionComponents = join(sessions, execution, "components");
+    yield* writeTextFile(join(sessionComponents, "Greeting.md"), "Session collision.");
+    yield* writeTextFile(join(sessionComponents, "SessionOnly.md"), "Session only.");
     yield* typed(terminal, '<Plan as="draft">Write an included greeting.</Plan>\n\n{draft}');
     yield* until(() => fake.prompts.length === 2, "Plan never repaired the unavailable component");
     expect(fake.prompts[1]).toContain("Local");
     expect(fake.prompts[0]).toContain("First greeting contract.");
-    expect(fake.prompts[0]).toContain(`${relative(yield* cwd(), fixture.first)}/Greeting.md`);
+    expect(fake.prompts[0]).toContain(`${fixture.first}/Greeting.md`);
     expect(fake.prompts[0]).not.toContain("Second greeting contract.");
+    expect(fake.prompts[0]).toContain(join(sessionComponents, "SessionOnly.md"));
     expect(fake.prompts[0]).not.toContain("<RootLocal>");
     expect(fake.prompts[0]).not.toContain("<Local>");
     yield* openQuestion(terminal);
@@ -1959,14 +1984,14 @@ function* settledProfile(fake: FakeAcp): Operation<ReplExecutionProfile> {
   if (!stack.ok) {
     throw stack.error;
   }
-  return yield* assembleReplProfile(stack.value, NO_PLUGINS, {
+  return yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
     acp: {
       createRuntime: fake.create,
       sessionStore: makeStore(),
       agentRegistry: makeRegistry({ [AGENT]: `${AGENT}-cmd` }),
     },
     planWriterRoot: yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-plan-"))),
-  });
+  })).finalize();
 }
 
 /** Whether this host holds no REPL history at all. */
@@ -2051,7 +2076,7 @@ function* start(
   location?: string,
 ): Operation<string> {
   const writerRoot = yield* untilResolved(mkdtemp(join(tmpdir(), "xmd-repl-plan-")));
-  const profile = yield* assembleReplProfile(
+  const profile = yield* (yield* assembleReplProfile(
     {
       provider: "acpx",
       defaultAgent: AGENT,
@@ -2067,7 +2092,7 @@ function* start(
       },
       planWriterRoot: writerRoot,
     },
-  );
+  )).finalize();
   const ran = yield* runReplProgram({
     profile,
     ...(location === undefined ? {} : { location }),

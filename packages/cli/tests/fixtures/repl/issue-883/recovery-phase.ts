@@ -52,7 +52,11 @@ import {
 } from "../../../../src/repl/sidekick/admission.ts";
 import { openReplSession } from "../../../../src/repl/session.ts";
 import type { ReplSession } from "../../../../src/repl/session.ts";
-import { useTempFileCompiler } from "@executablemd/core";
+import { Elicitation, useTempFileCompiler } from "@executablemd/core";
+import { API } from "@executablemd/runtime";
+import { pairedLocation } from "../../../../src/repl/sidekick/history.ts";
+import { encodeLocation } from "../../../../src/repl/route.ts";
+import { initialState } from "../../../../src/repl/application.ts";
 import { resolveAgentStack } from "../../../../src/agent-stack.ts";
 import { assembleReplProfile } from "../../../../src/repl-profile.ts";
 import { NO_PLUGINS } from "../../../../src/plugin-host.ts";
@@ -317,7 +321,7 @@ function* useConversing(
   }
   yield* until(mkdir(state, { recursive: true }));
   const store = createAcpxSessionStore(state);
-  const profile = yield* assembleReplProfile(stack.value, NO_PLUGINS, {
+  const profile = yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
     acp: {
       createRuntime: fake.create,
       sessionStore: store,
@@ -329,7 +333,7 @@ function* useConversing(
     // availability refusal rather than reaching the fake.
     sidekickAgent: AGENT,
     planWriterRoot: repository,
-  });
+  })).finalize();
   const opened = yield* openReplSession({
     execution: pair,
     includes: profile.includes,
@@ -587,6 +591,117 @@ function* phases(): Operation<unknown> {
   const legacy = join(repository, `${execution}.jsonl`);
   const sidekick = join(repository, PAIRED_DIRECTORY, execution, SIDEKICK_FILE);
   const entries = join(repository, PAIRED_DIRECTORY, execution, ENTRIES_FILE);
+
+  if (phase === "workspace-start" || phase === "workspace-continue") {
+    const mounted = yield* until(import("./mounted-program.ts"));
+    const { denoReplEntry } = yield* until(import("../../../../src/deno-repositories.ts"));
+    const project = join(dataRoot, "project");
+    yield* until(mkdir(project, { recursive: true }));
+    const live = { reads: 0, writes: 0, deletes: 0, ensures: 0 };
+    if (phase === "workspace-continue") {
+      yield* Elicitation.around({
+        *elicit() {
+          return { go: "yes" };
+        },
+      });
+    }
+    const entryHost = denoReplEntry(
+      { runtime: "source", platform: "unix", execPath: "/nonexistent/xmd" },
+      join(dataRoot, "managed"),
+    );
+    const repl = yield* mounted.useMountedRepl({
+      dataRoot,
+      projectCwd: project,
+      hostFiles: true,
+      *entryInstallation(owner, placement) {
+        const installation = yield* entryHost(owner, placement);
+        if (phase === "workspace-continue") {
+          yield* API.Files.around(
+            {
+              *readTextFile([input], next) {
+                if (live.writes === 0) {
+                  throw new Error("historical workspace read reached live I/O");
+                }
+                live.reads += 1;
+                return yield* next(input);
+              },
+              *writeTextFile([input], next) {
+                if (input.path !== "suffix.md") {
+                  throw new Error("acknowledged workspace write repeated");
+                }
+                live.writes += 1;
+                return yield* next(input);
+              },
+              *deleteFile() {
+                live.deletes += 1;
+                throw new Error("acknowledged workspace delete repeated");
+              },
+              *ensureDirectory() {
+                live.ensures += 1;
+                throw new Error("acknowledged workspace ensure repeated");
+              },
+            },
+            { at: "min" },
+          );
+        }
+        return installation;
+      },
+      ...(phase === "workspace-continue"
+        ? { location: encodeLocation(initialState(execution).route) }
+        : {}),
+    });
+    const id = yield* mounted.mountedExecution(repl);
+    const location = pairedLocation(repository, id);
+    if (phase === "workspace-start") {
+      yield* until(writeFile(join(location.directory, "obsolete.md"), "remove"));
+      const source = [
+        '<File path="note.md">A</File>',
+        '<File path="note.md" as="historical" />',
+        "<Dir path=" +
+          JSON.stringify(location.directory) +
+          '><Dir path="nested">ensured</Dir></Dir>',
+        '<File.Delete path="obsolete.md" />',
+        '<Elicit schema={{ type: "object", properties: { go: { type: "string" } }, required: ["go"], additionalProperties: false }} as="answer">Continue?</Elicit>',
+        "{historical}",
+        '<File path="suffix.md">once</File>',
+        '<File path="note.md" />',
+      ].join("\n");
+      repl.fake.script({
+        reply:
+          '<Let as="code" select="code">\n```xmd\n' +
+          source +
+          "\n```\n</Let>\n<REPL.EntryInput>{code}</REPL.EntryInput>\n<REPL.Submit />",
+      });
+      yield* mounted.sendMessage(repl, "perform workspace work and wait");
+      yield* mounted.awaiting(repl.terminal, "the workspace entry's question", (one) =>
+        mounted.shows(one, "waiting for an answer"),
+      );
+      const read = yield* mounted.mountedReading(repl);
+      return {
+        execution: id,
+        workspace: location.directory,
+        source: read.model.entries[0]?.source,
+        settled: read.model.entries[0]?.settled,
+        records: yield* until(readFile(location.entries, "utf8")),
+      };
+    }
+    yield* mounted.awaiting(repl.terminal, "the resumed workspace suffix", (one) =>
+      mounted.shows(one, "1. [ok] entry-1"),
+    );
+    const read = yield* mounted.mountedReading(repl);
+    return {
+      execution: id,
+      live,
+      output: read.model.entries[0]?.terminal?.output,
+      source: read.model.entries[0]?.source,
+      settled: read.model.entries[0]?.settled,
+      note: yield* until(readFile(join(location.directory, "note.md"), "utf8")),
+      obsolete: yield* until(readFile(join(location.directory, "obsolete.md"), "utf8")),
+      suffix: yield* until(readFile(join(location.directory, "suffix.md"), "utf8")),
+      sessions: repl.fake.ensured.length,
+      prompts: repl.fake.prompts.length,
+    };
+  }
 
   if (phase === "seed") {
     // The older single-file execution this case starts from: the state a

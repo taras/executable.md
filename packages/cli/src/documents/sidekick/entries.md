@@ -58,17 +58,75 @@ response. `select="code"` extracts the first matching fenced block without its
 fence, and trims trailing whitespace — pass a direct string value when exact
 string boundaries matter.
 
-## Reading the repository in an entry
+### Create and use a session component across responses
 
-An entry can ask the checkout it is standing in four questions. Read their exact
-forms with `<REPL.Syntax names={["Git.Files", "Git.Changes", "Git.Diff", "Git.File"]} />`
-before writing one; each requires `as`, renders nothing, and binds JSON.
+Read `<Guide.Environment />`, `<Guide.Entries />`, `<REPL.Environment />` and
+`<REPL.Syntax names={["File"]} />` first. When asked to create this component,
+submit its file definition in one response:
 
 ````xmd
 <Let as="code" select="code">
 ```xmd
+<File path="components/Greeting.md">Hello from this session.</File>
+```
+</Let>
+<REPL.EntryInput>{code}</REPL.EntryInput>
+<REPL.Submit />
+````
+
+Wait for the receipt and follow its read instruction to inspect the entry's
+output before assuming the write succeeded. A completed entry can report a File
+refusal in its output. A successful write creates exactly `Hello from this
+session.` with no added newline and invokes no Greeting. Correct a reported
+write failure before attempting invocation.
+
+In a later response inspect the selected definition:
+
+```xmd
+<REPL.Syntax names={["Greeting"]} />
+```
+
+Read its selected origin. A configured component directory precedes the session
+components directory, so inspect the definition that actually wins. Once the
+selected definition is the intended one, submit its invocation in another
+response:
+
+````xmd
+<Let as="code" select="code">
+```xmd
+<Greeting />
+```
+</Let>
+<REPL.EntryInput>{code}</REPL.EntryInput>
+<REPL.Submit />
+````
+
+Use the receipt's returned entry reference/read instruction to read that exact
+entry with `<REPL.Entry.Output />`. For example, when the receipt names
+`entry-2`, a later response writes:
+
+```xmd
+<REPL.Entry.Output entry={2} />
+```
+
+The session definition prints `Hello from this session.`. Response captures
+remain local to their response; the later response does not inherit `code`.
+
+### Read the repository in an entry
+
+An entry can ask a selected checkout four questions. Read their exact forms
+with `<REPL.Syntax names={["Git.Files", "Git.Changes", "Git.Diff", "Git.File"]} />`
+first. Enter the explicitly known checkout path before asking Git; the workspace
+is not a hidden route back to the project. Replace `/known/project` below with
+the actual known checkout path:
+
+````xmd
+<Let as="code" select="code">
+```xmd
+<Dir path="/known/project">
 <Git.Files prefix="packages/core/" limit={5} as="files" />
 <Json value={files.paths} />
+</Dir>
 ```
 </Let>
 <REPL.EntryInput>{code}</REPL.EntryInput>
@@ -76,20 +134,11 @@ before writing one; each requires `as`, renders nothing, and binds JSON.
 <REPL.Entry.Output />
 ````
 
-A page is bounded — 100 records, or 4096 characters of text — and `next` holds
-the complete arguments of the read that continues it, or `null` when there is no
-more. Follow it in a later entry by passing the captured value back, which is an
-ordinary binding the entry before it published:
-
-```xmd
-<Git.Files prefix={files.next.prefix} limit={files.next.limit} cursor={files.next.cursor} as="more" />
-```
-
-If the answer changed in between, that read refuses and says to restart without
-the cursor — ask for a fresh read at the beginning rather than treating the
-refusal as an error to work around. Nothing these reads return lets an entry
-change the repository; a change still takes `<Git.Add>`, `<Git.Switch>` or
-`<Git.Commit>`.
+Each read requires `as`, renders nothing and binds JSON. A page is bounded —
+100 records, or 4096 characters of text — and `next` holds the complete
+arguments for continuation, or `null` when there is no more. If a later read's
+cursor refuses because the answer changed, restart the read without the cursor.
+Nothing these reads return authorizes a repository change.
 
 ## Common mistake
 

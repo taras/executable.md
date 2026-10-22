@@ -19,7 +19,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { appendFile, mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -203,6 +203,45 @@ describe("Tier R1 — a published pair, and the writer handoff that creates one"
     const reopened = yield* repository.open("new-one");
     expect(reopened.chat.form).toBe("paired");
     expect((yield* reopened.stream.readAll()).length).toBe(1);
+  });
+
+  it("975: publication establishes components and cold reads never repair it", function* () {
+    yield* useRoot();
+    yield* useGatedHost("workspace", fresh());
+    const repository = pairedReplRepository(root);
+    const created = yield* repository.create();
+    const components = pairPath(created.id, "components");
+    expect((yield* until(stat(components))).isDirectory()).toBe(true);
+    yield* until(writeFile(join(components, "Greeting.md"), "Hello"));
+    yield* repository.open(created.id);
+    expect(yield* until(readFile(join(components, "Greeting.md"), "utf8"))).toBe("Hello");
+    yield* until(rm(components, { recursive: true }));
+    const before = yield* until(readFile(pairPath(created.id, SIDEKICK_FILE), "utf8"));
+    yield* repository.open(created.id);
+    expect(yield* until(readFile(pairPath(created.id, SIDEKICK_FILE), "utf8"))).toBe(before);
+    let absent = false;
+    try {
+      yield* until(stat(components));
+    } catch {
+      absent = true;
+    }
+    expect(absent).toBe(true);
+  });
+
+  it("975: an initial components non-directory refuses without replacing it", function* () {
+    yield* useRoot();
+    yield* useGatedHost("blocked-components", fresh());
+    const target = pairPath("blocked-components", "components");
+    yield* until(mkdir(join(root, PAIRED_DIRECTORY, "blocked-components"), { recursive: true }));
+    yield* until(writeFile(target, "preserved"));
+    let refused = false;
+    try {
+      yield* pairedReplRepository(root).create();
+    } catch {
+      refused = true;
+    }
+    expect(refused).toBe(true);
+    expect(yield* until(readFile(target, "utf8"))).toBe("preserved");
   });
 
   it("R1b: cold-opening an older single file converts nothing and writes nothing", function* () {
@@ -779,6 +818,31 @@ describe("Tier R1 — a record is constructed from checked members, never assert
     });
   }
 
+  for (const workspace of [false, null, "true", 1, {}]) {
+    it(`975: a present invalid workspace marker ${JSON.stringify(workspace)} refuses`, function* () {
+      expect(
+        parseSidekickRecord(
+          JSON.stringify({
+            kind: "control",
+            conversation: "c",
+            response: "r",
+            order: 0,
+            component: "REPL.Submit",
+            arguments: {},
+            submit: {
+              ordinal: 0,
+              entry: "entry-1",
+              source: "Hello",
+              revision: 0,
+              retained: { records: 0, bytes: 0, sha256: "f".repeat(64) },
+              workspace,
+            },
+          }),
+        ),
+      ).toBe(undefined);
+    });
+  }
+
   it("R1t: a well-formed record round-trips through the parser", function* () {
     const intent: SidekickRecord = {
       kind: "control",
@@ -803,7 +867,8 @@ describe("Tier R1 — a record is constructed from checked members, never assert
       outcome: { status: "err", error: { message: "refused", name: "ReplError" } },
     };
 
-    for (const held of [intent, answered]) {
+    const marked: SidekickRecord = { ...intent, submit: { ...intent.submit!, workspace: true } };
+    for (const held of [intent, answered, marked]) {
       expect(parseSidekickRecord(serializeSidekickRecord(held).slice(0, -1))).toEqual(held);
     }
   });

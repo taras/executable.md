@@ -160,7 +160,9 @@ export function* runPhase(
     | "reconcile"
     | "chat-open"
     | "chat-say"
-    | "chat-read",
+    | "chat-read"
+    | "workspace-start"
+    | "workspace-continue",
   root: RepositoryRoot,
   execution: string,
   /** One further argument, for a phase that takes one. */

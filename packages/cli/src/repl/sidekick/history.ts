@@ -294,6 +294,7 @@ export interface ControlRecord {
     readonly entry: string;
     readonly source: string;
     readonly revision: number;
+    readonly workspace?: true;
     /** The exact entry journal this reservation was taken against. */
     readonly retained: RetainedPrefix;
   };
@@ -684,7 +685,7 @@ function control(value: Record<string, unknown>): ControlRecord | undefined {
   if (Object.hasOwn(value, "submit")) {
     if (
       !plain(value.submit) ||
-      !exactly(value.submit, ["ordinal", "entry", "source", "revision", "retained"])
+      !exactly(value.submit, ["ordinal", "entry", "source", "revision", "retained"], ["workspace"])
     ) {
       return undefined;
     }
@@ -692,6 +693,9 @@ function control(value: Record<string, unknown>): ControlRecord | undefined {
     const entry = str(value.submit.entry);
     const source = str(value.submit.source);
     const revision = whole(value.submit.revision);
+    if (Object.hasOwn(value.submit, "workspace") && value.submit.workspace !== true) {
+      return undefined;
+    }
     // Required, not optional. A Submit without it cannot be reconciled against
     // anything, and reading one as though the ordinal were the binding is how
     // the ordinal came to be treated as a prefix in the first place — so a
@@ -706,7 +710,14 @@ function control(value: Record<string, unknown>): ControlRecord | undefined {
     ) {
       return undefined;
     }
-    submit = { ordinal, entry, source, revision, retained };
+    submit = {
+      ordinal,
+      entry,
+      source,
+      revision,
+      retained,
+      ...(value.submit.workspace === true ? { workspace: true } : {}),
+    };
   }
   return {
     kind: "control",
@@ -1300,6 +1311,7 @@ export function* publishPair(
 ): Operation<Publication> {
   const location = pairedLocation(root, execution);
   yield* ensureDir(location.directory);
+  yield* ensureDir(join(location.directory, "components"));
 
   if ((yield* exists(location.entries)) || (yield* exists(location.sidekick))) {
     throw new SidekickHistoryError(

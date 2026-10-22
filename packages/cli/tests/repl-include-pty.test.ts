@@ -12,7 +12,7 @@ import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import { scoped, sleep, until } from "effection";
 import type { Operation } from "effection";
-import { readdir, symlink } from "node:fs/promises";
+import { readdir, realpath, symlink } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { platform } from "node:os";
@@ -137,6 +137,7 @@ describe("REPL includes through the production source terminal", () => {
     for (const directory of [join(workspace, "components"), join(first, "File"), second]) {
       yield* ensureDir(directory);
     }
+    const invocationDirectory = yield* until(realpath(workspace));
     const external = '<File path="witness.txt">first-write</File>\n\nExternal-only rendered.\n';
     yield* writeTextFile(join(first, "Greeting.md"), greeting("First"));
     yield* writeTextFile(join(second, "Greeting.md"), greeting("Second"));
@@ -183,7 +184,7 @@ describe("REPL includes through the production source terminal", () => {
       );
       retained = yield* completed(pty, history, 2);
       const syntax = modelOf(retained).terminal?.output ?? "";
-      expect(syntax).toContain("../first/Greeting.md");
+      expect(syntax).toContain(join(first, "Greeting.md"));
       expect(syntax).toContain("First greeting contract.");
       expect(syntax).not.toContain("Second greeting contract.");
       expect(syntax).not.toContain("<Local>");
@@ -244,8 +245,10 @@ describe("REPL includes through the production source terminal", () => {
           expect(output).toContain("Root default rendered.");
           yield* submit(pty, '<Syntax names={["Local", "RootLocal"]} />');
           const syntax = modelOf(yield* completed(pty, history, 2)).terminal?.output ?? "";
-          expect(syntax).toContain("**Origin:** `components/Local.md`");
-          expect(syntax).toContain("**Origin:** `RootLocal.md`");
+          expect(syntax).toContain(
+            `**Origin:** \`${join(invocationDirectory, "components", "Local.md")}\``,
+          );
+          expect(syntax).toContain(`**Origin:** \`${join(invocationDirectory, "RootLocal.md")}\``);
           expect(syntax).not.toContain("ExternalOnly");
           yield* refused(pty, history, "ExternalOnly");
           expect(yield* exists(join(workspace, "witness.txt"))).toBe(true);

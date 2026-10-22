@@ -292,7 +292,7 @@ function* assembled(options: {
     if (!stack.ok) {
       throw stack.error;
     }
-    const profile = yield* assembleReplProfile(stack.value, NO_PLUGINS, {
+    const profile = yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
       ...(options.sidekick === undefined ? {} : { sidekickAgent: options.sidekick }),
       acp: {
         createRuntime: fake.create,
@@ -300,7 +300,7 @@ function* assembled(options: {
         agentRegistry: makeRegistry({}),
       },
       planWriterRoot: yield* useTemporary("xmd-sidekick-selection-"),
-    });
+    })).finalize();
     return { profile, asked: fake.ensured.map((one) => one.agent) };
   });
 }
@@ -315,7 +315,10 @@ describe("Tier R7 — the configuration a Sidekick conversation runs under", () 
       context: "context-agent",
     });
     expect(explicit.profile.sidekickAgent).toBe(OTHER);
-    expect(explicit.profile.includes).toEqual(["components", "."]);
+    expect(explicit.profile.includes).toEqual([
+      join(explicit.profile.projectCwd!, "components"),
+      explicit.profile.projectCwd,
+    ]);
 
     // Without the flag the context wins — and `--default-agent` still does not,
     // which is the whole point of the two being independent: a person who chose

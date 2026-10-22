@@ -1507,7 +1507,9 @@ describe("how a REPL entry gets its issues", () => {
         throw stack.error;
       }
       yield* selectReplEntryHost(SUITE_HELPER, planWriterRoot);
-      return yield* assembleReplProfile(stack.value, NO_PLUGINS, { planWriterRoot });
+      return yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
+        planWriterRoot,
+      })).finalize();
     });
     // Behavioural rather than by identity: the production selector builds the
     // factory from this host's own configuration, so what the profile carries
@@ -1522,7 +1524,9 @@ describe("how a REPL entry gets its issues", () => {
       if (!stack.ok) {
         throw stack.error;
       }
-      return yield* assembleReplProfile(stack.value, NO_PLUGINS, { planWriterRoot });
+      return yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
+        planWriterRoot,
+      })).finalize();
     });
     expect(absent.entryInstallation).toBe(undefined);
 
