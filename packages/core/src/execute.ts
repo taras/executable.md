@@ -28,6 +28,9 @@ import {
 import { API, readTextFile, cwd, timeoutExec } from "@executablemd/runtime";
 import type { ProcessOutcome } from "@executablemd/runtime";
 import { cwd as processCwd } from "@effectionx/fs";
+import { useComponentModules } from "./typescript-module.ts";
+import type { LoadComponentModule } from "./typescript-module.ts";
+import { pathToFileURL } from "node:url";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { createReplayStream } from "./replay-stream.ts";
 import { ExecutionProtocolError, issueExecution } from "./execution-request.ts";
@@ -484,6 +487,7 @@ function targetFailureRecord(failure: DocumentTargetFailure): TargetFailureRecor
  * the property this shape exists to make true rather than to promise.
  */
 interface ImportInputs {
+  readonly loadModule: LoadComponentModule;
   readonly searchPaths: string[];
   readonly registry: ComponentRegistry;
   readonly bundle: WorkflowComponentCatalog | undefined;
@@ -712,7 +716,7 @@ function* materializeImport(
     // content can resolve, or leave a selected path unloadable.
     const currentDir = yield* processCwd();
     const absolutePath = path.startsWith("/") ? path : `${currentDir}/${path}`;
-    const mod = yield* until(import(`file://${absolutePath}`));
+    const mod = yield* inputs.loadModule(content, pathToFileURL(absolutePath).href);
     if (typeof mod !== "object" || mod === null) {
       throw new Error(`Function component "${name}" at ${path} did not load a module`);
     }
@@ -724,10 +728,16 @@ function* materializeImport(
     // authenticated against the invocation this engine minted.
     const declaration = parseFormDeclaration("form" in mod ? mod.form : undefined);
     const defaultExport = "default" in mod ? mod.default : undefined;
-    if (declaration === undefined && !isFunctionComponent(defaultExport)) {
-      throw new Error(
-        `Function component "${name}" at ${path} must have a default export that is a generator function`,
-      );
+    let fn: FunctionComponent;
+    if (declaration !== undefined) {
+      fn = formDispatcher(declaration);
+    } else {
+      if (!isFunctionComponent(defaultExport)) {
+        throw new Error(
+          `Function component "${name}" at ${path} must have a default export that is a generator function`,
+        );
+      }
+      fn = defaultExport;
     }
 
     const propsExport = "props" in mod ? mod.props : undefined;
@@ -756,7 +766,7 @@ function* materializeImport(
       // component accepts and what it says it accepts come from one value.
       ...(forms === undefined ? {} : { forms }),
       ...(offered === undefined ? {} : { generated: offered.value }),
-      fn: declaration === undefined ? defaultExport : formDispatcher(declaration),
+      fn,
     };
 
     if ("returns" in mod && mod.returns !== undefined) {
@@ -2602,6 +2612,7 @@ export interface HostExecution extends DocumentExecution {
  * under and what a document imports through are the same decisions.
  */
 interface ComponentAssembly {
+  readonly loadModule: LoadComponentModule;
   readonly startingRegistry: ComponentRegistry;
   readonly bundle: WorkflowComponentCatalog | undefined;
   readonly catalog: ExecutionDeclarationCatalog;
@@ -2659,6 +2670,7 @@ function* assembleComponents(
   documentation: readonly DocumentationContribution[],
   canonicalImports: CanonicalImports,
   lifetime: EvaluationLifetime,
+  loadModule: LoadComponentModule,
 ): Operation<ComponentAssembly> {
   // The paths *this capture* resolves against, copied: the selection below is
   // resolved against the environment the host assembled, and a later edit to
@@ -2791,6 +2803,7 @@ function* assembleComponents(
             declared: installedComponents,
             catalog,
             guarded: identity.protected,
+            loadModule,
           }),
           lifetime,
           identity.componentRouting.project,
@@ -2798,6 +2811,7 @@ function* assembleComponents(
 
   return {
     startingRegistry,
+    loadModule,
     bundle,
     catalog,
     installedComponents,
@@ -2991,6 +3005,7 @@ function* executeDocument(
             declared: installedComponents,
             catalog,
             guarded: identity.protected,
+            loadModule: assembly.loadModule,
           },
           admitted,
         );
@@ -4162,6 +4177,7 @@ function* invoke(
     documentation,
     canonicalImports,
     lifetime,
+    yield* useComponentModules(),
   );
 
   // Whatever a handler returns is not an execution, so it is not read.

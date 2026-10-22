@@ -154,6 +154,7 @@ import { selectPlugins } from "./plugin-selection.ts";
 import type { PluginSelection } from "./plugin-selection.ts";
 import { deliverWhole } from "./stdout-delivery.ts";
 import { testingExecutionHost } from "./testing-host.ts";
+import { ComponentModuleLoader } from "@executablemd/core/api";
 import type { ChildPlanDeclaration } from "./testing-host.ts";
 import { EVAL_ALIAS, EVAL_OPTION, evalGrammarError, readEvalFlags } from "./eval-source.ts";
 import type { EvalFlags } from "./eval-source.ts";
@@ -1436,6 +1437,7 @@ function* runDocument(
   // that inherits no `API.Env` handler. What crosses is the argv, not the Api
   // that produced it.
   const testingHost = testingExecutionHost({
+    componentModuleLoader: yield* ComponentModuleLoader.get(),
     includes: include,
     // The Plugin *values*, so an isolated child installs them again for itself
     // with command `run`. Live middleware and installation-scoped resources

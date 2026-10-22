@@ -1,3 +1,4 @@
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -322,6 +323,7 @@ describe("WebForm: a repository file outranks the registration", () => {
   });
 
   it("prefers a repository WebForm.ts", function* () {
+    yield* useComponentModuleLoader();
     const dir = yield* useLocalFixture();
     yield* writeFile(
       join(dir, "WebForm.ts"),

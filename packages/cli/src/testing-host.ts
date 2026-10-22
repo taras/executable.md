@@ -61,6 +61,7 @@ import { installDocumentComponents } from "./cli.ts";
 import { installPlugins } from "./plugin-host.ts";
 import { nestedRunProfile } from "./run-profile.ts";
 import type { Plugin } from "@executablemd/core/api";
+import { ComponentModuleLoader } from "@executablemd/core/api";
 import { useOrdinaryGeneratedSelection } from "./evaluation-profile.ts";
 import type { HostServiceInstaller } from "./cli.ts";
 
@@ -87,6 +88,7 @@ export interface ChildPlanDeclaration {
 
 /** What the entrypoint already decided, and a child must not decide again. */
 export interface TestingHostSettings {
+  readonly componentModuleLoader?: ComponentModuleLoader;
   /** The component search path this run resolves names through. */
   readonly includes: string[];
   /**
@@ -270,6 +272,7 @@ function* runProfileChild(
   settings: TestingHostSettings,
 ): Operation<ChildSettlement> {
   const request = invocation.request;
+  yield* ComponentModuleLoader.set(settings.componentModuleLoader);
   if (request.host !== "run") {
     throw new Error(`the ${request.host} host profile is not available on this entrypoint`);
   }

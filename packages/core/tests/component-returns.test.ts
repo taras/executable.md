@@ -1,3 +1,4 @@
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
 /**
  * Tier RV — component and root return values (spec §6.10, §5.4).
  *
@@ -50,6 +51,7 @@ function* runExecution(options: {
   commands: string[];
 }): Operation<Run> {
   const { commands } = options;
+  yield* useComponentModuleLoader();
   yield* API.Process.around({
     // deno-lint-ignore require-yield
     *exec([execOptions], _next) {
@@ -630,6 +632,7 @@ describe("Tier RV — component return values", () => {
         delete globals.__rv12torn;
       });
 
+      yield* useComponentModuleLoader();
       yield* scoped(function* () {
         const dir = path.join(os.tmpdir(), `returns-halt-${randomUUID()}`);
         yield* ensureDir(dir);

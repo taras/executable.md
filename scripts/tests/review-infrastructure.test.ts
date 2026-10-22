@@ -1,3 +1,4 @@
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { FetchApi, type FetchResponse } from "@effectionx/fetch";
@@ -190,6 +191,7 @@ function* runDocumentResult(
         },
       });
     }
+    yield* useComponentModuleLoader();
     yield* useStubFs({ "doc.md": document, ...components });
     const process = options.process;
     if (process) {
@@ -238,13 +240,13 @@ const OPERATIONAL_DIRS = [
 /**
  * Read operational components from the repository before `useStubFs` replaces
  * the filesystem, so a run expands the shipped review documents rather than a
- * copy. A `.ts` component is imported from its real path, so its stub entry
- * only has to make the path resolve.
+ * copy. TypeScript selections retain these exact bytes while their dependencies
+ * resolve from their physical origin.
  */
 function* operationalComponents(paths: string[]): Operation<Record<string, string>> {
   const components: Record<string, string> = {};
   for (const path of paths) {
-    components[path] = path.endsWith(".ts") ? "" : yield* readTextFile(path);
+    components[path] = yield* readTextFile(path);
   }
   return components;
 }
@@ -316,7 +318,9 @@ describe("review infrastructure", () => {
 
     const valid = yield* runDocumentResult(
       '<Output><OxlintDiagnostics files={["a.ts"]} as="diagnostics" />\n```ts eval\nconst summary = `${diagnostics.length}:${diagnostics[0].ruleId}`;\n```\n{summary}</Output>',
-      { "packages/code-review-agent/src/components/OxlintDiagnostics.ts": "" },
+      yield* operationalComponents([
+        "packages/code-review-agent/src/components/OxlintDiagnostics.ts",
+      ]),
       {
         includes: [
           "packages/code-review-agent/src/documents/components",
@@ -361,7 +365,9 @@ describe("review infrastructure", () => {
       yield* useTempFileCompiler();
       const result = yield* runDocumentResult(
         '<Output><OxlintDiagnostics files={["a.ts"]} as="diagnostics" /></Output>',
-        { "packages/code-review-agent/src/components/OxlintDiagnostics.ts": "" },
+        yield* operationalComponents([
+          "packages/code-review-agent/src/components/OxlintDiagnostics.ts",
+        ]),
         {
           includes: OPERATIONAL_DIRS,
           process: scenario.process,
@@ -384,9 +390,9 @@ describe("review infrastructure", () => {
     expect(
       yield* runDocument(
         '<Output><OxlintDiagnostics files={[]} as="diagnostics" /></Output>',
-        {
-          "packages/code-review-agent/src/components/OxlintDiagnostics.ts": "",
-        },
+        yield* operationalComponents([
+          "packages/code-review-agent/src/components/OxlintDiagnostics.ts",
+        ]),
         {
           includes: [
             "packages/code-review-agent/src/documents/components",
@@ -473,7 +479,9 @@ describe("review infrastructure", () => {
     };
     const result = yield* runDocumentResult(
       document,
-      { "packages/code-review-agent/src/components/CommentReviewData.ts": "" },
+      yield* operationalComponents([
+        "packages/code-review-agent/src/components/CommentReviewData.ts",
+      ]),
       options,
     );
     expect(result.ok).toBe(true);
@@ -484,7 +492,9 @@ describe("review infrastructure", () => {
     malformed = true;
     const malformedResult = yield* runDocumentResult(
       document,
-      { "packages/code-review-agent/src/components/CommentReviewData.ts": "" },
+      yield* operationalComponents([
+        "packages/code-review-agent/src/components/CommentReviewData.ts",
+      ]),
       options,
     );
     expect(malformedResult.ok).toBe(false);
@@ -513,7 +523,9 @@ describe("review infrastructure", () => {
     ].join("\n");
     const result = yield* runDocumentResult(
       document,
-      { "packages/code-review-agent/src/components/CommentReviewState.ts": "" },
+      yield* operationalComponents([
+        "packages/code-review-agent/src/components/CommentReviewState.ts",
+      ]),
       {
         includes: [
           "packages/code-review-agent/src/documents/components",
@@ -541,7 +553,9 @@ describe("review infrastructure", () => {
       "{summary}",
       "</Output>",
     ].join("\n");
-    const component = { "packages/code-review-agent/src/components/Doctor.ts": "" };
+    const component = yield* operationalComponents([
+      "packages/code-review-agent/src/components/Doctor.ts",
+    ]);
     const stats = (available: boolean) => (path: string) => {
       if (path === ".reviews/.oxlint/oxlint" || path === ".reviews/.oxlint/tsgolint") {
         return { exists: available, isFile: available, isDirectory: false };
@@ -646,7 +660,7 @@ describe("review infrastructure", () => {
     ].join("\n");
     const result = yield* runDocumentResult(
       document,
-      { "packages/code-review-agent/src/components/ReviewContext.ts": "" },
+      yield* operationalComponents(["packages/code-review-agent/src/components/ReviewContext.ts"]),
       {
         includes: [
           "packages/code-review-agent/src/documents/components",
@@ -664,7 +678,7 @@ describe("review infrastructure", () => {
 
     const failed = yield* runDocumentResult(
       document,
-      { "packages/code-review-agent/src/components/ReviewContext.ts": "" },
+      yield* operationalComponents(["packages/code-review-agent/src/components/ReviewContext.ts"]),
       {
         includes: [
           "packages/code-review-agent/src/documents/components",
@@ -739,7 +753,9 @@ describe("review infrastructure", () => {
     const inventoryResult = yield* runDocumentResult(
       '<RepositoryInventory as="inventory" />\n{inventory.fileCount}:{inventory.lineCount}',
       {
-        "packages/code-review-agent/src/components/RepositoryInventory.ts": "",
+        ...(yield* operationalComponents([
+          "packages/code-review-agent/src/components/RepositoryInventory.ts",
+        ])),
         "packages/example.ts": "first\nsecond\n",
       },
       {

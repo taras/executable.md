@@ -4,7 +4,10 @@
   "exports": {
     ".": "./mod.ts",
     "./api": "./api.ts",
-    "./host": "./host.ts"
+    "./host": "./host.ts",
+    "./host/deno": "./component-modules/deno.ts",
+    "./host/node": "./component-modules/node.ts",
+    "./host/bun": "./component-modules/bun.ts"
   },
   "imports": {
     "@effectionx/context-api": "npm:@effectionx/context-api@0.6.0",
@@ -23,6 +26,7 @@
     "unist-util-select": "npm:unist-util-select@^5",
     "mdast-util-to-string": "npm:mdast-util-to-string@^4",
     "@secretlint/profiler": "npm:@secretlint/profiler@13.0.4",
-    "yq.rs": "npm:yq.rs@0.1.4"
+    "yq.rs": "npm:yq.rs@0.1.4",
+    "@babel/standalone": "npm:@babel/standalone@8.0.7"
   }
 }

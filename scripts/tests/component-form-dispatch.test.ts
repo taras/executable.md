@@ -38,12 +38,31 @@ interface Run {
   readonly output: string;
 }
 
-function* run(cwd: string, args: string[]): Operation<Run> {
-  const settled = yield* exec(BINARY, { arguments: args, cwd }).join();
+function* run(cwd: string, args: string[], env?: Record<string, string>): Operation<Run> {
+  const settled = yield* exec(BINARY, { arguments: args, cwd, env }).join();
   return { code: settled.code ?? 1, output: `${settled.stdout}${settled.stderr}` };
 }
 
 describe("compiled form dispatch across loaded copies", () => {
+  it("L4: loads a typed component and relative helper outside the source checkout", function* () {
+    const directory = yield* useTempDirectory("xmd-compiled-module-");
+    yield* writeTextFile(
+      join(directory, "helper.ts"),
+      'export const value: string = "compiled-typed-component";',
+    );
+    yield* writeTextFile(
+      join(directory, "Typed.ts"),
+      'import { value } from "./helper.ts";\nexport default function*() { const typed: string = value; return typed; }',
+    );
+    const result = yield* run(directory, ["-e", "<Typed />", "--include", directory, "--raw"], {
+      PATH: "",
+    });
+    expect(result).toEqual({
+      code: 0,
+      output: expect.stringContaining("compiled-typed-component"),
+    });
+  });
+
   it("reads the same way with the embedded default and with a second copy", function* () {
     if (!(yield* exists(BINARY))) {
       throw new Error(`${BINARY} is missing — run \`deno task build\` before this suite`);

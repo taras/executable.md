@@ -1,3 +1,4 @@
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
 /**
  * Tier GS — the component forms a host offers generated XMD (spec §5.3.2).
  *
@@ -75,6 +76,7 @@ function run(
 ): Operation<Attempt> {
   return scoped(function* () {
     const stream = new InMemoryStream(options.events ?? []);
+    yield* useComponentModuleLoader();
     if (options.files !== undefined) {
       yield* useRecordedFiles(options.files);
     }

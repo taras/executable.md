@@ -2428,6 +2428,37 @@ Function components are TypeScript files (`.ts`) that export an
 Effection generator function as their default export. They receive
 validated props directly and return rendered output as a string.
 
+**Host installation.** The CLI installs its host's component module loader.
+Programmatic callers install one explicitly in their owning Effection scope:
+
+```typescript
+import { useDenoComponentModuleLoader } from "@executablemd/core/host/deno";
+
+yield* useDenoComponentModuleLoader();
+const execution = yield* execute(options);
+```
+
+Node uses `useNodeComponentModuleLoader` from
+`@executablemd/core/host/node`; Bun uses
+`useBunComponentModuleLoader` from `@executablemd/core/host/bun`.
+Importing these subpaths installs nothing. An eval compiler does not install a
+component module loader. Without one, a repository TypeScript selection refuses
+before native loading with: “TypeScript component module loader is not installed
+— bind ComponentModuleLoader for this host before loading TypeScript components.”
+Markdown and non-file registrations remain available.
+
+`ComponentModuleLoader` is a same-name interface and Context exported from
+`@executablemd/core/api`. Its `load(source, origin): Operation<unknown>` receives
+the selected direct text and absolute logical file URL and returns the complete
+module namespace. Canonical setup captures the selected provider and bound
+method before profile resolution; later Context bindings affect later
+invocations. The loader grants no permission and writes no staging file.
+Relative and bare dependencies, re-exports, computed dynamic imports and module
+metadata use the logical origin. Dependencies remain live host dependencies;
+only the direct selected source is retained. Native hooks and object URLs belong
+to the canonical execution, survive namespace return and remain available for
+later module use. Cancellation joins native loading before releasing them.
+
 ```typescript
 // components/Greeting.ts
 import type { Json } from "@executablemd/core";
@@ -4120,6 +4151,13 @@ operation, with the read it leads to. What the journal holds is serializable: a
 repository selection records the chosen path and its content, and a registration
 records its origin, never its function.
 
+Both profile capture and durable import materialize TypeScript from that
+selection's exact direct text through the captured `ComponentModuleLoader`.
+New work at the same path uses edited text. Retained continuation uses recorded
+text even when the direct file changes or disappears, with the same logical
+origin and ordinary live dependencies. Materialization adds no journal member
+and does not repeat completed effects.
+
 The root's selection carries one more member. A targeted root resolves its
 selector here too, against the text this operation is about to record, and
 records the **exact** target it resolved to — so the section the run executed is
@@ -4172,18 +4210,11 @@ function* durableImportComponent(
     return found.definition;
   }
 
-  // Function component: .ts file — import() the module
+  // Direct source and the executable namespace describe the same selection.
   if (selection.path.endsWith(".ts")) {
     const absolutePath = `${process.cwd()}/${selection.path}`;
-    const mod = yield* call(() => import(`file://${absolutePath}`));
-    return {
-      kind: "function" as const,
-      name,
-      props: mod.props === undefined
-        ? { type: "object", properties: {}, additionalProperties: false }
-        : parseJsonObject(mod.props),
-      fn: mod.default,
-    };
+    const mod = yield* loadModule(selection.content, pathToFileURL(absolutePath).href);
+    return validateFunctionComponent(name, mod);
   }
 
   // Markdown component: parse at runtime — deterministic from content

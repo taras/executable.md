@@ -1,12 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignore": [
-    "**/vendor/**",
-    "**/npm/**",
-    "scripts/tests/fixtures/**",
-    "**/_fresh/**",
-    "**/*.d.ts"
-  ],
+  "ignore": ["**/vendor/**", "**/npm/**", "scripts/tests/fixtures/**", "**/_fresh/**", "**/*.d.ts"],
   "workspaces": {
     ".": {
       "entry": [
@@ -36,6 +30,9 @@
         ],
         "@executablemd/core": ["packages/core/mod.ts"],
         "@executablemd/core/api": ["packages/core/api.ts"],
+        "@executablemd/core/host/deno": ["packages/core/component-modules/deno.ts"],
+        "@executablemd/core/host/node": ["packages/core/component-modules/node.ts"],
+        "@executablemd/core/host/bun": ["packages/core/component-modules/bun.ts"],
         "@executablemd/core/host": ["packages/core/host.ts"],
         "@executablemd/durable-streams": ["packages/durable-streams/mod.ts"],
         "@executablemd/git": ["packages/git/mod.ts"],
@@ -66,12 +63,7 @@
         "demo/**/*.{ts,tsx}",
         "examples/**/*.{ts,tsx}"
       ],
-      "project": [
-        "**/*.{ts,tsx,js,jsx}",
-        "!vendor/**",
-        "!src/repl/vendor/**",
-        "!npm/**"
-      ],
+      "project": ["**/*.{ts,tsx,js,jsx}", "!vendor/**", "!src/repl/vendor/**", "!npm/**"],
       "paths": {
         "@executablemd/acp": ["../../packages/acp/mod.ts"],
         "@executablemd/acp/embedded-adapters": ["../../packages/acp/embedded-adapters.ts"],
@@ -82,6 +74,9 @@
         ],
         "@executablemd/core": ["../../packages/core/mod.ts"],
         "@executablemd/core/api": ["../../packages/core/api.ts"],
+        "@executablemd/core/host/deno": ["../../packages/core/component-modules/deno.ts"],
+        "@executablemd/core/host/node": ["../../packages/core/component-modules/node.ts"],
+        "@executablemd/core/host/bun": ["../../packages/core/component-modules/bun.ts"],
         "@executablemd/core/host": ["../../packages/core/host.ts"],
         "@executablemd/durable-streams": ["../../packages/durable-streams/mod.ts"],
         "@executablemd/git": ["../../packages/git/mod.ts"],

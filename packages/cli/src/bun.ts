@@ -11,6 +11,7 @@ import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileTempFile } from "@executablemd/core";
 import { runXmd, XMD_VERSION } from "./cli.ts";
+import { useBunComponentModuleLoader } from "@executablemd/core/host/bun";
 import { useBunRepl } from "./bun-repl.ts";
 import { readInputStream } from "./standard-input.ts";
 import { importPluginModule } from "./host-plugin-modules.ts";
@@ -36,6 +37,7 @@ const UPGRADE: UpgradeAssembly = {
 };
 
 await main(function* (args) {
+  yield* useBunComponentModuleLoader();
   // The base providers for this host. `at: "min"` puts them beneath ordinary
   // middleware, so middleware installed later can wrap either one.
   yield* API.Env.around(

@@ -3,12 +3,8 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "target": "ES2022",
-    "lib": [
-      "ES2022"
-    ],
-    "types": [
-      "node"
-    ],
+    "lib": ["ES2022"],
+    "types": ["node"],
     "strict": true,
     "noImplicitAny": false,
     "esModuleInterop": true,
@@ -16,57 +12,27 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "paths": {
-      "@executablemd/acp": [
-        "./packages/acp/mod.ts"
-      ],
-      "@executablemd/cli": [
-        "./packages/cli/src/cli.ts"
-      ],
-      "@executablemd/code-review-agent": [
-        "./packages/code-review-agent/mod.ts"
-      ],
-      "@executablemd/core": [
-        "./packages/core/mod.ts"
-      ],
-      "@executablemd/durable-streams": [
-        "./packages/durable-streams/mod.ts"
-      ],
-      "@executablemd/runtime": [
-        "./packages/runtime/mod.ts"
-      ],
-      "@executablemd/runtime/files": [
-        "./packages/runtime/files.ts"
-      ],
-      "@executablemd/runtime/test": [
-        "./packages/runtime/test/mod.ts"
-      ],
-      "@executablemd/test-agent": [
-        "./packages/test-agent/mod.ts"
-      ],
-      "@executablemd/test-support/bdd": [
-        "./packages/test-support/bdd.ts"
-      ],
-      "@executablemd/test-support/expect": [
-        "./packages/test-support/expect.ts"
-      ],
-      "@executablemd/test-support/journal": [
-        "./packages/test-support/journal.ts"
-      ],
-      "@executablemd/test-support/launch": [
-        "./packages/test-support/launch.ts"
-      ],
-      "@executablemd/test-support/temp": [
-        "./packages/test-support/temp.ts"
-      ],
-      "@executablemd/testing": [
-        "./packages/testing/mod.ts"
-      ],
-      "@executablemd/web": [
-        "./packages/web/mod.ts"
-      ],
-      "@executablemd/workflow": [
-        "./packages/workflow/mod.ts"
-      ]
+      "@executablemd/test-support/host": ["./packages/test-support/host.ts"],
+      "@executablemd/core/host/deno": ["./packages/core/component-modules/deno.ts"],
+      "@executablemd/core/host/node": ["./packages/core/component-modules/node.ts"],
+      "@executablemd/core/host/bun": ["./packages/core/component-modules/bun.ts"],
+      "@executablemd/acp": ["./packages/acp/mod.ts"],
+      "@executablemd/cli": ["./packages/cli/src/cli.ts"],
+      "@executablemd/code-review-agent": ["./packages/code-review-agent/mod.ts"],
+      "@executablemd/core": ["./packages/core/mod.ts"],
+      "@executablemd/durable-streams": ["./packages/durable-streams/mod.ts"],
+      "@executablemd/runtime": ["./packages/runtime/mod.ts"],
+      "@executablemd/runtime/files": ["./packages/runtime/files.ts"],
+      "@executablemd/runtime/test": ["./packages/runtime/test/mod.ts"],
+      "@executablemd/test-agent": ["./packages/test-agent/mod.ts"],
+      "@executablemd/test-support/bdd": ["./packages/test-support/bdd.ts"],
+      "@executablemd/test-support/expect": ["./packages/test-support/expect.ts"],
+      "@executablemd/test-support/journal": ["./packages/test-support/journal.ts"],
+      "@executablemd/test-support/launch": ["./packages/test-support/launch.ts"],
+      "@executablemd/test-support/temp": ["./packages/test-support/temp.ts"],
+      "@executablemd/testing": ["./packages/testing/mod.ts"],
+      "@executablemd/web": ["./packages/web/mod.ts"],
+      "@executablemd/workflow": ["./packages/workflow/mod.ts"]
     }
   },
   "include": [

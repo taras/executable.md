@@ -40,7 +40,13 @@ export function cliBase(): string[] {
   }
   // A fresh tsx process rather than the running one: a CLI subprocess must not
   // inherit --test or the runner's loaders from process.execArgv.
-  return ["tsx", "--tsconfig", join(ROOT, "tsconfig.node.json"), entry("node")];
+  return [
+    process.execPath,
+    fileURLToPath(import.meta.resolve("tsx/cli")),
+    "--tsconfig",
+    join(ROOT, "tsconfig.node.json"),
+    entry("node"),
+  ];
 }
 
 export function cliCommand(args: string[]): { command: string; arguments: string[] } {

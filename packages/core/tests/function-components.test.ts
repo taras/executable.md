@@ -16,6 +16,7 @@ import type { Json } from "@executablemd/durable-streams";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { until } from "effection";
 import { symlink } from "node:fs/promises";
 import * as path from "node:path";
@@ -35,6 +36,7 @@ const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
  * Teardown unlinks the node_modules symlink rather than following it.
  */
 function* makeTempDir(): Operation<string> {
+  yield* useComponentModuleLoader();
   const dir = yield* useTempDirectory("fc-test-");
   yield* writeTextFile(path.join(dir, "package.json"), JSON.stringify({ type: "module" }));
   yield* until(symlink(path.join(ROOT, "node_modules"), path.join(dir, "node_modules"), "dir"));
