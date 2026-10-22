@@ -9,7 +9,8 @@
     "./host-boundary": "./host-boundary.ts",
     "./journal": "./journal.ts",
     "./launch": "./launch.ts",
-    "./temp": "./temp.ts"
+    "./temp": "./temp.ts",
+    "./component-modules": "./component-modules.ts"
   },
   "dependencies": {
     "@effectionx/fs": "0.3.0",
@@ -18,6 +19,7 @@
     "@effectionx/timebox": "0.4.3",
     "@executablemd/durable-streams": "workspace:*",
     "effection": "4.1.0",
-    "expect": "^30.0.0"
+    "expect": "^30.0.0",
+    "@executablemd/core": "workspace:*"
   }
 }

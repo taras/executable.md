@@ -6,7 +6,10 @@
   "exports": {
     ".": "./mod.ts",
     "./api": "./api.ts",
-    "./host": "./host.ts"
+    "./host": "./host.ts",
+    "./component-modules/deno": "./component-modules/deno.ts",
+    "./component-modules/node": "./component-modules/node.ts",
+    "./component-modules/bun": "./component-modules/bun.ts"
   },
   "dependencies": {
     "@effectionx/context-api": "0.6.0",
