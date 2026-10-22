@@ -1,3 +1,4 @@
+import type { ReplTesting } from "./testing.ts";
 /**
  * What the root actually does when a reply asks, and where each answer comes from.
  *
@@ -205,8 +206,13 @@ export type SubmitForReply = () => Operation<Result<SubmitReceipt>>;
  * The reads are stateless over the root, so they cost a response that does not
  * use them nothing.
  */
-export function sidekickRequests(root: RootReading, submit: SubmitForReply): SidekickRequests {
+export function sidekickRequests(
+  root: RootReading,
+  submit: SubmitForReply,
+  test?: ReplTesting,
+): SidekickRequests {
   return {
+    ...(test === undefined ? {} : { test }),
     *bindings(): Operation<Result<Json>> {
       // The root data as it stands: the retained head for every entry that has
       // settled, and the current root of the entry running now on top of it.

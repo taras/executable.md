@@ -1,3 +1,5 @@
+import { testForSidekick } from "../../../../src/repl/sidekick/admission.ts";
+import { pairedLocation } from "../../../../src/repl/sidekick/history.ts";
 /**
  * One Sidekick, assembled the way the command assembles it (#883).
  *
@@ -63,6 +65,7 @@ export const AGENT = "scripted-sidekick";
 
 /** One case's world: the real pieces, and the one scripted provider. */
 export interface Harness {
+  readonly workspace: string;
   readonly fake: FakeAcp;
   /** The repository, so a case can reopen this execution as a cold one would. */
   readonly repository: PairedReplRepository;
@@ -154,6 +157,7 @@ export function* useHarness(
   if (!stack.ok) {
     throw stack.error;
   }
+  const workspace = pairedLocation(join(dataRoot, "repl"), execution.id).directory;
   const profile = yield* (yield* assembleReplProfile(stack.value, NO_PLUGINS, {
     acp: {
       createRuntime: fake.create,
@@ -166,7 +170,7 @@ export function* useHarness(
     // availability refusal rather than reaching the fake.
     sidekickAgent: AGENT,
     planWriterRoot: yield* useTemporary("xmd-sidekick-plan-"),
-  })).finalize();
+  })).finalize(workspace);
 
   const opened = yield* openReplSession({
     execution,
@@ -238,6 +242,7 @@ export function* useHarness(
       return Ok(execution.chat as PairedChatStorage);
     },
     root,
+    test: (path) => testForSidekick(path, { held: admitting, session, testing: profile.testing }),
     submit(at, journal: ControlJournal): Operation<Result<SubmitReceipt>> {
       return submitForSidekick(at, {
         session: {
@@ -276,7 +281,17 @@ export function* useHarness(
     },
   });
 
-  return { fake, repository, owner, session, execution, profile, admitting, state: () => state };
+  return {
+    workspace,
+    fake,
+    repository,
+    owner,
+    session,
+    execution,
+    profile,
+    admitting,
+    state: () => state,
+  };
 }
 
 /** Every record this execution's chat history holds. */

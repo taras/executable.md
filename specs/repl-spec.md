@@ -108,6 +108,90 @@ Read `<Guide.Environment />` and `<Guide.Entries />` for the component-writing,
 discovery, later submission and output-reading journey. Current
 `<REPL.Environment />` reports the response's actual cwd.
 
+## Testing session components
+
+After ordinary File entries create a component and its companion test, a
+Sidekick response requests real tests explicitly:
+
+```xmd
+<REPL.Test path="components/Greeting.test.md" as="tests" />
+<Output><Json value={tests} /></Output>
+```
+
+`REPL.Test` is a self-closing write control. Its only required prop is `path`;
+ordinary `as` capture is optional. A directory target such as `components`
+discovers `**/*.test.md` recursively, deduplicates documents and executes them
+in normalized relative-path code-point order. Both target forms preserve the
+finalized REPL component selection: configured directories, session components,
+then registered defaults. They do not promote the document or target directory
+as the CLI directory test command does.
+
+Targets resolve against the paired session workspace, including inside a
+response Dir. Empty, absolute and lexically escaping paths refuse before
+execution. Literal `#` and `%` belong to the filename. A missing selected file
+is an execution failure. Discovery failure before any document starts gives
+control-refusal feedback with its diagnostic and no completed report.
+
+A completed request returns this detached JSON-compatible value, and designated
+feedback retains the same value whether or not it was captured:
+
+```ts
+{
+  path: string,
+  status: "passed" | "failed" | "no-tests",
+  documents: [{
+    path: string,
+    status: "passed" | "failed" | "no-tests",
+    tests: TestResult[],
+    error: null | { name: string, message: string },
+    report: string
+  }]
+}
+```
+
+The top-level path preserves the requested spelling; document paths are
+normalized session-relative paths, including `components/`. Tests are actual
+Testing results: status `pass` or `fail`, source location, optional name and
+optional structured error with kind, full message and optional actual/expected
+values. Output is drained independently and partial rendering survives document
+failure. A successful execution has error null; otherwise the actual failure's
+name and full message remain. No outcome is inferred from report text.
+
+A document passes only after successful execution with reached tests. An
+otherwise valid zero-test execution is `no-tests` with its genuine testing-policy
+diagnostic. Parse or runtime failure before the first Test is `failed`, including
+when there are no results. An empty explicit Testing boundary is still
+`no-tests`. A suite passes only when every document passes; an empty selection
+or all no-tests documents is `no-tests`; every other combination is `failed`.
+Ordinary document failure allows later documents to run. Cancellation, refusal,
+persistence, Files infrastructure, disclosure and owning-cleanup failures
+produce no completed report and retain their authoritative failure paths.
+
+Each document has a fresh execution scope and real useTesting session under
+the clean command host, with its providers, immutable declarations and selected
+TypeScript loader. Entry and response bindings or registrations are not copied.
+Document cleanup joins before the next document starts. Nested Execution uses
+the existing testing host. Testing grants no permission and adds no terminal
+writer, pane or automatic chat summary. Only explicit Output publishes chat.
+
+The root admits testing only when no entry reservation or active test exists
+and the session is ready. Its test slot is acquired without suspension before
+discovery and held through suite cleanup. Person Run, Sidekick Submit and a
+second test refuse during this interval, including cancellation cleanup. A test
+also refuses while an entry is preparing, executing, paused or tearing down.
+Refusal queues nothing, preserves the draft and appends no entry.
+
+The response owns testing. Stop cancels and joins its test work before releasing
+the slot; Exit likewise joins it before shutdown completes. An already admitted
+ordinary entry remains session-owned and survives Sidekick Stop. Completed
+reports remain retained facts after source changes or removal. Reopening and
+inspection execute no test, provider or component. An unmatched test intent is
+unknown work; only a new explicit REPL.Test starts another run.
+
+Read Guide.Entries for the executable create, test, fail, fix, retest and reuse
+sequence. File availability follows actual File outcomes, not entry completion
+alone.
+
 ## One live journey
 
 Run `xmd repl`. The screen shows an empty draft, a Sessions list that says it is

@@ -5,6 +5,9 @@
  * id before the includes-dependent Plan declaration and entry vocabulary exist.
  */
 
+import { replTesting } from "./repl/sidekick/testing.ts";
+import type { ReplTesting } from "./repl/sidekick/testing.ts";
+
 import type { AcpxProviderDependencies } from "@executablemd/acp";
 import { agentIdentityComponents } from "@executablemd/core";
 import type { PermissionMode } from "@executablemd/core";
@@ -52,6 +55,7 @@ export interface ReplProfileSeams {
  * parameter: a caller states what it knows and leaves out the rest.
  */
 export interface ReplProfileFacts extends ReplProfileSeams {
+  readonly testingHarness?: (includes: readonly string[]) => Operation<ExecutionInstallation>;
   readonly includes?: readonly string[];
   /**
    * The name `--sidekick-agent` carried, or none when the line named none.
@@ -93,6 +97,7 @@ export interface ReplProfileAssembly {
 
 /** One finalized execution profile, shared by validation, descriptions and entries. */
 export interface ReplExecutionProfile {
+  readonly testing?: ReplTesting;
   readonly projectCwd?: string;
   /** Where a declared name is looked for, outermost first. */
   readonly includes: readonly string[];
@@ -252,7 +257,7 @@ export function* assembleReplProfile(
         installElicitation: noElicitationOfItsOwn,
       });
 
-      return Object.freeze({
+      const profile = Object.freeze({
         includes,
         projectCwd,
         vocabulary: entryVocabulary(includes, plugins),
@@ -281,6 +286,10 @@ export function* assembleReplProfile(
         // installed with, so a journey that scripts the runtime drives this exact
         // assembly rather than a second one standing in for it.
         sidekickAssembly: sidekick,
+      });
+      return Object.freeze({
+        ...profile,
+        testing: replTesting(host, profile, workspace, facts.testingHarness),
       });
     },
   });

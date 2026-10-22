@@ -1,3 +1,4 @@
+import type { ReplTesting } from "./testing.ts";
 /**
  * The conversation this execution owns, and the one cycle it runs at a time.
  *
@@ -341,6 +342,7 @@ export interface SidekickLiveTurn {
 
 /** What the owner needs, and nothing it could reach the rest of the root with. */
 export interface SidekickOwnerInput {
+  readonly test?: ReplTesting;
   readonly workspace?: string;
   readonly assembly: SidekickAssembly;
   /** This execution's chat storage as it stands, which may hold nothing yet. */
@@ -534,6 +536,7 @@ export interface SidekickOwner {
 
 /** Which response this conversation's captured controls are answering for. */
 interface ServingResponse {
+  readonly test?: ReplTesting;
   readonly journal: ControlJournal;
   /** Admit the draft for this response, recording a refusal that wrote nothing. */
   submit(): Operation<Result<SubmitReceipt>>;
@@ -592,9 +595,18 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
      * cannot reach the other one's root.
      */
     const ceiling = sidekickResponseCeiling(
-      sidekickRequests(root, function* (): Operation<Result<SubmitReceipt>> {
-        return yield* servingNow().submit();
-      }),
+      sidekickRequests(
+        root,
+        function* (): Operation<Result<SubmitReceipt>> {
+          return yield* servingNow().submit();
+        },
+        function* (path) {
+          const test = servingNow().test;
+          return test === undefined
+            ? Err(new Error("this REPL host has no test runner"))
+            : yield* test(path);
+        },
+      ),
       {
         *began(occurrence, reserved): Operation<number> {
           return yield* servingNow().journal.began(occurrence, reserved);
@@ -1518,6 +1530,7 @@ export function useSidekickOwner(input: SidekickOwnerInput): Operation<SidekickO
        */
       const responding: ServingResponse = {
         journal,
+        ...(input.test === undefined ? {} : { test: input.test }),
         *submit(): Operation<Result<SubmitReceipt>> {
           const taken = pairs;
           const answer = yield* input.submit(at, journal);

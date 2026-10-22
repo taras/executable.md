@@ -1,7 +1,7 @@
 # Entries
 
 Read this before preparing an entry for the first time, or whenever you need the
-authoring pattern for putting source into the shared draft.
+authoring pattern for preparing, testing and reusing session components.
 
 ## Applies to
 
@@ -139,6 +139,104 @@ Each read requires `as`, renders nothing and binds JSON. A page is bounded —
 arguments for continuation, or `null` when there is no more. If a later read's
 cursor refuses because the answer changed, restart the read without the cursor.
 Nothing these reads return authorizes a repository change.
+
+### Test, fix and reuse a session component
+
+When asked to create and test a component, write its definition and a companion
+Markdown test through an ordinary entry. This Greeting writes `greeting.txt`
+when invoked and returns its greeting. Authoring its file performs neither:
+
+````xmd
+<Let as="code" select="code">
+```xmd
+<Let as="definition" value={"<File path=\"greeting.txt\">Hello from this session.</File>Hello from this session."} />
+<File path="components/Greeting.md">{definition}</File>
+<Let as="test" value={"<Test name=\"greeting\"><Greeting as=\"actual\" /><AssertEquals actual={actual} expected=\"Hello from this session.\" /></Test>"} />
+<File path="components/Greeting.test.md">{test}</File>
+```
+</Let>
+<REPL.EntryInput>{code}</REPL.EntryInput>
+<REPL.Submit />
+````
+
+Follow the receipt's read instruction and check the actual File outcomes. A
+completed entry alone does not prove either write succeeded. `greeting.txt`
+does not exist yet, and authoring the test has run no assertion.
+
+After successful writes, request the document explicitly:
+
+````xmd
+<REPL.Test path="components/Greeting.test.md" />
+````
+
+Feedback contains a passed document and its named assertion. Invocation created
+`greeting.txt`. Testing executes authored effects under the command's ordinary
+permissions; it does not append an entry or consume the draft.
+
+To see a real failure, replace the expectation through another ordinary entry,
+then request the directory suite:
+
+````xmd
+<Let as="code" select="code">
+```xmd
+<Let as="test" value={"<Test name=\"greeting\"><Greeting as=\"actual\" /><AssertEquals actual={actual} expected=\"wrong\" /></Test>"} />
+<File path="components/Greeting.test.md">{test}</File>
+```
+</Let>
+<REPL.EntryInput>{code}</REPL.EntryInput>
+<REPL.Submit />
+<REPL.Test path="components" as="tests" />
+````
+
+The completed report is `failed`. Read the named assertion's full diagnostic,
+actual and expected values before changing the file. Fix that expectation and
+request a fresh suite:
+
+````xmd
+<Let as="code" select="code">
+```xmd
+<Let as="test" value={"<Test name=\"greeting\"><Greeting as=\"actual\" /><AssertEquals actual={actual} expected=\"Hello from this session.\" /></Test>"} />
+<File path="components/Greeting.test.md">{test}</File>
+```
+</Let>
+<REPL.EntryInput>{code}</REPL.EntryInput>
+<REPL.Submit />
+<REPL.Test path="components" />
+````
+
+A passed report belongs to this request. Earlier failed reports stay as facts.
+You can now invoke the component in a later ordinary entry without includes,
+pasted definitions or a restart:
+
+````xmd
+<Let as="code" select="code">
+```xmd
+<Greeting />
+```
+</Let>
+<REPL.EntryInput>{code}</REPL.EntryInput>
+<REPL.Submit />
+````
+
+The entry returns `Hello from this session.`. A person can also enter
+`<Greeting />` manually. Both use the selected component; configured directories
+still precede session components during a test, including a directory suite.
+
+Use `as` when this response needs the structured report. Capturing and leaving
+it uncaptured both deliver the same feedback and publish no chat. To show it to
+the person explicitly, write:
+
+```xmd
+<REPL.Test path="components" as="tests" />
+<Output><Json value={tests} /></Output>
+```
+
+`no-tests` means no document matched, or otherwise valid documents reached no
+Test. It is not a pass. A parse or runtime error before the first Test is a
+failed document; inspect its `error` and any partial `report`. An admission or
+discovery refusal produces a diagnostic instead of a completed report. Wait for
+entry or test cleanup to finish before requesting another run. Stop cancels and
+joins response-owned tests; it leaves an already admitted ordinary entry alone.
 
 ## Common mistake
 

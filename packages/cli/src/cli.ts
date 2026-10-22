@@ -2984,7 +2984,37 @@ function* dispatch(
       // line carried and nothing more: the profile settles the fallback, and
       // whether anybody answers to that name is the first explicit message's
       // question rather than this command's.
+      const moduleLoader = yield* ComponentModuleLoader.get();
+      const testAgentWorker = yield* readWorkerCommand();
+      const bundledPlugin = yield* BundledRunPlugin.expect();
       const profile = yield* assembleReplProfile(replStack, plugins, {
+        *testingHarness(includes) {
+          return testHarnessInstallation(
+            testingExecutionHost({
+              componentModuleLoader: moduleLoader,
+              includes: [...includes],
+              plugins: plugins.plugins,
+              pluginArgs: plugins.args,
+              secretDetection: true,
+              installService,
+              bundledPlugin,
+              testAgentWorker,
+              planDeclaration: (request) =>
+                planComponentDeclaration({
+                  surface: "component",
+                  includes,
+                  plugins,
+                  context: request.context,
+                  ...(request.planWriterRoot === undefined
+                    ? {}
+                    : { planWriterRoot: request.planWriterRoot }),
+                  host: request.host,
+                  installElicitation: request.installElicitation,
+                }),
+            }),
+            [testAgentChildDeclaration()],
+          );
+        },
         includes: command.config.include,
         ...(command.config.sidekickAgent === undefined
           ? {}

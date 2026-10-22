@@ -6431,6 +6431,34 @@ no project fallback. The Sidekick's native provider keeps the captured project
 `agentCwd`, or the caller's explicit dependency, and its existing identity and
 configuration.
 
+### Response-owned component testing
+
+`repl/sidekick/testing.ts` executes REPL.Test documents in fresh children of the
+command host captured during profile assembly. Each child installs one real
+useTesting session and executes the finalized REPL profile, including immutable
+host declarations and the selected TypeScript loader. The CLI supplies the
+existing nested testing-host installation factory with its captured host
+settings. Response and entry bindings or live registrations never enter those
+roots. Child outcomes travel back as Results so a clean host child cannot
+reassign response failure ownership to its parent. The response owns halting
+and joining every child; document cleanup finishes before the next starts.
+
+The root's existing admission state holds a process-local test slot beside its
+entry reservation. Both submitters consult it; testing checks that reservation
+and session readiness, then takes the slot synchronously before discovery. The
+slot remains held through joined cleanup. Stop cancels response-owned tests and
+leaves admitted ordinary entries with their session owner; Exit joins both
+owners before returning.
+
+Actual Testing results, execution completion and drained output are collected
+separately. Ordered completion callbacks distinguish a valid zero-test policy
+rejection from earlier document failure without inspecting error names. Fatal
+persistence, Files, disclosure and owning-cleanup failures retain their existing
+authority. Completed detached reports use the existing designated-control
+observation records; unmatched intents remain unknown and inspection does no
+work. The exact report and status fold live in the
+[REPL testing contract](specs/repl-spec.md#testing-session-components).
+
 ### Source ownership in retained entries
 
 A source position identifies authored bytes, not which invocation used them.
