@@ -1440,6 +1440,20 @@ describe("U2 — one action path, and one owner for a pending request", () => {
   });
 
   it("U2: activating it opens the drawer, and one choice settles that request once", function* () {
+    const builderArrived = signal();
+    const releaseBuilder = signal();
+    // Hold Session resolution before Prompt registers the builder's live turn.
+    yield* Agent.around({
+      *session(args, next) {
+        const [routed] = args;
+        const name = typeof routed === "string" ? routed : routed?.name;
+        if (name === "builder") {
+          builderArrived.publish();
+          yield* awaiting("the builder Session being released", releaseBuilder.published);
+        }
+        return yield* next(...args);
+      },
+    });
     const { session, stub } = yield* asking({
       review: {
         streaming: true,
@@ -1448,7 +1462,11 @@ describe("U2 — one action path, and one owner for a pending request", () => {
       build: { streaming: true },
       check: { queued: true },
     });
+    yield* awaiting("the builder reaching its Session gate", builderArrived.published);
     yield* until(session, "a request waiting", () => session.agent.requests.length === 1);
+    expect(session.agent.turns.some((turn) => turn.prompt === "build")).toBe(false);
+    releaseBuilder.publish();
+    yield* until(session, "both started turns", () => started(session) === 2);
     const request = session.agent.requests[0];
     if (request === undefined) {
       throw new Error("no request was published");
