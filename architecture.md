@@ -208,7 +208,7 @@ setup captures its bound `load(source, origin)` before profile resolution.
 Profile and durable imports pass exact selected direct bytes and the logical
 file URL; core still validates the complete namespace and owns durable identity
 and admission. Runtime-named CLI entrypoints install their matching core
-`component-modules/deno`, `/node` or `/bun` provider; compiled installs Deno's.
+`host/deno`, `/node` or `/bun` provider; compiled installs Deno's.
 Embeddings explicitly use the matching exported installer. Eval compilation is
 a separate service. Absent installation refuses TypeScript loading before native
 work; Markdown and registered functions are unaffected.
@@ -216,10 +216,13 @@ work; Markdown and registered functions are unaffected.
 These adapters transform direct TypeScript in memory, preserving module exports,
 logical origin, source maps and ordinary live dependencies without staging files
 or permission grants. Deno and Node retain owned native hooks; Bun retains an
-owned JavaScript object URL. Loading children belong to canonical execution,
-survive the short-lived materialization task and namespace return, and end after
-later module use. Cancellation joins native import work before deregistration
-or revocation. Retained imports execute retained direct text after file removal;
+owned JavaScript object URL. Each load has a separate canonical-owned scope-eval
+worker, retaining resources beyond materialization and namespace return without
+serializing independent loads. Before namespace transfer, cancellation halts and
+joins that worker’s hosting task; canonical completion owns transferred hosts.
+Adapter teardown joins native import work before deregistration or revocation.
+The transformer is imported lazily by the actual load operation; neutral imports
+and adapter installation evaluate no Babel code. Retained imports execute retained direct text after file removal;
 they do not snapshot dependencies or repeat completed effects.
 
 A callback registered with something outside the process — a listener on a

@@ -12,12 +12,10 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "paths": {
-      "@executablemd/test-support/component-modules": [
-        "./packages/test-support/component-modules.ts"
-      ],
-      "@executablemd/core/component-modules/deno": ["./packages/core/component-modules/deno.ts"],
-      "@executablemd/core/component-modules/node": ["./packages/core/component-modules/node.ts"],
-      "@executablemd/core/component-modules/bun": ["./packages/core/component-modules/bun.ts"],
+      "@executablemd/test-support/host": ["./packages/test-support/host.ts"],
+      "@executablemd/core/host/deno": ["./packages/core/component-modules/deno.ts"],
+      "@executablemd/core/host/node": ["./packages/core/component-modules/node.ts"],
+      "@executablemd/core/host/bun": ["./packages/core/component-modules/bun.ts"],
       "@executablemd/acp": ["./packages/acp/mod.ts"],
       "@executablemd/cli": ["./packages/cli/src/cli.ts"],
       "@executablemd/code-review-agent": ["./packages/code-review-agent/mod.ts"],

@@ -3,9 +3,9 @@ import type { Operation } from "effection";
 import { dirname, isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ComponentModuleLoader } from "../src/component-module-loader.ts";
-import { componentSource } from "./transform.ts";
 
 function* load(source: string, origin: string): Operation<unknown> {
+  const { componentSource } = yield* until(import("./transform.ts"));
   const bun: unknown = Reflect.get(globalThis, "Bun");
   if (
     typeof bun !== "object" ||

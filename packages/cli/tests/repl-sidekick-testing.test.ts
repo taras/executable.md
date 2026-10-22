@@ -2,7 +2,7 @@ import { DurablePersistenceError } from "@executablemd/durable-streams";
 import { submitForSidekick } from "../src/repl/sidekick/admission.ts";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { useComponentModuleLoader } from "@executablemd/test-support/component-modules";
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { allSettled, ensure, Ok, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";

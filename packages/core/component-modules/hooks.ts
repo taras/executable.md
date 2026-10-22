@@ -1,7 +1,6 @@
 import { allSettled, ensure, until } from "effection";
 import type { Operation } from "effection";
 import type { RegisterHooksOptions, ModuleHooks } from "node:module";
-import { componentSource } from "./transform.ts";
 
 /** Keep one host's supplied-source hooks until the consuming invocation ends. */
 export function* loadHookModule(
@@ -9,6 +8,7 @@ export function* loadHookModule(
   origin: string,
   register: (hooks: RegisterHooksOptions) => ModuleHooks,
 ): Operation<unknown> {
+  const { componentSource } = yield* until(import("./transform.ts"));
   const digest = new Uint8Array(
     yield* until(crypto.subtle.digest("SHA-256", new TextEncoder().encode(source))),
   );

@@ -11,7 +11,7 @@ import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileTempFile } from "@executablemd/core";
 import { runXmd, XMD_VERSION } from "./cli.ts";
-import { useBunComponentModuleLoader } from "@executablemd/core/component-modules/bun";
+import { useBunComponentModuleLoader } from "@executablemd/core/host/bun";
 import { useBunRepl } from "./bun-repl.ts";
 import { readInputStream } from "./standard-input.ts";
 import { importPluginModule } from "./host-plugin-modules.ts";

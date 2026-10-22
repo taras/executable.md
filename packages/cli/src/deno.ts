@@ -13,7 +13,7 @@ import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
 import { runXmd, XMD_VERSION } from "./cli.ts";
-import { useDenoComponentModuleLoader } from "@executablemd/core/component-modules/deno";
+import { useDenoComponentModuleLoader } from "@executablemd/core/host/deno";
 import { useDenoRepl } from "./deno-repl.ts";
 import { readInputStream } from "./standard-input.ts";
 import { importPluginModule } from "./host-plugin-modules.ts";

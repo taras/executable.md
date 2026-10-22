@@ -1147,3 +1147,30 @@ describe("execution initialization in isolated run children", () => {
     expect(result.stdout + result.stderr).not.toContain("❌");
   });
 });
+
+describe("L4 — current source host installation", () => {
+  it("installs the loader and carries it into detached run children", function* () {
+    const project = yield* useProject({
+      "package.json": '{"type":"module"}',
+      "helper.ts": 'export const value: string = "host-typed-component";',
+      "Typed.ts":
+        'import { value } from "./helper.ts";\nexport default function*() { const typed: string = value; return typed; }',
+      "README.test.md": doc(
+        '<Test name="host module selection">',
+        '<Typed as="direct" />',
+        '<AssertEquals actual={direct} expected="host-typed-component" />',
+        '<Execution host="run" source={"<Typed />"} as="child">',
+        '<CollectOutput as="output" />',
+        '<AssertStringIncludes actual={output} expected="host-typed-component" />',
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+    const args = ["test", "README.test.md", "--include", project];
+    console.log(JSON.stringify({ argv: [...cliBase(), ...args], cwd: project }));
+    const result = yield* runCli(args, { cwd: project }).join();
+    expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
+    expect(result.stdout).toContain("host-typed-component");
+    expect(result.stdout).toContain("AssertEquals** passed");
+  });
+});

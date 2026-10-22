@@ -1,7 +1,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { useComponentModuleLoader } from "@executablemd/test-support/component-modules";
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { cliRuntime } from "@executablemd/test-support/launch";
 import { readTextFile, readdir, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
@@ -9,10 +9,13 @@ import { createContext, ensure, scoped, spawn, suspend, until, withResolvers } f
 import type { Operation } from "effection";
 import * as moduleApi from "node:module";
 import { join } from "node:path";
+import { execPath } from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { collect, Component, execute, registerComponents, useNormalizedOutput } from "../mod.ts";
 import { ComponentModuleLoader, Execution } from "../api.ts";
+import { useComponentModules } from "../src/typescript-module.ts";
+import type { LoadComponentModule } from "../src/typescript-module.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { loadHookModule } from "../component-modules/hooks.ts";
 
@@ -231,44 +234,153 @@ describe("ComponentModuleLoader", () => {
     });
   });
 
-  it("P1: loads under the preserved read-only envelope and retains authored write denial", function* () {
-    const directory = yield* useTempDirectory("component-loader-readonly-");
-    const direct = join(directory, "ReadOnly.ts");
-    yield* writeTextFile(
-      direct,
-      'export default function*() { const value: string = "ordinary-read-only-component"; return value; }',
-    );
-    const before = yield* readTextFile(direct);
-    const fixture = join(ROOT, "packages/core/tests/fixtures/component-module-readonly.ts");
-    for (const mode of ["read", "write"]) {
-      const result = yield* exec("deno", {
-        arguments: [
-          "run",
-          "--config",
-          join(ROOT, "deno.json"),
-          "--node-modules-dir=manual",
-          "--allow-read",
-          "--allow-env",
-          "--allow-import",
-          "--deny-write",
-          "--no-prompt",
-          "--cached-only",
-          "--frozen",
-          fixture,
-          directory,
-          mode,
-        ],
-      }).join();
-      expect({ mode, code: result.code, stderr: result.stderr }).toEqual({
-        mode,
-        code: 0,
-        stderr: "",
-      });
-      expect(result.stdout.trim()).toBe(
-        mode === "read" ? "ordinary-read-only-component" : "authored-write-denied",
-      );
+  it("L3: canonical per-load evaluation keeps independent loads parallel and joins a cancelled waiter", function* () {
+    yield* useComponentModuleLoader();
+    const native = yield* ComponentModuleLoader.get();
+    if (native === undefined) {
+      throw new Error("fixture installer selected no loader");
     }
-    expect(yield* readTextFile(direct)).toBe(before);
-    expect((yield* readdir(directory)).sort()).toEqual(["ReadOnly.ts"]);
+    let installed = 0;
+    let removed = 0;
+    let load = native.load.bind(native);
+    if (cliRuntime() === "bun") {
+      const create = URL.createObjectURL;
+      const revoke = URL.revokeObjectURL;
+      yield* ensure(function* () {
+        URL.createObjectURL = create;
+        URL.revokeObjectURL = revoke;
+      });
+      URL.createObjectURL = (blob) => {
+        installed++;
+        return create(blob);
+      };
+      URL.revokeObjectURL = (url) => {
+        removed++;
+        revoke(url);
+      };
+    } else {
+      load = (source, origin) =>
+        loadHookModule(source, origin, (options) => {
+          const handle = moduleApi.registerHooks(options);
+          installed++;
+          const deregister = handle.deregister.bind(handle);
+          return new Proxy(handle, {
+            get(target, property, receiver) {
+              return property === "deregister"
+                ? () => {
+                    removed++;
+                    deregister();
+                  }
+                : Reflect.get(target, property, receiver);
+            },
+          });
+        });
+    }
+    yield* ComponentModuleLoader.set({ load });
+    const directory = yield* useTempDirectory("component-loader-canonical-");
+    yield* writeTextFile(
+      join(directory, "late.mjs"),
+      'export const value = "independent-late-module";',
+    );
+    const gate = `canonical-module-${directory}`;
+    const entered = withResolvers<void>();
+    let release: () => void = () => {
+      throw new Error("native load has not entered");
+    };
+    yield* ensure(function* () {
+      Reflect.deleteProperty(globalThis, gate);
+    });
+    Reflect.set(globalThis, gate, (resolve: () => void) => {
+      release = resolve;
+      entered.resolve();
+    });
+    const ready = withResolvers<LoadComponentModule>();
+    const canonical = yield* spawn(function* () {
+      ready.resolve(yield* useComponentModules());
+      yield* suspend();
+    });
+    const captured = yield* ready.operation;
+    let firstReturned = false;
+    const first = yield* spawn(function* () {
+      yield* captured(
+        `await new Promise<void>(resolve => Reflect.get(globalThis, ${JSON.stringify(gate)})(resolve));\nexport const value = "held";`,
+        pathToFileURL(join(directory, "Held.ts")).href,
+      );
+      firstReturned = true;
+    });
+    yield* entered.operation;
+    const second = yield* captured(
+      'export const later = () => import("./late.mjs");',
+      pathToFileURL(join(directory, "Independent.ts")).href,
+    );
+    if (
+      typeof second !== "object" ||
+      second === null ||
+      !("later" in second) ||
+      typeof second.later !== "function"
+    ) {
+      throw new Error("independent module lost its late export");
+    }
+    expect(yield* until(second.later())).toMatchObject({ value: "independent-late-module" });
+    expect(installed).toBe(2);
+    expect(removed).toBe(0);
+    let halted = false;
+    const stopping = yield* spawn(function* () {
+      yield* first.halt();
+      halted = true;
+    });
+    expect(halted).toBe(false);
+    expect(removed).toBe(0);
+    release();
+    yield* stopping;
+    expect(halted).toBe(true);
+    expect(firstReturned).toBe(false);
+    expect(removed).toBe(1);
+    expect(yield* until(second.later())).toMatchObject({ value: "independent-late-module" });
+    yield* canonical.halt();
+    expect(removed).toBe(2);
   });
+
+  if (cliRuntime() === "deno") {
+    it("P1: Deno loads under the preserved read-only envelope and retains authored write denial", function* () {
+      const directory = yield* useTempDirectory("component-loader-readonly-");
+      const direct = join(directory, "ReadOnly.ts");
+      yield* writeTextFile(
+        direct,
+        'export default function*() { const value: string = "ordinary-read-only-component"; return value; }',
+      );
+      const before = yield* readTextFile(direct);
+      const fixture = join(ROOT, "packages/core/tests/fixtures/component-module-readonly.ts");
+      for (const mode of ["read", "write"]) {
+        const result = yield* exec(execPath, {
+          arguments: [
+            "run",
+            "--config",
+            join(ROOT, "deno.json"),
+            "--node-modules-dir=manual",
+            "--allow-read",
+            "--allow-env",
+            "--allow-import",
+            "--deny-write",
+            "--no-prompt",
+            "--cached-only",
+            "--frozen",
+            fixture,
+            directory,
+            mode,
+          ],
+        }).join();
+        expect({ mode, code: result.code, stderr: result.stderr }).toEqual({
+          mode,
+          code: 0,
+          stderr: "",
+        });
+        expect(result.stdout.trim()).toBe(
+          mode === "read" ? "ordinary-read-only-component" : "authored-write-denied",
+        );
+      }
+      expect(yield* readTextFile(direct)).toBe(before);
+      expect((yield* readdir(directory)).sort()).toEqual(["ReadOnly.ts"]);
+    });
+  }
 });

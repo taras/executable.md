@@ -1,5 +1,7 @@
-import { ensure, Err, Ok, scoped, suspend, useScope, withResolvers } from "effection";
-import type { Operation, Result, Task } from "effection";
+import { ensure, scoped, suspend, useScope, withResolvers } from "effection";
+import type { Operation, Task } from "effection";
+import { unbox, useEvalScope } from "@effectionx/scope-eval";
+import type { EvalScope } from "@effectionx/scope-eval";
 import { ComponentModuleLoader } from "./component-module-loader.ts";
 
 export type LoadComponentModule = (source: string, origin: string) => Operation<unknown>;
@@ -17,7 +19,7 @@ export function* useComponentModules(): Operation<LoadComponentModule> {
           "TypeScript component module loader is not installed — bind ComponentModuleLoader for this host before loading TypeScript components.",
         );
       }
-      const ready = withResolvers<Result<unknown>>();
+      const ready = withResolvers<EvalScope>();
       let child: Task<void> | undefined;
       let transferred = false;
       yield* ensure(function* () {
@@ -26,22 +28,17 @@ export function* useComponentModules(): Operation<LoadComponentModule> {
         }
       });
       child = owner.run(function* () {
-        let value: unknown;
         try {
-          value = yield* load(source, origin);
+          ready.resolve(yield* useEvalScope());
         } catch (error) {
-          ready.resolve(Err(error));
+          ready.reject(error instanceof Error ? error : new Error(String(error)));
           return;
         }
-        ready.resolve(Ok(value));
         yield* suspend();
       });
-      const result = yield* ready.operation;
-      if (!result.ok) {
-        yield* child;
-        throw result.error;
-      }
+      const evaluation = yield* ready.operation;
+      const namespace = unbox(yield* evaluation.eval(() => load(source, origin)));
       transferred = true;
-      return result.value;
+      return namespace;
     });
 }

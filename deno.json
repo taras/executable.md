@@ -1,8 +1,5 @@
 {
-  "workspace": [
-    "packages/*",
-    "site"
-  ],
+  "workspace": ["packages/*", "site"],
   "exclude": [
     "scripts/tests/fixtures",
     ".xmd-eval",
@@ -54,7 +51,7 @@
     "zod": "npm:zod@^4.3.6",
     "mdast-util-to-string": "npm:mdast-util-to-string@^4",
     "yq.rs": "npm:yq.rs@0.1.4",
-    "@executablemd/test-support/component-modules": "./packages/test-support/component-modules.ts"
+    "@executablemd/test-support/host": "./packages/test-support/host.ts"
   },
   "tasks": {
     "xmd": "deno run --allow-all packages/cli/src/deno.ts",

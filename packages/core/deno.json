@@ -5,9 +5,9 @@
     ".": "./mod.ts",
     "./api": "./api.ts",
     "./host": "./host.ts",
-    "./component-modules/deno": "./component-modules/deno.ts",
-    "./component-modules/node": "./component-modules/node.ts",
-    "./component-modules/bun": "./component-modules/bun.ts"
+    "./host/deno": "./component-modules/deno.ts",
+    "./host/node": "./component-modules/node.ts",
+    "./host/bun": "./component-modules/bun.ts"
   },
   "imports": {
     "@effectionx/context-api": "npm:@effectionx/context-api@0.6.0",

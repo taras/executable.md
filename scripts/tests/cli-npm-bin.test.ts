@@ -225,7 +225,7 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
         'import { ComponentModuleLoader } from "@executablemd/core/api";',
         'import { InMemoryStream } from "@executablemd/durable-streams";',
         ...["deno", "node", "bun"].map(
-          (host) => `import * as ${host} from "@executablemd/core/component-modules/${host}";`,
+          (host) => `import * as ${host} from "@executablemd/core/host/${host}";`,
         ),
         "main(function*() {",
         '  if ((yield* ComponentModuleLoader.get()) !== undefined) throw new Error("adapter import installed a loader");',

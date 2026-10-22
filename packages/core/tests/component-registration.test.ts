@@ -1,4 +1,4 @@
-import { useComponentModuleLoader } from "@executablemd/test-support/component-modules";
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
 /**
  * Tier CR — component registration and resolution (spec §5.3).
  *

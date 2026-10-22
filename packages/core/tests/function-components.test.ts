@@ -16,7 +16,7 @@ import type { Json } from "@executablemd/durable-streams";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { useComponentModuleLoader } from "@executablemd/test-support/component-modules";
+import { useComponentModuleLoader } from "@executablemd/test-support/host";
 import { until } from "effection";
 import { symlink } from "node:fs/promises";
 import * as path from "node:path";

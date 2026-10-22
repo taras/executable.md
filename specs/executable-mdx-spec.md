@@ -2432,15 +2432,15 @@ validated props directly and return rendered output as a string.
 Programmatic callers install one explicitly in their owning Effection scope:
 
 ```typescript
-import { useDenoComponentModuleLoader } from "@executablemd/core/component-modules/deno";
+import { useDenoComponentModuleLoader } from "@executablemd/core/host/deno";
 
 yield* useDenoComponentModuleLoader();
 const execution = yield* execute(options);
 ```
 
 Node uses `useNodeComponentModuleLoader` from
-`@executablemd/core/component-modules/node`; Bun uses
-`useBunComponentModuleLoader` from `@executablemd/core/component-modules/bun`.
+`@executablemd/core/host/node`; Bun uses
+`useBunComponentModuleLoader` from `@executablemd/core/host/bun`.
 Importing these subpaths installs nothing. An eval compiler does not install a
 component module loader. Without one, a repository TypeScript selection refuses
 before native loading with: “TypeScript component module loader is not installed
