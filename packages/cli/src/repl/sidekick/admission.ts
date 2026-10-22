@@ -49,6 +49,8 @@
  * guessed at here, and why reopening resolves before it admits anything else.
  */
 
+import type { ReplTesting, ReplTestReport } from "./testing.ts";
+
 import { ensure, Err, Ok } from "effection";
 import type { Operation, Result } from "effection";
 
@@ -76,6 +78,7 @@ import type { ReplSubmission, StartingCheck } from "../session.ts";
  * slow append and a slow entry never hold the keyboard.
  */
 export interface Admitting {
+  testing?: boolean;
   /** The reservation a submission in flight holds, or none. */
   held: Reservation | undefined;
   /** What that work reported, for the loop to apply on its next pass. */
@@ -114,6 +117,9 @@ export function take(
   slot: { readonly entry: string; readonly ordinal: number },
   held: Admitting,
 ): Result<Reservation> {
+  if (held.testing === true) {
+    return Err(new Error("session tests are running or cleaning up"));
+  }
   const taken = admissible(by, facts, held.held);
   if (!taken.ok) {
     return taken;
@@ -226,6 +232,9 @@ export function* submitForSidekick(
   // record claiming an attempt on terms this could have asked about. It is also
   // what keeps a busy request a refusal rather than work that queues behind the
   // entry in flight: nothing below waits for that entry to finish.
+  if (held.testing === true) {
+    return Err(new Error("session tests are running or cleaning up"));
+  }
   const admits = session.admits();
   if (!admits.ok) {
     return admits;
@@ -541,4 +550,35 @@ export function* retainResolution(writer: SidekickWriter, held: ColdReservation)
  */
 export function blocking(error: Error): string {
   return `${error.message} Nothing can be admitted into this execution until that is resolved.`;
+}
+
+export function* testForSidekick(
+  path: string,
+  options: {
+    held: Admitting;
+    session: Pick<AdmittingSession, "admits">;
+    testing: ReplTesting | undefined;
+    blocked?: string;
+  },
+): Operation<Result<ReplTestReport>> {
+  const { held, session, testing } = options;
+  if (held.testing === true || held.held !== undefined) {
+    return Err(new Error("an entry or test is running, preparing or cleaning up"));
+  }
+  const ready = session.admits();
+  if (!ready.ok) {
+    return ready;
+  }
+  if (options.blocked !== undefined) {
+    return Err(new Error(options.blocked));
+  }
+  if (testing === undefined) {
+    return Err(new Error("this REPL host has no test runner"));
+  }
+  held.testing = true;
+  try {
+    return yield* testing(path);
+  } finally {
+    held.testing = false;
+  }
 }

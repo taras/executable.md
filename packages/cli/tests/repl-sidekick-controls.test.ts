@@ -637,6 +637,7 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.EntryInput",
         "REPL.Environment",
         "REPL.Submit",
+        "REPL.Test",
         "REPL.Syntax",
         // The four bounded reads of one entry's saved evidence, which are what
         // a response reads an entry with now.
@@ -661,7 +662,7 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         .filter((entry) => entry.effect === "write")
         .map((entry) => entry.name)
         .sort(),
-    ).toEqual(["Elicit", "REPL.EntryInput", "REPL.Submit"]);
+    ).toEqual(["Elicit", "REPL.EntryInput", "REPL.Submit", "REPL.Test"]);
     expect(surface.find((entry) => entry.name === "REPL.EntryInput")?.form).toBe("paired");
     expect(surface.find((entry) => entry.name === "REPL.Submit")?.form).toBe("self-closing");
     // Paired, because the question is the content.
@@ -728,6 +729,7 @@ describe("Tier R3 — what the ceiling admits, and what it does not", () => {
         "REPL.EntryInput",
         "REPL.Environment",
         "REPL.Submit",
+        "REPL.Test",
         "REPL.Syntax",
         "REPL.Entry.Source",
         "REPL.Entry.Prompt",

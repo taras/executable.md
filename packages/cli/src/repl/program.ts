@@ -1,3 +1,4 @@
+import { testForSidekick } from "./sidekick/admission.ts";
 /**
  * The command, as one scope.
  *
@@ -1068,6 +1069,13 @@ function* drive(
         return Ok(established);
       },
       root: sidekickRoot,
+      test: (path) =>
+        testForSidekick(path, {
+          held: admitting,
+          session: current,
+          testing: options.profile.testing,
+          ...(reopening.blocked === undefined ? {} : { blocked: reopening.blocked }),
+        }),
       submit(at, journal): Operation<Result<SubmitReceipt>> {
         return submitForSidekick(at, {
           session: {

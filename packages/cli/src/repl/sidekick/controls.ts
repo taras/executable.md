@@ -1,3 +1,4 @@
+import type { ReplTesting, ReplTestReport } from "./testing.ts";
 /**
  * The words a reply may use, and what each of them asks the root to do.
  *
@@ -123,6 +124,7 @@ export type GuideChapter = (typeof GUIDE_CHAPTERS)[number];
  * unavailable may well ask for something else next.
  */
 export interface SidekickRequests {
+  readonly test?: ReplTesting;
   /** The acknowledged published root values, detached. */
   bindings(): Operation<Result<Json>>;
   /** The active entry vocabulary, or the lookup of particular names. */
@@ -271,6 +273,7 @@ export const DESIGNATED: ReadonlySet<string> = new Set([
   "REPL.Environment",
   "REPL.EntryInput",
   "REPL.Submit",
+  "REPL.Test",
   "REPL.EntryOutput",
   ...ENTRY_INSPECTIONS,
   ELICIT_CONTROL,
@@ -706,6 +709,27 @@ export function sidekickMutations(
         );
       },
     }),
+    writing("REPL.Test", "Test", "self-closing", {
+      kind: "function",
+      name: "REPL.Test",
+      props: {
+        type: "object",
+        properties: { path: { type: "string" } },
+        required: ["path"],
+        additionalProperties: false,
+      },
+      description:
+        'Run a session test document or directory suite with `<REPL.Test path="components" />`. Read its completed results as feedback; add Output when the person needs to see them.',
+      *fn(props: Record<string, Json>): Operation<ReplTestReport | string> {
+        const path = props.path;
+        if (typeof path !== "string") {
+          throw new Error("REPL.Test requires path");
+        }
+        return yield* inspected(journal, { component: "REPL.Test", arguments: { path } }, () =>
+          requests.test === undefined ? refusedTesting() : requests.test(path),
+        );
+      },
+    }),
     writing("REPL.Submit", "Submit", "self-closing", {
       kind: "function",
       name: "REPL.Submit",
@@ -825,4 +849,8 @@ function longestRun(text: string, character: string): number {
     longest = Math.max(longest, current);
   }
   return longest;
+}
+
+function* refusedTesting(): Operation<Result<ReplTestReport>> {
+  return Err(new Error("this REPL host has no test runner"));
 }

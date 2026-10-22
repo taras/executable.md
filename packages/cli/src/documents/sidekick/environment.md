@@ -23,6 +23,12 @@ answer.
   `<REPL.Syntax names={["Greeting"]} />` before invoking a new component: a
   configured definition can win. A selected malformed definition fails; fix it
   rather than assuming another candidate runs.
+- Request real tests with `<REPL.Test path="components/Greeting.test.md" />`
+  or `<REPL.Test path="components" />`. Targets are relative to the session
+  workspace even inside a response Dir; absolute and escaping paths refuse.
+  A directory selects `**/*.test.md` recursively and retains configured-first
+  component lookup. Tests have effects and use the command's ordinary permissions.
+  Read `<Guide.Entries />` for the create, test, fix and reuse sequence.
 - A nested `<Dir>` selects another known, authorized directory for its content;
   later siblings return to the workspace. To copy project input, enter its
   explicitly known project path, capture the read there, then write the copy

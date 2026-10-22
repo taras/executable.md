@@ -22,7 +22,7 @@
  * Two classes. `read` observes and returns: the acknowledged bindings, the
  * entry vocabulary, the six guide chapters, the environment, and an entry's
  * output. `write` is what changes what a person sees or asks them something:
- * filling the shared draft, submitting it, and canonical `<Elicit>`. Keeping
+ * filling the shared draft, submitting it, executing tests, and canonical `<Elicit>`. Keeping
  * them separate is what lets a captured ceiling state that a reply which only
  * read could not have written and interrupted nobody — something nobody can say
  * about a single undifferentiated list.

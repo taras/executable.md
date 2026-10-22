@@ -202,6 +202,14 @@ begins with `-`. Options after `--` are not inspected. `--journal` writes one
 trace for one document, so a directory target rejects it before any document
 runs.
 
+### Tests requested from the REPL
+
+`REPL.Test` uses the same directory discovery convention and real per-document
+useTesting sessions. Both REPL target forms retain the finalized configured-first
+REPL profile; CLI directory promotion above remains specific to `xmd test`.
+The [REPL testing contract](repl-spec.md#testing-session-components) owns its
+structured report, admission, feedback, cancellation and retained-history rules.
+
 ## Atomic Tests
 
 Atomic tests use `<Test>`:
