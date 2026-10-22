@@ -13,6 +13,7 @@ import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
 import { runXmd, XMD_VERSION } from "./cli.ts";
+import { useDenoComponentModuleLoader } from "@executablemd/core/component-modules/deno";
 import { useDenoRepl } from "./deno-repl.ts";
 import { readInputStream } from "./standard-input.ts";
 import { importPluginModule } from "./host-plugin-modules.ts";
@@ -70,6 +71,7 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
   await main(() => runCredentialHelper(process.argv.slice(2)));
 } else {
   await main(function* (args) {
+    yield* useDenoComponentModuleLoader();
     // The base providers for this host. `at: "min"` puts them beneath ordinary
     // middleware, so middleware installed later can wrap either one.
     yield* API.Env.around(

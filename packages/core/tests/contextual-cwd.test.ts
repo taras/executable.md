@@ -1,3 +1,4 @@
+import { useComponentModuleLoader } from "@executablemd/test-support/component-modules";
 /**
  * Tier CW — contextual working directory (spec §1.2).
  *
@@ -105,6 +106,7 @@ function writeDocument(fixture: Fixture, source: string): Operation<void> {
 function run(fixture: Fixture): Operation<Json> {
   return scoped(function* () {
     let displayed = "";
+    yield* useComponentModuleLoader();
     const decoder = new TextDecoder();
     yield* Stdio.around({
       *stdout([bytes]) {

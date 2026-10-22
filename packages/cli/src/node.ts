@@ -17,6 +17,7 @@ import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileTempFile } from "@executablemd/core";
 import { runXmd, XMD_VERSION } from "./cli.ts";
+import { useNodeComponentModuleLoader } from "@executablemd/core/component-modules/node";
 import { useNodeRepl } from "./node-repl.ts";
 import { readInputStream } from "./standard-input.ts";
 import { importPluginModule } from "./host-plugin-modules.ts";
@@ -43,6 +44,7 @@ const UPGRADE: UpgradeAssembly = {
 };
 
 await main(function* (args) {
+  yield* useNodeComponentModuleLoader();
   // The base providers for this host. `at: "min"` puts them beneath ordinary
   // middleware, so middleware installed later can wrap either one.
   yield* API.Env.around(

@@ -1,3 +1,4 @@
+import { useComponentModuleLoader } from "@executablemd/test-support/component-modules";
 /**
  * Tier CR — component registration and resolution (spec §5.3).
  *
@@ -701,6 +702,7 @@ describe("Tier CR — what a document gets", () => {
   // used verbatim and never consults a working directory at all, which is why
   // the fixture lives under the process's own directory.
   it("CR24b: a relative repository component loads inside a rebound cwd", function* () {
+    yield* useComponentModuleLoader();
     const dir = yield* useLocalFixture();
     yield* writeTextFile(join(dir, "doc.md"), "<TempDir>\n<Widget />\n</TempDir>\n");
     yield* writeTextFile(

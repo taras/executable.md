@@ -436,6 +436,9 @@ importers:
       '@effectionx/timebox':
         specifier: 0.4.3
         version: 0.4.3(effection@4.1.0)
+      '@executablemd/core':
+        specifier: workspace:*
+        version: link:../core
       '@executablemd/durable-streams':
         specifier: workspace:*
         version: link:../durable-streams

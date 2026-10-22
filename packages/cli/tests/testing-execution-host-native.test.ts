@@ -23,6 +23,8 @@ import { Execution } from "@executablemd/core/api";
 import type { Plugin, PluginInstallation } from "@executablemd/core/api";
 import { cwd } from "@executablemd/runtime";
 import { cliBase } from "@executablemd/test-support/launch";
+import { runCli, runShell, shellQuote } from "@executablemd/test-support/launch";
+import { writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import type { HelperAssembly } from "@executablemd/git/credential-helper";
 import { planComponentDeclaration } from "../src/plan-component.ts";
@@ -48,6 +50,50 @@ import { denoRunRepositories } from "../src/deno-repositories.ts";
  * configured.
  */
 describe("C1 — the native host a run child initializes", () => {
+  it("L4: source entrypoints install the loader and carry it into detached run children", function* () {
+    const project = yield* useTempDirectory("xmd-module-host-");
+    const repository = fileURLToPath(new URL("../../../", import.meta.url));
+    yield* writeTextFile(
+      join(project, "helper.ts"),
+      'export const value: string = "host-typed-component";',
+    );
+    yield* writeTextFile(
+      join(project, "Typed.ts"),
+      'import { value } from "./helper.ts";\nexport default function*() { const typed: string = value; return typed; }',
+    );
+    yield* writeTextFile(
+      join(project, "README.test.md"),
+      [
+        '<Test name="host module selection">',
+        '<Typed as="direct" />',
+        '<AssertEquals actual={direct} expected="host-typed-component" />',
+        '<Execution host="run" source={"<Typed />"} as="child">',
+        '<CollectOutput as="output" />',
+        '<AssertStringIncludes actual={output} expected="host-typed-component" />',
+        "</Execution>",
+        "</Test>",
+      ].join("\n"),
+    );
+    const args = ["test", "README.test.md", "--include", project];
+    console.log(JSON.stringify({ argv: [...cliBase(), ...args], cwd: project }));
+    const deno = yield* runCli(args, { cwd: project }).join();
+    expect({ code: deno.code, stderr: deno.stderr }).toEqual({ code: 0, stderr: "" });
+    for (const argv of [
+      [
+        "tsx",
+        "--tsconfig",
+        join(repository, "tsconfig.node.json"),
+        join(repository, "packages/cli/src/node.ts"),
+        ...args,
+      ],
+      ["bun", join(repository, "packages/cli/src/bun.ts"), ...args],
+    ]) {
+      console.log(JSON.stringify({ argv, cwd: project }));
+      const result = yield* runShell(argv.map(shellQuote).join(" "), { cwd: project }).join();
+      expect({ argv, code: result.code, stderr: result.stderr }).toMatchObject({ argv, code: 0 });
+    }
+  });
+
   /** A bare remote a child may clone without reaching a network. */
   function* useBareRemote(home: string): Operation<string> {
     const parent = yield* until(realpath(yield* useTempDirectory("xmd-c1-remote-")));

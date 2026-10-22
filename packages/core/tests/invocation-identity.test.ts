@@ -1,3 +1,4 @@
+import { useComponentModuleLoader } from "@executablemd/test-support/component-modules";
 /**
  * Tier CIV — the identity a trusted host's component names its work after
  * (specs/executable-mdx-spec.md §5.6).
@@ -1435,6 +1436,7 @@ describe("Tier CIV — the authored form on the invocation", () => {
   });
 
   it("CIV21: a component that imports nothing still reads the canonical form", function* () {
+    yield* useComponentModuleLoader();
     const directory = fileURLToPath(new URL("./fixtures/invocation-identity/", import.meta.url));
 
     // A repository `.ts` component with no imports at all: no helper of its own

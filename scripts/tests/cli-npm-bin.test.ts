@@ -21,6 +21,7 @@ import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { createHash } from "node:crypto";
 import type { Operation } from "effection";
 import { exec, Stdio } from "@effectionx/process";
+import { symlink } from "node:fs/promises";
 import type { ProcessResult } from "@effectionx/process";
 import { timebox } from "@effectionx/timebox";
 import { useNpmWorkspace } from "./npm-output.ts";
@@ -198,6 +199,45 @@ describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, ()
     if (built.code !== 0) {
       throw new Error(`build-npm.ts exited ${built.code}\n${built.stderr}`);
     }
+
+    const consumer = yield* useTempDirectory("xmd-npm-module-consumer-");
+    yield* until(
+      symlink(
+        path.join(root, PKG_DIR, "npm/node_modules"),
+        path.join(consumer, "node_modules"),
+        "dir",
+      ),
+    );
+    yield* writeTextFile(
+      path.join(consumer, "helper.mjs"),
+      'export const value = "npm-typed-component";',
+    );
+    yield* writeTextFile(
+      path.join(consumer, "Typed.ts"),
+      'import { value } from "./helper.mjs";\nexport default function*() { const typed: string = value; return typed; }',
+    );
+    const probe = path.join(consumer, "consumer.mjs");
+    yield* writeTextFile(
+      probe,
+      [
+        'import { main } from "effection";',
+        'import { collect, execute } from "@executablemd/core";',
+        'import { ComponentModuleLoader } from "@executablemd/core/api";',
+        'import { InMemoryStream } from "@executablemd/durable-streams";',
+        ...["deno", "node", "bun"].map(
+          (host) => `import * as ${host} from "@executablemd/core/component-modules/${host}";`,
+        ),
+        "main(function*() {",
+        '  if ((yield* ComponentModuleLoader.get()) !== undefined) throw new Error("adapter import installed a loader");',
+        '  if (typeof deno.useDenoComponentModuleLoader !== "function" || typeof bun.useBunComponentModuleLoader !== "function") throw new Error("foreign installer missing");',
+        "  yield* node.useNodeComponentModuleLoader();",
+        `  console.log(yield* collect(yield* execute({ path: "<eval>", source: "<Typed />", includes: [${JSON.stringify(consumer)}], stream: new InMemoryStream() })));`,
+        "});",
+      ].join("\n"),
+    );
+    const moduleResult = yield* exec("node", { arguments: [probe], cwd: consumer }).join();
+    expect({ code: moduleResult.code, stderr: moduleResult.stderr }).toMatchObject({ code: 0 });
+    expect(moduleResult.stdout).toContain("npm-typed-component");
 
     const run = yield* runEmittedBin(root, [
       "test",
